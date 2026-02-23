@@ -1,0 +1,143 @@
+# ---------------------------------------------------------
+# Node / PNPM / Turborepo
+# ---------------------------------------------------------
+node_modules/
+pnpm-lock.yaml
+.pnpm-store/
+.turbo/
+dist/
+build/
+out/
+.next/
+.next-cache/
+.vercel/
+
+# ---------------------------------------------------------
+# Environment Files (DO NOT COMMIT)
+# ---------------------------------------------------------
+.env
+.env.local
+.env.development
+.env.production
+.env.test
+.env.*.local
+
+# App-specific envs
+apps/**/.env
+apps/**/.env.local
+
+# ---------------------------------------------------------
+# Logs
+# ---------------------------------------------------------
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---------------------------------------------------------
+# Prisma
+# ---------------------------------------------------------
+prisma/*.db
+prisma/*.sqlite
+prisma/migrations/*/README.md
+prisma/migrations/*/migration.sql
+prisma/migrations/*/steps.json
+
+# Prisma client output
+# src/prisma/client.ts
+generated/
+
+# ---------------------------------------------------------
+# Next.js (LoomX Web)
+# ---------------------------------------------------------
+apps/loomx-web/.next/
+apps/loomx-web/out/
+apps/loomx-web/.vercel/
+apps/loomx-web/.cache/
+
+# ---------------------------------------------------------
+# API (LoomX API)
+# ---------------------------------------------------------
+apps/loomx-api/dist/
+apps/loomx-api/build/
+apps/loomx-api/.cache/
+
+# ---------------------------------------------------------
+# OS / Editor Junk
+# ---------------------------------------------------------
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/tasks.json
+
+# JetBrains
+.idea/
+*.iml
+
+# ---------------------------------------------------------
+# Testing / Coverage
+# ---------------------------------------------------------
+coverage/
+.nyc_output/
+jest-cache/
+jest-temp/
+
+# Test files (we don't use a test framework currently)
+*.test.*
+*.spec.*
+test-*.js
+test-*.py
+test-*.ts
+**/__tests__/
+**/tests/
+
+# ---------------------------------------------------------
+# Temporary Files
+# ---------------------------------------------------------
+tmp/
+temp/
+*.tmp
+*.temp
+nul
+
+# ---------------------------------------------------------
+# Local Secrets / Keys
+# ---------------------------------------------------------
+*.pem
+*.key
+*.crt
+*.pfx
+
+# ---------------------------------------------------------
+# Python
+# ---------------------------------------------------------
+venv/
+env/
+*.pyc
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ---------------------------------------------------------
+# TypeScript Build Info
+# ---------------------------------------------------------
+*.tsbuildinfo
+
+# ---------------------------------------------------------
+# Misc
+# ---------------------------------------------------------
+*.local
+*.cache
+
+# ---------------------------------------------------------
+# Tool Configs (dev tooling, not project source)
+# ---------------------------------------------------------
+.claude/
