@@ -10,9 +10,10 @@
 
 1. [What is LoomX?](#what-is-loomx)
 2. [Architecture Overview](#architecture-overview)
-3. [Prerequisites](#prerequisites)
-4. [Azure AD App Registration](#azure-ad-app-registration)
-5. [Step-by-Step Setup](#step-by-step-setup)
+3. [Before You Begin — What You Need in Microsoft Fabric](#before-you-begin--what-you-need-in-microsoft-fabric)
+4. [Prerequisites](#prerequisites)
+5. [Azure AD App Registration](#azure-ad-app-registration)
+6. [Step-by-Step Setup](#step-by-step-setup)
    - [1. Clone the Repository](#1-clone-the-repository)
    - [2. Install Node.js Dependencies](#2-install-nodejs-dependencies)
    - [3. Configure Environment Variables](#3-configure-environment-variables)
@@ -20,12 +21,13 @@
    - [5. Apply the Database Schema](#5-apply-the-database-schema)
    - [6. Start All Services](#6-start-all-services)
    - [7. Verify Everything is Running](#7-verify-everything-is-running)
-6. [Using LoomX](#using-loomx)
-7. [Project Structure](#project-structure)
-8. [Environment Variable Reference](#environment-variable-reference)
-9. [Available Scripts](#available-scripts)
-10. [Troubleshooting](#troubleshooting)
-11. [Tech Stack](#tech-stack)
+7. [First Run — Your First 15 Minutes in LoomX](#first-run--your-first-15-minutes-in-loomx)
+8. [Using LoomX](#using-loomx)
+9. [Project Structure](#project-structure)
+10. [Environment Variable Reference](#environment-variable-reference)
+11. [Available Scripts](#available-scripts)
+12. [Troubleshooting](#troubleshooting)
+13. [Tech Stack](#tech-stack)
 
 ---
 
@@ -68,6 +70,93 @@ Microsoft Fabric SQL  (your warehouses and lakehouses)
 Node.js cannot authenticate to Fabric SQL using Azure AD tokens natively. The Python proxy bridges this gap using `pyodbc` + `ODBC Driver 18`, which supports Azure AD interactive token auth out of the box.
 
 **One metadata database** (also Fabric SQL) stores all LoomX application data: datasets, charts, dashboards, saved queries, data sources, user themes, and audit logs. You point LoomX at this database via `.env`. All your actual data warehouses and lakehouses are then registered through the UI at `/data-sources` — no need to touch `.env` for each one.
+
+---
+
+## Before You Begin — What You Need in Microsoft Fabric
+
+This is the most important section to read before doing anything else. LoomX requires **two distinct things** inside Microsoft Fabric. Confusing them is the single most common mistake a first-time setup makes.
+
+---
+
+### The Two Things You Need
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Thing 1 — Metadata Database                                    │
+│  A Fabric SQL warehouse or lakehouse that LoomX uses to store   │
+│  its own application data: your saved datasets, charts,         │
+│  dashboards, query history, user settings, etc.                 │
+│                                                                  │
+│  Think of it as LoomX's own private database.                   │
+│  Your users never query this directly.                          │
+│                                                                  │
+│  → Goes into your .env as FABRIC_METADATA_ENDPOINT              │
+│                             FABRIC_METADATA_DATABASE            │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│  Thing 2 — Your Data Warehouses / Lakehouses (one or more)      │
+│  The Fabric warehouses and lakehouses that contain your actual  │
+│  business data — the data your users want to query, chart,      │
+│  and build dashboards on.                                       │
+│                                                                  │
+│  Think of these as the data sources LoomX connects to.          │
+│  These are NOT in .env. You register them through the UI        │
+│  at /data-sources after LoomX is running.                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+You can use the **same Fabric workspace** for both. The metadata database can even be a separate SQL warehouse inside the same workspace as your data. They just need to be distinct databases.
+
+---
+
+### How to Create Your Metadata Database in Fabric
+
+If you do not already have a Fabric SQL warehouse to use as the metadata database, create one now:
+
+1. Go to [app.fabric.microsoft.com](https://app.fabric.microsoft.com) and open (or create) a workspace.
+
+2. Click **+ New item** → search for **Warehouse** → click **Warehouse**.
+
+3. Give it a name (e.g., `LoomXMetadata`) and click **Create**.
+
+4. Once created, open the warehouse and click the **Settings** icon (gear) in the top-right corner.
+
+5. Under **SQL connection string**, copy the **Server** value. It looks like:
+   ```
+   abc123xyz.msit-database.fabric.microsoft.com
+   ```
+   This is your `FABRIC_METADATA_ENDPOINT`.
+
+6. The **database name** is the name you gave the warehouse in step 3 (e.g., `LoomXMetadata`). This is your `FABRIC_METADATA_DATABASE`.
+
+> **Important:** Write these two values down. You will need them in Step 3 of the setup below.
+
+---
+
+### Permissions You Need on the Metadata Database
+
+Your Azure AD account (the one you will use to log into LoomX) must have the following roles on the metadata database:
+
+| Role | Why |
+|---|---|
+| `db_datareader` | Read LoomX app data |
+| `db_datawriter` | Write datasets, charts, dashboards, history |
+| `db_ddladmin` | Create the LoomX tables when you run schema.sql |
+
+To grant these: open the warehouse in Fabric → go to **Manage access** → add your account with **Admin** or at minimum the roles above.
+
+---
+
+### Permissions You Need on Your Data Warehouses
+
+Each Fabric warehouse or lakehouse you add as a data source in LoomX requires that the logged-in user has **read access** to query the data. At minimum:
+
+- `db_datareader` on the warehouse/lakehouse
+- Or a workspace role of **Contributor** or above in that Fabric workspace
+
+> LoomX passes the **user's own Azure AD token** when querying data. It does not use a service account. Every user sees exactly what their Azure AD permissions allow.
 
 ---
 
@@ -396,21 +485,180 @@ curl -I http://localhost:3000
 
 ---
 
+## First Run — Your First 15 Minutes in LoomX
+
+You have all three services running and the health checks pass. Here is the exact guided path from a completely empty application to your first dashboard.
+
+---
+
+### Step A — Sign In
+
+1. Open **http://localhost:3000** in your browser.
+2. You will see the LoomX login screen. Click **Sign in with Microsoft**.
+3. You are redirected to Microsoft's login page. Sign in with your Azure AD account (the same account that has access to your Fabric workspace).
+4. After login you are redirected back to LoomX. The app loads and you land on the home/dashboard page.
+
+> If login fails or you get a redirect error, go to [Troubleshooting → Authentication Errors](#authentication-errors).
+
+---
+
+### Step B — Register Your First Data Source
+
+LoomX starts completely empty — no data, no charts, nothing. The very first thing you must do is tell LoomX where your actual Fabric data lives.
+
+1. In the left sidebar, click **Data Sources** (or navigate to `/data-sources`).
+
+2. Click **+ Add Data Source**.
+
+3. Fill in the form:
+
+   | Field | What to enter |
+   |---|---|
+   | **Name** | A friendly display name, e.g. `Sales Warehouse` |
+   | **Type** | Select the type: `Fabric SQL DW`, `Fabric SQL AEP`, or `Azure SQL` |
+   | **SQL Endpoint** | The server address of your warehouse, e.g. `abc123.msit-database.fabric.microsoft.com` |
+   | **Database Name** | The database inside that endpoint, e.g. `SalesDB` |
+   | **Region** | `WW` (Worldwide) or `EU` (Europe) — match your Fabric workspace region |
+   | **Description** | Optional, helps teammates understand what data is here |
+
+4. Click **Save**. LoomX stores this in the `data_sources` table of your metadata database.
+
+> **Note:** You can add as many data sources as you need. Each one is a different warehouse or lakehouse. LoomX will let users pick which database to query in SQL Lab and the chart builder.
+
+---
+
+### Step C — Verify the Connection in SQL Lab
+
+Before building anything, confirm LoomX can actually reach your data.
+
+1. In the left sidebar, click **SQL Lab** (or navigate to `/lab`).
+
+2. In the **Database** dropdown at the top, select the data source you just added.
+
+3. On the left panel, click **Load Tables** — you should see the list of schemas and tables from your warehouse appear.
+
+4. Write a simple test query in the editor:
+   ```sql
+   SELECT TOP 10 * FROM your_schema.your_table
+   ```
+
+5. Click **Run** (or press `Ctrl+Enter` / `Cmd+Enter`).
+
+6. Results appear in the bottom panel. ✓ Your connection is working.
+
+> If no tables load or the query fails, go to [Troubleshooting → API cannot reach the Python proxy](#api-cannot-reach-the-python-proxy).
+
+---
+
+### Step D — Create Your First Dataset
+
+A dataset is a semantic layer over a table. It tells LoomX which columns are **dimensions** (things to group by, like Region or Product) and which are **metrics** (numbers to measure, like Revenue or Count).
+
+You need at least one dataset before you can build a chart.
+
+1. In the left sidebar, click **Datasets** → **+ New Dataset**.
+
+2. Fill in the details:
+   - **Name** — e.g. `Monthly Sales`
+   - **Description** — optional
+   - **Data Source** — select the data source you added in Step B
+   - **Schema** — select the schema (e.g. `dbo`)
+   - **Table** — select the fact table (e.g. `FactSales`)
+
+3. The columns load automatically. For each column, set its type:
+   - **Dimension** — text/category columns you want to group by (Region, Product, Month)
+   - **Metric** — numeric columns you want to measure (Revenue, Units, Cost)
+   - You can also mark columns as **filters** to make them available as filter options in charts
+
+4. Optionally add **Dimension Tables** if your fact table joins to dimension tables (e.g. `DimProduct`, `DimDate`). LoomX will automatically build the JOIN when generating SQL.
+
+5. Click **Save Dataset**.
+
+---
+
+### Step E — Build Your First Chart
+
+1. In the left sidebar, click **Charts** → **+ New Chart**.
+
+2. Select your dataset from the dropdown and click **Continue**.
+
+3. The chart builder opens. On the left panel:
+   - **Chart Type** — pick a type (Bar, Line, Pie, Table, etc.)
+   - **Metric** — drag a metric column (e.g. `Revenue`)
+   - **Group By** — drag a dimension (e.g. `Region`)
+   - **Time Column** — if you have a date column, drag it here and set a time range
+   - **Filters** — optionally add filters (e.g. Region = "EMEA")
+
+4. Click **Run Query**. The chart preview renders on the right.
+
+5. Click the **Advanced** tab to customise colours, title, axis labels, legend position, font size, and more.
+
+6. When happy, click **Save Chart**, give it a name, and click **Save**.
+
+---
+
+### Step F — Build Your First Dashboard
+
+1. In the left sidebar, click **Dashboards** → **+ New Dashboard**.
+
+2. Give the dashboard a name.
+
+3. In the component panel on the right, drag a **Chart** tile onto the canvas.
+
+4. A chart picker appears — select the chart you saved in Step E.
+
+5. Resize and reposition tiles by dragging their edges and corners.
+
+6. To add **dashboard-level filters** (filters that apply to all charts at once):
+   - Click **Add Filter** in the top bar
+   - Pick a dimension column that exists across your charts
+   - Users can change the filter value to slice all charts simultaneously
+
+7. Add more charts, text headers, dividers, and tabs as needed.
+
+8. Click **Save Dashboard**.
+
+---
+
+### You're done. Here is what you have after 15 minutes:
+
+```
+✓ Signed in with Azure AD
+✓ Data source registered (Fabric warehouse connected)
+✓ SQL Lab verified (live queries working)
+✓ Dataset created (semantic layer defined)
+✓ Chart built (visualisation rendered from live data)
+✓ Dashboard assembled (chart on canvas with filters)
+```
+
+From here, invite your teammates — they sign in with their own Azure AD accounts and immediately see everything you created. Each user gets their own query history, favourites, and theme colour.
+
+---
+
 ## Using LoomX
 
-Once all services are running:
+### Core concepts
 
-1. **Open** http://localhost:3000 in your browser.
-2. **Sign in** with your Azure AD (Microsoft) account. You will be redirected to Microsoft's login page.
-3. **Add a Data Source** — go to `/data-sources` in the sidebar and register your Fabric warehouse or lakehouse. You will need:
-   - A display name
-   - The SQL endpoint (e.g., `abc123.msit-database.fabric.microsoft.com`)
-   - The database name
-   - The region (WW or EU)
-4. **Explore your data** — use SQL Lab at `/lab` to write and run queries.
-5. **Build a dataset** — go to `/datasets` → New Dataset. A dataset defines the semantic layer: which table, which columns are dimensions vs metrics.
-6. **Create charts** — go to `/charts` → New Chart. Pick a dataset, configure your query, choose a visualization type.
-7. **Build dashboards** — go to `/dashboards` → New Dashboard. Drag charts onto the canvas, resize them, and apply dashboard-level filters.
+| Concept | What it is |
+|---|---|
+| **Data Source** | A registered Fabric warehouse or lakehouse. Configured once at `/data-sources`. |
+| **Dataset** | A semantic layer over one table — defines dimensions, metrics, and filter columns. Required before building charts. |
+| **Chart** | A saved visualisation: a dataset + query config + chart type + visual options. |
+| **Dashboard** | A canvas of charts with drag-and-drop layout and cross-chart filter controls. |
+| **SQL Lab** | A free-form SQL editor. Write any query, run it, save it, see history. |
+
+### Navigation
+
+| Page | URL | Purpose |
+|---|---|---|
+| Home | `/` | Overview and recent activity |
+| SQL Lab | `/lab` | Write and run ad-hoc SQL |
+| Query History | `/lab/queries` | Every query ever run, with source, tables, and duration |
+| Datasets | `/datasets` | Create and manage semantic datasets |
+| Charts | `/charts` | Build and manage charts |
+| Dashboards | `/dashboards` | Build and view dashboards |
+| Data Sources | `/data-sources` | Register Fabric warehouses and lakehouses |
+| Favorites | `/favorites` | Your starred datasets, charts, and dashboards |
 
 ---
 
