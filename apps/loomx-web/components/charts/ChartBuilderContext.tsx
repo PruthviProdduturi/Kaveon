@@ -1815,6 +1815,17 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         tablesUsed = generateJson.tables_used || [];
       }
 
+      // Derive source and optional dashboard ID from runContext.
+      // runContext is either:
+      //   undefined / "chart-builder"    → chart builder page
+      //   "dashboard"                    → dashboard (ID unknown)
+      //   "dashboard:123"                → dashboard with ID 123
+      const isDashboard = (runContext || "").startsWith("dashboard");
+      const executeSource = isDashboard ? "dashboard-chart" : "chart-builder";
+      const dashboardIdFromContext = isDashboard
+        ? (runContext || "").split(":")[1] || undefined
+        : undefined;
+
       const executeRes = await msalFetch(`${API_BASE}/api/v1/sql/execute`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1823,8 +1834,13 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         body: JSON.stringify({
           sql_text: sqlText,
           database: datasetDetail?.database_name,
-          source: runContext || "chart-builder",
+          source: executeSource,
           tables_used: tablesUsed.length > 0 ? JSON.stringify(tablesUsed) : null,
+          // Provide full context for rich query history entries.
+          chart_id:     chartId              ?? undefined,
+          chart_type:   selectedTemplate?.id ?? undefined,
+          dataset_id:   selectedDatasetId    ?? undefined,
+          dashboard_id: dashboardIdFromContext,
         }),
       });
 
@@ -2194,26 +2210,9 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         savedSql: sqlPreview.savedSql,
       });
       isQueryRunningRef.current = false;
-
-      // Fire-and-forget telemetry logging similar to Lab so this
-      // doesn't block the UI.
-      const executedBy = account?.email || account?.username || undefined;
-
-      void msalFetch(`${API_BASE}/api/v1/lab/record-query`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sql: sqlText,
-          dataset_id: selectedDatasetId,
-          chart_type: selectedTemplate.id,
-          row_limit: rowLimit,
-          row_count: Array.isArray(rows) ? rows.length : 0,
-          duration_ms: fabricDurationMs ?? totalDurationMs,
-          executed_by: executedBy,
-        }),
-      }).catch(() => {
-        // Best-effort logging; ignore failures.
-      });
+      // Query history is written server-side by /api/v1/sql/execute with full
+      // context (source, chart_id, dataset_id, tables_used). No secondary
+      // record-query call needed.
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Unknown error";
       isQueryRunningRef.current = false;

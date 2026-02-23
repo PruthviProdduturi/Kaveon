@@ -591,34 +591,14 @@ router.delete('/query-history', async (req: Request, res: Response) => {
 
 /**
  * POST /api/v1/lab/record-query
- * Fire-and-forget telemetry endpoint called by the chart builder after executing a query.
- * Records the query to history so it appears on the Query History page.
+ * No-op — kept for backwards compatibility only.
+ *
+ * Query history is now written by POST /api/v1/sql/execute, which has full
+ * context (source, chart_id, dashboard_id, tables_used). Logging here would
+ * create a duplicate entry with incomplete information.
  */
-router.post('/record-query', async (req: Request, res: Response) => {
-  try {
-    const userId = getCurrentUserId(req);
-    const { sql, dataset_id, chart_type, row_limit, row_count, duration_ms, executed_by } = req.body;
-
-    if (!sql) {
-      res.status(400).json({ error: 'sql is required' });
-      return;
-    }
-
-    await queryHistoryService.create({
-      sql_text: sql,
-      duration_ms: typeof duration_ms === 'number' ? duration_ms : 0,
-      row_count: typeof row_count === 'number' ? row_count : 0,
-      status: 'success',
-      trigger_source: 'chart-builder',
-      run_context: JSON.stringify({ chart_type, dataset_id, row_limit }),
-      started_at: Date.now() - (typeof duration_ms === 'number' ? duration_ms : 0),
-    }, executed_by || userId);
-
-    res.json({ success: true });
-  } catch (error) {
-    console.error('[Lab] record-query error:', error);
-    res.status(500).json({ error: 'Failed to record query' });
-  }
+router.post('/record-query', (_req: Request, res: Response) => {
+  res.json({ success: true });
 });
 
 /**
