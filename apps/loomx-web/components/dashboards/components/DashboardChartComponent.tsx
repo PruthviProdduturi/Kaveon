@@ -32,7 +32,7 @@ interface DashboardChartLoaderProps {
  * ChartHydrator + ChartPreview inside the shared ChartBuilderProvider.
  */
 const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({ chartId, filters }) => {
-  const { getChartConfig } = useDashboard();
+  const { getChartConfig, dashboardId } = useDashboard();
 
   const [chart, setChart] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -86,8 +86,12 @@ const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({ chartId, fi
     );
   }
 
+  // Encode the dashboard ID into runContext so the API can record it in
+  // query_history.run_context for every query this chart executes.
+  const runCtx = dashboardId ? `dashboard:${dashboardId}` : 'dashboard';
+
   return (
-    <ChartBuilderProvider runContext="dashboard">
+    <ChartBuilderProvider runContext={runCtx}>
       {/* ChartHydrator renders null — it only populates context state */}
       <ChartHydrator chart={chart} externalFilters={filtersRef.current} />
       <ChartPreview />

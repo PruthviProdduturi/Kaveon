@@ -5,6 +5,38 @@ import { pythonProxyService } from '../services/pythonProxy.service';
 import { QueryHistoryService } from '../services/queryHistory.service';
 import { getCurrentUserId } from '../middleware/userContext';
 import { buildChartPreviewQuery, buildDistinctFilterValuesQuery } from '../services/queryGenerator.service';
+import { extractTablesFromSql } from '../services/sqlTableExtractor';
+
+/**
+ * Maps a raw source string coming from the frontend into a canonical
+ * trigger_source value that is stored in query_history.
+ *
+ * Canonical vocabulary:
+ *   lab                   – SQL Lab editor (ad-hoc)
+ *   dataset-preview       – Dataset detail page preview
+ *   dataset-filter        – Dataset builder filter-value lookup
+ *   chart-builder         – Chart builder page — main query
+ *   chart-builder-filter  – Chart builder page — filter dropdown values
+ *   dashboard-chart       – Chart rendering inside a dashboard
+ *   dashboard-filter      – Dashboard filter bar value lookup
+ */
+function canonicalSource(raw: string | undefined | null): string {
+  switch ((raw || '').toLowerCase()) {
+    case 'dashboard':
+    case 'dashboard-chart':
+      return 'dashboard-chart';
+    case 'chart-builder':
+    case 'chart-builder-filter':
+      return raw!.toLowerCase();
+    case 'dashboard-filter':
+    case 'dataset-preview':
+    case 'dataset-filter':
+    case 'lab':
+      return raw!.toLowerCase();
+    default:
+      return raw || 'chart-builder';
+  }
+}
 
 const router: IRouter = Router();
 const datasetsService = new DatasetsService();
@@ -94,6 +126,11 @@ router.post('/generate', asyncHandler(async (req, res) => {
  * GET /api/v1/sql/distinct-filter-values
  * Get distinct values for filter dropdown
  * LIVE DATA - No caching
+ *
+ * Optional query params for history context:
+ *   source       – caller context ('chart-builder-filter', 'dashboard-filter')
+ *   chart_id     – chart being configured/rendered
+ *   dashboard_id – dashboard (when source is 'dashboard-filter')
  */
 router.get('/distinct-filter-values', asyncHandler(async (req, res) => {
   // Disable browser caching - LIVE data only
@@ -101,7 +138,7 @@ router.get('/distinct-filter-values', asyncHandler(async (req, res) => {
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
 
-  const { dataset_id, column, fact_key, limit } = req.query;
+  const { dataset_id, column, fact_key, limit, source, chart_id, dashboard_id } = req.query;
 
   if (!dataset_id || !column) {
     throw new ValidationError('dataset_id and column are required');
@@ -162,10 +199,80 @@ router.get('/distinct-filter-values', asyncHandler(async (req, res) => {
     throw new ValidationError('Dataset database_name is missing. Please update the dataset configuration.');
   }
 
-  const result = await pythonProxyService.executeQuery(sqlText, dataset.database_name);
+  const userId = getCurrentUserId(req);
+  const filterTriggerSource = canonicalSource(
+    source ? String(source) : 'chart-builder-filter'
+  ) || 'chart-builder-filter';
+
+  // Build tables_used from the dataset: fact table + any dimension tables.
+  const filterTablesUsed: string[] = [
+    dataset.schema_name
+      ? `${dataset.schema_name}.${dataset.table_name}`
+      : dataset.table_name,
+  ];
+  (dataset.dimensions || []).forEach((dim: any) => {
+    const dimTable = dim.dimension_table || dim.table_name;
+    if (dimTable && !filterTablesUsed.includes(dimTable)) {
+      filterTablesUsed.push(dimTable);
+    }
+  });
+
+  const filterRunContext = JSON.stringify({
+    source: filterTriggerSource,
+    datasetId:     Number(dataset_id),
+    column:        column as string,
+    filteringTier,
+    database:      dataset.database_name,
+    ...(chart_id     ? { chartId:     Number(chart_id)     } : {}),
+    ...(dashboard_id ? { dashboardId: Number(dashboard_id) } : {}),
+  });
+
+  const filterStartTime = Date.now();
+  let filterResult: Awaited<ReturnType<typeof pythonProxyService.executeQuery>>;
+  try {
+    filterResult = await pythonProxyService.executeQuery(sqlText, dataset.database_name);
+  } catch (error) {
+    // Log the failed filter-values query before re-throwing.
+    try {
+      await queryHistoryService.create({
+        sql_text: sqlText,
+        duration_ms: Date.now() - filterStartTime,
+        row_count: 0,
+        status: 'error',
+        error_message: error instanceof Error ? error.message : 'Unknown error',
+        trigger_source: filterTriggerSource,
+        tables_used: JSON.stringify(filterTablesUsed),
+        run_context: filterRunContext,
+        dataset_id: Number(dataset_id),
+        started_at: filterStartTime,
+      }, userId);
+    } catch (logErr) {
+      console.error('[SQL] Failed to log filter-values error to history:', logErr);
+    }
+    throw error;
+  }
+
+  const filterDurationMs = Date.now() - filterStartTime;
+
+  // Log successful filter-values query to history.
+  try {
+    await queryHistoryService.create({
+      sql_text: sqlText,
+      duration_ms: filterDurationMs,
+      row_count: filterResult.rows?.length || 0,
+      status: 'success',
+      trigger_source: filterTriggerSource,
+      tables_used: JSON.stringify(filterTablesUsed),
+      run_context: filterRunContext,
+      dataset_id: Number(dataset_id),
+      started_at: filterStartTime,
+    }, userId);
+  } catch (logErr) {
+    console.error('[SQL] Failed to log filter-values query to history:', logErr);
+  }
 
   // Transform rows to key-value pairs
-  const values = (result.rows || []).map((row: any) => {
+  const values = (filterResult.rows || []).map((row: any) => {
     if (Array.isArray(row)) {
       return { key: row[0], value: row[1] || row[0] };
     }
@@ -176,8 +283,8 @@ router.get('/distinct-filter-values', asyncHandler(async (req, res) => {
   res.json({
     success: true,
     values,
-    keyColumn,  // fact_key column for tier 1/2 optimization (null if not applicable)
-    filteringTier  // 1 = fastest (fact_key only), 2 = medium (dim key), 3 = slowest (dim display)
+    keyColumn,      // fact_key column for tier 1/2 optimization (null if not applicable)
+    filteringTier,  // 1 = fastest (fact_key only), 2 = medium (dim key), 3 = slowest (dim display)
   });
 }));
 
@@ -185,6 +292,15 @@ router.get('/distinct-filter-values', asyncHandler(async (req, res) => {
  * POST /api/v1/sql/execute
  * Execute arbitrary SQL query
  * LIVE DATA - No caching
+ *
+ * Optional body fields for richer history context:
+ *   source       – caller context ('chart-builder', 'dashboard', etc.)
+ *   chart_id     – ID of the chart being rendered
+ *   dashboard_id – ID of the dashboard (when source is 'dashboard')
+ *   chart_type   – chart template type ('bar', 'line', etc.)
+ *   dataset_id   – dataset the query was built from
+ *   tables_used  – JSON-stringified array of table names; if omitted,
+ *                  extracted server-side from the SQL text
  */
 router.post('/execute', asyncHandler(async (req, res) => {
   // Disable browser caching - LIVE data only
@@ -193,7 +309,17 @@ router.post('/execute', asyncHandler(async (req, res) => {
   res.setHeader('Expires', '0');
 
   const userId = getCurrentUserId(req);
-  const { sql_text, row_limit, source, tables_used, database } = req.body;
+  const {
+    sql_text,
+    row_limit,
+    source,
+    tables_used,
+    database,
+    chart_id,
+    dashboard_id,
+    chart_type,
+    dataset_id,
+  } = req.body;
 
   if (!sql_text || typeof sql_text !== 'string') {
     throw new ValidationError('sql_text is required');
@@ -203,12 +329,28 @@ router.post('/execute', asyncHandler(async (req, res) => {
     throw new ValidationError('database parameter is required');
   }
 
-  console.log('[SQL] Executing query on database:', database);
+  const trigger_source = canonicalSource(source);
+
+  // Resolve tables_used: prefer what the frontend provides, fall back to
+  // server-side extraction so the column is never null.
+  const resolvedTablesUsed: string = tables_used ||
+    JSON.stringify(extractTablesFromSql(sql_text));
+
+  // Consistent run_context: include all available caller metadata.
+  const run_context = JSON.stringify({
+    source: trigger_source,
+    ...(chart_id     != null ? { chartId:     Number(chart_id)     } : {}),
+    ...(dashboard_id != null ? { dashboardId: Number(dashboard_id) } : {}),
+    ...(chart_type   != null ? { chartType:   chart_type           } : {}),
+    ...(dataset_id   != null ? { datasetId:   Number(dataset_id)   } : {}),
+    database,
+  });
+
+  console.log('[SQL] Executing query on database:', database, '| source:', trigger_source);
   console.log('[SQL] Query preview:', sql_text.substring(0, 100) + (sql_text.length > 100 ? '...' : ''));
 
   const startTime = Date.now();
   let result;
-  let errorMessage: string | null = null;
 
   try {
     // Python proxy doesn't handle limit - apply it after execution if needed
@@ -221,10 +363,9 @@ router.post('/execute', asyncHandler(async (req, res) => {
       result.rowCount = limit;
     }
   } catch (error) {
-    errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     console.error('[SQL] Query execution failed:', errorMessage);
 
-    // Log failed query to history - AWAIT to ensure it's saved
     try {
       await queryHistoryService.create({
         sql_text,
@@ -232,10 +373,11 @@ router.post('/execute', asyncHandler(async (req, res) => {
         row_count: 0,
         status: 'error',
         error_message: errorMessage,
-        trigger_source: source || 'chart-builder',
-        tables_used: tables_used || null,
-        run_context: source ? JSON.stringify({ source }) : null,
-        started_at: startTime
+        trigger_source,
+        tables_used: resolvedTablesUsed,
+        run_context,
+        dataset_id: dataset_id ? Number(dataset_id) : null,
+        started_at: startTime,
       }, userId);
     } catch (err) {
       console.error('[SQL] Failed to log error to query history:', err);
@@ -246,17 +388,17 @@ router.post('/execute', asyncHandler(async (req, res) => {
 
   const durationMs = Date.now() - startTime;
 
-  // Log successful query to history - AWAIT to ensure it's saved before response
   try {
     await queryHistoryService.create({
       sql_text,
       duration_ms: durationMs,
       row_count: result.rowCount || 0,
       status: 'success',
-      trigger_source: source || 'chart-builder',
-      tables_used: tables_used || null,
-      run_context: source ? JSON.stringify({ source }) : null,
-      started_at: startTime
+      trigger_source,
+      tables_used: resolvedTablesUsed,
+      run_context,
+      dataset_id: dataset_id ? Number(dataset_id) : null,
+      started_at: startTime,
     }, userId);
   } catch (err) {
     console.error('[SQL] Failed to log query history:', err);
@@ -266,7 +408,7 @@ router.post('/execute', asyncHandler(async (req, res) => {
     columns: result.columns || [],
     rows: result.rows || [],
     message: result.rowCount ? `Returned ${result.rowCount} rows` : undefined,
-    duration_ms: durationMs
+    duration_ms: durationMs,
   });
 }));
 
