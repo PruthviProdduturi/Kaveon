@@ -1,0 +1,11 @@
+packages:
+  - apps/*
+  - packages/*
+
+ignoredBuiltDependencies:
+  - odbc
+
+onlyBuiltDependencies:
+  - puppeteer
+  - sharp
+  - unrs-resolver

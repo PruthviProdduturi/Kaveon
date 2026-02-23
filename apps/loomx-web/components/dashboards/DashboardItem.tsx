@@ -1,0 +1,368 @@
+/**
+ * Dashboard Item Component
+ *
+ * Wrapper component that renders the appropriate dashboard component type
+ * (chart, text, header, tabs, divider) based on the layout item configuration.
+ *
+ * Provides common functionality:
+ * - Drag handle for repositioning (edit mode only)
+ * - Action buttons (edit, duplicate, delete)
+ * - Selection state visual feedback
+ * - Component-specific rendering
+ */
+
+import React, { useMemo, useState } from 'react';
+import { useDashboard } from './DashboardContext';
+import type { DashboardLayoutItem } from '../../types/dashboard';
+
+// Import component implementations (will be created next)
+// For now, we'll use placeholder components
+const DashboardChartComponent = React.lazy(() => import('./components/DashboardChartComponent'));
+const DashboardTextComponent = React.lazy(() => import('./components/DashboardTextComponent'));
+const DashboardHeaderComponent = React.lazy(() => import('./components/DashboardHeaderComponent'));
+const DashboardTabsComponent = React.lazy(() => import('./components/DashboardTabsComponent'));
+const DashboardDividerComponent = React.lazy(() => import('./components/DashboardDividerComponent'));
+const DashboardRowComponent = React.lazy(() => import('./components/DashboardRowComponent'));
+const DashboardColumnComponent = React.lazy(() => import('./components/DashboardColumnComponent'));
+
+/**
+ * Props for the DashboardItem component
+ */
+interface DashboardItemProps {
+  /** Layout item configuration */
+  item: DashboardLayoutItem;
+  /** Whether the dashboard is in edit mode (defaults to context if not provided) */
+  isEditMode?: boolean;
+}
+
+/**
+ * DashboardItem Component
+ *
+ * Renders a single dashboard component with appropriate wrapper,
+ * drag handle, and action buttons based on edit mode state.
+ */
+const DashboardItem: React.FC<DashboardItemProps> = ({ item, isEditMode: isEditModeProp }) => {
+  const {
+    selectedItemId,
+    updateLayoutItem,
+    removeLayoutItem,
+    removeItemFromContainer,
+    duplicateLayoutItem,
+    getEffectiveFilters,
+    isEditMode: isEditModeContext,
+    moveItemToRoot,
+  } = useDashboard();
+
+  // Use prop if provided, otherwise fall back to context
+  const isEditMode = isEditModeProp !== undefined ? isEditModeProp : isEditModeContext;
+
+  // Check if this item is nested inside a container
+  const isNested = !!item.parentId;
+
+  const isSelected = selectedItemId === item.i;
+
+  // State for hover actions (used by chart, row, column components)
+  const [showActions, setShowActions] = useState(false);
+
+  /**
+   * Calculate effective filters for this component
+   * Merges dashboard filters with component-level filters
+   */
+  const effectiveFilters = useMemo(() => {
+    const result = getEffectiveFilters(item.i);
+    return result.effectiveFilters;
+  }, [item.i, getEffectiveFilters]);
+
+  /**
+   * Handle component configuration changes
+   */
+  const handleConfigChange = (itemId: string, updates: Partial<DashboardLayoutItem>) => {
+    updateLayoutItem(itemId, updates);
+  };
+
+  /**
+   * Handle component removal – for nested items use removeItemFromContainer
+   */
+  const handleRemove = () => {
+    if (window.confirm('Are you sure you want to remove this component?')) {
+      if (item.parentId) {
+        removeItemFromContainer(item.parentId, item.i);
+      } else {
+        removeLayoutItem(item.i);
+      }
+    }
+  };
+
+  /**
+   * Handle component duplication
+   */
+  const handleDuplicate = () => {
+    duplicateLayoutItem(item.i);
+  };
+
+  /**
+   * Handle moving item to root canvas
+   */
+  const handleMoveToRoot = () => {
+    if (item.parentId) {
+      moveItemToRoot(item.i);
+    }
+  };
+
+  /**
+   * Render the appropriate component based on type
+   */
+  const renderComponent = () => {
+    const componentProps = {
+      item,
+      isEditMode,
+      effectiveFilters,
+      onConfigChange: handleConfigChange,
+      onRemove: handleRemove,
+    };
+
+    switch (item.type) {
+      case 'chart':
+        return (
+          <React.Suspense fallback={<ComponentLoading />}>
+            <DashboardChartComponent {...componentProps} />
+          </React.Suspense>
+        );
+
+      case 'text':
+        return (
+          <React.Suspense fallback={<ComponentLoading />}>
+            <DashboardTextComponent {...componentProps} />
+          </React.Suspense>
+        );
+
+      case 'header':
+        return (
+          <React.Suspense fallback={<ComponentLoading />}>
+            <DashboardHeaderComponent {...componentProps} />
+          </React.Suspense>
+        );
+
+      case 'tabs':
+        return (
+          <React.Suspense fallback={<ComponentLoading />}>
+            <DashboardTabsComponent {...componentProps} />
+          </React.Suspense>
+        );
+
+      case 'divider':
+        return (
+          <React.Suspense fallback={<ComponentLoading />}>
+            <DashboardDividerComponent {...componentProps} />
+          </React.Suspense>
+        );
+
+      case 'row':
+        return (
+          <React.Suspense fallback={<ComponentLoading />}>
+            <DashboardRowComponent {...componentProps} />
+          </React.Suspense>
+        );
+
+      case 'column':
+        return (
+          <React.Suspense fallback={<ComponentLoading />}>
+            <DashboardColumnComponent {...componentProps} />
+          </React.Suspense>
+        );
+
+      default:
+        return (
+          <div className="dashboard-component-error">
+            <div className="dashboard-component-error-icon">
+              <i className="fas fa-exclamation-triangle" />
+            </div>
+            <div className="dashboard-component-error-message">
+              Unknown component type: {item.type}
+            </div>
+          </div>
+        );
+    }
+  };
+
+  // Row and column components self-manage their controls – render without wrapper actions.
+  if (item.type === 'row' || item.type === 'column') {
+    return (
+      <div
+        data-item-id={item.i}
+        data-item-type={item.type}
+        style={{ height: '100%' }}
+      >
+        {renderComponent()}
+      </div>
+    );
+  }
+
+  // Chart (and similar non-container) components: render with lightweight hover actions.
+  if (item.type === 'chart') {
+    return (
+      <div
+        className={`dashboard-component ${isSelected ? 'dashboard-component-selected' : ''}`}
+        data-testid={`dashboard-item-${item.i}`}
+        data-item-id={item.i}
+        data-item-type={item.type}
+        data-parent-id={item.parentId || ''}
+        style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}
+        onMouseEnter={() => setShowActions(true)}
+        onMouseLeave={() => setShowActions(false)}
+      >
+        {/* Hover action buttons in edit mode */}
+        {isEditMode && (
+          <div
+            style={{
+              position: 'absolute',
+              top: 6,
+              right: 6,
+              display: 'flex',
+              gap: 4,
+              zIndex: 10,
+              opacity: showActions ? 1 : 0,
+              transition: 'opacity 0.15s ease',
+              pointerEvents: showActions ? 'auto' : 'none',
+            }}
+          >
+            <button
+              onClick={handleDuplicate}
+              title="Duplicate chart"
+              style={{
+                background: 'rgba(255,255,255,0.95)',
+                padding: '4px 8px',
+                border: 'none',
+                borderRadius: 4,
+                cursor: 'pointer',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
+                fontSize: 12,
+                color: '#475569',
+              }}
+            >
+              <i className="fas fa-copy" />
+            </button>
+            <button
+              onClick={handleRemove}
+              title="Remove chart"
+              style={{
+                background: 'rgba(255,255,255,0.95)',
+                padding: '4px 8px',
+                border: 'none',
+                borderRadius: 4,
+                cursor: 'pointer',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
+                fontSize: 12,
+                color: '#ef4444',
+              }}
+            >
+              <i className="fas fa-times" />
+            </button>
+          </div>
+        )}
+
+        {/* Chart component */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
+          {renderComponent()}
+        </div>
+      </div>
+    );
+  }
+
+  // For non-chart/row/column components, render with header
+  return (
+    <div
+      className={`dashboard-component ${isSelected ? 'dashboard-component-selected' : ''}`}
+      data-testid={`dashboard-item-${item.i}`}
+      data-item-id={item.i}
+      data-item-type={item.type}
+      data-is-container={false}
+      data-parent-id={item.parentId || ''}
+      style={{ position: 'relative', height: '100%' }}
+    >
+      {/* Header with drag handle and actions */}
+      <div className="dashboard-component-header">
+        {isEditMode && (
+          <div className="dashboard-drag-handle" title="Drag to move">
+            <i className="fas fa-grip-vertical" />
+          </div>
+        )}
+
+        <div className="dashboard-component-title">
+          {getComponentTitle(item)}
+        </div>
+
+        {isEditMode && (
+          <div className="dashboard-component-actions">
+            {isNested && (
+              <button
+                className="dashboard-component-action-btn"
+                onClick={handleMoveToRoot}
+                title="Move to root canvas"
+              >
+                <i className="fas fa-arrow-up" />
+              </button>
+            )}
+            <button
+              className="dashboard-component-action-btn"
+              onClick={handleDuplicate}
+              title="Duplicate component"
+            >
+              <i className="fas fa-copy" />
+            </button>
+
+            <button
+              className="dashboard-component-action-btn"
+              onClick={handleRemove}
+              title="Remove component"
+            >
+              <i className="fas fa-trash" />
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Component body */}
+      <div className="dashboard-component-body">
+        {renderComponent()}
+      </div>
+    </div>
+  );
+};
+
+/**
+ * Get a display title for the component based on its type and configuration
+ */
+function getComponentTitle(item: DashboardLayoutItem): string {
+  switch (item.type) {
+    case 'chart':
+      return item.chartId ? `Chart #${item.chartId}` : 'Chart';
+    case 'text':
+      return 'Text Block';
+    case 'header':
+      return item.headerConfig?.content || 'Header';
+    case 'tabs':
+      return 'Tabs';
+    case 'divider':
+      return 'Divider';
+    case 'row':
+      return 'Row';
+    case 'column':
+      return 'Column';
+    default:
+      return 'Component';
+  }
+}
+
+/**
+ * Loading placeholder for lazy-loaded components
+ */
+function ComponentLoading() {
+  return (
+    <div className="dashboard-component-loading">
+      <i className="fas fa-spinner fa-spin" /> Loading...
+    </div>
+  );
+}
+
+export default DashboardItem;
