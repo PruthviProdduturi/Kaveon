@@ -928,17 +928,27 @@ if __name__ == '__main__':
     # (az login token / managed identity) before the first connection attempt,
     # avoiding noisy "Timeout error [258]" logs at startup.
     # Only the metadata DB is warmed here; warehouse DBs connect lazily on demand.
+    #
+    # We create 3 connections because the home page Phase 1 fires 3 parallel
+    # requests to the metadata DB (/summary, /favorite/current, /data-sources/list).
+    # Without 3 warm connections, only the first call is fast — the other two
+    # race to create new ODBC connections and take 7-10s each.
     def _delayed_warmup():
         time.sleep(15)
         if FABRIC_METADATA_ENDPOINT and FABRIC_METADATA_DATABASE:
+            conns = []
             try:
-                print(f"[Proxy] Warming metadata DB pool ({FABRIC_METADATA_DATABASE})…")
-                conn = get_connection(FABRIC_METADATA_DATABASE)
-                conn.execute_query("SELECT 1 AS warmup", use_cache=False)
-                return_connection(conn, FABRIC_METADATA_DATABASE)
-                print(f"[Proxy] Metadata DB pool ready.")
+                print(f"[Proxy] Warming metadata DB pool ({FABRIC_METADATA_DATABASE}) — 3 connections…")
+                for _ in range(3):
+                    conn = get_connection(FABRIC_METADATA_DATABASE)
+                    conn.execute_query("SELECT 1 AS warmup")
+                    conns.append(conn)
+                print(f"[Proxy] Metadata DB pool ready (3 connections warmed).")
             except Exception as e:
                 print(f"[Proxy] Warmup failed (will retry on first request): {e}")
+            finally:
+                for conn in conns:
+                    return_connection(conn, FABRIC_METADATA_DATABASE)
 
     warmup_thread = Thread(target=_delayed_warmup, daemon=True)
     warmup_thread.start()
