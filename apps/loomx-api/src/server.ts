@@ -24,6 +24,7 @@ import labRoutes from './routes/lab';
 import sqlRoutes from './routes/sql';
 import themeRoutes from './routes/theme';
 import dataSourcesRoutes from './routes/dataSources';
+import setupRoutes from './routes/setup';
 
 // Create Express app
 const app = express();
@@ -68,6 +69,7 @@ app.use('/api/v1/datasets', datasetsRoutes);
 app.use('/api/v1/charts', chartsRoutes);
 app.use('/api/v1/dashboards', dashboardsRoutes);
 app.use('/api/v1/data-sources', dataSourcesRoutes);
+app.use('/api/v1/setup', setupRoutes);
 
 // Root endpoint
 app.get('/', (req: Request, res: Response) => {

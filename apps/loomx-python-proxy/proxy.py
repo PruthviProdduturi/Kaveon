@@ -793,6 +793,85 @@ def execute_batch():
         }), 500
 
 
+@app.route('/api/v1/probe', methods=['POST'])
+def probe_connection():
+    """
+    Test an arbitrary Fabric SQL connection.
+    Used by the LoomX setup wizard to validate and initialise the metadata database.
+
+    Request body:
+      endpoint   - Fabric SQL endpoint hostname (e.g. "xxx.datawarehouse.fabric.microsoft.com")
+      database   - Database name
+      statements - (optional) list of SQL statements to execute in sequence.
+                   Defaults to ['SELECT 1 AS test'].
+
+    Response (always HTTP 200):
+      { success: true,  results: [...] }
+      { success: false, error_type: str, message: str }
+
+    error_type values:
+      connection_failed  - cannot reach the server
+      access_denied      - connected but authentication / permission denied
+      db_not_found       - server reachable but database does not exist
+      timeout            - connection timed out
+    """
+    data = request.json or {}
+    endpoint = data.get('endpoint')
+    database = data.get('database')
+    statements = data.get('statements', ['SELECT 1 AS test'])
+
+    if not endpoint or not database:
+        return jsonify({
+            'success': False,
+            'error_type': 'invalid_request',
+            'message': 'endpoint and database are required',
+        })
+
+    conn = None
+    try:
+        conn = FabricSQLConnection(endpoint, database)
+        conn.connect()
+
+        results = []
+        for stmt in statements:
+            stmt = stmt.strip()
+            if not stmt:
+                continue
+            result = conn.execute_query(stmt)
+            results.append({
+                'success': True,
+                'row_count': result['row_count'],
+                'rows': result['rows'][:10],   # cap at 10 rows
+                'columns': result['columns'],
+            })
+
+        return jsonify({'success': True, 'results': results})
+
+    except Exception as e:
+        raw = str(e).lower()
+        if any(k in raw for k in ['login failed', 'not authorized', 'access denied', 'permission denied']):
+            error_type = 'access_denied'
+        elif any(k in raw for k in ['cannot open database', 'invalid database', 'does not exist', 'catalog not found']):
+            error_type = 'db_not_found'
+        elif any(k in raw for k in ['timeout', 'timed out', 'connection timeout']):
+            error_type = 'timeout'
+        else:
+            error_type = 'connection_failed'
+
+        print(f"[Probe] {error_type}: {endpoint}/{database} — {str(e)}")
+        return jsonify({
+            'success': False,
+            'error_type': error_type,
+            'message': str(e),
+        })
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def warm_connection_pool():
     """Pre-warm connection pools with a few connections to reduce first-request latency"""
     print("[Proxy] Warming connection pools (LIVE DATA mode - no caching)...")
@@ -828,15 +907,14 @@ def warm_connection_pool():
 
 
 if __name__ == '__main__':
-    # Validate configuration - only metadata endpoint is required now
-    if not FABRIC_METADATA_ENDPOINT:
-        print("ERROR: FABRIC_METADATA_ENDPOINT environment variable is required")
-        print("Data warehouse endpoints are retrieved from the data_sources table")
-        sys.exit(1)
-
-    if not FABRIC_METADATA_DATABASE:
-        print("ERROR: FABRIC_METADATA_DATABASE environment variable is required")
-        sys.exit(1)
+    # Metadata endpoint/database are optional during first-time setup.
+    # The LoomX setup wizard will provide credentials and update .env.
+    # Only /api/v1/probe (and the health endpoint) are fully functional
+    # until the metadata DB is configured.
+    if not FABRIC_METADATA_ENDPOINT or not FABRIC_METADATA_DATABASE:
+        print("WARNING: FABRIC_METADATA_ENDPOINT / FABRIC_METADATA_DATABASE not set.")
+        print("         Proxy starting in setup mode — /api/v1/probe is available.")
+        print("         Use the LoomX setup wizard after login to configure your metadata DB.")
 
     print("=" * 44)
     print("LOOMX Python Proxy")
