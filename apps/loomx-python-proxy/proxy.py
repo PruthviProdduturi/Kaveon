@@ -923,34 +923,41 @@ if __name__ == '__main__':
     print(f"Health: http://localhost:5001/health")
     print("=" * 44)
 
-    # Warm the metadata DB execute pool in the background after a short delay.
-    # The delay lets DefaultAzureCredential finish iterating its auth chain
-    # (az login token / managed identity) before the first connection attempt,
-    # avoiding noisy "Timeout error [258]" logs at startup.
-    # Only the metadata DB is warmed here; warehouse DBs connect lazily on demand.
+    # Warm the metadata DB execute pool immediately at startup.
+    # Uses retry-with-backoff so that:
+    #   • In production (managed identity) or dev (az login cached): first
+    #     attempt succeeds in ~10s — pool is ready well before any user logs in.
+    #   • On a machine with no cached credentials (rare dev edge case): retries
+    #     at 10s and 20s then gives up, leaving lazy connection as the fallback.
     #
-    # We create 3 connections because the home page Phase 1 fires 3 parallel
-    # requests to the metadata DB (/summary, /favorite/current, /data-sources/list).
-    # Without 3 warm connections, only the first call is fast — the other two
-    # race to create new ODBC connections and take 7-10s each.
-    def _delayed_warmup():
-        time.sleep(15)
-        if FABRIC_METADATA_ENDPOINT and FABRIC_METADATA_DATABASE:
+    # We create 3 connections to cover Phase 1's 3 parallel metadata DB
+    # requests (/summary, /favorite/current, /data-sources/list).
+    def _startup_warmup():
+        if not FABRIC_METADATA_ENDPOINT or not FABRIC_METADATA_DATABASE:
+            return
+        delays = [0, 10, 20]  # immediate, then retry at 10s and 20s
+        for attempt, delay in enumerate(delays, 1):
+            if delay:
+                time.sleep(delay)
             conns = []
             try:
-                print(f"[Proxy] Warming metadata DB pool ({FABRIC_METADATA_DATABASE}) — 3 connections…")
+                print(f"[Proxy] Warming metadata DB pool ({FABRIC_METADATA_DATABASE}) — attempt {attempt}/3…")
                 for _ in range(3):
                     conn = get_connection(FABRIC_METADATA_DATABASE)
                     conn.execute_query("SELECT 1 AS warmup")
                     conns.append(conn)
                 print(f"[Proxy] Metadata DB pool ready (3 connections warmed).")
+                return  # success — no more retries needed
             except Exception as e:
-                print(f"[Proxy] Warmup failed (will retry on first request): {e}")
+                print(f"[Proxy] Warmup attempt {attempt} failed: {e}")
+                if attempt < len(delays):
+                    print(f"[Proxy] Retrying in {delays[attempt]}s…")
             finally:
                 for conn in conns:
                     return_connection(conn, FABRIC_METADATA_DATABASE)
+        print("[Proxy] Warmup gave up after 3 attempts — first request will connect lazily.")
 
-    warmup_thread = Thread(target=_delayed_warmup, daemon=True)
+    warmup_thread = Thread(target=_startup_warmup, daemon=True)
     warmup_thread.start()
 
     # Run Flask app
