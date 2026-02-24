@@ -923,9 +923,10 @@ if __name__ == '__main__':
     print(f"Health: http://localhost:5001/health")
     print("=" * 44)
 
-    # Pre-warm connection pools in a separate thread to not block startup
-    warmup_thread = Thread(target=warm_connection_pool, daemon=True)
-    warmup_thread.start()
+    # Connections are made lazily on first request (after the user logs in via
+    # the UI and Azure AD credentials are available).  Pre-warming at startup
+    # would trigger DefaultAzureCredential to iterate its entire chain before
+    # a token is cached, producing noisy timeout warnings in the logs.
 
     # Run Flask app
     # use_reloader=False prevents double startup banner from Flask's reloader
