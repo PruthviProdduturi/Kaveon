@@ -22,17 +22,19 @@ const SETUP_OK_KEY = "loomx_setup_ok";
  * Flow:
  *   1. Wait for MSAL auth check (isConnecting).
  *   2. If not authenticated → show AuthScreen.
- *   3. Once authenticated, check sessionStorage for a cached "ok" result.
- *      If found → skip the network call and render immediately.
- *   4. Otherwise call GET /api/v1/setup/status, cache "ok" in sessionStorage.
- *   5. If status is not 'ok' → show SetupModal (blocks the app until resolved).
- *
- * sessionStorage is scoped to the browser tab session, so setup is only
- * re-verified after a full tab close/reopen or after SetupModal completes.
+ *   3. Once authenticated, render Layout + children IMMEDIATELY so page.tsx
+ *      data fetches fire in parallel with the /status check.
+ *   4. /status fires in the background (sessionStorage short-circuits it on
+ *      every subsequent load within the same browser session).
+ *   5. If /status returns non-ok → overlay SetupModal (fixed, full-screen,
+ *      blocks interaction) without unmounting the already-loading page.
+ *   6. Once SetupModal completes → clear the overlay, page is already warm.
  */
 export function ClientLayout({ children }: ClientLayoutProps) {
   const { isAuthenticated, isConnecting } = useAuth();
 
+  // null  = check not yet returned (may or may not be needed)
+  // value = setup is required — show the modal
   const [setupData, setSetupData] = useState<SetupData | null>(null);
   const checkedRef = useRef(false);
 
@@ -41,31 +43,33 @@ export function ClientLayout({ children }: ClientLayoutProps) {
     checkedRef.current = true;
 
     // Fast path: if we already confirmed setup is ok in this browser session,
-    // skip the network round-trip (avoids a 7-10s delay on every page refresh).
+    // skip the network round-trip entirely.
     if (typeof sessionStorage !== "undefined" && sessionStorage.getItem(SETUP_OK_KEY) === "1") {
-      setSetupData({ status: "ok" });
       return;
     }
 
-    const checkSetup = async () => {
+    // Fire /status in the background — children are already rendering and
+    // their data fetches are running in parallel.
+    void (async () => {
       try {
         const res = await msalFetch(`${API_BASE}/api/v1/setup/status`);
         const data: SetupData = await res.json();
-        if (data.status === "ok" && typeof sessionStorage !== "undefined") {
-          sessionStorage.setItem(SETUP_OK_KEY, "1");
+        if (data.status === "ok") {
+          if (typeof sessionStorage !== "undefined") {
+            sessionStorage.setItem(SETUP_OK_KEY, "1");
+          }
+        } else {
+          // Setup required — overlay the modal on top of the already-rendered app.
+          setSetupData(data);
         }
-        setSetupData(data);
       } catch {
-        // If the setup check itself fails (e.g. API not running yet), don't
-        // block the user — treat as ok and let normal error handling take over.
-        setSetupData({ status: "ok" });
+        // If the check fails (API not running yet), fail open — let normal
+        // error handling surface the problem to the user.
       }
-    };
-
-    void checkSetup();
+    })();
   }, [isAuthenticated]);
 
-  // ── Loading states ────────────────────────────────────────────────────────
+  // ── Auth loading states (keep these — they're fast) ──────────────────────
 
   if (isConnecting) {
     return <LoadingOverlay />;
@@ -75,28 +79,40 @@ export function ClientLayout({ children }: ClientLayoutProps) {
     return <AuthScreen />;
   }
 
-  // Still waiting for the setup status response.
-  if (!setupData) {
-    return <LoadingOverlay />;
-  }
+  // ── Render immediately — no blocking on the setup check ──────────────────
+  //
+  // Layout + children mount and start their own data fetches right away.
+  // If the setup check returns "needs setup", SetupModal overlays the screen
+  // as a fixed full-screen layer so the user can't interact with the app
+  // until the database is configured.
 
-  // ── Setup required ────────────────────────────────────────────────────────
+  return (
+    <>
+      <Layout>{children}</Layout>
 
-  if (setupData.status !== "ok") {
-    return (
-      <SetupModal
-        data={setupData}
-        onComplete={() => {
-          if (typeof sessionStorage !== "undefined") {
-            sessionStorage.setItem(SETUP_OK_KEY, "1");
-          }
-          setSetupData({ status: "ok" });
-        }}
-      />
-    );
-  }
-
-  // ── Normal app ────────────────────────────────────────────────────────────
-
-  return <Layout>{children}</Layout>;
+      {setupData && setupData.status !== "ok" && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 9999,
+            background: "rgba(0, 0, 0, 0.65)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <SetupModal
+            data={setupData}
+            onComplete={() => {
+              if (typeof sessionStorage !== "undefined") {
+                sessionStorage.setItem(SETUP_OK_KEY, "1");
+              }
+              setSetupData(null);
+            }}
+          />
+        </div>
+      )}
+    </>
+  );
 }
