@@ -124,6 +124,7 @@ export default function Home() {
   const [labTableCount, setLabTableCount] = useState<number | null>(null);
   const [allLabTables, setAllLabTables] = useState<LabTableSummary[]>([]);
   const [allLabTableCount, setAllLabTableCount] = useState<number | null>(null);
+  const [dataSourceList, setDataSourceList] = useState<any[]>([]);
   const [tableScope, setTableScope] = useState<"fav" | "all">("fav");
   const [dashboardScope, setDashboardScope] = useState<"mine" | "all">("all");
   const [chartScope, setChartScope] = useState<"mine" | "all">("all");
@@ -145,10 +146,10 @@ export default function Home() {
 
       try {
         // ── PHASE 1: Metadata DB only ────────────────────────────────────────
-        // These two calls only hit the LoomX metadata Fabric DB, which is
+        // All three calls hit only the LoomX metadata Fabric DB, which is
         // already warm after the setup/status check in ClientLayout.
-        // Expected round-trip: ~500-700 ms.
-        const [favoriteDataSourceRes, metadata] = await Promise.all([
+        // Expected round-trip: ~500-700 ms after warmup.
+        const [favoriteDataSourceRes, metadata, dataSourceListRes] = await Promise.all([
           msalFetch(`${API_BASE}/api/v1/data-sources/favorite/current`, {
             headers: userEmail ? { 'x-user-email': userEmail } : undefined
           }).catch(() => null),
@@ -158,6 +159,13 @@ export default function Home() {
           })
             .then(r => r.ok ? r.json() : { dashboards: [], charts: [], datasets: [], favorites: [], savedQueries: [] })
             .catch(() => ({ dashboards: [], charts: [], datasets: [], favorites: [], savedQueries: [] })),
+
+          // Data source list (names/endpoints from metadata DB, no warehouse calls)
+          msalFetch(`${API_BASE}/api/v1/data-sources/list`, {
+            headers: userEmail ? { 'x-user-email': userEmail } : undefined
+          })
+            .then(r => r.ok ? r.json() : { dataSources: [] })
+            .catch(() => ({ dataSources: [] })),
         ]);
 
         const favoriteDataSource = favoriteDataSourceRes?.ok
@@ -212,6 +220,7 @@ export default function Home() {
         setAllSavedQueries(allQueries);
         setSavedQueries(filteredQueries);
         setSavedQueriesCount(allQueries.length);
+        setDataSourceList(dataSourceListRes.dataSources || []);
         setLabTables([]);
         setLabTableCount(null);
         setAllLabTables([]);

@@ -923,10 +923,25 @@ if __name__ == '__main__':
     print(f"Health: http://localhost:5001/health")
     print("=" * 44)
 
-    # Connections are made lazily on first request (after the user logs in via
-    # the UI and Azure AD credentials are available).  Pre-warming at startup
-    # would trigger DefaultAzureCredential to iterate its entire chain before
-    # a token is cached, producing noisy timeout warnings in the logs.
+    # Warm the metadata DB execute pool in the background after a short delay.
+    # The delay lets DefaultAzureCredential finish iterating its auth chain
+    # (az login token / managed identity) before the first connection attempt,
+    # avoiding noisy "Timeout error [258]" logs at startup.
+    # Only the metadata DB is warmed here; warehouse DBs connect lazily on demand.
+    def _delayed_warmup():
+        time.sleep(15)
+        if FABRIC_METADATA_ENDPOINT and FABRIC_METADATA_DATABASE:
+            try:
+                print(f"[Proxy] Warming metadata DB pool ({FABRIC_METADATA_DATABASE})…")
+                conn = get_connection(FABRIC_METADATA_DATABASE)
+                conn.execute_query("SELECT 1 AS warmup", use_cache=False)
+                return_connection(conn, FABRIC_METADATA_DATABASE)
+                print(f"[Proxy] Metadata DB pool ready.")
+            except Exception as e:
+                print(f"[Proxy] Warmup failed (will retry on first request): {e}")
+
+    warmup_thread = Thread(target=_delayed_warmup, daemon=True)
+    warmup_thread.start()
 
     # Run Flask app
     # use_reloader=False prevents double startup banner from Flask's reloader

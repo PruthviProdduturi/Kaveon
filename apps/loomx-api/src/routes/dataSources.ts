@@ -138,6 +138,39 @@ router.get('/active', async (req, res, next) => {
   }
 });
 
+// GET /api/v1/data-sources/list - List data sources from metadata DB only (no warehouse calls)
+// Used by the home page Phase 1 to get data source names/endpoints without table counts.
+router.get('/list', async (req, res, next) => {
+  try {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+
+    const userEmail = req.headers['x-user-email'] as string || 'unknown';
+
+    const result = await metadataProxyService.query(`
+      SELECT
+        ds.id,
+        ds.name,
+        ds.type,
+        ds.connection_string,
+        ds.database_name,
+        ds.region,
+        ds.description,
+        ds.is_active,
+        CASE WHEN fav.id IS NOT NULL THEN 1 ELSE 0 END AS is_favorite
+      FROM data_sources ds
+      LEFT JOIN favorites fav
+        ON CAST(ds.id AS NVARCHAR(255)) = fav.object_id
+        AND fav.object_type = 'data_source'
+        AND fav.user_email = @param0
+      ORDER BY is_favorite DESC, ds.is_active DESC, ds.created_at DESC
+    `, [userEmail]);
+
+    res.json({ success: true, dataSources: result.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // GET /api/v1/data-sources/:id - Get a single data source
 router.get('/:id', async (req, res, next) => {
   try {
