@@ -13,6 +13,8 @@ interface ClientLayoutProps {
   children: ReactNode;
 }
 
+const SETUP_OK_KEY = "loomx_setup_ok";
+
 /**
  * Client-side layout wrapper that enforces authentication and verifies that
  * the metadata database is reachable and initialised before rendering the app.
@@ -20,9 +22,13 @@ interface ClientLayoutProps {
  * Flow:
  *   1. Wait for MSAL auth check (isConnecting).
  *   2. If not authenticated → show AuthScreen.
- *   3. Once authenticated, call GET /api/v1/setup/status once.
- *   4. If status is 'ok' → render the full Layout.
- *   5. Otherwise → show SetupModal (blocks the app until resolved).
+ *   3. Once authenticated, check sessionStorage for a cached "ok" result.
+ *      If found → skip the network call and render immediately.
+ *   4. Otherwise call GET /api/v1/setup/status, cache "ok" in sessionStorage.
+ *   5. If status is not 'ok' → show SetupModal (blocks the app until resolved).
+ *
+ * sessionStorage is scoped to the browser tab session, so setup is only
+ * re-verified after a full tab close/reopen or after SetupModal completes.
  */
 export function ClientLayout({ children }: ClientLayoutProps) {
   const { isAuthenticated, isConnecting } = useAuth();
@@ -34,10 +40,20 @@ export function ClientLayout({ children }: ClientLayoutProps) {
     if (!isAuthenticated || checkedRef.current) return;
     checkedRef.current = true;
 
+    // Fast path: if we already confirmed setup is ok in this browser session,
+    // skip the network round-trip (avoids a 7-10s delay on every page refresh).
+    if (typeof sessionStorage !== "undefined" && sessionStorage.getItem(SETUP_OK_KEY) === "1") {
+      setSetupData({ status: "ok" });
+      return;
+    }
+
     const checkSetup = async () => {
       try {
         const res = await msalFetch(`${API_BASE}/api/v1/setup/status`);
         const data: SetupData = await res.json();
+        if (data.status === "ok" && typeof sessionStorage !== "undefined") {
+          sessionStorage.setItem(SETUP_OK_KEY, "1");
+        }
         setSetupData(data);
       } catch {
         // If the setup check itself fails (e.g. API not running yet), don't
@@ -70,7 +86,12 @@ export function ClientLayout({ children }: ClientLayoutProps) {
     return (
       <SetupModal
         data={setupData}
-        onComplete={() => setSetupData({ status: "ok" })}
+        onComplete={() => {
+          if (typeof sessionStorage !== "undefined") {
+            sessionStorage.setItem(SETUP_OK_KEY, "1");
+          }
+          setSetupData({ status: "ok" });
+        }}
       />
     );
   }
