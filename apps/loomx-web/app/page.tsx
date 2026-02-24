@@ -138,86 +138,40 @@ export default function Home() {
 
     const loadAllData = async () => {
       setIsLoadingData(true);
-      const startTime = performance.now();
-      console.log('[Homepage] Starting data load...');
       const userEmail = account?.email || account?.username || null;
 
-      try {
-        const fetchStart = performance.now();
-        console.log('[Homepage] Starting data fetch...');
+      // Track the favorite DB name so phase 2 knows which DB to fetch tables for.
+      let favDbName: string | null = null;
 
-        // Load favorite data source first to get its tables
-        const favoriteDataSourceRes = await msalFetch(`${API_BASE}/api/v1/data-sources/favorite/current`, {
-          headers: userEmail ? { 'x-user-email': userEmail } : undefined
-        }).catch(() => null);
+      try {
+        // ── PHASE 1: Metadata DB only ────────────────────────────────────────
+        // These two calls only hit the LoomX metadata Fabric DB, which is
+        // already warm after the setup/status check in ClientLayout.
+        // Expected round-trip: ~500-700 ms.
+        const [favoriteDataSourceRes, metadata] = await Promise.all([
+          msalFetch(`${API_BASE}/api/v1/data-sources/favorite/current`, {
+            headers: userEmail ? { 'x-user-email': userEmail } : undefined
+          }).catch(() => null),
+
+          msalFetch(`${API_BASE}/api/v1/metadata/summary`, {
+            headers: userEmail ? { 'x-user-email': userEmail } : undefined
+          })
+            .then(r => r.ok ? r.json() : { dashboards: [], charts: [], datasets: [], favorites: [], savedQueries: [] })
+            .catch(() => ({ dashboards: [], charts: [], datasets: [], favorites: [], savedQueries: [] })),
+        ]);
 
         const favoriteDataSource = favoriteDataSourceRes?.ok
           ? (await favoriteDataSourceRes.json()).dataSource
           : null;
+        favDbName = favoriteDataSource?.database_name ?? null;
 
-        // ONE call to get ALL metadata (datasets, charts, dashboards, favorites, saved_queries)
-        // Plus Lab tables separately (data comes from different endpoint)
-        const [favTablesData, allDataSourcesData, metadata] = await Promise.all([
-          // Favorite data source tables
-          favoriteDataSource?.database_name
-            ? msalFetch(`${API_BASE}/api/v1/lab/tables?database=${encodeURIComponent(favoriteDataSource.database_name)}`)
-                .then(r => r.ok ? r.json() : { tables: [] })
-                .catch(() => ({ tables: [] }))
-            : Promise.resolve({ tables: [] }),
-
-          // All data sources with table counts
-          msalFetch(`${API_BASE}/api/v1/data-sources/active`, {
-            headers: userEmail ? { 'x-user-email': userEmail } : undefined
-          })
-            .then(r => r.ok ? r.json() : { dataSources: [] })
-            .catch(() => ({ dataSources: [] })),
-
-          // ALL metadata in ONE call (from metadata tables)
-          msalFetch(`${API_BASE}/api/v1/metadata/summary`, {
-            headers: userEmail ? { 'x-user-email': userEmail } : undefined
-          })
-            .then(r => r.ok ? r.json() : {
-              dashboards: [],
-              charts: [],
-              datasets: [],
-              favorites: [],
-              savedQueries: []
-            })
-            .catch(() => ({
-              dashboards: [],
-              charts: [],
-              datasets: [],
-              favorites: [],
-              savedQueries: []
-            }))
-        ]);
-
-        const fetchEnd = performance.now();
-        console.log(`[Homepage] Data fetch completed in ${(fetchEnd - fetchStart).toFixed(2)}ms`);
-
-        const processStart = performance.now();
-
-        // Process favorite data source tables
-        let favTables: LabTableSummary[] = [];
-        if (Array.isArray(favTablesData)) {
-          favTables = favTablesData;
-        } else if (favTablesData?.success && Array.isArray(favTablesData.tables)) {
-          favTables = favTablesData.tables;
-        } else if (Array.isArray(favTablesData?.tables)) {
-          favTables = favTablesData.tables;
-        }
-
-        // Calculate total table count from all data sources
-        const dataSources = allDataSourcesData.dataSources || [];
-        const totalTableCount = dataSources.reduce((sum: number, ds: any) => sum + (ds.table_count || 0), 0);
-
-        // Process saved queries (now from metadata response)
+        // Process saved queries
         const allQueries = metadata.savedQueries || [];
         const filteredQueries = userEmail
           ? allQueries.filter((q: any) => !q.created_by || q.created_by === userEmail)
           : allQueries;
 
-        // Process favorites (now from metadata response)
+        // Process favorites
         const rawFavorites = (metadata.favorites || [])
           .map((fav: any) => ({
             ...fav,
@@ -232,13 +186,10 @@ export default function Home() {
           }))
           .filter((f: any) => f.updated_at || f.created_at);
 
-        // Deduplicate by kind + id (in case API returns duplicates)
         const uniqueFavoritesMap = new Map<string, any>();
         rawFavorites.forEach((fav: any) => {
           const key = `${fav.kind}-${fav.id}`;
-          if (!uniqueFavoritesMap.has(key)) {
-            uniqueFavoritesMap.set(key, fav);
-          }
+          if (!uniqueFavoritesMap.has(key)) uniqueFavoritesMap.set(key, fav);
         });
 
         const processedFavorites = Array.from(uniqueFavoritesMap.values())
@@ -249,11 +200,8 @@ export default function Home() {
           })
           .slice(0, 6);
 
-        // Update all state at once
-        setLabTables(favTables);
-        setLabTableCount(favTables.length);
-        setAllLabTables([]); // We don't fetch all individual tables, just count from data sources
-        setAllLabTableCount(totalTableCount);
+        // Commit all metadata state — page renders immediately after this.
+        // Table counts remain null (shows "•••") until phase 2 completes.
         setDashboards(metadata.dashboards || []);
         setCharts(metadata.charts || []);
         setDatasets(metadata.datasets || []);
@@ -264,13 +212,13 @@ export default function Home() {
         setAllSavedQueries(allQueries);
         setSavedQueries(filteredQueries);
         setSavedQueriesCount(allQueries.length);
+        setLabTables([]);
+        setLabTableCount(null);
+        setAllLabTables([]);
+        setAllLabTableCount(null);
 
-        const processEnd = performance.now();
-        console.log(`[Homepage] Data processing completed in ${(processEnd - processStart).toFixed(2)}ms`);
-        console.log(`[Homepage] Total load time: ${(processEnd - startTime).toFixed(2)}ms`);
       } catch (error) {
         console.error('Failed to load homepage data:', error);
-        // Set defaults on error
         setLabTableCount(0);
         setAllLabTableCount(0);
         setDashboardCount(0);
@@ -278,12 +226,53 @@ export default function Home() {
         setDatasetCount(0);
         setSavedQueriesCount(0);
       } finally {
+        // Page renders here — phase 1 is complete.
         setIsLoadingData(false);
       }
 
+      // ── PHASE 2: Warehouse table counts (deferred, non-blocking) ────────────
+      // These calls connect to Fabric SQL data warehouses — the first connection
+      // takes 10-12 s; once the pool is warm subsequent calls take ~300 ms.
+      // The page is already visible; these update the "Data Tables" stat card
+      // when they complete in the background.
+      Promise.all([
+        favDbName
+          ? msalFetch(`${API_BASE}/api/v1/lab/tables?database=${encodeURIComponent(favDbName)}`, {
+              headers: userEmail ? { 'x-user-email': userEmail } : undefined
+            })
+              .then(r => r.ok ? r.json() : { tables: [] })
+              .catch(() => ({ tables: [] }))
+          : Promise.resolve({ tables: [] }),
+
+        msalFetch(`${API_BASE}/api/v1/data-sources/active`, {
+          headers: userEmail ? { 'x-user-email': userEmail } : undefined
+        })
+          .then(r => r.ok ? r.json() : { dataSources: [] })
+          .catch(() => ({ dataSources: [] })),
+      ]).then(([favTablesData, allDataSourcesData]) => {
+        let favTables: LabTableSummary[] = [];
+        if (Array.isArray(favTablesData)) {
+          favTables = favTablesData;
+        } else if (favTablesData?.success && Array.isArray(favTablesData.tables)) {
+          favTables = favTablesData.tables;
+        } else if (Array.isArray(favTablesData?.tables)) {
+          favTables = favTablesData.tables;
+        }
+
+        setLabTables(favTables);
+        setLabTableCount(favTables.length);
+        setAllLabTables([]);
+
+        const dataSources = allDataSourcesData.dataSources || [];
+        const totalTableCount = dataSources.reduce((sum: number, ds: any) => sum + (ds.table_count || 0), 0);
+        setAllLabTableCount(totalTableCount);
+      }).catch(() => {
+        setLabTableCount(0);
+        setAllLabTableCount(0);
+      });
+
       // Background prefetch: Databases for Labs page
       setTimeout(() => {
-        const userEmail = account?.email || account?.username || null;
         msalFetch(`${API_BASE}/api/v1/lab/databases`, {
           headers: userEmail ? { 'x-user-email': userEmail } : undefined,
         }).catch(() => {});
