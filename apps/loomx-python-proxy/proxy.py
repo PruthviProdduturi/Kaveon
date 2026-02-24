@@ -947,7 +947,7 @@ if __name__ == '__main__':
                     conn.execute_query("SELECT 1 AS warmup")
                     conns.append(conn)
                 print(f"[Proxy] Metadata DB pool ready (3 connections warmed).")
-                return  # success — no more retries needed
+                break  # success — exit retry loop, enter heartbeat below
             except Exception as e:
                 print(f"[Proxy] Warmup attempt {attempt} failed: {e}")
                 if attempt < len(delays):
@@ -955,7 +955,26 @@ if __name__ == '__main__':
             finally:
                 for conn in conns:
                     return_connection(conn, FABRIC_METADATA_DATABASE)
-        print("[Proxy] Warmup gave up after 3 attempts — first request will connect lazily.")
+        else:
+            # All retries exhausted — first request will connect lazily.
+            print("[Proxy] Warmup gave up after 3 attempts — first request will connect lazily.")
+            return
+
+        # ── Heartbeat: keep metadata DB pool alive ────────────────────────────
+        # Fabric SQL serverless shuts the endpoint down after ~30 min of idle.
+        # Without this, every user session after a quiet period hits a cold start.
+        # Ping every 5 minutes so the pool and the endpoint stay warm indefinitely.
+        while True:
+            time.sleep(300)
+            hb_conn = None
+            try:
+                hb_conn = get_connection(FABRIC_METADATA_DATABASE)
+                hb_conn.execute_query("SELECT 1 AS heartbeat")
+            except Exception as e:
+                print(f"[Proxy] Heartbeat failed (will reconnect on next request): {e}")
+            finally:
+                if hb_conn:
+                    return_connection(hb_conn, FABRIC_METADATA_DATABASE)
 
     warmup_thread = Thread(target=_startup_warmup, daemon=True)
     warmup_thread.start()
