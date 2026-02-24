@@ -477,6 +477,11 @@ def get_data_source_info(database: str) -> Optional[Dict[str, str]]:
 connection_pools: Dict[str, ConnectionPool] = {}
 pool_lock = Lock()
 
+# Warmup gate — ensures at most one warmup thread runs at a time.
+# Set to True when /api/v1/warmup is first called (user sign-in).
+_warmup_triggered = False
+_warmup_trigger_lock = Lock()
+
 
 def get_connection_pool(database: str = None) -> ConnectionPool:
     """Get or create a connection pool for the specified database"""
@@ -571,6 +576,76 @@ def return_connection(conn: FabricSQLConnection, database: str = None):
 
 
 # API Routes
+
+def _run_warmup_and_heartbeat():
+    """
+    Warm the metadata DB execute pool with 3 connections (to cover the home
+    page's 3 parallel Phase 1 requests) then keep the pool alive with a
+    5-minute heartbeat so Fabric SQL serverless never goes cold.
+
+    Uses retry-with-backoff in case credentials are not yet cached:
+      attempt 1 — immediately
+      attempt 2 — 10 s later
+      attempt 3 — 20 s later
+    Falls back to lazy connection on first real request if all retries fail.
+    """
+    if not FABRIC_METADATA_ENDPOINT or not FABRIC_METADATA_DATABASE:
+        return
+    delays = [0, 10, 20]
+    for attempt, delay in enumerate(delays, 1):
+        if delay:
+            time.sleep(delay)
+        conns = []
+        try:
+            print(f"[Proxy] Warming metadata DB pool ({FABRIC_METADATA_DATABASE}) — attempt {attempt}/3…")
+            for _ in range(3):
+                conn = get_connection(FABRIC_METADATA_DATABASE)
+                conn.execute_query("SELECT 1 AS warmup")
+                conns.append(conn)
+            print(f"[Proxy] Metadata DB pool ready (3 connections warmed).")
+            break
+        except Exception as e:
+            print(f"[Proxy] Warmup attempt {attempt} failed: {e}")
+            if attempt < len(delays):
+                print(f"[Proxy] Retrying in {delays[attempt]}s…")
+        finally:
+            for conn in conns:
+                return_connection(conn, FABRIC_METADATA_DATABASE)
+    else:
+        print("[Proxy] Warmup gave up — first request will connect lazily.")
+        return
+
+    # Heartbeat: ping every 5 min to prevent Fabric SQL serverless cold start
+    while True:
+        time.sleep(300)
+        hb_conn = None
+        try:
+            hb_conn = get_connection(FABRIC_METADATA_DATABASE)
+            hb_conn.execute_query("SELECT 1 AS heartbeat")
+        except Exception as e:
+            print(f"[Proxy] Heartbeat failed (will reconnect on next request): {e}")
+        finally:
+            if hb_conn:
+                return_connection(hb_conn, FABRIC_METADATA_DATABASE)
+
+
+@app.route('/api/v1/warmup', methods=['POST'])
+def trigger_warmup():
+    """
+    Fire-and-forget pool warmup — called by the Node.js API immediately after
+    a user signs in (POST /connect). Returns 202 instantly; warmup runs in a
+    background thread alongside the user's page data fetches.
+
+    Idempotent: safe to call multiple times; only one warmup thread ever runs.
+    """
+    global _warmup_triggered
+    with _warmup_trigger_lock:
+        if _warmup_triggered:
+            return jsonify({'status': 'already_started'}), 200
+        _warmup_triggered = True
+    Thread(target=_run_warmup_and_heartbeat, daemon=True).start()
+    return jsonify({'status': 'started'}), 202
+
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -923,61 +998,9 @@ if __name__ == '__main__':
     print(f"Health: http://localhost:5001/health")
     print("=" * 44)
 
-    # Warm the metadata DB execute pool immediately at startup.
-    # Uses retry-with-backoff so that:
-    #   • In production (managed identity) or dev (az login cached): first
-    #     attempt succeeds in ~10s — pool is ready well before any user logs in.
-    #   • On a machine with no cached credentials (rare dev edge case): retries
-    #     at 10s and 20s then gives up, leaving lazy connection as the fallback.
-    #
-    # We create 3 connections to cover Phase 1's 3 parallel metadata DB
-    # requests (/summary, /favorite/current, /data-sources/list).
-    def _startup_warmup():
-        if not FABRIC_METADATA_ENDPOINT or not FABRIC_METADATA_DATABASE:
-            return
-        delays = [0, 10, 20]  # immediate, then retry at 10s and 20s
-        for attempt, delay in enumerate(delays, 1):
-            if delay:
-                time.sleep(delay)
-            conns = []
-            try:
-                print(f"[Proxy] Warming metadata DB pool ({FABRIC_METADATA_DATABASE}) — attempt {attempt}/3…")
-                for _ in range(3):
-                    conn = get_connection(FABRIC_METADATA_DATABASE)
-                    conn.execute_query("SELECT 1 AS warmup")
-                    conns.append(conn)
-                print(f"[Proxy] Metadata DB pool ready (3 connections warmed).")
-                break  # success — exit retry loop, enter heartbeat below
-            except Exception as e:
-                print(f"[Proxy] Warmup attempt {attempt} failed: {e}")
-                if attempt < len(delays):
-                    print(f"[Proxy] Retrying in {delays[attempt]}s…")
-            finally:
-                for conn in conns:
-                    return_connection(conn, FABRIC_METADATA_DATABASE)
-        else:
-            # All retries exhausted — first request will connect lazily.
-            print("[Proxy] Warmup gave up after 3 attempts — first request will connect lazily.")
-            return
-
-        # ── Heartbeat: keep metadata DB pool alive ────────────────────────────
-        # Fabric SQL serverless shuts the endpoint down after ~30 min of idle.
-        # Without this, every user session after a quiet period hits a cold start.
-        # Ping every 5 minutes so the pool and the endpoint stay warm indefinitely.
-        while True:
-            time.sleep(300)
-            hb_conn = None
-            try:
-                hb_conn = get_connection(FABRIC_METADATA_DATABASE)
-                hb_conn.execute_query("SELECT 1 AS heartbeat")
-            except Exception as e:
-                print(f"[Proxy] Heartbeat failed (will reconnect on next request): {e}")
-            finally:
-                if hb_conn:
-                    return_connection(hb_conn, FABRIC_METADATA_DATABASE)
-
-    warmup_thread = Thread(target=_startup_warmup, daemon=True)
-    warmup_thread.start()
+    # Pool warmup is triggered lazily when the first user signs in
+    # (POST /api/v1/warmup, called by the Node.js API after /connect).
+    # No connections are opened until a real user is present.
 
     # Run Flask app
     # use_reloader=False prevents double startup banner from Flask's reloader
