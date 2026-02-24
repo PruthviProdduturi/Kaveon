@@ -7,12 +7,12 @@
  * or has not been initialised.  Guides the user through providing a Fabric SQL
  * connection and running the LoomX schema automatically.
  *
- * Handles every scenario a first-time user can encounter:
- *   not_configured  – no .env vars; enter connection for the first time
- *   connection_failed – endpoint wrong or network issue
- *   access_denied   – connected but no permission → create new DB or get access
- *   db_not_found    – endpoint works but database name is wrong / doesn't exist
- *   schema_missing  – DB exists but LoomX tables are absent → one-click init
+ * Modelled on Apache Superset's database connection wizard:
+ *   - Step progress indicator (Enter → Test → Initialize)
+ *   - SIP-40-style issue codes with actionable fix hints per error type
+ *   - Errors auto-clear when the user edits the form (no stale messages)
+ *   - 200 / 400 HTTP status from the API drives success vs. error branch
+ *   - Endpoint format example shown inline (like Superset's URI help text)
  */
 
 import React, { useState, useEffect } from "react";
@@ -33,11 +33,21 @@ type SetupPhase =
   | "initializing"
   | "success";
 
+/** Mirrors the SIP-40 error shape returned by the API. */
+interface SetupError {
+  message: string;
+  error_type: string;
+  level?: "error" | "warning" | "info";
+  extra?: {
+    issue_codes: Array<{ code: number; message: string }>;
+  };
+}
+
 export interface SetupData {
   status: string;
   endpoint?: string;
   database?: string;
-  message?: string;
+  errors?: SetupError[];
 }
 
 interface SetupModalProps {
@@ -45,134 +55,309 @@ interface SetupModalProps {
   onComplete: () => void;
 }
 
+// ─── Issue-code hint messages (per error_type) ────────────────────────────────
+// Mirrors Superset's per-code actionable guidance shown under the error box.
+
+const ERROR_HINTS: Record<string, { title: string; hint: string }> = {
+  connection_failed: {
+    title: "Cannot reach this endpoint",
+    hint:
+      "Check for typos in the endpoint hostname and confirm port 1433 is " +
+      "reachable from this machine. Fabric SQL endpoints look like: " +
+      "xyz123-abc.datawarehouse.fabric.microsoft.com",
+  },
+  timeout: {
+    title: "Connection timed out",
+    hint:
+      "Port 1433 (required by Fabric SQL / ODBC Driver 18) may be blocked " +
+      "by a corporate firewall or VPN. Contact your network team if needed.",
+  },
+  access_denied: {
+    title: "Access denied",
+    hint:
+      "Your Azure AD identity must have the Contributor or Member role on " +
+      "the Fabric workspace. Ask your workspace admin to grant access, then retry.",
+  },
+  db_not_found: {
+    title: "Database not found",
+    hint:
+      "The database name was not found at this endpoint. Database names are " +
+      "case-sensitive in Fabric SQL — copy the exact name from your Fabric workspace.",
+  },
+};
+
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-const overlay: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(15, 23, 42, 0.92)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  zIndex: 9999,
-};
+const S = {
+  overlay: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(10, 16, 30, 0.93)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 9999,
+    padding: "20px",
+  } as React.CSSProperties,
 
-const card: React.CSSProperties = {
-  background: "#1e293b",
-  border: "1px solid #334155",
-  borderRadius: 16,
-  padding: "40px 44px",
-  width: "100%",
-  maxWidth: 480,
-  boxShadow: "0 25px 60px rgba(0,0,0,0.5)",
-};
+  card: {
+    background: "#1e293b",
+    border: "1px solid #2d3f5c",
+    borderRadius: 18,
+    padding: "36px 40px 40px",
+    width: "100%",
+    maxWidth: 500,
+    boxShadow: "0 32px 72px rgba(0,0,0,0.6)",
+    overflowY: "auto" as const,
+    maxHeight: "calc(100vh - 40px)",
+  } as React.CSSProperties,
 
-const heading: React.CSSProperties = {
-  fontSize: 22,
-  fontWeight: 700,
-  color: "#f1f5f9",
-  margin: "20px 0 8px",
-};
+  logoRow: {
+    display: "flex",
+    justifyContent: "center",
+    marginBottom: 4,
+  } as React.CSSProperties,
 
-const subheading: React.CSSProperties = {
-  fontSize: 14,
-  color: "#94a3b8",
-  lineHeight: 1.6,
-  marginBottom: 28,
-};
+  heading: {
+    fontSize: 21,
+    fontWeight: 700,
+    color: "#f1f5f9",
+    margin: "16px 0 6px",
+  } as React.CSSProperties,
 
-const label: React.CSSProperties = {
-  display: "block",
-  fontSize: 13,
-  fontWeight: 600,
-  color: "#cbd5e1",
-  marginBottom: 6,
-};
+  sub: {
+    fontSize: 13.5,
+    color: "#94a3b8",
+    lineHeight: 1.65,
+    marginBottom: 24,
+  } as React.CSSProperties,
 
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  background: "#0f172a",
-  border: "1px solid #334155",
-  borderRadius: 8,
-  padding: "10px 14px",
-  fontSize: 13,
-  color: "#f1f5f9",
-  outline: "none",
-  boxSizing: "border-box",
-  marginBottom: 16,
-};
+  label: {
+    display: "block",
+    fontSize: 12,
+    fontWeight: 700,
+    color: "#94a3b8",
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.06em",
+    marginBottom: 5,
+  } as React.CSSProperties,
 
-const btnPrimary: React.CSSProperties = {
-  width: "100%",
-  background: "linear-gradient(135deg, #3b82f6, #6366f1)",
-  border: "none",
-  borderRadius: 10,
-  padding: "12px 20px",
-  fontSize: 14,
-  fontWeight: 600,
-  color: "#fff",
-  cursor: "pointer",
-  marginBottom: 10,
-};
+  input: (hasError: boolean): React.CSSProperties => ({
+    width: "100%",
+    background: "#0f172a",
+    border: `1px solid ${hasError ? "#ef4444" : "#334155"}`,
+    borderRadius: 8,
+    padding: "10px 14px",
+    fontSize: 13,
+    color: "#f1f5f9",
+    outline: "none",
+    boxSizing: "border-box",
+    marginBottom: 4,
+    transition: "border-color 0.15s",
+  }),
 
-const btnSecondary: React.CSSProperties = {
-  width: "100%",
-  background: "transparent",
-  border: "1px solid #475569",
-  borderRadius: 10,
-  padding: "11px 20px",
-  fontSize: 14,
-  fontWeight: 500,
-  color: "#94a3b8",
-  cursor: "pointer",
-  marginBottom: 10,
-};
+  hint: {
+    fontSize: 11.5,
+    color: "#475569",
+    marginBottom: 14,
+    lineHeight: 1.5,
+  } as React.CSSProperties,
 
-const errorBox: React.CSSProperties = {
-  background: "rgba(220,38,38,0.12)",
-  border: "1px solid rgba(220,38,38,0.35)",
-  borderRadius: 8,
-  padding: "10px 14px",
-  fontSize: 12,
-  color: "#fca5a5",
-  marginBottom: 16,
-  wordBreak: "break-all",
-};
+  btnPrimary: (disabled = false): React.CSSProperties => ({
+    width: "100%",
+    background: disabled
+      ? "#1e3a5f"
+      : "linear-gradient(135deg, #3b82f6 0%, #6366f1 100%)",
+    border: "none",
+    borderRadius: 10,
+    padding: "12px 20px",
+    fontSize: 14,
+    fontWeight: 600,
+    color: disabled ? "#475569" : "#fff",
+    cursor: disabled ? "not-allowed" : "pointer",
+    marginBottom: 10,
+    transition: "opacity 0.15s",
+  }),
 
-const successBox: React.CSSProperties = {
-  background: "rgba(34,197,94,0.12)",
-  border: "1px solid rgba(34,197,94,0.35)",
-  borderRadius: 8,
-  padding: "10px 14px",
-  fontSize: 13,
-  color: "#86efac",
-  marginBottom: 16,
-};
+  btnSecondary: {
+    width: "100%",
+    background: "transparent",
+    border: "1px solid #334155",
+    borderRadius: 10,
+    padding: "11px 20px",
+    fontSize: 14,
+    fontWeight: 500,
+    color: "#64748b",
+    cursor: "pointer",
+    marginBottom: 10,
+  } as React.CSSProperties,
 
-const infoBox: React.CSSProperties = {
-  background: "rgba(59,130,246,0.1)",
-  border: "1px solid rgba(59,130,246,0.3)",
-  borderRadius: 8,
-  padding: "10px 14px",
-  fontSize: 12,
-  color: "#93c5fd",
-  marginBottom: 20,
-  wordBreak: "break-all",
-};
+  errorBox: {
+    background: "rgba(239,68,68,0.08)",
+    border: "1px solid rgba(239,68,68,0.3)",
+    borderRadius: 10,
+    padding: "12px 16px",
+    marginBottom: 18,
+  } as React.CSSProperties,
+
+  errorTitle: {
+    fontSize: 13,
+    fontWeight: 700,
+    color: "#f87171",
+    marginBottom: 4,
+  } as React.CSSProperties,
+
+  errorHint: {
+    fontSize: 12,
+    color: "#fca5a5",
+    lineHeight: 1.6,
+    marginBottom: 6,
+  } as React.CSSProperties,
+
+  errorRaw: {
+    fontSize: 11,
+    color: "#6b7280",
+    fontFamily: "monospace",
+    wordBreak: "break-all" as const,
+    marginTop: 6,
+  } as React.CSSProperties,
+
+  successBox: {
+    background: "rgba(34,197,94,0.08)",
+    border: "1px solid rgba(34,197,94,0.3)",
+    borderRadius: 10,
+    padding: "12px 16px",
+    marginBottom: 18,
+    fontSize: 13,
+    color: "#86efac",
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+  } as React.CSSProperties,
+
+  infoBox: {
+    background: "rgba(59,130,246,0.07)",
+    border: "1px solid rgba(59,130,246,0.25)",
+    borderRadius: 10,
+    padding: "12px 16px",
+    marginBottom: 20,
+    fontSize: 12,
+    color: "#93c5fd",
+    lineHeight: 1.8,
+    wordBreak: "break-all" as const,
+  } as React.CSSProperties,
+} as const;
+
+// ─── Step progress indicator ──────────────────────────────────────────────────
+
+type StepState = "done" | "active" | "pending";
+
+function StepDot({ state }: { state: StepState }) {
+  const colors: Record<StepState, string> = {
+    done: "#22c55e",
+    active: "#6366f1",
+    pending: "#334155",
+  };
+  return (
+    <div
+      style={{
+        width: 10,
+        height: 10,
+        borderRadius: "50%",
+        background: colors[state],
+        transition: "background 0.2s",
+      }}
+    />
+  );
+}
+
+function StepBar({
+  step,
+  testOk,
+  phase,
+}: {
+  step: 1 | 2 | 3;
+  testOk: boolean;
+  phase: SetupPhase;
+}) {
+  const isInit = phase === "initializing" || phase === "success";
+
+  const s1: StepState = "done"; // always on (they're on this screen)
+  const s2: StepState = testOk || isInit ? "done" : step >= 2 ? "active" : "pending";
+  const s3: StepState = phase === "success" ? "done" : isInit ? "active" : "pending";
+
+  const connector = (done: boolean) => (
+    <div
+      style={{
+        flex: 1,
+        height: 1,
+        background: done ? "#22c55e" : "#334155",
+        margin: "0 6px",
+        transition: "background 0.2s",
+      }}
+    />
+  );
+
+  return (
+    <div style={{ marginBottom: 28 }}>
+      {/* Dots + connectors */}
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 6 }}>
+        <StepDot state={s1} />
+        {connector(s2 === "done")}
+        <StepDot state={s2} />
+        {connector(s3 !== "pending")}
+        <StepDot state={s3} />
+      </div>
+      {/* Labels */}
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "#475569", letterSpacing: "0.04em", textTransform: "uppercase" as const }}>
+        <span style={{ color: "#94a3b8" }}>Enter Details</span>
+        <span style={{ color: s2 !== "pending" ? "#94a3b8" : undefined }}>Test</span>
+        <span style={{ color: s3 !== "pending" ? "#94a3b8" : undefined }}>Initialize</span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Error display ─────────────────────────────────────────────────────────────
+
+function ErrorDisplay({ errors, rawMessage }: { errors?: SetupError[]; rawMessage?: string }) {
+  const primary = errors?.[0];
+  const errType = primary?.error_type ?? "connection_failed";
+  const info = ERROR_HINTS[errType];
+
+  // Collect all issue-code messages from the API
+  const issueMsgs = (primary?.extra?.issue_codes ?? []).map((ic) => ic.message);
+  const raw = primary?.message ?? rawMessage;
+
+  return (
+    <div style={S.errorBox}>
+      {info && <div style={S.errorTitle}>{info.title}</div>}
+      {info && <div style={S.errorHint}>{info.hint}</div>}
+      {issueMsgs.map((m, i) => (
+        <div key={i} style={{ ...S.errorHint, color: "#fcd34d", fontSize: 11.5 }}>
+          <i className="fas fa-lightbulb" style={{ marginRight: 5 }} />
+          {m}
+        </div>
+      ))}
+      {raw && <div style={S.errorRaw}>{raw}</div>}
+    </div>
+  );
+}
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function SetupModal({ data, onComplete }: SetupModalProps) {
   const initialPhase =
-    data.status === "schema_missing" ? "schema_missing" : (data.status as SetupPhase);
+    data.status === "schema_missing"
+      ? "schema_missing"
+      : (data.status as SetupPhase);
 
   const [phase, setPhase] = useState<SetupPhase>(initialPhase);
   const [endpoint, setEndpoint] = useState(data.endpoint ?? "");
   const [database, setDatabase] = useState(data.database ?? "");
-  const [probeError, setProbeError] = useState<string | null>(null);
+  const [errors, setErrors] = useState<SetupError[] | null>(null);
   const [testOk, setTestOk] = useState(false);
 
-  // When the parent passes new data after re-checking, sync phase.
   useEffect(() => {
     if (phase !== "testing" && phase !== "initializing" && phase !== "success") {
       setPhase(initialPhase);
@@ -180,11 +365,23 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.status]);
 
-  // ── Handlers ────────────────────────────────────────────────────────────────
+  // Superset pattern: clear ALL validation state when the user edits the form.
+  function handleEndpointChange(v: string) {
+    setEndpoint(v);
+    setErrors(null);
+    setTestOk(false);
+  }
+  function handleDatabaseChange(v: string) {
+    setDatabase(v);
+    setErrors(null);
+    setTestOk(false);
+  }
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
 
   async function handleTest() {
     setPhase("testing");
-    setProbeError(null);
+    setErrors(null);
     setTestOk(false);
 
     try {
@@ -193,127 +390,131 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ endpoint: endpoint.trim(), database: database.trim() }),
       });
-      const result = await res.json();
 
-      if (result.success) {
+      if (res.ok) {
+        // HTTP 200 = success (mirrors Superset's test_connection 200 OK)
         setTestOk(true);
         setPhase("enter_connection");
       } else {
-        setProbeError(result.message || "Connection test failed");
+        // HTTP 400 = connection failure with structured errors
+        const body = await res.json();
+        setErrors(body.errors ?? null);
         setPhase("enter_connection");
       }
     } catch (err) {
-      setProbeError(err instanceof Error ? err.message : "Network error");
+      setErrors([{
+        message: err instanceof Error ? err.message : "Network error",
+        error_type: "connection_failed",
+        level: "error",
+      }]);
       setPhase("enter_connection");
     }
   }
 
-  async function handleInitialize() {
+  async function handleInitialize(ep = endpoint, db = database) {
     setPhase("initializing");
-    setProbeError(null);
+    setErrors(null);
 
     try {
       const res = await msalFetch(`${API_BASE}/api/v1/setup/initialize`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ endpoint: endpoint.trim(), database: database.trim() }),
+        body: JSON.stringify({ endpoint: ep.trim(), database: db.trim() }),
       });
-      const result = await res.json();
 
-      if (result.success) {
+      if (res.ok) {
         setPhase("success");
-        // API is restarting — reload after a brief pause.
-        setTimeout(() => {
-          window.location.reload();
-        }, 3500);
+        setTimeout(() => window.location.reload(), 3500);
       } else {
-        setProbeError(result.message || "Initialisation failed");
+        const body = await res.json();
+        setErrors(body.errors ?? null);
         setPhase("enter_connection");
       }
     } catch (err) {
-      setProbeError(err instanceof Error ? err.message : "Network error");
+      setErrors([{
+        message: err instanceof Error ? err.message : "Network error",
+        error_type: "connection_failed",
+        level: "error",
+      }]);
       setPhase("enter_connection");
     }
   }
 
-  // ── Render helpers ───────────────────────────────────────────────────────────
+  // ── Connection form (shared by not_configured + enter_connection) ──────────
 
-  function renderConnectionForm(
-    title: string,
-    description: React.ReactNode,
-    cancelAction?: () => void,
-  ) {
+  function ConnectionForm({ cancelTo }: { cancelTo?: SetupPhase }) {
     const canTest = endpoint.trim().length > 0 && database.trim().length > 0;
     const isWorking = phase === "testing";
 
     return (
       <>
-        <h2 style={heading}>{title}</h2>
-        <p style={subheading}>{description}</p>
+        <StepBar step={testOk ? 2 : 1} testOk={testOk} phase={phase} />
 
-        {probeError && !testOk && (
-          <div style={errorBox}>
-            <i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />
-            {probeError}
-          </div>
-        )}
+        <h2 style={S.heading}>Connect Metadata Database</h2>
+        <p style={S.sub}>
+          LoomX stores datasets, charts, and dashboards in a Microsoft Fabric SQL database.
+          Enter the SQL endpoint and database name below.
+        </p>
+
+        {errors && !testOk && <ErrorDisplay errors={errors} />}
 
         {testOk && (
-          <div style={successBox}>
-            <i className="fas fa-check-circle" style={{ marginRight: 6 }} />
-            Connection successful! Ready to initialise.
+          <div style={S.successBox}>
+            <i className="fas fa-check-circle" />
+            Connection successful — ready to initialise.
           </div>
         )}
 
-        <label style={label} htmlFor="setup-endpoint">
-          Fabric SQL Endpoint
-        </label>
+        <label style={S.label} htmlFor="setup-ep">SQL Endpoint</label>
         <input
-          id="setup-endpoint"
-          style={inputStyle}
+          id="setup-ep"
+          style={S.input(!!errors && !testOk)}
           type="text"
-          placeholder="xxxxxxxx.datawarehouse.fabric.microsoft.com"
+          placeholder="xyz123-abc.datawarehouse.fabric.microsoft.com"
           value={endpoint}
-          onChange={(e) => { setEndpoint(e.target.value); setTestOk(false); }}
+          onChange={(e) => handleEndpointChange(e.target.value)}
           disabled={isWorking}
+          autoComplete="off"
+          spellCheck={false}
         />
+        <p style={S.hint}>
+          Found in Fabric workspace → SQL analytics endpoint → copy the server address.
+        </p>
 
-        <label style={label} htmlFor="setup-database">
-          Database Name
-        </label>
+        <label style={S.label} htmlFor="setup-db">Database Name</label>
         <input
-          id="setup-database"
-          style={inputStyle}
+          id="setup-db"
+          style={S.input(!!errors && !testOk)}
           type="text"
-          placeholder="MyLoomXMetadataDB"
+          placeholder="MyLoomXMetadata"
           value={database}
-          onChange={(e) => { setDatabase(e.target.value); setTestOk(false); }}
+          onChange={(e) => handleDatabaseChange(e.target.value)}
           disabled={isWorking}
+          autoComplete="off"
         />
+        <p style={{ ...S.hint, marginBottom: 20 }}>
+          The Fabric SQL database that will store LoomX metadata. Names are case-sensitive.
+        </p>
 
         {testOk ? (
-          <button style={btnPrimary} onClick={handleInitialize}>
-            <i className="fas fa-rocket" style={{ marginRight: 8 }} />
+          <button style={S.btnPrimary()} onClick={() => handleInitialize()}>
+            <i className="fas fa-magic" style={{ marginRight: 8 }} />
             Initialize Database
           </button>
         ) : (
-          <button style={{ ...btnPrimary, opacity: canTest ? 1 : 0.5 }} onClick={handleTest} disabled={!canTest || isWorking}>
-            {isWorking ? (
-              <>
-                <i className="fas fa-spinner fa-spin" style={{ marginRight: 8 }} />
-                Testing…
-              </>
-            ) : (
-              <>
-                <i className="fas fa-plug" style={{ marginRight: 8 }} />
-                Test Connection
-              </>
-            )}
+          <button
+            style={S.btnPrimary(!canTest || isWorking)}
+            onClick={handleTest}
+            disabled={!canTest || isWorking}
+          >
+            {isWorking
+              ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 8 }} />Testing…</>
+              : <><i className="fas fa-plug" style={{ marginRight: 8 }} />Test Connection</>}
           </button>
         )}
 
-        {cancelAction && (
-          <button style={btnSecondary} onClick={cancelAction} disabled={isWorking}>
+        {cancelTo && (
+          <button style={S.btnSecondary} onClick={() => setPhase(cancelTo)} disabled={isWorking}>
             Cancel
           </button>
         )}
@@ -321,203 +522,180 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
     );
   }
 
+  // ── Error state pages (connection_failed / access_denied / db_not_found) ───
+
+  function ErrorState({
+    title,
+    description,
+    errType,
+  }: {
+    title: string;
+    description: string;
+    errType: string;
+  }) {
+    const info = ERROR_HINTS[errType];
+    const issueMsgs = (data.errors?.[0]?.extra?.issue_codes ?? []).map((ic) => ic.message);
+
+    return (
+      <>
+        <h2 style={S.heading}>{title}</h2>
+        <p style={S.sub}>{description}</p>
+
+        {data.endpoint && (
+          <div style={S.infoBox}>
+            <strong>Endpoint</strong>&nbsp; {data.endpoint}<br />
+            <strong>Database</strong>&nbsp; {data.database}
+          </div>
+        )}
+
+        <div style={S.errorBox}>
+          {info && <div style={S.errorTitle}>{info.title}</div>}
+          {info && <div style={S.errorHint}>{info.hint}</div>}
+          {issueMsgs.map((m, i) => (
+            <div key={i} style={{ ...S.errorHint, color: "#fcd34d", fontSize: 11.5 }}>
+              <i className="fas fa-lightbulb" style={{ marginRight: 5 }} />
+              {m}
+            </div>
+          ))}
+          {data.errors?.[0]?.message && (
+            <div style={S.errorRaw}>{data.errors[0].message}</div>
+          )}
+        </div>
+
+        <button style={S.btnPrimary()} onClick={() => {
+          if (data.endpoint) setEndpoint(data.endpoint);
+          if (data.database) setDatabase(data.database);
+          setErrors(null);
+          setTestOk(false);
+          setPhase("enter_connection");
+        }}>
+          <i className="fas fa-edit" style={{ marginRight: 8 }} />
+          Edit Connection
+        </button>
+        <button style={S.btnSecondary} onClick={() => window.location.reload()}>
+          <i className="fas fa-redo" style={{ marginRight: 8 }} />
+          Retry
+        </button>
+      </>
+    );
+  }
+
   // ── Main render ──────────────────────────────────────────────────────────────
 
   return (
-    <div style={overlay}>
-      <div style={card}>
-        {/* Logo */}
-        <div style={{ textAlign: "center" }}>
-          <LoomXLogo size={52} animate="pulse" />
+    <div style={S.overlay}>
+      <div style={S.card}>
+        <div style={S.logoRow}>
+          <LoomXLogo size={48} animate="pulse" />
         </div>
 
-        {/* ── Phase: not_configured ── */}
-        {(phase === "not_configured" || phase === "enter_connection") &&
-          renderConnectionForm(
-            "Connect Metadata Database",
-            "LoomX stores your datasets, charts, and dashboards in a Microsoft Fabric SQL database. Enter your endpoint and database name to get started.",
-            phase === "enter_connection" && initialPhase !== "not_configured"
-              ? () => setPhase(initialPhase)
-              : undefined,
-          )}
+        {/* ── Enter / not_configured ── */}
+        {(phase === "not_configured" || phase === "enter_connection") && (
+          <ConnectionForm
+            cancelTo={
+              phase === "enter_connection" && initialPhase !== "not_configured"
+                ? initialPhase
+                : undefined
+            }
+          />
+        )}
 
-        {/* ── Phase: connection_failed ── */}
+        {/* ── connection_failed ── */}
         {phase === "connection_failed" && (
-          <>
-            <h2 style={heading}>Cannot Connect</h2>
-            <p style={subheading}>
-              LoomX cannot reach the configured metadata database. Check your endpoint or network
-              connection, then try again.
-            </p>
-
-            {data.endpoint && (
-              <div style={infoBox}>
-                <strong>Endpoint:</strong> {data.endpoint}
-                <br />
-                <strong>Database:</strong> {data.database}
-              </div>
-            )}
-
-            {data.message && (
-              <div style={errorBox}>
-                <i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />
-                {data.message}
-              </div>
-            )}
-
-            <button style={btnPrimary} onClick={() => setPhase("enter_connection")}>
-              <i className="fas fa-edit" style={{ marginRight: 8 }} />
-              Use a Different Connection
-            </button>
-            <button
-              style={btnSecondary}
-              onClick={() => window.location.reload()}
-            >
-              <i className="fas fa-redo" style={{ marginRight: 8 }} />
-              Retry
-            </button>
-          </>
+          <ErrorState
+            errType="connection_failed"
+            title="Cannot Connect"
+            description="LoomX cannot reach the configured metadata database. Check your endpoint hostname and network, then retry or enter a different connection."
+          />
         )}
 
-        {/* ── Phase: access_denied ── */}
+        {/* ── access_denied ── */}
         {phase === "access_denied" && (
-          <>
-            <h2 style={heading}>Access Denied</h2>
-            <p style={subheading}>
-              LoomX connected to the endpoint but your account does not have permission to access
-              the metadata database. You can connect to a different database you own, or contact
-              your admin to get access.
-            </p>
-
-            {data.endpoint && (
-              <div style={infoBox}>
-                <strong>Endpoint:</strong> {data.endpoint}
-                <br />
-                <strong>Database:</strong> {data.database}
-              </div>
-            )}
-
-            {data.message && (
-              <div style={errorBox}>
-                <i className="fas fa-lock" style={{ marginRight: 6 }} />
-                {data.message}
-              </div>
-            )}
-
-            <button style={btnPrimary} onClick={() => setPhase("enter_connection")}>
-              <i className="fas fa-database" style={{ marginRight: 8 }} />
-              Use a Different Database
-            </button>
-            <button
-              style={btnSecondary}
-              onClick={() => window.location.reload()}
-            >
-              <i className="fas fa-redo" style={{ marginRight: 8 }} />
-              I Have Access Now — Retry
-            </button>
-          </>
+          <ErrorState
+            errType="access_denied"
+            title="Access Denied"
+            description="LoomX reached the endpoint but your Azure AD account does not have permission to access this database. Grant access in the Fabric workspace, or connect a different database."
+          />
         )}
 
-        {/* ── Phase: db_not_found ── */}
+        {/* ── db_not_found ── */}
         {phase === "db_not_found" && (
-          <>
-            <h2 style={heading}>Database Not Found</h2>
-            <p style={subheading}>
-              The endpoint was reached but the database does not exist or is not visible to your
-              account. Create a new Fabric SQL database and come back with the new connection
-              details.
-            </p>
-
-            {data.endpoint && (
-              <div style={infoBox}>
-                <strong>Endpoint:</strong> {data.endpoint}
-                <br />
-                <strong>Database:</strong> {data.database}
-              </div>
-            )}
-
-            {data.message && (
-              <div style={errorBox}>
-                <i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />
-                {data.message}
-              </div>
-            )}
-
-            <button style={btnPrimary} onClick={() => setPhase("enter_connection")}>
-              <i className="fas fa-edit" style={{ marginRight: 8 }} />
-              Use a Different Connection
-            </button>
-            <button
-              style={btnSecondary}
-              onClick={() => window.location.reload()}
-            >
-              <i className="fas fa-redo" style={{ marginRight: 8 }} />
-              Retry
-            </button>
-          </>
+          <ErrorState
+            errType="db_not_found"
+            title="Database Not Found"
+            description="The endpoint was reached but the database does not exist or is not accessible. Verify the exact database name (case-sensitive) in your Fabric workspace."
+          />
         )}
 
-        {/* ── Phase: schema_missing ── */}
+        {/* ── schema_missing ── */}
         {phase === "schema_missing" && (
           <>
-            <h2 style={heading}>Initialize Database</h2>
-            <p style={subheading}>
-              LoomX connected successfully, but the required tables have not been created yet.
-              Click below to set up the database — this only takes a few seconds.
+            <StepBar step={3} testOk phase="schema_missing" />
+            <h2 style={S.heading}>Initialize Database</h2>
+            <p style={S.sub}>
+              LoomX connected successfully. The required tables have not been created yet —
+              click below and LoomX will set them up in seconds.
             </p>
 
-            <div style={infoBox}>
-              <i className="fas fa-database" style={{ marginRight: 6 }} />
-              <strong>Endpoint:</strong> {data.endpoint ?? endpoint}
-              <br />
-              <i className="fas fa-layer-group" style={{ marginRight: 6, marginTop: 4 }} />
-              <strong>Database:</strong> {data.database ?? database}
+            <div style={S.infoBox}>
+              <i className="fas fa-check-circle" style={{ marginRight: 6, color: "#4ade80" }} />
+              <strong>Endpoint</strong>&nbsp; {data.endpoint ?? endpoint}<br />
+              <i className="fas fa-database" style={{ marginRight: 6, marginTop: 4, marginLeft: 1 }} />
+              <strong>Database</strong>&nbsp; {data.database ?? database}
             </div>
 
+            {errors && <ErrorDisplay errors={errors} />}
+
             <button
-              style={btnPrimary}
+              style={S.btnPrimary()}
               onClick={() => {
-                // Use the confirmed endpoint/database from status response.
-                if (data.endpoint) setEndpoint(data.endpoint);
-                if (data.database) setDatabase(data.database);
-                handleInitialize();
+                const ep = data.endpoint ?? endpoint;
+                const db = data.database ?? database;
+                setEndpoint(ep);
+                setDatabase(db);
+                handleInitialize(ep, db);
               }}
             >
               <i className="fas fa-magic" style={{ marginRight: 8 }} />
               Initialize Database
             </button>
-            <button style={btnSecondary} onClick={() => setPhase("enter_connection")}>
+            <button style={S.btnSecondary} onClick={() => {
+              if (data.endpoint) setEndpoint(data.endpoint);
+              if (data.database) setDatabase(data.database);
+              setErrors(null);
+              setTestOk(true);
+              setPhase("enter_connection");
+            }}>
               <i className="fas fa-edit" style={{ marginRight: 8 }} />
               Use a Different Connection
             </button>
           </>
         )}
 
-        {/* ── Phase: initializing ── */}
+        {/* ── initializing ── */}
         {phase === "initializing" && (
           <>
-            <h2 style={heading}>Setting Up LoomX…</h2>
-            <p style={subheading}>
-              Creating tables in your metadata database. This should only take a moment.
-            </p>
-            <div style={{ textAlign: "center", padding: "24px 0", color: "#6366f1", fontSize: 36 }}>
+            <StepBar step={3} testOk={false} phase="initializing" />
+            <h2 style={S.heading}>Setting Up LoomX…</h2>
+            <p style={S.sub}>Creating tables in your metadata database. This usually takes a few seconds.</p>
+            <div style={{ textAlign: "center", padding: "28px 0", color: "#6366f1", fontSize: 38 }}>
               <i className="fas fa-spinner fa-spin" />
             </div>
           </>
         )}
 
-        {/* ── Phase: success ── */}
+        {/* ── success ── */}
         {phase === "success" && (
           <>
-            <h2 style={{ ...heading, color: "#4ade80" }}>All Set!</h2>
-            <p style={subheading}>
-              Your metadata database has been initialised successfully. LoomX is restarting to
-              apply the configuration — the page will reload automatically.
+            <h2 style={{ ...S.heading, color: "#4ade80" }}>All Set!</h2>
+            <p style={S.sub}>
+              Metadata database initialised successfully. LoomX is restarting to apply the
+              configuration — the page will reload automatically.
             </p>
-            <div style={{ textAlign: "center", padding: "16px 0", color: "#4ade80", fontSize: 40 }}>
+            <div style={{ textAlign: "center", padding: "20px 0", color: "#4ade80", fontSize: 44 }}>
               <i className="fas fa-check-circle" />
             </div>
-            <div style={{ textAlign: "center", color: "#64748b", fontSize: 13 }}>
+            <div style={{ textAlign: "center", color: "#475569", fontSize: 12.5, marginTop: 8 }}>
               <i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />
               Reloading in a few seconds…
             </div>
