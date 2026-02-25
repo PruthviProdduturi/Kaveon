@@ -625,9 +625,21 @@ def _run_warmup_and_heartbeat():
         print(f"[Proxy] {label} warmup gave up — first request will connect lazily.")
         return False
 
-    # Warm metadata DB (3 conns) and warehouse (1 conn) concurrently.
-    # Metadata needs 3 because the home page fires 3 parallel metadata calls.
-    # Warehouse needs 1 — enough to remove the cold-start penalty from /tables.
+    # Warm metadata DB (6 conns) and warehouse (1 conn) concurrently.
+    #
+    # Why 6 for metadata:
+    #   GET /favorite/current  → 1 query
+    #   GET /list              → 1 query
+    #   GET /status            → 1 query
+    #   GET /summary           → 5 parallel sub-queries (datasets, charts,
+    #                            dashboards, favorites, saved_queries via
+    #                            Promise.all in metadata.ts)
+    #   Total simultaneous     → 8, but summary's 5 queries dominate; 6
+    #                            warm connections means summary grabs 5 warm
+    #                            + 1 spare, the other 3 calls share the pool.
+    #
+    # Warehouse needs 1 — enough to have a warm connection ready for /tables
+    # by the time favPromise resolves (~10s after sign-in).
     wh_thread = Thread(
         target=_warm_pool,
         args=(FABRIC_DATAWAREHOUSE_DATABASE, FABRIC_DATAWAREHOUSE_ENDPOINT, 1, "warehouse"),
@@ -635,7 +647,7 @@ def _run_warmup_and_heartbeat():
     )
     wh_thread.start()
 
-    meta_ok = _warm_pool(FABRIC_METADATA_DATABASE, FABRIC_METADATA_ENDPOINT, 3, "metadata")
+    meta_ok = _warm_pool(FABRIC_METADATA_DATABASE, FABRIC_METADATA_ENDPOINT, 6, "metadata")
 
     wh_thread.join()  # wait so heartbeat only starts after both are ready
 

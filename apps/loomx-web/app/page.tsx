@@ -1,7 +1,7 @@
 "use client";
 
 import { formatDatasetDate, formatSavedQueryDate } from "../utils/date";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { API_BASE } from "../config";
 import { LoadingOverlay } from "../components/LoadingOverlay";
@@ -128,6 +128,10 @@ export default function Home() {
   const [dataSourceList, setDataSourceList] = useState<any[]>([]);
   const [allFavorites, setAllFavorites] = useState<any[]>([]);
   const [tableScope, setTableScope] = useState<"fav" | "all">("fav");
+  // Guard against React Strict Mode double-invocation (dev only).
+  // Tracks the account identity for which a fetch is already in flight so that
+  // the second mount does not fire a duplicate set of API calls.
+  const fetchingForRef = useRef<string | null>(null);
   const [dashboardScope, setDashboardScope] = useState<"mine" | "all">("all");
   const [chartScope, setChartScope] = useState<"mine" | "all">("all");
   const [datasetScope, setDatasetScope] = useState<"mine" | "all">("all");
@@ -137,9 +141,19 @@ export default function Home() {
   const [isLoadingData, setIsLoadingData] = useState(false);
 
   useEffect(() => {
-    if (!isAuthenticated) return;
+    if (!isAuthenticated) {
+      fetchingForRef.current = null; // reset so next sign-in fetches fresh
+      return;
+    }
 
     const userEmail = account?.email || account?.username || null;
+
+    // Deduplicate: React Strict Mode (dev) mounts twice — skip the second run
+    // for the same account so we don't fire every API call twice.
+    const identity = userEmail || 'authenticated';
+    if (fetchingForRef.current === identity) return;
+    fetchingForRef.current = identity;
+
     const hdrs = userEmail ? { 'x-user-email': userEmail } : undefined;
 
     // ── Stale-while-revalidate cache ──────────────────────────────────────────
