@@ -124,6 +124,7 @@ export default function Home() {
   const [labTableCount, setLabTableCount] = useState<number | null>(null);
   const [allLabTables, setAllLabTables] = useState<LabTableSummary[]>([]);
   const [allLabTableCount, setAllLabTableCount] = useState<number | null>(null);
+  const [allTableCountFetched, setAllTableCountFetched] = useState(false);
   const [dataSourceList, setDataSourceList] = useState<any[]>([]);
   const [allFavorites, setAllFavorites] = useState<any[]>([]);
   const [tableScope, setTableScope] = useState<"fav" | "all">("fav");
@@ -169,12 +170,7 @@ export default function Home() {
       .then(r => r.ok ? r.json() : { dataSources: [] })
       .catch(() => ({ dataSources: [] }));
 
-    // 4. All data sources WITH table counts (warehouse — slow on first cold start)
-    const activePromise = msalFetch(`${API_BASE}/api/v1/data-sources/active`, { headers: hdrs })
-      .then(r => r.ok ? r.json() : { dataSources: [] })
-      .catch(() => ({ dataSources: [] }));
-
-    // 5. Lab tables — chains off favPromise so it fires the instant we know
+    // 4. Lab tables — chains off favPromise so it fires the instant we know
     //    the favorite DB name, without waiting for any other call to complete.
     const tablesPromise = favPromise.then((favData: any) => {
       const favDb = favData?.dataSource?.database_name as string | undefined;
@@ -242,12 +238,6 @@ export default function Home() {
       setDataSourceList(data.dataSources || []);
     });
 
-    activePromise.then((data: any) => {
-      const sources: any[] = data.dataSources || [];
-      const total = sources.reduce((s, ds) => s + (ds.table_count || 0), 0);
-      setAllLabTableCount(total);
-    }).catch(() => setAllLabTableCount(0));
-
     tablesPromise.then((data: any) => {
       let tables: LabTableSummary[] = [];
       if (Array.isArray(data)) tables = data;
@@ -261,6 +251,29 @@ export default function Home() {
       msalFetch(`${API_BASE}/api/v1/lab/databases`, { headers: hdrs }).catch(() => {});
     }, 100);
   }, [isAuthenticated, account]);
+
+  // Lazy-load total table count across ALL data sources.
+  // Only fires when the user explicitly switches to "all" scope — avoids a
+  // 17s warehouse round-trip on initial page load (warehouse cold start +
+  // per-source getTables calls). The result is cached in allTableCountFetched
+  // so the call is made at most once per session.
+  useEffect(() => {
+    if (!isAuthenticated || tableScope !== "all" || allTableCountFetched) return;
+
+    const userEmail = account?.email || account?.username || null;
+    const hdrs = userEmail ? { 'x-user-email': userEmail } : undefined;
+
+    setAllTableCountFetched(true); // prevent duplicate fetches
+
+    msalFetch(`${API_BASE}/api/v1/data-sources/active`, { headers: hdrs })
+      .then(r => r.ok ? r.json() : { dataSources: [] })
+      .then((data: any) => {
+        const sources: any[] = data.dataSources || [];
+        const total = sources.reduce((s: number, ds: any) => s + (ds.table_count || 0), 0);
+        setAllLabTableCount(total);
+      })
+      .catch(() => setAllLabTableCount(0));
+  }, [isAuthenticated, account, tableScope, allTableCountFetched]);
 
   // ...existing code...
 

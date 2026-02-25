@@ -6,6 +6,9 @@ import { resolve } from 'path';
 config({ path: resolve(__dirname, '../../.env') });
 
 const nextConfig: NextConfig = {
+  // Required for Docker/Container Apps deployment — creates a self-contained
+  // server bundle under .next/standalone that can run without node_modules.
+  output: 'standalone',
   reactStrictMode: true,
   poweredByHeader: false,
   compress: true,

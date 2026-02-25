@@ -1,0 +1,120 @@
+# ────────────────────────────────────────────────────────────────────────────────
+# LoomX — Azure Container Apps Deployment
+#
+# Authentication: OIDC (Workload Identity Federation) — NO client_secret stored
+# anywhere. GitHub's OIDC provider is federated with an Azure AD App Registration.
+#
+# Required GitHub repository variables (Settings → Secrets and Variables → Variables):
+#   AZURE_CLIENT_ID        — App Registration Application (client) ID
+#   AZURE_TENANT_ID        — Azure AD tenant ID
+#   AZURE_SUBSCRIPTION_ID  — Azure subscription ID
+#   ACR_NAME               — Container Registry name (without .azurecr.io)
+#   RESOURCE_GROUP         — Resource group name
+#   LOOMX_API_FQDN         — Public FQDN of loomx-api Container App (without https://)
+#   LOOMX_WEB_URL          — Public URL of loomx-web Container App (e.g. https://web.example.com)
+#   AAD_CLIENT_ID          — MSAL App Registration client ID (for the web frontend)
+#   AAD_TENANT_ID          — MSAL App Registration tenant ID
+#   CONTAINER_APP_WEB      — Container App name for loomx-web
+#   CONTAINER_APP_API      — Container App name for loomx-api
+#   CONTAINER_APP_PROXY    — Container App name for loomx-python-proxy
+# ────────────────────────────────────────────────────────────────────────────────
+
+name: Deploy to Azure Container Apps
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # Required for OIDC token exchange
+  contents: read
+
+env:
+  ACR_LOGIN_SERVER: ${{ vars.ACR_NAME }}.azurecr.io
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  build-and-deploy:
+    name: Build, Push & Deploy
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      # ── Checkout ──────────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Azure Login via OIDC (NO client_secret) ───────────────────────────────
+      - name: Azure Login (OIDC — no secret)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # ── ACR Login via Managed Identity (no admin credentials) ─────────────────
+      - name: Log in to Azure Container Registry
+        run: az acr login --name ${{ vars.ACR_NAME }}
+
+      # ── Build & Push: loomx-python-proxy ─────────────────────────────────────
+      - name: Build & push loomx-python-proxy
+        run: |
+          docker build \
+            -t ${{ env.ACR_LOGIN_SERVER }}/loomx-python-proxy:${{ env.IMAGE_TAG }} \
+            -t ${{ env.ACR_LOGIN_SERVER }}/loomx-python-proxy:latest \
+            -f apps/loomx-python-proxy/Dockerfile \
+            .
+          docker push ${{ env.ACR_LOGIN_SERVER }}/loomx-python-proxy:${{ env.IMAGE_TAG }}
+          docker push ${{ env.ACR_LOGIN_SERVER }}/loomx-python-proxy:latest
+
+      # ── Build & Push: loomx-api ───────────────────────────────────────────────
+      - name: Build & push loomx-api
+        run: |
+          docker build \
+            -t ${{ env.ACR_LOGIN_SERVER }}/loomx-api:${{ env.IMAGE_TAG }} \
+            -t ${{ env.ACR_LOGIN_SERVER }}/loomx-api:latest \
+            -f apps/loomx-api/Dockerfile \
+            .
+          docker push ${{ env.ACR_LOGIN_SERVER }}/loomx-api:${{ env.IMAGE_TAG }}
+          docker push ${{ env.ACR_LOGIN_SERVER }}/loomx-api:latest
+
+      # ── Build & Push: loomx-web ───────────────────────────────────────────────
+      # NEXT_PUBLIC_* env vars are baked at build time — pass as build-args.
+      - name: Build & push loomx-web
+        run: |
+          docker build \
+            --build-arg API_URL=https://${{ vars.LOOMX_API_FQDN }} \
+            --build-arg AZURE_CLIENT_ID=${{ vars.AAD_CLIENT_ID }} \
+            --build-arg AZURE_TENANT_ID=${{ vars.AAD_TENANT_ID }} \
+            --build-arg WEB_URL=${{ vars.LOOMX_WEB_URL }} \
+            -t ${{ env.ACR_LOGIN_SERVER }}/loomx-web:${{ env.IMAGE_TAG }} \
+            -t ${{ env.ACR_LOGIN_SERVER }}/loomx-web:latest \
+            -f apps/loomx-web/Dockerfile \
+            .
+          docker push ${{ env.ACR_LOGIN_SERVER }}/loomx-web:${{ env.IMAGE_TAG }}
+          docker push ${{ env.ACR_LOGIN_SERVER }}/loomx-web:latest
+
+      # ── Deploy: loomx-python-proxy (internal) ────────────────────────────────
+      - name: Deploy loomx-python-proxy
+        uses: azure/container-apps-deploy-action@v1
+        with:
+          resourceGroup: ${{ vars.RESOURCE_GROUP }}
+          containerAppName: ${{ vars.CONTAINER_APP_PROXY }}
+          imageToDeploy: ${{ env.ACR_LOGIN_SERVER }}/loomx-python-proxy:${{ env.IMAGE_TAG }}
+
+      # ── Deploy: loomx-api ─────────────────────────────────────────────────────
+      - name: Deploy loomx-api
+        uses: azure/container-apps-deploy-action@v1
+        with:
+          resourceGroup: ${{ vars.RESOURCE_GROUP }}
+          containerAppName: ${{ vars.CONTAINER_APP_API }}
+          imageToDeploy: ${{ env.ACR_LOGIN_SERVER }}/loomx-api:${{ env.IMAGE_TAG }}
+
+      # ── Deploy: loomx-web ─────────────────────────────────────────────────────
+      - name: Deploy loomx-web
+        uses: azure/container-apps-deploy-action@v1
+        with:
+          resourceGroup: ${{ vars.RESOURCE_GROUP }}
+          containerAppName: ${{ vars.CONTAINER_APP_WEB }}
+          imageToDeploy: ${{ env.ACR_LOGIN_SERVER }}/loomx-web:${{ env.IMAGE_TAG }}
