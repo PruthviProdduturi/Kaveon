@@ -3,6 +3,7 @@
 import React, { useEffect, useState, type ReactElement } from "react";
 
 import { API_BASE } from "../../../config";
+import { LoadingOverlay } from "../../../components/LoadingOverlay";
 import { format as formatSql } from "sql-formatter";
 import { msalFetch } from "../../../utils/msalFetch";
 import { useAuth } from "../../../auth/useAuth";
@@ -606,9 +607,7 @@ const LabQueriesPage: React.FC = () => {
 
           {activeTab === "saved" && (
             <div className="results-table-container">
-              {isLoadingSaved && (
-                <p className="muted">Loading saved queries…</p>
-              )}
+              {isLoadingSaved && <LoadingOverlay />}
               {!isLoadingSaved && errorSaved && (
                 <p className="muted">{errorSaved}</p>
               )}
@@ -738,9 +737,7 @@ const LabQueriesPage: React.FC = () => {
 
           {activeTab === "history" && (
             <div className="results-table-container">
-              {isLoadingHistory && (
-                <p className="muted">Loading query history…</p>
-              )}
+              {isLoadingHistory && <LoadingOverlay />}
               {!isLoadingHistory && errorHistory && (
                 <p className="muted">{errorHistory}</p>
               )}
