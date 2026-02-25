@@ -28,6 +28,14 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../../.env'))
 app = Flask(__name__)
 CORS(app)
 
+# ── Shared Azure credential ────────────────────────────────────────────────
+# One instance is shared across ALL pool connections.
+# DefaultAzureCredential caches tokens internally; sharing it means only ONE
+# real Azure AD token request is made regardless of how many connections are
+# being established simultaneously — eliminates the multi-auth race condition
+# seen when a connection storm hits a cold pool.
+_azure_credential = DefaultAzureCredential()
+
 # Custom JSON encoder to serialize datetime objects as ISO strings
 # This ensures dates display exactly as stored in SQL Server (no timezone conversion)
 def custom_jsonify(*args, **kwargs):
@@ -103,7 +111,7 @@ class FabricSQLConnection:
     def __init__(self, server: str, database: str):
         self.server = server
         self.database = database
-        self.credential = DefaultAzureCredential()
+        self.credential = _azure_credential  # shared singleton — no per-connection auth races
         self.connection = None
         self.in_use = False  # Track if connection is currently in use
         self.last_used = time.time()
