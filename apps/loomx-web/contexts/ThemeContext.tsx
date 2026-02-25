@@ -47,10 +47,23 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
   const [hasMigrated, setHasMigrated] = useState<boolean>(false);
   const { account, isAuthenticated } = useAuth();
 
-  // Load theme when user is authenticated, reset when logged out
+  // Load theme when user is authenticated, reset when logged out.
+  // If localStorage already has a theme colour, skip the API round-trip —
+  // the stored value is kept fresh by the PUT call whenever the user changes
+  // their theme. The API is only queried on first-ever sign-in (cold cache)
+  // or after the user clears localStorage. This removes one cold-metadata-DB
+  // connection from the page-load storm, reducing Fabric SQL cold-start time.
   useEffect(() => {
     if (isAuthenticated && account?.email) {
-      loadUserTheme();
+      const cached = typeof window !== 'undefined'
+        ? localStorage.getItem('loomx-theme-color')
+        : null;
+      if (cached && cached.toLowerCase() !== '#8f9192') {
+        // Use cached value immediately — no API call needed
+        setPrimaryColor(cached);
+      } else {
+        loadUserTheme();
+      }
     } else if (!isAuthenticated) {
       // Reset to default Microsoft blue when logged out
       setPrimaryColor(DEFAULT_THEME_COLOR);

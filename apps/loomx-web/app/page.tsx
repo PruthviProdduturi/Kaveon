@@ -246,10 +246,6 @@ export default function Home() {
       setLabTableCount(tables.length);
     }).catch(() => setLabTableCount(0));
 
-    // Background prefetch: databases list for the Labs page
-    setTimeout(() => {
-      msalFetch(`${API_BASE}/api/v1/lab/databases`, { headers: hdrs }).catch(() => {});
-    }, 100);
   }, [isAuthenticated, account]);
 
   // Lazy-load total table count across ALL data sources.
