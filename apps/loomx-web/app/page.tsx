@@ -142,50 +142,28 @@ export default function Home() {
     const userEmail = account?.email || account?.username || null;
     const hdrs = userEmail ? { 'x-user-email': userEmail } : undefined;
 
-    setIsLoadingData(true);
+    // ── Stale-while-revalidate cache ──────────────────────────────────────────
+    // Cache key is scoped to the signed-in user so multiple users on the
+    // same browser never see each other's data.
+    const CACHE_KEY = `loomx_home_v1_${userEmail || 'anon'}`;
 
-    // ── Fire ALL requests at t=0, as soon as the user is authenticated ────────
-    //
-    // Nothing waits for anything else. Metadata DB calls and warehouse calls
-    // start simultaneously. On a cold pool they all take ~10s but run in
-    // PARALLEL — not sequential — so the page is fully loaded in ~10s instead
-    // of ~20s (old sequential approach).
-    //
-    // State updates happen independently as each call resolves; cards show
-    // "•••" (null) until their data arrives and then update in-place.
+    function readCache(): { summary?: any; sources?: any[]; tables?: any[] } | null {
+      try {
+        const raw = localStorage.getItem(CACHE_KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch { return null; }
+    }
 
-    // 1. Favorite data source (metadata DB)
-    //    Resolved first so lab/tables can chain off it immediately.
-    const favPromise = msalFetch(`${API_BASE}/api/v1/data-sources/favorite/current`, { headers: hdrs })
-      .then(r => r.ok ? r.json() : null)
-      .catch(() => null);
+    function writeCache(patch: Record<string, any>) {
+      try {
+        const prev = readCache() || {};
+        localStorage.setItem(CACHE_KEY, JSON.stringify({ ...prev, ...patch }));
+      } catch { /* ignore quota errors */ }
+    }
 
-    // 2. All LoomX metadata in one call (metadata DB)
-    const summaryPromise = msalFetch(`${API_BASE}/api/v1/metadata/summary`, { headers: hdrs })
-      .then(r => r.ok ? r.json() : { dashboards: [], charts: [], datasets: [], favorites: [], savedQueries: [] })
-      .catch(() => ({ dashboards: [], charts: [], datasets: [], favorites: [], savedQueries: [] }));
-
-    // 3. Data source list without table counts (metadata DB)
-    const listPromise = msalFetch(`${API_BASE}/api/v1/data-sources/list`, { headers: hdrs })
-      .then(r => r.ok ? r.json() : { dataSources: [] })
-      .catch(() => ({ dataSources: [] }));
-
-    // 4. Lab tables — chains off favPromise so it fires the instant we know
-    //    the favorite DB name, without waiting for any other call to complete.
-    const tablesPromise = favPromise.then((favData: any) => {
-      const favDb = favData?.dataSource?.database_name as string | undefined;
-      if (!favDb) return { tables: [] };
-      return msalFetch(
-        `${API_BASE}/api/v1/lab/tables?database=${encodeURIComponent(favDb)}`,
-        { headers: hdrs }
-      )
-        .then(r => r.ok ? r.json() : { tables: [] })
-        .catch(() => ({ tables: [] }));
-    });
-
-    // ── Update state as each call resolves ────────────────────────────────────
-
-    summaryPromise.then((metadata: any) => {
+    // ── Shared: apply metadata summary to state ───────────────────────────────
+    // Called twice: once immediately from cache, once when fresh API data lands.
+    const applyMetadata = (metadata: any) => {
       const allQueries = metadata.savedQueries || [];
       const filteredQueries = userEmail
         ? allQueries.filter((q: any) => !q.created_by || q.created_by === userEmail)
@@ -226,6 +204,62 @@ export default function Home() {
       setSavedQueries(filteredQueries);
       setSavedQueriesCount(allQueries.length);
       setIsLoadingData(false);
+    };
+
+    // ── Step 1: paint from cache instantly (if available) ────────────────────
+    // The user sees real data the moment the page mounts — no spinner needed.
+    // The API calls below run in background and silently update the UI when
+    // fresh data arrives.
+    const cached = readCache();
+    if (cached) {
+      if (cached.summary) applyMetadata(cached.summary);
+      if (cached.sources) setDataSourceList(cached.sources);
+      if (cached.tables) {
+        setLabTables(cached.tables);
+        setLabTableCount(cached.tables.length);
+      }
+      // isLoadingData stays false — we already have something to show
+    } else {
+      // First-ever load for this user: show the loading state while we wait
+      setIsLoadingData(true);
+    }
+
+    // ── Step 2: fire all API calls in parallel (always — cache or not) ───────
+    // Results update the UI and write back to cache so the NEXT load is instant.
+
+    // Favorite data source — resolved first so tablesPromise can chain off it.
+    const favPromise = msalFetch(`${API_BASE}/api/v1/data-sources/favorite/current`, { headers: hdrs })
+      .then(r => r.ok ? r.json() : null)
+      .catch(() => null);
+
+    // All LoomX metadata (dashboards, charts, datasets, favorites, queries)
+    const summaryPromise = msalFetch(`${API_BASE}/api/v1/metadata/summary`, { headers: hdrs })
+      .then(r => r.ok ? r.json() : { dashboards: [], charts: [], datasets: [], favorites: [], savedQueries: [] })
+      .catch(() => ({ dashboards: [], charts: [], datasets: [], favorites: [], savedQueries: [] }));
+
+    // Data source list (no table counts — metadata DB only, fast)
+    const listPromise = msalFetch(`${API_BASE}/api/v1/data-sources/list`, { headers: hdrs })
+      .then(r => r.ok ? r.json() : { dataSources: [] })
+      .catch(() => ({ dataSources: [] }));
+
+    // Lab tables — chains off favPromise so it fires the instant the favorite
+    // DB name is known, without waiting for any other call.
+    const tablesPromise = favPromise.then((favData: any) => {
+      const favDb = favData?.dataSource?.database_name as string | undefined;
+      if (!favDb) return { tables: [] };
+      return msalFetch(
+        `${API_BASE}/api/v1/lab/tables?database=${encodeURIComponent(favDb)}`,
+        { headers: hdrs }
+      )
+        .then(r => r.ok ? r.json() : { tables: [] })
+        .catch(() => ({ tables: [] }));
+    });
+
+    // ── Step 3: update state + cache as each call resolves ───────────────────
+
+    summaryPromise.then((metadata: any) => {
+      applyMetadata(metadata);
+      writeCache({ summary: metadata });
     }).catch(() => {
       setDashboardCount(0);
       setChartCount(0);
@@ -235,7 +269,9 @@ export default function Home() {
     });
 
     listPromise.then((data: any) => {
-      setDataSourceList(data.dataSources || []);
+      const sources = data.dataSources || [];
+      setDataSourceList(sources);
+      writeCache({ sources });
     });
 
     tablesPromise.then((data: any) => {
@@ -244,6 +280,7 @@ export default function Home() {
       else if (Array.isArray(data?.tables)) tables = data.tables;
       setLabTables(tables);
       setLabTableCount(tables.length);
+      writeCache({ tables });
     }).catch(() => setLabTableCount(0));
 
   }, [isAuthenticated, account]);
