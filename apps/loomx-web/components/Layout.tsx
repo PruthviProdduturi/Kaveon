@@ -46,10 +46,15 @@ export function Layout({ children }: LayoutProps) {
 
   const handleLogoClick = () => {
     setIsRevolving(true);
-    // Reset animation after it completes
-    setTimeout(() => setIsRevolving(false), 400);
-    // Navigate to home
-    router.push('/');
+    setTimeout(() => {
+      setIsRevolving(false);
+      if (pathname === '/') {
+        // Already on home — hard reload to refresh all data
+        window.location.reload();
+      } else {
+        window.location.href = '/';
+      }
+    }, 400);
   };
 
   return (
