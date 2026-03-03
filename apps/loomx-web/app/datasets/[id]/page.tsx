@@ -972,7 +972,7 @@ export default function DatasetDetailPage() {
                               joinDisplay = `${parsed.factTable}.${parsed.factKey} = ${parsed.dimTable}.${parsed.dimKey}`;
                             }
                             return (
-                              <tr key={`${dim.dimension_table}-${idx}`} style={{ borderBottom: idx < dataset.dimensions.length - 1 ? "1px solid #f3f4f6" : "none" }}>
+                              <tr key={`${dim.dimension_table}-${idx}`} style={{ borderBottom: idx < (dataset.dimensions?.length ?? 0) - 1 ? "1px solid #f3f4f6" : "none" }}>
                                 <td style={{ padding: "10px 12px 10px 0", fontWeight: 500, fontSize: 13, verticalAlign: "top" }}>{tableDisplay}</td>
                                 <td style={{ padding: "10px 0", fontSize: 12, fontFamily: "monospace", color: "#6b7280", verticalAlign: "top" }} title={dim.join_condition}>{joinDisplay}</td>
                               </tr>
