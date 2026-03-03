@@ -4,7 +4,6 @@ import { formatDatasetDate, formatSavedQueryDate } from "../utils/date";
 import { useEffect, useRef, useState } from "react";
 
 import { API_BASE } from "../config";
-import { LoadingOverlay } from "../components/LoadingOverlay";
 import { msalFetch } from "../utils/msalFetch";
 import { useAuth } from "../auth/useAuth";
 import { useTheme } from "../contexts/ThemeContext";
@@ -138,7 +137,6 @@ export default function Home() {
   const [queryScope, setQueryScope] = useState<"mine" | "all">("mine");
   // Workspace Activity toggle state
   const [activityScope, setActivityScope] = useState<'mine'|'all'>('all');
-  const [isLoadingData, setIsLoadingData] = useState(false);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -217,7 +215,6 @@ export default function Home() {
       setAllSavedQueries(allQueries);
       setSavedQueries(filteredQueries);
       setSavedQueriesCount(allQueries.length);
-      setIsLoadingData(false);
     };
 
     // ── Step 1: paint from cache instantly (if available) ────────────────────
@@ -232,10 +229,7 @@ export default function Home() {
         setLabTables(cached.tables);
         setLabTableCount(cached.tables.length);
       }
-      // isLoadingData stays false — we already have something to show
-    } else {
-      // First-ever load for this user: show the loading state while we wait
-      setIsLoadingData(true);
+      // Already have something to show — API calls run in background
     }
 
     // ── Step 2: fire all API calls in parallel (always — cache or not) ───────
@@ -258,8 +252,11 @@ export default function Home() {
 
     // Lab tables — chains off favPromise so it fires the instant the favorite
     // DB name is known, without waiting for any other call.
+    // We also capture favDb here so we can write the Lab page sidebar cache.
+    let labCacheFavDb: string | null = null;
     const tablesPromise = favPromise.then((favData: any) => {
       const favDb = favData?.dataSource?.database_name as string | undefined;
+      labCacheFavDb = favDb || null;
       if (!favDb) return { tables: [] };
       return msalFetch(
         `${API_BASE}/api/v1/lab/tables?database=${encodeURIComponent(favDb)}`,
@@ -279,7 +276,6 @@ export default function Home() {
       setChartCount(0);
       setDatasetCount(0);
       setSavedQueriesCount(0);
-      setIsLoadingData(false);
     });
 
     listPromise.then((data: any) => {
@@ -295,6 +291,16 @@ export default function Home() {
       setLabTables(tables);
       setLabTableCount(tables.length);
       writeCache({ tables });
+      // Pre-warm the Lab page table sidebar cache so navigating to SQL Lab
+      // shows the table list instantly without waiting for data-sources/active.
+      if (labCacheFavDb && typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(
+            `loomx_lab_tables_v1_${userEmail || 'anon'}`,
+            JSON.stringify({ database: labCacheFavDb, tables, cachedAt: Date.now() })
+          );
+        } catch { /* ignore quota errors */ }
+      }
     }).catch(() => setLabTableCount(0));
 
   }, [isAuthenticated, account]);
@@ -476,12 +482,7 @@ export default function Home() {
   return (
     <>
       {isAuthenticated && (
-        <>
-          {isLoadingData && (
-            <LoadingOverlay />
-          )}
-          {!isLoadingData && (
-            <div className="homepage-container">
+        <div className="homepage-container">
             <section className="welcome-section">
           <div className="welcome-content">
             <h1>
@@ -1019,8 +1020,6 @@ export default function Home() {
           </div>
         </section>
         </div>
-          )}
-        </>
       )}
     </>
   );
