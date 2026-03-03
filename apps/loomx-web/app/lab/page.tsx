@@ -366,6 +366,31 @@ export default function LabPage() {
     void load();
   }, [isAuthenticated, initialSavedQueryLoaded, initialDatasetPreviewLoaded, datasetId, account?.email, account?.username]);
 
+  // Pre-populate the table sidebar from the cache written by the home page.
+  // This gives instant table visibility while the full data-sources/active
+  // round-trip (warehouse cold start) runs in the background below.
+  useEffect(() => {
+    if (!isAuthenticated || typeof window === 'undefined') return;
+    const userEmail = account?.email || account?.username || null;
+    const key = `loomx_lab_tables_v1_${userEmail || 'anon'}`;
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return;
+      const { database, tables: rawTables, cachedAt } = JSON.parse(raw);
+      // Skip if stale (> 15 minutes old)
+      if (!rawTables || Date.now() - cachedAt > 15 * 60 * 1000) return;
+      const withIds: TableInfo[] = (rawTables as any[]).map((t: any, idx: number) => ({
+        id: t.id || `${t.schema}.${t.name}.${idx}`,
+        schema: t.schema,
+        name: t.name,
+        fullName: t.fullName,
+      }));
+      setCurrentDatabase(database);
+      setTables(withIds);
+      setFilteredTables(withIds);
+    } catch { /* ignore parse errors */ }
+  }, [isAuthenticated, account?.email, account?.username]);
+
   useEffect(() => {
     if (!isAuthenticated) return;
 
