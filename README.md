@@ -4,7 +4,7 @@
 
 ### **Live Operational Outcomes & Metrics eXperience**
 
-*A self-hosted, enterprise-grade data exploration and visualization platform<br>built natively for Microsoft Fabric SQL — secured by Azure AD, zero compromises.*
+*Built for Advanced Analytics. Secured by Azure AD. Owned by Pruthvi Prodduturi.*
 
 *Owned by Pruthvi Prodduturi*
 
@@ -698,7 +698,7 @@ Or change the port in `.env` and update all three port variables consistently.
 
 <div align="center">
 
-**Built for Microsoft Fabric. Secured by Azure AD. Owned by you.**
+**Built for Advanced Analytics. Secured by Azure AD. Owned by Pruthvi Prodduturi.**
 
 *LoomX — Live Operational Outcomes & Metrics eXperience*
 
