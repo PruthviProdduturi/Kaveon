@@ -98,12 +98,6 @@ router.post('/generate', asyncHandler(async (req, res) => {
     throw new ValidationError('Failed to generate SQL from configuration');
   }
 
-  // Log generated SQL for debugging
-  console.log('[SQL Generate] Generated SQL:', {
-    datasource,
-    dimensionCount: dimensions.length,
-    sqlPreview: sqlText.substring(0, 300) + (sqlText.length > 300 ? '...' : '')
-  });
 
   // Extract tables used
   const tablesUsed = [dataset.table_name];
@@ -346,8 +340,6 @@ router.post('/execute', asyncHandler(async (req, res) => {
     database,
   });
 
-  console.log('[SQL] Executing query on database:', database, '| source:', trigger_source);
-  console.log('[SQL] Query preview:', sql_text.substring(0, 100) + (sql_text.length > 100 ? '...' : ''));
 
   const startTime = Date.now();
   let result;
