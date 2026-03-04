@@ -541,6 +541,33 @@ def return_connection(conn: FabricSQLConnection, database: str = None):
             conn.close()
 
 
+def is_connection_error(e: Exception) -> bool:
+    """Returns True for transient TCP/ODBC errors caused by a dropped idle connection.
+    ODBC state 08S01 (communication link failure) and Winsock 10054 (connection reset)
+    both indicate a stale pooled connection — safe to discard and retry once."""
+    msg = str(e).lower()
+    return '08s01' in msg or '10054' in msg or 'communication link failure' in msg
+
+
+def discard_connection(conn: FabricSQLConnection, database: str = None):
+    """Remove a dead connection from the pool and close it — do NOT recycle it.
+    Called after a communication link failure so the stale socket is never reused."""
+    if not conn:
+        return
+    db = database or conn.database or DEFAULT_DATABASE
+    pool = connection_pools.get(db)
+    if pool:
+        with pool.lock:
+            try:
+                pool.all_connections.remove(conn)
+            except ValueError:
+                pass  # Already removed
+    try:
+        conn.close()
+    except Exception:
+        pass
+
+
 # API Routes
 
 # Warmup gate — ensures at most one warmup thread runs at a time.
@@ -787,10 +814,7 @@ def get_table_columns(table_id: str):
 
 @app.route('/api/v1/execute', methods=['POST'])
 def execute_query():
-    """Execute SQL query"""
-    conn = None
-    database = None
-    start_time = time.time()
+    """Execute SQL query — retries once on stale connection (08S01 / communication link failure)."""
     try:
         data = request.json
         sql = data.get('sql')
@@ -799,14 +823,24 @@ def execute_query():
         if not sql:
             return jsonify({'error': 'SQL query is required'}), 400
 
-        conn = get_connection(database)
-        result = conn.execute_query(sql)
-
-        return jsonify({
-            'columns': result['columns'],
-            'rows': result['rows'],
-            'rowCount': result['row_count']
-        })
+        for attempt in range(2):
+            conn = get_connection(database)
+            try:
+                result = conn.execute_query(sql)
+                return_connection(conn, database)
+                return jsonify({
+                    'columns': result['columns'],
+                    'rows': result['rows'],
+                    'rowCount': result['row_count']
+                })
+            except Exception as e:
+                if attempt == 0 and is_connection_error(e):
+                    print(f"[Execute] Stale connection detected (08S01), discarding and retrying…")
+                    discard_connection(conn, database)
+                    continue
+                # Non-retryable error, or second attempt failed — return conn and propagate
+                return_connection(conn, database)
+                raise
 
     except Exception as e:
         print(f"[Execute] ERROR: {str(e)}")
@@ -816,9 +850,6 @@ def execute_query():
             'error': 'Query execution failed',
             'message': str(e)
         }), 500
-    finally:
-        if conn:
-            return_connection(conn, database)
 
 
 @app.route('/api/v1/execute/batch', methods=['POST'])
