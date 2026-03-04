@@ -6,7 +6,7 @@
 
 import { pythonProxyService } from './pythonProxy.service';
 
-const METADATA_DATABASE = process.env.FABRIC_METADATA_DATABASE || 'IDEAS Explorer-c14f52ec-a94e-4ee9-8909-08eab413eedc';
+const METADATA_DATABASE = process.env.FABRIC_METADATA_DATABASE || '';
 
 export interface QueryResult<T = any> {
   rows: T[];

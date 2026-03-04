@@ -979,6 +979,13 @@ def probe_connection():
                 pass
 
 
+@app.route('/api/v1/shutdown', methods=['POST'])
+def shutdown():
+    """Graceful shutdown — called by setup route to force config reload on restart."""
+    Thread(target=lambda: (time.sleep(0.5), os._exit(0)), daemon=True).start()
+    return jsonify({'success': True, 'message': 'Proxy shutting down for config reload'})
+
+
 def warm_connection_pool():
     """Pre-warm connection pools with a few connections to reduce first-request latency"""
     print("[Proxy] Warming connection pools (LIVE DATA mode - no caching)...")

@@ -308,6 +308,11 @@ router.post('/initialize', asyncHandler(async (req, res) => {
     message: 'Metadata database initialised successfully. LoomX API is restarting…',
   });
 
+  // Restart proxy so it re-reads the new .env (best-effort — non-fatal if proxy is down).
+  try {
+    await axios.post(`${PROXY_BASE}/api/v1/shutdown`, {}, { timeout: 3000 });
+  } catch {}
+
   // ts-node-dev (--respawn) / nodemon brings the process back up automatically.
   setTimeout(() => {
     console.log('[Setup] Restarting API to apply new metadata database configuration…');
