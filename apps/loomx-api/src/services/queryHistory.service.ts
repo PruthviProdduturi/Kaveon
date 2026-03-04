@@ -188,8 +188,6 @@ export class QueryHistoryService {
 
     const trigger_source = data.trigger_source || 'lab';
 
-    console.log(`[QueryHistory] Creating entry for userId: "${userId}", trigger_source: "${trigger_source}", dataset_id: ${data.dataset_id}, started_at: ${startedAt.toISOString()}`);
-
     // Insert and get the auto-generated ID
     const result = await this.db.query<{ id: number }>(`
       INSERT INTO query_history (
@@ -220,7 +218,6 @@ export class QueryHistoryService {
     ]);
 
     const createdId = result.rows[0].id;
-    console.log(`[QueryHistory] Created entry with id: ${createdId} for user: "${userId}"`);
 
     // Verify the record was saved with correct timestamp
     const verify = await this.db.queryOne<{ id: number; started_at: Date }>(`
