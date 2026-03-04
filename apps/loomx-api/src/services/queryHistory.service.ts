@@ -224,7 +224,6 @@ export class QueryHistoryService {
       SELECT id, started_at FROM query_history WHERE id = @param0
     `, [createdId]);
     if (verify) {
-      console.log(`[QueryHistory] ✓ Verified record ${createdId} saved with started_at: ${verify.started_at}`);
     } else {
       console.error(`[QueryHistory] ✗ Failed to verify record ${createdId} - not found in database!`);
     }

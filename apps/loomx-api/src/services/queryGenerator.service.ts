@@ -192,7 +192,6 @@ function buildCoalesceMap(
   dimensionsByFactKey.forEach((dims, factKey) => {
     if (dims.length <= 1) return;
 
-    console.log(`[QueryGenerator] Found ${dims.length} dimensions sharing fact_key "${factKey}" - will use COALESCE`);
 
     // Derive semantic label from factKey  (e.g. "ProductKey" → "product")
     let semantic = factKey;
@@ -329,16 +328,8 @@ function getRequiredDimensions(
     const factKey = normalizeColumnName(dim.factKey || '').toLowerCase();
     const isUsed = usedTables.has(tableName) || requiredFactKeys.has(factKey);
 
-    if (!isUsed) {
-      console.log(`[QueryGenerator] Skipping unused dimension: ${dim.table}`);
-    } else if (!usedTables.has(tableName)) {
-      console.log(`[QueryGenerator] Including sibling dimension for COALESCE: ${dim.table} (shares factKey "${dim.factKey}")`);
-    }
-
     return isUsed;
   });
-
-  console.log(`[QueryGenerator] Using ${requiredDimensions.length} of ${dimensions.length} dimensions`);
 
   return requiredDimensions;
 }
@@ -456,7 +447,6 @@ function resolveColumnExpression(
     const coalesceParts = sources.map(s => `${s.alias}.${quoteIdentifier(s.columnName)}`);
     const coalesceExpr = `COALESCE(${coalesceParts.join(', ')})`;
 
-    console.log(`[QueryGenerator] Using COALESCE for column "${colName}": ${coalesceExpr}`);
     return coalesceExpr;
   }
 
@@ -494,7 +484,6 @@ function resolveColumnAlias(
         // Found the table for this column, resolve to its alias
         const alias = aliasMap.get(tableName.toLowerCase());
         if (alias) {
-          console.log(`[QueryGenerator] Resolved unqualified column "${columnName}" to table "${tableName}" (alias: ${alias})`);
           return { alias, column: columnName };
         }
       }
@@ -564,8 +553,6 @@ function buildOptimizedFilterClause(
   // TIER 1/2 OPTIMIZATION: Use fact table's key column if available
   // This avoids joining the dimension table entirely
   if (keyColumn && valueKey !== undefined && valueKey !== null && valueKey !== '') {
-    console.log(`[QueryGenerator] Using tier 1/2 optimized filter on fact table key column: ${keyColumn}`);
-
     // Parse keyColumn to extract the fact-side column name
     // keyColumn format: "FactTable.ColumnName" or "schema.FactTable.ColumnName"
     const keyParts = normalizeColumnName(keyColumn).split('.').filter(p => p.length > 0);
@@ -586,8 +573,6 @@ function buildOptimizedFilterClause(
 
   // TIER 3 FALLBACK: Use dimension table's display column
   // This requires the dimension join to be present
-  console.log(`[QueryGenerator] Using tier 3 filter on dimension display column: ${col}`);
-
   const { alias, column: colName } = resolveColumnAlias(col, factAlias, aliasMap, columnTableMap);
   const quotedCol = `${alias}.${quoteIdentifier(colName)}`;
 
@@ -878,9 +863,6 @@ export function buildDistinctFilterValuesQuery(params: DistinctValuesParams): Di
     // Determine filtering strategy (which tier and keyColumn)
     const { keyColumn, tier } = determineFilteringStrategy(column, dimensions, datasource, columnTableMap);
 
-    console.log(`[QueryGenerator] Filter column "${column}" uses tier ${tier} filtering` +
-      (keyColumn ? ` (fact_key: ${keyColumn})` : ''));
-
     // Build COALESCE map to detect sibling dimensions sharing the same factKey
     const coalesceMap = buildCoalesceMap(requiredDimensions, aliasMap, columns);
 
@@ -928,7 +910,6 @@ export function buildDistinctFilterValuesQuery(params: DistinctValuesParams): Di
           `SELECT DISTINCT TOP ${limit} [key], [value] ` +
           `FROM (${subqueries.join(' UNION ')}) AS [combined_vals] ` +
           `ORDER BY [value]`;
-        console.log(`[QueryGenerator] Distinct filter values using UNION across ${siblingGroup.length} sibling dims`);
         return { sql, keyColumn, filteringTier: tier };
       }
     }

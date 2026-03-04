@@ -134,8 +134,14 @@ function getHistorySourceLabel(row: QueryHistoryRow): string {
   if (normalized === "dataset-filter-values" || normalized === "filter-values") {
     return "Dataset filters";
   }
-  if (normalized === "dashboard") {
+  if (normalized === "dashboard" || normalized === "dashboard-chart") {
     return "Dashboard";
+  }
+  if (normalized === "dashboard-filter") {
+    return "Dashboard filters";
+  }
+  if (normalized === "chart-builder-filter") {
+    return "Chart builder filters";
   }
 
   if (row.query_id != null) {
