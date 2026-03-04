@@ -93,10 +93,8 @@ class PythonProxyService {
 
   /**
    * Execute SQL query — retries once on transient TCP connection drops.
-   * When fabricToken is supplied it is forwarded to the proxy so the query
-   * runs under the user's own Azure AD identity instead of a service account.
    */
-  async executeQuery(sql: string, database?: string, fabricToken?: string): Promise<{
+  async executeQuery(sql: string, database?: string): Promise<{
     columns: string[];
     rows: Array<Record<string, any>>;
     rowCount: number;
@@ -106,7 +104,6 @@ class PythonProxyService {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
         const body: Record<string, unknown> = { sql, database };
-        if (fabricToken) body.fabric_token = fabricToken;
         const response = await this.client.post('/api/v1/execute', body);
         return response.data;
       } catch (error: any) {

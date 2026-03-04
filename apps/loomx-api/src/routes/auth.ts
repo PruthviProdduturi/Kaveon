@@ -17,8 +17,6 @@ const PROXY_BASE = process.env.PYTHON_PROXY_URL || 'http://localhost:5001';
  */
 router.post('/connect', async (req: Request, res: Response) => {
   try {
-    const { use_cached, initialize_only } = req.body;
-
     res.json({
       success: true,
       message: 'Connected successfully',
