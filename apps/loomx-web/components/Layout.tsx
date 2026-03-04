@@ -115,12 +115,15 @@ export function Layout({ children }: LayoutProps) {
               </Link>
               <div className="header-dropdown-menu" aria-label="Lab navigation submenu">
                 <Link className="header-dropdown-item" href="/lab">
+                  <i className="fas fa-flask" style={{ marginRight: 6, width: 14 }} />
                   <span>SQL Lab</span>
                 </Link>
                 <Link className="header-dropdown-item" href="/lab/queries">
+                  <i className="fas fa-bookmark" style={{ marginRight: 6, width: 14 }} />
                   <span>Saved queries</span>
                 </Link>
                 <Link className="header-dropdown-item" href="/lab/queries?view=history">
+                  <i className="fas fa-history" style={{ marginRight: 6, width: 14 }} />
                   <span>Query history</span>
                 </Link>
               </div>
@@ -158,11 +161,11 @@ export function Layout({ children }: LayoutProps) {
                 onClick={() => setSettingsOpen(true)}
                 style={{ width: '100%', textAlign: 'left' }}
               >
-                <i className="fas fa-palette" style={{ marginRight: 8, width: 16 }} />
+                <i className="fas fa-palette" style={{ marginRight: 6, width: 14 }} />
                 <span>Themes</span>
               </button>
               <Link href="/data-sources" className="header-dropdown-item">
-                <i className="fas fa-server" style={{ marginRight: 8, width: 16 }} />
+                <i className="fas fa-server" style={{ marginRight: 6, width: 14 }} />
                 <span>Data Sources</span>
               </Link>
             </div>

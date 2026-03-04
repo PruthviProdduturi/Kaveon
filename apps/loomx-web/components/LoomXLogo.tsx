@@ -1,7 +1,13 @@
 "use client";
 
 import React, { useId, useRef } from 'react';
-import { useTheme } from '../contexts/ThemeContext';
+
+/**
+ * LoomXLogo — uses CSS custom properties for all theme colors.
+ * Same approach as LoomXLoading: CSS vars are set synchronously by the
+ * layout.tsx inline script before React hydrates, so there is no flash
+ * and no hydration mismatch.
+ */
 
 interface LoomXLogoProps {
   size?: number;
@@ -18,24 +24,6 @@ export function LoomXLogo({ size = 48, animate = 'none', onClick, className = ''
   const wordRef = useRef<SVGTextElement | null>(null);
   const fontSize = Math.round(size * 0.52);
   const [isRotating, setIsRotating] = React.useState(false);
-  const [mounted, setMounted] = React.useState(false);
-
-  // Get theme colors
-  const { gradientColors } = useTheme();
-
-  // Use default colors until mounted to prevent hydration mismatch
-  const defaultColors = {
-    base: '#0078D4',
-    light: '#3dabff',
-    lighter: '#b1e6f6',
-    dark: '#004070'
-  };
-
-  const colors = mounted ? gradientColors : defaultColors;
-
-  React.useEffect(() => {
-    setMounted(true);
-  }, []);
 
   // Unique IDs for gradients to prevent conflicts - useId is SSR-safe
   const idSuffix = useId().replace(/:/g, '-');
@@ -70,18 +58,18 @@ export function LoomXLogo({ size = 48, animate = 'none', onClick, className = ''
     >
       <svg ref={svgRef} width={width} height={height} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMinYMid" aria-hidden="false">
         <defs>
-          {/* Dynamic gradient for X - multi-shade gradient */}
+          {/* Dynamic gradient for X - uses CSS vars, no hydration mismatch */}
           <linearGradient id={`xGradModern${idSuffix}`} x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor={colors.light} />
-            <stop offset="50%" stopColor={colors.base} />
-            <stop offset="100%" stopColor={colors.dark} />
+            <stop offset="0%" stopColor="var(--loomx-secondary)" />
+            <stop offset="50%" stopColor="var(--loomx-primary)" />
+            <stop offset="100%" stopColor="var(--loomx-dark)" />
           </linearGradient>
 
           {/* Radial gradient for glow */}
           <radialGradient id={`xRadial${idSuffix}`} cx="50%" cy="50%">
-            <stop offset="0%" stopColor={colors.base} stopOpacity="0.3" />
-            <stop offset="70%" stopColor={colors.base} stopOpacity="0.1" />
-            <stop offset="100%" stopColor={colors.base} stopOpacity="0" />
+            <stop offset="0%" stopColor="var(--loomx-primary)" stopOpacity="0.3" />
+            <stop offset="70%" stopColor="var(--loomx-primary)" stopOpacity="0.1" />
+            <stop offset="100%" stopColor="var(--loomx-primary)" stopOpacity="0" />
           </radialGradient>
 
           {/* Enhanced glow effect */}
@@ -186,7 +174,7 @@ export function LoomXLogo({ size = 48, animate = 'none', onClick, className = ''
 
         .loomx-logo:hover:not(.animate-revolve) {
           transform: translateY(-2px);
-          filter: drop-shadow(0 6px 12px ${colors.base}30);
+          filter: drop-shadow(0 6px 12px rgba(var(--loomx-primary-rgb), 0.19));
         }
 
         @keyframes pulse-logo {
@@ -196,7 +184,7 @@ export function LoomXLogo({ size = 48, animate = 'none', onClick, className = ''
           }
           50% {
             transform: scale(1.05);
-            filter: drop-shadow(0 6px 12px ${colors.base}35);
+            filter: drop-shadow(0 6px 12px rgba(var(--loomx-primary-rgb), 0.21));
           }
           100% {
             transform: scale(1);

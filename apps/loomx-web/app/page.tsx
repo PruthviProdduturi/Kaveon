@@ -4,6 +4,7 @@ import { formatDatasetDate, formatSavedQueryDate } from "../utils/date";
 import { useEffect, useRef, useState } from "react";
 
 import { API_BASE } from "../config";
+import { LoomXLoading } from "../components/LoomXLoading";
 import { msalFetch } from "../utils/msalFetch";
 import { useAuth } from "../auth/useAuth";
 import { useTheme } from "../contexts/ThemeContext";
@@ -109,6 +110,7 @@ export default function Home() {
   const { isAuthenticated, account } = useAuth();
   const { primaryColor } = useTheme();
 
+  const [isPageLoading, setIsPageLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dashboards, setDashboards] = useState<DashboardSummary[]>([]);
   const [charts, setCharts] = useState<ChartSummary[]>([]);
@@ -141,6 +143,7 @@ export default function Home() {
   useEffect(() => {
     if (!isAuthenticated) {
       fetchingForRef.current = null; // reset so next sign-in fetches fresh
+      setIsPageLoading(true);        // reset so next sign-in shows loader
       return;
     }
 
@@ -154,27 +157,7 @@ export default function Home() {
 
     const hdrs = userEmail ? { 'x-user-email': userEmail } : undefined;
 
-    // ── Stale-while-revalidate cache ──────────────────────────────────────────
-    // Cache key is scoped to the signed-in user so multiple users on the
-    // same browser never see each other's data.
-    const CACHE_KEY = `loomx_home_v1_${userEmail || 'anon'}`;
-
-    function readCache(): { summary?: any; sources?: any[]; tables?: any[] } | null {
-      try {
-        const raw = localStorage.getItem(CACHE_KEY);
-        return raw ? JSON.parse(raw) : null;
-      } catch { return null; }
-    }
-
-    function writeCache(patch: Record<string, any>) {
-      try {
-        const prev = readCache() || {};
-        localStorage.setItem(CACHE_KEY, JSON.stringify({ ...prev, ...patch }));
-      } catch { /* ignore quota errors */ }
-    }
-
-    // ── Shared: apply metadata summary to state ───────────────────────────────
-    // Called twice: once immediately from cache, once when fresh API data lands.
+    // ── Apply metadata summary to state ──────────────────────────────────────
     const applyMetadata = (metadata: any) => {
       const allQueries = metadata.savedQueries || [];
       const filteredQueries = userEmail
@@ -217,25 +200,9 @@ export default function Home() {
       setSavedQueriesCount(allQueries.length);
     };
 
-    // ── Step 1: paint from cache instantly (if available) ────────────────────
-    // The user sees real data the moment the page mounts — no spinner needed.
-    // The API calls below run in background and silently update the UI when
-    // fresh data arrives.
-    const cached = readCache();
-    if (cached) {
-      if (cached.summary) applyMetadata(cached.summary);
-      if (cached.sources) setDataSourceList(cached.sources);
-      if (cached.tables) {
-        setLabTables(cached.tables);
-        setLabTableCount(cached.tables.length);
-      }
-      // Already have something to show — API calls run in background
-    }
+    // ── Fire all API calls in parallel — always live data ────────────────────
 
-    // ── Step 2: fire all API calls in parallel (always — cache or not) ───────
-    // Results update the UI and write back to cache so the NEXT load is instant.
-
-    // Favorite data source — resolved first so tablesPromise can chain off it.
+    // Favorite data source
     const favPromise = msalFetch(`${API_BASE}/api/v1/data-sources/favorite/current`, { headers: hdrs })
       .then(r => r.ok ? r.json() : null)
       .catch(() => null);
@@ -250,27 +217,53 @@ export default function Home() {
       .then(r => r.ok ? r.json() : { dataSources: [] })
       .catch(() => ({ dataSources: [] }));
 
-    // Lab tables — chains off favPromise so it fires the instant the favorite
-    // DB name is known, without waiting for any other call.
-    // We also capture favDb here so we can write the Lab page sidebar cache.
-    let labCacheFavDb: string | null = null;
-    const tablesPromise = favPromise.then((favData: any) => {
-      const favDb = favData?.dataSource?.database_name as string | undefined;
-      labCacheFavDb = favDb || null;
-      if (!favDb) return { tables: [] };
+    // Lab tables — fire immediately using the cached DB name if available.
+    // Returning users: starts in parallel with every other fetch (no waiting).
+    // First-ever login (no cache yet): falls back to chaining off favPromise.
+    const labCacheKey = `loomx_lab_tables_v1_${userEmail || 'anon'}`;
+    let cachedLabDb: string | null = null;
+    try {
+      const raw = localStorage.getItem(labCacheKey);
+      if (raw) cachedLabDb = (JSON.parse(raw) as any).database || null;
+    } catch { /* ignore */ }
+    let labCacheFavDb: string | null = cachedLabDb;
+
+    // Starts immediately if we know the DB — true parallel fetch
+    const immediateTablesPromise: Promise<any> | null = cachedLabDb
+      ? msalFetch(`${API_BASE}/api/v1/lab/tables?database=${encodeURIComponent(cachedLabDb)}`, { headers: hdrs })
+          .then(r => r.ok ? r.json() : { tables: [] })
+          .catch(() => ({ tables: [] }))
+      : null;
+
+    // Paint tables in the UI as soon as the immediate fetch resolves
+    // (before favPromise even returns)
+    immediateTablesPromise?.then((data: any) => {
+      const tables: LabTableSummary[] = Array.isArray(data) ? data
+        : Array.isArray(data?.tables) ? data.tables : [];
+      setLabTables(tables);
+      setLabTableCount(tables.length);
+    });
+
+    // tablesPromise: confirms the DB via favPromise, re-fetches only if it changed
+    const tablesPromise = favPromise.then(async (favData: any) => {
+      const freshDb = favData?.dataSource?.database_name as string | undefined || null;
+      labCacheFavDb = freshDb;
+      // DB unchanged — return the already-running (or completed) immediate fetch
+      if (freshDb === cachedLabDb && immediateTablesPromise) return immediateTablesPromise;
+      // No cached DB (first login) or DB changed — fetch for the correct DB
+      if (!freshDb) return { tables: [] };
       return msalFetch(
-        `${API_BASE}/api/v1/lab/tables?database=${encodeURIComponent(favDb)}`,
+        `${API_BASE}/api/v1/lab/tables?database=${encodeURIComponent(freshDb)}`,
         { headers: hdrs }
       )
         .then(r => r.ok ? r.json() : { tables: [] })
         .catch(() => ({ tables: [] }));
     });
 
-    // ── Step 3: update state + cache as each call resolves ───────────────────
+    // ── Update state as each call resolves ───────────────────────────────────
 
     summaryPromise.then((metadata: any) => {
       applyMetadata(metadata);
-      writeCache({ summary: metadata });
     }).catch(() => {
       setDashboardCount(0);
       setChartCount(0);
@@ -281,7 +274,6 @@ export default function Home() {
     listPromise.then((data: any) => {
       const sources = data.dataSources || [];
       setDataSourceList(sources);
-      writeCache({ sources });
     });
 
     tablesPromise.then((data: any) => {
@@ -290,18 +282,23 @@ export default function Home() {
       else if (Array.isArray(data?.tables)) tables = data.tables;
       setLabTables(tables);
       setLabTableCount(tables.length);
-      writeCache({ tables });
-      // Pre-warm the Lab page table sidebar cache so navigating to SQL Lab
-      // shows the table list instantly without waiting for data-sources/active.
+      // Persist only the DB name — used as a hint on next load to fire the
+      // tables fetch in parallel (the actual data is always fetched live).
       if (labCacheFavDb && typeof window !== 'undefined') {
         try {
           localStorage.setItem(
             `loomx_lab_tables_v1_${userEmail || 'anon'}`,
-            JSON.stringify({ database: labCacheFavDb, tables, cachedAt: Date.now() })
+            JSON.stringify({ database: labCacheFavDb })
           );
         } catch { /* ignore quota errors */ }
       }
     }).catch(() => setLabTableCount(0));
+
+    // Show the page only once all data is ready — no partial renders.
+    // All setState calls above have already run before this fires,
+    // so the page appears complete the moment the loader disappears.
+    Promise.all([summaryPromise, listPromise, tablesPromise])
+      .finally(() => setIsPageLoading(false));
 
   }, [isAuthenticated, account]);
 
@@ -478,6 +475,10 @@ export default function Home() {
     .slice(0, 8);
 
   const hasRecentUserActivity = recentUserActivityItems.length > 0;
+
+  if (isAuthenticated && isPageLoading) {
+    return <LoomXLoading />;
+  }
 
   return (
     <>

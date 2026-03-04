@@ -106,29 +106,22 @@ def mask_endpoint(endpoint: str) -> str:
 
 
 class FabricSQLConnection:
-    """Fabric SQL connection using FabricExplorer's exact approach"""
+    """Fabric SQL connection using Azure AD token auth (pyodbc + ODBC Driver 18)."""
 
-    def __init__(self, server: str, database: str, user_token: Optional[str] = None):
+    def __init__(self, server: str, database: str):
         self.server = server
         self.database = database
-        self.user_token = user_token  # optional pre-supplied delegated MSAL token
         self.credential = _azure_credential  # shared singleton — no per-connection auth races
         self.connection = None
         self.in_use = False  # Track if connection is currently in use
         self.last_used = time.time()
 
     def _try_token_authentication(self) -> bool:
-        """Try to connect using Azure AD token authentication (FabricExplorer method)"""
+        """Connect using Azure AD token (SQL_COPT_SS_ACCESS_TOKEN injection via pyodbc)."""
         try:
-            if self.user_token:
-                # Delegated user token forwarded from the browser via MSAL —
-                # no service-account credential needed, runs under the user's identity.
-                print(f"[Proxy] Using delegated user token for {self.database}...")
-                token = self.user_token
-            else:
-                print(f"[Proxy] Trying token authentication for {self.database}...")
-                token_response = self.credential.get_token(TOKEN_URL)
-                token = token_response.token
+            print(f"[Proxy] Trying token authentication for {self.database}...")
+            token_response = self.credential.get_token(TOKEN_URL)
+            token = token_response.token
 
             # Encode token exactly like FabricExplorer (UTF-16-LE + struct pack)
             token_bytes = token.encode('UTF-16-LE')
@@ -161,56 +154,18 @@ class FabricSQLConnection:
             print(f"[Proxy] Token authentication failed: {str(e)}")
             return False
 
-    def _try_integrated_authentication(self) -> bool:
-        """Try to connect using Windows Integrated Authentication (FabricExplorer fallback)"""
-        try:
-            print(f"[Proxy] Trying integrated authentication for {self.database}...")
-
-            connection_string = (
-                "DRIVER={ODBC Driver 18 for SQL Server};"
-                f"SERVER={self.server};"
-                f"DATABASE={self.database};"
-                "Trusted_Connection=yes;"
-                "Encrypt=yes;"
-                "TrustServerCertificate=yes;"
-                "Connection Timeout=60;"
-            )
-
-            self.connection = pyodbc.connect(connection_string)
-
-            # Test connection
-            cursor = self.connection.cursor()
-            cursor.execute("SELECT 1")
-            cursor.fetchone()
-            cursor.close()
-
-            print(f"[Proxy] Integrated authentication successful for {self.database}")
-            return True
-
-        except Exception as e:
-            print(f"[Proxy] Integrated authentication failed: {str(e)}")
-            return False
-
     def connect(self):
-        """Connect to Fabric SQL using dual authentication strategy (EXACTLY like FabricExplorer)"""
+        """Connect to Fabric SQL using Azure AD token authentication."""
         if self.connection:
             return
 
         print(f"[Proxy] Connecting to {mask_endpoint(self.server)}/{self.database}...")
 
-        # Try token authentication first
         if self._try_token_authentication():
             print(f"[Proxy] Connected successfully to {self.database}")
             return
 
-        # Fallback to integrated authentication
-        print(f"[Proxy] Token authentication failed, trying integrated authentication...")
-        if self._try_integrated_authentication():
-            print(f"[Proxy] Connected successfully to {self.database}")
-            return
-
-        # Both methods failed
-        raise Exception(f"Failed to connect to {self.server}/{self.database} using both token and integrated authentication")
+        raise Exception(f"Failed to connect to {self.server}/{self.database}: Azure AD token authentication failed")
 
     def execute_query(self, sql: str, params: list = None, use_cache: bool = False) -> Dict[str, Any]:
         """Execute SQL query and return results (LIVE DATA - no caching)"""
@@ -492,10 +447,6 @@ def get_data_source_info(database: str) -> Optional[Dict[str, str]]:
 connection_pools: Dict[str, ConnectionPool] = {}
 pool_lock = Lock()
 
-# Warmup gate — ensures at most one warmup thread runs at a time.
-# Set to True when /api/v1/warmup is first called (user sign-in).
-_warmup_triggered = False
-_warmup_trigger_lock = Lock()
 
 
 def get_connection_pool(database: str = None) -> ConnectionPool:
@@ -592,22 +543,30 @@ def return_connection(conn: FabricSQLConnection, database: str = None):
 
 # API Routes
 
+# Warmup gate — ensures at most one warmup thread runs at a time.
+# Set to True when /api/v1/warmup is first called (user sign-in).
+_warmup_triggered = False
+_warmup_trigger_lock = Lock()
+
+
 def _run_warmup_and_heartbeat():
     """
-    Warm both the metadata DB pool and the warehouse pool in PARALLEL, then
-    keep both alive with a 5-minute heartbeat.
+    Warm the metadata DB first, then discover and warm all active data sources
+    (warehouses, lakehouses) in parallel. Keeps all pools alive with a 5-minute
+    heartbeat thereafter.
 
-    Why both pools:
-      - Metadata DB cold start:  ~10s  (favPromise, summaryPromise, listPromise)
-      - Warehouse cold start:    ~10s  (tablesPromise — chains off favPromise)
-      - Both start at sign-in → both warm by t≈10s → /tables is instant when
-        favPromise resolves instead of adding another 10s on top.
+    Flow:
+      1. Warm metadata (6 conns) — all endpoint details live here.
+      2. Query data_sources for active DB names.
+      3. Warm each data source pool (1 conn each) in parallel threads.
+      4. Heartbeat loop: ping all pools every 5 min.
 
     Uses retry-with-backoff (0s, 10s, 20s) for each pool independently.
     """
-    def _warm_pool(db_name: str, endpoint: str, n_conns: int, label: str):
-        """Warm n_conns connections for the given database, with retry."""
-        if not endpoint or not db_name:
+    def _warm_pool(db_name: str, n_conns: int, label: str):
+        """Warm n_conns connections for the given database, with retry.
+        Endpoint is resolved automatically by get_connection_pool (from data_sources table)."""
+        if not db_name:
             return False
         delays = [0, 10, 20]
         for attempt, delay in enumerate(delays, 1):
@@ -632,42 +591,63 @@ def _run_warmup_and_heartbeat():
         print(f"[Proxy] {label} warmup gave up — first request will connect lazily.")
         return False
 
-    # Warm metadata DB (6 conns) and warehouse (1 conn) concurrently.
+    # Step 1: Warm metadata DB first.
+    # All SQL endpoint details live in metadata (data_sources table), so metadata
+    # must be connected before we can discover and warm any other database.
     #
-    # Why 6 for metadata:
+    # Why 6 connections for metadata:
     #   GET /favorite/current  → 1 query
     #   GET /list              → 1 query
     #   GET /status            → 1 query
     #   GET /summary           → 5 parallel sub-queries (datasets, charts,
-    #                            dashboards, favorites, saved_queries via
-    #                            Promise.all in metadata.ts)
-    #   Total simultaneous     → 8, but summary's 5 queries dominate; 6
-    #                            warm connections means summary grabs 5 warm
-    #                            + 1 spare, the other 3 calls share the pool.
-    #
-    # Warehouse needs 1 — enough to have a warm connection ready for /tables
-    # by the time favPromise resolves (~10s after sign-in).
-    wh_thread = Thread(
-        target=_warm_pool,
-        args=(FABRIC_DATAWAREHOUSE_DATABASE, FABRIC_DATAWAREHOUSE_ENDPOINT, 1, "warehouse"),
-        daemon=True,
-    )
-    wh_thread.start()
-
-    meta_ok = _warm_pool(FABRIC_METADATA_DATABASE, FABRIC_METADATA_ENDPOINT, 6, "metadata")
-
-    wh_thread.join()  # wait so heartbeat only starts after both are ready
+    #                            dashboards, favorites, saved_queries)
+    #   Total simultaneous     → 8; 6 warm connections covers the summary
+    #                            burst and leaves 2 for the other callers.
+    meta_ok = _warm_pool(FABRIC_METADATA_DATABASE, 6, "metadata")
 
     if not meta_ok:
-        return  # metadata unavailable — no point heartbeating
+        return  # metadata unavailable — can't look up any other endpoints
 
-    # Heartbeat: ping both pools every 5 min to keep Fabric serverless warm
+    # Step 2: Discover all active data sources from metadata and warm them in parallel.
+    # Every warehouse/lakehouse endpoint is stored in data_sources — no hardcoding needed.
+    active_dbs: list = []
+    try:
+        conn = get_connection(FABRIC_METADATA_DATABASE)
+        try:
+            result = conn.execute_query(
+                "SELECT DISTINCT database_name FROM data_sources "
+                "WHERE is_active = 1 AND database_name IS NOT NULL"
+            )
+            active_dbs = [row['database_name'] for row in (result.get('rows_objects') or [])]
+            print(f"[Proxy] Discovered {len(active_dbs)} active data source(s) to warm: {active_dbs}")
+        finally:
+            return_connection(conn, FABRIC_METADATA_DATABASE)
+    except Exception as e:
+        print(f"[Proxy] Could not query data_sources for warmup: {e}")
+
+    # Fallback: also warm FABRIC_DATAWAREHOUSE_DATABASE if set and not already covered
+    if FABRIC_DATAWAREHOUSE_DATABASE and FABRIC_DATAWAREHOUSE_DATABASE not in active_dbs:
+        active_dbs.append(FABRIC_DATAWAREHOUSE_DATABASE)
+
+    ds_threads = []
+    for db_name in active_dbs:
+        t = Thread(
+            target=_warm_pool,
+            args=(db_name, 1, f"data-source({db_name})"),
+            daemon=True,
+        )
+        t.start()
+        ds_threads.append((t, db_name))
+
+    for t, _ in ds_threads:
+        t.join()  # wait for all data sources before starting heartbeat
+
+    # Heartbeat: ping all warmed pools every 5 min to keep Fabric serverless alive.
+    # Uses the same active_dbs list discovered above, plus the metadata DB.
+    heartbeat_dbs = [FABRIC_METADATA_DATABASE] + active_dbs
     while True:
         time.sleep(300)
-        for db, label in [
-            (FABRIC_METADATA_DATABASE, "metadata"),
-            (FABRIC_DATAWAREHOUSE_DATABASE, "warehouse"),
-        ]:
+        for db in heartbeat_dbs:
             if not db:
                 continue
             hb_conn = None
@@ -675,7 +655,7 @@ def _run_warmup_and_heartbeat():
                 hb_conn = get_connection(db)
                 hb_conn.execute_query("SELECT 1 AS heartbeat")
             except Exception as e:
-                print(f"[Proxy] {label} heartbeat failed (will reconnect on next request): {e}")
+                print(f"[Proxy] heartbeat failed for {db} (will reconnect on next request): {e}")
             finally:
                 if hb_conn:
                     return_connection(hb_conn, db)
@@ -810,27 +790,16 @@ def execute_query():
     """Execute SQL query"""
     conn = None
     database = None
-    is_user_conn = False  # True when using a per-request user-token connection
     start_time = time.time()
     try:
         data = request.json
         sql = data.get('sql')
         database = data.get('database', DEFAULT_DATABASE)
-        fabric_token = data.get('fabric_token')  # optional delegated MSAL token
 
         if not sql:
             return jsonify({'error': 'SQL query is required'}), 400
 
-        if fabric_token:
-            # Per-request connection with the user's own Azure AD token.
-            # Not returned to the pool — user tokens expire (1h) and must not
-            # be shared across users or cached beyond the request.
-            is_user_conn = True
-            pool = get_connection_pool(database)  # resolves & caches the endpoint
-            conn = FabricSQLConnection(pool.endpoint, database, user_token=fabric_token)
-        else:
-            conn = get_connection(database)
-
+        conn = get_connection(database)
         result = conn.execute_query(sql)
 
         return jsonify({
@@ -849,10 +818,7 @@ def execute_query():
         }), 500
     finally:
         if conn:
-            if is_user_conn:
-                conn.close()               # per-request — close immediately
-            else:
-                return_connection(conn, database)  # pool — return for reuse
+            return_connection(conn, database)
 
 
 @app.route('/api/v1/execute/batch', methods=['POST'])
@@ -990,7 +956,7 @@ def probe_connection():
 
     except Exception as e:
         raw = str(e).lower()
-        if any(k in raw for k in ['login failed', 'not authorized', 'access denied', 'permission denied']):
+        if any(k in raw for k in ['login failed', 'not authorized', 'access denied', 'permission denied', 'token authentication failed']):
             error_type = 'access_denied'
         elif any(k in raw for k in ['cannot open database', 'invalid database', 'does not exist', 'catalog not found']):
             error_type = 'db_not_found'
@@ -1064,9 +1030,14 @@ if __name__ == '__main__':
     print(f"Health: http://localhost:5001/health")
     print("=" * 44)
 
-    # Pool warmup is triggered lazily when the first user signs in
-    # (POST /api/v1/warmup, called by the Node.js API after /connect).
-    # No connections are opened until a real user is present.
+    # Start pool warmup immediately at server startup — don't wait for first user sign-in.
+    # Fabric SQL cold start takes ~9s; warming now means connections are ready
+    # by the time the first user signs in, keeping page load under 5s.
+    if FABRIC_METADATA_ENDPOINT and FABRIC_METADATA_DATABASE:
+        with _warmup_trigger_lock:
+            _warmup_triggered = True
+        Thread(target=_run_warmup_and_heartbeat, daemon=True).start()
+        print("[Proxy] Connection pool warmup started at server startup.")
 
     # Run Flask app
     # use_reloader=False prevents double startup banner from Flask's reloader
