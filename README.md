@@ -6,8 +6,6 @@
 
 *Built for Advanced Analytics. Secured by Azure AD. Owned by Pruthvi Prodduturi.*
 
-*Owned by Pruthvi Prodduturi*
-
 <br>
 
 [![Next.js](https://img.shields.io/badge/Next.js-15-black?style=for-the-badge&logo=next.js&logoColor=white)](https://nextjs.org/)
