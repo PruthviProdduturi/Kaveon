@@ -160,13 +160,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 					const primaryAccount = redirectResponse.account ?? msalInstance.getAllAccounts()[0];
 					if (primaryAccount) {
 						try {
-							const res = await fetch(`${API_BASE}/api/connect`, {
-								method: "POST",
-								headers: { "Content-Type": "application/json" },
-								body: JSON.stringify({ initialize_only: true }),
-							});
-							const data = await res.json();
-							if (res.ok && data?.success) {
+							// Fire /api/connect and theme prefetch in parallel.
+							// Theme is written to localStorage before setIsAuthenticated so
+							// ThemeContext's useState() initialiser reads it synchronously
+							// on the very first render — no flash, no extra API round-trip.
+							const [connectRes] = await Promise.all([
+								fetch(`${API_BASE}/api/connect`, {
+									method: "POST",
+									headers: { "Content-Type": "application/json" },
+									body: JSON.stringify({ initialize_only: true }),
+								}),
+								// Non-fatal: prefetch theme into localStorage
+								msalInstance.acquireTokenSilent({ ...loginRequest, account: primaryAccount })
+									.then(tok => fetch(`${API_BASE}/api/v1/theme`, {
+										headers: {
+											'Authorization': `Bearer ${tok.accessToken}`,
+											'x-user-email': primaryAccount.username,
+										},
+									}))
+									.then(r => r.ok ? r.json() : null)
+									.then((themeData: any) => {
+										if (themeData?.theme_color && typeof window !== 'undefined') {
+											window.localStorage.setItem('loomx-theme-color', themeData.theme_color);
+										}
+									})
+									.catch(() => { /* non-fatal */ }),
+							]);
+							const connectData = await connectRes.json();
+							if (connectRes.ok && connectData?.success) {
 								setIsAuthenticated(true);
 								setAccount({
 									name: primaryAccount.name ?? undefined,

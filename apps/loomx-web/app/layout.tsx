@@ -74,6 +74,12 @@ export default function RootLayout({
                     var light = hslToHex(hsl.h, hsl.s, Math.min(hsl.l + 20, 100));
                     var dark = hslToHex(hsl.h, hsl.s, Math.max(hsl.l - 20, 0));
 
+                    // Helper: convert hex to "R, G, B" string for rgba() CSS vars
+                    function hexToRgbStr(h) {
+                      h = h.replace(/^#/, '');
+                      return parseInt(h.substring(0,2),16) + ',' + parseInt(h.substring(2,4),16) + ',' + parseInt(h.substring(4,6),16);
+                    }
+
                     // Set CSS variables
                     document.documentElement.style.setProperty('--theme-primary', savedColor);
                     document.documentElement.style.setProperty('--theme-light', light);
@@ -83,6 +89,11 @@ export default function RootLayout({
                     document.documentElement.style.setProperty('--loomx-accent', lighter);
                     document.documentElement.style.setProperty('--loomx-dark', dark);
                     document.documentElement.style.setProperty('--loomx-light', lighter);
+                    // RGB component vars for rgba() usage in LoomXLoading (no hydration mismatch)
+                    document.documentElement.style.setProperty('--loomx-primary-rgb', hexToRgbStr(savedColor));
+                    document.documentElement.style.setProperty('--loomx-secondary-rgb', hexToRgbStr(light));
+                    document.documentElement.style.setProperty('--loomx-accent-rgb', hexToRgbStr(lighter));
+                    document.documentElement.style.setProperty('--loomx-dark-rgb', hexToRgbStr(dark));
                   }
                 } catch (e) { console.error('Theme preload error:', e); }
               })();

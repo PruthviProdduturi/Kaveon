@@ -2,8 +2,16 @@
 
 import React, { useState, useEffect } from 'react';
 import { LoomXLogo } from './LoomXLogo';
-import { useTheme } from '../contexts/ThemeContext';
-import { hexToRGB, rgbToRgba } from '../utils/colorUtils';
+
+/**
+ * LoomXLoading — full-screen branded loading screen.
+ *
+ * Colors are driven entirely by CSS custom properties (--loomx-primary, etc.)
+ * which are set synchronously by the inline script in layout.tsx before React
+ * hydrates. This avoids both:
+ *   - Hydration mismatches (CSS var strings are identical on server and client)
+ *   - Theme color flash (CSS vars already reflect the user's saved theme)
+ */
 
 interface LoomXLoadingProps {
   message?: string;
@@ -14,28 +22,7 @@ export function LoomXLoading({
   message = 'Loading',
   fullScreen = true
 }: LoomXLoadingProps) {
-  const { gradientColors } = useTheme();
-  const [mounted, setMounted] = useState(false);
   const [dots, setDots] = useState('');
-
-  // Use default colors until mounted to avoid hydration mismatch
-  const defaultBaseColor = '#0078D4';
-  const defaultLightColor = '#3dabff';
-  const defaultDarkColor = '#004070';
-  const defaultBaseRgb = { r: 0, g: 120, b: 212 };
-  const defaultLightRgb = { r: 61, g: 171, b: 255 };
-  const defaultDarkRgb = { r: 0, g: 64, b: 112 };
-
-  const baseColor = mounted ? gradientColors.base : defaultBaseColor;
-  const lightColor = mounted ? gradientColors.light : defaultLightColor;
-  const darkColor = mounted ? gradientColors.dark : defaultDarkColor;
-  const baseRgb = mounted ? hexToRGB(gradientColors.base) : defaultBaseRgb;
-  const lightRgb = mounted ? hexToRGB(gradientColors.light) : defaultLightRgb;
-  const darkRgb = mounted ? hexToRGB(gradientColors.dark) : defaultDarkRgb;
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -46,6 +33,20 @@ export function LoomXLoading({
     }, 500);
     return () => clearInterval(interval);
   }, []);
+
+  // CSS variable references — resolved by the browser after the inline script
+  // in layout.tsx sets them to the user's saved theme color.
+  const primary   = 'var(--loomx-primary)';
+  const secondary = 'var(--loomx-secondary)';
+  const accent    = 'var(--loomx-accent)';
+  const dark      = 'var(--loomx-dark)';
+
+  // rgba() helpers using CSS var RGB components (e.g. --loomx-primary-rgb: "0, 120, 212")
+  const pr = (opacity: number) => `rgba(var(--loomx-primary-rgb), ${opacity})`;
+  const sr = (opacity: number) => `rgba(var(--loomx-secondary-rgb), ${opacity})`;
+  const ar = (opacity: number) => `rgba(var(--loomx-accent-rgb), ${opacity})`;
+  const dr = (opacity: number) => `rgba(var(--loomx-dark-rgb), ${opacity})`;
+
   return (
     <div
       style={{
@@ -74,7 +75,7 @@ export function LoomXLoading({
               position: 'absolute',
               inset: -20,
               borderRadius: '50%',
-              background: `radial-gradient(circle, ${rgbToRgba(baseRgb, 0.15)} 0%, transparent 70%)`,
+              background: `radial-gradient(circle, ${pr(0.15)} 0%, transparent 70%)`,
               animation: 'pulse-glow 3s ease-in-out infinite',
             }}
           ></div>
@@ -86,7 +87,7 @@ export function LoomXLoading({
               position: 'absolute',
               inset: 0,
               borderRadius: '50%',
-              background: `conic-gradient(from 0deg, transparent 0deg, transparent 240deg, ${lightColor} 270deg, ${baseColor} 300deg, transparent 330deg, transparent 360deg)`,
+              background: `conic-gradient(from 0deg, transparent 0deg, transparent 240deg, ${secondary} 270deg, ${primary} 300deg, transparent 330deg, transparent 360deg)`,
               animation: 'spin-smooth 3s linear infinite',
               willChange: 'transform',
               backfaceVisibility: 'hidden',
@@ -104,7 +105,7 @@ export function LoomXLoading({
               inset: 0,
               margin: 20,
               borderRadius: '50%',
-              background: `conic-gradient(from 180deg, transparent 0deg, transparent 240deg, ${baseColor} 270deg, ${lightColor} 300deg, transparent 330deg, transparent 360deg)`,
+              background: `conic-gradient(from 180deg, transparent 0deg, transparent 240deg, ${primary} 270deg, ${secondary} 300deg, transparent 330deg, transparent 360deg)`,
               animation: 'spin-reverse 4s linear infinite',
               willChange: 'transform',
               backfaceVisibility: 'hidden',
@@ -121,9 +122,9 @@ export function LoomXLoading({
               inset: 0,
               margin: 40,
               borderRadius: '50%',
-              border: `2px solid ${baseColor}`,
+              border: `2px solid ${secondary}`,
               animation: 'pulse-ring 2s ease-in-out infinite',
-              boxShadow: `0 0 20px ${rgbToRgba(baseRgb, 0.4)}, inset 0 0 20px ${rgbToRgba(baseRgb, 0.2)}`,
+              boxShadow: `0 0 20px ${sr(0.4)}, inset 0 0 20px ${sr(0.2)}`,
             }}
           ></div>
 
@@ -134,8 +135,8 @@ export function LoomXLoading({
               inset: 0,
               margin: 60,
               borderRadius: '50%',
-              border: `1px solid ${rgbToRgba(lightRgb, 0.3)}`,
-              boxShadow: `0 0 10px ${rgbToRgba(lightRgb, 0.2)}`,
+              border: `1px solid ${ar(0.3)}`,
+              boxShadow: `0 0 10px ${ar(0.2)}`,
             }}
           ></div>
 
@@ -147,9 +148,9 @@ export function LoomXLoading({
               margin: 70,
               borderRadius: '50%',
               background: 'radial-gradient(circle, rgba(30, 41, 59, 0.6) 0%, rgba(15, 23, 42, 0.8) 100%)',
-              boxShadow: `0 0 60px ${rgbToRgba(baseRgb, 0.4)}, 0 0 100px ${rgbToRgba(lightRgb, 0.2)}, inset 0 0 30px ${rgbToRgba(baseRgb, 0.15)}`,
+              boxShadow: `0 0 60px ${pr(0.4)}, 0 0 100px ${sr(0.2)}, inset 0 0 30px ${pr(0.15)}`,
               backdropFilter: 'blur(40px)',
-              border: `1px solid ${rgbToRgba(baseRgb, 0.3)}`,
+              border: `1px solid ${pr(0.3)}`,
               animation: 'pulse-center 3s ease-in-out infinite',
             }}
           ></div>
@@ -161,7 +162,7 @@ export function LoomXLoading({
               inset: 0,
               margin: 90,
               borderRadius: '50%',
-              boxShadow: `0 0 40px ${rgbToRgba(lightRgb, 0.3)}, inset 0 0 20px ${rgbToRgba(baseRgb, 0.2)}`,
+              boxShadow: `0 0 40px ${ar(0.3)}, inset 0 0 20px ${sr(0.2)}`,
               animation: 'pulse-glow 2.5s ease-in-out infinite',
             }}
           ></div>
@@ -174,7 +175,7 @@ export function LoomXLoading({
             alignItems: 'center',
             justifyContent: 'center',
             zIndex: 10,
-            filter: `drop-shadow(0 0 20px ${rgbToRgba(lightRgb, 0.4)}) drop-shadow(0 0 40px ${rgbToRgba(baseRgb, 0.3)})`,
+            filter: `drop-shadow(0 0 20px ${ar(0.4)}) drop-shadow(0 0 40px ${pr(0.3)})`,
           }}>
             <LoomXLogo size={120} animate="pulse" />
           </div>
@@ -189,9 +190,9 @@ export function LoomXLoading({
               width: 12,
               height: 12,
               marginLeft: -6,
-              background: `radial-gradient(circle, ${lightColor} 0%, ${baseColor} 100%)`,
+              background: `radial-gradient(circle, ${accent} 0%, ${secondary} 100%)`,
               borderRadius: '50%',
-              boxShadow: `0 0 20px ${lightColor}, 0 0 40px ${rgbToRgba(lightRgb, 0.5)}`,
+              boxShadow: `0 0 20px ${accent}, 0 0 40px ${ar(0.5)}`,
               animation: 'pulse-dot 2s ease-in-out infinite'
             }}></div>
           </div>
@@ -205,9 +206,9 @@ export function LoomXLoading({
               width: 12,
               height: 12,
               marginLeft: -6,
-              background: `radial-gradient(circle, ${baseColor} 0%, ${darkColor} 100%)`,
+              background: `radial-gradient(circle, ${secondary} 0%, ${dark} 100%)`,
               borderRadius: '50%',
-              boxShadow: `0 0 20px ${baseColor}, 0 0 40px ${rgbToRgba(baseRgb, 0.5)}`,
+              boxShadow: `0 0 20px ${secondary}, 0 0 40px ${sr(0.5)}`,
               animation: 'pulse-dot 2.5s ease-in-out infinite'
             }}></div>
           </div>
@@ -221,9 +222,9 @@ export function LoomXLoading({
               width: 12,
               height: 12,
               marginTop: -6,
-              background: `radial-gradient(circle, ${lightColor} 0%, ${baseColor} 100%)`,
+              background: `radial-gradient(circle, ${accent} 0%, ${secondary} 100%)`,
               borderRadius: '50%',
-              boxShadow: `0 0 20px ${lightColor}, 0 0 40px ${rgbToRgba(lightRgb, 0.5)}`,
+              boxShadow: `0 0 20px ${accent}, 0 0 40px ${ar(0.5)}`,
               animation: 'pulse-dot 3s ease-in-out infinite'
             }}></div>
           </div>
@@ -237,9 +238,9 @@ export function LoomXLoading({
               width: 8,
               height: 8,
               marginTop: -4,
-              background: darkColor,
+              background: dark,
               borderRadius: '50%',
-              boxShadow: `0 0 15px ${rgbToRgba(darkRgb, 0.6)}`,
+              boxShadow: `0 0 15px ${dr(0.6)}`,
               animation: 'pulse-dot 3.5s ease-in-out infinite'
             }}></div>
           </div>
@@ -284,16 +285,16 @@ export function LoomXLoading({
               position: 'absolute',
               height: '100%',
               width: '60%',
-              background: `linear-gradient(90deg, transparent 0%, ${lightColor} 20%, ${baseColor} 50%, ${lightColor} 80%, transparent 100%)`,
+              background: `linear-gradient(90deg, transparent 0%, ${accent} 20%, ${secondary} 50%, ${accent} 80%, transparent 100%)`,
               animation: 'slide-continuous 2s ease-in-out infinite',
-              boxShadow: `0 0 20px ${rgbToRgba(baseRgb, 0.6)}`,
+              boxShadow: `0 0 20px ${sr(0.6)}`,
               filter: 'blur(1px)'
             }}></div>
             <div style={{
               position: 'absolute',
               height: '100%',
               width: '40%',
-              background: `linear-gradient(90deg, transparent 0%, ${baseColor} 50%, transparent 100%)`,
+              background: `linear-gradient(90deg, transparent 0%, ${secondary} 50%, transparent 100%)`,
               animation: 'slide-continuous 2s ease-in-out infinite',
             }}></div>
           </div>
