@@ -682,7 +682,12 @@ def _run_warmup_and_heartbeat():
                 hb_conn = get_connection(db)
                 hb_conn.execute_query("SELECT 1 AS heartbeat")
             except Exception as e:
-                print(f"[Proxy] heartbeat failed for {db} (will reconnect on next request): {e}")
+                print(f"[Proxy] Heartbeat failed for {db}: {e}")
+                if hb_conn and is_connection_error(e):
+                    # Discard the dead socket so it is never recycled back into the pool.
+                    # The pool will create a fresh connection on the next real request.
+                    discard_connection(hb_conn, db)
+                    hb_conn = None
             finally:
                 if hb_conn:
                     return_connection(hb_conn, db)
