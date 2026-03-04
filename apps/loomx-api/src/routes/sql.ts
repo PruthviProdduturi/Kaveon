@@ -227,12 +227,10 @@ router.get('/distinct-filter-values', asyncHandler(async (req, res) => {
     ...(dashboard_id ? { dashboardId: Number(dashboard_id) } : {}),
   });
 
-  const fabricToken = req.headers['x-fabric-token'] as string | undefined;
-
   const filterStartTime = Date.now();
   let filterResult: Awaited<ReturnType<typeof pythonProxyService.executeQuery>>;
   try {
-    filterResult = await pythonProxyService.executeQuery(sqlText, dataset.database_name, fabricToken);
+    filterResult = await pythonProxyService.executeQuery(sqlText, dataset.database_name);
   } catch (error) {
     // Log the failed filter-values query before re-throwing.
     try {
@@ -351,14 +349,12 @@ router.post('/execute', asyncHandler(async (req, res) => {
   console.log('[SQL] Executing query on database:', database, '| source:', trigger_source);
   console.log('[SQL] Query preview:', sql_text.substring(0, 100) + (sql_text.length > 100 ? '...' : ''));
 
-  const fabricToken = req.headers['x-fabric-token'] as string | undefined;
-
   const startTime = Date.now();
   let result;
 
   try {
     // Python proxy doesn't handle limit - apply it after execution if needed
-    result = await pythonProxyService.executeQuery(sql_text, database, fabricToken);
+    result = await pythonProxyService.executeQuery(sql_text, database);
 
     // Apply row limit if specified
     const limit = row_limit ? Math.min(Math.max(1, parseInt(row_limit, 10)), 5000) : undefined;
