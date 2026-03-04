@@ -108,9 +108,10 @@ def mask_endpoint(endpoint: str) -> str:
 class FabricSQLConnection:
     """Fabric SQL connection using FabricExplorer's exact approach"""
 
-    def __init__(self, server: str, database: str):
+    def __init__(self, server: str, database: str, user_token: Optional[str] = None):
         self.server = server
         self.database = database
+        self.user_token = user_token  # optional pre-supplied delegated MSAL token
         self.credential = _azure_credential  # shared singleton — no per-connection auth races
         self.connection = None
         self.in_use = False  # Track if connection is currently in use
@@ -119,9 +120,15 @@ class FabricSQLConnection:
     def _try_token_authentication(self) -> bool:
         """Try to connect using Azure AD token authentication (FabricExplorer method)"""
         try:
-            print(f"[Proxy] Trying token authentication for {self.database}...")
-            token_response = self.credential.get_token(TOKEN_URL)
-            token = token_response.token
+            if self.user_token:
+                # Delegated user token forwarded from the browser via MSAL —
+                # no service-account credential needed, runs under the user's identity.
+                print(f"[Proxy] Using delegated user token for {self.database}...")
+                token = self.user_token
+            else:
+                print(f"[Proxy] Trying token authentication for {self.database}...")
+                token_response = self.credential.get_token(TOKEN_URL)
+                token = token_response.token
 
             # Encode token exactly like FabricExplorer (UTF-16-LE + struct pack)
             token_bytes = token.encode('UTF-16-LE')
@@ -803,16 +810,27 @@ def execute_query():
     """Execute SQL query"""
     conn = None
     database = None
+    is_user_conn = False  # True when using a per-request user-token connection
     start_time = time.time()
     try:
         data = request.json
         sql = data.get('sql')
         database = data.get('database', DEFAULT_DATABASE)
+        fabric_token = data.get('fabric_token')  # optional delegated MSAL token
 
         if not sql:
             return jsonify({'error': 'SQL query is required'}), 400
 
-        conn = get_connection(database)
+        if fabric_token:
+            # Per-request connection with the user's own Azure AD token.
+            # Not returned to the pool — user tokens expire (1h) and must not
+            # be shared across users or cached beyond the request.
+            is_user_conn = True
+            pool = get_connection_pool(database)  # resolves & caches the endpoint
+            conn = FabricSQLConnection(pool.endpoint, database, user_token=fabric_token)
+        else:
+            conn = get_connection(database)
+
         result = conn.execute_query(sql)
 
         return jsonify({
@@ -831,7 +849,10 @@ def execute_query():
         }), 500
     finally:
         if conn:
-            return_connection(conn, database)
+            if is_user_conn:
+                conn.close()               # per-request — close immediately
+            else:
+                return_connection(conn, database)  # pool — return for reuse
 
 
 @app.route('/api/v1/execute/batch', methods=['POST'])
