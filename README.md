@@ -6,6 +6,8 @@
 
 *A self-hosted, enterprise-grade data exploration and visualization platform<br>built natively for Microsoft Fabric SQL — secured by Azure AD, zero compromises.*
 
+*Owned by Pruthvi Prodduturi*
+
 <br>
 
 [![Next.js](https://img.shields.io/badge/Next.js-15-black?style=for-the-badge&logo=next.js&logoColor=white)](https://nextjs.org/)
@@ -304,9 +306,9 @@ cp .env.example .env
 AZURE_TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 AZURE_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
-# ── Metadata Database ─────────────────────────────────────────────────────────
-FABRIC_METADATA_ENDPOINT=your-workspace.msit-database.fabric.microsoft.com
-FABRIC_METADATA_DATABASE=YourMetadataDatabase
+# ── Metadata Database (optional — setup wizard configures this on first login) ─
+# FABRIC_METADATA_ENDPOINT=your-workspace.msit-database.fabric.microsoft.com
+# FABRIC_METADATA_DATABASE=YourMetadataDatabase
 
 # ── Ports ────────────────────────────────────────────────────────────────────
 API_PORT=8080
@@ -513,8 +515,8 @@ LoomX/
 |---|---|---|---|
 | `AZURE_TENANT_ID` | ✅ | — | Azure AD / Entra ID tenant (directory) ID |
 | `AZURE_CLIENT_ID` | ✅ | — | App Registration application (client) ID |
-| `FABRIC_METADATA_ENDPOINT` | ✅ | — | SQL endpoint of your Fabric metadata database |
-| `FABRIC_METADATA_DATABASE` | ✅ | — | Database name in that Fabric endpoint |
+| `FABRIC_METADATA_ENDPOINT` | ⬜ | — | SQL endpoint of your Fabric metadata database (UI-configurable via setup wizard) |
+| `FABRIC_METADATA_DATABASE` | ⬜ | — | Database name in that Fabric endpoint (UI-configurable via setup wizard) |
 | `API_PORT` | ✅ | `8080` | Port for the Node.js API |
 | `WEB_PORT` | ✅ | `3000` | Port for the Next.js web app |
 | `PYTHON_PROXY_PORT` | ✅ | `5001` | Port for the Python proxy |
