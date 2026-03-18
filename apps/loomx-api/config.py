@@ -25,13 +25,18 @@ class Settings(BaseSettings):
     AZURE_CLIENT_ID: str = ""
     AZURE_TENANT_ID: str = ""
 
-    # Metadata database (Fabric SQL)
-    FABRIC_METADATA_ENDPOINT: str = ""
+    # Metadata database
+    FABRIC_METADATA_DB_TYPE: str = "fabric_sql"   # fabric_sql | azure_sql | postgresql | mysql
+    FABRIC_METADATA_ENDPOINT: str = ""             # Fabric SQL / Azure SQL server FQDN
     FABRIC_METADATA_DATABASE: str = ""
+    FABRIC_METADATA_HOST: str = ""                 # PostgreSQL / MySQL host
+    FABRIC_METADATA_PORT: int = 0                  # 0 = use driver default
+    FABRIC_METADATA_USERNAME: str = ""
+    FABRIC_METADATA_PASSWORD: str = ""
 
     # Default datawarehouse (backward-compat, optional)
     FABRIC_DATAWAREHOUSE_ENDPOINT: str = ""
-    FABRIC_DATAWAREHOUSE_DATABASE: str = "IDEASServingStoreLH"
+    FABRIC_DATAWAREHOUSE_DATABASE: str = ""
 
     # Connection pool tuning
     MAX_POOL_SIZE_METADATA: int = 20

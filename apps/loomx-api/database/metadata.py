@@ -1,14 +1,52 @@
 """
 Metadata database query layer.
 Direct port of metadataProxy.service.ts — same @param0 replacement logic.
+Includes lightweight T-SQL → ANSI dialect translation for non-MSSQL backends.
 """
 
+import os
+import re
 from typing import Any, List, Optional, TypeVar
 from database.pool import execute_query
 from config import settings
 
 T = TypeVar("T")
 
+
+# ── Dialect translation ────────────────────────────────────────────────────────
+
+def _adapt_sql(sql: str) -> str:
+    """Translate T-SQL idioms to the target dialect when the metadata DB is not MSSQL."""
+    db_type = os.environ.get("FABRIC_METADATA_DB_TYPE") or settings.FABRIC_METADATA_DB_TYPE or "fabric_sql"
+    if db_type in ("fabric_sql", "azure_sql"):
+        return sql  # native T-SQL, no changes needed
+
+    # Strip dbo. schema prefix (SQL Server specific)
+    sql = re.sub(r"\bdbo\.", "", sql, flags=re.IGNORECASE)
+
+    # SELECT TOP N → SELECT … LIMIT N
+    top_match = re.search(r"\bSELECT\s+TOP\s+(\d+)\b", sql, re.IGNORECASE)
+    if top_match:
+        n = top_match.group(1)
+        sql = re.sub(r"\bSELECT\s+TOP\s+\d+\b\s*", "SELECT ", sql, count=1, flags=re.IGNORECASE)
+        sql = sql.rstrip().rstrip(";") + f" LIMIT {n}"
+
+    # GETDATE() → NOW()
+    sql = re.sub(r"\bGETDATE\(\)", "NOW()", sql, flags=re.IGNORECASE)
+
+    # ISNULL(x, y) → COALESCE(x, y)
+    sql = re.sub(r"\bISNULL\(", "COALESCE(", sql, flags=re.IGNORECASE)
+
+    # [bracket_identifier] → "double_quote" (PostgreSQL) or `backtick` (MySQL)
+    if db_type == "postgresql":
+        sql = re.sub(r"\[([^\]]+)\]", r'"\1"', sql)
+    elif db_type == "mysql":
+        sql = re.sub(r"\[([^\]]+)\]", r"`\1`", sql)
+
+    return sql
+
+
+# ── Parameter interpolation ────────────────────────────────────────────────────
 
 def _replace_params(sql: str, params: Optional[List[Any]]) -> str:
     """
@@ -45,6 +83,8 @@ def _replace_params(sql: str, params: Optional[List[Any]]) -> str:
     return processed
 
 
+# ── Public API ─────────────────────────────────────────────────────────────────
+
 def query(sql: str, params: Optional[List[Any]] = None) -> dict:
     """
     Execute *sql* (with @paramN placeholders) against the metadata DB.
@@ -54,10 +94,9 @@ def query(sql: str, params: Optional[List[Any]] = None) -> dict:
     if not db:
         raise RuntimeError("FABRIC_METADATA_DATABASE is not configured")
 
-    processed = _replace_params(sql, params)
+    processed = _adapt_sql(_replace_params(sql, params))
     result = execute_query(processed, db)
 
-    # execute_query returns rows_objects already
     rows = result.get("rows_objects", [])
     return {"rows": rows, "row_count": result.get("row_count", len(rows))}
 
