@@ -112,8 +112,6 @@ def _probe(data: SetupConnectionBody, statements=None):
         db_type=data.db_type,
         host=data.host or "",
         port=data.port or 0,
-        username=data.username or "",
-        password=data.password or "",
     )
 
 
@@ -227,8 +225,6 @@ def setup_initialize(data: SetupConnectionBody):
     else:
         env_updates["FABRIC_METADATA_HOST"] = data.host or ""
         env_updates["FABRIC_METADATA_PORT"] = str(data.port or ("5432" if data.db_type == "postgresql" else "3306"))
-        env_updates["FABRIC_METADATA_USERNAME"] = data.username or ""
-        env_updates["FABRIC_METADATA_PASSWORD"] = data.password or ""
 
     try:
         _upsert_env(env_updates)

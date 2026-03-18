@@ -20,10 +20,6 @@ class SetupConnectionBody(BaseModel):
     host: Optional[str] = Field(default=None, max_length=255)
     port: Optional[int] = Field(default=None, ge=1, le=65535)
 
-    # Auth — required for PostgreSQL / MySQL
-    username: Optional[str] = Field(default=None, max_length=128)
-    password: Optional[str] = Field(default=None, max_length=256)
-
     # Required for azure_sql, postgresql, mysql; derived from connection_string for fabric_sql
     database: Optional[str] = Field(default=None, min_length=1, max_length=255)
 
@@ -47,8 +43,6 @@ class SetupConnectionBody(BaseModel):
         else:
             if not self.host:
                 raise ValueError("host is required for PostgreSQL and MySQL")
-            if not self.username:
-                raise ValueError("username is required for PostgreSQL and MySQL")
             if not self.database:
                 raise ValueError("database is required")
         return self
