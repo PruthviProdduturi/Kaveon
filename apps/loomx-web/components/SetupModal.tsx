@@ -53,6 +53,7 @@ interface DbTypeConfig {
   icon: string;
   defaultPort?: number;
   usesEndpoint: boolean;
+  usesConnectionString?: boolean;
   endpointLabel: string;
   endpointPlaceholder: string;
   endpointHint: string;
@@ -62,12 +63,13 @@ interface DbTypeConfig {
 const DB_TYPES: Record<DbType, DbTypeConfig> = {
   fabric_sql: {
     label: "Microsoft Fabric SQL",
-    icon: "fa-microsoft",
-    usesEndpoint: true,
-    endpointLabel: "SQL Analytics Endpoint",
-    endpointPlaceholder: "xyz123-abc.datawarehouse.fabric.microsoft.com",
-    endpointHint: "Found in Fabric workspace → SQL analytics endpoint → copy the server address.",
-    dbHint: "The Fabric SQL database that will store LoomX metadata. Names are case-sensitive.",
+    icon: "fa-hexagon-nodes",
+    usesEndpoint: false,
+    usesConnectionString: true,
+    endpointLabel: "",
+    endpointPlaceholder: "",
+    endpointHint: "",
+    dbHint: "",
   },
   azure_sql: {
     label: "Azure SQL Database",
@@ -291,6 +293,7 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
 
   const [phase, setPhase] = useState<SetupPhase>(initialPhase);
   const [dbType, setDbType] = useState<DbType>("fabric_sql");
+  const [connectionString, setConnectionString] = useState("");
   const [endpoint, setEndpoint] = useState(data.endpoint ?? "");
   const [database, setDatabase] = useState(data.database ?? "");
   const [host, setHost] = useState("");
@@ -322,6 +325,9 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
   function clearValidation() { setErrors(null); setTestOk(false); }
 
   function buildPayload() {
+    if (cfg.usesConnectionString) {
+      return { db_type: dbType, connection_string: connectionString.trim() };
+    }
     if (cfg.usesEndpoint) {
       return { db_type: dbType, endpoint: endpoint.trim(), database: database.trim() };
     }
@@ -336,6 +342,7 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
   }
 
   function canTest() {
+    if (cfg.usesConnectionString) return !!connectionString.trim();
     if (!database.trim()) return false;
     if (cfg.usesEndpoint) return !!endpoint.trim();
     return !!host.trim() && !!username.trim() && !!password;
@@ -413,23 +420,58 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
           </div>
         )}
 
-        {/* Host / Endpoint */}
-        <label style={S.label} htmlFor="setup-ep">{cfg.endpointLabel}</label>
-        <input
-          id="setup-ep"
-          style={S.input(hasError)}
-          type="text"
-          placeholder={cfg.endpointPlaceholder}
-          value={cfg.usesEndpoint ? endpoint : host}
-          onChange={(e) => { clearValidation(); cfg.usesEndpoint ? setEndpoint(e.target.value) : setHost(e.target.value); }}
-          disabled={isWorking}
-          autoComplete="off"
-          spellCheck={false}
-        />
-        <p style={S.hint}>{cfg.endpointHint}</p>
+        {/* Fabric SQL — ODBC connection string */}
+        {cfg.usesConnectionString && (
+          <>
+            <label style={S.label} htmlFor="setup-connstr">ODBC Connection String</label>
+            <textarea
+              id="setup-connstr"
+              style={{
+                ...S.input(hasError),
+                resize: "vertical",
+                minHeight: 90,
+                fontFamily: "monospace",
+                fontSize: 12,
+              }}
+              placeholder={
+                "Server=tcp:xyz.database.fabric.microsoft.com,1433;" +
+                "Initial Catalog=MyDatabase;" +
+                "Authentication=ActiveDirectoryInteractive;Encrypt=True;"
+              }
+              value={connectionString}
+              onChange={(e) => { clearValidation(); setConnectionString(e.target.value); }}
+              disabled={isWorking}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <p style={S.hint}>
+              Copy from Fabric workspace → SQL Database → Connection strings → ODBC.
+              LoomX extracts the server and database automatically.
+            </p>
+          </>
+        )}
+
+        {/* Host / Endpoint (Azure SQL and non-MSSQL types) */}
+        {!cfg.usesConnectionString && (
+          <>
+            <label style={S.label} htmlFor="setup-ep">{cfg.endpointLabel}</label>
+            <input
+              id="setup-ep"
+              style={S.input(hasError)}
+              type="text"
+              placeholder={cfg.endpointPlaceholder}
+              value={cfg.usesEndpoint ? endpoint : host}
+              onChange={(e) => { clearValidation(); cfg.usesEndpoint ? setEndpoint(e.target.value) : setHost(e.target.value); }}
+              disabled={isWorking}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <p style={S.hint}>{cfg.endpointHint}</p>
+          </>
+        )}
 
         {/* Non-MSSQL: database + port on one row, then username + password */}
-        {!cfg.usesEndpoint && (
+        {!cfg.usesEndpoint && !cfg.usesConnectionString && (
           <>
             <div style={S.inputRow}>
               <div style={{ flex: 1 }}>
@@ -494,8 +536,8 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
           </>
         )}
 
-        {/* MSSQL: database name below endpoint */}
-        {cfg.usesEndpoint && (
+        {/* Azure SQL: database name below endpoint */}
+        {cfg.usesEndpoint && !cfg.usesConnectionString && (
           <>
             <label style={S.label} htmlFor="setup-db">Database Name</label>
             <input
