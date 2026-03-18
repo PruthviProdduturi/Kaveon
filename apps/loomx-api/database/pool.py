@@ -8,8 +8,8 @@ Key design decisions preserved from the proxy:
   - Single shared DefaultAzureCredential (token cache is shared, no auth storms)
   - Queue-based thread-safe pool (FastAPI sync handlers run in threadpool)
   - Retry-once on 08S01 / 10054 (stale pooled socket, not a real failure)
-  - Large integer → string conversion (JavaScript MAX_SAFE_INTEGER boundary)
-  - datetime → ISO string (no timezone conversion, matches SQL Server storage)
+  - Large integer -> string conversion (JavaScript MAX_SAFE_INTEGER boundary)
+  - datetime -> ISO string (no timezone conversion, matches SQL Server storage)
 """
 
 import os
@@ -87,7 +87,7 @@ def _get_ossrdbms_token() -> tuple:
 # ── JSON helpers ──────────────────────────────────────────────────────────────
 
 def _serialize(obj: Any) -> Any:
-    """Custom JSON serializer: datetime → ISO string, large int → string."""
+    """Custom JSON serializer: datetime -> ISO string, large int -> string."""
     if isinstance(obj, (datetime, date)):
         return obj.isoformat()
     if isinstance(obj, int) and abs(obj) > _MAX_SAFE_INTEGER:
@@ -140,7 +140,7 @@ class FabricSQLConnection:
 
     def _try_token_auth(self) -> bool:
         try:
-            print(f"[Pool] Token auth → {mask_endpoint(self.server)}/{self.database}")
+            print(f"[Pool] Token auth -> {mask_endpoint(self.server)}/{self.database}")
             token_response = _azure_credential.get_token(TOKEN_URL)
             token_bytes = token_response.token.encode("UTF-16-LE")
             token_struct = struct.pack(f"<I{len(token_bytes)}s", len(token_bytes), token_bytes)
@@ -160,7 +160,7 @@ class FabricSQLConnection:
             cursor.execute("SELECT 1")
             cursor.fetchone()
             cursor.close()
-            print(f"[Pool] Connected → {self.database}")
+            print(f"[Pool] Connected -> {self.database}")
             return True
         except Exception as e:
             print(f"[Pool] Token auth failed: {e}")
@@ -264,7 +264,7 @@ class PostgreSQLConnection:
         if self.connection:
             return
         import psycopg2
-        print(f"[Pool] Token auth (PostgreSQL) → {self.host}:{self.port}/{self.database}")
+        print(f"[Pool] Token auth (PostgreSQL) -> {self.host}:{self.port}/{self.database}")
         token, username = _get_ossrdbms_token()
         self.connection = psycopg2.connect(
             host=self.host, port=self.port, dbname=self.database,
@@ -272,7 +272,7 @@ class PostgreSQLConnection:
             sslmode="require", connect_timeout=30,
         )
         self.connection.autocommit = False
-        print(f"[Pool] Connected (PostgreSQL) → {self.database}")
+        print(f"[Pool] Connected (PostgreSQL) -> {self.database}")
 
     def execute_query(self, sql: str, params: Optional[list] = None) -> Dict[str, Any]:
         self.connect()
@@ -345,7 +345,7 @@ class MySQLConnection:
         if self.connection:
             return
         import pymysql
-        print(f"[Pool] Token auth (MySQL) → {self.host}:{self.port}/{self.database}")
+        print(f"[Pool] Token auth (MySQL) -> {self.host}:{self.port}/{self.database}")
         token, username = _get_ossrdbms_token()
         self.connection = pymysql.connect(
             host=self.host, port=self.port, database=self.database,
@@ -354,7 +354,7 @@ class MySQLConnection:
             ssl={"ssl": {}},
             cursorclass=pymysql.cursors.Cursor,
         )
-        print(f"[Pool] Connected (MySQL) → {self.database}")
+        print(f"[Pool] Connected (MySQL) -> {self.database}")
 
     def execute_query(self, sql: str, params: Optional[list] = None) -> Dict[str, Any]:
         self.connect()
