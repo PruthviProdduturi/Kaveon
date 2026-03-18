@@ -46,6 +46,69 @@ interface SetupModalProps {
   onComplete: () => void;
 }
 
+// ─── Testing animation ────────────────────────────────────────────────────────
+
+function ConnectionTestingPanel({ target }: { target: string }) {
+  return (
+    <div style={{ textAlign: "center", padding: "28px 0 32px" }}>
+      <style>{`
+        @keyframes lx-pulse-ring {
+          0%   { transform: scale(0.85); opacity: 0.7; }
+          50%  { transform: scale(1.25); opacity: 0.15; }
+          100% { transform: scale(0.85); opacity: 0.7; }
+        }
+        @keyframes lx-dot {
+          0%, 80%, 100% { transform: translateY(0);  opacity: 0.3; }
+          40%            { transform: translateY(-5px); opacity: 1; }
+        }
+      `}</style>
+
+      {/* Pulsing icon */}
+      <div style={{ position: "relative", display: "inline-flex", alignItems: "center", justifyContent: "center", marginBottom: 20 }}>
+        <div style={{
+          position: "absolute", width: 64, height: 64, borderRadius: "50%",
+          border: "2px solid #6366f1",
+          animation: "lx-pulse-ring 1.6s ease-in-out infinite",
+        }} />
+        <div style={{
+          width: 48, height: 48, borderRadius: "50%",
+          background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.25)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>
+          <i className="fas fa-database" style={{ fontSize: 18, color: "#6366f1" }} />
+        </div>
+      </div>
+
+      {/* Label */}
+      <div style={{ fontSize: 14, fontWeight: 600, color: "#e2e8f0", marginBottom: 6 }}>
+        Testing connection
+      </div>
+
+      {/* Target */}
+      {target && (
+        <div style={{
+          fontSize: 11.5, color: "#475569", fontFamily: "monospace",
+          marginBottom: 14, maxWidth: 320, margin: "0 auto 14px",
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        }}>
+          {target}
+        </div>
+      )}
+
+      {/* Bouncing dots */}
+      <div style={{ display: "flex", justifyContent: "center", gap: 6 }}>
+        {[0, 1, 2].map((i) => (
+          <div key={i} style={{
+            width: 6, height: 6, borderRadius: "50%", background: "#6366f1",
+            animation: `lx-dot 1.2s ease-in-out infinite`,
+            animationDelay: `${i * 0.18}s`,
+          }} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── DB type definitions ──────────────────────────────────────────────────────
 
 interface DbTypeConfig {
@@ -407,6 +470,13 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
     const isWorking = phase === "testing";
     const hasError = !!errors && !testOk;
 
+    // Build a short display target for the testing panel
+    const testingTarget = cfg.usesConnectionString
+      ? connectionString.match(/(?:Server|Data Source)\s*=\s*(?:tcp:)?([^,;\s]+)/i)?.[1] ?? ""
+      : cfg.usesEndpoint
+        ? endpoint.trim()
+        : host.trim();
+
     return (
       <>
         <StepBar step={testOk ? 2 : 1} testOk={testOk} phase={phase} />
@@ -416,136 +486,126 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
           Choose a type and enter your connection details.
         </p>
 
-        <DbTypePicker value={dbType} onChange={handleDbTypeChange} disabled={isWorking} />
+        {/* Testing animation — replaces form fields while in-flight */}
+        {isWorking && <ConnectionTestingPanel target={testingTarget} />}
 
-        {errors && !testOk && <ErrorDisplay errors={errors} />}
-        {testOk && (
-          <div style={S.successBox}>
-            <i className="fas fa-check-circle" />
-            Connection successful — ready to initialise.
-          </div>
-        )}
-
-        {/* Fabric SQL — ODBC connection string */}
-        {cfg.usesConnectionString && (
+        {!isWorking && (
           <>
-            <label style={S.label} htmlFor="setup-connstr">ODBC Connection String</label>
-            <textarea
-              id="setup-connstr"
-              style={{
-                ...S.input(hasError),
-                resize: "vertical",
-                minHeight: 90,
-                fontFamily: "monospace",
-                fontSize: 12,
-              }}
-              placeholder={
-                "Server=tcp:xyz.database.fabric.microsoft.com,1433;" +
-                "Initial Catalog=MyDatabase;" +
-                "Authentication=ActiveDirectoryInteractive;Encrypt=True;"
-              }
-              value={connectionString}
-              onChange={(e) => { clearValidation(); setConnectionString(e.target.value); }}
-              disabled={isWorking}
-              autoComplete="off"
-              spellCheck={false}
-            />
-            <p style={S.hint}>
-              Copy from Fabric workspace → SQL Database → Connection strings → ODBC.
-              LoomX extracts the server and database automatically.
-            </p>
-          </>
-        )}
+            <DbTypePicker value={dbType} onChange={handleDbTypeChange} disabled={false} />
 
-        {/* Host / Endpoint (Azure SQL and non-MSSQL types) */}
-        {!cfg.usesConnectionString && (
-          <>
-            <label style={S.label} htmlFor="setup-ep">{cfg.endpointLabel}</label>
-            <input
-              id="setup-ep"
-              style={S.input(hasError)}
-              type="text"
-              placeholder={cfg.endpointPlaceholder}
-              value={cfg.usesEndpoint ? endpoint : host}
-              onChange={(e) => { clearValidation(); cfg.usesEndpoint ? setEndpoint(e.target.value) : setHost(e.target.value); }}
-              disabled={isWorking}
-              autoComplete="off"
-              spellCheck={false}
-            />
-            <p style={S.hint}>{cfg.endpointHint}</p>
-          </>
-        )}
+            {errors && !testOk && <ErrorDisplay errors={errors} />}
+            {testOk && (
+              <div style={S.successBox}>
+                <i className="fas fa-check-circle" />
+                Connection successful — ready to initialise.
+              </div>
+            )}
 
-        {/* Non-MSSQL: database + port on one row, then username + password */}
-        {!cfg.usesEndpoint && !cfg.usesConnectionString && (
-          <>
-            <div style={S.inputRow}>
-              <div style={{ flex: 1 }}>
+            {/* Fabric SQL — ODBC connection string */}
+            {cfg.usesConnectionString && (
+              <>
+                <label style={S.label} htmlFor="setup-connstr">ODBC Connection String</label>
+                <textarea
+                  id="setup-connstr"
+                  style={{ ...S.input(hasError), resize: "vertical", minHeight: 90, fontFamily: "monospace", fontSize: 12 }}
+                  placeholder={
+                    "Server=tcp:xyz.database.fabric.microsoft.com,1433;" +
+                    "Initial Catalog=MyDatabase;" +
+                    "Authentication=ActiveDirectoryInteractive;Encrypt=True;"
+                  }
+                  value={connectionString}
+                  onChange={(e) => { clearValidation(); setConnectionString(e.target.value); }}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <p style={S.hint}>
+                  Copy from Fabric workspace → SQL Database → Connection strings → ODBC.
+                  LoomX extracts the server and database automatically.
+                </p>
+              </>
+            )}
+
+            {/* Host / Endpoint (Azure SQL and non-MSSQL types) */}
+            {!cfg.usesConnectionString && (
+              <>
+                <label style={S.label} htmlFor="setup-ep">{cfg.endpointLabel}</label>
+                <input
+                  id="setup-ep"
+                  style={S.input(hasError)}
+                  type="text"
+                  placeholder={cfg.endpointPlaceholder}
+                  value={cfg.usesEndpoint ? endpoint : host}
+                  onChange={(e) => { clearValidation(); cfg.usesEndpoint ? setEndpoint(e.target.value) : setHost(e.target.value); }}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <p style={S.hint}>{cfg.endpointHint}</p>
+              </>
+            )}
+
+            {/* Non-MSSQL: database + port */}
+            {!cfg.usesEndpoint && !cfg.usesConnectionString && (
+              <>
+                <div style={S.inputRow}>
+                  <div style={{ flex: 1 }}>
+                    <label style={S.label} htmlFor="setup-db">Database Name</label>
+                    <input
+                      id="setup-db"
+                      style={{ ...S.input(hasError), marginBottom: 0 }}
+                      type="text"
+                      placeholder="my_loomx_db"
+                      value={database}
+                      onChange={(e) => { clearValidation(); setDatabase(e.target.value); }}
+                      autoComplete="off"
+                    />
+                  </div>
+                  <div style={{ width: 90 }}>
+                    <label style={S.label} htmlFor="setup-port">Port</label>
+                    <input
+                      id="setup-port"
+                      style={{ ...S.input(false), marginBottom: 0 }}
+                      type="number"
+                      placeholder={String(cfg.defaultPort)}
+                      value={port}
+                      onChange={(e) => { clearValidation(); setPort(e.target.value); }}
+                    />
+                  </div>
+                </div>
+                <p style={{ ...S.hint, marginBottom: 16 }}>{cfg.dbHint}</p>
+                <p style={{ ...S.hint, marginBottom: 20, color: "#4ade80" }}>
+                  <i className="fas fa-shield-check" style={{ marginRight: 6 }} />
+                  Connects via Azure AD Managed Identity — no credentials required.
+                </p>
+              </>
+            )}
+
+            {/* Azure SQL: database name below endpoint */}
+            {cfg.usesEndpoint && !cfg.usesConnectionString && (
+              <>
                 <label style={S.label} htmlFor="setup-db">Database Name</label>
                 <input
                   id="setup-db"
-                  style={{ ...S.input(hasError), marginBottom: 0 }}
+                  style={S.input(hasError)}
                   type="text"
-                  placeholder="my_loomx_db"
+                  placeholder="loomx"
                   value={database}
                   onChange={(e) => { clearValidation(); setDatabase(e.target.value); }}
-                  disabled={isWorking}
                   autoComplete="off"
                 />
-              </div>
-              <div style={{ width: 90 }}>
-                <label style={S.label} htmlFor="setup-port">Port</label>
-                <input
-                  id="setup-port"
-                  style={{ ...S.input(false), marginBottom: 0 }}
-                  type="number"
-                  placeholder={String(cfg.defaultPort)}
-                  value={port}
-                  onChange={(e) => { clearValidation(); setPort(e.target.value); }}
-                  disabled={isWorking}
-                />
-              </div>
-            </div>
-            <p style={{ ...S.hint, marginBottom: 16 }}>{cfg.dbHint}</p>
-            <p style={{ ...S.hint, marginBottom: 20, color: "#4ade80" }}>
-              <i className="fas fa-shield-check" style={{ marginRight: 6 }} />
-              Connects via Azure AD Managed Identity — no credentials required.
-            </p>
-          </>
-        )}
+                <p style={{ ...S.hint, marginBottom: 20 }}>{cfg.dbHint}</p>
+              </>
+            )}
 
-        {/* Azure SQL: database name below endpoint */}
-        {cfg.usesEndpoint && !cfg.usesConnectionString && (
-          <>
-            <label style={S.label} htmlFor="setup-db">Database Name</label>
-            <input
-              id="setup-db"
-              style={S.input(hasError)}
-              type="text"
-              placeholder={dbType === "fabric_sql" ? "MyLoomXMetadata" : "loomx"}
-              value={database}
-              onChange={(e) => { clearValidation(); setDatabase(e.target.value); }}
-              disabled={isWorking}
-              autoComplete="off"
-            />
-            <p style={{ ...S.hint, marginBottom: 20 }}>{cfg.dbHint}</p>
+            {testOk ? (
+              <button style={S.btnPrimary()} onClick={() => handleInitialize()}>
+                <i className="fas fa-magic" style={{ marginRight: 8 }} />Initialize Database
+              </button>
+            ) : (
+              <button style={S.btnPrimary(!canTest())} onClick={handleTest} disabled={!canTest()}>
+                <i className="fas fa-plug" style={{ marginRight: 8 }} />Test Connection
+              </button>
+            )}
           </>
-        )}
-
-        {testOk ? (
-          <button style={S.btnPrimary()} onClick={() => handleInitialize()}>
-            <i className="fas fa-magic" style={{ marginRight: 8 }} />Initialize Database
-          </button>
-        ) : (
-          <button
-            style={S.btnPrimary(!canTest() || isWorking)}
-            onClick={handleTest}
-            disabled={!canTest() || isWorking}
-          >
-            {isWorking
-              ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 8 }} />Testing…</>
-              : <><i className="fas fa-plug" style={{ marginRight: 8 }} />Test Connection</>}
-          </button>
         )}
 
         {cancelTo && (
