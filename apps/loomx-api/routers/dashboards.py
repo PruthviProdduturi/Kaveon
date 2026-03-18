@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Request, Response, HTTPException, Depends
 from middleware.auth import require_auth
+from models.dashboards import DashboardCreate, DashboardUpdate, DashboardFavoriteBody
 import services.dashboards as svc
 import services.favorites as fav_svc
 
@@ -37,15 +38,13 @@ def get_dashboard(dashboard_id: str, response: Response, user: str = Depends(req
 
 
 @router.post("/dashboards", status_code=201)
-def create_dashboard(data: dict, user: str = Depends(require_auth)):
-    if not data.get("name"):
-        raise HTTPException(status_code=400, detail="Name is required")
-    return svc.create_dashboard(data, user)
+def create_dashboard(data: DashboardCreate, user: str = Depends(require_auth)):
+    return svc.create_dashboard(data.model_dump(exclude_none=True), user)
 
 
 @router.put("/dashboards/{dashboard_id}")
-def update_dashboard(dashboard_id: str, data: dict, user: str = Depends(require_auth)):
-    result = svc.update_dashboard(dashboard_id, data)
+def update_dashboard(dashboard_id: str, data: DashboardUpdate, user: str = Depends(require_auth)):
+    result = svc.update_dashboard(dashboard_id, data.model_dump(exclude_none=True))
     if not result:
         raise HTTPException(status_code=404, detail="Dashboard not found")
     return result
@@ -59,12 +58,12 @@ def delete_dashboard(dashboard_id: str, user: str = Depends(require_auth)):
 
 
 @router.put("/dashboards/{dashboard_id}/favorite")
-def set_dashboard_favorite(dashboard_id: str, data: dict, user: str = Depends(require_auth)):
+def set_dashboard_favorite(dashboard_id: str, data: DashboardFavoriteBody, user: str = Depends(require_auth)):
     dashboard = svc.get_dashboard_by_id(dashboard_id)
     if not dashboard:
         raise HTTPException(status_code=404, detail="Dashboard not found")
 
-    if data.get("is_favorite"):
+    if data.is_favorite:
         favorite = fav_svc.create_favorite(
             {"object_type": "dashboard", "object_id": dashboard_id, "object_name": dashboard.get("name")},
             user,

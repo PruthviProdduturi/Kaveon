@@ -1,40 +1,32 @@
 """Favorites router — /api/v1/favorites."""
 
-from fastapi import APIRouter, Request, Response, HTTPException
-from middleware.auth import get_user_email
+from fastapi import APIRouter, Response, HTTPException, Depends
+from middleware.auth import require_auth
+from models.favorites import FavoriteCreate
 import services.favorites as svc
 
 router = APIRouter()
+NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
 
 
 @router.get("/favorites")
-def list_favorites(request: Request, response: Response):
-    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
-    user_id = get_user_email(request)
-    return svc.list_favorites(user_id)
+def list_favorites(response: Response, user: str = Depends(require_auth)):
+    response.headers.update(NO_CACHE)
+    return svc.list_favorites(user)
 
 
 @router.post("/favorites", status_code=201)
-def create_favorite(data: dict, request: Request):
-    if not data.get("object_type") or not data.get("object_id") or not data.get("object_name"):
-        raise HTTPException(status_code=400, detail="object_type, object_id, and object_name are required")
-    user_id = get_user_email(request)
-    return svc.create_favorite(data, user_id)
+def create_favorite(data: FavoriteCreate, user: str = Depends(require_auth)):
+    return svc.create_favorite(data.model_dump(), user)
 
 
 @router.post("/favorites/toggle")
-def toggle_favorite(data: dict, request: Request):
-    if not data.get("object_type") or not data.get("object_id") or not data.get("object_name"):
-        raise HTTPException(status_code=400, detail="object_type, object_id, and object_name are required")
-    user_id = get_user_email(request)
-    return svc.toggle_favorite(data, user_id)
+def toggle_favorite(data: FavoriteCreate, user: str = Depends(require_auth)):
+    return svc.toggle_favorite(data.model_dump(), user)
 
 
 @router.delete("/favorites/{fav_id}", status_code=204)
-def delete_favorite(fav_id: str, request: Request):
-    user_id = get_user_email(request)
-    deleted = svc.delete_favorite_by_id(fav_id, user_id)
+def delete_favorite(fav_id: str, user: str = Depends(require_auth)):
+    deleted = svc.delete_favorite_by_id(fav_id, user)
     if not deleted:
         raise HTTPException(status_code=404, detail="Favorite not found")

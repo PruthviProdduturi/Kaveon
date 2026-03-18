@@ -4,6 +4,7 @@ import json
 import time
 from fastapi import APIRouter, Request, Response, HTTPException, Query, Depends
 from middleware.auth import require_auth
+from models.sql import SqlGenerateBody, SqlExecuteBody
 import services.datasets as datasets_svc
 import services.query_history as history_svc
 from services.query_generator import build_chart_preview_query, build_distinct_filter_values_query
@@ -30,13 +31,10 @@ def canonical_source(raw: str) -> str:
 
 
 @router.post("/sql/generate")
-def generate_sql(data: dict, user: str = Depends(require_auth)):
-    dataset_id = data.get("dataset_id")
-    chart_type = data.get("chart_type")
-    config = data.get("config")
-
-    if not dataset_id or not chart_type or not config:
-        raise HTTPException(status_code=400, detail="dataset_id, chart_type, and config are required")
+def generate_sql(data: SqlGenerateBody, user: str = Depends(require_auth)):
+    dataset_id = data.dataset_id
+    chart_type = data.chart_type
+    config = data.config
 
     dataset = datasets_svc.get_dataset_by_id(str(dataset_id))
     if not dataset:
@@ -187,24 +185,19 @@ def distinct_filter_values(
 
 
 @router.post("/sql/execute")
-def execute_sql(data: dict, response: Response, user: str = Depends(require_auth)):
+def execute_sql(data: SqlExecuteBody, response: Response, user: str = Depends(require_auth)):
     response.headers.update(NO_CACHE)
     user_id = user
 
-    sql_text = data.get("sql_text") or ""
-    database = data.get("database") or ""
-    source = data.get("source")
-    tables_used = data.get("tables_used")
-    chart_id = data.get("chart_id")
-    dashboard_id = data.get("dashboard_id")
-    chart_type = data.get("chart_type")
-    dataset_id = data.get("dataset_id")
-    row_limit = data.get("row_limit")
-
-    if not sql_text:
-        raise HTTPException(status_code=400, detail="sql_text is required")
-    if not database:
-        raise HTTPException(status_code=400, detail="database parameter is required")
+    sql_text = data.sql_text
+    database = data.database
+    source = data.source
+    tables_used = data.tables_used
+    chart_id = data.chart_id
+    dashboard_id = data.dashboard_id
+    chart_type = data.chart_type
+    dataset_id = data.dataset_id
+    row_limit = data.row_limit
 
     trigger_source = canonical_source(source)
     resolved_tables = tables_used or json.dumps(extract_tables_from_sql(sql_text))
