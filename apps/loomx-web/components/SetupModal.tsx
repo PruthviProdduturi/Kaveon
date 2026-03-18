@@ -298,8 +298,6 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
   const [database, setDatabase] = useState(data.database ?? "");
   const [host, setHost] = useState("");
   const [port, setPort] = useState("");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
   const [errors, setErrors] = useState<SetupError[] | null>(null);
   const [testOk, setTestOk] = useState(false);
 
@@ -336,8 +334,6 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
       host: host.trim(),
       port: parseInt(port) || cfg.defaultPort,
       database: database.trim(),
-      username: username.trim(),
-      password,
     };
   }
 
@@ -345,7 +341,7 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
     if (cfg.usesConnectionString) return !!connectionString.trim();
     if (!database.trim()) return false;
     if (cfg.usesEndpoint) return !!endpoint.trim();
-    return !!host.trim() && !!username.trim() && !!password;
+    return !!host.trim();
   }
 
   async function handleTest() {
@@ -501,37 +497,9 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
               </div>
             </div>
             <p style={{ ...S.hint, marginBottom: 16 }}>{cfg.dbHint}</p>
-
-            <div style={S.inputRow}>
-              <div style={{ flex: 1 }}>
-                <label style={S.label} htmlFor="setup-user">Username</label>
-                <input
-                  id="setup-user"
-                  style={{ ...S.input(hasError), marginBottom: 0 }}
-                  type="text"
-                  placeholder="db_user"
-                  value={username}
-                  onChange={(e) => { clearValidation(); setUsername(e.target.value); }}
-                  disabled={isWorking}
-                  autoComplete="username"
-                />
-              </div>
-              <div style={{ flex: 1 }}>
-                <label style={S.label} htmlFor="setup-pass">Password</label>
-                <input
-                  id="setup-pass"
-                  style={{ ...S.input(hasError), marginBottom: 0 }}
-                  type="password"
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => { clearValidation(); setPassword(e.target.value); }}
-                  disabled={isWorking}
-                  autoComplete="current-password"
-                />
-              </div>
-            </div>
-            <p style={{ ...S.hint, marginBottom: 20 }}>
-              Credentials used only to connect — stored in your .env file.
+            <p style={{ ...S.hint, marginBottom: 20, color: "#4ade80" }}>
+              <i className="fas fa-shield-check" style={{ marginRight: 6 }} />
+              Connects via Azure AD Managed Identity — no credentials required.
             </p>
           </>
         )}

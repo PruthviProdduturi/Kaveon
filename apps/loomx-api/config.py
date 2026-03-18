@@ -31,8 +31,6 @@ class Settings(BaseSettings):
     FABRIC_METADATA_DATABASE: str = ""
     FABRIC_METADATA_HOST: str = ""                 # PostgreSQL / MySQL host
     FABRIC_METADATA_PORT: int = 0                  # 0 = use driver default
-    FABRIC_METADATA_USERNAME: str = ""
-    FABRIC_METADATA_PASSWORD: str = ""
 
     # Default datawarehouse (backward-compat, optional)
     FABRIC_DATAWAREHOUSE_ENDPOINT: str = ""

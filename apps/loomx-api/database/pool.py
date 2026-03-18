@@ -35,6 +35,7 @@ _azure_credential: DefaultAzureCredential = DefaultAzureCredential()
 
 SQL_COPT_SS_ACCESS_TOKEN = 1256
 TOKEN_URL = "https://database.windows.net/.default"
+OSSRDBMS_TOKEN_URL = "https://ossrdbms-aad.database.windows.net/.default"
 
 # JavaScript MAX_SAFE_INTEGER = 2^53 − 1
 _MAX_SAFE_INTEGER = 9_007_199_254_740_991
@@ -47,6 +48,40 @@ def _safe(value: Any) -> Any:
     if isinstance(value, (datetime, date)):
         return value.isoformat()
     return value
+
+
+def _get_ossrdbms_token() -> tuple:
+    """
+    Obtain an Azure AD access token for Azure Database for PostgreSQL / MySQL.
+    Returns (token_str, username) where username is the AAD identity's OID —
+    no credentials are stored; authentication is entirely via Managed Identity.
+    """
+    import base64 as _b64
+    import json as _json
+
+    token_response = _azure_credential.get_token(OSSRDBMS_TOKEN_URL)
+    token = token_response.token
+
+    # Decode JWT payload (no signature verification needed — we just issued it)
+    parts = token.split(".")
+    if len(parts) >= 2:
+        padding = 4 - len(parts[1]) % 4
+        try:
+            payload = _json.loads(_b64.urlsafe_b64decode(parts[1] + "=" * padding))
+            # UPN for user identities; OID for managed / service-principal identities
+            username = (
+                payload.get("upn")
+                or payload.get("preferred_username")
+                or payload.get("unique_name")
+                or payload.get("oid")
+                or ""
+            )
+        except Exception:
+            username = ""
+    else:
+        username = ""
+
+    return token, username
 
 
 # ── JSON helpers ──────────────────────────────────────────────────────────────
@@ -215,14 +250,12 @@ class FabricSQLConnection:
 # ── PostgreSQLConnection ──────────────────────────────────────────────────────
 
 class PostgreSQLConnection:
-    """Single psycopg2 connection to a PostgreSQL database."""
+    """Single psycopg2 connection to Azure Database for PostgreSQL via Managed Identity."""
 
-    def __init__(self, host: str, port: int, database: str, username: str, password: str):
+    def __init__(self, host: str, port: int, database: str):
         self.host = host
         self.port = port or 5432
         self.database = database
-        self.username = username
-        self.password = password
         self.connection = None
         self.in_use: bool = False
         self.last_used: float = time.time()
@@ -231,10 +264,12 @@ class PostgreSQLConnection:
         if self.connection:
             return
         import psycopg2
-        print(f"[Pool] Connecting (PostgreSQL) → {self.host}:{self.port}/{self.database}")
+        print(f"[Pool] Token auth (PostgreSQL) → {self.host}:{self.port}/{self.database}")
+        token, username = _get_ossrdbms_token()
         self.connection = psycopg2.connect(
             host=self.host, port=self.port, dbname=self.database,
-            user=self.username, password=self.password, connect_timeout=30,
+            user=username, password=token,
+            sslmode="require", connect_timeout=30,
         )
         self.connection.autocommit = False
         print(f"[Pool] Connected (PostgreSQL) → {self.database}")
@@ -296,14 +331,12 @@ class PostgreSQLConnection:
 # ── MySQLConnection ───────────────────────────────────────────────────────────
 
 class MySQLConnection:
-    """Single PyMySQL connection to a MySQL / MariaDB database."""
+    """Single PyMySQL connection to Azure Database for MySQL via Managed Identity."""
 
-    def __init__(self, host: str, port: int, database: str, username: str, password: str):
+    def __init__(self, host: str, port: int, database: str):
         self.host = host
         self.port = port or 3306
         self.database = database
-        self.username = username
-        self.password = password
         self.connection = None
         self.in_use: bool = False
         self.last_used: float = time.time()
@@ -312,11 +345,13 @@ class MySQLConnection:
         if self.connection:
             return
         import pymysql
-        print(f"[Pool] Connecting (MySQL) → {self.host}:{self.port}/{self.database}")
+        print(f"[Pool] Token auth (MySQL) → {self.host}:{self.port}/{self.database}")
+        token, username = _get_ossrdbms_token()
         self.connection = pymysql.connect(
             host=self.host, port=self.port, database=self.database,
-            user=self.username, password=self.password,
+            user=username, password=token,
             charset="utf8mb4", connect_timeout=30,
+            ssl={"ssl": {}},
             cursorclass=pymysql.cursors.Cursor,
         )
         print(f"[Pool] Connected (MySQL) → {self.database}")
@@ -382,7 +417,7 @@ class ConnectionPool:
     def __init__(
         self, endpoint: str, database: str, pool_size: int = 10,
         db_type: str = "fabric_sql",
-        host: str = "", port: int = 0, username: str = "", password: str = "",
+        host: str = "", port: int = 0,
     ):
         self.endpoint = endpoint
         self.database = database
@@ -390,8 +425,6 @@ class ConnectionPool:
         self.db_type = db_type
         self.host = host
         self.port = port
-        self.username = username
-        self.password = password
         self.available: Queue = Queue(maxsize=pool_size)
         self.all_connections: List[Any] = []
         self.lock = Lock()
@@ -401,9 +434,9 @@ class ConnectionPool:
         if self.db_type in ("fabric_sql", "azure_sql"):
             return FabricSQLConnection(self.endpoint, self.database)
         if self.db_type == "postgresql":
-            return PostgreSQLConnection(self.host, self.port, self.database, self.username, self.password)
+            return PostgreSQLConnection(self.host, self.port, self.database)
         if self.db_type == "mysql":
-            return MySQLConnection(self.host, self.port, self.database, self.username, self.password)
+            return MySQLConnection(self.host, self.port, self.database)
         raise ValueError(f"Unsupported db_type: {self.db_type}")
 
     def get_connection(self) -> Any:
@@ -490,8 +523,6 @@ def get_connection_pool(database: str) -> ConnectionPool:
                     "", database, pool_size=pool_size, db_type=db_type,
                     host=settings.FABRIC_METADATA_HOST,
                     port=settings.FABRIC_METADATA_PORT or (5432 if db_type == "postgresql" else 3306),
-                    username=settings.FABRIC_METADATA_USERNAME,
-                    password=settings.FABRIC_METADATA_PASSWORD,
                 )
         else:
             # Data warehouse — always Fabric SQL / Azure SQL via pyodbc
@@ -588,11 +619,12 @@ def get_table_columns(table_id: str, database: str) -> List[Dict[str, Any]]:
 def probe_connection(
     endpoint: str, database: str, statements: Optional[List[str]] = None,
     db_type: str = "fabric_sql",
-    host: str = "", port: int = 0, username: str = "", password: str = "",
+    host: str = "", port: int = 0,
 ) -> Dict[str, Any]:
     """
     Test an arbitrary connection (used by setup wizard).
     Returns {success, results} or {success, error_type, message}.
+    All DB types authenticate via Azure AD Managed Identity — no credentials stored.
     """
     if statements is None:
         statements = ["SELECT 1 AS test"]
@@ -600,9 +632,9 @@ def probe_connection(
     if db_type in ("fabric_sql", "azure_sql"):
         conn: Any = FabricSQLConnection(endpoint, database)
     elif db_type == "postgresql":
-        conn = PostgreSQLConnection(host, port or 5432, database, username, password)
+        conn = PostgreSQLConnection(host, port or 5432, database)
     elif db_type == "mysql":
-        conn = MySQLConnection(host, port or 3306, database, username, password)
+        conn = MySQLConnection(host, port or 3306, database)
     else:
         return {"success": False, "error_type": "connection_failed", "message": f"Unsupported db_type: {db_type}"}
     try:
