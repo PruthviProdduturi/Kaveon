@@ -54,6 +54,7 @@ interface DbTypeConfig {
   defaultPort?: number;
   usesEndpoint: boolean;
   usesConnectionString?: boolean;
+  beta?: boolean;
   endpointLabel: string;
   endpointPlaceholder: string;
   endpointHint: string;
@@ -85,6 +86,7 @@ const DB_TYPES: Record<DbType, DbTypeConfig> = {
     icon: "fa-database",
     defaultPort: 5432,
     usesEndpoint: false,
+    beta: true,
     endpointLabel: "Host",
     endpointPlaceholder: "localhost or db.example.com",
     endpointHint: "Hostname or IP address of your PostgreSQL server.",
@@ -95,6 +97,7 @@ const DB_TYPES: Record<DbType, DbTypeConfig> = {
     icon: "fa-database",
     defaultPort: 3306,
     usesEndpoint: false,
+    beta: true,
     endpointLabel: "Host",
     endpointPlaceholder: "localhost or db.example.com",
     endpointHint: "Hostname or IP address of your MySQL or MariaDB server.",
@@ -174,6 +177,12 @@ const S = {
   } as React.CSSProperties,
 
   dbTypeGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 20 } as React.CSSProperties,
+
+  betaBadge: {
+    fontSize: 9, fontWeight: 700, color: "#f59e0b", background: "rgba(245,158,11,0.12)",
+    border: "1px solid rgba(245,158,11,0.3)", borderRadius: 4, padding: "1px 5px",
+    letterSpacing: "0.05em", textTransform: "uppercase" as const, flexShrink: 0,
+  } as React.CSSProperties,
 
   dbTypeCard: (active: boolean, disabled: boolean): React.CSSProperties => ({
     background: active ? "rgba(99,102,241,0.15)" : "#0f172a",
@@ -277,7 +286,8 @@ function DbTypePicker({ value, onChange, disabled }: { value: DbType; onChange: 
           return (
             <div key={t} style={S.dbTypeCard(active, disabled)} onClick={() => !disabled && onChange(t)}>
               <i className={`fas ${cfg.icon}`} style={{ fontSize: 14, color: active ? "#6366f1" : "#475569", flexShrink: 0 }} />
-              <span style={S.dbTypeLabel(active)}>{cfg.label}</span>
+              <span style={{ flex: 1, ...S.dbTypeLabel(active) }}>{cfg.label}</span>
+              {cfg.beta && <span style={S.betaBadge}>Beta</span>}
             </div>
           );
         })}
