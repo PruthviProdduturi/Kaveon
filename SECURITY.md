@@ -12,12 +12,15 @@ It is intended for use by authenticated Azure AD users within the organization a
 
 | Asset | Threat | Mitigation |
 |-------|--------|-----------|
-| Microsoft Fabric SQL databases | Unauthorized data access | Azure AD authentication; per-user data scoping |
+| Microsoft Fabric SQL databases | Unauthorized data access | Azure AD JWT verification (RS256); per-user data scoping |
 | User query history | Privacy — cross-user data leak | Queries stored with `executed_by`; API filters by user |
-| API endpoints | CSRF on state-changing operations | Bearer token required on all mutating calls via `msalFetch` |
-| SQL query generation | Identifier injection | `quoteIdentifier()` wraps all user-supplied identifiers in `[...]` with `]` escaped as `]]` |
-| Filter values | Operator injection | Operator values validated against a strict allowlist |
-| User identity | Identity spoofing via header | `x-user-email` header is SECONDARY to JWT-extracted identity |
+| API endpoints | CSRF on state-changing operations | Bearer token required on all endpoints via `require_auth` dependency |
+| SQL query generation | Identifier injection | `quote_identifier()` wraps all user-supplied identifiers in `[...]` with `]` escaped as `]]` |
+| Filter values | Operator injection | Operator values validated against a strict allowlist in `query_generator.py` |
+| User identity | Identity spoofing via header | `x-user-email` header is **rejected** when AAD is configured; only a valid signed Bearer JWT is accepted |
+| Internal errors | Information disclosure | Exception details are logged server-side only; clients always receive a generic error message |
+| Credential exposure | Connection string leak | `connection_string` column is excluded from all API responses via `_PUBLIC_FIELDS` constant |
+| Unauthenticated schema enumeration | Data discovery without auth | All lab, SQL, and data-source endpoints require `require_auth` dependency |
 
 ---
 
@@ -26,41 +29,29 @@ It is intended for use by authenticated Azure AD users within the organization a
 ```
 Browser (MSAL)
     │
-    │  Authorization: Bearer <Azure AD access token>
-    │  x-user-email: user@contoso.com  (secondary, legacy)
+    │  Authorization: Bearer <Azure AD access token (RS256 signed)>
     ▼
-Express API (loomx-api)
+FastAPI (loomx-api)
     │
-    ├─ authMiddleware.extractUser
-    │     Decodes JWT payload, validates exp + iss
-    │     Sets req.user.email from preferred_username claim
+    ├─ middleware/auth.py — get_current_user()
+    │     When AZURE_CLIENT_ID + AZURE_TENANT_ID are set (production):
+    │       Fetches Azure AD JWKS public keys (cached by PyJWKClient)
+    │       Verifies RS256 signature, expiry, and audience
+    │       Extracts email from preferred_username / email / upn claim
     │
-    ├─ Routes use req.user.email as authoritative identity
-    │     Fallback to x-user-email only if no Bearer token
-    │     Final fallback: 'anonymous' (never 'system')
+    │     When AAD is NOT configured (first-run setup mode only):
+    │       Falls back to unverified JWT decode OR x-user-email header
+    │       This is intentional — no metadata DB exists yet in setup mode
     │
-    └─ pythonProxyService → Python Flask → Microsoft Fabric ODBC
+    ├─ require_auth dependency — applied to every protected endpoint
+    │     Returns 401 if no authenticated user is present
+    │     User email is the authoritative identity throughout all services
+    │
+    └─ database/pool.py — FabricSQLConnection
+          Uses DefaultAzureCredential (Managed Identity in production)
+          Injects token via SQL_COPT_SS_ACCESS_TOKEN (no SQL username/password)
+          Connects directly to Microsoft Fabric SQL over ODBC/TLS
 ```
-
-### Current Limitations
-
-1. **JWT signature is not verified server-side.**
-   The `authMiddleware` validates JWT structure, expiry, and issuer, but does not verify
-   the cryptographic signature against Azure AD's JWKS endpoint.
-
-   **Recommended next step:** Add `jsonwebtoken` + `jwks-rsa` packages (or use
-   `@azure/msal-node` `ConfidentialClientApplication` with `AZURE_CLIENT_SECRET`) to
-   perform full signature verification. This eliminates the ability for an attacker to
-   forge a token with arbitrary claims.
-
-2. **No server-side rate limiting.**
-   The Python proxy and SQL execution endpoints have no per-user rate limits.
-
-   **Recommended next step:** Add `express-rate-limit` middleware on SQL execution routes.
-
-3. **SQL Lab executes arbitrary user SQL.**
-   This is by design — SQL Lab is a developer tool for authenticated enterprise users.
-   Queries are logged to `query_history` with the authenticated user's identity.
 
 ---
 
@@ -70,6 +61,7 @@ Express API (loomx-api)
 - **Query History** — each record is scoped to `executed_by` (user email). The workspace activity view aggregates all users' history; this is intentional for team visibility.
 - **Saved Queries** — scoped per user; list/read/update/delete operations require matching `user_id`.
 - **Favorites** — scoped per user.
+- **Data Sources** — readable and manageable by all authenticated users; `connection_string` is never returned in any API response.
 
 ---
 
@@ -77,15 +69,27 @@ Express API (loomx-api)
 
 All SQL sent to Microsoft Fabric is constructed using one of two safe patterns:
 
-1. **Parameterized queries** — used by all service layer DB operations via `metadataProxyService.query()`.
-   Parameters are passed as a separate array and bound by the Tedious driver.
+1. **Parameterized queries** — used by all service-layer database operations via `database/metadata.py` and `pool.execute_query()`. Parameters are passed as a separate list and bound by `pyodbc` using `?` or `@paramN` placeholders, never embedded as string literals.
 
-2. **Quoted identifiers** — table names, column names, and schema names used in dynamic
-   SQL (e.g., distinct values query, chart preview query) are passed through `quoteIdentifier()`,
-   which wraps each part in `[...]` and escapes `]` as `]]`.
+2. **Quoted identifiers** — table names, column names, and schema names used in dynamic SQL (e.g., distinct values query, chart preview query) are passed through `quote_identifier()` in `services/query_generator.py`, which wraps each part in `[...]` and escapes `]` as `]]`.
 
-Filter operators (e.g., `=`, `<`, `LIKE`) are validated against a strict allowlist in
-`queryGenerator.service.ts` before being embedded in SQL.
+Filter operators (e.g., `=`, `<`, `LIKE`) are validated against a strict allowlist in `services/query_generator.py` before being embedded in SQL.
+
+---
+
+## Security Controls (S360 Compliance)
+
+| Control | Implementation |
+|---------|---------------|
+| **JWT signature verification** | RS256 via PyJWT + PyJWKClient; Azure AD JWKS endpoint; audience checked against `AZURE_CLIENT_ID` |
+| **Authentication required** | `require_auth` FastAPI dependency on every non-setup endpoint |
+| **Security headers** | `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Strict-Transport-Security`, `Referrer-Policy`, `X-Permitted-Cross-Domain-Policies` added by middleware in `main.py` |
+| **CORS hardening** | Explicit `allow_origins=[WEB_URL]`, explicit method list, explicit header list — no wildcards |
+| **Error message safety** | `generic_error_handler` never returns exception details to clients; full traceback to server logs only |
+| **Credential suppression** | `connection_string` excluded from all data-source SELECT queries via `_PUBLIC_FIELDS` constant |
+| **SQL injection** | Parameterized queries throughout; `quote_identifier()` for dynamic identifiers |
+| **Setup endpoint gating** | `POST /setup/test` and `POST /setup/initialize` return 403 once the app is configured |
+| **Query size limit** | 64 KB maximum enforced on all SQL execution endpoints |
 
 ---
 
@@ -107,13 +111,14 @@ Include:
 
 Before merging a PR that touches API routes or services, verify:
 
-- [ ] User identity is read from `req.user.email` (not from a client-supplied header)
-- [ ] All SQL identifiers (table names, column names) pass through `quoteIdentifier()`
-- [ ] All SQL values are bound as parameters, not embedded as string literals
-- [ ] Filter operators are validated against the `SAFE_OPERATORS` allowlist
+- [ ] User identity is read from the `require_auth` dependency result (not from a client-supplied header)
+- [ ] All SQL identifiers (table names, column names) pass through `quote_identifier()`
+- [ ] All SQL values are bound as pyodbc parameters, not embedded as string literals
+- [ ] Filter operators are validated against the `SAFE_OPERATORS` allowlist in `query_generator.py`
 - [ ] State-changing frontend fetch calls use `msalFetch` (not bare `fetch`)
-- [ ] Error responses in production do not expose SQL error messages or stack traces
+- [ ] Error responses do not expose SQL error messages, stack traces, or internal state
 - [ ] New query execution endpoints enforce the 64 KB query size limit
+- [ ] New endpoints include `user: str = Depends(require_auth)` unless explicitly public
 
 ---
 
@@ -123,9 +128,8 @@ Keep dependencies up to date. The critical security-relevant packages are:
 
 | Package | Purpose |
 |---------|---------|
-| `helmet` | HTTP security headers |
-| `cors` | CORS origin restriction |
+| `PyJWT` | JWT decoding and RS256 signature verification |
+| `cryptography` | RSA key operations (used by PyJWT for RS256) |
+| `azure-identity` | DefaultAzureCredential / Managed Identity for Fabric SQL |
 | `@azure/msal-browser` | Frontend MSAL authentication |
-| `@azure/msal-node` | Backend Azure AD integration |
-| `@azure/identity` | Azure identity primitives |
-| `tedious` | Microsoft SQL Server parameterized queries |
+| `pyodbc` | Parameterized SQL execution via ODBC Driver 18 |

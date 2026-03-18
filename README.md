@@ -10,7 +10,8 @@
 
 [![Next.js](https://img.shields.io/badge/Next.js-15-black?style=for-the-badge&logo=next.js&logoColor=white)](https://nextjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Azure AD](https://img.shields.io/badge/Azure_AD-Auth-0078D4?style=for-the-badge&logo=microsoftazure&logoColor=white)](https://azure.microsoft.com/en-us/products/active-directory)
 [![Microsoft Fabric](https://img.shields.io/badge/Microsoft_Fabric-SQL-742774?style=for-the-badge&logo=microsoft&logoColor=white)](https://learn.microsoft.com/en-us/fabric/)
 [![License](https://img.shields.io/badge/License-Proprietary-red?style=for-the-badge)](./LICENSE)
@@ -41,9 +42,10 @@ No separate login system. No data leaves your tenant. No vendor lock-in.
 
 ### 🔐 Enterprise Security
 - Azure AD / Entra ID single sign-on
+- Full JWT signature verification (RS256 via JWKS)
 - Delegated user token auth — every user sees only what their AD permissions allow
 - No service accounts, no password storage
-- Session persistence with automatic token refresh
+- S360-compliant: security headers, hardened CORS, parameterized queries throughout
 
 </td>
 <td width="50%">
@@ -100,7 +102,7 @@ No separate login system. No data leaves your tenant. No vendor lock-in.
 <td width="50%">
 
 ### ⚡ Performance
-- Connection pool warming at proxy startup — sub-second queries after cold start
+- Connection pool warming at API startup — sub-second queries after cold start
 - Parallel metadata fetching on page load
 - 5-minute heartbeat keeps Fabric serverless connections alive
 - All data is live — no stale cache, ever
@@ -122,7 +124,7 @@ No separate login system. No data leaves your tenant. No vendor lock-in.
 
 ## 🏛️ Architecture
 
-LoomX is a **monorepo** with three services that work together:
+LoomX is a **monorepo** with two services:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -141,19 +143,14 @@ LoomX is a **monorepo** with three services that work together:
                                │  REST API (Bearer token)
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  loomx-api  ·  Express.js  ·  TypeScript                        │
+│  loomx-api  ·  FastAPI  ·  Python 3.11                          │
 │                                                                  │
-│  · JWT validation · Route handlers · Query history logging       │
+│  · JWT signature verification (RS256 / JWKS)                     │
+│  · Route handlers · Query history logging                        │
 │  · Semantic SQL generation · Dataset / chart / dashboard CRUD    │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │  HTTP (localhost:5001)
-                               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  loomx-python-proxy  ·  Flask  ·  Python 3.10+                  │
-│                                                                  │
-│  · pyodbc + ODBC Driver 18 for SQL Server                        │
+│  · pyodbc + ODBC Driver 18 connection pool (in-process)          │
 │  · Azure AD token injection via SQL_COPT_SS_ACCESS_TOKEN         │
-│  · Connection pool per database · Startup warmup · Heartbeat     │
+│  · Per-database pool · Startup warmup · 5-min heartbeat          │
 └──────────────────────────────┬──────────────────────────────────┘
                                │  ODBC (TLS)
                                ▼
@@ -167,15 +164,15 @@ LoomX is a **monorepo** with three services that work together:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Why three services?
+### Why two services?
 
-Node.js cannot authenticate to Fabric SQL using Azure AD tokens natively. The Python proxy bridges this gap using `pyodbc` + `ODBC Driver 18`, the only driver that supports Azure AD interactive token injection (`SQL_COPT_SS_ACCESS_TOKEN`) required by Microsoft Fabric.
+The Python/FastAPI API handles everything in a single process — JWT validation, business logic, and direct ODBC connections to Fabric SQL. Python's `pyodbc` is the only driver that supports Azure AD interactive token injection (`SQL_COPT_SS_ACCESS_TOKEN`) required by Microsoft Fabric. Eliminating the former Node.js→Python inter-service HTTP hop reduces latency and simplifies deployment.
 
 ### Two Fabric databases
 
 | Database | Purpose | Configured via |
 |---|---|---|
-| **Metadata DB** | Stores LoomX app data: datasets, charts, dashboards, query history, themes | `.env` |
+| **Metadata DB** | Stores LoomX app data: datasets, charts, dashboards, query history, themes | `.env` or first-run setup wizard |
 | **Your Data Sources** | Your actual Fabric warehouses and lakehouses | UI at `/data-sources` |
 
 ---
@@ -186,12 +183,11 @@ Install **all** of the following before you begin:
 
 | Requirement | Version | Check | Install |
 |---|---|---|---|
+| **Python** | 3.11+ | `python --version` | [python.org](https://www.python.org/) |
+| **ODBC Driver 18** | 18.x | See below | [Microsoft docs](https://learn.microsoft.com/sql/connect/odbc/download-odbc-driver-for-sql-server) |
 | **Node.js** | 20.x+ | `node -v` | [nodejs.org](https://nodejs.org/) |
 | **pnpm** | 9.x+ | `pnpm -v` | `npm install -g pnpm` |
-| **Python** | 3.10+ | `python --version` | [python.org](https://www.python.org/) |
-| **ODBC Driver 18** | 18.x | See below | [Microsoft docs](https://learn.microsoft.com/sql/connect/odbc/download-odbc-driver-for-sql-server) |
 | **Git** | Any | `git --version` | [git-scm.com](https://git-scm.com/) |
-| **Azure Data Studio** | Any | — | [Download](https://azure.microsoft.com/products/data-studio) |
 | **Fabric SQL access** | — | — | Contact your Fabric workspace admin |
 
 #### Verify ODBC Driver 18
@@ -224,8 +220,8 @@ LoomX uses Azure AD for all authentication. This is a **one-time setup** by your
    - **Redirect URI:** `Single-page application (SPA)` → `http://localhost:3000`
 
 3. Click **Register**. Note down:
-   - **Application (client) ID** → your `AZURE_CLIENT_ID`
-   - **Directory (tenant) ID** → your `AZURE_TENANT_ID`
+   - **Application (client) ID** → your `AZURE_CLIENT_ID` / `AZURE_CLIENT_ID`
+   - **Directory (tenant) ID** → your `AZURE_TENANT_ID` / `AZURE_TENANT_ID`
 
 4. **API permissions** → **Add a permission** → **Azure SQL Database** → **Delegated** → `user_impersonation` → **Add permissions**
 
@@ -244,30 +240,24 @@ LoomX uses Azure AD for all authentication. This is a **one-time setup** by your
 git clone <your-repo-url>
 cd LoomX
 
-# 2. Install Node.js dependencies (all workspaces in one command)
+# 2. Install Node.js dependencies (frontend only)
 pnpm install
 
 # 3. Configure environment
 cp .env.example .env
 # → Edit .env with your Azure AD and Fabric SQL values
 
-# 4. Set up Python proxy
-cd apps/loomx-python-proxy
+# 4. Set up Python API
+cd apps/loomx-api
 python -m venv venv
 venv\Scripts\activate        # Windows
 # source venv/bin/activate   # macOS / Linux
 pip install -r requirements.txt
 cd ../..
 
-# 5. Apply database schema (run schema.sql in Azure Data Studio against your metadata DB)
-
-# 6. Start all services — three terminals
-python apps/loomx-python-proxy/proxy.py    # Terminal 1
-pnpm --filter loomx-api dev                # Terminal 2
-pnpm --filter loomx-web dev                # Terminal 3
-
-# Or start everything at once (Python proxy still needs its own terminal)
-pnpm dev
+# 5. Start both services — two terminals
+python apps/loomx-api/main.py    # Terminal 1 (API)
+pnpm --filter loomx-web dev      # Terminal 2 (Web)
 ```
 
 Open **http://localhost:3000** and sign in with your Azure AD account. ✓
@@ -289,11 +279,11 @@ cd LoomX
 pnpm install
 ```
 
-This installs dependencies for all three workspaces in one command.
+This installs dependencies for the frontend workspace.
 
 ### 3 · Configure Environment Variables
 
-LoomX uses a **single `.env` file at the repository root**. All three services read from it.
+LoomX uses a **single `.env` file at the repository root**. Both services read from it.
 
 ```bash
 cp .env.example .env
@@ -304,6 +294,10 @@ cp .env.example .env
 AZURE_TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 AZURE_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
+# Same values for the Next.js frontend (MSAL)
+AZURE_TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+AZURE_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
 # ── Metadata Database (optional — setup wizard configures this on first login) ─
 # FABRIC_METADATA_ENDPOINT=your-workspace.msit-database.fabric.microsoft.com
 # FABRIC_METADATA_DATABASE=YourMetadataDatabase
@@ -311,23 +305,18 @@ AZURE_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 # ── Ports ────────────────────────────────────────────────────────────────────
 API_PORT=8080
 WEB_PORT=3000
-PYTHON_PROXY_PORT=5001
 
 # ── Internal URLs ─────────────────────────────────────────────────────────────
 API_URL=http://localhost:8080
 WEB_URL=http://localhost:3000
-PYTHON_PROXY_URL=http://localhost:5001
-
-# ── Environment ───────────────────────────────────────────────────────────────
-NODE_ENV=development
 ```
 
 > 💡 **How to find your Fabric SQL endpoint:** Open your Fabric workspace → open your SQL warehouse → **Settings** gear → copy the **Server** value (e.g. `xxxxxxxx.msit-database.fabric.microsoft.com`)
 
-### 4 · Set Up the Python Proxy
+### 4 · Set Up the Python API
 
 ```bash
-cd apps/loomx-python-proxy
+cd apps/loomx-api
 
 # Create virtual environment
 python -m venv venv
@@ -353,10 +342,14 @@ python -c "import pyodbc; print([d for d in pyodbc.drivers() if '18' in d])"
 
 ### 5 · Apply the Database Schema
 
-> **One-time step.** Once the tables exist, never run this again.
+> The setup wizard can apply the schema automatically from the browser (recommended). Manual steps below are optional.
+
+**Option A — Setup Wizard (recommended):** Leave `FABRIC_METADATA_ENDPOINT` and `FABRIC_METADATA_DATABASE` commented out in `.env`. The wizard will appear on first login and apply the schema for you.
+
+**Option B — Manual apply:**
 
 1. Open **Azure Data Studio**
-2. Connect to your metadata database (use the `FABRIC_METADATA_ENDPOINT` and `FABRIC_METADATA_DATABASE` values from your `.env`)
+2. Connect to your metadata database
 3. Open `apps/loomx-api/schema.sql`
 4. Press **F5** to run
 
@@ -375,37 +368,26 @@ python -c "import pyodbc; print([d for d in pyodbc.drivers() if '18' in d])"
 
 > The schema uses `IF OBJECT_ID(...) IS NULL` guards — safe to re-run.
 
-### 6 · Start All Services
+### 6 · Start Both Services
 
-You need three terminal windows:
-
-**Terminal 1 — Python Proxy**
+**Terminal 1 — API (Python/FastAPI)**
 ```bash
-cd apps/loomx-python-proxy
+cd apps/loomx-api
 venv\Scripts\activate   # Windows  |  source venv/bin/activate  (macOS/Linux)
-python proxy.py
+python main.py
 ```
 ```
 ============================================
-LOOMX Python Proxy
+LoomX API
 ============================================
-Server: http://localhost:5001
-Health: http://localhost:5001/health
+Server: http://localhost:8080
+Health: http://localhost:8080/api/health
+Docs:   http://localhost:8080/docs
 ============================================
-[Proxy] Connection pool warmup started at server startup.
+[API] Connection pool warmup started.
 ```
 
-**Terminal 2 — API**
-```bash
-pnpm --filter loomx-api dev
-```
-```
-============================================
-LoomX API · http://localhost:8080
-============================================
-```
-
-**Terminal 3 — Web**
+**Terminal 2 — Web (Next.js)**
 ```bash
 pnpm --filter loomx-web dev
 ```
@@ -419,8 +401,8 @@ pnpm --filter loomx-web dev
 
 | Service | URL | Expected |
 |---|---|---|
-| Python Proxy | http://localhost:5001/health | `{"status": "healthy"}` |
-| API | http://localhost:8080/api/v1/health | `{"status": "ok"}` |
+| API | http://localhost:8080/api/health | `{"status": "ok"}` or `{"status": "degraded"}` |
+| API Docs | http://localhost:8080/docs | Swagger UI |
 | Web | http://localhost:3000 | LoomX login page |
 
 ---
@@ -481,6 +463,7 @@ LoomX/
 │   │   │   ├── charts/             ← Chart builder and list
 │   │   │   ├── dashboards/         ← Dashboard builder and viewer
 │   │   │   ├── datasets/           ← Dataset configuration
+│   │   │   ├── data-sources/       ← Data source registration
 │   │   │   ├── lab/                ← SQL Lab (Monaco editor)
 │   │   │   └── layout.tsx          ← Root layout with theme + auth
 │   │   ├── auth/                   ← MSAL Azure AD configuration
@@ -488,18 +471,31 @@ LoomX/
 │   │   ├── contexts/               ← Theme, auth context providers
 │   │   └── utils/                  ← MSAL fetch, colour utilities
 │   │
-│   ├── loomx-api/                  ← Express.js REST API (TypeScript)
-│   │   ├── src/
-│   │   │   ├── routes/             ← API route handlers (one file per domain)
-│   │   │   ├── services/           ← Business logic, SQL generation
-│   │   │   ├── middleware/         ← Auth, error handling, user context
-│   │   │   └── server.ts           ← Express entry point
-│   │   └── schema.sql              ← Run once in your metadata database
-│   │
-│   └── loomx-python-proxy/         ← Flask ODBC proxy (Python)
-│       ├── proxy.py                ← Connection pool + query execution
+│   └── loomx-api/                  ← Python/FastAPI REST API
+│       ├── main.py                 ← FastAPI entry point
+│       ├── config.py               ← Pydantic settings (reads root .env)
 │       ├── requirements.txt        ← Python dependencies
-│       └── start_proxy.bat         ← Windows quick-start helper
+│       ├── schema.sql              ← Run once in your metadata database
+│       ├── database/               ← Connection pool + metadata queries
+│       │   ├── pool.py             ← pyodbc pool with Azure AD token auth
+│       │   ├── metadata.py         ← Parameterized metadata DB helpers
+│       │   └── warmup.py           ← Startup warmup + 5-min heartbeat
+│       ├── middleware/             ← Auth and error handling
+│       │   ├── auth.py             ← JWT RS256 verification (PyJWT + JWKS)
+│       │   └── errors.py           ← Exception handlers (no detail leakage)
+│       ├── routers/                ← API route handlers (one file per domain)
+│       │   ├── auth.py, health.py
+│       │   ├── datasets.py, charts.py, dashboards.py
+│       │   ├── data_sources.py, favorites.py
+│       │   ├── lab.py, sql.py
+│       │   ├── theme.py, metadata_summary.py
+│       │   └── setup.py
+│       └── services/               ← Business logic
+│           ├── query_generator.py  ← Star-schema SQL builder
+│           ├── datasets.py, charts.py, dashboards.py
+│           ├── favorites.py, saved_queries.py
+│           ├── query_history.py, theme.py
+│           └── sql_table_extractor.py
 │
 └── packages/
     └── types/                      ← Shared TypeScript type definitions
@@ -511,18 +507,16 @@ LoomX/
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `AZURE_TENANT_ID` | ✅ | — | Azure AD / Entra ID tenant (directory) ID |
-| `AZURE_CLIENT_ID` | ✅ | — | App Registration application (client) ID |
+| `AZURE_TENANT_ID` | ✅ | — | Azure AD tenant ID — used by the API for JWT verification |
+| `AZURE_CLIENT_ID` | ✅ | — | App Registration client ID — used by the API for JWT audience check |
+| `AZURE_TENANT_ID` | ✅ | — | Same tenant ID exposed to the Next.js frontend (MSAL) |
+| `AZURE_CLIENT_ID` | ✅ | — | Same client ID exposed to the Next.js frontend (MSAL) |
 | `FABRIC_METADATA_ENDPOINT` | ⬜ | — | SQL endpoint of your Fabric metadata database (UI-configurable via setup wizard) |
 | `FABRIC_METADATA_DATABASE` | ⬜ | — | Database name in that Fabric endpoint (UI-configurable via setup wizard) |
-| `API_PORT` | ✅ | `8080` | Port for the Node.js API |
-| `WEB_PORT` | ✅ | `3000` | Port for the Next.js web app |
-| `PYTHON_PROXY_PORT` | ✅ | `5001` | Port for the Python proxy |
+| `API_PORT` | ⬜ | `8080` | Port for the FastAPI service |
+| `WEB_PORT` | ⬜ | `3000` | Port for the Next.js web app |
 | `API_URL` | ✅ | `http://localhost:8080` | Full URL of the API, used by the web app |
 | `WEB_URL` | ✅ | `http://localhost:3000` | Full URL of the web app, used for CORS |
-| `PYTHON_PROXY_URL` | ✅ | `http://localhost:5001` | Full URL of the Python proxy |
-| `NODE_ENV` | ✅ | `development` | `development` or `production` |
-| `PYTHON_PROXY_TIMEOUT_MS` | ⬜ | `120000` | Max ms to wait for a proxy query (2 min default) |
 
 > Data warehouse endpoints are **not** configured here. Register them through the UI at `/data-sources` after first run.
 
@@ -534,30 +528,28 @@ Run from the **repository root**:
 
 | Command | Description |
 |---|---|
-| `pnpm dev` | Start all services in development mode |
-| `pnpm build` | Build all services for production |
-| `pnpm start` | Start all services in production mode |
-| `pnpm check-types` | TypeScript type checking across the monorepo |
+| `pnpm dev` | Start Next.js frontend in development mode |
+| `pnpm build` | Build the frontend for production |
+| `pnpm check-types` | TypeScript type checking |
 | `pnpm clean` | Delete all build artifacts |
-| `pnpm --filter loomx-api dev` | Start only the API |
 | `pnpm --filter loomx-web dev` | Start only the web app |
 
-**Python proxy** (from `apps/loomx-python-proxy/`):
+**Python API** (from `apps/loomx-api/`):
 
 | Command | Description |
 |---|---|
-| `python proxy.py` | Start proxy (requires venv activated) |
-| `start_proxy.bat` | Windows: activates venv and starts proxy in one step |
+| `python main.py` | Start API in development mode (uvicorn with reload) |
+| `gunicorn main:app -w 4 -k uvicorn.workers.UvicornWorker` | Production start |
 
 ---
 
 ## 🔧 Troubleshooting
 
 <details>
-<summary><strong>🔴 ODBC Driver not found / proxy fails to connect</strong></summary>
+<summary><strong>🔴 ODBC Driver not found / API fails to connect</strong></summary>
 
 - Verify ODBC Driver 18 is installed (see [Prerequisites](#-prerequisites))
-- Make sure the Python virtual environment is activated before starting the proxy
+- Make sure the Python virtual environment is activated before starting the API
 - On Windows, try running the terminal **as Administrator** during initial setup
 
 </details>
@@ -575,16 +567,8 @@ Run from the **repository root**:
 <summary><strong>🔴 API returns 401 Unauthorized</strong></summary>
 
 - Your Azure AD token may have expired — sign out and sign back in
+- If `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` are not set, the API falls back to unverified JWT decode (setup mode only)
 - If you changed `.env`, restart the API service (it does not hot-reload env vars)
-
-</details>
-
-<details>
-<summary><strong>🔴 API cannot reach the Python proxy</strong></summary>
-
-- Confirm the proxy is running: `curl http://localhost:5001/health`
-- Check `PYTHON_PROXY_URL` in `.env` matches the proxy port
-- Check for firewall rules blocking `localhost:5001`
 
 </details>
 
@@ -592,7 +576,7 @@ Run from the **repository root**:
 <summary><strong>🔴 Cannot connect to metadata database</strong></summary>
 
 - Double-check `FABRIC_METADATA_ENDPOINT` and `FABRIC_METADATA_DATABASE` in `.env`
-- Confirm your Azure AD account has `db_datareader` + `db_datawriter` + `db_ddladmin` on the metadata database
+- Confirm your Azure AD account (or Managed Identity in production) has `db_datareader` + `db_datawriter` + `db_ddladmin` on the metadata database
 - Test the connection directly in Azure Data Studio to rule out network issues
 
 </details>
@@ -600,13 +584,7 @@ Run from the **repository root**:
 <details>
 <summary><strong>🔴 Queries time out on first run</strong></summary>
 
-Fabric serverless endpoints have a cold start (~10s on first connection). LoomX warms the connection pool at proxy startup to minimise this. If you're still hitting timeouts:
-
-```env
-PYTHON_PROXY_TIMEOUT_MS=180000
-```
-
-Restart the API after changing `.env`.
+Fabric serverless endpoints have a cold start (~10s on first connection). LoomX warms the connection pool at API startup. If you're still hitting timeouts, the pool warmup may not have had time to complete before your first request. Wait a few seconds after seeing `[API] Connection pool warmup started.` in the API logs.
 
 </details>
 
@@ -621,8 +599,8 @@ pnpm install
 # Clear Next.js cache
 rm -rf apps/loomx-web/.next
 
-# Clear API build
-rm -rf apps/loomx-api/dist
+# Reinstall Python dependencies
+cd apps/loomx-api && pip install -r requirements.txt
 
 # Re-check types
 pnpm check-types
@@ -635,16 +613,16 @@ pnpm check-types
 
 **Windows:**
 ```bash
-netstat -ano | findstr :3000
+netstat -ano | findstr :8080
 taskkill /PID <PID> /F
 ```
 
 **macOS / Linux:**
 ```bash
-lsof -ti :3000 | xargs kill -9
+lsof -ti :8080 | xargs kill -9
 ```
 
-Or change the port in `.env` and update all three port variables consistently.
+Or change `API_PORT` in `.env` and restart.
 
 </details>
 
@@ -669,20 +647,14 @@ Or change the port in `.env` and update all three port variables consistently.
 
 | Technology | Version | Role |
 |---|---|---|
-| [Express.js](https://expressjs.com/) | 4.x | HTTP server and routing |
-| [TypeScript](https://www.typescriptlang.org/) | 5.x | Type safety |
-| [@azure/identity](https://github.com/Azure/azure-sdk-for-js) | 4.x | Azure AD token validation |
-| [axios](https://axios-http.com/) | 1.x | HTTP client for Python proxy |
-| [helmet](https://helmetjs.github.io/) | 7.x | HTTP security headers |
-
-### Python Proxy — `loomx-python-proxy`
-
-| Technology | Version | Role |
-|---|---|---|
-| [Python](https://www.python.org/) | 3.10+ | Runtime |
-| [Flask](https://flask.palletsprojects.com/) | 3.0 | HTTP server |
-| [pyodbc](https://github.com/mkleehammer/pyodbc) | 5.0 | ODBC driver wrapper |
-| [azure-identity](https://pypi.org/project/azure-identity/) | 1.15+ | Azure AD credential provider |
+| [FastAPI](https://fastapi.tiangolo.com/) | 0.115+ | ASGI HTTP framework with dependency injection |
+| [Python](https://www.python.org/) | 3.11+ | Runtime |
+| [Uvicorn](https://www.uvicorn.org/) | 0.30+ | ASGI server (development + production worker) |
+| [Gunicorn](https://gunicorn.org/) | 22+ | Process manager (production) |
+| [pyodbc](https://github.com/mkleehammer/pyodbc) | 5.x | ODBC Driver 18 wrapper for Fabric SQL |
+| [azure-identity](https://pypi.org/project/azure-identity/) | 1.x | DefaultAzureCredential for Managed Identity |
+| [PyJWT](https://pyjwt.readthedocs.io/) | 2.x | JWT decoding and RS256 signature verification |
+| [pydantic-settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/) | 2.x | Typed configuration from environment variables |
 | [python-dotenv](https://pypi.org/project/python-dotenv/) | 1.x | Reads root `.env` file |
 
 ### Monorepo Tooling
