@@ -2,7 +2,8 @@
 
 import json
 from fastapi import APIRouter, Request, Response, HTTPException, Query, Depends
-from middleware.auth import get_user_email, require_auth
+from middleware.auth import require_auth
+from models.lab import SavedQueryCreate, SavedQueryUpdate, LabExecuteBody, LabQueryBody, SwitchDatabaseBody
 import database.pool as pool
 import database.metadata as meta_db
 import services.saved_queries as saved_q_svc
@@ -47,15 +48,13 @@ def get_saved_query(query_id: str, user: str = Depends(require_auth)):
 
 
 @router.post("/lab/saved-queries", status_code=201)
-def create_saved_query(data: dict, user: str = Depends(require_auth)):
-    if not data.get("name") or not data.get("sql"):
-        raise HTTPException(status_code=400, detail="name and sql are required")
-    return saved_q_svc.create_saved_query(data, user)
+def create_saved_query(data: SavedQueryCreate, user: str = Depends(require_auth)):
+    return saved_q_svc.create_saved_query(data.model_dump(exclude_none=True), user)
 
 
 @router.put("/lab/saved-queries/{query_id}")
-def update_saved_query(query_id: str, data: dict, user: str = Depends(require_auth)):
-    result = saved_q_svc.update_saved_query(query_id, data, user)
+def update_saved_query(query_id: str, data: SavedQueryUpdate, user: str = Depends(require_auth)):
+    result = saved_q_svc.update_saved_query(query_id, data.model_dump(exclude_none=True), user)
     if not result:
         raise HTTPException(status_code=404, detail="Saved query not found")
     return result
@@ -89,37 +88,21 @@ def get_schema(schema: str, table_name: str, database: str = Query(...), user: s
 
 
 @router.post("/lab/execute")
-def execute_sql(data: dict, response: Response, user: str = Depends(require_auth)):
-    sql = data.get("sql") or ""
-    database = data.get("database") or ""
-    if not sql:
-        raise HTTPException(status_code=400, detail="SQL query is required")
-    if not database:
-        raise HTTPException(status_code=400, detail="Database parameter is required")
-    if len(sql.encode("utf-8")) > MAX_SQL_BYTES:
-        raise HTTPException(status_code=400, detail="Query exceeds maximum allowed size (64 KB)")
-
-    result = pool.execute_query(sql, database)
+def execute_sql(data: LabExecuteBody, response: Response, user: str = Depends(require_auth)):
+    result = pool.execute_query(data.sql, data.database)
     return {"columns": result.get("columns", []), "rows": result.get("rows", []),
             "rowCount": result.get("row_count", 0)}
 
 
 @router.post("/lab/query")
-def run_query(data: dict, user: str = Depends(require_auth)):
+def run_query(data: LabQueryBody, user: str = Depends(require_auth)):
     user_id = user
-    sql = data.get("query") or ""
-    database = data.get("database") or ""
-    dataset_id = data.get("datasetId")
-    run_context = data.get("runContext")
-    tables_used = data.get("tablesUsed")
+    sql = data.query
+    database = data.database
+    dataset_id = data.datasetId
+    run_context = data.runContext
+    tables_used = data.tablesUsed
     start_time = int(time.time() * 1000)
-
-    if not sql:
-        raise HTTPException(status_code=400, detail="SQL query is required")
-    if not database:
-        raise HTTPException(status_code=400, detail="Database parameter is required")
-    if len(sql.encode("utf-8")) > MAX_SQL_BYTES:
-        raise HTTPException(status_code=400, detail="Query exceeds maximum allowed size (64 KB)")
 
     trigger_source = "dataset-preview" if run_context == "dataset-detail" else "lab"
 
@@ -166,11 +149,8 @@ def run_query(data: dict, user: str = Depends(require_auth)):
 
 
 @router.post("/lab/switch-database")
-def switch_database(data: dict, user: str = Depends(require_auth)):
-    database_name = data.get("database_name") or ""
-    if not database_name:
-        raise HTTPException(status_code=400, detail="Database name is required")
-    return {"success": True, "database": database_name}
+def switch_database(data: SwitchDatabaseBody, user: str = Depends(require_auth)):
+    return {"success": True, "database": data.database_name}
 
 
 @router.get("/lab/query-history")

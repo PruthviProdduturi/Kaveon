@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Request, Response, HTTPException, Depends
 from middleware.auth import require_auth
+from models.charts import ChartCreate, ChartUpdate
 import services.charts as svc
 import services.favorites as fav_svc
 
@@ -36,23 +37,21 @@ def get_chart(chart_id: str, response: Response, user: str = Depends(require_aut
 
 
 @router.post("/charts", status_code=201)
-def create_chart(data: dict, user: str = Depends(require_auth)):
-    if not data.get("name") or not data.get("dataset_id") or not data.get("chart_type"):
-        raise HTTPException(status_code=400, detail="Name, dataset_id, and chart_type are required")
-    return svc.create_chart(data, user)
+def create_chart(data: ChartCreate, user: str = Depends(require_auth)):
+    return svc.create_chart(data.model_dump(exclude_none=True), user)
 
 
 @router.put("/charts/{chart_id}")
-def update_chart(chart_id: str, data: dict, user: str = Depends(require_auth)):
-    result = svc.update_chart(chart_id, data)
+def update_chart(chart_id: str, data: ChartUpdate, user: str = Depends(require_auth)):
+    result = svc.update_chart(chart_id, data.model_dump(exclude_none=True))
     if not result:
         raise HTTPException(status_code=404, detail="Chart not found")
     return result
 
 
 @router.patch("/charts/{chart_id}")
-def patch_chart(chart_id: str, data: dict, user: str = Depends(require_auth)):
-    result = svc.update_chart(chart_id, data)
+def patch_chart(chart_id: str, data: ChartUpdate, user: str = Depends(require_auth)):
+    result = svc.update_chart(chart_id, data.model_dump(exclude_none=True))
     if not result:
         raise HTTPException(status_code=404, detail="Chart not found")
     return result

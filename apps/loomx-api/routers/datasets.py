@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Request, Response, HTTPException, Depends
 from middleware.auth import require_auth
+from models.datasets import DatasetCreate, DatasetUpdate
 import services.datasets as svc
 import services.favorites as fav_svc
 
@@ -36,25 +37,21 @@ def get_dataset(dataset_id: str, response: Response, user: str = Depends(require
 
 
 @router.post("/datasets", status_code=201)
-def create_dataset(data: dict, user: str = Depends(require_auth)):
-    if not data.get("name"):
-        raise HTTPException(status_code=400, detail="Dataset name is required")
-    if not data.get("table_name"):
-        raise HTTPException(status_code=400, detail="Table name is required")
-    return svc.create_dataset(data, user)
+def create_dataset(data: DatasetCreate, user: str = Depends(require_auth)):
+    return svc.create_dataset(data.model_dump(exclude_none=True), user)
 
 
 @router.put("/datasets/{dataset_id}")
-def update_dataset(dataset_id: str, data: dict, user: str = Depends(require_auth)):
-    result = svc.update_dataset(dataset_id, data, user)
+def update_dataset(dataset_id: str, data: DatasetUpdate, user: str = Depends(require_auth)):
+    result = svc.update_dataset(dataset_id, data.model_dump(exclude_none=True), user)
     if not result:
         raise HTTPException(status_code=404, detail="Dataset not found")
     return result
 
 
 @router.patch("/datasets/{dataset_id}")
-def patch_dataset(dataset_id: str, data: dict, user: str = Depends(require_auth)):
-    result = svc.update_dataset(dataset_id, data, user)
+def patch_dataset(dataset_id: str, data: DatasetUpdate, user: str = Depends(require_auth)):
+    result = svc.update_dataset(dataset_id, data.model_dump(exclude_none=True), user)
     if not result:
         raise HTTPException(status_code=404, detail="Dataset not found")
     return result

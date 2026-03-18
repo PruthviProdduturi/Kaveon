@@ -6,6 +6,7 @@ import sys
 import threading
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
+from models.setup import SetupConnectionBody
 import database.pool as pool
 
 router = APIRouter()
@@ -95,14 +96,9 @@ def _assert_setup_mode():
 
 
 @router.post("/setup/test")
-def setup_test(data: dict):
+def setup_test(data: SetupConnectionBody):
     _assert_setup_mode()
-    endpoint = data.get("endpoint")
-    database = data.get("database")
-    if not endpoint or not database:
-        raise HTTPException(status_code=400, detail="endpoint and database are required")
-
-    result = pool.probe_connection(endpoint, database)
+    result = pool.probe_connection(data.endpoint, data.database)
     if result["success"]:
         return {"success": True}
     error_type = result.get("error_type", "connection_failed")
@@ -113,12 +109,10 @@ def setup_test(data: dict):
 
 
 @router.post("/setup/initialize")
-def setup_initialize(data: dict):
+def setup_initialize(data: SetupConnectionBody):
     _assert_setup_mode()
-    endpoint = data.get("endpoint")
-    database = data.get("database")
-    if not endpoint or not database:
-        raise HTTPException(status_code=400, detail="endpoint and database are required")
+    endpoint = data.endpoint
+    database = data.database
 
     if not SCHEMA_PATH.exists():
         raise HTTPException(status_code=500, detail="schema.sql not found on the server")
