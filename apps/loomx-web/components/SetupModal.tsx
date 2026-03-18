@@ -51,6 +51,7 @@ interface SetupModalProps {
 interface DbTypeConfig {
   label: string;
   icon: string;
+  iconText?: string;
   defaultPort?: number;
   usesEndpoint: boolean;
   usesConnectionString?: boolean;
@@ -64,7 +65,8 @@ interface DbTypeConfig {
 const DB_TYPES: Record<DbType, DbTypeConfig> = {
   fabric_sql: {
     label: "Microsoft Fabric SQL",
-    icon: "fa-hexagon-nodes",
+    icon: "",
+    iconText: "F",
     usesEndpoint: false,
     usesConnectionString: true,
     endpointLabel: "",
@@ -285,7 +287,16 @@ function DbTypePicker({ value, onChange, disabled }: { value: DbType; onChange: 
           const active = value === t;
           return (
             <div key={t} style={S.dbTypeCard(active, disabled)} onClick={() => !disabled && onChange(t)}>
-              <i className={`fas ${cfg.icon}`} style={{ fontSize: 14, color: active ? "#6366f1" : "#475569", flexShrink: 0 }} />
+              {cfg.iconText ? (
+                <span style={{
+                  fontSize: 13, fontWeight: 800, fontStyle: "italic",
+                  color: active ? "#6366f1" : "#475569",
+                  flexShrink: 0, width: 14, textAlign: "center" as const,
+                  fontFamily: "Georgia, serif",
+                }}>{cfg.iconText}</span>
+              ) : (
+                <i className={`fas ${cfg.icon}`} style={{ fontSize: 14, color: active ? "#6366f1" : "#475569", flexShrink: 0 }} />
+              )}
               <span style={{ flex: 1, ...S.dbTypeLabel(active) }}>{cfg.label}</span>
               {cfg.beta && <span style={S.betaBadge}>Beta</span>}
             </div>
