@@ -1,5 +1,0 @@
-flask==3.0.0
-flask-cors==4.0.0
-pyodbc==5.0.1
-azure-identity==1.15.0
-python-dotenv==1.2.1
