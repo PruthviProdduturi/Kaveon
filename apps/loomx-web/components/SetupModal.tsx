@@ -661,7 +661,7 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
       <div style={S.card}>
         <div style={S.logoRow}><LoomXLogo size={48} animate="pulse" /></div>
 
-        {(phase === "not_configured" || phase === "enter_connection") && (
+        {(phase === "not_configured" || phase === "enter_connection" || phase === "testing") && (
           <ConnectionForm cancelTo={phase === "enter_connection" && initialPhase !== "not_configured" ? initialPhase : undefined} />
         )}
 
