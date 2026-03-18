@@ -1,7 +1,7 @@
 """Data sources router — /api/v1/data-sources."""
 
 from fastapi import APIRouter, Request, Response, HTTPException, Depends
-from middleware.auth import get_user_email, require_auth
+from middleware.auth import require_auth
 import database.metadata as db
 import database.pool as pool
 
