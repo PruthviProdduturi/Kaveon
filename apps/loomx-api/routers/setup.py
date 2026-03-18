@@ -65,11 +65,49 @@ def _upsert_env(updates: dict):
     ENV_PATH.write_text(content, "utf-8")
 
 
+def _parse_odbc(conn_str: str) -> tuple:
+    """
+    Extract (server, database) from a standard ODBC connection string.
+    Handles both 'Server=tcp:host,port' and 'Server=host' forms.
+    Returns (endpoint, database) — endpoint has tcp: prefix and port stripped.
+    """
+    server_m = re.search(
+        r'(?:Server|Data Source)\s*=\s*(?:tcp:)?([^,;\s]+)',
+        conn_str, re.IGNORECASE,
+    )
+    db_m = re.search(
+        r'(?:Initial Catalog|Database)\s*=\s*([^;]+)',
+        conn_str, re.IGNORECASE,
+    )
+    if not server_m or not db_m:
+        raise ValueError(
+            "Connection string must include 'Server' (or 'Data Source') "
+            "and 'Initial Catalog' (or 'Database')."
+        )
+    return server_m.group(1).strip(), db_m.group(1).strip()
+
+
+def _resolve_fabric(data: SetupConnectionBody) -> tuple:
+    """
+    For Fabric SQL: parse the ODBC connection string if provided,
+    otherwise fall back to explicit endpoint + database.
+    Returns (endpoint, database).
+    """
+    if data.connection_string and data.connection_string.strip():
+        return _parse_odbc(data.connection_string)
+    return (data.endpoint or ""), (data.database or "")
+
+
 def _probe(data: SetupConnectionBody, statements=None):
     """Call pool.probe_connection with the right params for the given db_type."""
+    if data.db_type == "fabric_sql":
+        endpoint, database = _resolve_fabric(data)
+    else:
+        endpoint, database = (data.endpoint or ""), (data.database or "")
+
     return pool.probe_connection(
-        endpoint=data.endpoint or "",
-        database=data.database,
+        endpoint=endpoint,
+        database=database,
         statements=statements,
         db_type=data.db_type,
         host=data.host or "",
@@ -175,12 +213,17 @@ def setup_initialize(data: SetupConnectionBody):
         )
 
     # Persist to .env
+    if data.db_type == "fabric_sql":
+        _fab_endpoint, _fab_database = _resolve_fabric(data)
+    else:
+        _fab_endpoint, _fab_database = (data.endpoint or ""), (data.database or "")
+
     env_updates = {
         "FABRIC_METADATA_DB_TYPE": data.db_type,
-        "FABRIC_METADATA_DATABASE": data.database,
+        "FABRIC_METADATA_DATABASE": _fab_database,
     }
     if data.db_type in ("fabric_sql", "azure_sql"):
-        env_updates["FABRIC_METADATA_ENDPOINT"] = data.endpoint or ""
+        env_updates["FABRIC_METADATA_ENDPOINT"] = _fab_endpoint
     else:
         env_updates["FABRIC_METADATA_HOST"] = data.host or ""
         env_updates["FABRIC_METADATA_PORT"] = str(data.port or ("5432" if data.db_type == "postgresql" else "3306"))
