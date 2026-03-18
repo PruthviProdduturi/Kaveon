@@ -26,7 +26,7 @@ def list_databases(response: Response, user: str = Depends(require_auth)):
             SELECT database_name as [database], name as display_name, 0 as table_count
             FROM data_sources WHERE is_active = 1 ORDER BY name
         """
-        result = pool.execute_query(sql, settings.FABRIC_METADATA_DATABASE)
+        result = pool.execute_query(sql, settings.METADATA_DATABASE)
         databases = result.get("rows_objects") or []
         return {"success": True, "databases": databases}
     except Exception:

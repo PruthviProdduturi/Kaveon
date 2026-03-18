@@ -117,9 +117,9 @@ def _probe(data: SetupConnectionBody, statements=None):
 
 @router.get("/setup/status")
 def setup_status():
-    endpoint = os.environ.get("FABRIC_METADATA_ENDPOINT")
-    database = os.environ.get("FABRIC_METADATA_DATABASE")
-    db_type = os.environ.get("FABRIC_METADATA_DB_TYPE") or "fabric_sql"
+    endpoint = os.environ.get("METADATA_ENDPOINT")
+    database = os.environ.get("METADATA_DATABASE")
+    db_type = os.environ.get("METADATA_DB_TYPE") or "fabric_sql"
 
     if not database:
         return {"status": "not_configured"}
@@ -136,10 +136,8 @@ def setup_status():
             "SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'datasets'",
         ],
         db_type=db_type,
-        host=os.environ.get("FABRIC_METADATA_HOST") or "",
-        port=int(os.environ.get("FABRIC_METADATA_PORT") or 0),
-        username=os.environ.get("FABRIC_METADATA_USERNAME") or "",
-        password=os.environ.get("FABRIC_METADATA_PASSWORD") or "",
+        host=os.environ.get("METADATA_HOST") or "",
+        port=int(os.environ.get("METADATA_PORT") or 0),
     )
 
     if not result["success"]:
@@ -162,10 +160,10 @@ def setup_status():
 
 def _assert_setup_mode():
     """Raise 403 if the app is already fully configured."""
-    database = os.environ.get("FABRIC_METADATA_DATABASE")
-    db_type = os.environ.get("FABRIC_METADATA_DB_TYPE") or "fabric_sql"
-    endpoint = os.environ.get("FABRIC_METADATA_ENDPOINT")
-    host = os.environ.get("FABRIC_METADATA_HOST")
+    database = os.environ.get("METADATA_DATABASE")
+    db_type = os.environ.get("METADATA_DB_TYPE") or "fabric_sql"
+    endpoint = os.environ.get("METADATA_ENDPOINT")
+    host = os.environ.get("METADATA_HOST")
     if database and (endpoint if db_type in ("fabric_sql", "azure_sql") else host):
         raise HTTPException(
             status_code=403,
@@ -217,14 +215,14 @@ def setup_initialize(data: SetupConnectionBody):
         _fab_endpoint, _fab_database = (data.endpoint or ""), (data.database or "")
 
     env_updates = {
-        "FABRIC_METADATA_DB_TYPE": data.db_type,
-        "FABRIC_METADATA_DATABASE": _fab_database,
+        "METADATA_DB_TYPE": data.db_type,
+        "METADATA_DATABASE": _fab_database,
     }
     if data.db_type in ("fabric_sql", "azure_sql"):
-        env_updates["FABRIC_METADATA_ENDPOINT"] = _fab_endpoint
+        env_updates["METADATA_ENDPOINT"] = _fab_endpoint
     else:
-        env_updates["FABRIC_METADATA_HOST"] = data.host or ""
-        env_updates["FABRIC_METADATA_PORT"] = str(data.port or ("5432" if data.db_type == "postgresql" else "3306"))
+        env_updates["METADATA_HOST"] = data.host or ""
+        env_updates["METADATA_PORT"] = str(data.port or ("5432" if data.db_type == "postgresql" else "3306"))
 
     try:
         _upsert_env(env_updates)

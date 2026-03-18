@@ -510,19 +510,19 @@ def get_connection_pool(database: str) -> ConnectionPool:
         if database in _pools:
             return _pools[database]
 
-        if database == settings.FABRIC_METADATA_DATABASE:
-            db_type = settings.FABRIC_METADATA_DB_TYPE or "fabric_sql"
+        if database == settings.METADATA_DATABASE:
+            db_type = settings.METADATA_DB_TYPE or "fabric_sql"
             pool_size = settings.MAX_POOL_SIZE_METADATA
             if db_type in ("fabric_sql", "azure_sql"):
-                endpoint = settings.FABRIC_METADATA_ENDPOINT
+                endpoint = settings.METADATA_ENDPOINT
                 if not endpoint:
                     raise ValueError(f"No endpoint configured for metadata database: {database}")
                 pool = ConnectionPool(endpoint, database, pool_size=pool_size, db_type=db_type)
             else:
                 pool = ConnectionPool(
                     "", database, pool_size=pool_size, db_type=db_type,
-                    host=settings.FABRIC_METADATA_HOST,
-                    port=settings.FABRIC_METADATA_PORT or (5432 if db_type == "postgresql" else 3306),
+                    host=settings.METADATA_HOST,
+                    port=settings.METADATA_PORT or (5432 if db_type == "postgresql" else 3306),
                 )
         else:
             # Data warehouse — always Fabric SQL / Azure SQL via pyodbc
@@ -537,10 +537,10 @@ def get_connection_pool(database: str) -> ConnectionPool:
 
 def _resolve_endpoint(database: str) -> str:
     """Query data_sources in the metadata DB to find the endpoint for *database*."""
-    meta_db = settings.FABRIC_METADATA_DATABASE
+    meta_db = settings.METADATA_DATABASE
     if meta_db not in _pools:
         # Metadata pool not yet created — fall back to env var
-        return settings.FABRIC_DATAWAREHOUSE_ENDPOINT or ""
+        return settings.DATAWAREHOUSE_ENDPOINT or ""
 
     meta_pool = _pools[meta_db]
     conn = None
@@ -554,10 +554,10 @@ def _resolve_endpoint(database: str) -> str:
         )
         if result["rows_objects"]:
             return result["rows_objects"][0].get("connection_string", "")
-        return settings.FABRIC_DATAWAREHOUSE_ENDPOINT or ""
+        return settings.DATAWAREHOUSE_ENDPOINT or ""
     except Exception as e:
         print(f"[Pool] Could not resolve endpoint for {database}: {e}")
-        return settings.FABRIC_DATAWAREHOUSE_ENDPOINT or ""
+        return settings.DATAWAREHOUSE_ENDPOINT or ""
     finally:
         if conn:
             meta_pool.return_connection(conn)

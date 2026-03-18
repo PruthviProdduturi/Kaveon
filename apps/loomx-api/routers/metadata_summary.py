@@ -20,7 +20,9 @@ def metadata_summary(response: Response, user: str = Depends(require_auth)):
     response.headers.update(NO_CACHE)
 
     # Return empty payload while app is in setup mode — the frontend shows the setup overlay
-    if not os.environ.get("FABRIC_METADATA_ENDPOINT") or not os.environ.get("FABRIC_METADATA_DATABASE"):
+    db_type = os.environ.get("METADATA_DB_TYPE") or "fabric_sql"
+    has_connection = os.environ.get("METADATA_ENDPOINT") if db_type in ("fabric_sql", "azure_sql") else os.environ.get("METADATA_HOST")
+    if not has_connection or not os.environ.get("METADATA_DATABASE"):
         return {"datasets": [], "charts": [], "dashboards": [], "favorites": [], "savedQueries": []}
 
     # Fetch all in parallel using threads (pyodbc is synchronous)

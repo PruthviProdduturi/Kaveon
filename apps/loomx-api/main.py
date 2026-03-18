@@ -38,11 +38,11 @@ from routers import (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: kick off pool warmup + heartbeat in the background
-    if settings.FABRIC_METADATA_ENDPOINT and settings.FABRIC_METADATA_DATABASE:
+    if settings.METADATA_ENDPOINT and settings.METADATA_DATABASE:
         threading.Thread(target=start_warmup_and_heartbeat, daemon=True).start()
         print("[API] Connection pool warmup started.")
     else:
-        print("[API] WARNING: FABRIC_METADATA_ENDPOINT / FABRIC_METADATA_DATABASE not set.")
+        print("[API] WARNING: METADATA_ENDPOINT / METADATA_DATABASE not set.")
         print("[API] Starting in setup mode — /api/v1/setup/status is available.")
     yield
     # Shutdown: pools close via GC; nothing explicit needed

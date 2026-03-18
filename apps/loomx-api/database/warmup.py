@@ -54,7 +54,7 @@ def start_warmup_and_heartbeat():
     Entry point — run in a daemon thread from main.py lifespan startup.
     Warms all pools, then runs a heartbeat loop forever.
     """
-    meta_db = settings.FABRIC_METADATA_DATABASE
+    meta_db = settings.METADATA_DATABASE
     meta_ok = _warm_pool(meta_db, 6, "metadata")
 
     if not meta_ok:
@@ -79,7 +79,7 @@ def start_warmup_and_heartbeat():
         print(f"[Warmup] Could not query data_sources: {e}")
 
     # Fallback: also warm the default warehouse if set and not already covered
-    dw_db = settings.FABRIC_DATAWAREHOUSE_DATABASE
+    dw_db = settings.DATAWAREHOUSE_DATABASE
     if dw_db and dw_db not in active_dbs:
         active_dbs.append(dw_db)
 
