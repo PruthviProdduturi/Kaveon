@@ -40,6 +40,15 @@ TOKEN_URL = "https://database.windows.net/.default"
 _MAX_SAFE_INTEGER = 9_007_199_254_740_991
 
 
+def _safe(value: Any) -> Any:
+    """Coerce large ints and datetimes to JSON-safe types."""
+    if isinstance(value, int) and abs(value) > _MAX_SAFE_INTEGER:
+        return str(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return value
+
+
 # ── JSON helpers ──────────────────────────────────────────────────────────────
 
 def _serialize(obj: Any) -> Any:
@@ -143,13 +152,6 @@ class FabricSQLConnection:
         sql_upper = sql.strip().upper()
         is_modification = sql_upper.startswith(("INSERT", "UPDATE", "DELETE", "MERGE"))
 
-        def _safe(value: Any) -> Any:
-            if isinstance(value, int) and abs(value) > _MAX_SAFE_INTEGER:
-                return str(value)
-            if isinstance(value, (datetime, date)):
-                return value.isoformat()
-            return value
-
         if cursor.description:
             columns = [col[0] for col in cursor.description]
             rows_arrays: List[list] = []
@@ -210,21 +212,201 @@ class FabricSQLConnection:
             self.connection = None
 
 
+# ── PostgreSQLConnection ──────────────────────────────────────────────────────
+
+class PostgreSQLConnection:
+    """Single psycopg2 connection to a PostgreSQL database."""
+
+    def __init__(self, host: str, port: int, database: str, username: str, password: str):
+        self.host = host
+        self.port = port or 5432
+        self.database = database
+        self.username = username
+        self.password = password
+        self.connection = None
+        self.in_use: bool = False
+        self.last_used: float = time.time()
+
+    def connect(self):
+        if self.connection:
+            return
+        import psycopg2
+        print(f"[Pool] Connecting (PostgreSQL) → {self.host}:{self.port}/{self.database}")
+        self.connection = psycopg2.connect(
+            host=self.host, port=self.port, dbname=self.database,
+            user=self.username, password=self.password, connect_timeout=30,
+        )
+        self.connection.autocommit = False
+        print(f"[Pool] Connected (PostgreSQL) → {self.database}")
+
+    def execute_query(self, sql: str, params: Optional[list] = None) -> Dict[str, Any]:
+        self.connect()
+        cursor = self.connection.cursor()
+        cursor.execute(sql, params or [])
+        sql_upper = sql.strip().upper()
+        is_modification = sql_upper.startswith(("INSERT", "UPDATE", "DELETE", "MERGE"))
+
+        if cursor.description:
+            columns = [col[0] for col in cursor.description]
+            rows_arrays: List[list] = []
+            rows_objects: List[dict] = []
+            for row in cursor.fetchall():
+                safe_row = [_safe(v) for v in row]
+                rows_arrays.append(safe_row)
+                rows_objects.append({columns[i]: safe_row[i] for i in range(len(columns))})
+            cursor.close()
+            if is_modification:
+                self.connection.commit()
+            return {"columns": columns, "rows": rows_arrays, "rows_objects": rows_objects, "row_count": len(rows_arrays)}
+        else:
+            row_count = cursor.rowcount
+            cursor.close()
+            self.connection.commit()
+            return {"columns": [], "rows": [], "rows_objects": [], "row_count": row_count}
+
+    def get_tables(self) -> List[Dict[str, str]]:
+        result = self.execute_query("""
+            SELECT table_schema AS "schema", table_name AS "name"
+            FROM information_schema.tables
+            WHERE table_type = 'BASE TABLE'
+              AND table_schema NOT IN ('pg_catalog', 'information_schema')
+            ORDER BY table_schema, table_name
+        """)
+        return result["rows_objects"]
+
+    def get_table_columns(self, schema: str, table_name: str) -> List[Dict[str, Any]]:
+        result = self.execute_query("""
+            SELECT column_name AS "name", data_type AS "dataType",
+                   is_nullable AS "isNullable", character_maximum_length AS "maxLength"
+            FROM information_schema.columns
+            WHERE table_schema = %s AND table_name = %s
+            ORDER BY ordinal_position
+        """, [schema, table_name])
+        return result["rows_objects"]
+
+    def close(self):
+        if self.connection:
+            try:
+                self.connection.close()
+            except Exception:
+                pass
+            self.connection = None
+
+
+# ── MySQLConnection ───────────────────────────────────────────────────────────
+
+class MySQLConnection:
+    """Single PyMySQL connection to a MySQL / MariaDB database."""
+
+    def __init__(self, host: str, port: int, database: str, username: str, password: str):
+        self.host = host
+        self.port = port or 3306
+        self.database = database
+        self.username = username
+        self.password = password
+        self.connection = None
+        self.in_use: bool = False
+        self.last_used: float = time.time()
+
+    def connect(self):
+        if self.connection:
+            return
+        import pymysql
+        print(f"[Pool] Connecting (MySQL) → {self.host}:{self.port}/{self.database}")
+        self.connection = pymysql.connect(
+            host=self.host, port=self.port, database=self.database,
+            user=self.username, password=self.password,
+            charset="utf8mb4", connect_timeout=30,
+            cursorclass=pymysql.cursors.Cursor,
+        )
+        print(f"[Pool] Connected (MySQL) → {self.database}")
+
+    def execute_query(self, sql: str, params: Optional[list] = None) -> Dict[str, Any]:
+        self.connect()
+        cursor = self.connection.cursor()
+        cursor.execute(sql, params or [])
+        sql_upper = sql.strip().upper()
+        is_modification = sql_upper.startswith(("INSERT", "UPDATE", "DELETE", "MERGE"))
+
+        if cursor.description:
+            columns = [col[0] for col in cursor.description]
+            rows_arrays: List[list] = []
+            rows_objects: List[dict] = []
+            for row in cursor.fetchall():
+                safe_row = [_safe(v) for v in row]
+                rows_arrays.append(safe_row)
+                rows_objects.append({columns[i]: safe_row[i] for i in range(len(columns))})
+            cursor.close()
+            if is_modification:
+                self.connection.commit()
+            return {"columns": columns, "rows": rows_arrays, "rows_objects": rows_objects, "row_count": len(rows_arrays)}
+        else:
+            row_count = cursor.rowcount
+            cursor.close()
+            self.connection.commit()
+            return {"columns": [], "rows": [], "rows_objects": [], "row_count": row_count}
+
+    def get_tables(self) -> List[Dict[str, str]]:
+        result = self.execute_query("""
+            SELECT table_schema AS `schema`, table_name AS `name`
+            FROM information_schema.tables
+            WHERE table_type = 'BASE TABLE' AND table_schema = %s
+            ORDER BY table_name
+        """, [self.database])
+        return result["rows_objects"]
+
+    def get_table_columns(self, schema: str, table_name: str) -> List[Dict[str, Any]]:
+        result = self.execute_query("""
+            SELECT column_name AS `name`, data_type AS `dataType`,
+                   is_nullable AS `isNullable`, character_maximum_length AS `maxLength`
+            FROM information_schema.columns
+            WHERE table_schema = %s AND table_name = %s
+            ORDER BY ordinal_position
+        """, [schema, table_name])
+        return result["rows_objects"]
+
+    def close(self):
+        if self.connection:
+            try:
+                self.connection.close()
+            except Exception:
+                pass
+            self.connection = None
+
+
 # ── ConnectionPool ────────────────────────────────────────────────────────────
 
 class ConnectionPool:
-    """Thread-safe connection pool backed by a Queue."""
+    """Thread-safe connection pool backed by a Queue. Supports all DB types."""
 
-    def __init__(self, endpoint: str, database: str, pool_size: int = 10):
+    def __init__(
+        self, endpoint: str, database: str, pool_size: int = 10,
+        db_type: str = "fabric_sql",
+        host: str = "", port: int = 0, username: str = "", password: str = "",
+    ):
         self.endpoint = endpoint
         self.database = database
         self.pool_size = pool_size
+        self.db_type = db_type
+        self.host = host
+        self.port = port
+        self.username = username
+        self.password = password
         self.available: Queue = Queue(maxsize=pool_size)
-        self.all_connections: List[FabricSQLConnection] = []
+        self.all_connections: List[Any] = []
         self.lock = Lock()
-        print(f"[Pool] Created pool for {database} (max={pool_size})")
+        print(f"[Pool] Created pool for {database} ({db_type}, max={pool_size})")
 
-    def get_connection(self) -> FabricSQLConnection:
+    def _create_connection(self) -> Any:
+        if self.db_type in ("fabric_sql", "azure_sql"):
+            return FabricSQLConnection(self.endpoint, self.database)
+        if self.db_type == "postgresql":
+            return PostgreSQLConnection(self.host, self.port, self.database, self.username, self.password)
+        if self.db_type == "mysql":
+            return MySQLConnection(self.host, self.port, self.database, self.username, self.password)
+        raise ValueError(f"Unsupported db_type: {self.db_type}")
+
+    def get_connection(self) -> Any:
         try:
             conn = self.available.get(block=False)
             conn.in_use = True
@@ -235,7 +417,7 @@ class ConnectionPool:
 
         with self.lock:
             if len(self.all_connections) < self.pool_size:
-                conn = FabricSQLConnection(self.endpoint, self.database)
+                conn = self._create_connection()
                 self.all_connections.append(conn)
                 conn.in_use = True
                 conn.last_used = time.time()
@@ -250,7 +432,7 @@ class ConnectionPool:
         except Empty:
             raise Exception(f"Timeout waiting for connection to {self.database}")
 
-    def return_connection(self, conn: FabricSQLConnection):
+    def return_connection(self, conn: Any):
         if conn and conn.connection:
             conn.in_use = False
             conn.last_used = time.time()
@@ -259,7 +441,7 @@ class ConnectionPool:
             except Exception:
                 pass
 
-    def discard_connection(self, conn: FabricSQLConnection):
+    def discard_connection(self, conn: Any):
         """Remove a dead connection — never recycle a stale socket."""
         with self.lock:
             try:
@@ -296,17 +478,28 @@ def get_connection_pool(database: str) -> ConnectionPool:
             return _pools[database]
 
         if database == settings.FABRIC_METADATA_DATABASE:
-            endpoint = settings.FABRIC_METADATA_ENDPOINT
+            db_type = settings.FABRIC_METADATA_DB_TYPE or "fabric_sql"
             pool_size = settings.MAX_POOL_SIZE_METADATA
+            if db_type in ("fabric_sql", "azure_sql"):
+                endpoint = settings.FABRIC_METADATA_ENDPOINT
+                if not endpoint:
+                    raise ValueError(f"No endpoint configured for metadata database: {database}")
+                pool = ConnectionPool(endpoint, database, pool_size=pool_size, db_type=db_type)
+            else:
+                pool = ConnectionPool(
+                    "", database, pool_size=pool_size, db_type=db_type,
+                    host=settings.FABRIC_METADATA_HOST,
+                    port=settings.FABRIC_METADATA_PORT or (5432 if db_type == "postgresql" else 3306),
+                    username=settings.FABRIC_METADATA_USERNAME,
+                    password=settings.FABRIC_METADATA_PASSWORD,
+                )
         else:
-            # Look up the endpoint in the data_sources table
+            # Data warehouse — always Fabric SQL / Azure SQL via pyodbc
             endpoint = _resolve_endpoint(database)
-            pool_size = settings.MAX_POOL_SIZE_DATAWAREHOUSE
+            if not endpoint:
+                raise ValueError(f"No endpoint configured for database: {database}")
+            pool = ConnectionPool(endpoint, database, pool_size=settings.MAX_POOL_SIZE_DATAWAREHOUSE)
 
-        if not endpoint:
-            raise ValueError(f"No endpoint configured for database: {database}")
-
-        pool = ConnectionPool(endpoint, database, pool_size=pool_size)
         _pools[database] = pool
         return pool
 
@@ -393,16 +586,25 @@ def get_table_columns(table_id: str, database: str) -> List[Dict[str, Any]]:
 
 
 def probe_connection(
-    endpoint: str, database: str, statements: Optional[List[str]] = None
+    endpoint: str, database: str, statements: Optional[List[str]] = None,
+    db_type: str = "fabric_sql",
+    host: str = "", port: int = 0, username: str = "", password: str = "",
 ) -> Dict[str, Any]:
     """
-    Test an arbitrary endpoint/database (used by setup wizard).
+    Test an arbitrary connection (used by setup wizard).
     Returns {success, results} or {success, error_type, message}.
     """
     if statements is None:
         statements = ["SELECT 1 AS test"]
 
-    conn = FabricSQLConnection(endpoint, database)
+    if db_type in ("fabric_sql", "azure_sql"):
+        conn: Any = FabricSQLConnection(endpoint, database)
+    elif db_type == "postgresql":
+        conn = PostgreSQLConnection(host, port or 5432, database, username, password)
+    elif db_type == "mysql":
+        conn = MySQLConnection(host, port or 3306, database, username, password)
+    else:
+        return {"success": False, "error_type": "connection_failed", "message": f"Unsupported db_type: {db_type}"}
     try:
         conn.connect()
         results = []
