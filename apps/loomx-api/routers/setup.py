@@ -84,7 +84,9 @@ def _parse_odbc(conn_str: str) -> tuple:
             "Connection string must include 'Server' (or 'Data Source') "
             "and 'Initial Catalog' (or 'Database')."
         )
-    return server_m.group(1).strip(), db_m.group(1).strip()
+    # Strip tcp: prefix, port suffix, and ODBC {} value wrappers
+    server = server_m.group(1).strip()
+    database = db_m.group(1).strip().strip("{}")
 
 
 def _resolve_fabric(data: SetupConnectionBody) -> tuple:

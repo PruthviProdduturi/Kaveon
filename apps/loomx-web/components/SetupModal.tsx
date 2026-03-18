@@ -80,15 +80,15 @@ function ConnectionTestingPanel({ target }: { target: string }) {
       </div>
 
       {/* Label */}
-      <div style={{ fontSize: 14, fontWeight: 600, color: "#e2e8f0", marginBottom: 6 }}>
-        Testing connection
+      <div style={{ fontSize: 14, fontWeight: 600, color: "#e2e8f0", marginBottom: 4 }}>
+        Verifying connection
       </div>
 
       {/* Target */}
       {target && (
         <div style={{
           fontSize: 11.5, color: "#475569", fontFamily: "monospace",
-          marginBottom: 14, maxWidth: 320, margin: "0 auto 14px",
+          margin: "0 auto 14px", maxWidth: 320,
           overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
         }}>
           {target}
@@ -470,27 +470,21 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
     const isWorking = phase === "testing";
     const hasError = !!errors && !testOk;
 
-    // Build a short display target for the testing panel
     const testingTarget = cfg.usesConnectionString
       ? connectionString.match(/(?:Server|Data Source)\s*=\s*(?:tcp:)?([^,;\s]+)/i)?.[1] ?? ""
-      : cfg.usesEndpoint
-        ? endpoint.trim()
-        : host.trim();
+      : cfg.usesEndpoint ? endpoint.trim() : host.trim();
 
     return (
       <>
         <StepBar step={testOk ? 2 : 1} testOk={testOk} phase={phase} />
-        <h2 style={S.heading}>Connect Metadata Database</h2>
-        <p style={S.sub}>
-          LoomX stores datasets, charts, and dashboards in a database you control.
-          Choose a type and enter your connection details.
-        </p>
 
-        {/* Testing animation — replaces form fields while in-flight */}
-        {isWorking && <ConnectionTestingPanel target={testingTarget} />}
-
-        {!isWorking && (
+        {isWorking ? (
+          <ConnectionTestingPanel target={testingTarget} />
+        ) : (
           <>
+            <h2 style={S.heading}>Metadata Database</h2>
+            <p style={S.sub}>Select a database type and enter your connection details.</p>
+
             <DbTypePicker value={dbType} onChange={handleDbTypeChange} disabled={false} />
 
             {errors && !testOk && <ErrorDisplay errors={errors} />}
@@ -525,7 +519,7 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
               </>
             )}
 
-            {/* Host / Endpoint (Azure SQL and non-MSSQL types) */}
+            {/* Host / Endpoint — Azure SQL and non-MSSQL */}
             {!cfg.usesConnectionString && (
               <>
                 <label style={S.label} htmlFor="setup-ep">{cfg.endpointLabel}</label>
@@ -543,7 +537,7 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
               </>
             )}
 
-            {/* Non-MSSQL: database + port */}
+            {/* PostgreSQL / MySQL — database + port */}
             {!cfg.usesEndpoint && !cfg.usesConnectionString && (
               <>
                 <div style={S.inputRow}>
@@ -579,7 +573,7 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
               </>
             )}
 
-            {/* Azure SQL: database name below endpoint */}
+            {/* Azure SQL — database name */}
             {cfg.usesEndpoint && !cfg.usesConnectionString && (
               <>
                 <label style={S.label} htmlFor="setup-db">Database Name</label>
@@ -605,11 +599,11 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
                 <i className="fas fa-plug" style={{ marginRight: 8 }} />Test Connection
               </button>
             )}
-          </>
-        )}
 
-        {cancelTo && (
-          <button style={S.btnSecondary} onClick={() => setPhase(cancelTo)} disabled={isWorking}>Cancel</button>
+            {cancelTo && (
+              <button style={S.btnSecondary} onClick={() => setPhase(cancelTo)}>Cancel</button>
+            )}
+          </>
         )}
       </>
     );

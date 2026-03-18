@@ -616,6 +616,27 @@ def get_table_columns(table_id: str, database: str) -> List[Dict[str, Any]]:
         pool.return_connection(conn)
 
 
+def _write_probe_statements(db_type: str) -> List[str]:
+    """
+    Returns a pair of statements that verify write access then immediately roll back.
+    Uses a temp table so nothing is left behind in the database.
+    """
+    if db_type in ("fabric_sql", "azure_sql"):
+        return [
+            "CREATE TABLE #_loomx_probe (id INT)",
+            "DROP TABLE #_loomx_probe",
+        ]
+    if db_type == "postgresql":
+        return [
+            "CREATE TEMP TABLE _loomx_probe (id INT) ON COMMIT DROP",
+        ]
+    # mysql — session-scoped temporary table, auto-dropped on disconnect
+    return [
+        "CREATE TEMPORARY TABLE _loomx_probe (id INT)",
+        "DROP TEMPORARY TABLE _loomx_probe",
+    ]
+
+
 def probe_connection(
     endpoint: str, database: str, statements: Optional[List[str]] = None,
     db_type: str = "fabric_sql",
@@ -623,11 +644,13 @@ def probe_connection(
 ) -> Dict[str, Any]:
     """
     Test an arbitrary connection (used by setup wizard).
+    When called without explicit statements (plain connectivity test), also
+    verifies write access via a temporary table that is immediately discarded.
     Returns {success, results} or {success, error_type, message}.
-    All DB types authenticate via Azure AD Managed Identity — no credentials stored.
     """
+    check_write = statements is None
     if statements is None:
-        statements = ["SELECT 1 AS test"]
+        statements = ["SELECT 1 AS connection_test"] + _write_probe_statements(db_type)
 
     if db_type in ("fabric_sql", "azure_sql"):
         conn: Any = FabricSQLConnection(endpoint, database)
@@ -645,18 +668,17 @@ def probe_connection(
             if not stmt:
                 continue
             result = conn.execute_query(stmt)
-            results.append(
-                {
-                    "success": True,
-                    "row_count": result["row_count"],
-                    "rows": result["rows"][:10],
-                    "columns": result["columns"],
-                }
-            )
+            results.append({
+                "success": True,
+                "row_count": result["row_count"],
+                "rows": result["rows"][:10],
+                "columns": result["columns"],
+            })
         return {"success": True, "results": results}
     except Exception as e:
         raw = str(e).lower()
-        if any(k in raw for k in ["login failed", "not authorized", "access denied", "permission denied", "token authentication failed"]):
+        if any(k in raw for k in ["login failed", "not authorized", "access denied", "permission denied",
+                                   "token authentication failed", "privilege", "create"]):
             error_type = "access_denied"
         elif any(k in raw for k in ["cannot open database", "invalid database", "does not exist", "catalog not found"]):
             error_type = "db_not_found"
@@ -664,6 +686,10 @@ def probe_connection(
             error_type = "timeout"
         else:
             error_type = "connection_failed"
+        # Give a clearer message when write check fails
+        if check_write and "create" in raw:
+            return {"success": False, "error_type": "access_denied",
+                    "message": "Connected successfully but write access was denied. Grant CREATE TABLE permission to the identity."}
         return {"success": False, "error_type": error_type, "message": str(e)}
     finally:
         try:
