@@ -17,7 +17,7 @@ T = TypeVar("T")
 
 def _adapt_sql(sql: str) -> str:
     """Translate T-SQL idioms to the target dialect when the metadata DB is not MSSQL."""
-    db_type = os.environ.get("FABRIC_METADATA_DB_TYPE") or settings.FABRIC_METADATA_DB_TYPE or "fabric_sql"
+    db_type = os.environ.get("METADATA_DB_TYPE") or settings.METADATA_DB_TYPE or "fabric_sql"
     if db_type in ("fabric_sql", "azure_sql"):
         return sql  # native T-SQL, no changes needed
 
@@ -90,9 +90,9 @@ def query(sql: str, params: Optional[List[Any]] = None) -> dict:
     Execute *sql* (with @paramN placeholders) against the metadata DB.
     Returns {"rows": list[dict], "row_count": int}.
     """
-    db = settings.FABRIC_METADATA_DATABASE
+    db = settings.METADATA_DATABASE
     if not db:
-        raise RuntimeError("FABRIC_METADATA_DATABASE is not configured")
+        raise RuntimeError("METADATA_DATABASE is not configured")
 
     processed = _adapt_sql(_replace_params(sql, params))
     result = execute_query(processed, db)

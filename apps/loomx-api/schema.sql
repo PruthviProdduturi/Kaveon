@@ -243,7 +243,7 @@ PRINT '  - user_themes';
 PRINT '';
 PRINT 'Next steps:';
 PRINT '  1. Add your data sources via the /data-sources UI';
-PRINT '  2. Configure FABRIC_METADATA_ENDPOINT and FABRIC_METADATA_DATABASE in .env';
+PRINT '  2. Configure METADATA_ENDPOINT and METADATA_DATABASE in .env';
 PRINT '  3. Start creating datasets, charts, and dashboards!';
 PRINT '============================================';
 GO
