@@ -82,8 +82,19 @@ const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = 
   // Keep latest external filters in a ref — avoids re-triggering hydration on
   // every filter change while still applying the current values at run-time.
   const externalFiltersRef = useRef(externalFilters);
+  const prevExternalFiltersSerialRef = useRef('');
   useEffect(() => {
     externalFiltersRef.current = externalFilters;
+  }, [externalFilters]);
+
+  // Re-run query when externalFilters change after initial hydration (dashboard cross-filtering).
+  useEffect(() => {
+    if (!hasAutoRunRef.current) return;
+    const serial = JSON.stringify(externalFilters);
+    if (serial === prevExternalFiltersSerialRef.current) return;
+    prevExternalFiltersSerialRef.current = serial;
+    void runPreviewQuery(true, externalFilters);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalFilters]);
 
   // Reset metadata flag when a different chart is loaded.

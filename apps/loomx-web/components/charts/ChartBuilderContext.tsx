@@ -982,7 +982,7 @@ export interface ChartBuilderContextValue {
   filters: ChartFilterConfig[];
   setFilters: React.Dispatch<React.SetStateAction<ChartFilterConfig[]>>;
   sqlPreview: SqlPreviewState;
-  runPreviewQuery: (forceRegenerate?: boolean) => Promise<void>;
+  runPreviewQuery: (forceRegenerate?: boolean, extraFilters?: any[]) => Promise<void>;
   isSaving: boolean;
   canSave: boolean;
   saveError: string | null;
@@ -1250,7 +1250,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     return value.toFixed(decimalPlaces);
   };
 
-  const buildQueryConfigForPreview = () => {
+  const buildQueryConfigForPreview = (extraFilters: any[] = []) => {
     if (!selectedTemplate || !selectedDatasetId) {
       return null;
     }
@@ -1293,7 +1293,18 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
           return payload;
         });
 
-    const filtersPayload = buildFiltersPayload(primaryFilters);
+    const extraFiltersPayload = extraFilters
+      .filter((f: any) => f.column && f.value !== '' && f.value !== null && f.value !== undefined)
+      .map((f: any) => ({
+        column: f.column,
+        keyColumn: f.keyColumn ?? null,
+        columnLabel: f.columnLabel ?? null,
+        op: (f.operator || "=").toUpperCase(),
+        value: String(f.value ?? ""),
+        valueKey: f.valueKey ?? "",
+      }));
+
+    const filtersPayload = [...buildFiltersPayload(primaryFilters), ...extraFiltersPayload];
     const secondaryFiltersPayload = buildFiltersPayload(secondaryFilters);
     const filterGroups = secondaryFiltersPayload.length
       ? [
@@ -2441,7 +2452,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     });
   }, [previewOptions?.yAxisDateFormat]);
 
-  const runPreviewQuery = async (forceRegenerate: boolean = false) => {
+  const runPreviewQuery = async (forceRegenerate: boolean = false, extraFilters: any[] = []) => {
     if (!selectedDatasetId || !selectedTemplate) {
       return;
     }
@@ -2451,7 +2462,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
       return;
     }
 
-    const config = buildQueryConfigForPreview();
+    const config = buildQueryConfigForPreview(extraFilters);
     if (!config) return;
 
     isQueryRunningRef.current = true;
