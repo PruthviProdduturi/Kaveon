@@ -36,9 +36,12 @@ import {
 interface ChartHydratorProps {
   chart: any;
   externalFilters?: any[];
+  /** Cross-filter extras: applied at query time only, NOT merged into context filter state.
+   *  Change in this prop triggers a re-run with these as extra filters. */
+  crossFilterExtra?: any[];
 }
 
-const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = [] }) => {
+const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = [], crossFilterExtra = [] }) => {
   const {
     setChartId,
     setSelectedDatasetId,
@@ -82,20 +85,24 @@ const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = 
   // Keep latest external filters in a ref — avoids re-triggering hydration on
   // every filter change while still applying the current values at run-time.
   const externalFiltersRef = useRef(externalFilters);
-  const prevExternalFiltersSerialRef = useRef('');
   useEffect(() => {
     externalFiltersRef.current = externalFilters;
   }, [externalFilters]);
 
-  // Re-run query when externalFilters change after initial hydration (dashboard cross-filtering).
+  // Re-run query when cross-filter changes after initial hydration.
+  // crossFilterExtra is kept SEPARATE from externalFilters so it is NOT baked into
+  // context filter state during hydration — preventing dashboard filters from being
+  // applied twice and making clear/restore work correctly.
+  const prevCrossFilterSerialRef = useRef('');
   useEffect(() => {
     if (!hasAutoRunRef.current) return;
-    const serial = JSON.stringify(externalFilters);
-    if (serial === prevExternalFiltersSerialRef.current) return;
-    prevExternalFiltersSerialRef.current = serial;
-    void runPreviewQuery(true, externalFilters);
+    const serial = JSON.stringify(crossFilterExtra);
+    if (serial === prevCrossFilterSerialRef.current) return;
+    prevCrossFilterSerialRef.current = serial;
+    // Pass only the cross-filter as extra; dashboard filters are already in context state
+    void runPreviewQuery(true, crossFilterExtra);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [externalFilters]);
+  }, [crossFilterExtra]);
 
   // Reset metadata flag when a different chart is loaded.
   useEffect(() => {
