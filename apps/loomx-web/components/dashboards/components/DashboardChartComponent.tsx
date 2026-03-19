@@ -81,10 +81,38 @@ const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chartId]);
 
-  // Derive the primary dimension column from chart config for cross-filter
-  const crossFilterColumn = chart?.query_config?.groupby?.[0] ?? null;
+  const TIME_SERIES_TYPES = new Set([
+    'time_series_line', 'time_series_line_share',
+    'time_series_area', 'time_series_area_share',
+    'line_multi_series', 'area_stack',
+  ]);
+  const chartKind: string = chart?.chart_type || chart?.viz_config?.chartType || chart?.viz_config?.chart_type || '';
+  const isTimeSeries = TIME_SERIES_TYPES.has(chartKind);
+  const qc = chart?.query_config || {};
 
-  // Inject the chart's primary dimension column before calling parent
+  // For time series, cross-filter by the time column (date click).
+  // For other charts, cross-filter by the first dimension/groupby column.
+  const crossFilterColumn: string | null = isTimeSeries
+    ? (qc.time_column ?? null)
+    : (qc.groupby?.[0] ?? null);
+
+  // Helper to normalise a column name for loose matching
+  // (strips brackets, qualifiers — matches "[dbo].[tbl].[Col]" to "col")
+  const normCol = (s: string | null | undefined) =>
+    s ? s.replace(/\[|\]/g, '').split('.').pop()!.toLowerCase() : '';
+
+  // Only apply incoming cross-filters where the source column matches one of
+  // THIS chart's columns (time column or any groupby). Prevents nonsensical
+  // filters being applied to unrelated charts.
+  const relevantCrossExtras = crossFilterFilters.filter(cf => {
+    if (!cf.column) return false;
+    const cfNorm = normCol(cf.column);
+    if (qc.time_column && normCol(qc.time_column) === cfNorm) return true;
+    if (Array.isArray(qc.groupby) && qc.groupby.some((g: string) => normCol(g) === cfNorm)) return true;
+    return false;
+  });
+
+  // Inject the resolved column before calling parent
   const handleCrossFilter = useCallback((value: string) => {
     onCrossFilter(crossFilterColumn, value);
   }, [onCrossFilter, crossFilterColumn]);
@@ -110,18 +138,13 @@ const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({
   // query_history.run_context for every query this chart executes.
   const runCtx = dashboardId ? `dashboard:${dashboardId}` : 'dashboard';
 
-  // Cross-filter extras are kept separate from dashboard externalFilters so they
-  // are NOT baked into context state during initial hydration (which would cause
-  // dashboard filters to be applied twice when the cross-filter re-query fires).
-  const crossExtras = crossFilterFilters.filter(cf => cf.column !== null);
-
   return (
     <ChartBuilderProvider runContext={runCtx}>
       {/* ChartHydrator renders null — it only populates context state */}
       <ChartHydrator
         chart={chart}
         externalFilters={filtersRef.current}
-        crossFilterExtra={crossExtras}
+        crossFilterExtra={relevantCrossExtras}
       />
       <ChartPreview
         onCrossFilter={isEditMode ? undefined : handleCrossFilter}
