@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { API_BASE } from "../../config";
 import { TEMPLATES } from "../../components/charts/ChartBuilderContext";
+import { LoomXLogo } from "../../components/LoomXLogo";
 import { msalFetch } from "../../utils/msalFetch";
 import { useAuth } from "../../auth/useAuth";
 import { useRouter } from "next/navigation";
@@ -29,6 +30,7 @@ export default function ChartsPage() {
   const { isAuthenticated, account } = useAuth();
   const router = useRouter();
   const [charts, setCharts] = useState<ChartSummary[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
 
@@ -52,6 +54,7 @@ export default function ChartsPage() {
   useEffect(() => {
     if (!isAuthenticated) return;
     const load = async () => {
+      setLoading(true);
       try {
         const userEmail = account?.email || account?.username || null;
         const res = await msalFetch(`${API_BASE}/api/v1/charts/summary`, {
@@ -61,21 +64,18 @@ export default function ChartsPage() {
           throw new Error(`Failed to load charts: ${res.status}`);
         }
         const data = await res.json();
-          console.log('API response:', data);
-        const chartsData = Array.isArray(data.recent) ? data.recent : [];
-          console.log('Charts data:', chartsData);
-        // Remove any filtering, use all charts from API
-        const chartsWithFavorite = data.recent.map((c: ChartSummary) => ({
+        const chartsWithFavorite = (data.recent || []).map((c: ChartSummary) => ({
           ...c,
           favorite: c.favorite ?? false,
           owner: c.owner || "—",
           modified_by: c.modified_by || "—",
         }));
-          console.log('Mapped charts:', chartsWithFavorite);
         setCharts(chartsWithFavorite);
       } catch (e: unknown) {
         const message = e instanceof Error ? e.message : "Unknown error";
         setError(message);
+      } finally {
+        setLoading(false);
       }
     };
     load();
@@ -100,8 +100,11 @@ export default function ChartsPage() {
   const allCharts = chartsWithMeta;
   const formatDateTime = (value?: string | null) => {
     if (!value) return "—";
-    // Return raw SQL date without formatting
-    return value;
+    try {
+      return new Date(value).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+    } catch {
+      return value;
+    }
   };
 
 
@@ -149,14 +152,24 @@ export default function ChartsPage() {
 
       {!isAuthenticated && <p className="muted">Sign in to see your charts.</p>}
 
-      {error && (
+      {isAuthenticated && loading && (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "80px 0", gap: 20 }}>
+          <div style={{ animation: "lx-pulse 1.6s ease-in-out infinite" }}>
+            <LoomXLogo size={48} animate="pulse" />
+          </div>
+          <p style={{ color: "#94a3b8", fontSize: 14, margin: 0 }}>Loading charts…</p>
+          <style>{`@keyframes lx-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.6;transform:scale(0.96)} }`}</style>
+        </div>
+      )}
+
+      {!loading && error && (
         <div className="card page-empty-card">
           <p className="page-empty-title">Problem loading charts</p>
           <p className="page-empty-body">{error}</p>
         </div>
       )}
 
-      {isAuthenticated && !error && chartsWithMeta.length === 0 && (
+      {isAuthenticated && !loading && !error && chartsWithMeta.length === 0 && (
         <div className="card page-empty-card" style={{ marginTop: 12 }}>
           <p className="page-empty-title">No charts yet</p>
           <p className="page-empty-body">
@@ -175,7 +188,7 @@ export default function ChartsPage() {
 
       {/* Button is now in the header */}
 
-      {isAuthenticated && !error && chartsWithMeta.length > 0 && (
+      {isAuthenticated && !loading && !error && chartsWithMeta.length > 0 && (
         <div className="card" style={{ marginTop: 12 }}>
           <div className="results-table-container">
             <table className="results-table">
