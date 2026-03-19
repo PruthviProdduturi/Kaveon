@@ -614,35 +614,59 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
 
         # ── Rolling window calculation ─────────────────────────────────────
         if rolling_calc != "none" and time_grain_expr and metric_list:
-            base_sql = " ".join([p for p in [select_clause, from_clause, join_clause, where_clause, group_by_clause, order_by_clause] if p])
-            # Build window function wrapped query
+            # Dimension exprs = group_by_parts minus the time expression.
+            # These may be bare COALESCE(...) or table.column exprs with no alias,
+            # so we assign explicit positional aliases for the CTE and outer SELECT.
+            dim_exprs = [p for p in group_by_parts if p != time_grain_expr]
+            dim_aliases = [f"[__dim_{i}__]" for i in range(len(dim_exprs))]
+
+            # Metric aggregation parts = select_parts entries that are NOT in group_by_parts
+            # (they contain the SUM/AVG/COUNT aggregations with AS aliases)
+            group_by_set = set(group_by_parts)
+            metric_agg_parts = [sp for sp in select_parts if sp not in group_by_set]
+
+            # Extract the quoted alias from "AGG(x) AS [alias]" → "[alias]"
             metric_aliases = []
-            for m in metric_list:
-                raw_alias = (m.get("alias") or m.get("label") or m.get("column") or m.get("field") or "metric")
-                metric_aliases.append(quote_identifier(normalize_column_name(raw_alias)))
+            for ma in metric_agg_parts:
+                upper = ma.upper()
+                if " AS " in upper:
+                    alias_part = ma[ma.upper().rfind(" AS ") + 4:].strip()
+                    metric_aliases.append(alias_part)
+
+            # Build CTE SELECT with explicit aliases for every column
+            cte_parts = []
+            for expr, alias in zip(dim_exprs, dim_aliases):
+                cte_parts.append(f"{expr} AS {alias}")
+            cte_parts.append(f"{time_grain_expr} AS [__time__]")
+            cte_parts.extend(metric_agg_parts)
+
+            top_cte = f"TOP {int(row_limit)} " if row_limit and int(row_limit) > 0 else ""
+            cte_select_clause = f"SELECT {top_cte}{', '.join(cte_parts)}"
+            # NOTE: ORDER BY is intentionally omitted from the CTE — SQL Server
+            # forbids ORDER BY inside a CTE without TOP/OFFSET.
+            cte_body = " ".join([p for p in [cte_select_clause, from_clause, join_clause, where_clause, group_by_clause] if p])
+
+            # PARTITION BY per dimension so window runs per series, not across all data
+            partition_by = f"PARTITION BY {', '.join(dim_aliases)} " if dim_aliases else ""
 
             window_selects = []
             for alias in metric_aliases:
                 if rolling_calc == "rolling_avg":
                     window_selects.append(
-                        f"AVG({alias}) OVER (ORDER BY [__time__] ROWS BETWEEN {rolling_window - 1} PRECEDING AND CURRENT ROW) AS {alias}"
+                        f"AVG({alias}) OVER ({partition_by}ORDER BY [__time__] ROWS BETWEEN {rolling_window - 1} PRECEDING AND CURRENT ROW) AS {alias}"
                     )
                 elif rolling_calc == "cumulative_sum":
                     window_selects.append(
-                        f"SUM({alias}) OVER (ORDER BY [__time__] ROWS UNBOUNDED PRECEDING) AS {alias}"
+                        f"SUM({alias}) OVER ({partition_by}ORDER BY [__time__] ROWS UNBOUNDED PRECEDING) AS {alias}"
                     )
 
             if window_selects:
-                # Replace time grain expression alias in CTE with __time__
-                cte_select = base_sql.replace(
-                    time_grain_expr, f"{time_grain_expr} AS [__time__]", 1
-                )
-                non_metric_cols = "[__time__]"
+                outer_dims = ", ".join(dim_aliases + ["[__time__]"])
                 window_query = (
-                    f"WITH base AS ({cte_select}) "
-                    f"SELECT {non_metric_cols}, {', '.join(window_selects)} "
+                    f"WITH base AS ({cte_body}) "
+                    f"SELECT {outer_dims}, {', '.join(window_selects)} "
                     f"FROM base "
-                    f"ORDER BY [__time__] ASC"
+                    f"ORDER BY {', '.join(dim_aliases + ['[__time__]'])} ASC"
                 )
                 return window_query
 
