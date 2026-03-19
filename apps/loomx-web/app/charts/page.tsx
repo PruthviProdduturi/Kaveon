@@ -173,16 +173,8 @@ export default function ChartsPage() {
         <div className="card page-empty-card" style={{ marginTop: 12 }}>
           <p className="page-empty-title">No charts yet</p>
           <p className="page-empty-body">
-            Once you have datasets or Lab queries, you&apos;ll be able to design and save charts here.
+            Build a chart from any dataset or Lab query using the <strong>New chart</strong> button above.
           </p>
-          <Button
-            style={{ marginTop: 12 }}
-            onClick={() => {
-              void router.push("/charts/new");
-            }}
-          >
-            <i className="fas fa-plus" /> Create your first chart
-          </Button>
         </div>
       )}
 
