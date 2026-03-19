@@ -110,16 +110,19 @@ const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({
   // query_history.run_context for every query this chart executes.
   const runCtx = dashboardId ? `dashboard:${dashboardId}` : 'dashboard';
 
-  // Merge dashboard filters + cross-filters from other charts
-  const allExternalFilters = [
-    ...filtersRef.current,
-    ...crossFilterFilters.filter(cf => cf.column !== null),
-  ];
+  // Cross-filter extras are kept separate from dashboard externalFilters so they
+  // are NOT baked into context state during initial hydration (which would cause
+  // dashboard filters to be applied twice when the cross-filter re-query fires).
+  const crossExtras = crossFilterFilters.filter(cf => cf.column !== null);
 
   return (
     <ChartBuilderProvider runContext={runCtx}>
       {/* ChartHydrator renders null — it only populates context state */}
-      <ChartHydrator chart={chart} externalFilters={allExternalFilters} />
+      <ChartHydrator
+        chart={chart}
+        externalFilters={filtersRef.current}
+        crossFilterExtra={crossExtras}
+      />
       <ChartPreview
         onCrossFilter={isEditMode ? undefined : handleCrossFilter}
       />
