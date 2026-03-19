@@ -28,6 +28,7 @@ import {
   ChartKind,
   DateDisplayFormat,
   TimeRangePreset,
+  MetricConfig,
   mergeAdvancedOptions,
   DEFAULT_ADVANCED_OPTIONS,
 } from "./ChartBuilderContext";
@@ -45,6 +46,10 @@ const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = 
     setDescription,
     setChartType,
     setMetricColumn,
+    setMetrics,
+    setTimeGrain,
+    setSortBy,
+    setQueryMode,
     setGroupByColumns,
     setTimeColumn,
     setFilters,
@@ -68,6 +73,11 @@ const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = 
 
   const hasHydratedRef = useRef(false);
   const hasAutoRunRef = useRef(false);
+  // Tracks whether dataset ID + other metadata has been written for the current
+  // chart object. Only resets when the chart itself changes — NOT when
+  // datasetColumns reloads. This prevents the column-mapping re-run from
+  // overwriting a dataset the user deliberately switched to.
+  const hasSetMetadataRef = useRef(false);
 
   // Keep latest external filters in a ref — avoids re-triggering hydration on
   // every filter change while still applying the current values at run-time.
@@ -76,8 +86,13 @@ const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = 
     externalFiltersRef.current = externalFilters;
   }, [externalFilters]);
 
-  // Re-hydrate when datasetColumns become available (they load asynchronously
-  // after the dataset ID is set, so the first render may have an empty list).
+  // Reset metadata flag when a different chart is loaded.
+  useEffect(() => {
+    hasSetMetadataRef.current = false;
+  }, [chart?.id]);
+
+  // Re-hydrate column-mapped fields when datasetColumns become available
+  // (they load asynchronously after the dataset ID is set).
   useEffect(() => {
     if (datasetColumns && datasetColumns.length > 0) {
       hasHydratedRef.current = false;
@@ -91,20 +106,24 @@ const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = 
 
     const qc = chart.query_config ?? {};
 
-    // Basic metadata — set immediately, no column mapping needed.
-    setChartId(chart.id ?? null);
-    setSelectedDatasetId(chart.dataset_id ?? null);
-    setName(chart.name ?? "");
-    setDescription(chart.description ?? "");
-    if (chart.chart_type) setChartType(chart.chart_type as ChartKind);
+    // Basic metadata — only set once per chart load so that a user switching
+    // datasets doesn't get snapped back when datasetColumns reload triggers
+    // a second pass through this effect.
+    if (!hasSetMetadataRef.current) {
+      setChartId(chart.id ?? null);
+      setSelectedDatasetId(chart.dataset_id ?? null);
+      setName(chart.name ?? "");
+      setDescription(chart.description ?? "");
+      if (chart.chart_type) setChartType(chart.chart_type as ChartKind);
 
-    // Viz config — prefer echarts_option if nested, fall back to viz_config
-    // directly for charts saved before the nested format was introduced.
-    if (chart.viz_config) {
-      const echartsOption = chart.viz_config.echarts_option || chart.viz_config;
-      setAdvancedOptions(mergeAdvancedOptions(echartsOption));
-    } else {
-      setAdvancedOptions(DEFAULT_ADVANCED_OPTIONS);
+      if (chart.viz_config) {
+        const echartsOption = chart.viz_config.echarts_option || chart.viz_config;
+        setAdvancedOptions(mergeAdvancedOptions(echartsOption));
+      } else {
+        setAdvancedOptions(DEFAULT_ADVANCED_OPTIONS);
+      }
+
+      hasSetMetadataRef.current = true;
     }
 
     // Column-mapped fields require datasetColumns to be available.
@@ -128,18 +147,57 @@ const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = 
       return colKeyMap.get(norm) ?? raw;
     };
 
-    // Metric column
-    let metricCol: string | null = null;
-    if (qc.metric && typeof qc.metric.column === "string") {
-      metricCol = qc.metric.column;
-    } else if (Array.isArray(qc.metrics) && qc.metrics.length > 0) {
-      const m0 = qc.metrics[0];
-      if (m0 && (typeof m0.column === "string" || typeof m0.col === "string")) {
-        metricCol = (m0.column || m0.col) as string;
+    // Metrics — prefer saved metrics array, fall back to legacy single metric
+    if (Array.isArray(qc.metrics) && qc.metrics.length > 0) {
+      const hydratedMetrics = qc.metrics.map((m: any, idx: number) => {
+        const rawCol = m.column || m.col || "";
+        const col = normalizeLookup(rawCol) || rawCol;
+        return {
+          id: `hydrated-${idx}`,
+          column: col,
+          aggregate: (m.aggregate || m.agg || "SUM") as "SUM" | "COUNT" | "COUNT_DISTINCT" | "AVG" | "MIN" | "MAX",
+          label: m.label || m.name || rawCol.split(".").pop() || "value",
+        };
+      }).filter((m: any) => m.column);
+      if (hydratedMetrics.length > 0) {
+        setMetrics(hydratedMetrics);
+        setMetricColumn(hydratedMetrics[0].column);
+      }
+    } else {
+      // Legacy format: single metric stored as qc.metric = { column, agg }
+      let metricCol: string | null = null;
+      let metricAgg = "SUM";
+      if (qc.metric && typeof qc.metric.column === "string") {
+        metricCol = qc.metric.column;
+        metricAgg = qc.metric.agg || qc.metric.aggregate || "SUM";
+      }
+      metricCol = normalizeLookup(metricCol);
+      if (metricCol) {
+        setMetricColumn(metricCol);
+        // Synthesise a metrics[] entry so the config panel shows the metric correctly
+        setMetrics([{
+          id: "hydrated-0",
+          column: metricCol,
+          aggregate: metricAgg as "SUM" | "COUNT" | "COUNT_DISTINCT" | "AVG" | "MIN" | "MAX",
+          label: metricCol.split(".").pop() || "value",
+        }]);
       }
     }
-    metricCol = normalizeLookup(metricCol);
-    if (metricCol) setMetricColumn(metricCol);
+
+    // Time grain
+    if (typeof qc.time_grain === "string" && qc.time_grain !== "none") {
+      setTimeGrain(qc.time_grain);
+    }
+
+    // Sort by
+    if (qc.sort_by && typeof qc.sort_by.column === "string") {
+      setSortBy({ column: qc.sort_by.column, direction: qc.sort_by.direction || "asc" });
+    }
+
+    // Query mode
+    if (qc.query_mode === "raw") {
+      setQueryMode("raw");
+    }
 
     // Group-by columns
     if (Array.isArray(qc.groupby)) {
@@ -225,7 +283,9 @@ const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = 
     if (!chart?.id) return;
     if (sqlPreview.lastSql) return;           // Already has a result — skip
     if (!selectedDatasetId || !chartType) return;
-    if (!metricColumn) return;                // Chart must have a metric configured
+
+    const isTable = chartType === "table" || chartType === "pivot_table";
+    if (!isTable && !metricColumn) return;    // Non-table charts must have a metric
 
     const isTimeSeries = [
       "time_series_line",

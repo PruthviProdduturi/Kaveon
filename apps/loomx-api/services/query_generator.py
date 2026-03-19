@@ -55,6 +55,22 @@ def _apply_date_format(col_expr: str, date_format: Optional[str]) -> str:
     return col_expr
 
 
+def _apply_time_grain(col_expr: str, grain: str) -> str:
+    """Truncate a datetime expression to the given time grain (SQL Server T-SQL)."""
+    g = (grain or "").lower()
+    if g in ("", "none", "day"):
+        return f"CAST({col_expr} AS DATE)"
+    if g == "week":
+        return f"DATEADD(DAY, 1 - DATEPART(WEEKDAY, {col_expr}), CAST({col_expr} AS DATE))"
+    if g == "month":
+        return f"DATEFROMPARTS(YEAR({col_expr}), MONTH({col_expr}), 1)"
+    if g == "quarter":
+        return f"DATEFROMPARTS(YEAR({col_expr}), ((DATEPART(QUARTER, {col_expr}) - 1) * 3) + 1, 1)"
+    if g == "year":
+        return f"DATEFROMPARTS(YEAR({col_expr}), 1, 1)"
+    return col_expr
+
+
 # ─── Coalesce map ────────────────────────────────────────────────────────────
 
 def _build_coalesce_map(
@@ -392,104 +408,282 @@ def _determine_filtering_strategy(
 def build_chart_preview_query(params: dict) -> Optional[str]:
     try:
         raw_datasource = params.get("datasource") or ""
+        sql_text = (params.get("sql_text") or "").strip().rstrip(";").strip()
         metric = params.get("metric")
         metrics = params.get("metrics")
         groupby = params.get("groupby") or []
         time_column = params.get("time_column")
+        time_grain = params.get("time_grain") or "none"
         filters = params.get("filters") or []
         time_range = params.get("time_range")
         date_display_format = params.get("date_display_format")
         dimensions = params.get("dimensions") or []
         columns = params.get("columns") or []
-        row_limit = params.get("row_limit") or 1000
+        row_limit = params.get("row_limit") or None
+        sort_by = params.get("sort_by")  # { column, direction }
+        query_mode = (params.get("query_mode") or "aggregate").lower()
+        rolling_calc = (params.get("rolling_calc") or "none").lower()  # "none", "rolling_avg", "cumulative_sum"
+        rolling_window = max(2, int(params.get("rolling_window") or 3))
 
         datasource = normalize_column_name(raw_datasource)
-        if not datasource:
-            return None
 
-        fact_alias = "fact"
-        fact_table = quote_identifier(datasource)
+        # Virtual SQL dataset — use the saved SQL as a subquery source
+        if sql_text and not datasource:
+            fact_alias = "fact"
+            fact_table = f"(\n{sql_text}\n)"
+        elif not datasource:
+            return None
+        else:
+            fact_alias = "fact"
+            fact_table = quote_identifier(datasource)
 
         column_table_map = _build_column_table_map(columns)
         required_dims = _get_required_dimensions(dimensions, groupby, filters, column_table_map, datasource)
         alias_map, join_clauses = _build_dimension_joins(required_dims, fact_alias, datasource)
         coalesce_map = _build_coalesce_map(required_dims, alias_map, columns)
 
-        select_parts: List[str] = []
+        metric_list = metrics or ([metric] if metric else [])
+
+        # ── RAW / RECORD mode — no aggregation ────────────────────────────────
+        if query_mode == "raw":
+            select_parts: List[str] = []
+            for col in groupby:
+                expr = _resolve_column_expression(col, fact_alias, alias_map, column_table_map, coalesce_map)
+                if expr not in select_parts:
+                    select_parts.append(expr)
+            if time_column:
+                expr = _resolve_column_expression(time_column, fact_alias, alias_map, column_table_map, coalesce_map)
+                if expr not in select_parts:
+                    select_parts.append(expr)
+            for m in metric_list:
+                col = m.get("column") or m.get("field")
+                if col:
+                    alias, col_name = _resolve_column_alias(col, fact_alias, alias_map, column_table_map)
+                    raw_expr = f"{alias}.{quote_identifier(col_name)}"
+                    if raw_expr not in select_parts:
+                        select_parts.append(raw_expr)
+            if not select_parts:
+                select_parts.append(f"{fact_alias}.*")
+
+            top_clause = f"TOP {int(row_limit)} " if row_limit and int(row_limit) > 0 else "TOP 1000 "
+            select_clause = f"SELECT {top_clause}{', '.join(select_parts)}"
+            from_clause = f"FROM {fact_table} AS {fact_alias}"
+            join_clause = " ".join(join_clauses)
+
+            where_parts: List[str] = []
+            for f in filters:
+                fc = _build_optimized_filter_clause(f, fact_alias, alias_map, column_table_map)
+                if fc:
+                    where_parts.append(fc)
+            where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+
+            parts = [p for p in [select_clause, from_clause, join_clause, where_clause] if p]
+            return " ".join(parts)
+
+        # ── AGGREGATE mode (default) ───────────────────────────────────────────
+        select_parts = []
+        group_by_parts: List[str] = []
 
         for col in groupby:
             expr = _resolve_column_expression(col, fact_alias, alias_map, column_table_map, coalesce_map)
             if expr not in select_parts:
                 select_parts.append(expr)
 
+        time_grain_expr = None  # The grain-truncated time expression for GROUP BY / ORDER BY
         if time_column:
-            expr = _resolve_column_expression(time_column, fact_alias, alias_map, column_table_map, coalesce_map)
-            expr = _apply_date_format(expr, date_display_format)
-            if expr not in select_parts:
-                select_parts.append(expr)
+            raw_expr = _resolve_column_expression(time_column, fact_alias, alias_map, column_table_map, coalesce_map)
+            if time_grain and time_grain != "none":
+                grain_expr = _apply_time_grain(raw_expr, time_grain)
+            else:
+                grain_expr = _apply_date_format(raw_expr, date_display_format)
+            time_grain_expr = grain_expr
+            if grain_expr not in select_parts:
+                select_parts.append(grain_expr)
 
-        metric_list = metrics or ([metric] if metric else [])
         for m in metric_list:
-            agg_func = m.get("aggregate") or m.get("agg") or "SUM"
+            agg_func = (m.get("aggregate") or m.get("agg") or "SUM").upper()
             col = m.get("column") or m.get("field")
             if col:
                 alias, col_name = _resolve_column_alias(col, fact_alias, alias_map, column_table_map)
-                metric_expr = f"{agg_func}({alias}.{quote_identifier(col_name)})"
-                metric_alias = m.get("label") or m.get("name") or "value"
+                if agg_func == "COUNT_DISTINCT":
+                    metric_expr = f"COUNT(DISTINCT {alias}.{quote_identifier(col_name)})"
+                else:
+                    metric_expr = f"{agg_func}({alias}.{quote_identifier(col_name)})"
+                metric_alias = m.get("label") or m.get("name") or col_name or "value"
                 select_parts.append(f"{metric_expr} AS {quote_identifier(metric_alias)}")
 
         if not select_parts:
             select_parts.append("*")
 
-        select_clause = f"SELECT TOP {int(row_limit)} {', '.join(select_parts)}"
+        top_clause = f"TOP {int(row_limit)} " if row_limit and int(row_limit) > 0 else ""
+        select_clause = f"SELECT {top_clause}{', '.join(select_parts)}"
         from_clause = f"FROM {fact_table} AS {fact_alias}"
         join_clause = " ".join(join_clauses)
 
-        where_parts: List[str] = []
+        where_parts = []
+
+        # ── Time range filter ─────────────────────────────────────────────────
+        if time_column and time_range and time_range != "all_time":
+            raw_time_expr = _resolve_column_expression(time_column, fact_alias, alias_map, column_table_map, coalesce_map)
+            today = "CAST(GETUTCDATE() AS DATE)"
+            tr = time_range.lower()
+
+            range_sql: Optional[str] = None
+            if tr == "last_day":
+                range_sql = f"{raw_time_expr} >= DATEADD(DAY, -1, {today})"
+            elif tr == "last_week":
+                range_sql = f"{raw_time_expr} >= DATEADD(WEEK, -1, {today})"
+            elif tr == "last_month":
+                range_sql = f"{raw_time_expr} >= DATEADD(MONTH, -1, {today})"
+            elif tr == "last_quarter":
+                range_sql = f"{raw_time_expr} >= DATEADD(QUARTER, -1, {today})"
+            elif tr == "last_year":
+                range_sql = f"{raw_time_expr} >= DATEADD(YEAR, -1, {today})"
+            elif tr == "week_to_date":
+                range_sql = f"{raw_time_expr} >= DATEADD(DAY, 1 - DATEPART(WEEKDAY, {today}), {today})"
+            elif tr == "month_to_date":
+                range_sql = f"{raw_time_expr} >= DATEFROMPARTS(YEAR({today}), MONTH({today}), 1)"
+            elif tr == "quarter_to_date":
+                range_sql = f"{raw_time_expr} >= DATEFROMPARTS(YEAR({today}), ((DATEPART(QUARTER, {today}) - 1) * 3) + 1, 1)"
+            elif tr == "year_to_date":
+                range_sql = f"{raw_time_expr} >= DATEFROMPARTS(YEAR({today}), 1, 1)"
+            elif tr == "previous_week":
+                range_sql = (f"{raw_time_expr} >= DATEADD(WEEK, -2, DATEADD(DAY, 1 - DATEPART(WEEKDAY, {today}), {today})) "
+                             f"AND {raw_time_expr} < DATEADD(DAY, 1 - DATEPART(WEEKDAY, {today}), {today})")
+            elif tr == "previous_month":
+                range_sql = (f"{raw_time_expr} >= DATEFROMPARTS(YEAR(DATEADD(MONTH, -1, {today})), MONTH(DATEADD(MONTH, -1, {today})), 1) "
+                             f"AND {raw_time_expr} < DATEFROMPARTS(YEAR({today}), MONTH({today}), 1)")
+            elif tr == "previous_quarter":
+                range_sql = (f"{raw_time_expr} >= DATEADD(QUARTER, -2, DATEFROMPARTS(YEAR({today}), ((DATEPART(QUARTER, {today}) - 1) * 3) + 1, 1)) "
+                             f"AND {raw_time_expr} < DATEFROMPARTS(YEAR({today}), ((DATEPART(QUARTER, {today}) - 1) * 3) + 1, 1)")
+            elif tr == "previous_year":
+                range_sql = (f"{raw_time_expr} >= DATEFROMPARTS(YEAR({today}) - 1, 1, 1) "
+                             f"AND {raw_time_expr} < DATEFROMPARTS(YEAR({today}), 1, 1)")
+            elif tr == "last_7_days":
+                range_sql = f"{raw_time_expr} >= DATEADD(DAY, -7, {today})"
+            elif tr == "last_30_days":
+                range_sql = f"{raw_time_expr} >= DATEADD(DAY, -30, {today})"
+            elif tr == "last_90_days":
+                range_sql = f"{raw_time_expr} >= DATEADD(DAY, -90, {today})"
+            elif tr == "last_365_days":
+                range_sql = f"{raw_time_expr} >= DATEADD(DAY, -365, {today})"
+            elif tr == "custom":
+                custom_start = params.get("custom_start_date")
+                custom_end = params.get("custom_end_date")
+                if custom_start and custom_end:
+                    range_sql = f"{raw_time_expr} >= '{custom_start}' AND {raw_time_expr} <= '{custom_end}'"
+                elif custom_start:
+                    range_sql = f"{raw_time_expr} >= '{custom_start}'"
+            elif tr == "custom_to_latest":
+                custom_start = params.get("custom_start_date")
+                if custom_start:
+                    range_sql = f"{raw_time_expr} >= '{custom_start}'"
+
+            if range_sql:
+                where_parts.append(f"({range_sql})")
+
         for f in filters:
             fc = _build_optimized_filter_clause(f, fact_alias, alias_map, column_table_map)
             if fc:
                 where_parts.append(fc)
 
-        if time_range and time_column:
-            alias, col_name = _resolve_column_alias(time_column, fact_alias, alias_map, column_table_map)
-            time_col = f"{alias}.{quote_identifier(col_name)}"
-            if time_range == "last_7_days":
-                where_parts.append(f"{time_col} >= DATEADD(day, -7, GETDATE())")
-            elif time_range == "last_30_days":
-                where_parts.append(f"{time_col} >= DATEADD(day, -30, GETDATE())")
-            elif time_range == "last_90_days":
-                where_parts.append(f"{time_col} >= DATEADD(day, -90, GETDATE())")
-
         where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
-        group_by_parts: List[str] = []
+        # ── GROUP BY ─────────────────────────────────────────────────────────
         for col in groupby:
             expr = _resolve_column_expression(col, fact_alias, alias_map, column_table_map, coalesce_map)
             if expr not in group_by_parts:
                 group_by_parts.append(expr)
-        if time_column:
-            expr = _resolve_column_expression(time_column, fact_alias, alias_map, column_table_map, coalesce_map)
-            expr = _apply_date_format(expr, date_display_format)
-            if expr not in group_by_parts:
-                group_by_parts.append(expr)
+        if time_grain_expr and time_grain_expr not in group_by_parts:
+            group_by_parts.append(time_grain_expr)
 
         group_by_clause = f"GROUP BY {', '.join(group_by_parts)}" if group_by_parts else ""
 
-        if time_column:
-            time_expr = _resolve_column_expression(time_column, fact_alias, alias_map, column_table_map, coalesce_map)
-            time_expr = _apply_date_format(time_expr, date_display_format)
-            order_by_clause = f"ORDER BY {time_expr} ASC"
+        # ── ORDER BY ─────────────────────────────────────────────────────────
+        if sort_by and sort_by.get("column"):
+            sb_col = sort_by["column"]
+            sb_dir = "DESC" if str(sort_by.get("direction", "asc")).upper() == "DESC" else "ASC"
+            sb_expr = _resolve_column_expression(sb_col, fact_alias, alias_map, column_table_map, coalesce_map)
+            order_by_clause = f"ORDER BY {sb_expr} {sb_dir}"
+        elif time_grain_expr:
+            order_by_clause = f"ORDER BY {time_grain_expr} ASC"
         elif group_by_parts:
             order_by_clause = f"ORDER BY {group_by_parts[0]}"
         else:
             order_by_clause = ""
+
+        # ── Rolling window calculation ─────────────────────────────────────
+        if rolling_calc != "none" and time_grain_expr and metric_list:
+            base_sql = " ".join([p for p in [select_clause, from_clause, join_clause, where_clause, group_by_clause, order_by_clause] if p])
+            # Build window function wrapped query
+            metric_aliases = []
+            for m in metric_list:
+                raw_alias = (m.get("alias") or m.get("label") or m.get("column") or m.get("field") or "metric")
+                metric_aliases.append(quote_identifier(normalize_column_name(raw_alias)))
+
+            window_selects = []
+            for alias in metric_aliases:
+                if rolling_calc == "rolling_avg":
+                    window_selects.append(
+                        f"AVG({alias}) OVER (ORDER BY [__time__] ROWS BETWEEN {rolling_window - 1} PRECEDING AND CURRENT ROW) AS {alias}"
+                    )
+                elif rolling_calc == "cumulative_sum":
+                    window_selects.append(
+                        f"SUM({alias}) OVER (ORDER BY [__time__] ROWS UNBOUNDED PRECEDING) AS {alias}"
+                    )
+
+            if window_selects:
+                # Replace time grain expression alias in CTE with __time__
+                cte_select = base_sql.replace(
+                    time_grain_expr, f"{time_grain_expr} AS [__time__]", 1
+                )
+                non_metric_cols = "[__time__]"
+                window_query = (
+                    f"WITH base AS ({cte_select}) "
+                    f"SELECT {non_metric_cols}, {', '.join(window_selects)} "
+                    f"FROM base "
+                    f"ORDER BY [__time__] ASC"
+                )
+                return window_query
 
         parts = [p for p in [select_clause, from_clause, join_clause, where_clause, group_by_clause, order_by_clause] if p]
         return " ".join(parts)
 
     except Exception:
         return None
+
+
+def _dim_direct_subquery(dim_entry: dict, col_name: str, limit: int) -> Optional[str]:
+    """
+    Build a query that reads directly from a single dimension table — no fact table,
+    no join.  Returns None if the dim entry lacks the required metadata.
+
+    For ID-based dimKey columns the real stored ID is returned as [key].
+    For Key-based dimKey columns key == value so the frontend can apply mmh3 as usual.
+    """
+    table_raw = normalize_column_name(dim_entry.get("table") or "")
+    if not table_raw:
+        return None
+
+    dk_parts = [p for p in normalize_column_name(dim_entry.get("dimKey") or "").split(".") if p]
+    dk = dk_parts[-1] if dk_parts else None
+
+    dim_table = quote_identifier(table_raw)
+    quoted_display = quote_identifier(col_name)
+
+    if dk and (dk.endswith("ID") or dk.endswith("Id")):
+        # Return the actual stored ID from the dim table as [key]
+        key_select = f"CAST({quote_identifier(dk)} AS NVARCHAR(MAX))"
+    else:
+        # Key/hash columns: key == value so the frontend hashes client-side
+        key_select = quoted_display
+
+    return (
+        f"SELECT DISTINCT TOP {int(limit)} {key_select} AS [key], {quoted_display} AS [value] "
+        f"FROM {dim_table} "
+        f"WHERE {quoted_display} IS NOT NULL "
+        f"ORDER BY [value]"
+    )
 
 
 def build_distinct_filter_values_query(params: dict) -> Optional[dict]:
@@ -519,53 +713,63 @@ def build_distinct_filter_values_query(params: dict) -> Optional[dict]:
 
         alias, col_name = _resolve_column_alias(column, fact_alias, alias_map, column_table_map)
 
-        # Find target table for this alias
-        target_table_name = next((t for t, a in alias_map.items() if a == alias), None)
-        sibling_group = coalesce_map.get(target_table_name) if target_table_name else None
+        # ── Fast path: column lives in a dim table ────────────────────────────
+        # Query the dim table directly — no fact table, no join, much cheaper
+        # since dim tables are small and typically indexed on their key columns.
+        if alias != fact_alias:
+            target_table_name = next((t for t, a in alias_map.items() if a == alias), None)
+            sibling_group = coalesce_map.get(target_table_name) if target_table_name else None
 
-        if sibling_group and len(sibling_group) >= 2:
-            subqueries = []
-            for source in sibling_group:
-                dim_entry = next(
-                    (d for i, d in enumerate(required_dims) if f"dim{i+1}" == source["alias"]),
-                    None,
-                )
-                if not dim_entry:
-                    continue
-                fk_parts = [p for p in (dim_entry.get("factKey") or "").split(".") if p]
-                dk_parts = [p for p in (dim_entry.get("dimKey") or "").split(".") if p]
-                fk = fk_parts[-1] if fk_parts else ""
-                dk = dk_parts[-1] if dk_parts else ""
-                if not fk or not dk:
-                    continue
-                dim_table = quote_identifier(normalize_column_name(dim_entry.get("table") or ""))
-                col_expr = f"{source['alias']}.{quote_identifier(source['columnName'])}"
-                subqueries.append(
-                    f"SELECT {col_expr} AS [key], {col_expr} AS [value] "
-                    f"FROM {fact_table} AS {fact_alias} "
-                    f"LEFT JOIN {dim_table} AS {source['alias']} "
-                    f"ON {fact_alias}.{quote_identifier(fk)} = {source['alias']}.{quote_identifier(dk)} "
-                    f"WHERE {col_expr} IS NOT NULL"
-                )
-            if len(subqueries) >= 2:
-                sql = (
-                    f"SELECT DISTINCT TOP {int(limit)} [key], [value] "
-                    f"FROM ({' UNION '.join(subqueries)}) AS [combined_vals] "
-                    f"ORDER BY [value]"
-                )
-                return {"sql": sql, "keyColumn": key_column, "filteringTier": tier}
+            # Sibling group: multiple dim tables cover the same logical column (coalesce)
+            if sibling_group and len(sibling_group) >= 2:
+                subqueries = []
+                for source in sibling_group:
+                    dim_entry = next(
+                        (d for i, d in enumerate(required_dims) if f"dim{i+1}" == source["alias"]),
+                        None,
+                    )
+                    if not dim_entry:
+                        continue
+                    sub = _dim_direct_subquery(dim_entry, source["columnName"], limit)
+                    if sub:
+                        subqueries.append(sub)
+                if len(subqueries) >= 2:
+                    # Strip ORDER BY from each sub before UNIONing, add one at the end
+                    stripped = [s.rsplit(" ORDER BY [value]", 1)[0] for s in subqueries]
+                    sql = (
+                        f"SELECT DISTINCT TOP {int(limit)} [key], [value] "
+                        f"FROM ({' UNION '.join(stripped)}) AS [combined_vals] "
+                        f"ORDER BY [value]"
+                    )
+                    return {"sql": sql, "keyColumn": key_column, "filteringTier": tier}
 
-        # Single-table query
-        quoted_col = f"{alias}.{quote_identifier(col_name)}"
-        join_clause = " ".join(join_clauses)
-        parts = [
+            # Single dim table
+            dim_idx = next((i for i, _ in enumerate(required_dims) if f"dim{i+1}" == alias), None)
+            if dim_idx is not None:
+                sql = _dim_direct_subquery(required_dims[dim_idx], col_name, limit)
+                if sql:
+                    return {"sql": sql, "keyColumn": key_column, "filteringTier": tier}
+
+            # Fallback: dim entry missing metadata — use fact+join query
+            quoted_col = f"{alias}.{quote_identifier(col_name)}"
+            join_clause = " ".join(join_clauses)
+            sql = " ".join(p for p in [
+                f"SELECT DISTINCT TOP {int(limit)} {quoted_col} AS [key], {quoted_col} AS [value]",
+                f"FROM {fact_table} AS {fact_alias}",
+                join_clause,
+                f"WHERE {quoted_col} IS NOT NULL",
+                "ORDER BY [value]",
+            ] if p)
+            return {"sql": sql, "keyColumn": key_column, "filteringTier": tier}
+
+        # ── Column is on the fact table itself — query it directly ────────────
+        quoted_col = f"{fact_alias}.{quote_identifier(col_name)}"
+        sql = " ".join([
             f"SELECT DISTINCT TOP {int(limit)} {quoted_col} AS [key], {quoted_col} AS [value]",
             f"FROM {fact_table} AS {fact_alias}",
-            join_clause,
             f"WHERE {quoted_col} IS NOT NULL",
             "ORDER BY [value]",
-        ]
-        sql = " ".join(p for p in parts if p)
+        ])
         return {"sql": sql, "keyColumn": key_column, "filteringTier": tier}
 
     except Exception:

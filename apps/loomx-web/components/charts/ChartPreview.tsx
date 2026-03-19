@@ -1,6 +1,7 @@
 import React from "react";
 import dynamic from "next/dynamic";
 import { useChartBuilder } from "./ChartBuilderContext";
+import { getPlugin } from "./chartPluginRegistry";
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
 
@@ -23,8 +24,204 @@ const formatDuration = (ms: number): string => {
   return `${minutesStr}:${secondsStr}`;
 };
 
+interface BigNumberKpiCardProps {
+  options: any;
+  rows: (string | number | null)[][];
+  columns: string[];
+}
+
+const BigNumberKpiCard: React.FC<BigNumberKpiCardProps> = ({ options, rows, columns }) => {
+  const lastRow = rows[rows.length - 1];
+  const kpiOpts = options?.kpiOptions || {};
+
+  // Find the metric column (last numeric column)
+  let value: number | null = null;
+  let label = "";
+  let trend: number | null = null;
+
+  if (lastRow) {
+    for (let i = columns.length - 1; i >= 0; i--) {
+      const v = lastRow[i];
+      if (v !== null && v !== undefined && !isNaN(Number(v))) {
+        value = Number(v);
+        label = columns[i] || "";
+        break;
+      }
+    }
+  }
+
+  // Trend: compare last two rows
+  if (rows.length >= 2) {
+    const prevRow = rows[rows.length - 2];
+    const colIdx = columns.findIndex((c) => c === label);
+    if (colIdx >= 0 && prevRow) {
+      const prev = Number(prevRow[colIdx]);
+      if (!isNaN(prev) && prev !== 0 && value !== null) {
+        trend = ((value - prev) / Math.abs(prev)) * 100;
+      }
+    }
+  }
+
+  const numFmt = kpiOpts.numberFormat || "auto";
+  const prefix = kpiOpts.prefix || "";
+  const suffix = kpiOpts.suffix || "";
+
+  const formatKpiValue = (v: number): string => {
+    if (numFmt === "k") return `${(v / 1e3).toFixed(1)}K`;
+    if (numFmt === "m") return `${(v / 1e6).toFixed(1)}M`;
+    if (numFmt === "b") return `${(v / 1e9).toFixed(1)}B`;
+    if (numFmt === "t") return `${(v / 1e12).toFixed(1)}T`;
+    if (numFmt === "fixed") return v.toFixed(kpiOpts.decimalPlaces ?? 2);
+    // auto: pick best unit
+    if (Math.abs(v) >= 1e9) return `${(v / 1e9).toFixed(1)}B`;
+    if (Math.abs(v) >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
+    if (Math.abs(v) >= 1e3) return `${(v / 1e3).toFixed(1)}K`;
+    return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  };
+
+  const formatted = value === null ? "—" : `${prefix}${formatKpiValue(value)}${suffix}`;
+
+  const trendColor = trend === null ? "#6b7280" : trend >= 0 ? "#16a34a" : "#dc2626";
+  const trendIcon = trend === null ? null : trend >= 0 ? "▲" : "▼";
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 8, padding: 24 }}>
+      {options?.title?.text && (
+        <div style={{ fontSize: 13, color: "#6b7280", fontWeight: 500, textAlign: "center" }}>{options.title.text}</div>
+      )}
+      <div style={{ fontSize: 52, fontWeight: 700, color: "#0f172a", lineHeight: 1, letterSpacing: "-2px" }}>{formatted}</div>
+      {label && <div style={{ fontSize: 13, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</div>}
+      {trend !== null && (
+        <div style={{ fontSize: 14, color: trendColor, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
+          <span>{trendIcon}</span>
+          <span>{Math.abs(trend).toFixed(1)}% vs prior period</span>
+        </div>
+      )}
+    </div>
+  );
+};
+
+interface TableRendererProps {
+  rows: (string | number | null)[][];
+  columns: string[];
+  isPivot?: boolean;
+}
+
+const TableRenderer: React.FC<TableRendererProps> = ({ rows, columns, isPivot }) => {
+  const [sortCol, setSortCol] = React.useState<number | null>(null);
+  const [sortDir, setSortDir] = React.useState<"asc" | "desc">("asc");
+
+  const handleSort = (idx: number) => {
+    if (sortCol === idx) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortCol(idx);
+      setSortDir("asc");
+    }
+  };
+
+  let displayRows = [...rows];
+  if (sortCol !== null) {
+    displayRows.sort((a, b) => {
+      const av = a[sortCol];
+      const bv = b[sortCol];
+      const an = Number(av);
+      const bn = Number(bv);
+      const cmp = !isNaN(an) && !isNaN(bn) ? an - bn : String(av ?? "").localeCompare(String(bv ?? ""));
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+  }
+
+  // Pivot: rotate so row[0] values become column headers
+  if (isPivot && columns.length >= 3) {
+    const dimCol = columns[0];
+    const catCol = columns[1];
+    const valCol = columns[2];
+    const pivotCats = [...new Set(rows.map((r) => String(r[1] ?? "")))];
+    const pivotDims = [...new Set(rows.map((r) => String(r[0] ?? "")))];
+    const pivotMap = new Map<string, Map<string, string | number | null>>();
+    rows.forEach((r) => {
+      const dim = String(r[0] ?? "");
+      const cat = String(r[1] ?? "");
+      if (!pivotMap.has(dim)) pivotMap.set(dim, new Map());
+      pivotMap.get(dim)!.set(cat, r[2]);
+    });
+    const pivotCols = [dimCol, ...pivotCats];
+    const pivotRows = pivotDims.map((dim) => {
+      const row: (string | number | null)[] = [dim];
+      pivotCats.forEach((cat) => row.push(pivotMap.get(dim)?.get(cat) ?? null));
+      return row;
+    });
+    displayRows = pivotRows;
+    columns = pivotCols;
+  }
+
+  const isNumeric = (v: string | number | null) => v !== null && v !== "" && !isNaN(Number(v));
+
+  return (
+    <div style={{ width: "100%", height: "100%", overflow: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, tableLayout: "auto" }}>
+        <thead>
+          <tr>
+            {columns.map((col, i) => (
+              <th
+                key={i}
+                onClick={() => handleSort(i)}
+                style={{
+                  padding: "6px 10px",
+                  background: "#f8fafc",
+                  borderBottom: "2px solid #e2e8f0",
+                  textAlign: "left",
+                  fontWeight: 600,
+                  color: "#374151",
+                  whiteSpace: "nowrap",
+                  cursor: "pointer",
+                  userSelect: "none",
+                  position: "sticky",
+                  top: 0,
+                  zIndex: 1,
+                }}
+              >
+                {col.split(".").pop() ?? col}
+                {sortCol === i ? (sortDir === "asc" ? " ▲" : " ▼") : ""}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {displayRows.map((row, ri) => (
+            <tr key={ri} style={{ background: ri % 2 === 0 ? "#fff" : "#f9fafb" }}>
+              {row.map((cell, ci) => (
+                <td
+                  key={ci}
+                  style={{
+                    padding: "5px 10px",
+                    borderBottom: "1px solid #e2e8f0",
+                    textAlign: isNumeric(cell) ? "right" : "left",
+                    color: "#1f2937",
+                    whiteSpace: "nowrap",
+                    fontVariantNumeric: "tabular-nums",
+                  }}
+                >
+                  {cell === null || cell === undefined ? (
+                    <span style={{ color: "#9ca3af" }}>null</span>
+                  ) : isNumeric(cell) ? (
+                    Number(cell).toLocaleString()
+                  ) : (
+                    String(cell)
+                  )}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
 const ChartPreview: React.FC = () => {
-  const { selectedTemplate, selectedDatasetId, previewOptions, sqlPreview, description } = useChartBuilder();
+  const { selectedTemplate, selectedDatasetId, previewOptions, sqlPreview, description, chartType, advancedOptions } = useChartBuilder();
 
   const hasOption = Boolean(previewOptions);
 
@@ -79,8 +276,17 @@ const ChartPreview: React.FC = () => {
         ...legendProps,
         left: pos.left,
         top: pos.top,
-        // Use order as data if present
         data: order && Array.isArray(order) && order.length > 0 ? order : legendProps.data,
+        textStyle: {
+          fontSize: 12,
+          color: "#475569",
+          fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+          ...(legendProps.textStyle || {}),
+        },
+        itemGap: 16,
+        itemWidth: 12,
+        itemHeight: 12,
+        icon: legendProps.icon || "roundRect",
       },
     };
   }
@@ -148,29 +354,138 @@ const ChartPreview: React.FC = () => {
     }
   }
 
-  // Preserve label settings when explicitly configured (e.g., when markers are enabled)
-  // Note: Overlap handling is done via top-level labelLayout option (ECharts native API)
+  // ── Global aesthetics ────────────────────────────────────────────────────────
+  // Tooltip — polished card style applied to every chart type
+  if (chartOptions.tooltip) {
+    const tooltipBase = {
+      appendToBody: true,
+      confine: true,
+      backgroundColor: "rgba(255, 255, 255, 0.97)",
+      borderColor: "#e2e8f0",
+      borderWidth: 1,
+      padding: [10, 14],
+      textStyle: {
+        color: "#1e293b",
+        fontSize: 12,
+        lineHeight: 20,
+        fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      },
+      extraCssText:
+        "box-shadow: 0 8px 24px rgba(0,0,0,0.12); border-radius: 8px; pointer-events: none; z-index: 99999;",
+    };
+    if (Array.isArray(chartOptions.tooltip)) {
+      chartOptions = {
+        ...chartOptions,
+        tooltip: chartOptions.tooltip.map((t: any) => ({ ...tooltipBase, ...t })),
+      };
+    } else {
+      chartOptions = {
+        ...chartOptions,
+        tooltip: { ...tooltipBase, ...chartOptions.tooltip },
+      };
+    }
+  }
+
+  // Data labels — professional typography with position-aware contrast
+  const labelStep: number = (advancedOptions as any)?.chartTypeOptions?.labelStep ?? 1;
+  const labelNumFmt: string = (advancedOptions as any)?.chartTypeOptions?.labelNumberFormat || "none";
+  const isShareChart = chartType?.endsWith("_share") || false;
+  const fmtLabelNum = (v: number): string => {
+    if (isShareChart) return `${v.toFixed(1)}%`;
+    if (labelNumFmt === "k") return `${(v / 1e3).toFixed(1)}K`;
+    if (labelNumFmt === "m") return `${(v / 1e6).toFixed(1)}M`;
+    if (labelNumFmt === "b") return `${(v / 1e9).toFixed(1)}B`;
+    if (labelNumFmt === "t") return `${(v / 1e12).toFixed(1)}T`;
+    return v.toLocaleString();
+  };
+
   if (chartOptions.series && Array.isArray(chartOptions.series)) {
     chartOptions = {
       ...chartOptions,
-      series: chartOptions.series.map((series: any) => ({
-        ...series,
-        label: {
-          ...(series.label || {}),
-          // Preserve show setting if explicitly set
-          show: series.label?.show !== undefined ? series.label.show : false,
-        },
-      })),
-    };
-  }
+      series: chartOptions.series.map((series: any) => {
+        if (!series.label?.show) {
+          return {
+            ...series,
+            label: { ...(series.label || {}), show: false },
+          };
+        }
 
-  // Ensure labelLayout is preserved and properly configured for overlap handling
-  if (chartOptions.series?.some((s: any) => s.label?.show)) {
-    chartOptions = {
-      ...chartOptions,
-      labelLayout: {
-        hideOverlap: true,
-      },
+        const pos = series.label.position || "top";
+        const isInside =
+          pos === "inside" || pos === "insideTop" || pos === "insideBottom" ||
+          pos === "insideLeft" || pos === "insideRight" || pos === "insideTopLeft" ||
+          pos === "insideTopRight" || pos === "insideBottomLeft" || pos === "insideBottomRight";
+
+        const font = 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+        const existingFormatter = series.label.formatter;
+
+        // Shared pill style — same values whether applied directly or via rich text
+        const pillStyle = {
+          backgroundColor: "rgba(255,255,255,0.92)",
+          borderRadius: 4,
+          padding: [3, 6] as [number, number],
+          borderColor: "#e2e8f0",
+          borderWidth: 1,
+          color: "#334155",
+          fontSize: 11,
+          fontWeight: "600",
+          fontFamily: font,
+        };
+
+        const styledLabel: any = {
+          ...series.label,
+          fontSize: 11,
+          fontWeight: isInside ? "700" : "600",
+          fontFamily: font,
+          color: series.label.color || (isInside ? "#ffffff" : pillStyle.color),
+          textShadowColor: isInside ? "rgba(0,0,0,0.45)" : "rgba(255,255,255,0.9)",
+          textShadowBlur: isInside ? 4 : 3,
+          ...(!isInside && { ...pillStyle }),
+        };
+
+        if (labelStep > 1 && !isInside && typeof existingFormatter !== "string") {
+          // Density + outside: move pill into rich text so shown labels keep the
+          // container while hidden labels return "" with no label-level background
+          // (no background on label = no ghost dot artifact).
+          delete styledLabel.backgroundColor;
+          delete styledLabel.borderRadius;
+          delete styledLabel.padding;
+          delete styledLabel.borderColor;
+          delete styledLabel.borderWidth;
+          styledLabel.rich = { pill: { ...pillStyle, padding: [3, 6] } };
+          styledLabel.formatter = (params: any) => {
+            if (params.dataIndex % labelStep !== 0) return "";
+            const val = typeof existingFormatter === "function"
+              ? String(existingFormatter(params))
+              : fmtLabelNum(Number(params.value ?? 0));
+            return `{pill|${val}}`;
+          };
+        } else if (labelStep > 1) {
+          // Inside or string-template: "" is safe, no background to ghost
+          styledLabel.formatter = (params: any) => {
+            if (params.dataIndex % labelStep !== 0) return "";
+            if (typeof existingFormatter === "function") return existingFormatter(params);
+            if (typeof existingFormatter === "string") return existingFormatter;
+            return fmtLabelNum(Number(params.value ?? 0));
+          };
+        }
+
+        // When density > 1, sync marker dots to the same step so labels and dots align
+        const showSymbolOverride = labelStep > 1 && series.showSymbol !== false && series.showSymbol !== undefined
+          ? (dataIndex: number) => dataIndex % labelStep === 0
+          : series.showSymbol;
+
+        return {
+          ...series,
+          labelLayout: { hideOverlap: true },
+          label: styledLabel,
+          ...(showSymbolOverride !== series.showSymbol && { showSymbol: showSymbolOverride }),
+          emphasis: {
+            ...(series.emphasis || {}),
+            label: { show: false },
+          },
+        };
+      }),
     };
   }
 
@@ -224,7 +539,20 @@ const ChartPreview: React.FC = () => {
             : "chart-builder-preview-inner chart-builder-preview-inner-empty"
         }
       >
-        {hasOption && !sqlPreview.isRunning ? (
+        {hasOption && !sqlPreview.isRunning && (chartType === "table" || chartType === "pivot_table") ? (
+          <TableRenderer
+            rows={(previewOptions as any)?._rows ?? sqlPreview.dataRows}
+            columns={(previewOptions as any)?._columns ?? sqlPreview.dataColumns}
+            isPivot={chartType === "pivot_table"}
+          />
+        ) : hasOption && !sqlPreview.isRunning && (chartType === "big_number" || chartType === "big_number_trend") ? (
+          <BigNumberKpiCard options={chartOptions} rows={sqlPreview.dataRows} columns={sqlPreview.dataColumns} />
+        ) : hasOption && !sqlPreview.isRunning && chartType && getPlugin(chartType)?.Renderer ? (
+          (() => {
+            const PluginRenderer = getPlugin(chartType)!.Renderer!;
+            return <PluginRenderer options={chartOptions} rows={sqlPreview.dataRows} columns={sqlPreview.dataColumns} />;
+          })()
+        ) : hasOption && !sqlPreview.isRunning ? (
           <ReactECharts
             option={chartOptions}
             style={{ width: "100%", height: "100%" }}

@@ -5,6 +5,7 @@ import { API_BASE } from "../../config";
 import { msalFetch } from "../../utils/msalFetch";
 import { useAuth } from "../../auth/useAuth";
 import { useRouter } from "next/navigation";
+import { getRegisteredPlugins, getPlugin } from "./chartPluginRegistry";
 
 // Default advanced chart options for merging with loaded config
 export const DEFAULT_ADVANCED_OPTIONS = {
@@ -17,11 +18,15 @@ export const DEFAULT_ADVANCED_OPTIONS = {
   legend: { show: true, left: "top", order: undefined as string[] | undefined },
   tooltip: { show: true, dateFormat: "auto", numberFormat: "none", decimalPlaces: 2, useCommas: true },
   yAxisFormat: "none",
-  xAxisDateFormat: "auto", // Added to support advancedOptions?.xAxisDateFormat
+  xAxisFormat: "none",     // Number format for value X axis (horizontal bar / scatter)
+  xAxisDateFormat: "auto", // Date format for category X axis
+  yAxisDateFormat: "auto", // Date format for category Y axis (horizontal bars)
   labelLayout: undefined as { hideOverlap?: boolean; moveOverlap?: string } | undefined,
   series: [],
   seriesSettings: undefined as { smooth?: boolean; symbol?: string | Function; symbolSize?: number; stack?: string } | undefined,
   showAsPercentage: undefined as boolean | undefined,
+  /** Chart-type-specific options (bar labels, pie hole size, KPI format, etc.) */
+  chartTypeOptions: undefined as Record<string, any> | undefined,
 };
 
 /**
@@ -424,6 +429,61 @@ export function buildEChartsOptionsFromQueryResult(
         ],
       };
     }
+    case "mixed_line_bar": {
+      return {
+        ...common,
+        xAxis: buildCategoryAxis(),
+        yAxis: [
+          { type: "value" },
+          { type: "value", splitLine: { show: false } },
+        ],
+        series: seriesNames.map((name, idx) => {
+          const seriesType = idx === 0 ? "bar" : "line";
+          return {
+            name,
+            type: seriesType,
+            yAxisIndex: idx === 0 ? 0 : 1,
+            data: xValues.map((x) => dataMap.get(name)?.get(x) ?? 0),
+          };
+        }),
+      };
+    }
+    case "waterfall": {
+      const wfData = xValues.map((x) => {
+        const val = dataMap.get(seriesNames[0])?.get(x) ?? 0;
+        return val;
+      });
+      // Build running total for placeholder bars
+      let running = 0;
+      const placeholders: number[] = [];
+      wfData.forEach((v) => {
+        placeholders.push(v >= 0 ? running : running + v);
+        running += v;
+      });
+      return {
+        ...common,
+        xAxis: buildCategoryAxis(),
+        yAxis: { type: "value" },
+        series: [
+          {
+            type: "bar",
+            stack: "waterfall",
+            itemStyle: { color: "transparent", borderColor: "transparent" },
+            data: placeholders,
+            tooltip: { show: false },
+          },
+          {
+            name: seriesNames[0] || "Value",
+            type: "bar",
+            stack: "waterfall",
+            data: wfData.map((v) => ({
+              value: Math.abs(v),
+              itemStyle: { color: v >= 0 ? "#22c55e" : "#ef4444" },
+            })),
+          },
+        ],
+      };
+    }
     default:
       return {
         ...common,
@@ -512,6 +572,8 @@ export function mergeAdvancedOptions(loaded: Partial<typeof DEFAULT_ADVANCED_OPT
     seriesSettings: loaded?.seriesSettings || undefined,
     // Explicitly preserve showAsPercentage for share charts (important: false is a valid value)
     showAsPercentage: loaded?.showAsPercentage !== undefined ? loaded.showAsPercentage : undefined,
+    // Preserve chart-type-specific options (bar labels, pie hole size, KPI format, etc.)
+    chartTypeOptions: (loaded as any)?.chartTypeOptions || undefined,
   };
 }
 
@@ -544,7 +606,9 @@ export type ChartKind =
   | "table"
   | "pivot_table"
   | "pie"
-  | "donut";
+  | "donut"
+  | "mixed_line_bar"
+  | "waterfall";
 
 export type TimeRangePreset =
   | "all_time"
@@ -602,6 +666,13 @@ export interface DatasetColumn {
   is_metric: boolean;
   semantic_type?: string | null;
   fact_key?: string | null;
+}
+
+export interface MetricConfig {
+  id: string;
+  column: string;
+  aggregate: "SUM" | "COUNT" | "COUNT_DISTINCT" | "AVG" | "MIN" | "MAX";
+  label: string;
 }
 
 export interface DatasetMetric {
@@ -706,7 +777,7 @@ export const TEMPLATES: ChartTemplate[] = [
   {
     id: "bar_vertical",
     name: "Vertical bar",
-    description: "Compare categories with a vertical bar chart.",
+    description: "Compare categories. Supports grouped and stacked via Customize.",
     category: "Bar",
     previewKind: "bar",
     thumbnail: "/chart-thumbnails/bar_vertical.png",
@@ -714,31 +785,10 @@ export const TEMPLATES: ChartTemplate[] = [
   {
     id: "bar_horizontal",
     name: "Horizontal bar",
-    description: "Use when category labels are long.",
+    description: "Use when category labels are long. Supports grouped and stacked via Customize.",
     category: "Bar",
     previewKind: "bar",
     thumbnail: "/chart-thumbnails/bar_horizontal.png",
-  },
-  {
-    id: "stacked_bar_vertical",
-    name: "Stacked bar (vertical)",
-    description: "Compare parts of a whole across categories.",
-    category: "Bar",
-    previewKind: "stacked-bar",
-  },
-  {
-    id: "stacked_bar_horizontal",
-    name: "Stacked bar (horizontal)",
-    description: "Stacked bars with long category labels.",
-    category: "Bar",
-    previewKind: "stacked-bar",
-  },
-  {
-    id: "grouped_bar",
-    name: "Grouped bar",
-    description: "Compare multiple series side by side.",
-    category: "Bar",
-    previewKind: "grouped-bar",
   },
   {
     id: "scatter",
@@ -863,6 +913,20 @@ export const TEMPLATES: ChartTemplate[] = [
     description: "Pie chart with a focus on center KPI.",
     category: "Pie",
   },
+  {
+    id: "mixed_line_bar",
+    name: "Mixed Line + Bar",
+    description: "Combine bars and lines on a dual-axis chart.",
+    category: "Bar",
+    previewKind: "bar",
+  },
+  {
+    id: "waterfall",
+    name: "Waterfall",
+    description: "Show cumulative effect of sequential positive/negative values.",
+    category: "Bar",
+    previewKind: "bar",
+  },
 ];
 
 export interface ChartBuilderContextValue {
@@ -891,6 +955,14 @@ export interface ChartBuilderContextValue {
   datasetDetail: DatasetDetailForChart | null;
   metricColumn: string | null;
   setMetricColumn: (value: string | null) => void;
+  metrics: MetricConfig[];
+  setMetrics: React.Dispatch<React.SetStateAction<MetricConfig[]>>;
+  timeGrain: string;
+  setTimeGrain: (value: string) => void;
+  sortBy: { column: string; direction: "asc" | "desc" } | null;
+  setSortBy: (value: { column: string; direction: "asc" | "desc" } | null) => void;
+  queryMode: "aggregate" | "raw";
+  setQueryMode: (value: "aggregate" | "raw") => void;
   groupByColumns: string[];
   setGroupByColumns: (value: string[]) => void;
   timeColumn: string | null;
@@ -949,6 +1021,10 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
   const [description, setDescription] = useState<string>("");
   const [chartType, setChartType] = useState<ChartKind | null>(null);
   const [metricColumn, setMetricColumn] = useState<string | null>(null);
+  const [metrics, setMetrics] = useState<MetricConfig[]>([]);
+  const [timeGrain, setTimeGrain] = useState<string>("none");
+  const [sortBy, setSortBy] = useState<{ column: string; direction: "asc" | "desc" } | null>(null);
+  const [queryMode, setQueryMode] = useState<"aggregate" | "raw">("aggregate");
   const [groupByColumns, setGroupByColumns] = useState<string[]>([]);
   const [timeColumn, setTimeColumn] = useState<string | null>(null);
   const [timeRange, setTimeRange] = useState<TimeRangePreset>("last_30_days");
@@ -1018,6 +1094,10 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
       setDatasetDetailError(null);
       setDatasetDetail(null);
       setMetricColumn(null);
+      setMetrics([]);
+      setTimeGrain("none");
+      setSortBy(null);
+      setQueryMode("aggregate");
       setGroupByColumns([]);
       setTimeColumn(null);
       setFilterLogic("AND");
@@ -1055,7 +1135,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
 
   // Initialize from props on mount
   useEffect(() => {
-    if (initialTemplate && TEMPLATES.some((t) => t.id === initialTemplate)) {
+    if (initialTemplate && [...TEMPLATES, ...getRegisteredPlugins()].some((t) => t.id === initialTemplate)) {
       setChartType(initialTemplate as ChartKind);
     }
 
@@ -1070,14 +1150,23 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     // This keeps the context simpler and allows pages to control the loading logic
   }, [initialTemplate, initialDatasetId, initialChartId]);
 
+  // Merge built-in TEMPLATES with registered plugins so plugin chart types
+  // appear in the picker and are handled throughout the builder.
+  const allTemplates = useMemo(() => {
+    const plugins = getRegisteredPlugins();
+    if (plugins.length === 0) return TEMPLATES;
+    const pluginIds = new Set(plugins.map((p) => p.id));
+    return [...TEMPLATES.filter((t) => !pluginIds.has(t.id)), ...plugins];
+  }, []);
+
   const selectedTemplate = useMemo(
-    () => (chartType ? TEMPLATES.find((t) => t.id === chartType) ?? null : null),
-    [chartType],
+    () => (chartType ? allTemplates.find((t) => t.id === chartType) ?? null : null),
+    [chartType, allTemplates],
   );
 
   const categories = useMemo(
-    () => CHART_CATEGORIES.filter((cat) => TEMPLATES.some((t) => t.category === cat.id)),
-    [],
+    () => CHART_CATEGORIES.filter((cat) => allTemplates.some((t) => t.category === cat.id)),
+    [allTemplates],
   );
 
   // Save button is always enabled (removed hasChanges check)
@@ -1201,13 +1290,6 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
             valueKey: keyValue, // Key to use in SQL (e.g., "4999588089921664978")
           };
 
-          console.log('[ChartBuilder] Building filter payload:', {
-            column: payload.column,
-            keyColumn: payload.keyColumn,
-            value: payload.value,
-            valueKey: payload.valueKey
-          });
-
           return payload;
         });
 
@@ -1226,18 +1308,25 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         ]
       : null;
 
+    // Build metrics array — prefer the metrics[] array, fall back to legacy metricColumn
+    const metricsPayload = metrics.length > 0
+      ? metrics.map((m) => ({ column: m.column, aggregate: m.aggregate, label: m.label }))
+      : metricColumn
+        ? [{ column: metricColumn, aggregate: "SUM", label: "value" }]
+        : [];
+
     return {
       dataset_id: selectedDatasetId,
       template: selectedTemplate.id,
       datasource,
-      metric: metricColumn
-        ? {
-            column: metricColumn,
-            agg: "SUM",
-          }
-        : null,
+      metrics: metricsPayload,
+      // legacy single-metric kept for backward compat with saved charts
+      metric: metricColumn && metrics.length === 0 ? { column: metricColumn, agg: "SUM" } : null,
       groupby: groupByColumns,
       time_column: timeColumn,
+      time_grain: timeGrain !== "none" ? timeGrain : null,
+      sort_by: sortBy,
+      query_mode: queryMode,
       filters: filtersPayload,
       filter_logic: filterLogic,
       filter_groups: filterGroups,
@@ -1246,6 +1335,8 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
       custom_end_date: customEndDate,
       date_display_format: dateDisplayFormat,
       row_limit: rowLimit,
+      rolling_calc: advancedOptions?.rollingCalc || "none",
+      rolling_window: advancedOptions?.rollingWindow || 3,
     };
   };
 
@@ -1260,6 +1351,179 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     setHasChanges(false);
   };
 
+  /**
+   * Apply chart-type-specific options stored in advancedOptions.chartTypeOptions
+   * to the ECharts option object just before rendering.
+   */
+  const applyChartTypeOptions = (option: any, chartKind: string, ctOpts: any): any => {
+    if (!ctOpts || !option) return option;
+
+    const isBar = ["bar_vertical", "bar_horizontal", "stacked_bar_vertical", "stacked_bar_horizontal", "grouped_bar"].includes(chartKind);
+    const isPieOrDonut = chartKind === "pie" || chartKind === "donut";
+    const isScatterOrBubble = chartKind === "scatter" || chartKind === "bubble";
+
+    if (isBar && Array.isArray(option.series)) {
+      option = {
+        ...option,
+        series: option.series.map((s: any) => {
+          const updated: any = { ...s };
+          if (ctOpts.barBorderRadius !== undefined) {
+            updated.itemStyle = { ...s.itemStyle, borderRadius: Number(ctOpts.barBorderRadius) };
+          }
+          if (ctOpts.showDataLabels !== undefined) {
+            const labelNumFmt = ctOpts.labelNumberFormat || "none";
+            const fmtLabelVal = (v: number) => {
+              if (labelNumFmt === "k") return `${(v / 1e3).toFixed(1)}K`;
+              if (labelNumFmt === "m") return `${(v / 1e6).toFixed(1)}M`;
+              if (labelNumFmt === "b") return `${(v / 1e9).toFixed(1)}B`;
+              if (labelNumFmt === "t") return `${(v / 1e12).toFixed(1)}T`;
+              return v.toLocaleString();
+            };
+            updated.label = {
+              ...s.label,
+              show: ctOpts.showDataLabels,
+              position: ctOpts.labelPosition || (chartKind === "bar_horizontal" ? "right" : "top"),
+              fontSize: 11,
+              color: "#334155",
+              formatter: ctOpts.showDataLabels
+                ? (params: any) => fmtLabelVal(Number(params.value))
+                : undefined,
+            };
+          }
+          return updated;
+        }),
+      };
+    }
+
+    if (isPieOrDonut && Array.isArray(option.series)) {
+      option = {
+        ...option,
+        series: option.series.map((s: any) => {
+          const updated: any = { ...s };
+          if (ctOpts.showPieLabels !== undefined) {
+            const labelContent = ctOpts.labelContent || "name_pct";
+            const formatter =
+              labelContent === "percentage" ? "{d}%" :
+              labelContent === "value"      ? "{c}" :
+              labelContent === "name_value" ? "{b}: {c}" :
+                                              "{b}: {d}%";
+            updated.label = { show: ctOpts.showPieLabels, formatter };
+            updated.labelLine = { show: ctOpts.showPieLabels };
+          }
+          if (chartKind === "donut" && ctOpts.donutHoleSize !== undefined) {
+            updated.radius = [`${ctOpts.donutHoleSize}%`, "75%"];
+          }
+          if (ctOpts.roseType !== undefined) {
+            updated.roseType = ctOpts.roseType ? "area" : undefined;
+          }
+          return updated;
+        }),
+      };
+    }
+
+    if (isScatterOrBubble && Array.isArray(option.series)) {
+      option = {
+        ...option,
+        series: option.series.map((s: any) => {
+          const updated: any = { ...s };
+          if (ctOpts.symbolSize !== undefined) updated.symbolSize = Number(ctOpts.symbolSize);
+          if (ctOpts.pointOpacity !== undefined) {
+            updated.itemStyle = { ...s.itemStyle, opacity: Number(ctOpts.pointOpacity) };
+          }
+          return updated;
+        }),
+      };
+    }
+
+    if (chartKind === "funnel" && Array.isArray(option.series)) {
+      option = {
+        ...option,
+        series: option.series.map((s: any) => ({
+          ...s,
+          sort: ctOpts.funnelSort || s.sort || "descending",
+          label: ctOpts.showFunnelLabels !== undefined ? { ...s.label, show: ctOpts.showFunnelLabels, position: ctOpts.funnelLabelPos || "inside" } : s.label,
+        })),
+      };
+    }
+
+    if (chartKind === "gauge" && Array.isArray(option.series)) {
+      option = {
+        ...option,
+        series: option.series.map((s: any) => ({
+          ...s,
+          min: ctOpts.gaugeMin !== undefined ? Number(ctOpts.gaugeMin) : s.min,
+          max: ctOpts.gaugeMax !== undefined ? Number(ctOpts.gaugeMax) : s.max,
+        })),
+      };
+    }
+
+    if (chartKind === "heatmap" && Array.isArray(option.series)) {
+      option = {
+        ...option,
+        series: option.series.map((s: any) => ({
+          ...s,
+          label: ctOpts.showCellValues !== undefined ? { show: ctOpts.showCellValues } : s.label,
+        })),
+      };
+    }
+
+    if (chartKind === "radar") {
+      if (option.radar && ctOpts.radarShape) {
+        option = { ...option, radar: { ...option.radar, shape: ctOpts.radarShape } };
+      }
+      if (ctOpts.radarFill !== undefined && Array.isArray(option.series)) {
+        option = {
+          ...option,
+          series: option.series.map((s: any) => ({
+            ...s,
+            areaStyle: ctOpts.radarFill ? { opacity: 0.4 } : undefined,
+          })),
+        };
+      }
+    }
+
+    // Store kpiOptions for BigNumberKpiCard in ChartPreview
+    if ((chartKind === "big_number" || chartKind === "big_number_trend") && ctOpts) {
+      option = { ...option, kpiOptions: ctOpts };
+    }
+
+    if (chartKind === "mixed_line_bar") {
+      const labelNumFmt = ctOpts.labelNumberFormat || "none";
+      const seriesTypeMap = ctOpts.seriesTypes || {};
+      const seriesAxisMap = ctOpts.seriesAxis || {};
+      const fmtVal = (v: number) => {
+        if (labelNumFmt === "k") return `${(v / 1e3).toFixed(1)}K`;
+        if (labelNumFmt === "m") return `${(v / 1e6).toFixed(1)}M`;
+        if (labelNumFmt === "b") return `${(v / 1e9).toFixed(1)}B`;
+        if (labelNumFmt === "t") return `${(v / 1e12).toFixed(1)}T`;
+        return v.toLocaleString();
+      };
+      if (option && Array.isArray(option.series)) {
+        option.series = option.series.filter((s: any) => s.tooltip?.show !== false).map((s: any, idx: number) => {
+          const st = seriesTypeMap[s.name] || (idx === 0 ? "bar" : "line");
+          const yi = seriesAxisMap[s.name] ?? (idx === 0 ? 0 : 1);
+          return {
+            ...s,
+            type: st,
+            yAxisIndex: yi,
+            smooth: st === "line",
+            label: {
+              ...s.label,
+              show: ctOpts.showDataLabels ?? false,
+              formatter: ctOpts.showDataLabels ? (params: any) => fmtVal(Number(params.value)) : undefined,
+            },
+          };
+        });
+        if (Array.isArray(option.yAxis) && option.yAxis.length >= 2) {
+          option.yAxis[0] = { ...option.yAxis[0], name: ctOpts.leftAxisName || "" };
+          option.yAxis[1] = { ...option.yAxis[1], name: ctOpts.rightAxisName || "" };
+        }
+      }
+    }
+
+    return option;
+  };
+
   const buildEchartsOptionFromPreview = (
     chartKind: ChartKind,
     executeJson: { columns?: string[]; rows?: unknown[][] },
@@ -1271,11 +1535,14 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
 
     const columns = executeJson.columns;
     const rows = executeJson.rows as (string | number | null)[][];
-    // Prefer advancedOptions.xAxisDateFormat if set, then previewOptions, then config
     const xAxisDateFormat =
       (advancedOptions && advancedOptions.xAxisDateFormat) ||
       (previewOptions && previewOptions.xAxisDateFormat) ||
       (config?.date_display_format as DateDisplayFormat | undefined) ||
+      "auto";
+    const yAxisDateFormat: string =
+      (advancedOptions && (advancedOptions as any).yAxisDateFormat) ||
+      (previewOptions && previewOptions.yAxisDateFormat) ||
       "auto";
 
     const displayFormat: DateDisplayFormat = xAxisDateFormat;
@@ -1611,16 +1878,23 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
           }),
         };
       case "bar_horizontal":
-      case "stacked_bar_horizontal":
+      case "stacked_bar_horizontal": {
+        const hBarYAxis: any = { type: "category", data: xValues };
+        if (yAxisDateFormat && yAxisDateFormat !== "auto") {
+          hBarYAxis.axisLabel = {
+            formatter: (val: string) => formatXAxisLabel(String(val), yAxisDateFormat as DateDisplayFormat),
+          };
+        }
         return {
           ...common,
           xAxis: { type: "value" },
-          yAxis: { type: "category", data: xValues },
+          yAxis: hBarYAxis,
           series: buildLineOrBarSeries({
             type: "bar",
             stacked: chartKind === "stacked_bar_horizontal",
           }),
         };
+      }
       case "pie":
       case "donut": {
         const data = seriesNames.length > 1 ? seriesNames : xValues;
@@ -1695,8 +1969,379 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
           },
         };
       }
-      default:
+      case "scatter":
+      case "bubble": {
+        const xIdx = 0;
+        const yIdx = Math.min(1, columns.length - 1);
+        const sizeIdx = chartKind === "bubble" && columns.length >= 3 ? 2 : -1;
+        const scatterData = rows.map((r) => {
+          const x = Number(r[xIdx]);
+          const y = Number(r[yIdx]);
+          return sizeIdx >= 0 ? [x, y, Number(r[sizeIdx] ?? 1)] : [x, y];
+        });
+        return {
+          ...common,
+          xAxis: { type: "value", name: columns[xIdx], nameLocation: "center", nameGap: 30 },
+          yAxis: { type: "value", name: columns[yIdx] },
+          series: [{
+            type: "scatter",
+            data: scatterData,
+            symbolSize: sizeIdx >= 0
+              ? (d: number[]) => Math.max(8, Math.sqrt(Math.abs(d[2] || 1)) * 4)
+              : 10,
+          }],
+        };
+      }
+      case "heatmap": {
+        // col[0]=x-category, col[1]=y-category, col[2]=value
+        const hxCats = [...new Set(rows.map((r) => String(r[0] ?? "")))];
+        const hyCats = [...new Set(rows.map((r) => String(r[1] ?? "")))];
+        const heatData = rows.map((r) => [
+          hxCats.indexOf(String(r[0] ?? "")),
+          hyCats.indexOf(String(r[1] ?? "")),
+          Number(r[2] ?? 0),
+        ]);
+        const heatVals = heatData.map((d) => d[2] as number);
+        const heatMin = Math.min(...heatVals);
+        const heatMax = Math.max(...heatVals);
+        return {
+          tooltip: { trigger: "item", formatter: (p: any) => `${hxCats[p.data[0]]}, ${hyCats[p.data[1]]}: ${p.data[2]}` },
+          grid: { ...common.grid, bottom: "15%" },
+          xAxis: { type: "category", data: hxCats, splitArea: { show: true } },
+          yAxis: { type: "category", data: hyCats, splitArea: { show: true } },
+          visualMap: {
+            min: heatMin, max: heatMax, calculable: true,
+            orient: "horizontal", left: "center", bottom: "2%",
+            inRange: { color: ["#e0f3f8", "#abd9e9", "#74add1", "#4575b4", "#313695"] },
+          },
+          series: [{
+            name: columns[2] || "value",
+            type: "heatmap",
+            data: heatData,
+            label: { show: false },
+            emphasis: { itemStyle: { shadowBlur: 10, shadowColor: "rgba(0,0,0,0.5)" } },
+          }],
+        };
+      }
+      case "radar": {
+        if (columns.length > 2) {
+          // Multi-column: col[0]=series name, rest=indicator values
+          const indicators = columns.slice(1).map((c, i) => ({
+            name: c,
+            max: Math.max(...rows.map((r) => Number(r[i + 1] ?? 0))) * 1.25 || 100,
+          }));
+          const radarData = rows.map((r) => ({
+            name: String(r[0] ?? ""),
+            value: columns.slice(1).map((_, i) => Number(r[i + 1] ?? 0)),
+          }));
+          return {
+            tooltip: { trigger: "item" },
+            legend: { data: radarData.map((d) => d.name) },
+            radar: { indicator: indicators },
+            series: [{ type: "radar", data: radarData }],
+          };
+        }
+        // 2 columns: col[0]=indicator name, col[1]=value → single radar shape
+        const indicators2 = rows.map((r) => ({
+          name: String(r[0] ?? ""),
+          max: Math.max(...rows.map((row) => Number(row[1] ?? 0))) * 1.25 || 100,
+        }));
+        const vals2 = rows.map((r) => Number(r[1] ?? 0));
+        return {
+          tooltip: { trigger: "item" },
+          radar: { indicator: indicators2 },
+          series: [{ type: "radar", data: [{ name: columns[1] || "value", value: vals2 }] }],
+        };
+      }
+      case "funnel": {
+        const funnelData = xValues
+          .map((x) => ({
+            name: x,
+            value: seriesNames.reduce((sum, n) => sum + (dataMap.get(n)?.get(x) ?? 0), 0),
+          }))
+          .sort((a, b) => b.value - a.value);
+        return {
+          tooltip: { trigger: "item", formatter: "{b} : {c} ({d}%)" },
+          legend: { data: funnelData.map((d) => d.name) },
+          series: [{
+            name: columns[metricIndex] || "value",
+            type: "funnel",
+            left: "10%", width: "80%", top: 60, bottom: 60,
+            min: 0, max: funnelData[0]?.value || 100,
+            minSize: "0%", maxSize: "100%",
+            sort: "descending", gap: 2,
+            label: { show: true, position: "inside" },
+            labelLine: { length: 10, lineStyle: { width: 1, type: "solid" } },
+            itemStyle: { borderColor: "#fff", borderWidth: 1 },
+            emphasis: { label: { fontSize: 20 } },
+            data: funnelData,
+          }],
+        };
+      }
+      case "gauge": {
+        const gaugeRow = rows[rows.length - 1];
+        const gaugeVal = Number(gaugeRow?.[metricIndex] ?? 0);
+        const allMetricVals = rows.map((r) => Number(r[metricIndex] ?? 0)).filter((v) => !isNaN(v));
+        const gaugeMax = allMetricVals.length > 0 ? Math.ceil(Math.max(...allMetricVals) * 1.25) : 100;
+        return {
+          tooltip: { formatter: "{a} <br/>{b} : {c}" },
+          series: [{
+            name: columns[metricIndex] || "value",
+            type: "gauge",
+            min: 0, max: gaugeMax,
+            progress: { show: true, width: 18 },
+            axisLine: { lineStyle: { width: 18 } },
+            axisTick: { show: false },
+            splitLine: { length: 15, lineStyle: { width: 2, color: "#999" } },
+            axisLabel: { distance: 25, color: "#999", fontSize: 12 },
+            anchor: { show: true, showAbove: true, size: 25, itemStyle: { borderWidth: 10 } },
+            detail: { valueAnimation: true, fontSize: 28, offsetCenter: [0, "70%"] },
+            data: [{ value: gaugeVal, name: columns[metricIndex] || "value" }],
+          }],
+        };
+      }
+      case "boxplot": {
+        if (columns.length >= 6) {
+          // Pre-aggregated: col[0]=category, col[1]=min, col[2]=Q1, col[3]=median, col[4]=Q3, col[5]=max
+          return {
+            ...common,
+            xAxis: { type: "category", data: rows.map((r) => String(r[0] ?? "")) },
+            yAxis: { type: "value" },
+            series: [{ type: "boxplot", data: rows.map((r) => [r[1], r[2], r[3], r[4], r[5]].map(Number)) }],
+          };
+        }
+        // Compute box stats grouped by dimension
+        const bpGroups = new Map<string, number[]>();
+        rows.forEach((r) => {
+          const cat = String(r[0] ?? "");
+          const val = Number(r[metricIndex] ?? 0);
+          if (!bpGroups.has(cat)) bpGroups.set(cat, []);
+          bpGroups.get(cat)!.push(val);
+        });
+        const bpCats: string[] = [];
+        const bpData: number[][] = [];
+        bpGroups.forEach((vals, cat) => {
+          vals.sort((a, b) => a - b);
+          const n = vals.length;
+          bpCats.push(cat);
+          bpData.push([
+            vals[0],
+            vals[Math.floor(n * 0.25)],
+            vals[Math.floor(n * 0.5)],
+            vals[Math.floor(n * 0.75)],
+            vals[n - 1],
+          ]);
+        });
+        return {
+          ...common,
+          xAxis: { type: "category", data: bpCats },
+          yAxis: { type: "value" },
+          series: [{ type: "boxplot", data: bpData }],
+        };
+      }
+      case "candlestick": {
+        // col[0]=date, col[1]=open, col[2]=close, col[3]=low, col[4]=high
+        const csDate = rows.map((r) => String(r[0] ?? ""));
+        const csData = rows.map((r) => [Number(r[1]), Number(r[2]), Number(r[3]), Number(r[4])]);
+        return {
+          tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
+          grid: common.grid,
+          xAxis: { type: "category", data: csDate, scale: true, boundaryGap: false, axisLine: { onZero: false }, splitLine: { show: false }, min: "dataMin", max: "dataMax" },
+          yAxis: { scale: true, splitArea: { show: true } },
+          dataZoom: [
+            { type: "inside", start: 0, end: 100 },
+            { show: true, type: "slider", bottom: 10, start: 0, end: 100 },
+          ],
+          series: [{
+            name: columns[0] || "Price",
+            type: "candlestick",
+            data: csData,
+            itemStyle: { color: "#ef232a", color0: "#14b143", borderColor: "#ef232a", borderColor0: "#14b143" },
+          }],
+        };
+      }
+      case "treemap": {
+        const tmData = xValues
+          .map((x) => ({
+            name: x,
+            value: seriesNames.reduce((sum, n) => sum + (dataMap.get(n)?.get(x) ?? 0), 0),
+          }))
+          .filter((d) => d.value > 0);
+        return {
+          tooltip: { formatter: (info: any) => `${info.name}: ${Number(info.value).toLocaleString()}` },
+          series: [{
+            type: "treemap",
+            data: tmData,
+            leafDepth: 1,
+            label: { show: true, formatter: "{b}" },
+            upperLabel: { show: true, height: 30 },
+            emphasis: { label: { fontSize: 14 } },
+            breadcrumb: { show: false },
+          }],
+        };
+      }
+      case "sunburst": {
+        if (columns.length >= 3) {
+          // Hierarchical: col[0]=parent, col[1]=name, col[2]=value
+          const sbParentMap = new Map<string, { name: string; value: number }[]>();
+          rows.forEach((r) => {
+            const parent = String(r[0] ?? "");
+            if (!sbParentMap.has(parent)) sbParentMap.set(parent, []);
+            sbParentMap.get(parent)!.push({ name: String(r[1] ?? ""), value: Number(r[2] ?? 0) });
+          });
+          const allChildNames = new Set([...sbParentMap.values()].flat().map((c) => c.name));
+          const roots = [...sbParentMap.keys()].filter((k) => !allChildNames.has(k));
+          const buildSbTree = (key: string): any[] =>
+            (sbParentMap.get(key) || []).map((c) =>
+              sbParentMap.has(c.name)
+                ? { name: c.name, children: buildSbTree(c.name) }
+                : c
+            );
+          const sbData =
+            roots.length > 0
+              ? roots.map((r) => ({ name: r, children: buildSbTree(r) }))
+              : [...sbParentMap.entries()].map(([k, v]) => ({ name: k, children: v }));
+          return {
+            tooltip: { trigger: "item" },
+            series: [{ type: "sunburst", data: sbData, radius: [0, "90%"], label: { rotate: "radial" }, emphasis: { focus: "ancestor" } }],
+          };
+        }
+        // Flat sunburst: col[0]=name, col[1]=value
+        const sbFlat = xValues.map((x) => ({
+          name: x,
+          value: seriesNames.reduce((sum, n) => sum + (dataMap.get(n)?.get(x) ?? 0), 0),
+        }));
+        return {
+          tooltip: { trigger: "item" },
+          series: [{ type: "sunburst", data: sbFlat, radius: [0, "90%"], label: { rotate: "radial" } }],
+        };
+      }
+      case "pictorial_bar": {
+        const pbData = xValues.map((x) =>
+          seriesNames.reduce((sum, n) => sum + (dataMap.get(n)?.get(x) ?? 0), 0)
+        );
+        return {
+          ...common,
+          xAxis: buildCategoryAxis(),
+          yAxis: { type: "value" },
+          series: [{
+            type: "pictorialBar",
+            symbol: "roundRect",
+            symbolRepeat: true,
+            symbolSize: [20, 12],
+            symbolMargin: 2,
+            data: pbData,
+          }],
+        };
+      }
+      case "theme_river": {
+        // col[0]=time, col[1]=value, col[2]=category  — or fall back to dimension/metric layout
+        const trTime = (r: (string | number | null)[]) => String(r[0] ?? "");
+        const trVal = (r: (string | number | null)[]) =>
+          Number(columns.length >= 3 ? r[1] : r[metricIndex]) ?? 0;
+        const trCat = (r: (string | number | null)[]) =>
+          String(columns.length >= 3 ? r[2] : (dimensionIndexes.length > 0 ? r[dimensionIndexes[0]] : r[0])) ?? "";
+        const trData: [string, number, string][] = rows.map((r) => [trTime(r), trVal(r), trCat(r)]);
+        const trLegend = [...new Set(trData.map((d) => d[2]))];
+        return {
+          tooltip: { trigger: "axis", axisPointer: { type: "line" } },
+          legend: { data: trLegend, top: 0 },
+          singleAxis: {
+            top: 50, bottom: 50, type: "time",
+            axisTick: {}, axisLabel: {},
+            axisPointer: { animation: true, label: { show: true } },
+            splitLine: { show: true, lineStyle: { type: "dashed", opacity: 0.2 } },
+          },
+          series: [{ type: "themeRiver", emphasis: { focus: "series" }, data: trData }],
+        };
+      }
+      case "table":
+      case "pivot_table": {
+        // Sentinel — ChartPreview detects _tableData and renders an HTML table instead of ECharts
+        return { _tableData: true, _columns: columns, _rows: rows, _chartType: chartKind };
+      }
+      case "mixed_line_bar": {
+        const seriesTypeMap: Record<string, "bar" | "line"> = advancedOptions?.chartTypeOptions?.seriesTypes || {};
+        const seriesAxisMap: Record<string, number> = advancedOptions?.chartTypeOptions?.seriesAxis || {};
+
+        const mixedSeries = seriesNames.map((name, idx) => {
+          const seriesType = seriesTypeMap[name] || (idx === 0 ? "bar" : "line");
+          const yAxisIndex = seriesAxisMap[name] ?? (idx === 0 ? 0 : 1);
+          const ctOpts = advancedOptions?.chartTypeOptions || {};
+          const labelNumFmt = ctOpts.labelNumberFormat || "none";
+          const fmtVal = (v: number) => {
+            if (labelNumFmt === "k") return `${(v / 1e3).toFixed(1)}K`;
+            if (labelNumFmt === "m") return `${(v / 1e6).toFixed(1)}M`;
+            if (labelNumFmt === "b") return `${(v / 1e9).toFixed(1)}B`;
+            if (labelNumFmt === "t") return `${(v / 1e12).toFixed(1)}T`;
+            return v.toLocaleString();
+          };
+          return {
+            name,
+            type: seriesType,
+            yAxisIndex,
+            data: xValues.map((x) => dataMap.get(name)?.get(x) ?? 0),
+            smooth: seriesType === "line",
+            label: {
+              show: ctOpts.showDataLabels ?? false,
+              position: "top",
+              formatter: ctOpts.showDataLabels ? (params: any) => fmtVal(Number(params.value)) : undefined,
+            },
+          };
+        });
+
+        return {
+          ...common,
+          xAxis: buildCategoryAxis(),
+          yAxis: [
+            { type: "value", alignTicks: true },
+            { type: "value", alignTicks: true, splitLine: { show: false } },
+          ],
+          series: mixedSeries,
+        };
+      }
+      case "waterfall": {
+        const wfRaw = xValues.map((x) => dataMap.get(seriesNames[0])?.get(x) ?? 0);
+        let wfRunning = 0;
+        const wfPlaceholders: number[] = [];
+        const wfBars: any[] = [];
+        wfRaw.forEach((v) => {
+          wfPlaceholders.push(v >= 0 ? wfRunning : wfRunning + v);
+          wfBars.push({ value: Math.abs(v), itemStyle: { color: v >= 0 ? "#22c55e" : "#ef4444" } });
+          wfRunning += v;
+        });
+        return {
+          ...common,
+          xAxis: buildCategoryAxis(),
+          yAxis: { type: "value" },
+          series: [
+            {
+              type: "bar",
+              stack: "waterfall",
+              itemStyle: { color: "transparent", borderColor: "transparent" },
+              data: wfPlaceholders,
+              tooltip: { show: false },
+            },
+            {
+              name: seriesNames[0] || "Value",
+              type: "bar",
+              stack: "waterfall",
+              data: wfBars,
+              label: {
+                show: false,
+              },
+            },
+          ],
+        };
+      }
+      default: {
+        // Try registered plugins
+        const plugin = getPlugin(chartKind);
+        if (plugin?.buildOptions) {
+          return plugin.buildOptions({ rows, columns, advancedOptions, config });
+        }
         return null;
+      }
     }
   };
 
@@ -1729,6 +2374,10 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     name,
     description,
     metricColumn,
+    metrics,
+    timeGrain,
+    sortBy,
+    queryMode,
     groupByColumns,
     timeColumn,
     timeRange,
@@ -1767,6 +2416,31 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     }
   }, [previewOptions?.xAxisDateFormat]);
 
+  // Update Y axis formatter when yAxisDateFormat changes (horizontal bar charts)
+  useEffect(() => {
+    const dateFormat = previewOptions?.yAxisDateFormat;
+    if (!previewOptions || !previewOptions.yAxis || !dateFormat) return;
+    const fmt = dateFormat === "auto" ? null : (val: string) => formatXAxisLabel(String(val), dateFormat as DateDisplayFormat);
+    setPreviewOptions((prev: any) => {
+      if (!prev || !prev.yAxis) return prev;
+      const updateAxisFormatter = (axis: any) => {
+        if (axis.type !== "category") return axis;
+        return {
+          ...axis,
+          axisLabel: fmt
+            ? { ...(axis.axisLabel || {}), formatter: fmt }
+            : { ...(axis.axisLabel || {}), formatter: undefined },
+        };
+      };
+      return {
+        ...prev,
+        yAxis: Array.isArray(prev.yAxis)
+          ? prev.yAxis.map(updateAxisFormatter)
+          : updateAxisFormatter(prev.yAxis),
+      };
+    });
+  }, [previewOptions?.yAxisDateFormat]);
+
   const runPreviewQuery = async (forceRegenerate: boolean = false) => {
     if (!selectedDatasetId || !selectedTemplate) {
       return;
@@ -1774,7 +2448,6 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
 
     // Prevent concurrent runs — if a query is already in flight, skip
     if (isQueryRunningRef.current) {
-      console.log('[ChartBuilder] Skipping runPreviewQuery — already running');
       return;
     }
 
@@ -1971,8 +2644,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         if (advancedOptions.yAxisFormat) {
           option.yAxisFormat = advancedOptions.yAxisFormat;
           if (option.yAxis && typeof option.yAxis === "object") {
-            // If yAxis is an array, update all; if object, update directly
-            const setFormatter = (yAxisObj: any) => {
+            const setYFormatter = (yAxisObj: any) => {
               yAxisObj.axisLabel = {
                 ...(yAxisObj.axisLabel || {}),
                 hideOverlap: true,
@@ -1985,11 +2657,29 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
                 },
               };
             };
-            if (Array.isArray(option.yAxis)) {
-              option.yAxis.forEach(setFormatter);
-            } else {
-              setFormatter(option.yAxis);
-            }
+            if (Array.isArray(option.yAxis)) option.yAxis.forEach(setYFormatter);
+            else setYFormatter(option.yAxis);
+          }
+        }
+        // Merge xAxisFormat — for horizontal bar charts where X is the value axis
+        if (advancedOptions.xAxisFormat && advancedOptions.xAxisFormat !== "none") {
+          option.xAxisFormat = advancedOptions.xAxisFormat;
+          if (option.xAxis && typeof option.xAxis === "object") {
+            const setXFormatter = (xAxisObj: any) => {
+              xAxisObj.axisLabel = {
+                ...(xAxisObj.axisLabel || {}),
+                hideOverlap: true,
+                formatter: (val: any) => {
+                  if (advancedOptions.xAxisFormat === "k") return `${(val / 1e3).toFixed(0)}K`;
+                  if (advancedOptions.xAxisFormat === "m") return `${(val / 1e6).toFixed(0)}M`;
+                  if (advancedOptions.xAxisFormat === "b") return `${(val / 1e9).toFixed(0)}B`;
+                  if (advancedOptions.xAxisFormat === "t") return `${(val / 1e12).toFixed(0)}T`;
+                  return val.toLocaleString();
+                },
+              };
+            };
+            if (Array.isArray(option.xAxis)) option.xAxis.forEach(setXFormatter);
+            else setXFormatter(option.xAxis);
           }
         }
         // Merge stacking, smooth, and marker settings for each series
@@ -2147,6 +2837,10 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         if (advancedOptions.labelLayout) {
           option.labelLayout = advancedOptions.labelLayout;
         }
+        // Apply chart-type-specific options (from "Chart Options" section in Customize tab)
+        if (advancedOptions.chartTypeOptions) {
+          option = applyChartTypeOptions(option, selectedTemplate?.id ?? "", advancedOptions.chartTypeOptions);
+        }
         // Merge date settings (timeColumn, timeRange, dateDisplayFormat)
         if (advancedOptions.timeColumn) {
           option.timeColumn = advancedOptions.timeColumn;
@@ -2160,19 +2854,31 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         // Merge xAxisDateFormat for persistence and preview
         if (advancedOptions.xAxisDateFormat) {
           option.xAxisDateFormat = advancedOptions.xAxisDateFormat;
-          // Update the xAxis formatter to use the new date format
           if (option.xAxis && advancedOptions.xAxisDateFormat !== "auto") {
-            const updateAxisFormatter = (axis: any) => {
+            const updateXFormatter = (axis: any) => {
               axis.axisLabel = {
                 ...(axis.axisLabel || {}),
                 formatter: (val: string) => formatXAxisLabel(String(val), advancedOptions.xAxisDateFormat),
               };
             };
-            if (Array.isArray(option.xAxis)) {
-              option.xAxis.forEach(updateAxisFormatter);
-            } else {
-              updateAxisFormatter(option.xAxis);
-            }
+            if (Array.isArray(option.xAxis)) option.xAxis.forEach(updateXFormatter);
+            else updateXFormatter(option.xAxis);
+          }
+        }
+        // Merge yAxisDateFormat — for horizontal bars where Y is the category axis
+        if ((advancedOptions as any).yAxisDateFormat && (advancedOptions as any).yAxisDateFormat !== "auto") {
+          option.yAxisDateFormat = (advancedOptions as any).yAxisDateFormat;
+          if (option.yAxis) {
+            const updateYDateFormatter = (axis: any) => {
+              if (axis.type === "category") {
+                axis.axisLabel = {
+                  ...(axis.axisLabel || {}),
+                  formatter: (val: string) => formatXAxisLabel(String(val), (advancedOptions as any).yAxisDateFormat),
+                };
+              }
+            };
+            if (Array.isArray(option.yAxis)) option.yAxis.forEach(updateYDateFormatter);
+            else updateYDateFormatter(option.yAxis);
           }
         }
         // Update advancedOptions.series to match the current series order and names
@@ -2259,14 +2965,6 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         sql_text: sqlPreview.lastSql || null,
       };
 
-      console.log('[ChartBuilder] Saving chart with payload:', {
-        name: payload.name,
-        has_sql_text: Boolean(payload.sql_text),
-        sql_text_length: payload.sql_text?.length || 0,
-        filters: config?.filters,
-        query_config_keys: Object.keys(config || {}),
-      });
-
       // If the chart name has changed from the original, always create a new chart (POST)
       let isUpdate = Boolean(chartId);
       if (isUpdate && initialSnapshotRef.current && name.trim() !== initialSnapshotRef.current.name) {
@@ -2339,7 +3037,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     setDescription,
     chartType,
     setChartType,
-    templates: TEMPLATES,
+    templates: allTemplates,
     categories,
     selectedTemplate,
     previewOptions,
@@ -2352,6 +3050,14 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     datasetDetail,
     metricColumn,
     setMetricColumn,
+    metrics,
+    setMetrics,
+    timeGrain,
+    setTimeGrain,
+    sortBy,
+    setSortBy,
+    queryMode,
+    setQueryMode,
     groupByColumns,
     setGroupByColumns,
     timeColumn,

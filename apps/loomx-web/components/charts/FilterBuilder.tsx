@@ -533,10 +533,13 @@ const FilterBuilder: React.FC = () => {
                       value={editingFilter.value || ""}
                       onChange={(e) => {
                         const selectedValue = e.target.value;
-                        // Check keyColumn (e.g., "Dims.IDEASProduct.ProductPrimaryKey")
                         const keyColumn = editingFilter.keyColumn || '';
-                        // Extract just the column name (last part after the dot)
                         const keyColumnName = keyColumn.split('.').pop() || '';
+
+                        // Prefer the actual key returned from the server (opt.key may differ from
+                        // opt.value when the backend returns a fact-table key like a hash).
+                        const matchedOpt = editingFilter.options.find((o) => o.value === selectedValue);
+                        const serverKey = matchedOpt?.key;
 
                         let valueKey: string;
 
@@ -549,17 +552,18 @@ const FilterBuilder: React.FC = () => {
                             'Unknown': '-1'
                           };
                           valueKey = boolMapping[selectedValue] || selectedValue;
-                          console.log(`[FilterBuilder] BoolFlag mapping for "${selectedValue}": ${valueKey}`);
                         }
-                        // For keyColumns ending with "Key": compute MMH3 hash from display value
+                        // If server returned a distinct key (not the same as display value), use it directly
+                        else if (serverKey && serverKey !== selectedValue) {
+                          valueKey = serverKey;
+                        }
+                        // Fallback: for columns ending with "Key" compute mmh3 hash
                         else if (keyColumnName.endsWith('Key')) {
                           valueKey = mmh3Hash64(selectedValue);
-                          console.log(`[FilterBuilder] Hashing for ${keyColumnName}: "${selectedValue}" -> ${valueKey}`);
                         }
-                        // For keyColumns ending with "ID": use the selected value directly (actual ID from dimension)
+                        // Otherwise use the value as-is
                         else {
                           valueKey = selectedValue;
-                          console.log(`[FilterBuilder] Direct value for ${keyColumnName}: "${selectedValue}"`);
                         }
 
                         updateFilter(editingFilter.id, {
