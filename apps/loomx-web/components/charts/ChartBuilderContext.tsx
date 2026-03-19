@@ -288,8 +288,8 @@ export function buildEChartsOptionsFromQueryResult(
     },
   } as any;
 
-  const buildCategoryAxis = () => {
-    const axis: any = { type: "category", data: xValues };
+  const buildCategoryAxis = (boundaryGap: boolean = true) => {
+    const axis: any = { type: "category", data: xValues, boundaryGap };
     if (xAxisDateFormat && xAxisDateFormat !== "auto") {
       axis.axisLabel = {
         formatter: (val: string) => formatXAxisLabel(String(val), xAxisDateFormat as DateDisplayFormat),
@@ -319,7 +319,7 @@ export function buildEChartsOptionsFromQueryResult(
               },
             }
           : common.tooltip,
-        xAxis: buildCategoryAxis(),
+        xAxis: buildCategoryAxis(false),
         yAxis: isPercentageArea
           ? {
               type: "value",
@@ -1821,9 +1821,9 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
           return (val as DateDisplayFormat) || "auto";
       }
     };
-    const buildCategoryAxis = () => {
+    const buildCategoryAxis = (boundaryGap: boolean = true) => {
       // Use the actual UI format string for the formatter
-      const axis: any = { type: "category", data: xValues };
+      const axis: any = { type: "category", data: xValues, boundaryGap };
       if (xAxisDateFormat && xAxisDateFormat !== "auto") {
         axis.axisLabel = {
           formatter: (val: string) => formatXAxisLabel(String(val), xAxisDateFormat),
@@ -1853,7 +1853,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
                 },
               }
             : common.tooltip,
-          xAxis: buildCategoryAxis(),
+          xAxis: buildCategoryAxis(false),
           yAxis: isPercentageArea
             ? {
                 type: "value",
