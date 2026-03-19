@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useRef, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { useChartBuilder } from "./ChartBuilderContext";
 import { getPlugin } from "./chartPluginRegistry";
@@ -220,8 +220,42 @@ const TableRenderer: React.FC<TableRendererProps> = ({ rows, columns, isPivot })
   );
 };
 
-const ChartPreview: React.FC = () => {
+interface ChartPreviewProps {
+  /** Called when user clicks a data point in dashboard view — enables cross-filtering */
+  onCrossFilter?: (value: string) => void;
+}
+
+const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter }) => {
   const { selectedTemplate, selectedDatasetId, previewOptions, sqlPreview, description, chartType, advancedOptions } = useChartBuilder();
+  const echartsInstanceRef = useRef<any>(null);
+
+  // ── Download helpers ─────────────────────────────────────────────────────────
+  const downloadPng = useCallback(() => {
+    if (!echartsInstanceRef.current) return;
+    const url = echartsInstanceRef.current.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: '#fff' });
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'chart.png';
+    a.click();
+  }, []);
+
+  const downloadCsv = useCallback(() => {
+    const cols = sqlPreview.dataColumns;
+    const rows = sqlPreview.dataRows;
+    if (!cols?.length || !rows?.length) return;
+    const escape = (v: any) => {
+      const s = v === null || v === undefined ? '' : String(v);
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const csv = [cols.map(escape).join(','), ...rows.map(r => r.map(escape).join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'chart.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [sqlPreview.dataColumns, sqlPreview.dataRows]);
 
   const hasOption = Boolean(previewOptions);
 
@@ -489,6 +523,48 @@ const ChartPreview: React.FC = () => {
     };
   }
 
+  // ── Reference lines (markLine) ───────────────────────────────────────────────
+  const referenceLines: any[] = (advancedOptions as any)?.referenceLines || [];
+  if (referenceLines.length > 0 && Array.isArray(chartOptions.series) && chartOptions.series.length > 0) {
+    const markLineData = referenceLines
+      .filter((rl: any) => rl.value !== '' && rl.value !== null && rl.value !== undefined)
+      .map((rl: any) => ({
+        name: rl.label || '',
+        yAxis: Number(rl.value),
+        lineStyle: {
+          color: rl.color || '#ef4444',
+          type: rl.style || 'dashed',
+          width: 2,
+        },
+        label: {
+          show: Boolean(rl.label),
+          formatter: rl.label || '',
+          position: 'end',
+          color: rl.color || '#ef4444',
+          fontSize: 11,
+          fontWeight: 600,
+        },
+      }));
+
+    if (markLineData.length > 0) {
+      chartOptions = {
+        ...chartOptions,
+        series: chartOptions.series.map((s: any, i: number) => {
+          if (i !== 0) return s; // Only attach to first series to avoid duplicate lines
+          return {
+            ...s,
+            markLine: {
+              silent: true,
+              animation: false,
+              symbol: ['none', 'none'],
+              data: markLineData,
+            },
+          };
+        }),
+      };
+    }
+  }
+
   // Configure grid spacing to reduce top space and add bottom space
   if (!chartOptions.grid) {
     chartOptions = {
@@ -513,24 +589,51 @@ const ChartPreview: React.FC = () => {
     };
   }
 
+  const hasData = hasOption && !sqlPreview.isRunning && !!sqlPreview.dataRows?.length;
+
   return (
     <div className="chart-builder-preview-card">
       <div className="chart-builder-preview-header">
         <div className="chart-builder-preview-meta">
           {subtitle && <div>{subtitle}</div>}
-          {/* Timer removed as requested */}
         </div>
-        {description && description.trim() && (
-          <div className="chart-info-icon-container">
-            <i
-              className="fas fa-info-circle chart-info-icon"
-              title={description}
-            />
-            <div className="chart-info-tooltip">
-              {description}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {hasData && (
+            <>
+              <button
+                type="button"
+                className="chart-preview-action-btn"
+                title="Download PNG"
+                onClick={downloadPng}
+                style={{ padding: '4px 8px', fontSize: 12, background: 'none', border: '1px solid #e2e8f0', borderRadius: 5, cursor: 'pointer', color: '#64748b', display: 'flex', alignItems: 'center', gap: 4 }}
+              >
+                <i className="fas fa-image" style={{ fontSize: 11 }} />
+                <span>PNG</span>
+              </button>
+              <button
+                type="button"
+                className="chart-preview-action-btn"
+                title="Download CSV"
+                onClick={downloadCsv}
+                style={{ padding: '4px 8px', fontSize: 12, background: 'none', border: '1px solid #e2e8f0', borderRadius: 5, cursor: 'pointer', color: '#64748b', display: 'flex', alignItems: 'center', gap: 4 }}
+              >
+                <i className="fas fa-file-csv" style={{ fontSize: 11 }} />
+                <span>CSV</span>
+              </button>
+            </>
+          )}
+          {description && description.trim() && (
+            <div className="chart-info-icon-container">
+              <i
+                className="fas fa-info-circle chart-info-icon"
+                title={description}
+              />
+              <div className="chart-info-tooltip">
+                {description}
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
       <div
         className={
@@ -555,11 +658,18 @@ const ChartPreview: React.FC = () => {
         ) : hasOption && !sqlPreview.isRunning ? (
           <ReactECharts
             option={chartOptions}
-            style={{ width: "100%", height: "100%" }}
+            style={{ width: "100%", height: "100%", cursor: onCrossFilter ? 'pointer' : undefined }}
             key={
               // Force re-render when xAxis date format changes
               (chartOptions.xAxis && chartOptions.xAxis.axisLabel && chartOptions.xAxis.axisLabel.formatter ? chartOptions.xAxisDateFormat || chartOptions.xAxis.axisLabel.formatter.toString() : 'default')
             }
+            onChartReady={(instance: any) => { echartsInstanceRef.current = instance; }}
+            onEvents={onCrossFilter ? {
+              click: (params: any) => {
+                const val = params.name || (Array.isArray(params.value) ? String(params.value[0]) : String(params.value ?? ''));
+                if (val) onCrossFilter(val);
+              },
+            } : undefined}
           />
         ) : sqlPreview.isRunning ? (
           <div className="chart-preview-loading-state">

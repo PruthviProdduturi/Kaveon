@@ -109,6 +109,13 @@ interface DashboardContextState {
   addIgnoredFilter: (itemId: string, filterId: string) => void;
   removeIgnoredFilter: (itemId: string, filterId: string) => void;
 
+  // Cross-filter state (click-based filtering across charts)
+  crossFilters: Record<string, { column: string | null; value: string }>;
+  setCrossFilter: (sourceItemId: string, column: string | null, value: string) => void;
+  clearCrossFilter: (sourceItemId: string) => void;
+  clearAllCrossFilters: () => void;
+  getCrossFilterFilters: (itemId: string) => Array<{ column: string | null; operator: string; value: string }>;
+
   // Filter resolution
   getEffectiveFilters: (itemId: string) => FilterResolutionResult;
 
@@ -183,6 +190,35 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
   // Chart config cache for parallel loading
   const [chartConfigCache, setChartConfigCache] = useState<Map<number, any>>(new Map());
   const [isPreloading, setIsPreloading] = useState<boolean>(false);
+
+  // Cross-filter state
+  const [crossFilters, setCrossFiltersState] = useState<Record<string, { column: string | null; value: string }>>({});
+
+  const setCrossFilter = useCallback((sourceItemId: string, column: string | null, value: string) => {
+    setCrossFiltersState((prev) => ({ ...prev, [sourceItemId]: { column, value } }));
+  }, []);
+
+  const clearCrossFilter = useCallback((sourceItemId: string) => {
+    setCrossFiltersState((prev) => {
+      const next = { ...prev };
+      delete next[sourceItemId];
+      return next;
+    });
+  }, []);
+
+  const clearAllCrossFilters = useCallback(() => {
+    setCrossFiltersState({});
+  }, []);
+
+  /** Returns cross-filter filters from OTHER charts that this itemId should apply */
+  const getCrossFilterFilters = useCallback(
+    (itemId: string): Array<{ column: string | null; operator: string; value: string }> => {
+      return Object.entries(crossFilters)
+        .filter(([sourceId]) => sourceId !== itemId)
+        .map(([, cf]) => ({ column: cf.column, operator: '=', value: cf.value }));
+    },
+    [crossFilters]
+  );
 
   // UI state
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -1018,6 +1054,13 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
     setComponentFilters,
     addIgnoredFilter,
     removeIgnoredFilter,
+
+    // Cross-filter
+    crossFilters,
+    setCrossFilter,
+    clearCrossFilter,
+    clearAllCrossFilters,
+    getCrossFilterFilters,
 
     // Filter resolution
     getEffectiveFilters,

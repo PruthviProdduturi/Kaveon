@@ -620,6 +620,7 @@ const AdvancedChartOptions: React.FC = () => {
   const [isAxesExpanded, setIsAxesExpanded] = useState(false);
   const [isTooltipsExpanded, setIsTooltipsExpanded] = useState(false);
   const [isLegendExpanded, setIsLegendExpanded] = useState(false);
+  const [isRefLinesExpanded, setIsRefLinesExpanded] = useState(false);
 
   // Sync localLegendOrder to advancedOptions when changed
   useEffect(() => {
@@ -1202,6 +1203,72 @@ const AdvancedChartOptions: React.FC = () => {
               )}
             </div>
           )}
+        </CollapsibleSection>
+      )}
+
+      {/* REFERENCE LINES */}
+      {hasCartesianAxes && (
+        <CollapsibleSection title="Reference lines" expanded={isRefLinesExpanded} onToggle={() => setIsRefLinesExpanded(v => !v)}>
+          {(() => {
+            const refLines: any[] = advancedOptions?.referenceLines || [];
+            const updateLines = (lines: any[]) => {
+              setAdvancedOptions((prev: any) => ({ ...(prev || {}), referenceLines: lines }));
+              setPreviewOptions((prev: any) => ({ ...(prev || {}), referenceLines: lines }));
+            };
+            const addLine = () => updateLines([...refLines, { value: '', label: '', color: '#ef4444', style: 'dashed' }]);
+            const removeLine = (idx: number) => updateLines(refLines.filter((_: any, i: number) => i !== idx));
+            const updateLine = (idx: number, key: string, val: any) => {
+              const next = refLines.map((l: any, i: number) => i === idx ? { ...l, [key]: val } : l);
+              updateLines(next);
+            };
+            return (
+              <>
+                {refLines.map((rl: any, idx: number) => (
+                  <div key={idx} style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 6, padding: '10px 10px 8px', marginBottom: 8 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+                      <div>
+                        <label className="chart-builder-label">Value</label>
+                        <input type="number" className="chart-builder-input" value={rl.value} placeholder="e.g. 1000"
+                          onChange={e => updateLine(idx, 'value', e.target.value)} />
+                      </div>
+                      <div>
+                        <label className="chart-builder-label">Label</label>
+                        <input type="text" className="chart-builder-input" value={rl.label} placeholder="e.g. Target"
+                          onChange={e => updateLine(idx, 'label', e.target.value)} />
+                      </div>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 32px', gap: 8, alignItems: 'end' }}>
+                      <div>
+                        <label className="chart-builder-label">Color</label>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <input type="color" value={rl.color || '#ef4444'} onChange={e => updateLine(idx, 'color', e.target.value)}
+                            style={{ width: 32, height: 28, border: '1px solid #e2e8f0', borderRadius: 4, cursor: 'pointer', padding: 2 }} />
+                          <span style={{ fontSize: 12, color: '#64748b' }}>{rl.color || '#ef4444'}</span>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="chart-builder-label">Style</label>
+                        <select className="chart-builder-select" value={rl.style || 'dashed'} onChange={e => updateLine(idx, 'style', e.target.value)}>
+                          <option value="dashed">Dashed</option>
+                          <option value="solid">Solid</option>
+                          <option value="dotted">Dotted</option>
+                        </select>
+                      </div>
+                      <button type="button" onClick={() => removeLine(idx)}
+                        style={{ padding: '5px 8px', borderRadius: 5, border: '1px solid #fca5a5', background: '#fff', color: '#ef4444', cursor: 'pointer', fontSize: 12, alignSelf: 'flex-end' }}
+                        title="Remove line">
+                        <i className="fas fa-times" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                <button type="button" onClick={addLine}
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', border: '1px dashed #94a3b8', borderRadius: 6, background: 'none', color: '#475569', fontSize: 12, cursor: 'pointer', width: '100%', justifyContent: 'center' }}>
+                  <i className="fas fa-plus" style={{ fontSize: 10 }} /> Add reference line
+                </button>
+              </>
+            );
+          })()}
         </CollapsibleSection>
       )}
 
