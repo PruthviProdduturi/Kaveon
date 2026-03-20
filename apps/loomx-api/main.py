@@ -13,7 +13,7 @@ import time
 
 from config import settings
 from middleware.errors import AppError, app_error_handler, generic_error_handler
-from database.pool import LargeIntResponse
+from database.pool import LargeIntResponse, TokenAuthError
 from database.warmup import start_warmup_and_heartbeat
 
 # Routers
@@ -79,8 +79,17 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "x-user-email", "Cache-Control"],
 )
 
+async def _token_auth_handler(request: Request, exc: TokenAuthError) -> JSONResponse:
+    print(f"[API] Token auth failure — {request.method} {request.url.path}")
+    return JSONResponse(
+        status_code=401,
+        content={"error": {"code": "token_auth_failed", "message": "Azure AD token authentication failed. Please sign in again."}},
+    )
+
+
 # Exception handlers
 app.add_exception_handler(AppError, app_error_handler)
+app.add_exception_handler(TokenAuthError, _token_auth_handler)
 app.add_exception_handler(Exception, generic_error_handler)
 
 
