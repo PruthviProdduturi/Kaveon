@@ -1029,7 +1029,7 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
     setDescription,
 
     // Actions - Layout management
-    setLayout,
+    setLayout: (newLayout: DashboardLayoutItem[]) => { setLayout(newLayout); setHasUnsavedChanges(true); },
     addLayoutItem,
     updateLayoutItem,
     removeLayoutItem,

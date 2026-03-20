@@ -223,8 +223,8 @@ LoomX uses Azure AD for all authentication. This is a **one-time setup** by your
    - **Redirect URI:** `Single-page application (SPA)` → `http://localhost:3000`
 
 3. Click **Register**. Note down:
-   - **Application (client) ID** → your `AZURE_CLIENT_ID` / `AZURE_CLIENT_ID`
-   - **Directory (tenant) ID** → your `AZURE_TENANT_ID` / `AZURE_TENANT_ID`
+   - **Application (client) ID** → your `AZURE_CLIENT_ID`
+   - **Directory (tenant) ID** → your `AZURE_TENANT_ID`
 
 4. **API permissions** → **Add a permission** → **Azure SQL Database** → **Delegated** → `user_impersonation` → **Add permissions**
 
@@ -294,10 +294,7 @@ cp .env.example .env
 
 ```env
 # ── Azure AD ─────────────────────────────────────────────────────────────────
-AZURE_TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-AZURE_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-
-# Same values for the Next.js frontend (MSAL)
+# Shared by both the API (JWT verification) and the Next.js frontend (MSAL)
 AZURE_TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 AZURE_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
@@ -527,10 +524,8 @@ LoomX/
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `AZURE_TENANT_ID` | ✅ | — | Azure AD tenant ID — used by the API for JWT verification |
-| `AZURE_CLIENT_ID` | ✅ | — | App Registration client ID — used by the API for JWT audience check |
-| `AZURE_TENANT_ID` | ✅ | — | Same tenant ID exposed to the Next.js frontend (MSAL) |
-| `AZURE_CLIENT_ID` | ✅ | — | Same client ID exposed to the Next.js frontend (MSAL) |
+| `AZURE_TENANT_ID` | ✅ | — | Azure AD tenant ID — used by the API for JWT verification and by the frontend (MSAL) |
+| `AZURE_CLIENT_ID` | ✅ | — | App Registration client ID — used by the API for JWT audience check and by the frontend (MSAL) |
 | `FABRIC_METADATA_ENDPOINT` | ⬜ | — | SQL endpoint of your Fabric metadata database (UI-configurable via setup wizard) |
 | `FABRIC_METADATA_DATABASE` | ⬜ | — | Database name in that Fabric endpoint (UI-configurable via setup wizard) |
 | `API_PORT` | ⬜ | `8080` | Port for the FastAPI service |
