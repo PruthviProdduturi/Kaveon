@@ -170,11 +170,24 @@ class FabricSQLConnection:
     def connect(self):
         if self.connection:
             return
-        if not self._try_token_auth():
-            raise Exception(
-                f"Failed to connect to {self.server}/{self.database}: "
-                "Azure AD token authentication failed"
-            )
+        global _azure_credential
+        # Retry up to 3 times — Azure CLI credential can take a moment to refresh
+        # its token cache after the system wakes from idle or a long pause.
+        for attempt in range(3):
+            if self._try_token_auth():
+                return
+            if attempt < 2:
+                wait = 2 * (attempt + 1)
+                print(f"[Pool] Token auth retry {attempt + 1}/3 in {wait} s …")
+                time.sleep(wait)
+                # On the second retry, force a fresh DefaultAzureCredential so the
+                # full credential chain is re-evaluated (clears any internal error state).
+                if attempt == 1:
+                    _azure_credential = DefaultAzureCredential()
+        raise Exception(
+            f"Failed to connect to {self.server}/{self.database}: "
+            "Azure AD token authentication failed after 3 attempts"
+        )
 
     def execute_query(self, sql: str, params: Optional[list] = None) -> Dict[str, Any]:
         """Execute SQL and return {columns, rows, rows_objects, row_count}."""
