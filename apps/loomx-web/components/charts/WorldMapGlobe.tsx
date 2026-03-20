@@ -15,8 +15,12 @@ interface Props {
 }
 
 const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOptions }) => {
+  const [mapReady, setMapReady] = React.useState(false);
+
   React.useEffect(() => {
+    if (!geoJson) return;
     echarts.registerMap("world", geoJson);
+    setMapReady(true);
   }, [geoJson]);
 
   const ctOpts = advancedOptions?.chartTypeOptions || {};
@@ -110,6 +114,8 @@ const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOption
       },
     }],
   };
+
+  if (!mapReady) return null;
 
   return (
     <ReactECharts
