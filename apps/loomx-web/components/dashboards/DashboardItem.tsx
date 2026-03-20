@@ -16,8 +16,6 @@ import { useDashboard } from './DashboardContext';
 import type { DashboardLayoutItem } from '../../types/dashboard';
 import { ConfirmModal } from '../../components/ConfirmModal';
 
-// Import component implementations (will be created next)
-// For now, we'll use placeholder components
 const DashboardChartComponent = React.lazy(() => import('./components/DashboardChartComponent'));
 const DashboardTextComponent = React.lazy(() => import('./components/DashboardTextComponent'));
 const DashboardHeaderComponent = React.lazy(() => import('./components/DashboardHeaderComponent'));

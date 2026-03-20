@@ -114,6 +114,7 @@ const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOption
   return (
     <ReactECharts
       option={option}
+      notMerge={true}
       style={{ width: "100%", height: "100%", background: "#0d1117" }}
     />
   );

@@ -923,7 +923,6 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
       return;
     }
 
-    console.log(`[DashboardContext] Pre-loading ${chartIds.length} charts in parallel...`);
     setIsPreloading(true);
 
     try {
@@ -954,7 +953,6 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
       });
 
       setChartConfigCache(newCache);
-      console.log(`[DashboardContext] Pre-loaded ${newCache.size} charts successfully`);
     } catch (error) {
       console.error('[DashboardContext] Error pre-loading charts:', error);
     } finally {
