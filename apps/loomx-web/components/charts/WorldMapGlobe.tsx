@@ -15,7 +15,7 @@ interface Props {
 
 const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOptions }) => {
   const containerRef = React.useRef<HTMLDivElement>(null);
-  const chartRef    = React.useRef<echarts.ECharts | null>(null);
+  const chartRef     = React.useRef<echarts.ECharts | null>(null);
 
   const ctOpts      = advancedOptions?.chartTypeOptions || {};
   const colorScheme = advancedOptions?.color?.length ? advancedOptions.color : MAP_DEFAULT_COLORS;
@@ -33,11 +33,14 @@ const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOption
   const nameIdx = columns.findIndex((_, i) => rows.some(r => isNaN(Number(r[i]))));
   const valIdx  = columns.length - 1 === nameIdx ? columns.length - 2 : columns.length - 1;
 
-  const data = nameIdx >= 0 && valIdx >= 0
-    ? rows
-        .map(r => ({ name: String(r[nameIdx] ?? ""), value: Number(r[valIdx] ?? 0) }))
-        .filter(d => d.name && !isNaN(d.value))
-    : [];
+  const data = React.useMemo(() =>
+    nameIdx >= 0 && valIdx >= 0
+      ? rows
+          .map(r => ({ name: String(r[nameIdx] ?? ""), value: Number(r[valIdx] ?? 0) }))
+          .filter(d => d.name && !isNaN(d.value))
+      : [],
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [JSON.stringify(rows), nameIdx, valIdx]);
 
   const values = data.map(d => d.value);
   const minV   = values.length ? Math.min(...values) : 0;
@@ -100,53 +103,65 @@ const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOption
         label: { show: true, textStyle: { color: "#fff", fontSize: 11, fontFamily: "Inter, sans-serif" } },
         itemStyle: { color: "#fbbf24" },
       },
-      itemStyle: {
-        borderWidth: 0.4,
-        borderColor: "rgba(255,255,255,0.15)",
-      },
-      label: {
-        show: showLabels,
-        textStyle: { color: "#fff", fontSize: 9, fontFamily: "Inter, sans-serif" },
-      },
+      itemStyle: { borderWidth: 0.4, borderColor: "rgba(255,255,255,0.15)" },
+      label: { show: showLabels, textStyle: { color: "#fff", fontSize: 9, fontFamily: "Inter, sans-serif" } },
     }],
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [JSON.stringify(data), minV, maxV, JSON.stringify(colorScheme), showLabels, numFmt, JSON.stringify(titleOpt)]);
+  }), [data, minV, maxV, JSON.stringify(colorScheme), showLabels, numFmt, JSON.stringify(titleOpt)]);
 
-  // ── Initialise echarts instance manually ───────────────────────────────────
-  // echarts-for-react's internal lifecycle management is incompatible with
-  // echarts-gl's WebGL renderer — it calls dispose() on objects that haven't
-  // finished initialising, causing runtime crashes. Managing the instance
-  // ourselves gives full control over creation and teardown order.
+  // ── Lifecycle ──────────────────────────────────────────────────────────────
+  // echarts-for-react's lifecycle is incompatible with echarts-gl's WebGL
+  // renderer. We manage the instance manually:
+  //
+  //  • echarts.init() creates the canvas/context once when geoJson arrives.
+  //  • setOption is deferred via requestAnimationFrame so the browser has
+  //    painted the container and the GL context is fully ready before we
+  //    touch it (synchronous setOption causes "null renderer" crashes).
+  //  • The RAF id is cancelled in the effect cleanup so rapid option changes
+  //    don't stack up.
+  //  • A separate unmount-only effect disposes the instance and removes the
+  //    resize listener exactly once.
+
   React.useEffect(() => {
     if (!geoJson || !containerRef.current) return;
 
     echarts.registerMap("world", geoJson);
 
-    let instance: echarts.ECharts | null = null;
-    try {
-      instance = echarts.init(containerRef.current);
-      chartRef.current = instance;
-    } catch (_) {
-      return; // WebGL not available (e.g. headless test env)
+    // Create instance on first run
+    if (!chartRef.current) {
+      try {
+        chartRef.current = echarts.init(containerRef.current);
+      } catch (_) {
+        return; // WebGL unavailable
+      }
     }
 
-    const onResize = () => { try { instance?.resize(); } catch (_) {} };
-    window.addEventListener("resize", onResize);
+    const instance = chartRef.current;
 
+    // Defer setOption until the next animation frame so the WebGL context
+    // has been fully initialised by the browser before we write to it.
+    const rafId = requestAnimationFrame(() => {
+      if (!instance || instance.isDisposed()) return;
+      try {
+        instance.setOption(option, { notMerge: true, silent: true });
+      } catch (_) {}
+    });
+
+    return () => { cancelAnimationFrame(rafId); };
+  }, [geoJson, option]);
+
+  // Dispose + resize listener — unmount only
+  React.useEffect(() => {
+    const onResize = () => { try { chartRef.current?.resize(); } catch (_) {} };
+    window.addEventListener("resize", onResize);
     return () => {
       window.removeEventListener("resize", onResize);
-      chartRef.current = null;
-      try { instance?.dispose(); } catch (_) {}
+      if (chartRef.current) {
+        try { chartRef.current.dispose(); } catch (_) {}
+        chartRef.current = null;
+      }
     };
-  }, [geoJson]);
-
-  // ── Sync option changes into the live instance ─────────────────────────────
-  React.useEffect(() => {
-    if (!chartRef.current) return;
-    try {
-      chartRef.current.setOption(option, { notMerge: true, silent: true });
-    } catch (_) {}
-  }, [option]);
+  }, []);
 
   return (
     <div
