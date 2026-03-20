@@ -1,5 +1,5 @@
-// Static imports — this file is loaded as a single webpack chunk via dynamic()
-// so echarts-gl extends the same echarts instance that ReactECharts uses.
+// Static imports — loaded as a single webpack chunk via dynamic() so
+// echarts-gl extends the same echarts instance used everywhere else.
 import "echarts-gl";
 import * as echarts from "echarts";
 import React from "react";
@@ -16,13 +16,14 @@ interface Props {
 const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOptions }) => {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const chartRef     = React.useRef<echarts.ECharts | null>(null);
+  const optionRef    = React.useRef<any>(null);
 
   const ctOpts      = advancedOptions?.chartTypeOptions || {};
   const colorScheme = advancedOptions?.color?.length ? advancedOptions.color : MAP_DEFAULT_COLORS;
   const showLabels  = ctOpts.mapShowLabels === true;
   const numFmt      = ctOpts.mapNumberFormat || "none";
 
-  const fmtVal = (v: number): string => {
+  const fmtVal = (v: number) => {
     if (numFmt === "k") return `${(v / 1e3).toFixed(1)}K`;
     if (numFmt === "m") return `${(v / 1e6).toFixed(1)}M`;
     if (numFmt === "b") return `${(v / 1e9).toFixed(1)}B`;
@@ -35,16 +36,15 @@ const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOption
 
   const data = React.useMemo(() =>
     nameIdx >= 0 && valIdx >= 0
-      ? rows
-          .map(r => ({ name: String(r[nameIdx] ?? ""), value: Number(r[valIdx] ?? 0) }))
-          .filter(d => d.name && !isNaN(d.value))
+      ? rows.map(r => ({ name: String(r[nameIdx] ?? ""), value: Number(r[valIdx] ?? 0) }))
+             .filter(d => d.name && !isNaN(d.value))
       : [],
   // eslint-disable-next-line react-hooks/exhaustive-deps
   [JSON.stringify(rows), nameIdx, valIdx]);
 
   const values = data.map(d => d.value);
-  const minV   = values.length ? Math.min(...values) : 0;
-  const maxV   = values.length ? Math.max(...values) : 1;
+  const minV = values.length ? Math.min(...values) : 0;
+  const maxV = values.length ? Math.max(...values) : 1;
 
   const titleOpt = advancedOptions?.title?.text
     ? { title: { text: advancedOptions.title.text, left: "center", top: 5, textStyle: { color: "#e2e8f0", fontSize: Number(advancedOptions.titleSize) || 20, fontFamily: advancedOptions.titleFont || "sans-serif" } } }
@@ -61,7 +61,7 @@ const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOption
       borderWidth: 1,
       padding: [10, 14],
       textStyle: { color: "#1e293b", fontSize: 12, fontFamily: "Inter, -apple-system, sans-serif" },
-      extraCssText: "box-shadow: 0 8px 24px rgba(0,0,0,0.12); border-radius: 8px;",
+      extraCssText: "box-shadow:0 8px 24px rgba(0,0,0,0.12);border-radius:8px;",
       formatter: (p: any) => {
         const v = Number(p.value);
         return `<b>${p.name}</b><br/>${p.value != null && !isNaN(v) ? fmtVal(v) : "—"}`;
@@ -78,20 +78,9 @@ const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOption
     globe: {
       baseTexture: "#0c1e35",
       shading: "lambert",
-      light: {
-        ambient: { intensity: 0.6 },
-        main: { intensity: 1.2, shadow: false },
-      },
+      light: { ambient: { intensity: 0.6 }, main: { intensity: 1.2, shadow: false } },
       atmosphere: { show: true },
-      viewControl: {
-        autoRotate: false,
-        distance: 160,
-        minDistance: 80,
-        maxDistance: 320,
-        rotateSensitivity: 1,
-        zoomSensitivity: 1,
-        panSensitivity: 0,
-      },
+      viewControl: { autoRotate: false, distance: 160, minDistance: 80, maxDistance: 320, rotateSensitivity: 1, zoomSensitivity: 1, panSensitivity: 0 },
     },
     series: [{
       type: "map3D",
@@ -109,68 +98,61 @@ const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOption
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [data, minV, maxV, JSON.stringify(colorScheme), showLabels, numFmt, JSON.stringify(titleOpt)]);
 
-  // ── Lifecycle ──────────────────────────────────────────────────────────────
-  // echarts-for-react's lifecycle is incompatible with echarts-gl's WebGL
-  // renderer. We manage the instance manually:
-  //
-  //  • echarts.init() creates the canvas/context once when geoJson arrives.
-  //  • setOption is deferred via requestAnimationFrame so the browser has
-  //    painted the container and the GL context is fully ready before we
-  //    touch it (synchronous setOption causes "null renderer" crashes).
-  //  • The RAF id is cancelled in the effect cleanup so rapid option changes
-  //    don't stack up.
-  //  • A separate unmount-only effect disposes the instance and removes the
-  //    resize listener exactly once.
+  // Keep optionRef current so the ResizeObserver callback always has latest option.
+  optionRef.current = option;
 
+  // ── Instance lifecycle ─────────────────────────────────────────────────────
+  // echarts.init() must run AFTER the container has non-zero pixel dimensions.
+  // Using ResizeObserver guarantees this regardless of when CSS resolves —
+  // it fires as soon as the element is laid out and sized by the browser.
   React.useEffect(() => {
-    if (!geoJson || !containerRef.current) return;
-
+    if (!geoJson) return;
     echarts.registerMap("world", geoJson);
 
-    // Create instance on first run
-    if (!chartRef.current) {
+    const container = containerRef.current;
+    if (!container) return;
+
+    let active = true;
+
+    const tryInit = () => {
+      if (!active || chartRef.current) return;
+      const { width, height } = container.getBoundingClientRect();
+      if (width === 0 || height === 0) return; // wait for next ResizeObserver tick
       try {
-        chartRef.current = echarts.init(containerRef.current);
-      } catch (_) {
-        return; // WebGL unavailable
-      }
-    }
-
-    const instance = chartRef.current;
-
-    // Double-rAF: first frame lets the browser flush layout so the container
-    // has real pixel dimensions; second frame is when the GL context is safe
-    // to write into. Also call resize() after setOption so echarts picks up
-    // the correct canvas size even if init() ran on a zero-height container.
-    let rafId = requestAnimationFrame(() => {
-      rafId = requestAnimationFrame(() => {
-        if (!instance || instance.isDisposed()) return;
-        try {
-          instance.setOption(option, { notMerge: true });
-          instance.resize();
-        } catch (_) {}
-      });
-    });
-
-    return () => { cancelAnimationFrame(rafId); };
-  }, [geoJson, option]);
-
-  // Dispose + resize listener — unmount only
-  React.useEffect(() => {
-    const onResize = () => {
-      requestAnimationFrame(() => {
-        try { chartRef.current?.resize(); } catch (_) {}
-      });
+        const inst = echarts.init(container);
+        chartRef.current = inst;
+        inst.setOption(optionRef.current, { notMerge: true });
+      } catch (_) {}
     };
-    window.addEventListener("resize", onResize);
+
+    const ro = new ResizeObserver(() => {
+      if (!active) return;
+      if (!chartRef.current) {
+        tryInit();
+      } else if (!chartRef.current.isDisposed()) {
+        try { chartRef.current.resize(); } catch (_) {}
+      }
+    });
+    ro.observe(container);
+
+    // Also attempt immediately in case the container is already sized.
+    tryInit();
+
     return () => {
-      window.removeEventListener("resize", onResize);
+      active = false;
+      ro.disconnect();
       if (chartRef.current) {
         try { chartRef.current.dispose(); } catch (_) {}
         chartRef.current = null;
       }
     };
-  }, []);
+  }, [geoJson]);
+
+  // ── Option updates ─────────────────────────────────────────────────────────
+  React.useEffect(() => {
+    if (!chartRef.current || chartRef.current.isDisposed()) return;
+    try { chartRef.current.setOption(option, { notMerge: true }); } catch (_) {}
+  }, [option]);
 
   return (
     <div
