@@ -207,7 +207,6 @@ const DashboardFilterBarEnhanced: React.FC = () => {
       valueKey = defaultValue;
     }
 
-    console.log(`[DashboardFilter] Auto-defaulting filter to AllUp: ${columnId} -> valueKey: ${valueKey}`);
 
     // Add the filter
     addDashboardFilter({

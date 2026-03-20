@@ -85,7 +85,6 @@ const DashboardFilterBarReadOnly: React.FC = () => {
       valueKey = editValue;
     }
 
-    console.log(`[DashboardFilterReadOnly] Updating filter: "${editValue}" -> valueKey: ${valueKey}`);
 
     // Update filter with new value and valueKey
     updateDashboardFilter(filterId, {
