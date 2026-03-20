@@ -65,13 +65,18 @@ def _extract_email_from_token(token: str) -> Optional[str]:
         except Exception:
             return None
 
+    # Azure AD may put the audience as the plain GUID or as the api:// URI form.
+    _valid_audiences = [
+        settings.AZURE_CLIENT_ID,
+        f"api://{settings.AZURE_CLIENT_ID}",
+    ]
     try:
         signing_key = _jwks_client.get_signing_key_from_jwt(token)
         payload = jwt.decode(
             token,
             signing_key.key,
             algorithms=["RS256"],
-            audience=settings.AZURE_CLIENT_ID,
+            audience=_valid_audiences,
             options={"verify_exp": True},
         )
         return _email_from_payload(payload)

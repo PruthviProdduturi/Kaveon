@@ -7,6 +7,7 @@
  */
 
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import { ConfirmModal } from '../../../components/ConfirmModal';
 import dynamic from 'next/dynamic';
 import type { DashboardComponentProps, TabConfig, DashboardLayoutItem, ComponentType } from '../../../types/dashboard';
 import { useDashboard } from '../DashboardContext';
@@ -43,17 +44,15 @@ const TabDashboardItem: React.FC<{
   const { getEffectiveFilters, selectedItemId, setSelectedItemId } = useDashboard();
 
   const isSelected = selectedItemId === item.i;
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const effectiveFilters = useMemo(() => {
     const result = getEffectiveFilters(item.i);
     return result.effectiveFilters;
   }, [item.i, getEffectiveFilters]);
 
-  const handleRemove = () => {
-    if (window.confirm('Are you sure you want to remove this component?')) {
-      onRemove(item.i);
-    }
-  };
+  const handleRemove = () => setConfirmOpen(true);
+  const doRemove = () => { setConfirmOpen(false); onRemove(item.i); };
 
   const handleDuplicate = () => {
     onDuplicate(item.i);
@@ -161,6 +160,15 @@ const TabDashboardItem: React.FC<{
       </div>
 
       <div className="dashboard-component-body">{renderComponent()}</div>
+
+      <ConfirmModal
+        isOpen={confirmOpen}
+        title="Remove component"
+        message="This component will be permanently removed from the dashboard."
+        confirmLabel="Remove"
+        onConfirm={doRemove}
+        onCancel={() => setConfirmOpen(false)}
+      />
     </div>
   );
 };

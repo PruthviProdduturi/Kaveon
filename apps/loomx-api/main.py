@@ -37,6 +37,19 @@ from routers import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Seed os.environ from settings so routers that call os.environ.get() see
+    # the values pydantic-settings loaded from .env (pydantic-settings does NOT
+    # write to os.environ itself).
+    import os as _os
+    for _k, _v in {
+        "METADATA_DB_TYPE": settings.METADATA_DB_TYPE,
+        "METADATA_ENDPOINT": settings.METADATA_ENDPOINT,
+        "METADATA_DATABASE": settings.METADATA_DATABASE,
+        "METADATA_HOST": settings.METADATA_HOST,
+        "METADATA_PORT": str(settings.METADATA_PORT),
+    }.items():
+        _os.environ.setdefault(_k, _v)
+
     # Startup: kick off pool warmup + heartbeat in the background
     if settings.METADATA_ENDPOINT and settings.METADATA_DATABASE:
         threading.Thread(target=start_warmup_and_heartbeat, daemon=True).start()
@@ -81,6 +94,7 @@ async def security_headers(request: Request, call_next):
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["X-Permitted-Cross-Domain-Policies"] = "none"
+    response.headers["Content-Security-Policy"] = "default-src 'none'"
     return response
 
 

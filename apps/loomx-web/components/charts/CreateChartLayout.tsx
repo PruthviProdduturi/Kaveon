@@ -5,11 +5,8 @@ import ChartConfigPanel from "./ChartConfigPanel";
 import ChartPreview from "./ChartPreview";
 import ColumnBrowser from "./ColumnBrowser";
 import DatasetSelector from "./DatasetSelector";
+import RunQueryButton from "./RunQueryButton";
 import SQLPreviewTabs from "./SQLPreviewTabs";
-
-// Removed unused imports
-// import ChartTypePicker from "./ChartTypePicker";
-// import FilterBuilder from "./FilterBuilder";
 
 const CreateChartLayout: React.FC = () => {
   const [isSourceCollapsed, setIsSourceCollapsed] = useState(true);
@@ -122,7 +119,9 @@ const CreateChartLayout: React.FC = () => {
           </div>
         </div>
 
-        <div className="chart-builder-center-actions" />
+        <div className="chart-builder-center-actions">
+          <RunQueryButton />
+        </div>
       </div>
 
       <div className="chart-builder-right">

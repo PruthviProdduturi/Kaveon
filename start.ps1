@@ -101,8 +101,8 @@ if (-not (Test-Path "venv")) {
     }
 }
 
-Write-Host "  Installing Python dependencies..." -ForegroundColor Cyan
-& venv\Scripts\python.exe -m pip install --quiet -r requirements.txt
+Write-Host "  Installing Python dependencies (this may take a minute)..." -ForegroundColor Cyan
+& venv\Scripts\python.exe -m pip install -r requirements.txt
 if ($?) {
     Write-Host "  Python dependencies: OK" -ForegroundColor Green
 } else {
@@ -117,7 +117,7 @@ Pop-Location
 Write-Host ""
 Write-Host "[4/6] Installing Node dependencies..." -ForegroundColor Yellow
 
-pnpm install --silent 2>&1 | Out-Null
+pnpm install 2>&1
 if ($?) {
     Write-Host "  Node dependencies: OK" -ForegroundColor Green
 } else {

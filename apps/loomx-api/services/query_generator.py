@@ -529,7 +529,15 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
             tr = time_range.lower()
 
             range_sql: Optional[str] = None
-            if tr == "last_day":
+            if tr == "latest_day":
+                # Filter to rows where the date equals the maximum date in the table
+                tc_parts = time_column.split(".")
+                tc_quoted = quote_identifier(tc_parts[-1])
+                range_sql = (
+                    f"CAST({raw_time_expr} AS DATE) = "
+                    f"(SELECT MAX(CAST({tc_quoted} AS DATE)) FROM {fact_table})"
+                )
+            elif tr == "last_day":
                 range_sql = f"{raw_time_expr} >= DATEADD(DAY, -1, {today})"
             elif tr == "last_week":
                 range_sql = f"{raw_time_expr} >= DATEADD(WEEK, -1, {today})"

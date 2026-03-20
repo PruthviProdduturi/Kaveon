@@ -145,12 +145,13 @@ class FabricSQLConnection:
             token_bytes = token_response.token.encode("UTF-16-LE")
             token_struct = struct.pack(f"<I{len(token_bytes)}s", len(token_bytes), token_bytes)
 
+            trust_cert = "yes" if settings.SQL_TRUST_SERVER_CERT else "no"
             conn_str = (
                 "DRIVER={ODBC Driver 18 for SQL Server};"
                 f"SERVER={self.server};"
                 f"DATABASE={self.database};"
                 "Encrypt=yes;"
-                "TrustServerCertificate=yes;"
+                f"TrustServerCertificate={trust_cert};"
                 "Connection Timeout=60;"
             )
             self.connection = pyodbc.connect(
@@ -212,6 +213,55 @@ class FabricSQLConnection:
             cursor.close()
             self.connection.commit()
             return {"columns": [], "rows": [], "rows_objects": [], "row_count": row_count}
+
+    def execute_query_cancellable(
+        self, sql: str, params: Optional[list] = None, cancel_event=None
+    ) -> Dict[str, Any]:
+        """Like execute_query but watches *cancel_event* (threading.Event).
+        When the event is set the pyodbc cursor is cancelled mid-flight."""
+        import threading as _threading
+
+        self.connect()
+        cursor = self.connection.cursor()
+
+        if cancel_event is not None:
+            def _watcher():
+                cancel_event.wait()
+                try:
+                    cursor.cancel()
+                except Exception:
+                    pass
+            _threading.Thread(target=_watcher, daemon=True).start()
+
+        try:
+            if params:
+                cursor.execute(sql, params)
+            else:
+                cursor.execute(sql)
+
+            sql_upper = sql.strip().upper()
+            is_modification = sql_upper.startswith(("INSERT", "UPDATE", "DELETE", "MERGE"))
+
+            if cursor.description:
+                columns = [col[0] for col in cursor.description]
+                rows_arrays: List[list] = []
+                rows_objects: List[dict] = []
+                for row in cursor.fetchall():
+                    safe_row = [_safe(v) for v in row]
+                    rows_arrays.append(safe_row)
+                    rows_objects.append({columns[i]: safe_row[i] for i in range(len(columns))})
+                cursor.close()
+                if is_modification:
+                    self.connection.commit()
+                return {"columns": columns, "rows": rows_arrays, "rows_objects": rows_objects, "row_count": len(rows_arrays)}
+            else:
+                row_count = cursor.rowcount
+                cursor.close()
+                self.connection.commit()
+                return {"columns": [], "rows": [], "rows_objects": [], "row_count": row_count}
+        finally:
+            if cancel_event is not None:
+                cancel_event.set()
 
     def get_tables(self) -> List[Dict[str, str]]:
         sql = """
@@ -583,6 +633,24 @@ def execute_query(sql: str, database: str, params: Optional[list] = None) -> Dic
             pool.return_connection(conn)
             raise
     raise Exception(f"Query failed after retry on {database}")
+
+
+def execute_query_cancellable(
+    sql: str, database: str, params: Optional[list] = None, cancel_event=None
+) -> Dict[str, Any]:
+    """execute_query variant that supports mid-flight cancellation via cancel_event."""
+    db_pool = get_connection_pool(database)
+    conn = db_pool.get_connection()
+    try:
+        result = conn.execute_query_cancellable(sql, params, cancel_event=cancel_event)
+        db_pool.return_connection(conn)
+        return result
+    except Exception as e:
+        if is_connection_error(e):
+            db_pool.discard_connection(conn)
+        else:
+            db_pool.return_connection(conn)
+        raise
 
 
 def get_tables(database: str) -> List[Dict[str, Any]]:

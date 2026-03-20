@@ -2,7 +2,8 @@
 
 import json
 import re
-from datetime import datetime
+import pyodbc
+from datetime import datetime, timezone
 from typing import List, Optional
 import database.metadata as db
 
@@ -57,19 +58,31 @@ def _expand_columns_from_dimensions(columns: list, dimensions: list) -> list:
 
 
 def _adapt(row: dict) -> dict:
+    name = row.get("dataset_name")
+    # Extract sql_text stored inside the tables_used JSON blob (virtual datasets).
+    sql_text = None
+    if row.get("tables_used"):
+        try:
+            tu = json.loads(row["tables_used"])
+            sql_text = tu.get("sql_text")
+        except Exception:
+            pass
     return {
         "id": str(row["id"]),
-        "name": row.get("dataset_name"),
+        "name": name,
+        "dataset_name": name,  # duplicated for frontend compatibility
         "description": row.get("description"),
         "table_name": row.get("fact_table"),
         "schema_name": row.get("schema_name"),
         "database_name": row.get("database_name"),
         "date_column": row.get("date_column"),
+        "sql_text": sql_text,
         "tables_used": row.get("tables_used"),
         "created_at": row.get("created_at"),
         "updated_at": row.get("modified_at"),
         "created_by": row.get("created_by"),
         "modified_by": row.get("modified_by"),
+        "modified_at": row.get("modified_at"),
         "favorite": row.get("favorite") == 1,
     }
 
@@ -177,27 +190,37 @@ def get_dataset_by_id(dataset_id: str, user_id: Optional[str] = None) -> Optiona
 
 
 def create_dataset(data: dict, user_id: str) -> dict:
-    now = datetime.utcnow()
-    tables_used = json.dumps({"filters": data.get("filters") or []})
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    tu_payload: dict = {"filters": data.get("filters") or []}
+    if data.get("sql_text"):
+        tu_payload["sql_text"] = data["sql_text"]
+    tables_used = json.dumps(tu_payload)
 
-    db.execute("""
-        INSERT INTO datasets (
-          dataset_name, description, fact_table, schema_name, database_name,
-          date_column, tables_used, created_at, modified_at, created_by, modified_by
-        ) VALUES (
-          @param0, @param1, @param2, @param3, @param4,
-          @param5, @param6, @param7, @param8, @param9, @param10
-        )
-    """, [
-        data["name"], data.get("description"), data.get("table_name"),
-        data.get("schema_name", "dbo"), data.get("database_name", "IDEASServingStoreLH"),
-        data.get("date_column"), tables_used,
-        now, now, user_id, user_id,
-    ])
+    base_name = data["name"]
+    name = base_name
+    for attempt in range(1, 100):
+        try:
+            db.execute("""
+                INSERT INTO datasets (
+                  dataset_name, description, fact_table, schema_name, database_name,
+                  date_column, tables_used, created_at, modified_at, created_by, modified_by
+                ) VALUES (
+                  @param0, @param1, @param2, @param3, @param4,
+                  @param5, @param6, @param7, @param8, @param9, @param10
+                )
+            """, [
+                name, data.get("description"), data.get("table_name") or "",
+                data.get("schema_name", "dbo"), data.get("database_name", "IDEASServingStoreLH"),
+                data.get("date_column"), tables_used,
+                now, now, user_id, user_id,
+            ])
+            break
+        except pyodbc.IntegrityError:
+            name = f"{base_name} ({attempt})"
 
     inserted = db.query_one(
         "SELECT TOP 1 id FROM datasets WHERE dataset_name = @param0 AND created_by = @param1 ORDER BY id DESC",
-        [data["name"], user_id],
+        [name, user_id],
     )
     if not inserted:
         raise RuntimeError("Failed to retrieve created dataset")
@@ -227,7 +250,7 @@ def create_dataset(data: dict, user_id: str) -> dict:
               dataset_id, table_name, column_name, data_type,
               is_dimension, is_metric, semantic_type
             ) VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6)
-        """, [dataset_id, col.get("table_name"), col.get("column_name"), col.get("data_type"),
+        """, [dataset_id, col.get("table_name") or "", col.get("column_name") or "", col.get("data_type") or "",
               1 if col.get("is_dimension") else 0,
               1 if col.get("is_metric") else 0,
               col.get("semantic_type")])
@@ -252,7 +275,7 @@ def update_dataset(dataset_id: str, data: dict, user_id: str) -> Optional[dict]:
     if not get_dataset_by_id(dataset_id):
         return None
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     updates, params, i = [], [], 0
     did = int(dataset_id)
 

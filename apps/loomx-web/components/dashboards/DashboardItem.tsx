@@ -14,6 +14,7 @@
 import React, { useMemo, useState } from 'react';
 import { useDashboard } from './DashboardContext';
 import type { DashboardLayoutItem } from '../../types/dashboard';
+import { ConfirmModal } from '../../components/ConfirmModal';
 
 // Import component implementations (will be created next)
 // For now, we'll use placeholder components
@@ -61,8 +62,8 @@ const DashboardItem: React.FC<DashboardItemProps> = ({ item, isEditMode: isEditM
 
   const isSelected = selectedItemId === item.i;
 
-  // State for hover actions (used by chart, row, column components)
-  const [showActions, setShowActions] = useState(false);
+  // State for confirm removal dialog
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   /**
    * Calculate effective filters for this component
@@ -81,16 +82,24 @@ const DashboardItem: React.FC<DashboardItemProps> = ({ item, isEditMode: isEditM
   };
 
   /**
-   * Handle component removal – for nested items use removeItemFromContainer
+   * Directly remove this item (used by components that have their own confirm dialog).
    */
-  const handleRemove = () => {
-    if (window.confirm('Are you sure you want to remove this component?')) {
-      if (item.parentId) {
-        removeItemFromContainer(item.parentId, item.i);
-      } else {
-        removeLayoutItem(item.i);
-      }
+  const directRemove = (_itemId?: string) => {
+    if (item.parentId) {
+      removeItemFromContainer(item.parentId, item.i);
+    } else {
+      removeLayoutItem(item.i);
     }
+  };
+
+  /**
+   * Handle component removal – opens DashboardItem's own confirm modal (tabs fallback).
+   */
+  const handleRemove = () => setConfirmOpen(true);
+
+  const doRemove = () => {
+    setConfirmOpen(false);
+    directRemove();
   };
 
   /**
@@ -118,7 +127,8 @@ const DashboardItem: React.FC<DashboardItemProps> = ({ item, isEditMode: isEditM
       isEditMode,
       effectiveFilters,
       onConfigChange: handleConfigChange,
-      onRemove: handleRemove,
+      onRemove: directRemove,
+      onDuplicate: handleDuplicate,
     };
 
     switch (item.type) {
@@ -185,8 +195,8 @@ const DashboardItem: React.FC<DashboardItemProps> = ({ item, isEditMode: isEditM
     }
   };
 
-  // Row and column components self-manage their controls – render without wrapper actions.
-  if (item.type === 'row' || item.type === 'column') {
+  // Row, column, divider, header and text self-manage their controls — no wrapper.
+  if (item.type === 'row' || item.type === 'column' || item.type === 'divider' || item.type === 'header' || item.type === 'text') {
     return (
       <div
         data-item-id={item.i}
@@ -202,74 +212,30 @@ const DashboardItem: React.FC<DashboardItemProps> = ({ item, isEditMode: isEditM
   if (item.type === 'chart') {
     return (
       <div
-        className={`dashboard-component ${isSelected ? 'dashboard-component-selected' : ''}`}
+        className={`dashboard-component dashboard-component-chart ${isSelected ? 'dashboard-component-selected' : ''}`}
         data-testid={`dashboard-item-${item.i}`}
         data-item-id={item.i}
         data-item-type={item.type}
         data-parent-id={item.parentId || ''}
         style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}
-        onMouseEnter={() => setShowActions(true)}
-        onMouseLeave={() => setShowActions(false)}
       >
-        {/* Hover action buttons in edit mode */}
-        {isEditMode && (
-          <div
-            style={{
-              position: 'absolute',
-              top: 6,
-              right: 6,
-              display: 'flex',
-              gap: 4,
-              zIndex: 10,
-              opacity: showActions ? 1 : 0,
-              transition: 'opacity 0.15s ease',
-              pointerEvents: showActions ? 'auto' : 'none',
-            }}
-          >
-            <button
-              onClick={handleDuplicate}
-              title="Duplicate chart"
-              style={{
-                background: 'rgba(255,255,255,0.95)',
-                padding: '4px 8px',
-                border: 'none',
-                borderRadius: 4,
-                cursor: 'pointer',
-                boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
-                fontSize: 12,
-                color: '#475569',
-              }}
-            >
-              <i className="fas fa-copy" />
-            </button>
-            <button
-              onClick={handleRemove}
-              title="Remove chart"
-              style={{
-                background: 'rgba(255,255,255,0.95)',
-                padding: '4px 8px',
-                border: 'none',
-                borderRadius: 4,
-                cursor: 'pointer',
-                boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
-                fontSize: 12,
-                color: '#ef4444',
-              }}
-            >
-              <i className="fas fa-times" />
-            </button>
-          </div>
-        )}
-
-        {/* Chart component */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
           {renderComponent()}
         </div>
+
+        <ConfirmModal
+          isOpen={confirmOpen}
+          title="Remove component"
+          message="This component will be permanently removed from the dashboard."
+          confirmLabel="Remove"
+          onConfirm={doRemove}
+          onCancel={() => setConfirmOpen(false)}
+        />
       </div>
     );
   }
 
-  // For non-chart/row/column components, render with header
+  // For tab components: render with header but no card border
   return (
     <div
       className={`dashboard-component ${isSelected ? 'dashboard-component-selected' : ''}`}
@@ -326,6 +292,15 @@ const DashboardItem: React.FC<DashboardItemProps> = ({ item, isEditMode: isEditM
       <div className="dashboard-component-body">
         {renderComponent()}
       </div>
+
+      <ConfirmModal
+        isOpen={confirmOpen}
+        title="Remove component"
+        message="This component will be permanently removed from the dashboard."
+        confirmLabel="Remove"
+        onConfirm={doRemove}
+        onCancel={() => setConfirmOpen(false)}
+      />
     </div>
   );
 };

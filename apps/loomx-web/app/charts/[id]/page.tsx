@@ -51,9 +51,11 @@ const ChartDetailBuilderView: React.FC<ChartDetailBuilderViewProps> = ({
   onToggleFavorite,
   dataset,
 }) => {
-  const { name, canSave, isSaving, saveError } = useChartBuilder();
+  const { name, setName, canSave, isSaving, saveError } = useChartBuilder();
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
   const [isAnimating, setIsAnimating] = useState(false);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   const handleFavoriteClick = () => {
     setIsAnimating(true);
@@ -61,16 +63,46 @@ const ChartDetailBuilderView: React.FC<ChartDetailBuilderViewProps> = ({
     setTimeout(() => setIsAnimating(false), 300);
   };
 
-  const title = name.trim() || chart.name || "Chart";
+  useEffect(() => {
+    if (isEditingName) nameInputRef.current?.select();
+  }, [isEditingName]);
+
+  const displayName = name.trim() || chart.name || "Chart";
 
   return (
     <>
       <header className="page-header page-header-with-actions">
         <div className="page-header-main">
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <h1 className="page-header-title" style={{ margin: 0 }}>
-              {title}
-            </h1>
+            {!isEditingName ? (
+              <h1
+                className="page-header-title"
+                style={{ margin: 0, cursor: "pointer", borderRadius: 6, padding: "4px 8px", border: "2px solid transparent", transition: "background 0.15s" }}
+                onClick={() => setIsEditingName(true)}
+                onMouseOver={e => { e.currentTarget.style.background = "#f1f5f9"; }}
+                onMouseOut={e => { e.currentTarget.style.background = "transparent"; }}
+                title="Click to rename"
+              >
+                {displayName}
+              </h1>
+            ) : (
+              <input
+                ref={nameInputRef}
+                type="text"
+                value={name}
+                onChange={e => setName(e.target.value)}
+                onBlur={() => setIsEditingName(false)}
+                onKeyDown={e => { if (e.key === "Enter" || e.key === "Escape") setIsEditingName(false); }}
+                placeholder="Chart name"
+                style={{
+                  fontSize: 18, fontWeight: 600, color: "#1e293b",
+                  padding: "4px 8px", margin: 0,
+                  border: "2px solid #2563eb", borderRadius: 6,
+                  outline: "none", background: "#fff",
+                  fontFamily: "inherit", minWidth: 200,
+                }}
+              />
+            )}
           </div>
           {chart.description && (
             <p className="page-header-subtitle">{chart.description}</p>

@@ -12,49 +12,30 @@ import { API_BASE } from "../../../../config";
 export const dynamic = 'force-dynamic';
 export const dynamicParams = true;
 
-/**
- * Inner component that pre-loads charts using the dashboard context
- * Must be inside DashboardProvider to access useDashboard hook
- */
 const DashboardViewContent: React.FC<{
-  id: string;
   isFavorite: boolean;
   isAnimating: boolean;
   isPublished: boolean;
   publishing: boolean;
-  sidebarCollapsed: boolean;
   initialConfig: DashboardConfig | undefined;
   onFavoriteClick: () => void;
   onPublish: () => void;
   onEdit: () => void;
-  setSidebarCollapsed: (collapsed: boolean) => void;
-}> = ({
-  id,
-  isFavorite,
-  isAnimating,
-  isPublished,
-  publishing,
-  sidebarCollapsed,
-  initialConfig,
-  onFavoriteClick,
-  onPublish,
-  onEdit,
-  setSidebarCollapsed,
-}) => {
-  const { preloadAllCharts, isPreloading } = useDashboard();
+}> = ({ isFavorite, isAnimating, isPublished, initialConfig, publishing, onFavoriteClick, onPublish, onEdit }) => {
+  const { preloadAllCharts, isPreloading, dashboardFilters } = useDashboard();
   const hasPreloadedRef = useRef(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
-  // Pre-load all chart configs in parallel when dashboard loads
   useEffect(() => {
     if (hasPreloadedRef.current || !initialConfig) return;
-
     hasPreloadedRef.current = true;
     preloadAllCharts(API_BASE, msalFetch);
   }, [initialConfig, preloadAllCharts]);
 
+  const hasFilters = dashboardFilters.length > 0;
+
   return (
     <div className="page-shell page-shell-wide">
-      {/* Header */}
       <header className="page-header page-header-with-actions">
         <div className="page-header-main">
           <h1 className="page-header-title">{initialConfig?.name || "Dashboard"}</h1>
@@ -63,194 +44,118 @@ const DashboardViewContent: React.FC<{
           )}
         </div>
         <div className="page-header-actions">
-          {/* Favorite Icon */}
+          {/* Filters toggle — only shown if dashboard has filters */}
+          {hasFilters && (
+            <button
+              onClick={() => setFiltersOpen((v) => !v)}
+              style={{
+                padding: '8px 14px',
+                background: filtersOpen ? '#eff6ff' : 'transparent',
+                border: filtersOpen ? '1px solid #bfdbfe' : '1px solid #e2e8f0',
+                borderRadius: 6,
+                cursor: 'pointer',
+                fontSize: 13,
+                fontWeight: 500,
+                color: filtersOpen ? '#2563eb' : '#475569',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              <i className="fas fa-filter" style={{ fontSize: 11 }} />
+              Filters
+            </button>
+          )}
+
+          {/* Favorite */}
           <button
             type="button"
-            className="chart-builder-fav-btn chart-builder-fav-btn-inline"
             aria-label={isFavorite ? "Unfavorite dashboard" : "Favorite dashboard"}
             onClick={onFavoriteClick}
             style={{
               background: 'transparent',
               border: 'none',
-              padding: '8px 12px',
+              padding: '8px 10px',
               cursor: 'pointer',
-              transition: 'all 0.2s ease',
-              borderRadius: '6px',
+              borderRadius: 6,
               transform: isAnimating ? 'scale(0.9)' : 'scale(1)',
+              transition: 'transform 0.2s ease',
             }}
-            onMouseOver={(e) => {
-              if (!isAnimating) {
-                e.currentTarget.style.background = isFavorite ? '#FEF3C7' : '#F3F4F6';
-                e.currentTarget.style.transform = 'scale(1.05)';
-              }
-            }}
-            onMouseOut={(e) => {
-              if (!isAnimating) {
-                e.currentTarget.style.background = 'transparent';
-                e.currentTarget.style.transform = 'scale(1)';
-              }
-            }}
+            onMouseOver={(e) => { e.currentTarget.style.background = isFavorite ? '#FEF3C7' : '#F3F4F6'; }}
+            onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; }}
           >
             <i
               className={isFavorite ? "fas fa-star" : "far fa-star"}
-              aria-hidden="true"
               style={{
-                fontSize: '18px',
+                fontSize: 18,
                 color: isFavorite ? '#F59E0B' : '#9CA3AF',
                 transition: 'all 0.2s ease',
-                filter: isFavorite ? 'drop-shadow(0 2px 4px rgba(245, 158, 11, 0.3))' : 'none',
-                transform: isAnimating && isFavorite ? 'scale(1.3)' : 'scale(1)',
+                filter: isFavorite ? 'drop-shadow(0 2px 4px rgba(245,158,11,0.3))' : 'none',
               }}
             />
           </button>
 
-          {/* Publish Button - Only shown if not published */}
           {!isPublished && (
             <button
               onClick={onPublish}
               disabled={publishing}
               style={{
-                padding: "8px 16px",
-                background: publishing ? "#94a3b8" : "#10b981",
-                color: "#ffffff",
-                border: "none",
+                padding: '8px 16px',
+                background: publishing ? '#94a3b8' : '#10b981',
+                color: '#fff',
+                border: 'none',
                 borderRadius: 6,
-                cursor: publishing ? "not-allowed" : "pointer",
+                cursor: publishing ? 'not-allowed' : 'pointer',
                 fontSize: 13,
                 fontWeight: 600,
               }}
             >
-              {publishing ? (
-                <>
-                  <i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />
-                  Publishing...
-                </>
-              ) : (
-                <>
-                  <i className="fas fa-check-circle" style={{ marginRight: 6 }} />
-                  Publish
-                </>
-              )}
+              {publishing
+                ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Publishing…</>
+                : <><i className="fas fa-check-circle" style={{ marginRight: 6 }} />Publish</>
+              }
             </button>
           )}
 
-          {/* Edit Button - Only shown if not published */}
-          {!isPublished && (
-            <button
-              onClick={onEdit}
-              style={{
-                padding: "8px 16px",
-                background: "#2563eb",
-                color: "#ffffff",
-                border: "none",
-                borderRadius: 6,
-                cursor: "pointer",
-                fontSize: 13,
-                fontWeight: 600,
-              }}
-            >
-              <i className="fas fa-edit" style={{ marginRight: 6 }} />
-              Edit
-            </button>
-          )}
+          <button
+            onClick={onEdit}
+            style={{
+              padding: '8px 16px',
+              background: '#2563eb',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 6,
+              cursor: 'pointer',
+              fontSize: 13,
+              fontWeight: 600,
+            }}
+          >
+            <i className="fas fa-edit" style={{ marginRight: 6 }} />
+            Edit
+          </button>
         </div>
       </header>
 
-      {/* Main content with sidebar */}
-      <div
-        style={{
-          flex: 1,
-          display: 'grid',
-          gridTemplateColumns: sidebarCollapsed
-            ? "auto minmax(0, 1fr)"
-            : "minmax(0, 360px) minmax(0, 1fr)",
-          overflow: 'hidden',
-        }}
-      >
-        {/* Left sidebar - Filters */}
-        <div
-          style={{
-            background: sidebarCollapsed ? 'transparent' : '#fff',
-            borderRight: sidebarCollapsed ? 'none' : '1px solid #e2e8f0',
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden',
-            width: sidebarCollapsed ? 'auto' : undefined,
-          }}
-        >
-          {sidebarCollapsed ? (
-            <div style={{
-              background: '#f8fafc',
-              borderRight: '1px solid #e2e8f0',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              height: '100%',
-            }}>
-              <button
-                onClick={() => setSidebarCollapsed(false)}
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  padding: '12px 8px',
-                  cursor: 'pointer',
-                  color: '#475569',
-                  fontSize: 18,
-                  fontWeight: 600,
-                }}
-                aria-label="Expand filters"
-              >
-                ❯
-              </button>
-              <div style={{
-                writingMode: 'vertical-rl',
-                transform: 'rotate(180deg)',
-                fontSize: 12,
-                fontWeight: 600,
-                color: '#64748b',
-                letterSpacing: '0.5px',
-                padding: '16px 0',
-                textTransform: 'uppercase',
-              }}>
-                Filters
-              </div>
-            </div>
-          ) : (
-            <>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid #e2e8f0' }}>
-                <span style={{ fontSize: 14, fontWeight: 600, color: '#1e293b' }}>Filters</span>
-                <button
-                  onClick={() => setSidebarCollapsed(true)}
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    padding: '4px 8px',
-                    cursor: 'pointer',
-                    color: '#64748b',
-                    fontSize: 14,
-                  }}
-                  aria-label="Collapse filters"
-                >
-                  ❮
-                </button>
-              </div>
-              <div style={{ flex: 1, overflow: 'auto', padding: '16px' }}>
-                <DashboardFilterBarReadOnly />
-              </div>
-            </>
-          )}
+      {/* Inline filter bar — shown only when toggled open */}
+      {hasFilters && filtersOpen && (
+        <div style={{
+          background: '#fff',
+          borderBottom: '1px solid #e2e8f0',
+          padding: '12px 24px',
+        }}>
+          <DashboardFilterBarReadOnly />
         </div>
+      )}
 
-        {/* Dashboard canvas */}
-        <div style={{ background: '#f8fafc', padding: '12px', overflow: 'auto' }}>
-          {isPreloading && (
-            <div style={{ padding: 20, textAlign: 'center', color: '#64748b' }}>
-              <i className="fas fa-spinner fa-spin" style={{ marginRight: 8 }} />
-              Loading charts...
-            </div>
-          )}
-          <DashboardCanvas />
-        </div>
+      {/* Canvas */}
+      <div style={{ flex: 1, overflow: 'auto', padding: '16px 24px', background: '#f8fafc' }}>
+        {isPreloading && (
+          <div style={{ padding: 20, textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>
+            <i className="fas fa-spinner fa-spin" style={{ marginRight: 8 }} />
+            Loading charts…
+          </div>
+        )}
+        <DashboardCanvas />
       </div>
     </div>
   );
@@ -263,126 +168,78 @@ const DashboardViewPage: React.FC = () => {
   const [initialConfig, setInitialConfig] = useState<DashboardConfig | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [isFavorite, setIsFavorite] = useState(false);
   const [isAnimating, setIsAnimating] = useState(false);
   const [isPublished, setIsPublished] = useState(false);
   const [publishing, setPublishing] = useState(false);
 
-  /**
-   * Load dashboard data
-   */
   useEffect(() => {
     if (!id) return;
-
-    const loadDashboard = async () => {
+    const load = async () => {
       try {
         setLoading(true);
-        const response = await msalFetch(`${API_BASE}/api/v1/dashboards/${id}`);
-
-        if (!response.ok) {
-          throw new Error(`Failed to load dashboard: ${response.status}`);
-        }
-
-        const dashboard = await response.json();
-
-        // Parse JSON fields
-        const config: DashboardConfig = {
-          id: dashboard.id,
-          name: dashboard.name,
-          description: dashboard.description || "",
-          layout: (() => { const p = JSON.parse(dashboard.layout || "[]"); return Array.isArray(p) ? p : []; })(),
-          filters: JSON.parse(dashboard.filters || "[]"),
+        const res = await msalFetch(`${API_BASE}/api/v1/dashboards/${id}`);
+        if (!res.ok) throw new Error(`Failed to load dashboard: ${res.status}`);
+        const d = await res.json();
+        setInitialConfig({
+          id: d.id,
+          name: d.name,
+          description: d.description || "",
+          layout: (() => { const p = JSON.parse(d.layout || "[]"); return Array.isArray(p) ? p : []; })(),
+          filters: JSON.parse(d.filters || "[]"),
           filterLogic: "AND",
-          chartIds: JSON.parse(dashboard.charts || "[]"),
-        };
-
-        setInitialConfig(config);
-        setIsPublished(dashboard.is_published || false);
-        setIsFavorite(dashboard.is_favorite || false);
-        setError(null);
+          chartIds: JSON.parse(d.charts || "[]"),
+        });
+        setIsPublished(d.is_published || false);
+        setIsFavorite(d.favorite || false);
       } catch (err) {
-        console.error("Error loading dashboard:", err);
-        const errorMessage = err instanceof Error && err.message === "Failed to fetch"
-          ? `Cannot connect to API server at ${API_BASE}. Please ensure the backend is running.`
-          : err instanceof Error ? err.message : "Failed to load dashboard";
-        setError(errorMessage);
+        setError(err instanceof Error ? err.message : "Failed to load dashboard");
       } finally {
         setLoading(false);
       }
     };
-
-    loadDashboard();
+    load();
   }, [id]);
 
-  /**
-   * Handle favorite toggle
-   */
   const handleFavoriteClick = async () => {
     if (!id) return;
-
     setIsAnimating(true);
-    const newFavoriteStatus = !isFavorite;
-    setIsFavorite(newFavoriteStatus);
-
+    const next = !isFavorite;
+    setIsFavorite(next);
     try {
-      const response = await msalFetch(`${API_BASE}/api/v1/dashboards/${id}/favorite`, {
+      const res = await msalFetch(`${API_BASE}/api/v1/dashboards/${id}/favorite`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ is_favorite: newFavoriteStatus }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_favorite: next }),
       });
-
-      if (!response.ok) {
-        // Revert on failure
-        setIsFavorite(!newFavoriteStatus);
-        console.error('Failed to update favorite status');
-      }
-    } catch (error) {
-      // Revert on error
-      setIsFavorite(!newFavoriteStatus);
-      console.error('Error updating favorite status:', error);
+      if (!res.ok) setIsFavorite(!next);
+    } catch {
+      setIsFavorite(!next);
     } finally {
       setTimeout(() => setIsAnimating(false), 300);
     }
   };
 
-  /**
-   * Handle publish
-   */
   const handlePublish = async () => {
     if (!id) return;
-
     try {
       setPublishing(true);
-      const response = await msalFetch(`${API_BASE}/api/v1/dashboards/${id}`, {
+      const res = await msalFetch(`${API_BASE}/api/v1/dashboards/${id}`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ is_published: true }),
       });
-
-      if (!response.ok) {
-        throw new Error(`Failed to publish dashboard: ${response.status}`);
-      }
-
+      if (!res.ok) throw new Error(`Failed to publish: ${res.status}`);
       setIsPublished(true);
-    } catch (error) {
-      console.error('Error publishing dashboard:', error);
-      alert(error instanceof Error ? error.message : 'Failed to publish dashboard');
+    } catch (err) {
+      console.error(err);
     } finally {
       setPublishing(false);
     }
   };
 
-  // Show loading state
-  if (loading) {
-    return <LoadingOverlay />;
-  }
+  if (loading) return <LoadingOverlay />;
 
-  // Show error state
   if (error) {
     return (
       <div className="page-shell page-shell-wide">
@@ -391,15 +248,7 @@ const DashboardViewPage: React.FC = () => {
           <div style={{ marginTop: 16, color: "#64748b" }}>{error}</div>
           <button
             onClick={() => router.push("/dashboards")}
-            style={{
-              marginTop: 16,
-              padding: "8px 16px",
-              background: "#2563eb",
-              color: "#ffffff",
-              border: "none",
-              borderRadius: 6,
-              cursor: "pointer",
-            }}
+            style={{ marginTop: 16, padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}
           >
             Back to Dashboards
           </button>
@@ -411,17 +260,14 @@ const DashboardViewPage: React.FC = () => {
   return (
     <DashboardProvider initialConfig={initialConfig}>
       <DashboardViewContent
-        id={id as string}
         isFavorite={isFavorite}
         isAnimating={isAnimating}
         isPublished={isPublished}
         publishing={publishing}
-        sidebarCollapsed={sidebarCollapsed}
         initialConfig={initialConfig}
         onFavoriteClick={handleFavoriteClick}
         onPublish={handlePublish}
         onEdit={() => router.push(`/dashboards/${id}/edit`)}
-        setSidebarCollapsed={setSidebarCollapsed}
       />
     </DashboardProvider>
   );

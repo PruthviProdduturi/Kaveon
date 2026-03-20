@@ -59,3 +59,25 @@ class LabQueryBody(BaseModel):
 
 class SwitchDatabaseBody(BaseModel):
     database_name: str = Field(..., min_length=1, max_length=255)
+
+
+class CtasBody(BaseModel):
+    sql: str = Field(..., min_length=1)
+    database: str = Field(..., min_length=1, max_length=255)
+    schema: str = Field(default="dbo", min_length=1, max_length=128)
+    table_name: str = Field(..., min_length=1, max_length=255)
+
+    @field_validator("sql")
+    @classmethod
+    def sql_max_size(cls, v: str) -> str:
+        if len(v.encode("utf-8")) > 65_536:
+            raise ValueError("Query exceeds maximum allowed size (64 KB)")
+        return v
+
+    @field_validator("table_name")
+    @classmethod
+    def safe_name(cls, v: str) -> str:
+        import re
+        if not re.match(r'^[\w\s]+$', v):
+            raise ValueError("Table name may only contain letters, digits, underscores and spaces")
+        return v

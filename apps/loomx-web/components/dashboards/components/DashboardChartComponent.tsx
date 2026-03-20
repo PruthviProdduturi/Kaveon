@@ -22,6 +22,7 @@ import { useDashboard } from '../DashboardContext';
 import { ChartBuilderProvider } from '../../charts/ChartBuilderContext';
 import ChartHydrator from '../../charts/ChartHydrator';
 import ChartPreview from '../../charts/ChartPreview';
+import ChartActionsOverlay from './ChartActionsOverlay';
 
 interface DashboardChartLoaderProps {
   itemId: string;
@@ -30,6 +31,8 @@ interface DashboardChartLoaderProps {
   crossFilterFilters: Array<{ column: string | null; operator: string; value: string }>;
   onCrossFilter: (column: string | null, value: string) => void;
   isEditMode: boolean;
+  onDuplicate?: () => void;
+  onRemove?: () => void;
 }
 
 /**
@@ -43,13 +46,17 @@ const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({
   crossFilterFilters,
   onCrossFilter,
   isEditMode,
+  onDuplicate,
+  onRemove,
 }) => {
   const { getChartConfig, dashboardId } = useDashboard();
 
   const [chart, setChart] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
   const hasFetchedRef = useRef(false);
+  const exportsRef = useRef<{ downloadPng: () => void; downloadCsv: () => void } | null>(null);
 
   // Keep latest filters in a ref to avoid re-triggering the fetch on filter changes.
   const filtersRef = useRef(filters);
@@ -142,13 +149,26 @@ const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({
     <ChartBuilderProvider runContext={runCtx}>
       {/* ChartHydrator renders null — it only populates context state */}
       <ChartHydrator
+        key={refreshKey}
         chart={chart}
         externalFilters={filtersRef.current}
         crossFilterExtra={relevantCrossExtras}
       />
-      <ChartPreview
-        onCrossFilter={isEditMode ? undefined : handleCrossFilter}
-      />
+      <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
+        <ChartPreview
+          onCrossFilter={isEditMode ? undefined : handleCrossFilter}
+          onRegisterExports={(exp) => { exportsRef.current = exp; }}
+        />
+        <ChartActionsOverlay
+          chartId={chartId}
+          dashboardId={dashboardId}
+          isEditMode={isEditMode}
+          onRefresh={() => setRefreshKey(k => k + 1)}
+          onDuplicate={onDuplicate}
+          onRemove={onRemove}
+          exportsRef={exportsRef}
+        />
+      </div>
     </ChartBuilderProvider>
   );
 };
@@ -156,7 +176,7 @@ const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({
 /**
  * Top-level dashboard chart component — thin wrapper that passes item props.
  */
-export const DashboardChartComponent: React.FC<DashboardComponentProps> = ({ item, effectiveFilters, isEditMode }) => {
+export const DashboardChartComponent: React.FC<DashboardComponentProps> = ({ item, effectiveFilters, isEditMode, onRemove, onDuplicate }) => {
   const { setCrossFilter, clearCrossFilter, getCrossFilterFilters, crossFilters } = useDashboard();
 
   const crossFilterFilters = getCrossFilterFilters(item.i);
@@ -172,7 +192,7 @@ export const DashboardChartComponent: React.FC<DashboardComponentProps> = ({ ite
   }, [item.i, activeCrossFilter, setCrossFilter, clearCrossFilter]);
 
   return (
-    <div className="dashboard-chart-component" style={{ height: '100%', width: '100%', position: 'relative' }}>
+    <div className="dashboard-chart-component" style={{ height: '100%', width: '100%', position: 'relative', display: 'flex', flexDirection: 'column' }}>
       {/* Active cross-filter badge */}
       {activeCrossFilter && !isEditMode && (
         <div style={{
@@ -208,6 +228,8 @@ export const DashboardChartComponent: React.FC<DashboardComponentProps> = ({ ite
         crossFilterFilters={crossFilterFilters}
         onCrossFilter={handleCrossFilter}
         isEditMode={isEditMode}
+        onDuplicate={onDuplicate ? () => onDuplicate(item.i) : undefined}
+        onRemove={onRemove ? () => onRemove(item.i) : undefined}
       />
     </div>
   );

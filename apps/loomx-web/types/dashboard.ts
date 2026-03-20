@@ -291,6 +291,9 @@ export interface DashboardComponentProps {
 
   /** Callback when component is removed */
   onRemove?: (itemId: string) => void;
+
+  /** Callback when component is duplicated */
+  onDuplicate?: (itemId: string) => void;
 }
 
 /**

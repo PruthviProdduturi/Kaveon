@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { loginRequest, msalInstance } from "../../../auth/msalConfig";
 
 import { API_BASE } from "../../../config";
@@ -48,7 +48,8 @@ interface DatasetDetail {
   schema_name?: string | null;
   database_name?: string | null;
   favorite?: boolean;
-   date_column?: string | null;
+  date_column?: string | null;
+  sql_text?: string | null;
   dimensions?: DatasetDimension[];
   columns?: DatasetColumn[];
   metrics?: DatasetMetric[];
@@ -426,6 +427,9 @@ export default function DatasetDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isTogglingFavorite, setIsTogglingFavorite] = useState(false);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [editNameValue, setEditNameValue] = useState("");
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const [accessToken, setAccessToken] = useState<string>("");
   const [previewColumns, setPreviewColumns] = useState<string[]>([]);
   const [previewRows, setPreviewRows] = useState<any[][]>([]);
@@ -457,6 +461,26 @@ export default function DatasetDetailPage() {
   }, [dataset]);
 
   const datasetId = params?.id as string | undefined;
+
+  const startEditingName = () => {
+    setEditNameValue(dataset?.name ?? "");
+    setIsEditingName(true);
+    setTimeout(() => nameInputRef.current?.select(), 0);
+  };
+
+  const commitRename = async () => {
+    setIsEditingName(false);
+    const trimmed = editNameValue.trim();
+    if (!trimmed || trimmed === dataset?.name || !datasetId) return;
+    try {
+      const res = await msalFetch(`${API_BASE}/api/v1/datasets/${datasetId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: trimmed }),
+      });
+      if (res.ok) setDataset(prev => prev ? { ...prev, name: trimmed } : prev);
+    } catch { /* silent — name reverts on next load */ }
+  };
 
   // Acquire and cache access token once
   useEffect(() => {
@@ -542,10 +566,14 @@ export default function DatasetDetailPage() {
           }
         }
 
-        const sql = buildDatasetPreviewSql(dataset, 100);
+        const sql = dataset.sql_text && !dataset.table_name
+          ? `SELECT TOP 100 * FROM (\n${dataset.sql_text.replace(/;\s*$/, "").trim()}\n) AS _preview`
+          : buildDatasetPreviewSql(dataset, 100);
 
         // Build list of tables used in this query for query history
-        const tablesUsed = [
+        const tablesUsed = dataset.sql_text && !dataset.table_name
+          ? []
+          : [
           `${dataset.schema_name || 'dbo'}.${dataset.table_name}`, // Fact table
           ...(dataset.dimensions || []).map(d => d.dimension_table) // Dimension tables
         ];
@@ -565,7 +593,7 @@ export default function DatasetDetailPage() {
         });
         const data = await res.json();
         if (!res.ok || !data.success) {
-          throw new Error(data.error || "Failed to load preview rows");
+          throw new Error(data.detail || data.error || `Preview query failed (HTTP ${res.status})`);
         }
 
         const apiColumns: string[] = Array.isArray(data.columns) ? data.columns : [];
@@ -751,9 +779,33 @@ export default function DatasetDetailPage() {
                 Dataset
               </div>
             )}
-            <h1 style={{ fontSize: 28, fontWeight: 600, color: "#111827", margin: 0, lineHeight: 1.2 }}>
-              {dataset?.name ?? "Dataset"}
-            </h1>
+            {!isEditingName ? (
+              <h1
+                style={{ fontSize: 28, fontWeight: 600, color: "#111827", margin: 0, lineHeight: 1.2, cursor: "pointer", borderRadius: 6, padding: "4px 8px", border: "2px solid transparent", transition: "background 0.15s", display: "inline-block" }}
+                onClick={startEditingName}
+                onMouseOver={e => { e.currentTarget.style.background = "#f1f5f9"; }}
+                onMouseOut={e => { e.currentTarget.style.background = "transparent"; }}
+                title="Click to rename"
+              >
+                {dataset?.name ?? "Dataset"}
+              </h1>
+            ) : (
+              <input
+                ref={nameInputRef}
+                type="text"
+                value={editNameValue}
+                onChange={e => setEditNameValue(e.target.value)}
+                onBlur={commitRename}
+                onKeyDown={e => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") setIsEditingName(false); }}
+                style={{
+                  fontSize: 28, fontWeight: 600, color: "#111827",
+                  padding: "4px 8px", margin: 0,
+                  border: "2px solid #2563eb", borderRadius: 6,
+                  outline: "none", background: "#fff",
+                  fontFamily: "inherit", minWidth: 260,
+                }}
+              />
+            )}
             {dataset?.description && (
               <p style={{ fontSize: 14, color: "#6b7280", margin: "6px 0 0 0", lineHeight: 1.4, maxWidth: 600 }}>
                 {dataset.description}
@@ -845,7 +897,9 @@ export default function DatasetDetailPage() {
                 </div>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
                   <span style={{ color: "#9ca3af", fontSize: 13, minWidth: 100 }}>Table</span>
-                  <span style={{ fontWeight: 500, fontSize: 14, color: "#111827" }}>{dataset.table_name}</span>
+                  <span style={{ fontWeight: 500, fontSize: 14, color: "#111827" }}>
+                    {dataset.table_name || (dataset.sql_text ? <em style={{ color: "#6b7280" }}>Virtual (SQL)</em> : "(none)")}
+                  </span>
                 </div>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
                   <span style={{ color: "#9ca3af", fontSize: 13, minWidth: 100 }}>Date column</span>

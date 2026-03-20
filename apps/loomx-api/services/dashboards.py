@@ -3,7 +3,7 @@
 import json
 import uuid
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 import database.metadata as db
 
@@ -68,7 +68,7 @@ def get_dashboard_by_id(dashboard_id: str) -> Optional[dict]:
 
 def create_dashboard(data: dict, user_id: str) -> dict:
     d_id = str(uuid.uuid4())
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     slug = re.sub(r"[^a-z0-9-]", "", data["name"].lower().replace(" ", "-"))
 
     def _to_str(v):
@@ -101,7 +101,7 @@ def create_dashboard(data: dict, user_id: str) -> dict:
 def update_dashboard(dashboard_id: str, data: dict) -> Optional[dict]:
     if not get_dashboard_by_id(dashboard_id):
         return None
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     updates, params, i = [], [], 0
 
     if "name" in data:

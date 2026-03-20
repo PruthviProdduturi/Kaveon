@@ -4,9 +4,10 @@
  * Renders the dashboard as a vertical stack of rows (Apache Superset style).
  * Each root-level item is rendered in order with full width.
  * In edit mode an "+ Add Row" button appears at the bottom.
+ * In edit mode rows can be reordered by dragging the grip handle.
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import { useDashboard } from './DashboardContext';
 import DashboardItem from './DashboardItem';
 
@@ -15,10 +16,56 @@ interface DashboardCanvasProps {
 }
 
 const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => {
-  const { layout, isEditMode, addLayoutItem } = useDashboard();
+  const { layout, setLayout, isEditMode, addLayoutItem } = useDashboard();
+
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   // Only show root-level items (items without a parentId)
   const rootItems = layout.filter((item) => !item.parentId);
+
+  const handleDragStart = (e: React.DragEvent, index: number) => {
+    e.dataTransfer.setData('text/plain', String(index));
+    e.dataTransfer.effectAllowed = 'move';
+
+    // Small custom drag image so the full row isn't ghosted
+    const ghost = document.createElement('div');
+    ghost.textContent = 'Moving row…';
+    ghost.style.cssText =
+      'position:fixed;top:-200px;left:0;background:#1e293b;color:#fff;' +
+      'padding:6px 14px;border-radius:6px;font-size:13px;font-weight:600;' +
+      'white-space:nowrap;pointer-events:none;';
+    document.body.appendChild(ghost);
+    e.dataTransfer.setDragImage(ghost, 60, 18);
+    requestAnimationFrame(() => document.body.removeChild(ghost));
+  };
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverIndex(index);
+  };
+
+  const handleDrop = (e: React.DragEvent, dropIndex: number) => {
+    e.preventDefault();
+    const fromIndex = parseInt(e.dataTransfer.getData('text/plain'), 10);
+    setDragOverIndex(null);
+    if (isNaN(fromIndex) || fromIndex === dropIndex) return;
+
+    const reordered = [...rootItems];
+    const [moved] = reordered.splice(fromIndex, 1);
+    reordered.splice(dropIndex, 0, moved);
+
+    // Non-root items live inside children arrays — keep them after reordered roots
+    const nonRoots = layout.filter((item) => !!item.parentId);
+    setLayout([...reordered, ...nonRoots]);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    // Only clear if leaving the canvas entirely (not just moving between children)
+    if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) {
+      setDragOverIndex(null);
+    }
+  };
 
   // ── Empty state ──────────────────────────────────────────────────────────────
   if (rootItems.length === 0) {
@@ -68,9 +115,48 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
     <div
       className={`dashboard-canvas ${className}`}
       style={{ paddingBottom: 32 }}
+      onDragLeave={handleDragLeave}
     >
-      {rootItems.map((item) => (
-        <div key={item.i} style={{ marginBottom: 16 }}>
+      {rootItems.map((item, index) => (
+        <div
+          key={item.i}
+          onDragOver={(e) => handleDragOver(e, index)}
+          onDrop={(e) => handleDrop(e, index)}
+          style={{
+            marginBottom: 16,
+            borderRadius: 8,
+            outline:
+              dragOverIndex === index
+                ? '2px dashed #2563eb'
+                : '2px solid transparent',
+            transition: 'outline 0.1s ease',
+          }}
+        >
+          {/* Drag handle strip — only in edit mode, draggable instead of the whole row */}
+          {isEditMode && (
+            <div
+              draggable
+              onDragStart={(e) => handleDragStart(e, index)}
+              title="Drag to reorder row"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '3px 10px',
+                marginBottom: 2,
+                cursor: 'grab',
+                userSelect: 'none',
+                color: '#94a3b8',
+                fontSize: 11,
+                fontWeight: 600,
+                letterSpacing: '0.4px',
+              }}
+            >
+              <i className="fas fa-grip-horizontal" style={{ fontSize: 10 }} />
+              <span style={{ textTransform: 'uppercase' }}>Row {index + 1}</span>
+            </div>
+          )}
+
           <DashboardItem item={item} isEditMode={isEditMode} />
         </div>
       ))}

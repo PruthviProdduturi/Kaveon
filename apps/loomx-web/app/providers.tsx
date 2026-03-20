@@ -1,6 +1,8 @@
 "use client";
 
-import "@fortawesome/fontawesome-free/css/all.min.css";
+import "@fortawesome/fontawesome-free/css/fontawesome.min.css";
+import "@fortawesome/fontawesome-free/css/solid.min.css";
+import "@fortawesome/fontawesome-free/css/regular.min.css";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 

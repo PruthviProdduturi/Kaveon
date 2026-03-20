@@ -4,6 +4,7 @@ import json
 import time
 from fastapi import APIRouter, Request, Response, HTTPException, Query, Depends
 from middleware.auth import require_auth
+from middleware.rate_limit import sql_execute_limiter
 from models.sql import SqlGenerateBody, SqlExecuteBody
 import services.datasets as datasets_svc
 import services.query_history as history_svc
@@ -50,14 +51,16 @@ def generate_sql(data: SqlGenerateBody, user: str = Depends(require_auth)):
         for dim in (dataset.get("dimensions") or [])
     ]
 
+    table_name = dataset.get("table_name") or ""
     datasource = (
-        f"{dataset['schema_name']}.{dataset['table_name']}"
-        if dataset.get("schema_name")
-        else dataset.get("table_name") or ""
+        f"{dataset['schema_name']}.{table_name}"
+        if dataset.get("schema_name") and table_name
+        else table_name
     )
 
     params = {
         "datasource": datasource,
+        "sql_text": dataset.get("sql_text") or "",
         **config,
         "dimensions": dimensions,
         "columns": dataset.get("columns") or [],
@@ -137,7 +140,7 @@ def distinct_filter_values(
         "source": filter_trigger, "datasetId": int(dataset_id), "column": column,
         "filteringTier": filtering_tier, "database": dataset["database_name"],
         **({} if not chart_id else {"chartId": int(chart_id)}),
-        **({} if not dashboard_id else {"dashboardId": int(dashboard_id)}),
+        **({} if not dashboard_id else {"dashboardId": dashboard_id}),
     })
 
     start_time = int(time.time() * 1000)
@@ -186,6 +189,7 @@ def distinct_filter_values(
 
 @router.post("/sql/execute")
 def execute_sql(data: SqlExecuteBody, response: Response, user: str = Depends(require_auth)):
+    sql_execute_limiter.check(user)
     response.headers.update(NO_CACHE)
     user_id = user
 
@@ -204,7 +208,7 @@ def execute_sql(data: SqlExecuteBody, response: Response, user: str = Depends(re
     run_context = json.dumps({
         "source": trigger_source, "database": database,
         **({} if chart_id is None else {"chartId": int(chart_id)}),
-        **({} if dashboard_id is None else {"dashboardId": int(dashboard_id)}),
+        **({} if dashboard_id is None else {"dashboardId": dashboard_id}),
         **({} if chart_type is None else {"chartType": chart_type}),
         **({} if dataset_id is None else {"datasetId": int(dataset_id)}),
     })
@@ -230,8 +234,8 @@ def execute_sql(data: SqlExecuteBody, response: Response, user: str = Depends(re
                 "dataset_id": int(dataset_id) if dataset_id is not None else None,
                 "started_at": start_time,
             }, user_id)
-        except Exception:
-            pass
+        except Exception as he:
+            print(f"[History] Failed to save error history: {he}")
         raise HTTPException(status_code=500, detail="Query execution failed")
 
     duration_ms = int(time.time() * 1000) - start_time
@@ -244,8 +248,8 @@ def execute_sql(data: SqlExecuteBody, response: Response, user: str = Depends(re
             "dataset_id": int(dataset_id) if dataset_id is not None else None,
             "started_at": start_time,
         }, user_id)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[History] Failed to save execute history: {e}")
 
     row_count = result.get("row_count") or 0
     return {

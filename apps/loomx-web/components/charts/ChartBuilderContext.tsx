@@ -484,6 +484,81 @@ export function buildEChartsOptionsFromQueryResult(
         ],
       };
     }
+    case "nightingale_rose": {
+      const roseData = seriesNames.length > 1
+        ? seriesNames.map(name => ({ name, value: xValues.reduce((s, x) => s + (dataMap.get(name)?.get(x) ?? 0), 0) }))
+        : xValues.map(x => ({ name: x, value: dataMap.get(seriesNames[0])?.get(x) ?? 0 }));
+      return {
+        tooltip: { trigger: "item", formatter: "{b}: {c} ({d}%)" },
+        legend: { orient: "vertical", left: "left" },
+        series: [{
+          type: "pie", roseType: "area",
+          radius: ["15%", "72%"], center: ["55%", "50%"],
+          itemStyle: { borderRadius: 4, borderColor: "#fff", borderWidth: 2 },
+          label: { show: false },
+          emphasis: { label: { show: true, fontSize: 12, fontWeight: "bold" } },
+          data: roseData,
+        }],
+      };
+    }
+    case "histogram": {
+      const hvals = rows.map(r => Number(r[metricIndex])).filter(v => !isNaN(v));
+      if (!hvals.length) return null;
+      const hmin = Math.min(...hvals), hmax = Math.max(...hvals);
+      const bins = Math.min(20, Math.ceil(Math.sqrt(hvals.length)));
+      const bw = (hmax - hmin) / bins || 1;
+      const counts = Array.from({ length: bins }, () => 0);
+      hvals.forEach(v => { counts[Math.min(Math.floor((v - hmin) / bw), bins - 1)]++; });
+      const labels = Array.from({ length: bins }, (_, i) => {
+        const mid = hmin + (i + 0.5) * bw;
+        return Math.abs(mid) >= 1e6 ? `${(mid / 1e6).toFixed(1)}M` : Math.abs(mid) >= 1e3 ? `${(mid / 1e3).toFixed(1)}K` : mid.toFixed(1);
+      });
+      return {
+        ...common,
+        xAxis: { type: "category", data: labels, name: columns[metricIndex] || "", nameLocation: "center", nameGap: 30 },
+        yAxis: { type: "value", name: "Count" },
+        series: [{ type: "bar", data: counts, barCategoryGap: "2%", itemStyle: { borderRadius: [3, 3, 0, 0] } }],
+      };
+    }
+    case "sankey": {
+      if (columns.length < 3) return null;
+      const nodeSet = new Set<string>();
+      const sankeyLinks: { source: string; target: string; value: number }[] = [];
+      rows.forEach(r => {
+        const src = String(r[0] ?? ""), tgt = String(r[1] ?? ""), val = Number(r[2] ?? 0);
+        if (src && tgt) { nodeSet.add(src); nodeSet.add(tgt); sankeyLinks.push({ source: src, target: tgt, value: val }); }
+      });
+      return {
+        tooltip: { trigger: "item", formatter: (p: any) => p.dataType === "edge" ? `${p.data.source} → ${p.data.target}: ${p.data.value}` : p.name },
+        series: [{ type: "sankey", layout: "none", emphasis: { focus: "adjacency" }, nodeAlign: "left", data: Array.from(nodeSet).map(n => ({ name: n })), links: sankeyLinks }],
+      };
+    }
+    case "calendar_heatmap": {
+      if (columns.length < 2) return null;
+      const calRows = rows.map(r => [String(r[0] ?? ""), Number(r[metricIndex] ?? 0)]);
+      const calVals = calRows.map(d => d[1] as number);
+      const years = [...new Set(calRows.map(d => String(d[0]).slice(0, 4)))].sort();
+      return {
+        tooltip: { formatter: (p: any) => `${p.data[0]}: ${p.data[1]}` },
+        visualMap: { min: Math.min(...calVals), max: Math.max(...calVals), calculable: true, orient: "horizontal", left: "center", bottom: 10, inRange: { color: ["#e0f3f8", "#abd9e9", "#74add1", "#4575b4", "#313695"] } },
+        calendar: years.map((y, i) => ({ range: y, top: 60 + i * 170, left: 60, right: 20, cellSize: ["auto", 14] })),
+        series: years.map((y, i) => ({ type: "heatmap", coordinateSystem: "calendar", calendarIndex: i, data: calRows.filter(d => String(d[0]).startsWith(y)) })),
+      };
+    }
+    case "parallel_coordinates": {
+      if (columns.length < 2) return null;
+      const hasCatCol = isNaN(Number(rows[0]?.[0]));
+      const dimStart = hasCatCol ? 1 : 0;
+      const dims = columns.slice(dimStart);
+      return {
+        parallelAxis: dims.map((d, i) => ({ dim: i, name: d.split(".").pop() || d })),
+        parallel: { left: "5%", right: "5%", bottom: "10%", top: "10%" },
+        tooltip: { trigger: "item" },
+        series: [{ type: "parallel", lineStyle: { width: 1.5, opacity: 0.4 }, data: rows.map(r => dims.map((_, i) => Number(r[dimStart + i] ?? 0))) }],
+      };
+    }
+    case "world_map":
+      return { _worldMap: true, _rows: rows, _columns: columns };
     default:
       return {
         ...common,
@@ -608,10 +683,17 @@ export type ChartKind =
   | "pie"
   | "donut"
   | "mixed_line_bar"
-  | "waterfall";
+  | "waterfall"
+  | "nightingale_rose"
+  | "sankey"
+  | "calendar_heatmap"
+  | "histogram"
+  | "parallel_coordinates"
+  | "world_map";
 
 export type TimeRangePreset =
   | "all_time"
+  | "latest_day"
   | "last_day"
   | "last_week"
   | "last_month"
@@ -732,15 +814,24 @@ export interface SqlPreviewState {
 }
 
 export const CHART_CATEGORIES: ChartCategory[] = [
-  { id: "Line", label: "Line", iconClass: "fas fa-chart-line" },
-  { id: "Bar", label: "Bar", iconClass: "fas fa-chart-bar" },
-  { id: "Pie", label: "Pie", iconClass: "fas fa-chart-pie" },
-  { id: "Heatmap", label: "Heatmap", iconClass: "fas fa-th-large" },
-  { id: "Treemap", label: "Treemap", iconClass: "fas fa-th" },
-  { id: "Sunburst", label: "Sunburst", iconClass: "fas fa-sun" },
-  { id: "Funnel", label: "Funnel", iconClass: "fas fa-filter" },
-  { id: "Custom", label: "Custom", iconClass: "fas fa-shapes" },
-  { id: "Dataset", label: "Dataset", iconClass: "fas fa-table" },
+  { id: "Line",        label: "Line",       iconClass: "fas fa-chart-line" },
+  { id: "Bar",         label: "Bar",        iconClass: "fas fa-chart-bar" },
+  { id: "Pie",         label: "Pie",        iconClass: "fas fa-chart-pie" },
+  { id: "Scatter",     label: "Scatter",    iconClass: "fas fa-braille" },
+  { id: "Heatmap",     label: "Heatmap",    iconClass: "fas fa-th-large" },
+  { id: "Treemap",     label: "Treemap",    iconClass: "fas fa-th" },
+  { id: "Sunburst",    label: "Sunburst",   iconClass: "fas fa-sun" },
+  { id: "Funnel",      label: "Funnel",     iconClass: "fas fa-filter" },
+  { id: "Radar",       label: "Radar",      iconClass: "fas fa-bullseye" },
+  { id: "Gauge",       label: "Gauge",      iconClass: "fas fa-tachometer-alt" },
+  { id: "Boxplot",     label: "Boxplot",    iconClass: "fas fa-box" },
+  { id: "Candlestick", label: "Candlestick",iconClass: "fas fa-chart-bar" },
+  { id: "PictorialBar",label: "Pictorial",  iconClass: "fas fa-images" },
+  { id: "ThemeRiver",  label: "Stream",     iconClass: "fas fa-water" },
+  { id: "Flow",        label: "Flow",       iconClass: "fas fa-project-diagram" },
+  { id: "Map",         label: "Map",        iconClass: "fas fa-globe" },
+  { id: "Custom",      label: "Custom",     iconClass: "fas fa-shapes" },
+  { id: "Dataset",     label: "Table",      iconClass: "fas fa-table" },
 ];
 
 export const TEMPLATES: ChartTemplate[] = [
@@ -760,6 +851,13 @@ export const TEMPLATES: ChartTemplate[] = [
     previewKind: "line",
   },
   {
+    id: "line_multi_series",
+    name: "Multi-series line",
+    description: "Compare multiple metrics over time on a shared axis.",
+    category: "Line",
+    previewKind: "line",
+  },
+  {
     id: "time_series_area",
     name: "Time-series area",
     description: "Visualize volume over time with a filled line.",
@@ -775,9 +873,16 @@ export const TEMPLATES: ChartTemplate[] = [
     previewKind: "area",
   },
   {
+    id: "area_stack",
+    name: "Stacked area",
+    description: "Multiple stacked areas showing cumulative values over time.",
+    category: "Line",
+    previewKind: "area",
+  },
+  {
     id: "bar_vertical",
     name: "Vertical bar",
-    description: "Compare categories. Supports grouped and stacked via Customize.",
+    description: "Compare categories side by side.",
     category: "Bar",
     previewKind: "bar",
     thumbnail: "/chart-thumbnails/bar_vertical.png",
@@ -785,10 +890,31 @@ export const TEMPLATES: ChartTemplate[] = [
   {
     id: "bar_horizontal",
     name: "Horizontal bar",
-    description: "Use when category labels are long. Supports grouped and stacked via Customize.",
+    description: "Use when category labels are long.",
     category: "Bar",
     previewKind: "bar",
     thumbnail: "/chart-thumbnails/bar_horizontal.png",
+  },
+  {
+    id: "grouped_bar",
+    name: "Grouped bar",
+    description: "Side-by-side bars comparing multiple series per category.",
+    category: "Bar",
+    previewKind: "bar",
+  },
+  {
+    id: "stacked_bar_vertical",
+    name: "Stacked bar",
+    description: "Bars stacked to show part-to-whole relationships.",
+    category: "Bar",
+    previewKind: "bar",
+  },
+  {
+    id: "stacked_bar_horizontal",
+    name: "Stacked horizontal bar",
+    description: "Horizontal stacked bars comparing composition across categories.",
+    category: "Bar",
+    previewKind: "bar",
   },
   {
     id: "scatter",
@@ -926,6 +1052,42 @@ export const TEMPLATES: ChartTemplate[] = [
     description: "Show cumulative effect of sequential positive/negative values.",
     category: "Bar",
     previewKind: "bar",
+  },
+  {
+    id: "nightingale_rose",
+    name: "Nightingale rose",
+    description: "Pie chart where radius encodes value — great for comparing periodic categories.",
+    category: "Pie",
+  },
+  {
+    id: "histogram",
+    name: "Histogram",
+    description: "Auto-bins a numeric column to show value distribution.",
+    category: "Bar",
+  },
+  {
+    id: "sankey",
+    name: "Sankey diagram",
+    description: "Visualise flow between nodes. Query needs source, target, value columns.",
+    category: "Flow",
+  },
+  {
+    id: "calendar_heatmap",
+    name: "Calendar heatmap",
+    description: "Daily values plotted in a calendar grid. Query needs date + value columns.",
+    category: "Heatmap",
+  },
+  {
+    id: "parallel_coordinates",
+    name: "Parallel coordinates",
+    description: "Compare multi-dimensional numeric data across parallel axes.",
+    category: "Custom",
+  },
+  {
+    id: "world_map",
+    name: "World map",
+    description: "Choropleth world map. Query needs a country name/code column and a value column.",
+    category: "Map",
   },
 ];
 
@@ -2338,13 +2500,124 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
               type: "bar",
               stack: "waterfall",
               data: wfBars,
-              label: {
-                show: false,
-              },
+              label: { show: false },
             },
           ],
         };
       }
+      case "nightingale_rose": {
+        const roseData = seriesNames.length > 1
+          ? seriesNames.map(name => ({ name, value: xValues.reduce((s, x) => s + (dataMap.get(name)?.get(x) ?? 0), 0) }))
+          : xValues.map(x => ({ name: x, value: dataMap.get(seriesNames[0])?.get(x) ?? 0 }));
+        return {
+          tooltip: { trigger: "item", formatter: "{b}: {c} ({d}%)" },
+          legend: { orient: "vertical", left: "left" },
+          series: [{
+            type: "pie", roseType: "area",
+            radius: ["15%", "72%"], center: ["55%", "50%"],
+            itemStyle: { borderRadius: 4, borderColor: "#fff", borderWidth: 2 },
+            label: { show: false },
+            emphasis: { label: { show: true, fontSize: 13, fontWeight: "bold" } },
+            data: roseData,
+          }],
+        };
+      }
+      case "histogram": {
+        const hvals = rows.map(r => Number(r[metricIndex])).filter(v => !isNaN(v));
+        if (!hvals.length) return null;
+        const hmin = Math.min(...hvals), hmax = Math.max(...hvals);
+        const binCount = Math.min(20, Math.ceil(Math.sqrt(hvals.length)));
+        const bw = (hmax - hmin) / binCount || 1;
+        const counts = Array.from({ length: binCount }, () => 0);
+        hvals.forEach(v => { counts[Math.min(Math.floor((v - hmin) / bw), binCount - 1)]++; });
+        const histLabels = Array.from({ length: binCount }, (_, i) => {
+          const mid = hmin + (i + 0.5) * bw;
+          return Math.abs(mid) >= 1e6 ? `${(mid / 1e6).toFixed(1)}M` : Math.abs(mid) >= 1e3 ? `${(mid / 1e3).toFixed(1)}K` : mid.toFixed(1);
+        });
+        return {
+          ...common,
+          tooltip: {
+            trigger: "axis",
+            formatter: (params: any[]) => {
+              const b0 = hmin + params[0].dataIndex * bw;
+              const b1 = b0 + bw;
+              return `${b0.toFixed(2)} – ${b1.toFixed(2)}: <b>${params[0].value}</b>`;
+            },
+          },
+          xAxis: { type: "category", data: histLabels, name: columns[metricIndex] || "", nameLocation: "center", nameGap: 30 },
+          yAxis: { type: "value", name: "Count" },
+          series: [{ type: "bar", data: counts, barCategoryGap: "2%", itemStyle: { borderRadius: [3, 3, 0, 0] } }],
+        };
+      }
+      case "sankey": {
+        if (columns.length < 3) return null;
+        const snkSet = new Set<string>();
+        const snkLinks: { source: string; target: string; value: number }[] = [];
+        rows.forEach(r => {
+          const src = String(r[0] ?? ""), tgt = String(r[1] ?? ""), val = Number(r[2] ?? 0);
+          if (src && tgt) { snkSet.add(src); snkSet.add(tgt); snkLinks.push({ source: src, target: tgt, value: val }); }
+        });
+        return {
+          tooltip: {
+            trigger: "item",
+            formatter: (p: any) => p.dataType === "edge"
+              ? `${p.data.source} → ${p.data.target}: <b>${p.data.value.toLocaleString()}</b>`
+              : `<b>${p.name}</b>`,
+          },
+          series: [{
+            type: "sankey",
+            layout: "none",
+            emphasis: { focus: "adjacency" },
+            nodeAlign: "left",
+            nodeGap: 12,
+            nodeWidth: 18,
+            label: { fontSize: 11 },
+            data: Array.from(snkSet).map(n => ({ name: n })),
+            links: snkLinks,
+          }],
+        };
+      }
+      case "calendar_heatmap": {
+        if (columns.length < 2) return null;
+        const calRows = rows.map(r => [String(r[0] ?? ""), Number(r[metricIndex] ?? 0)]);
+        const calVals = calRows.map(d => d[1] as number);
+        const calYears = [...new Set(calRows.map(d => String(d[0]).slice(0, 4)))].sort();
+        if (!calYears.length) return null;
+        return {
+          tooltip: { formatter: (p: any) => `${p.data[0]}: <b>${Number(p.data[1]).toLocaleString()}</b>` },
+          visualMap: {
+            min: Math.min(...calVals), max: Math.max(...calVals),
+            calculable: true, orient: "horizontal", left: "center", bottom: 10,
+            inRange: { color: ["#e0f3f8", "#74add1", "#4575b4", "#313695"] },
+          },
+          calendar: calYears.map((y, i) => ({
+            range: y, top: 60 + i * 170, left: 70, right: 20, cellSize: ["auto", 15],
+            dayLabel: { firstDay: 1 }, monthLabel: { nameMap: "en" },
+          })),
+          series: calYears.map((y, i) => ({
+            type: "heatmap", coordinateSystem: "calendar", calendarIndex: i,
+            data: calRows.filter(d => String(d[0]).startsWith(y)),
+          })),
+        };
+      }
+      case "parallel_coordinates": {
+        if (columns.length < 2) return null;
+        const hasCat = isNaN(Number(rows[0]?.[0]));
+        const dimStart = hasCat ? 1 : 0;
+        const pcDims = columns.slice(dimStart);
+        return {
+          parallelAxis: pcDims.map((d, i) => ({ dim: i, name: d.split(".").pop() || d })),
+          parallel: { left: "5%", right: "5%", bottom: "15%", top: "15%" },
+          tooltip: { trigger: "item" },
+          series: [{
+            type: "parallel",
+            lineStyle: { width: 1.5, opacity: 0.45 },
+            data: rows.map(r => pcDims.map((_, i) => Number(r[dimStart + i] ?? 0))),
+          }],
+        };
+      }
+      case "world_map":
+        return { _worldMap: true, _rows: rows, _columns: columns };
       default: {
         // Try registered plugins
         const plugin = getPlugin(chartKind);
