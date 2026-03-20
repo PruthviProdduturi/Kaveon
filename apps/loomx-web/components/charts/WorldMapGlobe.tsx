@@ -138,13 +138,18 @@ const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOption
 
     const instance = chartRef.current;
 
-    // Defer setOption until the next animation frame so the WebGL context
-    // has been fully initialised by the browser before we write to it.
-    const rafId = requestAnimationFrame(() => {
-      if (!instance || instance.isDisposed()) return;
-      try {
-        instance.setOption(option, { notMerge: true, silent: true });
-      } catch (_) {}
+    // Double-rAF: first frame lets the browser flush layout so the container
+    // has real pixel dimensions; second frame is when the GL context is safe
+    // to write into. Also call resize() after setOption so echarts picks up
+    // the correct canvas size even if init() ran on a zero-height container.
+    let rafId = requestAnimationFrame(() => {
+      rafId = requestAnimationFrame(() => {
+        if (!instance || instance.isDisposed()) return;
+        try {
+          instance.setOption(option, { notMerge: true });
+          instance.resize();
+        } catch (_) {}
+      });
     });
 
     return () => { cancelAnimationFrame(rafId); };
@@ -152,7 +157,11 @@ const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOption
 
   // Dispose + resize listener — unmount only
   React.useEffect(() => {
-    const onResize = () => { try { chartRef.current?.resize(); } catch (_) {} };
+    const onResize = () => {
+      requestAnimationFrame(() => {
+        try { chartRef.current?.resize(); } catch (_) {}
+      });
+    };
     window.addEventListener("resize", onResize);
     return () => {
       window.removeEventListener("resize", onResize);
