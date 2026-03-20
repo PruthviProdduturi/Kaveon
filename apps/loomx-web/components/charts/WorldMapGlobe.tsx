@@ -1,7 +1,6 @@
 // Static imports — this file is loaded as a single webpack chunk via dynamic()
 // so echarts-gl extends the same echarts instance that ReactECharts uses.
 import "echarts-gl";
-import ReactECharts from "echarts-for-react";
 import * as echarts from "echarts";
 import React from "react";
 
@@ -15,18 +14,13 @@ interface Props {
 }
 
 const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOptions }) => {
-  const [mapReady, setMapReady] = React.useState(false);
+  const containerRef = React.useRef<HTMLDivElement>(null);
+  const chartRef    = React.useRef<echarts.ECharts | null>(null);
 
-  React.useEffect(() => {
-    if (!geoJson) return;
-    echarts.registerMap("world", geoJson);
-    setMapReady(true);
-  }, [geoJson]);
-
-  const ctOpts = advancedOptions?.chartTypeOptions || {};
-  const colorScheme: string[] = advancedOptions?.color?.length ? advancedOptions.color : MAP_DEFAULT_COLORS;
-  const showLabels: boolean = ctOpts.mapShowLabels === true;
-  const numFmt: string = ctOpts.mapNumberFormat || "none";
+  const ctOpts      = advancedOptions?.chartTypeOptions || {};
+  const colorScheme = advancedOptions?.color?.length ? advancedOptions.color : MAP_DEFAULT_COLORS;
+  const showLabels  = ctOpts.mapShowLabels === true;
+  const numFmt      = ctOpts.mapNumberFormat || "none";
 
   const fmtVal = (v: number): string => {
     if (numFmt === "k") return `${(v / 1e3).toFixed(1)}K`;
@@ -37,21 +31,23 @@ const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOption
   };
 
   const nameIdx = columns.findIndex((_, i) => rows.some(r => isNaN(Number(r[i]))));
-  const valIdx = columns.length - 1 === nameIdx ? columns.length - 2 : columns.length - 1;
+  const valIdx  = columns.length - 1 === nameIdx ? columns.length - 2 : columns.length - 1;
 
   const data = nameIdx >= 0 && valIdx >= 0
-    ? rows.map(r => ({ name: String(r[nameIdx] ?? ""), value: Number(r[valIdx] ?? 0) })).filter(d => d.name && !isNaN(d.value))
+    ? rows
+        .map(r => ({ name: String(r[nameIdx] ?? ""), value: Number(r[valIdx] ?? 0) }))
+        .filter(d => d.name && !isNaN(d.value))
     : [];
 
   const values = data.map(d => d.value);
-  const minV = values.length ? Math.min(...values) : 0;
-  const maxV = values.length ? Math.max(...values) : 1;
+  const minV   = values.length ? Math.min(...values) : 0;
+  const maxV   = values.length ? Math.max(...values) : 1;
 
   const titleOpt = advancedOptions?.title?.text
     ? { title: { text: advancedOptions.title.text, left: "center", top: 5, textStyle: { color: "#e2e8f0", fontSize: Number(advancedOptions.titleSize) || 20, fontFamily: advancedOptions.titleFont || "sans-serif" } } }
     : {};
 
-  const option = {
+  const option = React.useMemo(() => ({
     ...titleOpt,
     backgroundColor: "#0d1117",
     tooltip: {
@@ -61,7 +57,7 @@ const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOption
       borderColor: "#e2e8f0",
       borderWidth: 1,
       padding: [10, 14],
-      textStyle: { color: "#1e293b", fontSize: 12, fontFamily: 'Inter, -apple-system, sans-serif' },
+      textStyle: { color: "#1e293b", fontSize: 12, fontFamily: "Inter, -apple-system, sans-serif" },
       extraCssText: "box-shadow: 0 8px 24px rgba(0,0,0,0.12); border-radius: 8px;",
       formatter: (p: any) => {
         const v = Number(p.value);
@@ -113,14 +109,48 @@ const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOption
         textStyle: { color: "#fff", fontSize: 9, fontFamily: "Inter, sans-serif" },
       },
     }],
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [JSON.stringify(data), minV, maxV, JSON.stringify(colorScheme), showLabels, numFmt, JSON.stringify(titleOpt)]);
 
-  if (!mapReady) return null;
+  // ── Initialise echarts instance manually ───────────────────────────────────
+  // echarts-for-react's internal lifecycle management is incompatible with
+  // echarts-gl's WebGL renderer — it calls dispose() on objects that haven't
+  // finished initialising, causing runtime crashes. Managing the instance
+  // ourselves gives full control over creation and teardown order.
+  React.useEffect(() => {
+    if (!geoJson || !containerRef.current) return;
+
+    echarts.registerMap("world", geoJson);
+
+    let instance: echarts.ECharts | null = null;
+    try {
+      instance = echarts.init(containerRef.current);
+      chartRef.current = instance;
+    } catch (_) {
+      return; // WebGL not available (e.g. headless test env)
+    }
+
+    const onResize = () => { try { instance?.resize(); } catch (_) {} };
+    window.addEventListener("resize", onResize);
+
+    return () => {
+      window.removeEventListener("resize", onResize);
+      chartRef.current = null;
+      try { instance?.dispose(); } catch (_) {}
+    };
+  }, [geoJson]);
+
+  // ── Sync option changes into the live instance ─────────────────────────────
+  React.useEffect(() => {
+    if (!chartRef.current) return;
+    try {
+      chartRef.current.setOption(option, { notMerge: true, silent: true });
+    } catch (_) {}
+  }, [option]);
 
   return (
-    <ReactECharts
-      option={option}
-      notMerge={true}
+    <div
+      ref={containerRef}
       style={{ width: "100%", height: "100%", background: "#0d1117" }}
     />
   );
