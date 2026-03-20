@@ -175,7 +175,7 @@ const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOption
   return (
     <div
       ref={containerRef}
-      style={{ width: "100%", height: "100%", background: "#0d1117" }}
+      style={{ position: "absolute", inset: 0, background: "#0d1117" }}
     />
   );
 };

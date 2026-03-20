@@ -336,14 +336,22 @@ const WorldMapRenderer: React.FC<{
             worldGeoJsonFetching = fetch("/geo/world.json")
               .then(r => r.json())
               .then(data => {
-                // Strip features with null/incomplete geometry — these are valid
-                // per GeoJSON spec (disputed territories) but echarts and
-                // echarts-gl crash when they encounter them.
+                // echarts-gl only handles Polygon and MultiPolygon geometry types.
+                // Any other type (null, Point, LineString, GeometryCollection, etc.)
+                // produces an undefined internal region object whose .geometries
+                // access then crashes the GL mesh builder asynchronously — outside
+                // any try/catch boundary. Filter to only the two supported types
+                // and require non-empty coordinates.
+                const SUPPORTED = new Set(["Polygon", "MultiPolygon"]);
                 worldGeoJsonCache = {
                   ...data,
-                  features: (data.features ?? []).filter(
-                    (f: any) => f?.geometry != null && f.geometry.coordinates != null
-                  ),
+                  features: (data.features ?? []).filter((f: any) => {
+                    const g = f?.geometry;
+                    return g != null
+                      && SUPPORTED.has(g.type)
+                      && Array.isArray(g.coordinates)
+                      && g.coordinates.length > 0;
+                  }),
                 };
                 return worldGeoJsonCache;
               });
@@ -492,15 +500,20 @@ const WorldMapRenderer: React.FC<{
   if (error) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#ef4444", fontSize: 13 }}>{error}</div>;
   if (!ready) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#94a3b8", fontSize: 13 }}>Loading map…</div>;
 
-  // Globe: delegate to the separate chunk that statically imports echarts-gl
+  // Globe: delegate to the separate chunk that statically imports echarts-gl.
+  // Wrap in a positioned container so the globe's inset:0 has an anchor —
+  // the parent flex container (.chart-builder-preview-inner) uses
+  // align-items:center which breaks height:100% on direct children.
   if (isGlobe) {
     return (
-      <WorldMapGlobe
-        rows={rows}
-        columns={columns}
-        geoJson={worldGeoJsonCache}
-        advancedOptions={advancedOptions}
-      />
+      <div style={{ position: "relative", width: "100%", height: "100%", flex: 1, alignSelf: "stretch" }}>
+        <WorldMapGlobe
+          rows={rows}
+          columns={columns}
+          geoJson={worldGeoJsonCache}
+          advancedOptions={advancedOptions}
+        />
+      </div>
     );
   }
 
