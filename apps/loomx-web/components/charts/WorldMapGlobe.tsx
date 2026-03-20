@@ -19,7 +19,13 @@ const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOption
 
   React.useEffect(() => {
     if (!geoJson) return;
-    echarts.registerMap("world", geoJson);
+    // echarts-gl does not guard against null geometry (valid in GeoJSON spec for
+    // disputed / unclaimed territories) — filter them out before registering.
+    const safe = {
+      ...geoJson,
+      features: (geoJson.features ?? []).filter((f: any) => f?.geometry != null),
+    };
+    echarts.registerMap("world", safe);
     setMapReady(true);
   }, [geoJson]);
 
