@@ -335,7 +335,18 @@ const WorldMapRenderer: React.FC<{
           if (!worldGeoJsonFetching) {
             worldGeoJsonFetching = fetch("/geo/world.json")
               .then(r => r.json())
-              .then(data => { worldGeoJsonCache = data; return data; });
+              .then(data => {
+                // Strip features with null/incomplete geometry — these are valid
+                // per GeoJSON spec (disputed territories) but echarts and
+                // echarts-gl crash when they encounter them.
+                worldGeoJsonCache = {
+                  ...data,
+                  features: (data.features ?? []).filter(
+                    (f: any) => f?.geometry != null && f.geometry.coordinates != null
+                  ),
+                };
+                return worldGeoJsonCache;
+              });
           }
           await worldGeoJsonFetching;
         }
