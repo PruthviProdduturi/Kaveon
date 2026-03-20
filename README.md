@@ -82,10 +82,13 @@ No separate login system. No data leaves your tenant. No vendor lock-in.
 <td width="50%">
 
 ### 🖥️ Dashboards
-- Drag-and-drop canvas with resizable chart tiles
-- Cross-chart filter bar — one filter slices all charts at once
-- Tab support for multi-page dashboards
-- Share with your whole team instantly
+- Drag-and-drop canvas with resizable chart tiles and row/column containers
+- Superset-style content blocks: rich **markdown text** (bold, italic, links, lists, code, blockquote), section headers (H1/H2/H3 with alignment + colour picker), and styled dividers
+- Per-chart **⋯ context menu**: refresh, full-screen, view query, view as table, download CSV/PNG, share, duplicate, remove
+- **Cross-chart filtering** — click a bar/slice to instantly filter all related charts
+- Dashboard-level filter bar — shared filters slice every chart simultaneously
+- Parallel chart preloading on open — all charts fetch in one pass for instant rendering
+- Publish, favourite, and inline-rename dashboards
 
 </td>
 <td width="50%">
@@ -468,6 +471,22 @@ LoomX/
 │   │   │   └── layout.tsx          ← Root layout with theme + auth
 │   │   ├── auth/                   ← MSAL Azure AD configuration
 │   │   ├── components/             ← Reusable React components
+│   │   │   ├── ConfirmModal.tsx    ← Portal-based confirm dialog (ReactDOM.createPortal)
+│   │   │   ├── charts/             ← Chart builder components
+│   │   │   │   └── ChartPreview.tsx← ECharts/table/KPI/map renderer + export hooks
+│   │   │   └── dashboards/         ← Dashboard canvas + item components
+│   │   │       ├── DashboardContext.tsx        ← Flat layout state, cross-filters, preload cache
+│   │   │       ├── DashboardCanvas.tsx         ← react-grid-layout canvas + row drag handles
+│   │   │       ├── DashboardItem.tsx           ← Type router → self-managed or chart card
+│   │   │       └── components/
+│   │   │           ├── ChartActionsOverlay.tsx ← ⋯ context menu (refresh/query/download/share)
+│   │   │           ├── DashboardChartComponent.tsx
+│   │   │           ├── DashboardRowComponent.tsx
+│   │   │           ├── DashboardColumnComponent.tsx ← Nested children + drag-to-reorder
+│   │   │           ├── DashboardTextComponent.tsx   ← Markdown renderer + formatting toolbar
+│   │   │           ├── DashboardHeaderComponent.tsx ← H1/H2/H3 + alignment + colour picker
+│   │   │           ├── DashboardDividerComponent.tsx
+│   │   │           └── DashboardTabsComponent.tsx
 │   │   ├── contexts/               ← Theme, auth context providers
 │   │   └── utils/                  ← MSAL fetch, colour utilities
 │   │
@@ -482,6 +501,7 @@ LoomX/
 │       │   └── warmup.py           ← Startup warmup + 5-min heartbeat
 │       ├── middleware/             ← Auth and error handling
 │       │   ├── auth.py             ← JWT RS256 verification (PyJWT + JWKS)
+│       │   ├── rate_limit.py       ← Per-user in-memory rate limiter
 │       │   └── errors.py           ← Exception handlers (no detail leakage)
 │       ├── routers/                ← API route handlers (one file per domain)
 │       │   ├── auth.py, health.py

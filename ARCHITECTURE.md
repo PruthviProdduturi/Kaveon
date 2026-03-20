@@ -344,6 +344,10 @@ CORSMiddleware(
 )
 ```
 
+### Rate Limiting (middleware/rate_limit.py)
+
+`RateLimitMiddleware` enforces a per-user sliding-window limit using an in-memory counter keyed on the authenticated user's email. Requests that exceed the limit receive HTTP 429. The limit applies only to authenticated routes — unauthenticated setup/health endpoints are excluded.
+
 ### Error Handling (middleware/errors.py)
 
 - `AppError` / subclasses (`ValidationError`, `NotFoundError`, etc.) → structured JSON error with appropriate status code
@@ -431,16 +435,126 @@ Returns `{sql, keyColumn, filteringTier}`. The frontend always sends the `keyCol
 
 ### 3. Dashboards: Multi-Chart Composition
 
-Dashboards store:
-- `layout_json`: react-grid-layout positions and sizes for each chart tile
-- `filter_config`: shared filter bar configuration (which columns, default values)
-- `chart_ids`: the charts included in this dashboard
+#### Layout Model
 
-The dashboard viewer:
-1. Loads dashboard metadata (layout, filter config)
-2. Loads each chart's configuration
-3. For each chart, calls `/api/v1/sql/execute` with any active dashboard filters appended to the chart's WHERE clause
-4. Renders all charts simultaneously via `Promise.all`
+Dashboards store a **flat layout array** (serialised as `layout_json`) where each item is a `DashboardLayoutItem`:
+
+```typescript
+interface DashboardLayoutItem {
+  i: string;          // unique id
+  type: ComponentType; // 'chart' | 'text' | 'header' | 'divider' | 'row' | 'column' | 'tabs'
+  x, y, w, h: number; // react-grid-layout grid position/size
+  parentId?: string;   // set when item is nested inside a row/column
+  children?: DashboardLayoutItem[]; // for row/column containers
+  chartId?: number;
+  textConfig?: { content, alignment, fontSize, color };
+  headerConfig?: { content, size, alignment, color };
+  dividerConfig?: { style, color, thickness };
+}
+```
+
+Root items (no `parentId`) sit on the main react-grid-layout canvas. Container items (`row`, `column`) own their children via the `children` array — children are sized and positioned by the container, not by react-grid-layout.
+
+#### State Management — `DashboardContext`
+
+All dashboard state lives in `DashboardContext` (React context + `useState`):
+
+| State / method | Purpose |
+|---|---|
+| `layout` / `setLayout` | The flat layout array; drives react-grid-layout |
+| `addLayoutItem` | Appends a new root item |
+| `updateLayoutItem` | Patches any item by id (config changes, resize) |
+| `removeLayoutItem` | Removes a root item |
+| `addItemToContainer` | Appends a child to a row/column's `children` array |
+| `removeItemFromContainer` | Removes a child from a container |
+| `moveItemToRoot` | Lifts a nested item out to the root canvas |
+| `duplicateLayoutItem` | Deep-clones an item with fresh ids |
+| `crossFilters` | Map of `itemId → {column, value}` for cross-filtering |
+| `setCrossFilter / clearCrossFilter` | Update/remove a cross-filter entry |
+| `getCrossFilterFilters` | Returns filters from other charts applicable to a given chart |
+| `dashboardFilters` | Dashboard-level shared filters (filter bar) |
+| `getEffectiveFilters` | Merges dashboard filters + cross-filters for a chart |
+| `preloadAllCharts` | Fetches all chart configs in parallel and caches them |
+| `getChartConfig` | Returns a cached chart config from the preload cache |
+
+#### Component Types and Rendering
+
+`DashboardItem` is the type router — it receives a `DashboardLayoutItem` and delegates rendering:
+
+```
+DashboardItem
+ ├── 'chart'   → DashboardChartComponent (chart card with ⋯ menu)
+ ├── 'text'    → DashboardTextComponent  (self-managed, no card wrapper)
+ ├── 'header'  → DashboardHeaderComponent (self-managed, no card wrapper)
+ ├── 'divider' → DashboardDividerComponent (self-managed, no card wrapper)
+ ├── 'row'     → DashboardRowComponent    (self-managed container)
+ ├── 'column'  → DashboardColumnComponent (self-managed container)
+ └── 'tabs'    → DashboardTabsComponent   (tabbed container)
+```
+
+**Self-managed components** (`text`, `header`, `divider`, `row`, `column`) bypass the default card wrapper — they render borderless, Superset-style, and handle their own hover toolbars, inline editing, and confirm dialogs. They receive `onRemove` as a **direct removal function** (not a re-open-confirm wrapper) because they own their own confirm modals.
+
+**Chart cards** (`chart` type) get a card wrapper (border, shadow) and are rendered via:
+
+```
+DashboardChartComponent
+  └── DashboardChartLoader
+        └── ChartBuilderProvider       (scoped context for this chart)
+              ├── ChartHydrator        (populates context from config — renders null)
+              └── <div flex:1>
+                    ├── ChartPreview   (ECharts / table / KPI / map renderer)
+                    └── ChartActionsOverlay  (⋯ button + dropdown menu)
+```
+
+`ChartBuilderProvider` is scoped **per chart card** so `ChartActionsOverlay` can access `useChartBuilder()` for the "View Query" and "View as Table" features.
+
+#### Chart Actions Overlay (`ChartActionsOverlay`)
+
+The always-visible `⋯` button on each chart card opens a dropdown with:
+
+| Action | Notes |
+|---|---|
+| Refresh | Increments `refreshKey` → forces `ChartHydrator` remount |
+| Full screen | Portal modal (ReactDOM.createPortal) over the page |
+| Edit chart | Navigate to `/charts/:id` (edit mode only) |
+| View query | Shows last executed SQL in a portal modal |
+| View as table | Shows raw data rows/columns in a portal modal |
+| Download CSV | Calls `exportsRef.current.downloadCsv()` registered by `ChartPreview` |
+| Download PNG | Calls `exportsRef.current.downloadPng()` registered by `ChartPreview` |
+| Share dashboard | Copies dashboard URL to clipboard |
+| Duplicate | Calls `duplicateLayoutItem` (edit mode only) |
+| Remove | Portal confirm modal → `directRemove` (edit mode only) |
+
+`ChartPreview` registers its download functions via the `onRegisterExports` callback pattern:
+```typescript
+// ChartPreview calls this once, passing download functions to the parent
+onRegisterExports?.({ downloadPng, downloadCsv })
+```
+
+#### Cross-Filter System
+
+Clicking a chart element (bar, pie slice, etc.) in view mode emits a cross-filter:
+
+```
+User clicks chart element
+  → ChartPreview.onCrossFilter(value)
+  → DashboardChartComponent.handleCrossFilter(column, value)
+  → DashboardContext.setCrossFilter(itemId, column, value)
+  → All other charts re-render with the new filter injected into their WHERE clause
+```
+
+Each chart uses `getCrossFilterFilters(itemId)` to get filters emitted by **other** charts. Only filters whose column matches this chart's time column or groupby columns are applied — preventing nonsensical filter application across unrelated charts.
+
+#### Parallel Chart Preloading
+
+On dashboard open, `preloadAllCharts(apiBase, fetchFn)` fetches all chart configs in parallel:
+
+```typescript
+await Promise.all(chartIds.map(id => fetch(`/api/v1/charts/${id}`)))
+// Results stored in chartConfigCache: Map<number, ChartConfig>
+```
+
+Each `DashboardChartLoader` checks `getChartConfig(chartId)` first — if cached, no network call is made. This means all charts render immediately from cache without any sequential waterfall.
 
 ---
 
@@ -504,6 +618,7 @@ Expires: 0
 | `LargeIntResponse` | `database/pool.py` | FastAPI response class: `datetime→ISO`, large `int→str` |
 | `get_current_user` | `middleware/auth.py` | JWT verification dependency |
 | `require_auth` | `middleware/auth.py` | Enforcing dependency — 401 if unauthenticated |
+| `RateLimitMiddleware` | `middleware/rate_limit.py` | Per-user in-memory sliding-window rate limiter |
 | `build_chart_preview_query` | `services/query_generator.py` | Star-schema T-SQL generation |
 | `build_distinct_filter_values_query` | `services/query_generator.py` | Filter dropdown query generation |
 | `quote_identifier` | `services/query_generator.py` | SQL identifier sanitization |
@@ -516,8 +631,18 @@ Expires: 0
 | `MsalProvider` | `auth/` | Azure AD MSAL browser context |
 | `msalFetch` | `utils/` | Authenticated fetch wrapper (injects Bearer token) |
 | `ThemeContext` | `contexts/` | Per-user colour theme state |
+| `ConfirmModal` | `components/ConfirmModal.tsx` | Portal-based confirm dialog — renders at `document.body` via `ReactDOM.createPortal` to avoid clipping |
 | Chart Builder | `app/charts/new/` | Drag-drop chart config UI |
-| Dashboard Builder | `app/dashboards/[id]/edit/` | react-grid-layout canvas |
+| `ChartPreview` | `components/charts/ChartPreview.tsx` | Renders ECharts, table, KPI, world map; exposes `onRegisterExports` for download callbacks |
+| `ChartBuilderProvider` | `components/charts/ChartBuilderContext.tsx` | Per-chart scoped context — runs query, holds results, exposes `sqlPreview` |
+| Dashboard Canvas | `components/dashboards/DashboardCanvas.tsx` | react-grid-layout grid with row drag handles (small draggable strip + `dataTransfer`) |
+| `DashboardContext` | `components/dashboards/DashboardContext.tsx` | Flat layout state, cross-filter map, preload cache, filter merging |
+| `DashboardItem` | `components/dashboards/DashboardItem.tsx` | Routes each layout item to the correct component; chart items get card wrapper |
+| `ChartActionsOverlay` | `components/dashboards/components/ChartActionsOverlay.tsx` | Always-visible ⋯ button + dropdown; uses `useChartBuilder()` for query/table modals |
+| `DashboardChartComponent` | `components/dashboards/components/DashboardChartComponent.tsx` | Scopes `ChartBuilderProvider`, wires preload cache, cross-filter emission, refresh key |
+| `DashboardTextComponent` | `components/dashboards/components/DashboardTextComponent.tsx` | Markdown renderer + formatting toolbar (B/I/code/link/lists/quote); inline edit with Markdown/Preview tabs |
+| `DashboardHeaderComponent` | `components/dashboards/components/DashboardHeaderComponent.tsx` | H1/H2/H3 inline-editable header with alignment and `react-colorful` colour picker |
+| `DashboardColumnComponent` | `components/dashboards/components/DashboardColumnComponent.tsx` | Vertical container with child drag-to-reorder and add-block dropdown (Chart/Text/Header/Divider) |
 | Monaco Editor | `app/lab/` | SQL editor with syntax highlighting |
 
 ---
@@ -580,19 +705,20 @@ app/
 ├── page.tsx                — Home: recent activity, quick links
 ├── charts/
 │   ├── page.tsx            — Charts list
-│   ├── [id]/page.tsx       — Chart detail / preview
-│   └── new/page.tsx        — Chart builder
+│   ├── [id]/page.tsx       — Chart detail / inline rename
+│   └── new/page.tsx        — Chart builder (drag-drop config + live preview)
 ├── dashboards/
 │   ├── page.tsx            — Dashboards list
-│   ├── [id]/page.tsx       — Dashboard viewer
-│   └── [id]/edit/page.tsx  — Dashboard editor
+│   ├── [id]/
+│   │   ├── edit/page.tsx   — Dashboard editor (react-grid-layout, edit mode)
+│   │   └── view/page.tsx   — Dashboard viewer (read-only, filter bar, publish)
 ├── datasets/
 │   ├── page.tsx            — Datasets list
-│   └── [id]/page.tsx       — Dataset detail + editor
+│   └── [id]/page.tsx       — Dataset detail + inline rename
 ├── data-sources/page.tsx   — Data source registration
 ├── lab/
-│   ├── page.tsx            — SQL Lab (Monaco + results grid)
-│   └── queries/page.tsx    — Saved queries + history
+│   ├── page.tsx            — SQL Lab (Monaco + multi-tab + results grid)
+│   └── queries/page.tsx    — Saved queries + query history
 ├── favorites/page.tsx      — Favourites list
 └── workspace-activity/     — Team query history
 ```
