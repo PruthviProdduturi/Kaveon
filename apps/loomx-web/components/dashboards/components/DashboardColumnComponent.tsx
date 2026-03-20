@@ -363,6 +363,7 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
                 onDragLeave={() => setDragOverIndex(null)}
                 style={{
                   flexShrink: 0,
+                  marginBottom: 8,
                   outline: isDropTarget ? '2px dashed #2563eb' : '2px solid transparent',
                   borderRadius: 5,
                   transition: 'outline 0.1s',
