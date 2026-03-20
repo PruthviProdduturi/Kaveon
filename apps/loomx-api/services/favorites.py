@@ -1,7 +1,7 @@
 """Favorites service — port of favorites.service.ts."""
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 import database.metadata as db
 
@@ -61,7 +61,7 @@ def create_favorite(data: dict, user_id: str) -> dict:
             return _adapt(existing)
 
     fav_id = str(uuid.uuid4())
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     db.execute("""
         INSERT INTO favorites (id, user_email, object_id, object_type, object_name, created_at)
         VALUES (@param0, @param1, @param2, @param3, @param4, @param5)

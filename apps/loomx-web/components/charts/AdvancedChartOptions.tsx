@@ -237,8 +237,9 @@ const ChartTypeOptions: React.FC<ChartTypeOptionsProps> = ({ chartType, advanced
   const isRadar = chartType === "radar";
   const isLine = ["time_series_line","time_series_line_share","time_series_area","time_series_area_share","line_multi_series","area_stack"].includes(chartType);
   const isMixed = chartType === "mixed_line_bar";
+  const isMap = chartType === "world_map";
 
-  if (!isBar && !isPie && !isScatter && !isKpi && !isFunnel && !isGauge && !isHeatmap && !isRadar && !isLine && !isMixed) return null;
+  if (!isBar && !isPie && !isScatter && !isKpi && !isFunnel && !isGauge && !isHeatmap && !isRadar && !isLine && !isMixed && !isMap) return null;
 
   return (
     <div style={{ marginBottom: 24 }}>
@@ -370,6 +371,18 @@ const ChartTypeOptions: React.FC<ChartTypeOptionsProps> = ({ chartType, advanced
               <input id="kpi-suffix" type="text" className="chart-builder-input" placeholder='e.g. " users"' maxLength={12} value={ctOpts.suffix || ""} onChange={(e) => setKpi("suffix", e.target.value)} />
             </div>
           </Row2>
+          <div className="chart-builder-field-group" style={{ marginBottom: 10 }}>
+            <label className="chart-builder-label" htmlFor="kpi-label">Metric label</label>
+            <input
+              id="kpi-label"
+              type="text"
+              className="chart-builder-input"
+              placeholder="Auto-detected from column name"
+              value={ctOpts.labelText || ""}
+              onChange={(e) => setKpi("labelText", e.target.value)}
+            />
+            <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 3 }}>Overrides the column name shown below the value</div>
+          </div>
         </>
       )}
 
@@ -502,6 +515,49 @@ const ChartTypeOptions: React.FC<ChartTypeOptionsProps> = ({ chartType, advanced
                 onChange={(e) => set("rightAxisName", e.target.value)} />
             </div>
           </div>
+        </>
+      )}
+
+      {/* MAP OPTIONS */}
+      {isMap && (
+        <>
+          <div className="chart-builder-field-group" style={{ marginBottom: 12 }}>
+            <label className="chart-builder-label">Map style</label>
+            <div style={{ display: "flex", gap: 8 }}>
+              {(["flat", "globe"] as const).map(style => (
+                <button
+                  key={style}
+                  type="button"
+                  onClick={() => set("mapStyle", style)}
+                  style={{
+                    flex: 1, padding: "7px 0", fontSize: 12, fontWeight: 600,
+                    borderRadius: 6, cursor: "pointer", border: "1.5px solid",
+                    borderColor: (ctOpts.mapStyle || "flat") === style ? "#0078d4" : "#e2e8f0",
+                    background: (ctOpts.mapStyle || "flat") === style ? "#eff6ff" : "#fff",
+                    color: (ctOpts.mapStyle || "flat") === style ? "#0078d4" : "#475569",
+                    display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+                  }}
+                >
+                  <i className={style === "globe" ? "fas fa-globe" : "fas fa-map"} style={{ fontSize: 11 }} />
+                  {style === "globe" ? "3D Globe" : "Flat map"}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="chart-builder-field-group" style={{ marginBottom: 10 }}>
+            <label className="chart-builder-label" htmlFor="map-number-fmt">Value format</label>
+            <select id="map-number-fmt" className="chart-builder-select" value={ctOpts.mapNumberFormat || "none"} onChange={(e) => set("mapNumberFormat", e.target.value)}>
+              <option value="none">Raw</option>
+              <option value="k">Thousands (K)</option>
+              <option value="m">Millions (M)</option>
+              <option value="b">Billions (B)</option>
+              <option value="t">Trillions (T)</option>
+            </select>
+          </div>
+          {(ctOpts.mapStyle || "flat") === "flat" && (
+            <CheckRow id="map-roam" label="Enable zoom / pan" checked={ctOpts.mapRoam !== false} onChange={(v) => set("mapRoam", v)} />
+          )}
+          <CheckRow id="map-labels" label="Show country labels" checked={ctOpts.mapShowLabels === true} onChange={(v) => set("mapShowLabels", v)} />
         </>
       )}
 
@@ -708,7 +764,7 @@ const AdvancedChartOptions: React.FC = () => {
   const isPieType = chartType === "pie" || chartType === "donut";
   const isScatterType = chartType === "scatter" || chartType === "bubble";
   const isKpiType = chartType === "big_number" || chartType === "big_number_trend";
-  const showChartTypeSection = Boolean(chartType && (isBarType || isPieType || isScatterType || isKpiType || isLineOrAreaChart || chartType === "mixed_line_bar" || chartType === "funnel" || chartType === "gauge" || chartType === "heatmap" || chartType === "radar"));
+  const showChartTypeSection = Boolean(chartType && (isBarType || isPieType || isScatterType || isKpiType || isLineOrAreaChart || chartType === "mixed_line_bar" || chartType === "funnel" || chartType === "gauge" || chartType === "heatmap" || chartType === "radar" || chartType === "world_map"));
 
   // Axis capability flags — controls which formatting rows appear in the Axes section
   const CARTESIAN_CHARTS = [

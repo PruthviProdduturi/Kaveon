@@ -1,7 +1,7 @@
 import { Configuration, PublicClientApplication } from "@azure/msal-browser";
 
-const clientId = process.env.NEXT_PUBLIC_AZURE_CLIENT_ID || "cd692cda-e48c-4f9b-9419-d6fc96ee506d";
-const tenantId = process.env.NEXT_PUBLIC_AZURE_TENANT_ID || "72f988bf-86f1-41af-91ab-2d7cd011db47";
+const clientId = process.env.NEXT_PUBLIC_AZURE_CLIENT_ID ?? "";
+const tenantId = process.env.NEXT_PUBLIC_AZURE_TENANT_ID ?? "common";
 const redirectUri = process.env.NEXT_PUBLIC_AZURE_REDIRECT_URI || (typeof window !== 'undefined' ? window.location.origin : "");
 const apiScope = process.env.NEXT_PUBLIC_AZURE_API_SCOPE;
 

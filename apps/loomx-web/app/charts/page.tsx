@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { API_BASE } from "../../config";
 import { TEMPLATES } from "../../components/charts/ChartBuilderContext";
-import { LoomXLogo } from "../../components/LoomXLogo";
+import { LoomXLoading } from "../../components/LoomXLoading";
 import { msalFetch } from "../../utils/msalFetch";
 import { useAuth } from "../../auth/useAuth";
 import { useRouter } from "next/navigation";
@@ -152,15 +152,7 @@ export default function ChartsPage() {
 
       {!isAuthenticated && <p className="muted">Sign in to see your charts.</p>}
 
-      {isAuthenticated && loading && (
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "80px 0", gap: 20 }}>
-          <div style={{ animation: "lx-pulse 1.6s ease-in-out infinite" }}>
-            <LoomXLogo size={48} animate="pulse" />
-          </div>
-          <p style={{ color: "#94a3b8", fontSize: 14, margin: 0 }}>Loading charts…</p>
-          <style>{`@keyframes lx-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.6;transform:scale(0.96)} }`}</style>
-        </div>
-      )}
+      {isAuthenticated && loading && <LoomXLoading message="Loading charts" />}
 
       {!loading && error && (
         <div className="card page-empty-card">

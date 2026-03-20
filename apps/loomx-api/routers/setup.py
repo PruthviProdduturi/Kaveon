@@ -87,6 +87,7 @@ def _parse_odbc(conn_str: str) -> tuple:
     # Strip tcp: prefix, port suffix, and ODBC {} value wrappers
     server = server_m.group(1).strip()
     database = db_m.group(1).strip().strip("{}")
+    return server, database
 
 
 def _resolve_fabric(data: SetupConnectionBody) -> tuple:

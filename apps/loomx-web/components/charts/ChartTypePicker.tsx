@@ -4,8 +4,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useChartBuilder } from "./ChartBuilderContext";
 
 // ── Inline SVG mini-chart icons ──────────────────────────────────────────────
-const ChartIcon: React.FC<{ id: string; color: string }> = ({ id, color }) => {
-  const s = { width: 28, height: 28, display: "block" };
+export const ChartIcon: React.FC<{ id: string; color: string; size?: number }> = ({ id, color, size = 28 }) => {
+  const s = { width: size, height: size, display: "block" };
   switch (id) {
     case "time_series_line":
     case "line_multi_series":
@@ -43,12 +43,49 @@ const ChartIcon: React.FC<{ id: string; color: string }> = ({ id, color }) => {
           <rect x="19" y="15" width="5" height="9" rx="1.5" fill={color} fillOpacity="0.5" />
         </svg>
       );
+    case "grouped_bar":
+      return (
+        <svg viewBox="0 0 28 28" style={s}>
+          <rect x="2"  y="14" width="4" height="10" rx="1.2" fill={color} />
+          <rect x="7"  y="10" width="4" height="14" rx="1.2" fill={color} fillOpacity="0.5" />
+          <rect x="13" y="9"  width="4" height="15" rx="1.2" fill={color} />
+          <rect x="18" y="14" width="4" height="10" rx="1.2" fill={color} fillOpacity="0.5" />
+          <rect x="23" y="17" width="3" height="7"  rx="1.2" fill={color} />
+        </svg>
+      );
+    case "stacked_bar_vertical":
+      return (
+        <svg viewBox="0 0 28 28" style={s}>
+          <rect x="3"  y="17" width="5" height="7"  rx="1.5" fill={color} />
+          <rect x="3"  y="12" width="5" height="5"  rx="0"   fill={color} fillOpacity="0.55" />
+          <rect x="3"  y="9"  width="5" height="3"  rx="1.5 1.5 0 0" fill={color} fillOpacity="0.3" />
+          <rect x="11" y="13" width="5" height="11" rx="1.5" fill={color} />
+          <rect x="11" y="7"  width="5" height="6"  rx="0"   fill={color} fillOpacity="0.55" />
+          <rect x="11" y="4"  width="5" height="3"  rx="1.5 1.5 0 0" fill={color} fillOpacity="0.3" />
+          <rect x="19" y="18" width="5" height="6"  rx="1.5" fill={color} />
+          <rect x="19" y="14" width="5" height="4"  rx="0"   fill={color} fillOpacity="0.55" />
+          <rect x="19" y="11" width="5" height="3"  rx="1.5 1.5 0 0" fill={color} fillOpacity="0.3" />
+        </svg>
+      );
     case "bar_horizontal":
       return (
         <svg viewBox="0 0 28 28" style={s}>
           <rect x="2" y="4" width="16" height="5" rx="1.5" fill={color} />
           <rect x="2" y="12" width="22" height="5" rx="1.5" fill={color} fillOpacity="0.75" />
           <rect x="2" y="20" width="11" height="5" rx="1.5" fill={color} fillOpacity="0.5" />
+        </svg>
+      );
+    case "stacked_bar_horizontal":
+      return (
+        <svg viewBox="0 0 28 28" style={s}>
+          <rect x="2" y="4"  width="12" height="5" rx="1.5" fill={color} />
+          <rect x="14" y="4" width="7"  height="5" rx="0"   fill={color} fillOpacity="0.55" />
+          <rect x="21" y="4" width="4"  height="5" rx="0 1.5 1.5 0" fill={color} fillOpacity="0.3" />
+          <rect x="2" y="12" width="16" height="5" rx="1.5" fill={color} />
+          <rect x="18" y="12" width="7" height="5" rx="0"   fill={color} fillOpacity="0.55" />
+          <rect x="2" y="20" width="9"  height="5" rx="1.5" fill={color} />
+          <rect x="11" y="20" width="10" height="5" rx="0"  fill={color} fillOpacity="0.55" />
+          <rect x="21" y="20" width="4"  height="5" rx="0 1.5 1.5 0" fill={color} fillOpacity="0.3" />
         </svg>
       );
     case "pie":
@@ -198,6 +235,82 @@ const ChartIcon: React.FC<{ id: string; color: string }> = ({ id, color }) => {
           <rect x="23" y="8" width="3" height="8" rx="1.5" fill={color} fillOpacity="0.6" />
         </svg>
       );
+    case "nightingale_rose":
+      return (
+        <svg viewBox="0 0 28 28" style={s}>
+          {[0,1,2,3,4,5].map(i => {
+            const angle = (i * 60 - 90) * Math.PI / 180;
+            const r = 5 + i * 1.8;
+            const x1 = 14, y1 = 14;
+            const x2 = 14 + Math.cos(angle) * r;
+            const y2 = 14 + Math.sin(angle) * r;
+            const x3 = 14 + Math.cos(angle + 60 * Math.PI / 180) * r;
+            const y3 = 14 + Math.sin(angle + 60 * Math.PI / 180) * r;
+            return <path key={i} d={`M${x1},${y1} L${x2},${y2} A${r},${r} 0 0,1 ${x3},${y3} Z`} fill={color} fillOpacity={0.35 + i * 0.1} />;
+          })}
+          <circle cx="14" cy="14" r="2.5" fill={color} />
+        </svg>
+      );
+    case "histogram":
+      return (
+        <svg viewBox="0 0 28 28" style={s}>
+          <rect x="2"  y="20" width="3.5" height="4"  rx="1" fill={color} fillOpacity="0.4" />
+          <rect x="6"  y="16" width="3.5" height="8"  rx="1" fill={color} fillOpacity="0.55" />
+          <rect x="10" y="10" width="3.5" height="14" rx="1" fill={color} fillOpacity="0.75" />
+          <rect x="14" y="7"  width="3.5" height="17" rx="1" fill={color} />
+          <rect x="18" y="11" width="3.5" height="13" rx="1" fill={color} fillOpacity="0.75" />
+          <rect x="22" y="17" width="3.5" height="7"  rx="1" fill={color} fillOpacity="0.45" />
+        </svg>
+      );
+    case "sankey":
+      return (
+        <svg viewBox="0 0 28 28" style={s}>
+          <rect x="2" y="4"  width="4" height="8"  rx="1.5" fill={color} />
+          <rect x="2" y="16" width="4" height="8"  rx="1.5" fill={color} fillOpacity="0.6" />
+          <rect x="22" y="3"  width="4" height="5"  rx="1.5" fill={color} />
+          <rect x="22" y="11" width="4" height="5"  rx="1.5" fill={color} fillOpacity="0.75" />
+          <rect x="22" y="19" width="4" height="6"  rx="1.5" fill={color} fillOpacity="0.5" />
+          <path d="M6,8 C14,8 14,5.5 22,5.5"  fill="none" stroke={color} strokeWidth="2.5" strokeOpacity="0.6" />
+          <path d="M6,12 C14,12 14,13.5 22,13.5" fill="none" stroke={color} strokeWidth="2" strokeOpacity="0.5" />
+          <path d="M6,20 C14,20 14,21.5 22,21.5" fill="none" stroke={color} strokeWidth="2.5" strokeOpacity="0.4" />
+        </svg>
+      );
+    case "calendar_heatmap":
+      return (
+        <svg viewBox="0 0 28 28" style={s}>
+          {[0,1,2,3].map(row =>
+            [0,1,2,3,4,5,6].map(col => {
+              const intensity = Math.random(); // deterministic enough for icon
+              const val = ((row * 7 + col) * 17) % 10 / 10;
+              return <rect key={`${row}-${col}`} x={1 + col * 4} y={6 + row * 5} width="3.5" height="4" rx="0.5" fill={color} fillOpacity={0.1 + val * 0.85} />;
+            })
+          )}
+          <rect x="1" y="2" width="26" height="2.5" rx="1" fill={color} fillOpacity="0.3" />
+        </svg>
+      );
+    case "parallel_coordinates":
+      return (
+        <svg viewBox="0 0 28 28" style={s}>
+          {[4, 10, 16, 22].map(x => (
+            <line key={x} x1={x} y1="4" x2={x} y2="24" stroke={color} strokeWidth="1.5" strokeOpacity="0.35" />
+          ))}
+          <polyline points="4,8 10,16 16,10 22,18"  fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" />
+          <polyline points="4,14 10,7  16,19 22,11" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeOpacity="0.6" />
+          <polyline points="4,20 10,13 16,14 22,6"  fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeOpacity="0.4" />
+        </svg>
+      );
+    case "world_map":
+      return (
+        <svg viewBox="0 0 28 28" style={s}>
+          <ellipse cx="14" cy="14" rx="11" ry="11" fill="none" stroke={color} strokeWidth="1.4" strokeOpacity="0.4" />
+          <ellipse cx="14" cy="14" rx="5.5" ry="11" fill="none" stroke={color} strokeWidth="1.2" strokeOpacity="0.35" />
+          <line x1="3" y1="14" x2="25" y2="14" stroke={color} strokeWidth="1.2" strokeOpacity="0.35" />
+          <line x1="5" y1="9" x2="23" y2="9" stroke={color} strokeWidth="1" strokeOpacity="0.25" />
+          <line x1="5" y1="19" x2="23" y2="19" stroke={color} strokeWidth="1" strokeOpacity="0.25" />
+          <path d="M8,6 Q11,10 10,14 Q9,18 11,22" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" />
+          <path d="M16,6 Q18,10 18,14 Q18,18 17,22" fill="none" stroke={color} strokeWidth="1.3" strokeLinecap="round" strokeOpacity="0.6" />
+        </svg>
+      );
     case "big_number":
       return (
         <svg viewBox="0 0 28 28" style={s}>
@@ -243,7 +356,7 @@ const ChartIcon: React.FC<{ id: string; color: string }> = ({ id, color }) => {
 };
 
 // Category → accent color
-const CATEGORY_COLOR: Record<string, string> = {
+export const CATEGORY_COLOR: Record<string, string> = {
   Line:        "#0078d4",
   Bar:         "#7c3aed",
   Pie:         "#db2777",
@@ -258,8 +371,10 @@ const CATEGORY_COLOR: Record<string, string> = {
   Sunburst:    "#db2777",
   PictorialBar:"#0891b2",
   ThemeRiver:  "#0078d4",
+  Flow:        "#0ea5e9",
+  Map:         "#0078d4",
   Custom:      "#6366f1",
-  Dataset:     "#374151",
+  Dataset:     "#475569",
 };
 
 const DEFAULT_COLOR = "#0078d4";

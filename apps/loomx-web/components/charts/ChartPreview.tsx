@@ -1,7 +1,9 @@
-import React, { useRef, useCallback } from "react";
+import React, { useRef, useCallback, useEffect } from "react";
 import dynamic from "next/dynamic";
 import { useChartBuilder } from "./ChartBuilderContext";
 import { getPlugin } from "./chartPluginRegistry";
+
+const WorldMapGlobe = dynamic(() => import("./WorldMapGlobe"), { ssr: false });
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
 
@@ -28,16 +30,89 @@ interface BigNumberKpiCardProps {
   options: any;
   rows: (string | number | null)[][];
   columns: string[];
+  chartType?: string;
 }
 
-const BigNumberKpiCard: React.FC<BigNumberKpiCardProps> = ({ options, rows, columns }) => {
+// Inline sparkline SVG for big_number_trend with hover tooltip
+const SparkLine: React.FC<{ values: number[]; color: string; rowLabels?: string[]; formatValue?: (v: number) => string }> = ({ values, color, rowLabels, formatValue }) => {
+  const [hoverIdx, setHoverIdx] = React.useState<number | null>(null);
+  if (values.length < 2) return null;
+  const W = 240, H = 56, PAD = 4;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const toX = (i: number) => PAD + (i / (values.length - 1)) * (W - PAD * 2);
+  const toY = (v: number) => PAD + (1 - (v - min) / range) * (H - PAD * 2);
+  const linePts = values.map((v, i) => `${toX(i)},${toY(v)}`).join(' ');
+  const fillPts = `${toX(0)},${H - PAD} ${linePts} ${toX(values.length - 1)},${H - PAD}`;
+  const lastX = toX(values.length - 1);
+  const lastY = toY(values[values.length - 1]);
+
+  const hov = hoverIdx !== null ? hoverIdx : null;
+
+  return (
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      {/* Hover tooltip */}
+      {hov !== null && (
+        <div style={{
+          position: 'absolute',
+          left: toX(hov) - 30,
+          top: toY(values[hov]) - 34,
+          background: '#1e293b',
+          color: '#fff',
+          fontSize: 11,
+          fontWeight: 600,
+          padding: '3px 8px',
+          borderRadius: 5,
+          whiteSpace: 'nowrap',
+          pointerEvents: 'none',
+          zIndex: 10,
+          fontFamily: 'Inter, -apple-system, sans-serif',
+        }}>
+          {rowLabels?.[hov] ? `${rowLabels[hov]}: ` : ''}{formatValue ? formatValue(values[hov]) : values[hov].toLocaleString(undefined, { maximumFractionDigits: 2 })}
+        </div>
+      )}
+      <svg width={W} height={H} style={{ overflow: 'visible', display: 'block', cursor: 'crosshair' }}>
+        <defs>
+          <linearGradient id="spark-grad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.22" />
+            <stop offset="100%" stopColor={color} stopOpacity="0.02" />
+          </linearGradient>
+        </defs>
+        <polygon points={fillPts} fill="url(#spark-grad)" />
+        <polyline points={linePts} fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+        <circle cx={lastX} cy={lastY} r="3.5" fill={color} />
+        {/* Hover dot */}
+        {hov !== null && (
+          <circle cx={toX(hov)} cy={toY(values[hov])} r="4.5" fill={color} stroke="#fff" strokeWidth="1.5" />
+        )}
+        {/* Invisible hover zones for each data point */}
+        {values.map((_, i) => (
+          <rect
+            key={i}
+            x={toX(i) - (W - PAD * 2) / (values.length - 1) / 2}
+            y={0}
+            width={(W - PAD * 2) / (values.length - 1)}
+            height={H}
+            fill="transparent"
+            onMouseEnter={() => setHoverIdx(i)}
+            onMouseLeave={() => setHoverIdx(null)}
+          />
+        ))}
+      </svg>
+    </div>
+  );
+};
+
+const BigNumberKpiCard: React.FC<BigNumberKpiCardProps> = ({ options, rows, columns, chartType }) => {
   const lastRow = rows[rows.length - 1];
   const kpiOpts = options?.kpiOptions || {};
+  const showTrend = chartType === "big_number_trend";
 
   // Find the metric column (last numeric column)
   let value: number | null = null;
   let label = "";
-  let trend: number | null = null;
+  let metricIdx = -1;
 
   if (lastRow) {
     for (let i = columns.length - 1; i >= 0; i--) {
@@ -45,22 +120,30 @@ const BigNumberKpiCard: React.FC<BigNumberKpiCardProps> = ({ options, rows, colu
       if (v !== null && v !== undefined && !isNaN(Number(v))) {
         value = Number(v);
         label = columns[i] || "";
+        metricIdx = i;
         break;
       }
     }
   }
 
-  // Trend: compare last two rows
-  if (rows.length >= 2) {
+  // % change vs prior period (last two rows)
+  let trend: number | null = null;
+  if (rows.length >= 2 && metricIdx >= 0) {
     const prevRow = rows[rows.length - 2];
-    const colIdx = columns.findIndex((c) => c === label);
-    if (colIdx >= 0 && prevRow) {
-      const prev = Number(prevRow[colIdx]);
-      if (!isNaN(prev) && prev !== 0 && value !== null) {
-        trend = ((value - prev) / Math.abs(prev)) * 100;
-      }
+    const prev = Number(prevRow[metricIdx]);
+    if (!isNaN(prev) && prev !== 0 && value !== null) {
+      trend = ((value - prev) / Math.abs(prev)) * 100;
     }
   }
+
+  // Sparkline values + labels (time/category column for tooltip)
+  const timeOrCatIdx = columns.findIndex((c, i) => i !== metricIdx && (c.toLowerCase().includes('date') || c.toLowerCase().includes('time') || c.toLowerCase().includes('month') || c.toLowerCase().includes('week') || c.toLowerCase().includes('year') || c.toLowerCase().includes('period')));
+  const sparkValues: number[] = showTrend && metricIdx >= 0
+    ? rows.map(r => Number(r[metricIdx])).filter(v => !isNaN(v))
+    : [];
+  const sparkLabels: string[] = showTrend && timeOrCatIdx >= 0
+    ? rows.map(r => String(r[timeOrCatIdx] ?? ''))
+    : [];
 
   const numFmt = kpiOpts.numberFormat || "auto";
   const prefix = kpiOpts.prefix || "";
@@ -72,7 +155,6 @@ const BigNumberKpiCard: React.FC<BigNumberKpiCardProps> = ({ options, rows, colu
     if (numFmt === "b") return `${(v / 1e9).toFixed(1)}B`;
     if (numFmt === "t") return `${(v / 1e12).toFixed(1)}T`;
     if (numFmt === "fixed") return v.toFixed(kpiOpts.decimalPlaces ?? 2);
-    // auto: pick best unit
     if (Math.abs(v) >= 1e9) return `${(v / 1e9).toFixed(1)}B`;
     if (Math.abs(v) >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
     if (Math.abs(v) >= 1e3) return `${(v / 1e3).toFixed(1)}K`;
@@ -80,17 +162,24 @@ const BigNumberKpiCard: React.FC<BigNumberKpiCardProps> = ({ options, rows, colu
   };
 
   const formatted = value === null ? "—" : `${prefix}${formatKpiValue(value)}${suffix}`;
-
   const trendColor = trend === null ? "#6b7280" : trend >= 0 ? "#16a34a" : "#dc2626";
   const trendIcon = trend === null ? null : trend >= 0 ? "▲" : "▼";
+  // Custom label overrides auto-detected column name
+  const displayLabel = kpiOpts.labelText || label;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 8, padding: 24 }}>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: showTrend ? 6 : 8, padding: 24 }}>
       {options?.title?.text && (
         <div style={{ fontSize: 13, color: "#6b7280", fontWeight: 500, textAlign: "center" }}>{options.title.text}</div>
       )}
       <div style={{ fontSize: 52, fontWeight: 700, color: "#0f172a", lineHeight: 1, letterSpacing: "-2px" }}>{formatted}</div>
-      {label && <div style={{ fontSize: 13, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</div>}
+      {displayLabel && <div style={{ fontSize: 13, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>{displayLabel}</div>}
+      {/* Sparkline — only for big_number_trend */}
+      {showTrend && sparkValues.length >= 2 && (
+        <div style={{ marginTop: 4, marginBottom: 2 }}>
+          <SparkLine values={sparkValues} color={trendColor} rowLabels={sparkLabels.length ? sparkLabels : undefined} formatValue={(v) => `${prefix}${formatKpiValue(v)}${suffix}`} />
+        </div>
+      )}
       {trend !== null && (
         <div style={{ fontSize: 14, color: trendColor, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
           <span>{trendIcon}</span>
@@ -220,12 +309,209 @@ const TableRenderer: React.FC<TableRendererProps> = ({ rows, columns, isPivot })
   );
 };
 
+// Module-level GeoJSON cache so we only fetch once per page load
+let worldGeoJsonCache: any = null;
+let worldGeoJsonFetching: Promise<any> | null = null;
+
+const MAP_DEFAULT_COLORS = ["#e0f2fe", "#0ea5e9", "#0369a1"];
+
+const WorldMapRenderer: React.FC<{
+  rows: (string | number | null)[][];
+  columns: string[];
+  advancedOptions?: any;
+}> = ({ rows, columns, advancedOptions }) => {
+  const [ready, setReady] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const eRef = React.useRef<any>(null);
+
+  const ctOpts = advancedOptions?.chartTypeOptions || {};
+  const isGlobe = ctOpts.mapStyle === "globe";
+
+  React.useEffect(() => {
+    setReady(false);
+    const load = async () => {
+      try {
+        if (!worldGeoJsonCache) {
+          if (!worldGeoJsonFetching) {
+            worldGeoJsonFetching = fetch("/geo/world.json")
+              .then(r => r.json())
+              .then(data => { worldGeoJsonCache = data; return data; });
+          }
+          await worldGeoJsonFetching;
+        }
+        if (!isGlobe) {
+          // Flat map: register map on the main echarts instance
+          const echarts = await import("echarts");
+          echarts.registerMap("world", worldGeoJsonCache);
+        }
+        setReady(true);
+      } catch (e) {
+        setError("Failed to load world map data");
+      }
+    };
+    load();
+  }, [isGlobe]);
+
+  const option = React.useMemo(() => {
+    if (!ready || !rows.length || columns.length < 2) return null;
+
+    const colorScheme: string[] = advancedOptions?.color?.length ? advancedOptions.color : MAP_DEFAULT_COLORS;
+    const showRoam: boolean = ctOpts.mapRoam !== false;
+    const showLabels: boolean = ctOpts.mapShowLabels === true;
+    const numFmt: string = ctOpts.mapNumberFormat || "none";
+
+    const fmtVal = (v: number): string => {
+      if (numFmt === "k") return `${(v / 1e3).toFixed(1)}K`;
+      if (numFmt === "m") return `${(v / 1e6).toFixed(1)}M`;
+      if (numFmt === "b") return `${(v / 1e9).toFixed(1)}B`;
+      if (numFmt === "t") return `${(v / 1e12).toFixed(1)}T`;
+      return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    };
+
+    // Heuristic: first non-numeric col = country name, last numeric col = value
+    const nameIdx = columns.findIndex((_, i) => rows.some(r => isNaN(Number(r[i]))));
+    const valIdx = columns.length - 1 === nameIdx ? columns.length - 2 : columns.length - 1;
+    if (nameIdx < 0 || valIdx < 0) return null;
+
+    const data = rows
+      .map(r => ({ name: String(r[nameIdx] ?? ""), value: Number(r[valIdx] ?? 0) }))
+      .filter(d => d.name && !isNaN(d.value));
+
+    const values = data.map(d => d.value);
+    const minV = Math.min(...values);
+    const maxV = Math.max(...values);
+
+    const titleOpt = advancedOptions?.title?.text
+      ? { title: { text: advancedOptions.title.text, left: "center", top: 5, textStyle: { fontSize: Number(advancedOptions.titleSize) || 20, fontFamily: advancedOptions.titleFont || "sans-serif" } } }
+      : {};
+
+    const visualMap = {
+      min: minV, max: maxV,
+      left: "left", bottom: 30,
+      text: [fmtVal(maxV), fmtVal(minV)],
+      inRange: { color: colorScheme },
+      calculable: true,
+      textStyle: { fontSize: 11, color: isGlobe ? "#94a3b8" : "#475569" },
+    };
+
+    const tooltipStyle = {
+      trigger: "item",
+      appendToBody: true,
+      backgroundColor: "rgba(255,255,255,0.97)",
+      borderColor: "#e2e8f0",
+      borderWidth: 1,
+      padding: [10, 14],
+      textStyle: { color: "#1e293b", fontSize: 12, fontFamily: 'Inter, -apple-system, sans-serif' },
+      extraCssText: "box-shadow: 0 8px 24px rgba(0,0,0,0.12); border-radius: 8px;",
+      formatter: (p: any) => {
+        const v = Number(p.value);
+        return `<b>${p.name}</b><br/>${p.value != null && !isNaN(v) ? fmtVal(v) : "—"}`;
+      },
+    };
+
+    if (isGlobe) {
+      return {
+        ...titleOpt,
+        backgroundColor: "#0d1117",
+        tooltip: tooltipStyle,
+        visualMap,
+        globe: {
+          baseTexture: "#0c1e35",
+          shading: "lambert",
+          light: {
+            ambient: { intensity: 0.6 },
+            main: { intensity: 1.2, shadow: false },
+          },
+          atmosphere: {
+            show: true,
+          },
+          viewControl: {
+            autoRotate: false,
+            distance: 160,
+            minDistance: 80,
+            maxDistance: 320,
+            rotateSensitivity: 1,
+            zoomSensitivity: 1,
+            panSensitivity: 0,
+          },
+          itemStyle: {
+            borderWidth: 0,
+          },
+          regionQuery: {},
+        },
+        series: [{
+          type: "map3D",
+          coordinateSystem: "globe",
+          map: "world",
+          data,
+          shading: "lambert",
+          emphasis: {
+            label: { show: true, textStyle: { color: "#fff", fontSize: 11, fontFamily: 'Inter, sans-serif' } },
+            itemStyle: { color: "#fbbf24" },
+          },
+          itemStyle: {
+            borderWidth: 0.4,
+            borderColor: "rgba(255,255,255,0.15)",
+          },
+          label: {
+            show: showLabels,
+            textStyle: { color: "#fff", fontSize: 9, fontFamily: 'Inter, sans-serif' },
+          },
+        }],
+      };
+    }
+
+    // Flat map
+    return {
+      ...titleOpt,
+      tooltip: tooltipStyle,
+      visualMap,
+      series: [{
+        type: "map",
+        map: "world",
+        roam: showRoam,
+        data,
+        emphasis: { label: { show: true, fontSize: 11 }, itemStyle: { areaColor: "#fbbf24" } },
+        itemStyle: { borderColor: "#fff", borderWidth: 0.5 },
+        label: { show: showLabels, fontSize: 10, color: "#1e293b" },
+      }],
+    };
+  }, [ready, rows, columns, advancedOptions, isGlobe]);
+
+  if (error) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#ef4444", fontSize: 13 }}>{error}</div>;
+  if (!ready) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#94a3b8", fontSize: 13 }}>Loading map…</div>;
+
+  // Globe: delegate to the separate chunk that statically imports echarts-gl
+  if (isGlobe) {
+    return (
+      <WorldMapGlobe
+        rows={rows}
+        columns={columns}
+        geoJson={worldGeoJsonCache}
+        advancedOptions={advancedOptions}
+      />
+    );
+  }
+
+  if (!option) return null;
+
+  return (
+    <ReactECharts
+      option={option}
+      style={{ width: "100%", height: "100%" }}
+      onChartReady={(instance: any) => { eRef.current = instance; }}
+    />
+  );
+};
+
 interface ChartPreviewProps {
   /** Called when user clicks a data point in dashboard view — enables cross-filtering */
   onCrossFilter?: (value: string) => void;
+  /** Called after downloadPng/downloadCsv are defined, so parent can invoke them */
+  onRegisterExports?: (exports: { downloadPng: () => void; downloadCsv: () => void }) => void;
 }
 
-const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter }) => {
+const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterExports }) => {
   const { selectedTemplate, selectedDatasetId, previewOptions, sqlPreview, description, chartType, advancedOptions } = useChartBuilder();
   const echartsInstanceRef = useRef<any>(null);
 
@@ -256,6 +542,10 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter }) => {
     a.click();
     URL.revokeObjectURL(url);
   }, [sqlPreview.dataColumns, sqlPreview.dataRows]);
+
+  useEffect(() => {
+    onRegisterExports?.({ downloadPng, downloadCsv });
+  }, [onRegisterExports, downloadPng, downloadCsv]);
 
   const hasOption = Boolean(previewOptions);
 
@@ -592,36 +882,14 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter }) => {
   const hasData = hasOption && !sqlPreview.isRunning && !!sqlPreview.dataRows?.length;
 
   return (
-    <div className="chart-builder-preview-card">
+    <div
+      className="chart-builder-preview-card"
+    >
       <div className="chart-builder-preview-header">
         <div className="chart-builder-preview-meta">
           {subtitle && <div>{subtitle}</div>}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {hasData && (
-            <>
-              <button
-                type="button"
-                className="chart-preview-action-btn"
-                title="Download PNG"
-                onClick={downloadPng}
-                style={{ padding: '4px 8px', fontSize: 12, background: 'none', border: '1px solid #e2e8f0', borderRadius: 5, cursor: 'pointer', color: '#64748b', display: 'flex', alignItems: 'center', gap: 4 }}
-              >
-                <i className="fas fa-image" style={{ fontSize: 11 }} />
-                <span>PNG</span>
-              </button>
-              <button
-                type="button"
-                className="chart-preview-action-btn"
-                title="Download CSV"
-                onClick={downloadCsv}
-                style={{ padding: '4px 8px', fontSize: 12, background: 'none', border: '1px solid #e2e8f0', borderRadius: 5, cursor: 'pointer', color: '#64748b', display: 'flex', alignItems: 'center', gap: 4 }}
-              >
-                <i className="fas fa-file-csv" style={{ fontSize: 11 }} />
-                <span>CSV</span>
-              </button>
-            </>
-          )}
           {description && description.trim() && (
             <div className="chart-info-icon-container">
               <i
@@ -649,7 +917,13 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter }) => {
             isPivot={chartType === "pivot_table"}
           />
         ) : hasOption && !sqlPreview.isRunning && (chartType === "big_number" || chartType === "big_number_trend") ? (
-          <BigNumberKpiCard options={chartOptions} rows={sqlPreview.dataRows} columns={sqlPreview.dataColumns} />
+          <BigNumberKpiCard options={chartOptions} rows={sqlPreview.dataRows} columns={sqlPreview.dataColumns} chartType={chartType} />
+        ) : hasOption && !sqlPreview.isRunning && chartType === "world_map" ? (
+          <WorldMapRenderer
+            rows={(previewOptions as any)?._rows ?? sqlPreview.dataRows}
+            columns={(previewOptions as any)?._columns ?? sqlPreview.dataColumns}
+            advancedOptions={advancedOptions}
+          />
         ) : hasOption && !sqlPreview.isRunning && chartType && getPlugin(chartType)?.Renderer ? (
           (() => {
             const PluginRenderer = getPlugin(chartType)!.Renderer!;

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useState } from "react";
-import { useRouter, useParams } from "next/navigation";
+import { useParams } from "next/navigation";
 import { DashboardProvider, DashboardConfig } from "../../../../components/dashboards/DashboardContext";
 import DashboardBuilder from "../../../../components/dashboards/DashboardBuilder";
 import { LoadingOverlay } from "../../../../components/LoadingOverlay";
@@ -12,7 +12,6 @@ export const dynamic = 'force-dynamic';
 export const dynamicParams = true;
 
 const DashboardEditPage: React.FC = () => {
-  const router = useRouter();
   const params = useParams();
   const id = params?.id as string | undefined;
   const [initialConfig, setInitialConfig] = useState<DashboardConfig | undefined>(undefined);
@@ -71,10 +70,10 @@ const DashboardEditPage: React.FC = () => {
         const payload = {
           name: config.name,
           description: config.description || "",
-          layout: JSON.stringify(config.layout),
-          charts: JSON.stringify(config.chartIds || []),
-          filters: JSON.stringify(config.filters || []),
-          is_published: false, // Unpublish when edited
+          layout: config.layout,
+          charts: config.chartIds || [],
+          filters: config.filters || [],
+          is_published: false,
         };
 
         const response = await msalFetch(`${API_BASE}/api/v1/dashboards/${id}`, {
@@ -87,17 +86,18 @@ const DashboardEditPage: React.FC = () => {
 
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.detail || `Failed to update dashboard: ${response.status}`);
+          const detail = Array.isArray(errorData.detail)
+            ? errorData.detail.map((e: any) => e.msg || JSON.stringify(e)).join('; ')
+            : errorData.detail;
+          throw new Error(detail || `Failed to update dashboard: ${response.status}`);
         }
-
-        // Navigate to the dashboard view page
-        router.push(`/dashboards/${id}/view`);
+        // Stay on the edit page — context will clear hasUnsavedChanges
       } catch (error) {
         console.error("Error saving dashboard:", error);
         throw error; // Re-throw to let the context handle the error state
       }
     },
-    [id, router]
+    [id]
   );
 
   // Show loading state

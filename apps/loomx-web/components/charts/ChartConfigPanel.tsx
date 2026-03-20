@@ -132,6 +132,7 @@ const ChartConfigPanel: React.FC = () => {
   const timeRangeOptions = useMemo(
     () => [
       { value: "all_time", label: "No filter (all time)", group: "Common" },
+      { value: "latest_day", label: "Latest available day", group: "Common" },
       { value: "last_day", label: "Last day", group: "Common" },
       { value: "last_week", label: "Last week", group: "Common" },
       { value: "last_month", label: "Last month", group: "Common" },

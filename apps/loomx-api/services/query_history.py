@@ -1,28 +1,28 @@
 """Query history service — port of queryHistory.service.ts."""
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 import database.metadata as db
 
 
-_SELECT = """
-    SELECT id, query_id, dataset_id, tables_used, sql_text, run_context,
-           trigger_source, status, error_message, row_count, duration_ms,
-           started_at, finished_at, executed_by, client_ip, user_agent
-    FROM query_history
-"""
+
+_COLS = (
+    "id, query_id, dataset_id, tables_used, sql_text, run_context, "
+    "trigger_source, status, error_message, row_count, duration_ms, "
+    "started_at, finished_at, executed_by, client_ip, user_agent"
+)
 
 
 def list_history(user_id: Optional[str], limit: int = 50) -> List[dict]:
     fetch_all = not user_id or user_id == "all"
     if fetch_all:
         result = db.query(
-            f"SELECT TOP (@param0) {_SELECT.split('FROM')[1].strip()} FROM query_history ORDER BY started_at DESC",
+            f"SELECT TOP (@param0) {_COLS} FROM query_history ORDER BY started_at DESC",
             [limit],
         )
     else:
         result = db.query(
-            _SELECT + "WHERE executed_by = @param0 ORDER BY started_at DESC",
+            f"SELECT {_COLS} FROM query_history WHERE executed_by = @param0 ORDER BY started_at DESC",
             [user_id],
         )
         result["rows"] = result["rows"][:limit]
@@ -30,17 +30,15 @@ def list_history(user_id: Optional[str], limit: int = 50) -> List[dict]:
 
 
 def create_history(data: dict, user_id: str) -> dict:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     started_at = data.get("started_at")
     if isinstance(started_at, (int, float)):
-        started_at = datetime.utcfromtimestamp(started_at / 1000)
+        started_at = datetime.fromtimestamp(started_at / 1000, tz=timezone.utc).replace(tzinfo=None)
     elif started_at is None:
         started_at = now
 
     duration_ms = data.get("duration_ms") or 0
-    finished_at = datetime.utcfromtimestamp(
-        started_at.timestamp() + duration_ms / 1000
-    ) if started_at else now
+    finished_at = (started_at + timedelta(milliseconds=duration_ms)) if started_at else now
 
     trigger_source = data.get("trigger_source") or "lab"
 

@@ -1,7 +1,7 @@
 """Charts service — port of charts.service.ts."""
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 import database.metadata as db
 
@@ -72,14 +72,17 @@ def get_chart_by_id(chart_id: str) -> Optional[dict]:
 
 
 def create_chart(data: dict, user_id: str) -> dict:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    query_config = data.get("query_config") or {}
+    if "dataset_id" in data and data["dataset_id"] is not None:
+        query_config = {**query_config, "dataset_id": data["dataset_id"]}
     db.execute("""
         INSERT INTO charts (name, description, chart_type, query_config, viz_config,
                            created_on, created_by, changed_on, updated_by, created_at, updated_at)
         VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6, @param7, @param8, @param9, @param10)
     """, [
         data["name"], data.get("description"), data["chart_type"],
-        json.dumps(data.get("query_config") or {}),
+        json.dumps(query_config),
         json.dumps(data.get("viz_config") or {}),
         now, user_id, now, user_id, now, now,
     ])
@@ -95,7 +98,7 @@ def create_chart(data: dict, user_id: str) -> dict:
 def update_chart(chart_id: str, data: dict) -> Optional[dict]:
     if not get_chart_by_id(chart_id):
         return None
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     updates, params, i = [], [], 0
 
     for field, col in [("name", "name"), ("description", "description"), ("chart_type", "chart_type")]:

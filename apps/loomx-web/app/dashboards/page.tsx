@@ -8,6 +8,7 @@ import { LoadingOverlay } from "../../components/LoadingOverlay";
 import { msalFetch } from "../../utils/msalFetch";
 import { useAuth } from "../../auth/useAuth";
 import { Button } from "../../components/Button";
+import { ConfirmModal } from "../../components/ConfirmModal";
 
 interface DashboardSummary {
   id: string;
@@ -36,6 +37,7 @@ const DashboardsPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<DashboardSummary | null>(null);
 
   // On first load, migrate localStorage favorites to backend and clear localStorage
   // Helper to load dashboards from backend
@@ -153,8 +155,7 @@ const DashboardsPage: React.FC = () => {
   };
 
   const handleDeleteDashboard = async (dashboard: DashboardSummary) => {
-    const confirmed = window.confirm(`Delete dashboard "${dashboard.name}"? This cannot be undone.`);
-    if (!confirmed) return;
+    setConfirmDelete(null);
     setDeletingId(dashboard.id);
     try {
       // Use msalFetch (includes Bearer token) to prevent CSRF on destructive operations
@@ -308,7 +309,7 @@ const DashboardsPage: React.FC = () => {
                           aria-label="Delete dashboard"
                           onClick={(e) => {
                             e.stopPropagation();
-                            void handleDeleteDashboard(d);
+                            setConfirmDelete(d);
                           }}
                           disabled={deletingId === d.id}
                         >
@@ -323,6 +324,15 @@ const DashboardsPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      <ConfirmModal
+        isOpen={!!confirmDelete}
+        title="Delete dashboard"
+        message={confirmDelete ? `"${confirmDelete.name}" will be permanently deleted. This cannot be undone.` : ''}
+        confirmLabel="Delete"
+        onConfirm={() => confirmDelete && void handleDeleteDashboard(confirmDelete)}
+        onCancel={() => setConfirmDelete(null)}
+      />
     </div>
   );
 };

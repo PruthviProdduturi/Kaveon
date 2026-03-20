@@ -1,10 +1,12 @@
 """
 Metadata database query layer.
-Direct port of metadataProxy.service.ts — same @param0 replacement logic.
+Direct port of metadataProxy.service.ts — same @paramN replacement logic.
 Includes lightweight T-SQL → ANSI dialect translation for non-MSSQL backends.
+
+Security: parameters are passed to the driver via native placeholders (? / %s)
+rather than string interpolation. The driver handles escaping.
 """
 
-import os
 import re
 from typing import Any, List, Optional, TypeVar
 from database.pool import execute_query
@@ -15,20 +17,19 @@ T = TypeVar("T")
 
 # ── Dialect translation ────────────────────────────────────────────────────────
 
-def _adapt_sql(sql: str) -> str:
+def _adapt_sql(sql: str, db_type: str) -> str:
     """Translate T-SQL idioms to the target dialect when the metadata DB is not MSSQL."""
-    db_type = os.environ.get("METADATA_DB_TYPE") or settings.METADATA_DB_TYPE or "fabric_sql"
     if db_type in ("fabric_sql", "azure_sql"):
         return sql  # native T-SQL, no changes needed
 
     # Strip dbo. schema prefix (SQL Server specific)
     sql = re.sub(r"\bdbo\.", "", sql, flags=re.IGNORECASE)
 
-    # SELECT TOP N → SELECT … LIMIT N
-    top_match = re.search(r"\bSELECT\s+TOP\s+(\d+)\b", sql, re.IGNORECASE)
+    # SELECT TOP N / TOP (@paramN) → SELECT … LIMIT N / LIMIT @paramN
+    top_match = re.search(r"\bSELECT\s+TOP\s+\(?([^\s)]+)\)?\b", sql, re.IGNORECASE)
     if top_match:
         n = top_match.group(1)
-        sql = re.sub(r"\bSELECT\s+TOP\s+\d+\b\s*", "SELECT ", sql, count=1, flags=re.IGNORECASE)
+        sql = re.sub(r"\bSELECT\s+TOP\s+\(?[^\s)]+\)?\s*", "SELECT ", sql, count=1, flags=re.IGNORECASE)
         sql = sql.rstrip().rstrip(";") + f" LIMIT {n}"
 
     # GETDATE() → NOW()
@@ -46,41 +47,30 @@ def _adapt_sql(sql: str) -> str:
     return sql
 
 
-# ── Parameter interpolation ────────────────────────────────────────────────────
+# ── Native parameter conversion ────────────────────────────────────────────────
 
-def _replace_params(sql: str, params: Optional[List[Any]]) -> str:
+def _to_native_params(sql: str, params: Optional[List[Any]], db_type: str) -> tuple:
     """
-    Replace @param0, @param1 … in *sql* with properly escaped literals.
-    Replacement is done in REVERSE order to avoid @param1 matching inside @param10.
+    Replace @paramN placeholders with driver-native ? (MSSQL) or %s (PostgreSQL/MySQL).
+
+    Scans left-to-right so the returned params list matches placeholder order.
+    Values are passed as Python objects — the driver handles type-safe escaping.
+
+    Returns (converted_sql, ordered_params_list).
     """
     if not params:
-        return sql
+        return sql, []
 
-    processed = sql
-    for i in range(len(params) - 1, -1, -1):
-        param = params[i]
-        placeholder = f"@param{i}"
+    placeholder = "?" if db_type in ("fabric_sql", "azure_sql") else "%s"
+    ordered: List[Any] = []
 
-        if param is None:
-            value = "NULL"
-        elif isinstance(param, str):
-            value = f"'{param.replace(chr(39), chr(39) * 2)}'"
-        elif isinstance(param, bool):
-            value = "1" if param else "0"
-        elif isinstance(param, (int, float)):
-            value = str(param)
-        else:
-            import json as _json
-            from datetime import datetime, date
-            if isinstance(param, (datetime, date)):
-                value = f"'{param.isoformat()}'"
-            else:
-                dumped = _json.dumps(param, ensure_ascii=False)
-                value = f"'{dumped.replace(chr(39), chr(39) * 2)}'"
+    def _sub(m: re.Match) -> str:
+        idx = int(m.group(1))
+        ordered.append(params[idx] if idx < len(params) else None)
+        return placeholder
 
-        processed = processed.replace(placeholder, value)
-
-    return processed
+    converted = re.sub(r"@param(\d+)", _sub, sql, flags=re.IGNORECASE)
+    return converted, ordered
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -88,14 +78,18 @@ def _replace_params(sql: str, params: Optional[List[Any]]) -> str:
 def query(sql: str, params: Optional[List[Any]] = None) -> dict:
     """
     Execute *sql* (with @paramN placeholders) against the metadata DB.
+    Parameters are passed to the DB driver directly — no string interpolation.
     Returns {"rows": list[dict], "row_count": int}.
     """
     db = settings.METADATA_DATABASE
     if not db:
         raise RuntimeError("METADATA_DATABASE is not configured")
 
-    processed = _adapt_sql(_replace_params(sql, params))
-    result = execute_query(processed, db)
+    db_type = settings.METADATA_DB_TYPE or "fabric_sql"
+    adapted = _adapt_sql(sql, db_type)
+    native_sql, native_params = _to_native_params(adapted, params, db_type)
+
+    result = execute_query(native_sql, db, native_params or None)
 
     rows = result.get("rows_objects", [])
     return {"rows": rows, "row_count": result.get("row_count", len(rows))}

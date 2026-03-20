@@ -22,6 +22,10 @@
   padding: 0;
 }
 
+html {
+  height: 100%;
+}
+
 body {
   font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", sans-serif;
   background: #f8fafc;
@@ -42,7 +46,8 @@ main {
 main.main-lab {
   max-width: 100%;
   margin: 0;
-  min-height: calc(100vh - 64px);
+  height: calc(100vh - 56px);
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   .feature-card {
@@ -2461,17 +2466,18 @@ main.main-lab {
 }
 
 .chart-builder-field-group {
-  margin-bottom: 0.85rem;
+  margin-bottom: 0.75rem;
 }
 
 .chart-builder-label {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
-  font-size: 0.8rem;
+  gap: 0.3rem;
+  font-size: 12px;
   font-weight: 500;
-  color: #4b5563;
-  margin-bottom: 0.2rem;
+  color: #475569;
+  margin-bottom: 5px;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 .chart-builder-label-icon-wrap {
@@ -2489,10 +2495,15 @@ main.main-lab {
 .chart-builder-input,
 .chart-builder-select {
   width: 100%;
-  border-radius: 8px;
-  border: 2px solid #e1e5e9;
-  padding: 0.75rem 0.6rem;
-  font-size: 0.9rem;
+  border-radius: 7px;
+  border: 1.5px solid #e2e8f0;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #1e293b;
+  background-color: #ffffff;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  line-height: 1.5;
 }
 
 .chart-builder-input-clickable {
@@ -2501,10 +2512,11 @@ main.main-lab {
   justify-content: space-between;
   cursor: pointer;
   background-color: #ffffff;
+  user-select: none;
 }
 
 .chart-builder-input-clickable:hover {
-  border-color: #d1d5db;
+  border-color: #94a3b8;
 }
 
 .chart-builder-input-clickable-icon {
@@ -2601,39 +2613,54 @@ main.main-lab {
 
 /* Nice, consistent dropdown styling for all select fields */
 .chart-builder-select {
-  background-color: #ffffff;
   background-image:
-    linear-gradient(45deg, transparent 50%, #9ca3af 50%),
-    linear-gradient(135deg, #9ca3af 50%, transparent 50%);
+    linear-gradient(45deg, transparent 50%, #94a3b8 50%),
+    linear-gradient(135deg, #94a3b8 50%, transparent 50%);
   background-position:
-    calc(100% - 14px) calc(50% - 2px),
-    calc(100% - 9px) calc(50% - 2px);
-  background-size: 6px 6px, 6px 6px;
+    calc(100% - 13px) calc(50% - 1px),
+    calc(100% - 8px) calc(50% - 1px);
+  background-size: 5px 5px, 5px 5px;
   background-repeat: no-repeat;
   padding-right: 2rem;
   appearance: none;
   -webkit-appearance: none;
   -moz-appearance: none;
+  cursor: pointer;
 }
 
+.chart-builder-input:focus,
 .chart-builder-select:focus {
   outline: none;
   border-color: var(--loomx-primary);
-  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.25);
+  box-shadow: 0 0 0 3px rgba(0, 120, 212, 0.12);
 }
 
+.chart-builder-input:hover,
 .chart-builder-select:hover {
-  border-color: #d1d5db;
+  border-color: #94a3b8;
 }
 
 .chart-builder-textarea {
   width: 100%;
-  border-radius: 8px;
-  border: 1px solid #e5e7eb;
-  padding: 0.5rem 0.6rem;
-  font-size: 0.85rem;
+  border-radius: 7px;
+  border: 1.5px solid #e2e8f0;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #1e293b;
   min-height: 72px;
   resize: vertical;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.chart-builder-textarea:focus {
+  outline: none;
+  border-color: var(--loomx-primary);
+  box-shadow: 0 0 0 3px rgba(0, 120, 212, 0.12);
+}
+
+.chart-builder-textarea:hover {
+  border-color: #94a3b8;
 }
 
 .chart-builder-preview-card {
@@ -3502,23 +3529,21 @@ main.main-wide {
   flex: 1;
   display: flex;
   overflow: hidden;
+  padding: 0.35rem 0.4rem;
+  min-height: 0;
 }
 
 .sidebar {
-  min-width: 320px;
-  max-width: 450px;
-  width: 380px;
   background: #ffffff;
   border-right: none;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  resize: horizontal;
-  box-shadow: 0 16px 30px rgba(15, 23, 42, 0.06);
-  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+  border-radius: 10px;
   border: 1px solid #e5e7eb;
-  margin: 0 0 1.5rem 0;
   flex-shrink: 0;
+  align-self: stretch;
 }
 
 .sidebar-header {
@@ -3715,11 +3740,118 @@ main.main-wide {
   opacity: 0.8;
 }
 
-.search-container {
-  padding: 1rem;
-  border-bottom: 1px solid #e1e5e9;
+.sidebar-controls {
+  padding: 0.875rem 1rem;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f8fafc;
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.sidebar-db-wrap {
   position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.sidebar-db-icon {
+  position: absolute;
+  left: 0.75rem;
+  color: var(--loomx-primary, #0078D4);
+  font-size: 0.8rem;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.sidebar-db-select {
+  width: 100%;
+  padding: 0.5rem 2rem 0.5rem 2.125rem;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: #1e293b;
+  background-color: #ffffff;
+  background-image:
+    linear-gradient(45deg, transparent 50%, #94a3b8 50%),
+    linear-gradient(135deg, #94a3b8 50%, transparent 50%);
+  background-position:
+    calc(100% - 12px) calc(50% - 2px),
+    calc(100% - 7px) calc(50% - 2px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+
+.sidebar-db-select:focus {
+  outline: none;
+  border-color: var(--loomx-primary, #0078D4);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--loomx-primary, #0078D4) 15%, transparent);
+}
+
+.sidebar-db-select:hover {
+  border-color: #cbd5e1;
+}
+
+.sidebar-db-select:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.sidebar-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.sidebar-search-icon {
+  position: absolute;
+  left: 0.75rem;
+  color: #94a3b8;
+  font-size: 0.8rem;
+  pointer-events: none;
+}
+
+.sidebar-search-input {
+  width: 100%;
+  padding: 0.5rem 0.75rem 0.5rem 2.125rem;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 0.82rem;
   background: #ffffff;
+  color: #1e293b;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+
+.sidebar-search-input::placeholder {
+  color: #94a3b8;
+  font-weight: 400;
+}
+
+.sidebar-search-input:focus {
+  outline: none;
+  border-color: var(--loomx-primary, #0078D4);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--loomx-primary, #0078D4) 15%, transparent);
+}
+
+.sidebar-search-input:hover {
+  border-color: #cbd5e1;
+}
+
+.sidebar-search-input:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* Legacy — kept for other pages that reference these classes */
+.search-container {
+  display: none;
 }
 
 .search-input {
@@ -3920,10 +4052,10 @@ main.main-wide {
   display: flex;
   flex-direction: column;
   padding: 0 0 0.50rem;
-  border-radius: 12px;
+  border-radius: 10px;
   border: 1px solid #e5e7eb;
-  box-shadow: 0 16px 30px rgba(15, 23, 42, 0.06);
-  margin: 0 0.5rem 0.5rem;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+  margin: 0 0.25rem 0.25rem;
   overflow: hidden;
 }
 
@@ -4072,17 +4204,25 @@ main.main-wide {
 }
 
 .results-section {
-  flex: none;
-  height: 46vh;
-  max-height: 46vh;
+  flex: 1;
+  min-height: 120px;
   background: #ffffff;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  margin: 0 0.5rem 1rem;
-  border-radius: 12px;
+  margin: 0 0.25rem 0;
+  border-radius: 10px;
   border: 1px solid #e5e7eb;
-  box-shadow: 0 16px 30px rgba(15, 23, 42, 0.06);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+
+.results-section--fullscreen {
+  position: fixed !important;
+  inset: 0 !important;
+  margin: 0 !important;
+  border-radius: 0 !important;
+  z-index: 500;
+  height: 100vh !important;
 }
 
 .results-section .section-header {
@@ -4214,7 +4354,10 @@ main.main-wide {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.9rem;
-  margin: 0 auto;
+}
+
+.results-table--columns-hidden {
+  width: auto;
 }
 
 /* Subtle, classy scrollbar just for the results view */

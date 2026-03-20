@@ -1,9 +1,12 @@
 """Lab router — /api/v1/lab."""
 
+import asyncio
 import json
+import threading
 from fastapi import APIRouter, Request, Response, HTTPException, Query, Depends
 from middleware.auth import require_auth
-from models.lab import SavedQueryCreate, SavedQueryUpdate, LabExecuteBody, LabQueryBody, SwitchDatabaseBody
+from middleware.rate_limit import sql_execute_limiter
+from models.lab import SavedQueryCreate, SavedQueryUpdate, LabExecuteBody, LabQueryBody, SwitchDatabaseBody, CtasBody
 import database.pool as pool
 import database.metadata as meta_db
 import services.saved_queries as saved_q_svc
@@ -89,13 +92,15 @@ def get_schema(schema: str, table_name: str, database: str = Query(...), user: s
 
 @router.post("/lab/execute")
 def execute_sql(data: LabExecuteBody, response: Response, user: str = Depends(require_auth)):
+    sql_execute_limiter.check(user)
     result = pool.execute_query(data.sql, data.database)
     return {"columns": result.get("columns", []), "rows": result.get("rows", []),
             "rowCount": result.get("row_count", 0)}
 
 
 @router.post("/lab/query")
-def run_query(data: LabQueryBody, user: str = Depends(require_auth)):
+async def run_query(request: Request, data: LabQueryBody, user: str = Depends(require_auth)):
+    sql_execute_limiter.check(user)
     user_id = user
     sql = data.query
     database = data.database
@@ -106,8 +111,35 @@ def run_query(data: LabQueryBody, user: str = Depends(require_auth)):
 
     trigger_source = "dataset-preview" if run_context == "dataset-detail" else "lab"
 
+    # cancel_event is shared between the query thread and the disconnect watcher.
+    # Setting it triggers cursor.cancel() inside execute_query_cancellable.
+    cancel_event = threading.Event()
+
+    loop = asyncio.get_event_loop()
+    query_future = loop.run_in_executor(
+        None,
+        lambda: pool.execute_query_cancellable(sql, database, cancel_event=cancel_event),
+    )
+
+    # Poll for client disconnect every 500ms while the query runs.
+    cancelled = False
+    while not query_future.done():
+        if await request.is_disconnected():
+            cancel_event.set()
+            cancelled = True
+            break
+        await asyncio.sleep(0.5)
+
+    if cancelled:
+        # Client disconnected — query has been signalled to cancel on the DB side.
+        try:
+            await query_future
+        except Exception:
+            pass
+        return Response(status_code=204)
+
     try:
-        result = pool.execute_query(sql, database)
+        result = await query_future
         duration_ms = int(time.time() * 1000) - start_time
 
         try:
@@ -120,8 +152,8 @@ def run_query(data: LabQueryBody, user: str = Depends(require_auth)):
                 "tables_used": json.dumps(tables_used) if tables_used else None,
                 "started_at": start_time,
             }, user_id)
-        except Exception:
-            pass
+        except Exception as he:
+            print(f"[History] Failed to record lab query: {he}")
 
         return {
             "success": True,
@@ -143,9 +175,24 @@ def run_query(data: LabQueryBody, user: str = Depends(require_auth)):
                 "tables_used": json.dumps(tables_used) if tables_used else None,
                 "started_at": start_time,
             }, user_id)
-        except Exception:
-            pass
+        except Exception as he:
+            print(f"[History] Failed to record lab error: {he}")
         raise HTTPException(status_code=500, detail="Query execution failed")
+
+
+@router.post("/lab/ctas", status_code=200)
+def create_table_as_select(data: CtasBody, user: str = Depends(require_auth)):
+    """Materialise a query as a new table using SELECT … INTO [schema].[table]."""
+    sql_execute_limiter.check(user)
+    # Wrap user SQL in SELECT … INTO — strip trailing semicolon first
+    source_sql = data.sql.rstrip().rstrip(";").strip()
+    target = f"[{data.schema}].[{data.table_name}]"
+    ctas_sql = f"SELECT * INTO {target} FROM (\n{source_sql}\n) AS __ctas_source"
+    try:
+        pool.execute_query(ctas_sql, data.database)
+        return {"success": True, "table": f"{data.schema}.{data.table_name}"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/lab/switch-database")
@@ -219,8 +266,8 @@ def get_distinct_values(
                 "run_context": json.dumps({"column": column, "database": database}),
                 "started_at": start_time,
             }, user_id)
-        except Exception:
-            pass
+        except Exception as he:
+            print(f"[History] Failed to record distinct values query: {he}")
 
         return {"success": True, "values": values}
 
@@ -235,6 +282,6 @@ def get_distinct_values(
                 "tables_used": json.dumps([f"{schema}.{table}"]),
                 "started_at": start_time,
             }, user_id)
-        except Exception:
-            pass
+        except Exception as he:
+            print(f"[History] Failed to record distinct values error: {he}")
         raise HTTPException(status_code=500, detail="Query execution failed")

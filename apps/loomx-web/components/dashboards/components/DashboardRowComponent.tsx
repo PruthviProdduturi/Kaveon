@@ -105,11 +105,10 @@ const DashboardRowComponent: React.FC<DashboardComponentProps> = ({
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       style={{
-        background: '#fff',
+        background: 'transparent',
         border: isEditMode ? '1px solid #e2e8f0' : 'none',
         borderRadius: 8,
         position: 'relative',
-        boxShadow: isEditMode ? '0 1px 3px rgba(0,0,0,0.04)' : 'none',
       }}
     >
       {/* ── Row toolbar (edit mode, shown on hover) ────────────────────────── */}

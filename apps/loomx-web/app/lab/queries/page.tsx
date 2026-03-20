@@ -3,6 +3,7 @@
 import React, { useEffect, useState, type ReactElement } from "react";
 
 import { API_BASE } from "../../../config";
+import { Button } from "../../../components/Button";
 import { LoadingOverlay } from "../../../components/LoadingOverlay";
 import { format as formatSql } from "sql-formatter";
 import { msalFetch } from "../../../utils/msalFetch";
@@ -565,31 +566,23 @@ const LabQueriesPage: React.FC = () => {
 
   return (
     <div className="page-shell">
-      <header className="page-header">
-        <div>
+      <header className="page-header-with-actions">
+        <div className="page-header-main">
           <h1 className="page-header-title">SQL activity</h1>
           <p className="page-header-subtitle">
             Review your saved Lab queries and recent query history.
           </p>
         </div>
+        <Button
+          onClick={() => void router.push("/lab")}
+          style={{ flexShrink: 0 }}
+        >
+          <i className="fas fa-plus" /> New query
+        </Button>
       </header>
 
       {!isAuthenticated && (
         <p className="muted">Sign in to view your saved queries and history.</p>
-      )}
-
-      {isAuthenticated && (
-        <div className="card page-empty-card" style={{ marginTop: 12 }}>
-          <button
-            type="button"
-            className="overview-primary-btn"
-            onClick={() => {
-              void router.push("/lab");
-            }}
-          >
-            <i className="fas fa-plus" /> New query
-          </button>
-        </div>
       )}
 
       {isAuthenticated && (

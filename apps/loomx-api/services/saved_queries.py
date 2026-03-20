@@ -1,6 +1,6 @@
 """Saved queries service — port of savedQueries.service.ts."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 import database.metadata as db
 
@@ -43,7 +43,7 @@ def get_by_id(query_id: str, user_id: str) -> Optional[dict]:
 
 
 def create_saved_query(data: dict, user_id: str) -> dict:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     db.execute("""
         INSERT INTO saved_queries (name, description, sql_text, created_by, created_at,
                                    modified_by, modified_at, is_shared, favorite)
@@ -68,7 +68,7 @@ def update_saved_query(query_id: str, data: dict, user_id: str) -> Optional[dict
     if not get_by_id(query_id, user_id):
         return None
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     updates, params, i = [], [], 0
 
     if "name" in data:

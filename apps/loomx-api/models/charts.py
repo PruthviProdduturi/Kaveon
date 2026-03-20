@@ -9,6 +9,8 @@ class ChartCreate(BaseModel):
     dataset_id: int
     chart_type: str = Field(..., min_length=1, max_length=100)
     config: Optional[dict[str, Any]] = None
+    query_config: Optional[dict[str, Any]] = None
+    viz_config: Optional[dict[str, Any]] = None
     description: Optional[str] = Field(default=None, max_length=1000)
 
 
@@ -17,4 +19,6 @@ class ChartUpdate(BaseModel):
     dataset_id: Optional[int] = None
     chart_type: Optional[str] = Field(default=None, min_length=1, max_length=100)
     config: Optional[dict[str, Any]] = None
+    query_config: Optional[dict[str, Any]] = None
+    viz_config: Optional[dict[str, Any]] = None
     description: Optional[str] = Field(default=None, max_length=1000)

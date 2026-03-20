@@ -99,9 +99,8 @@
 
 /* Dashboard Canvas */
 .dashboard-canvas {
-  background: #f8fafc;
+  background: transparent;
   min-height: 600px;
-  border: 1px solid #e2e8f0;
   width: 100%;
   height: 100%;
   box-sizing: border-box;
@@ -140,27 +139,34 @@
   max-width: 400px;
 }
 
-/* Dashboard Component Base */
+/* Dashboard Component Base — no card styling; charts get .dashboard-component-chart */
 .dashboard-component {
   position: relative;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
   height: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transition: all 0.2s ease;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
-.dashboard-component:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
-  transform: translateY(-1px);
+/* Chart-specific card style */
+.dashboard-component-chart {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
 }
 
-.dashboard-component-selected {
+/* ChartPreview fills the full card height inside a dashboard chart */
+.dashboard-component-chart .chart-builder-preview-card {
+  height: 100%;
+  box-shadow: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.dashboard-component-chart.dashboard-component-selected {
   border-color: #0078D4;
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2), 0 4px 12px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 0 0 2px rgba(0, 120, 212, 0.2);
 }
 
 .dashboard-component-header {
@@ -408,33 +414,7 @@
   padding: 16px;
 }
 
-/* Dashboard Divider Component */
-.dashboard-divider-horizontal {
-  width: 100%;
-  border: none;
-  border-top: 1px solid #cbd5e1;
-  margin: 16px 0;
-}
-
-.dashboard-divider-vertical {
-  height: 100%;
-  width: 1px;
-  border: none;
-  border-left: 1px solid #cbd5e1;
-  margin: 0 16px;
-}
-
-.dashboard-divider-solid {
-  border-style: solid;
-}
-
-.dashboard-divider-dashed {
-  border-style: dashed;
-}
-
-.dashboard-divider-dotted {
-  border-style: dotted;
-}
+/* Dashboard Divider Component — fully inline-styled, no CSS needed */
 
 /* Dashboard Drag Handle */
 .dashboard-drag-handle {
