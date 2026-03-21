@@ -25,8 +25,27 @@ interface UserKey {
   created_at: string;
 }
 
+// SVG logos for providers that don't have Font Awesome free icons
+const PROVIDER_LOGOS: Record<string, React.ReactNode> = {
+  anthropic: (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="#c17b3f">
+      <path d="M13.827 3.52h3.603L24 20h-3.603l-6.57-16.48zm-3.654 0H6.57L0 20h3.603l1.351-3.384h6.932l1.351 3.384h3.603L10.173 3.52zm-3.93 10.14 2.26-5.668 2.26 5.668H6.243z"/>
+    </svg>
+  ),
+  openai: (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="#0d9488">
+      <path d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.141-.081 4.779-2.758a.795.795 0 0 0 .392-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.494 4.494zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.677l5.815 3.354-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 7.896zm16.597 3.855-5.843-3.369 2.02-1.168a.076.076 0 0 1 .071 0l4.83 2.782a4.492 4.492 0 0 1-.676 8.101v-5.676a.79.79 0 0 0-.402-.67zm2.01-3.023-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.5 4.5 0 0 1 7.375-3.453l-.142.08L8.704 5.46a.795.795 0 0 0-.393.681zm1.097-2.365 2.602-1.5 2.607 1.5v2.999l-2.597 1.5-2.607-1.5z"/>
+    </svg>
+  ),
+  github: (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="#0f172a">
+      <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/>
+    </svg>
+  ),
+};
+
 const PROVIDER_META: Record<string, {
-  label: string; icon: string; color: string; bg: string; border: string;
+  label: string; color: string; bg: string; border: string;
   models: string[];
   keyLabel: string;
   keyPlaceholder: string;
@@ -34,10 +53,9 @@ const PROVIDER_META: Record<string, {
 }> = {
   anthropic: {
     label: "Anthropic (Claude)",
-    icon: "fa-robot",
-    color: "#7c3aed",
-    bg: "#f5f3ff",
-    border: "#c4b5fd",
+    color: "#c17b3f",
+    bg: "#fdf8f0",
+    border: "#f0d5a8",
     models: ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001"],
     keyLabel: "Anthropic API Key",
     keyPlaceholder: "sk-ant-api03-...",
@@ -49,10 +67,9 @@ const PROVIDER_META: Record<string, {
   },
   openai: {
     label: "OpenAI",
-    icon: "fa-brain",
-    color: "#059669",
-    bg: "#ecfdf5",
-    border: "#6ee7b7",
+    color: "#0d9488",
+    bg: "#f0fdfa",
+    border: "#99f6e4",
     models: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
     keyLabel: "OpenAI API Key",
     keyPlaceholder: "sk-proj-...",
@@ -64,7 +81,6 @@ const PROVIDER_META: Record<string, {
   },
   github: {
     label: "GitHub Models (Copilot)",
-    icon: "fa-github",
     color: "#0f172a",
     bg: "#f8fafc",
     border: "#cbd5e1",
@@ -194,12 +210,12 @@ export default function AISettingsPage() {
                       return (
                         <tr key={p.id}>
                           <td>
-                            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                              <span style={{ padding: "0.2rem 0.6rem", borderRadius: 6, fontSize: 12, fontWeight: 600, background: meta?.bg ?? "#f1f5f9", border: `1px solid ${meta?.border ?? "#e2e8f0"}`, color: meta?.color ?? "#374151" }}>
-                                <i className={`fas ${meta?.icon ?? "fa-robot"}`} style={{ marginRight: 4 }} />
-                                {meta?.label ?? p.provider}
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.2rem 0.6rem", borderRadius: 6, fontSize: 12, fontWeight: 600, background: meta?.bg ?? "#f1f5f9", border: `1px solid ${meta?.border ?? "#e2e8f0"}`, color: meta?.color ?? "#374151" }}>
+                              <span style={{ width: 14, height: 14, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                                {PROVIDER_LOGOS[p.provider] ?? <i className="fas fa-robot" />}
                               </span>
-                            </div>
+                              {meta?.label ?? p.provider}
+                            </span>
                           </td>
                           <td className="muted" style={{ fontSize: 13 }}>{p.label}</td>
                           <td className="muted" style={{ fontSize: 12, fontFamily: "monospace" }}>{p.model}</td>
@@ -259,8 +275,10 @@ export default function AISettingsPage() {
                     return (
                       <tr key={k.provider}>
                         <td>
-                          <span style={{ padding: "0.2rem 0.6rem", borderRadius: 6, fontSize: 12, fontWeight: 600, background: meta?.bg ?? "#f1f5f9", border: `1px solid ${meta?.border ?? "#e2e8f0"}`, color: meta?.color ?? "#374151" }}>
-                            <i className={`fas ${meta?.icon ?? "fa-robot"}`} style={{ marginRight: 4 }} />
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.2rem 0.6rem", borderRadius: 6, fontSize: 12, fontWeight: 600, background: meta?.bg ?? "#f1f5f9", border: `1px solid ${meta?.border ?? "#e2e8f0"}`, color: meta?.color ?? "#374151" }}>
+                            <span style={{ width: 14, height: 14, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                              {PROVIDER_LOGOS[k.provider] ?? <i className="fas fa-robot" />}
+                            </span>
                             {meta?.label ?? k.provider}
                           </span>
                         </td>
@@ -391,10 +409,12 @@ function AddKeyModal({ isGlobal, onClose, onSuccess }: { isGlobal: boolean; onCl
                       padding: "0.65rem 0.5rem", borderRadius: 10, cursor: "pointer", textAlign: "center",
                       border: `2px solid ${provider === key ? m.color : "#e2e8f0"}`,
                       background: provider === key ? m.bg : "white",
-                      transition: "all 0.15s",
+                      transition: "all 0.15s", display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
                     }}
                   >
-                    <i className={`fab ${m.icon}`} style={{ fontSize: 18, color: provider === key ? m.color : "#94a3b8", display: "block", marginBottom: 4 }} />
+                    <div style={{ opacity: provider === key ? 1 : 0.35, transition: "opacity 0.15s" }}>
+                      {PROVIDER_LOGOS[key]}
+                    </div>
                     <span style={{ fontSize: 11, fontWeight: 600, color: provider === key ? m.color : "#64748b", lineHeight: 1.3 }}>{m.label}</span>
                   </button>
                 ))}
