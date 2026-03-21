@@ -77,19 +77,22 @@ def bootstrap_admin_if_needed() -> None:
             ["admin", "admin@local", pwd_hash, True, True, now, now],
         )
 
-        # Also ensure Admin role in user_roles
-        existing_role = db.query_one(
-            "SELECT id FROM user_roles WHERE user_email = @param0",
-            ["admin@local"],
-        )
-        if not existing_role:
-            db.execute(
-                "INSERT INTO user_roles (user_email, role, granted_by, granted_at, updated_at) "
-                "VALUES (@param0, 'Admin', 'system-bootstrap', @param1, @param2)",
-                ["admin@local", now, now],
-            )
-
         print("[LocalAuth] Bootstrap admin user created (admin / admin@local).")
+
+        # Also ensure Admin role in user_roles (non-fatal — resolve_role bootstraps it on first login)
+        try:
+            existing_role = db.query_one(
+                "SELECT id FROM user_roles WHERE user_email = @param0",
+                ["admin@local"],
+            )
+            if not existing_role:
+                db.execute(
+                    "INSERT INTO user_roles (user_email, role, granted_by, granted_at, updated_at) "
+                    "VALUES (@param0, 'Admin', 'system-bootstrap', @param1, @param2)",
+                    ["admin@local", now, now],
+                )
+        except Exception as role_err:
+            print(f"[LocalAuth] Could not seed admin role in user_roles (will be bootstrapped on first login): {role_err}")
 
     except Exception as e:
         print(f"[LocalAuth] bootstrap_admin_if_needed failed: {e}")

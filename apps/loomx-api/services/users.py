@@ -59,6 +59,10 @@ def resolve_role(user_email: str, jwt_roles: list[str]) -> str:
 
     except Exception as e:
         print(f"[Users] resolve_role failed for {user_email}: {e}")
+        # DB unavailable — honour the cryptographically-signed JWT claim rather than
+        # falling back to Viewer (which would silently strip Admin from local bootstrap users)
+        if jwt_role:
+            return jwt_role
 
     # 4. Default
     return "Viewer"
