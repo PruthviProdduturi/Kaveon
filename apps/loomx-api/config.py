@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     DATAWAREHOUSE_ENDPOINT: str = ""
     DATAWAREHOUSE_DATABASE: str = ""
 
+    # ── AI ────────────────────────────────────────────────────────────────────
+    # Used to encrypt AI API keys stored in the database.
+    # Defaults to a value derived from Azure tenant + client IDs.
+    AI_ENCRYPTION_SECRET: str = ""
+
     # ── TLS ───────────────────────────────────────────────────────────────────
     # Set to True only when connecting to Fabric SQL / Azure SQL via private
     # endpoint where the certificate cannot be verified by the ODBC driver.
