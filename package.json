@@ -1,9 +1,6 @@
 {
   "name": "loomx",
   "private": true,
-  "pnpm": {
-    "patchedDependencies": {
-      "echarts-gl@2.0.9": "apps/loomx-web/patches/echarts-gl+2.0.9.patch"
-    }
-  }
+  "pnpm": {}
+
 }
