@@ -66,43 +66,59 @@ const DashboardViewContent: React.FC<{
 
   const hasFilters = dashboardFilters.length > 0;
 
+  // Shared action button style
+  const btnBase: React.CSSProperties = {
+    display: 'flex', alignItems: 'center', gap: 6, height: 34,
+    padding: '0 12px', borderRadius: 8, fontSize: 13, fontWeight: 500,
+    cursor: 'pointer', border: '1px solid #e2e8f0', background: 'white',
+    color: '#475569', transition: 'background 0.15s, border-color 0.15s, color 0.15s', whiteSpace: 'nowrap',
+  };
+
   return (
     <div className="page-shell page-shell-wide">
-      <header className="page-header page-header-with-actions">
-        <div className="page-header-main">
-          <h1 className="page-header-title">{initialConfig?.name || "Dashboard"}</h1>
+      {/* ── Elegant dashboard header ── */}
+      <header style={{
+        background: 'white', borderBottom: '1px solid #e2e8f0',
+        padding: '12px 24px', display: 'flex', alignItems: 'center',
+        justifyContent: 'space-between', gap: 16, flexWrap: 'wrap',
+      }}>
+        {/* Left: title + badge */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <h1 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.2, letterSpacing: '-0.3px' }}>
+              {initialConfig?.name || 'Dashboard'}
+            </h1>
+            <span style={{
+              fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 20, lineHeight: 1.5,
+              background: isPublished ? '#f0fdf4' : '#fef3c7',
+              color: isPublished ? '#15803d' : '#92400e',
+              border: `1px solid ${isPublished ? '#bbf7d0' : '#fde68a'}`,
+            }}>
+              {isPublished ? 'Published' : 'Draft'}
+            </span>
+          </div>
           {initialConfig?.description && (
-            <p className="page-header-subtitle">{initialConfig.description}</p>
+            <p style={{ margin: 0, fontSize: 12.5, color: '#64748b', lineHeight: 1.4, marginTop: 1 }}>
+              {initialConfig.description}
+            </p>
           )}
         </div>
-        <div className="page-header-actions">
-          {/* Auto-refresh controls */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <button
-              onClick={handleManualRefresh}
-              title="Refresh all charts"
-              style={{
-                padding: '7px 10px',
-                background: 'transparent',
-                border: '1px solid #e2e8f0',
-                borderRadius: 6,
-                cursor: 'pointer',
-                color: '#475569',
-              }}
-            >
-              <i className="fas fa-sync-alt" style={{ fontSize: 12 }} />
+
+        {/* Right: action toolbar */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+
+          {/* Refresh group */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '2px 4px' }}>
+            <button onClick={handleManualRefresh} title="Refresh all charts" style={{ ...btnBase, border: 'none', background: 'transparent', padding: '0 8px' }}>
+              <i className="fas fa-sync-alt" style={{ fontSize: 11 }} />
             </button>
             <select
               value={refreshInterval}
               onChange={(e) => setRefreshInterval(Number(e.target.value))}
               style={{
-                padding: '7px 10px',
-                background: refreshInterval > 0 ? '#f0fdf4' : 'transparent',
-                border: refreshInterval > 0 ? '1px solid #86efac' : '1px solid #e2e8f0',
-                borderRadius: 6,
-                cursor: 'pointer',
-                fontSize: 12,
-                color: refreshInterval > 0 ? '#15803d' : '#475569',
+                height: 28, padding: '0 6px', border: 'none', background: 'transparent',
+                fontSize: 12, color: refreshInterval > 0 ? '#15803d' : '#475569',
+                cursor: 'pointer', fontWeight: refreshInterval > 0 ? 600 : 400,
               }}
             >
               {REFRESH_INTERVALS.map((ri) => (
@@ -110,99 +126,63 @@ const DashboardViewContent: React.FC<{
               ))}
             </select>
             {lastRefreshed && (
-              <span style={{ fontSize: 11, color: '#94a3b8', whiteSpace: 'nowrap' }}>
+              <span style={{ fontSize: 11, color: '#94a3b8', paddingRight: 6, whiteSpace: 'nowrap' }}>
                 {lastRefreshed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
               </span>
             )}
           </div>
 
-          {/* Filters toggle — only shown if dashboard has filters */}
+          {/* Divider */}
+          <div style={{ width: 1, height: 22, background: '#e2e8f0', margin: '0 2px' }} />
+
+          {/* Filters */}
           {hasFilters && (
-            <button
-              onClick={() => setFiltersOpen((v) => !v)}
-              style={{
-                padding: '8px 14px',
-                background: filtersOpen ? '#eff6ff' : 'transparent',
-                border: filtersOpen ? '1px solid #bfdbfe' : '1px solid #e2e8f0',
-                borderRadius: 6,
-                cursor: 'pointer',
-                fontSize: 13,
-                fontWeight: 500,
-                color: filtersOpen ? '#2563eb' : '#475569',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-              }}
-            >
+            <button onClick={() => setFiltersOpen((v) => !v)} style={{
+              ...btnBase,
+              background: filtersOpen ? '#eff6ff' : 'white',
+              borderColor: filtersOpen ? '#bfdbfe' : '#e2e8f0',
+              color: filtersOpen ? '#2563eb' : '#475569',
+            }}>
               <i className="fas fa-filter" style={{ fontSize: 11 }} />
               Filters
             </button>
           )}
 
           {/* Favorite */}
-          <button
-            type="button"
-            aria-label={isFavorite ? "Unfavorite dashboard" : "Favorite dashboard"}
-            onClick={onFavoriteClick}
-            style={{
-              background: 'transparent',
-              border: 'none',
-              padding: '8px 10px',
-              cursor: 'pointer',
-              borderRadius: 6,
-              transform: isAnimating ? 'scale(0.9)' : 'scale(1)',
-              transition: 'transform 0.2s ease',
-            }}
-            onMouseOver={(e) => { e.currentTarget.style.background = isFavorite ? '#FEF3C7' : '#F3F4F6'; }}
-            onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; }}
-          >
-            <i
-              className={isFavorite ? "fas fa-star" : "far fa-star"}
-              style={{
-                fontSize: 18,
-                color: isFavorite ? '#F59E0B' : '#9CA3AF',
-                transition: 'all 0.2s ease',
-                filter: isFavorite ? 'drop-shadow(0 2px 4px rgba(245,158,11,0.3))' : 'none',
-              }}
-            />
+          <button type="button" onClick={onFavoriteClick} title={isFavorite ? 'Remove from favorites' : 'Add to favorites'} style={{
+            ...btnBase, padding: '0 10px',
+            background: isFavorite ? '#fffbeb' : 'white',
+            borderColor: isFavorite ? '#fde68a' : '#e2e8f0',
+            transform: isAnimating ? 'scale(0.88)' : 'scale(1)',
+            transition: 'all 0.2s ease',
+          }}>
+            <i className={isFavorite ? 'fas fa-star' : 'far fa-star'} style={{
+              fontSize: 14, color: isFavorite ? '#f59e0b' : '#9ca3af',
+              filter: isFavorite ? 'drop-shadow(0 1px 3px rgba(245,158,11,0.4))' : 'none',
+            }} />
           </button>
 
+          {/* Divider */}
+          <div style={{ width: 1, height: 22, background: '#e2e8f0', margin: '0 2px' }} />
+
+          {/* Publish */}
           {!isPublished && (
-            <button
-              onClick={onPublish}
-              disabled={publishing}
-              style={{
-                padding: '8px 16px',
-                background: publishing ? '#94a3b8' : '#10b981',
-                color: '#fff',
-                border: 'none',
-                borderRadius: 6,
-                cursor: publishing ? 'not-allowed' : 'pointer',
-                fontSize: 13,
-                fontWeight: 600,
-              }}
-            >
-              {publishing
-                ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Publishing…</>
-                : <><i className="fas fa-check-circle" style={{ marginRight: 6 }} />Publish</>
-              }
+            <button onClick={onPublish} disabled={publishing} style={{
+              ...btnBase, background: publishing ? '#f1f5f9' : '#f0fdf4',
+              borderColor: publishing ? '#e2e8f0' : '#86efac', color: publishing ? '#94a3b8' : '#15803d',
+              fontWeight: 600, cursor: publishing ? 'not-allowed' : 'pointer',
+            }}>
+              <i className={`fas ${publishing ? 'fa-spinner fa-spin' : 'fa-check-circle'}`} style={{ fontSize: 12 }} />
+              {publishing ? 'Publishing…' : 'Publish'}
             </button>
           )}
 
-          <button
-            onClick={onEdit}
-            style={{
-              padding: '8px 16px',
-              background: '#2563eb',
-              color: '#fff',
-              border: 'none',
-              borderRadius: 6,
-              cursor: 'pointer',
-              fontSize: 13,
-              fontWeight: 600,
-            }}
+          {/* Edit */}
+          <button onClick={onEdit} style={{ ...btnBase, background: '#2563eb', borderColor: '#2563eb', color: 'white', fontWeight: 600 }}
+            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#1d4ed8'; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = '#2563eb'; }}
           >
-            <i className="fas fa-edit" style={{ marginRight: 6 }} />
+            <i className="fas fa-edit" style={{ fontSize: 12 }} />
             Edit
           </button>
         </div>
