@@ -753,38 +753,31 @@ export default function Home() {
           <div className="home-main-grid">
             <div className="home-column">
               <section className="home-panel">
-                <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: 14 }}>
-                  <div style={{ width: 28, height: 28, borderRadius: 7, background: `linear-gradient(135deg, ${gradientColors.light}, ${gradientColors.dark})`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: `0 2px 8px ${primaryColor}25` }}>
-                    <i className="fas fa-bolt" style={{ color: "white", fontSize: 11 }} />
+                <div style={{ marginBottom: 16, paddingBottom: 12, borderBottom: "1px solid #f1f5f9", background: "linear-gradient(to bottom, #f8fafc, white)", margin: "-1px -1px 16px", padding: "10px 14px 12px", borderRadius: "12px 12px 0 0" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+                    <div style={{ width: 28, height: 28, borderRadius: 7, background: `linear-gradient(135deg, ${gradientColors.light}, ${gradientColors.dark})`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: `0 2px 8px ${primaryColor}25` }}>
+                      <i className="fas fa-bolt" style={{ color: "white", fontSize: 11 }} />
+                    </div>
+                    <h2 className="home-section-title" style={{ margin: 0 }}>Quick Actions</h2>
                   </div>
-                  <h2 className="home-section-title" style={{ margin: 0 }}>Quick Actions</h2>
+                  <div className="muted" style={{ fontSize: 12, marginTop: 5, paddingLeft: 36 }}>
+                    Jump straight into creating something new.
+                  </div>
                 </div>
                 <div className="welcome-actions">
-                  <button
-                    className="welcome-btn welcome-btn-primary"
-                    onClick={() => (window.location.href = "/dashboards/new")}
-                  >
+                  <button className="welcome-btn welcome-btn-primary" onClick={() => (window.location.href = "/dashboards/new")}>
                     <i className="fas fa-tachometer-alt" />
                     <span className="welcome-btn-label">New Dashboard</span>
                   </button>
-                  <button
-                    className="welcome-btn welcome-btn-primary"
-                    onClick={() => (window.location.href = "/charts/new")}
-                  >
+                  <button className="welcome-btn welcome-btn-primary" onClick={() => (window.location.href = "/charts/new")}>
                     <i className="fas fa-chart-bar" />
                     <span className="welcome-btn-label">New Chart</span>
                   </button>
-                  <button
-                    className="welcome-btn welcome-btn-primary"
-                    onClick={() => (window.location.href = "/datasets/new")}
-                  >
+                  <button className="welcome-btn welcome-btn-primary" onClick={() => (window.location.href = "/datasets/new")}>
                     <i className="fas fa-database" />
                     <span className="welcome-btn-label">New Dataset</span>
                   </button>
-                  <button
-                    className="welcome-btn welcome-btn-primary"
-                    onClick={() => (window.location.href = "/lab")}
-                  >
+                  <button className="welcome-btn welcome-btn-primary" onClick={() => (window.location.href = "/lab")}>
                     <i className="fas fa-flask" />
                     <span className="welcome-btn-label">SQL Lab</span>
                   </button>
