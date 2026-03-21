@@ -1,29 +1,17 @@
 /**
- * Authentication Module - Azure AD Integration via MSAL
+ * Authentication Module - Multi-Provider (Local, Azure AD, Google)
  *
- * This module provides authentication functionality for LooMX using
- * Microsoft Authentication Library (MSAL) for Azure AD/Entra ID integration.
+ * This module provides authentication functionality for LooMX supporting
+ * multiple auth providers: local username/password, Azure AD via MSAL, and
+ * Google OAuth2 (stub).
  *
- * Key Features:
- * - Single sign-on via Azure AD popup flow
- * - Session persistence with 6-hour cache
- * - Automatic session restoration on page reload
- * - Context-based auth state management (React Context API)
- * - Backend connection synchronization
+ * On mount, the provider fetches GET /api/auth/provider to determine the
+ * active auth method, then initialises the appropriate flow.
  *
- * Architecture:
- * - AuthProvider: React Context Provider that wraps the entire app
- * - useAuth: Hook to access auth state and actions (login, logout)
- * - MSAL: Handles Azure AD OAuth2/OIDC flows
- * - Backend sync: Calls /api/connect to establish backend session
- *
- * Session Flow:
- * 1. User visits site → AuthProvider checks localStorage cache
- * 2. If cached auth exists → restore MSAL session silently
- * 3. If no cache or expired → show login button
- * 4. User clicks login → MSAL popup → Azure AD login
- * 5. On success → call backend /api/connect → cache session
- * 6. Subsequent visits use cached session (6-hour TTL)
+ * Token storage keys for local auth:
+ *   loomx_local_token     — JWT string
+ *   loomx_local_token_exp — exp timestamp as number
+ *   loomx_auth_provider   — "local" | "azure_ad" | "google"
  */
 
 import React, {
@@ -53,27 +41,34 @@ async function ensureMsalInitialized(): Promise<void> {
 
 import { API_BASE } from "../config";
 
-// LocalStorage key for caching authentication state
+// LocalStorage key for caching authentication state (Azure AD)
 const AUTH_CACHE_KEY = "fabric-explorer-auth-cache";
 // LocalStorage key for caching resolved role
 const ROLE_CACHE_KEY = "loomx-user-role";
+// LocalStorage key for the active auth provider
+const PROVIDER_KEY = "loomx_auth_provider";
+// LocalStorage key for local auth JWT
+const LOCAL_TOKEN_KEY = "loomx_local_token";
+// LocalStorage key for local auth token expiry
+const LOCAL_TOKEN_EXP_KEY = "loomx_local_token_exp";
 
 // Cache time-to-live: 6 hours (matches typical session durations)
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
+export type AuthProvider = "local" | "azure_ad" | "google";
+
 /**
- * Simplified user account information from Azure AD.
+ * Simplified user account information.
  * Contains only the essential fields needed for display and identification.
  */
 interface SimpleAccount {
 	name?: string;       // Display name (e.g., "John Doe")
-	username?: string;   // UPN (e.g., "john.doe@company.com")
-	email?: string;      // Email address (usually same as username)
+	username?: string;   // UPN / username
+	email?: string;      // Email address
 }
 
 /**
  * Authentication context value exposed to all components via useAuth hook.
- * This interface defines the shape of auth state and actions available throughout the app.
  */
 export type UserRole = "Viewer" | "Analyst" | "Editor" | "Admin";
 
@@ -81,30 +76,33 @@ interface AuthContextValue {
 	isAuthenticated: boolean;
 	isConnecting: boolean;
 	error: string | null;
-	login: () => Promise<void>;
+	login: (credentials?: { username: string; password: string }) => Promise<void>;
 	logout: () => Promise<void>;
 	account: SimpleAccount | null;
-	role: UserRole | null;           // Resolved role from /api/v1/users/me
+	role: UserRole | null;
+	provider: AuthProvider | null;
 }
 
 // Create React Context for auth state (consumed via useAuth hook)
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 /**
- * Check localStorage for a cached authentication session.
- *
- * Returns cached session info if:
- * - Cache exists and is valid JSON
- * - Timestamp is within TTL (6 hours)
- * - authenticated flag is true
- *
- * Otherwise, clears stale cache and returns null.
- *
- * This optimization allows instant page loads for returning users without
- * waiting for full MSAL token refresh on every visit.
+ * Parse a JWT payload without verifying the signature.
+ * Safe to use on the frontend for reading claims only.
+ */
+function parseJwtPayload(token: string): Record<string, unknown> {
+	try {
+		return JSON.parse(atob(token.split(".")[1]));
+	} catch {
+		return {};
+	}
+}
+
+/**
+ * Check localStorage for a cached Azure AD authentication session.
  */
 function getCachedAuth(): { timestamp: number; authenticated: boolean } | null {
-	if (typeof window === "undefined") return null;  // SSR safety
+	if (typeof window === "undefined") return null;
 	try {
 		const raw = window.localStorage.getItem(AUTH_CACHE_KEY);
 		if (!raw) return null;
@@ -114,14 +112,12 @@ function getCachedAuth(): { timestamp: number; authenticated: boolean } | null {
 
 		const now = Date.now();
 		if (now - parsed.timestamp > CACHE_TTL_MS) {
-			// Cache expired, clean up
 			window.localStorage.removeItem(AUTH_CACHE_KEY);
 			return null;
 		}
 
 		return { timestamp: parsed.timestamp, authenticated: true };
 	} catch {
-		// Invalid cache data, ignore
 		return null;
 	}
 }
@@ -129,18 +125,8 @@ function getCachedAuth(): { timestamp: number; authenticated: boolean } | null {
 /**
  * AuthProvider - React Context Provider for authentication state.
  *
- * This component wraps the entire application (see _app.tsx) and manages:
- * - MSAL initialization
- * - Session restoration from cache
- * - Login/logout actions
- * - User account information
- * - Backend connection synchronization
- *
- * On mount, it checks for cached auth and attempts to restore the session
- * silently. If successful, the user is immediately authenticated without
- * requiring a login action.
- *
- * All child components can access auth state via the useAuth hook.
+ * On mount it calls GET /api/auth/provider, stores the result, then runs the
+ * appropriate initialisation flow for the active provider.
  */
 export function AuthProvider({ children }: { children: React.ReactNode }) {
 	const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -148,6 +134,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 	const [error, setError] = useState<string | null>(null);
 	const [account, setAccount] = useState<SimpleAccount | null>(null);
 	const [role, setRole] = useState<UserRole | null>(null);
+	const [provider, setProvider] = useState<AuthProvider | null>(null);
 
 	useEffect(() => {
 		if (typeof window === "undefined") {
@@ -157,46 +144,91 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
 		(async () => {
 			try {
-				// CRITICAL: Handle redirect first before any other MSAL operations
+				// ── 1. Resolve the active auth provider ──────────────────────────────
+				let resolvedProvider: AuthProvider = "azure_ad";
+				try {
+					const providerRes = await fetch(`${API_BASE}/api/auth/provider`);
+					if (providerRes.ok) {
+						const providerData = await providerRes.json() as {
+							provider: AuthProvider;
+							azure_client_id?: string;
+							azure_tenant_id?: string;
+							google_client_id?: string;
+						};
+						resolvedProvider = providerData.provider;
+					}
+				} catch {
+					// If the provider endpoint fails, fall back to whatever is cached
+					const cached = typeof window !== "undefined"
+						? window.localStorage.getItem(PROVIDER_KEY) as AuthProvider | null
+						: null;
+					if (cached) resolvedProvider = cached;
+				}
+				window.localStorage.setItem(PROVIDER_KEY, resolvedProvider);
+				setProvider(resolvedProvider);
+
+				// ── 2. Provider-specific session restoration ─────────────────────────
+
+				if (resolvedProvider === "local") {
+					// Local auth: check stored JWT validity
+					const token = window.localStorage.getItem(LOCAL_TOKEN_KEY);
+					const expRaw = window.localStorage.getItem(LOCAL_TOKEN_EXP_KEY);
+					const exp = expRaw ? Number(expRaw) : 0;
+
+					if (token && exp && Date.now() / 1000 < exp) {
+						const payload = parseJwtPayload(token);
+						const cachedRole = window.localStorage.getItem(ROLE_CACHE_KEY) as UserRole | null;
+						setIsAuthenticated(true);
+						setAccount({
+							name: (payload.name as string) ?? (payload.sub as string) ?? undefined,
+							username: (payload.sub as string) ?? undefined,
+							email: (payload.email as string) ?? (payload.sub as string) ?? undefined,
+						});
+						setRole((payload.role as UserRole) ?? cachedRole);
+					}
+					// If token is missing or expired, stay unauthenticated → show login screen
+					setIsConnecting(false);
+					return;
+				}
+
+				if (resolvedProvider === "google") {
+					// Google stub — not yet implemented
+					setIsConnecting(false);
+					return;
+				}
+
+				// ── Azure AD flow (unchanged) ─────────────────────────────────────────
 				await ensureMsalInitialized();
 				const redirectResponse = await msalInstance.handleRedirectPromise();
 
-				// If we just completed a redirect, set up the session
 				if (redirectResponse) {
 					const primaryAccount = redirectResponse.account ?? msalInstance.getAllAccounts()[0];
 					if (primaryAccount) {
 						try {
-							// Acquire token once; reuse for both theme and role fetches
 							const tok = await msalInstance.acquireTokenSilent({ ...loginRequest, account: primaryAccount });
 							const authHeaders = {
-								'Authorization': `Bearer ${tok.accessToken}`,
-								'x-user-email': primaryAccount.username,
+								"Authorization": `Bearer ${tok.accessToken}`,
+								"x-user-email": primaryAccount.username,
 							};
 
-							// Fire /api/connect, theme prefetch, and role fetch in parallel.
-							// Theme and role are written to localStorage before setIsAuthenticated so
-							// ThemeContext's useState() initialiser reads it synchronously
-							// on the very first render — no flash, no extra API round-trip.
 							const [connectRes] = await Promise.all([
 								fetch(`${API_BASE}/api/connect`, {
 									method: "POST",
 									headers: { "Content-Type": "application/json" },
 									body: JSON.stringify({ initialize_only: true }),
 								}),
-								// Non-fatal: prefetch theme into localStorage
 								fetch(`${API_BASE}/api/v1/theme`, { headers: authHeaders })
 									.then(r => r.ok ? r.json() : null)
 									.then((themeData: any) => {
-										if (themeData?.theme_color && typeof window !== 'undefined') {
-											window.localStorage.setItem('loomx-theme-color', themeData.theme_color);
+										if (themeData?.theme_color && typeof window !== "undefined") {
+											window.localStorage.setItem("loomx-theme-color", themeData.theme_color);
 										}
 									})
 									.catch(() => { /* non-fatal */ }),
-								// Non-fatal: prefetch role into localStorage
 								fetch(`${API_BASE}/api/v1/users/me`, { headers: authHeaders })
 									.then(r => r.ok ? r.json() : null)
 									.then((meData: any) => {
-										if (meData?.role && typeof window !== 'undefined') {
+										if (meData?.role && typeof window !== "undefined") {
 											window.localStorage.setItem(ROLE_CACHE_KEY, meData.role);
 										}
 									})
@@ -225,7 +257,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 					}
 				}
 
-				// Check cached auth if no redirect
 				const cached = getCachedAuth();
 				if (!cached) {
 					setIsConnecting(false);
@@ -252,7 +283,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 					return;
 				}
 
-				// Restore role: use localStorage cache first, then re-fetch in background
 				const cachedRole = window.localStorage.getItem(ROLE_CACHE_KEY) as UserRole | null;
 				setIsAuthenticated(true);
 				setAccount({
@@ -262,12 +292,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 				});
 				setRole(cachedRole);
 
-				// Re-fetch role in background to pick up any assignment changes
+				// Re-fetch role in background
 				msalInstance.acquireTokenSilent({ ...loginRequest, account: primary })
 					.then(tok => fetch(`${API_BASE}/api/v1/users/me`, {
 						headers: {
-							'Authorization': `Bearer ${tok.accessToken}`,
-							'x-user-email': primary.username,
+							"Authorization": `Bearer ${tok.accessToken}`,
+							"x-user-email": primary.username,
 						},
 					}))
 					.then(r => r.ok ? r.json() : null)
@@ -287,7 +317,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 		})();
 	}, []);
 
-	const login = useCallback(async () => {
+	const login = useCallback(async (credentials?: { username: string; password: string }) => {
 		setError(null);
 		setIsConnecting(true);
 		try {
@@ -295,32 +325,79 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 				throw new Error("Login is only available in the browser");
 			}
 
-			await ensureMsalInitialized();
+			const activeProvider = window.localStorage.getItem(PROVIDER_KEY) as AuthProvider | null;
 
-			// Use redirect flow instead of popup (better for enterprise environments)
+			if (activeProvider === "local") {
+				// Local username/password login
+				if (!credentials) throw new Error("Username and password are required");
+				const res = await fetch(`${API_BASE}/api/auth/login`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(credentials),
+				});
+				if (!res.ok) {
+					const body = await res.json().catch(() => ({}));
+					throw new Error((body as any)?.detail ?? "Invalid username or password");
+				}
+				const data = await res.json() as { access_token: string; token_type: string; force_password_change?: boolean };
+				const token = data.access_token;
+				const payload = parseJwtPayload(token);
+				const exp = (payload.exp as number) ?? 0;
+
+				window.localStorage.setItem(LOCAL_TOKEN_KEY, token);
+				window.localStorage.setItem(LOCAL_TOKEN_EXP_KEY, String(exp));
+
+				const userRole = (payload.role as UserRole) ?? "Viewer";
+				window.localStorage.setItem(ROLE_CACHE_KEY, userRole);
+
+				setIsAuthenticated(true);
+				setAccount({
+					name: (payload.name as string) ?? (payload.sub as string) ?? undefined,
+					username: (payload.sub as string) ?? undefined,
+					email: (payload.email as string) ?? (payload.sub as string) ?? undefined,
+				});
+				setRole(userRole);
+				return;
+			}
+
+			if (activeProvider === "google") {
+				// Google stub
+				alert("Google auth coming soon");
+				return;
+			}
+
+			// Azure AD: redirect flow
+			await ensureMsalInitialized();
 			await msalInstance.loginRedirect(loginRequest);
-			// After redirect, the useEffect will handle the callback and set up the session
 		} catch (e) {
 			const message = e instanceof Error ? e.message : "Connection failed";
 			setError(message);
+		} finally {
 			setIsConnecting(false);
 		}
 	}, []);
 
 	const logout = useCallback(async () => {
 		setError(null);
+		const activeProvider = typeof window !== "undefined"
+			? window.localStorage.getItem(PROVIDER_KEY) as AuthProvider | null
+			: null;
+
 		try {
-			await fetch(`${API_BASE}/api/disconnect`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-			});
+			if (activeProvider !== "local") {
+				await fetch(`${API_BASE}/api/disconnect`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+				});
+			}
 		} catch {
 			// Ignore disconnect errors; we still clear local state
 		} finally {
 			if (typeof window !== "undefined") {
 				window.localStorage.removeItem(AUTH_CACHE_KEY);
-				// Clear theme and role preferences
-				window.localStorage.removeItem('loomx-theme-color');
+				window.localStorage.removeItem(LOCAL_TOKEN_KEY);
+				window.localStorage.removeItem(LOCAL_TOKEN_EXP_KEY);
+				window.localStorage.removeItem("loomx-theme-color");
 				window.localStorage.removeItem(ROLE_CACHE_KEY);
 			}
 			setIsAuthenticated(false);
@@ -337,6 +414,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 		logout,
 		account: isAuthenticated ? account : null,
 		role: isAuthenticated ? role : null,
+		provider,
 	};
 
 	return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -344,21 +422,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
 /**
  * useAuth - React Hook to access authentication state and actions.
- *
- * This hook provides access to the authentication context created by AuthProvider.
- * It must be called from within a component that's wrapped by AuthProvider
- * (which is all components in this app, since AuthProvider wraps _app.tsx).
- *
- * Usage:
- * ```tsx
- * const { isAuthenticated, login, logout, account, role } = useAuth();
- *
- * if (!isAuthenticated) {
- *   return <button onClick={login}>Sign in with Azure AD</button>;
- * }
- *
- * return <div>Welcome, {account?.name} ({role})</div>;
- * ```
  *
  * @throws Error if used outside of AuthProvider
  * @returns AuthContextValue with auth state and actions

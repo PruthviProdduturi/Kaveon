@@ -132,3 +132,30 @@ CREATE TABLE IF NOT EXISTS user_themes (
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_user_themes_email ON user_themes(user_email);
+
+CREATE TABLE IF NOT EXISTS auth_config (
+    id SERIAL PRIMARY KEY,
+    provider VARCHAR(50) NOT NULL DEFAULT 'azure_ad',
+    azure_tenant_id VARCHAR(255),
+    azure_client_id VARCHAR(255),
+    google_client_id VARCHAR(255),
+    google_client_secret VARCHAR(1000),
+    jwt_secret VARCHAR(1000),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_by VARCHAR(255)
+);
+
+CREATE TABLE IF NOT EXISTS local_users (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    force_password_change BOOLEAN NOT NULL DEFAULT FALSE,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_local_users_username UNIQUE (username),
+    CONSTRAINT uq_local_users_email UNIQUE (email)
+);
+CREATE INDEX IF NOT EXISTS idx_local_users_username ON local_users(username);
+CREATE INDEX IF NOT EXISTS idx_local_users_email ON local_users(email);

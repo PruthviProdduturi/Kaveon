@@ -146,6 +146,11 @@ export function Layout({ children }: LayoutProps) {
               <button className="header-dropdown-item" onClick={() => setSettingsOpen(true)}>
                 <i className="fas fa-palette" style={{ width: 14, color: "#8b5cf6" }} /> Themes
               </button>
+              {isAdmin && (
+                <Link href="/settings/auth" className="header-dropdown-item">
+                  <i className="fas fa-lock" style={{ width: 14, color: "#dc2626" }} /> Authentication
+                </Link>
+              )}
               <div className="header-dropdown-divider" />
               <Link href="/data-sources" className="header-dropdown-item">
                 <i className="fas fa-server" style={{ width: 14, color: "#0ea5e9" }} /> Data Sources
