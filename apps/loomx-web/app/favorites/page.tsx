@@ -33,7 +33,16 @@ const FavoritesPage: React.FC = () => {
     msalFetch(`${API_BASE}/api/v1/favorites`)
       .then(r => r.ok ? r.json() : Promise.reject("Failed to load favorites"))
       .then((favs: FavoriteItem[]) => {
-        setFavorites(favs || []);
+        // Deduplicate by kind+id — the backend can return the same item via
+        // multiple favorite rows (e.g. row per dataset join per chart join)
+        const seen = new Set<string>();
+        const unique = (favs || []).filter(f => {
+          const k = `${f.kind}-${f.id}`;
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        });
+        setFavorites(unique);
       })
       .catch(e => {
         setError("Failed to load favorites");
