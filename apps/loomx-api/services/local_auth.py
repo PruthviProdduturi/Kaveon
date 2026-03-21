@@ -31,16 +31,13 @@ def verify_password(plain: str, hashed: str) -> bool:
 # ── User queries ──────────────────────────────────────────────────────────────
 
 def get_user_by_username(username: str) -> Optional[dict]:
-    """Return a local_users row by username, or None."""
-    try:
-        return db.query_one(
-            "SELECT id, username, email, password_hash, force_password_change, is_active "
-            "FROM local_users WHERE username = @param0",
-            [username],
-        )
-    except Exception as e:
-        print(f"[LocalAuth] get_user_by_username failed: {e}")
-        return None
+    """Return a local_users row by username, or None.
+    Raises on DB errors so the caller can detect DB unavailability."""
+    return db.query_one(
+        "SELECT id, username, email, password_hash, force_password_change, is_active "
+        "FROM local_users WHERE username = @param0",
+        [username],
+    )
 
 
 def get_user_by_id(user_id: int) -> Optional[dict]:
