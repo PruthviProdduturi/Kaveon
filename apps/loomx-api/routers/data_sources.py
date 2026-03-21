@@ -117,8 +117,8 @@ def create_data_source(data: dict, ctx=Depends(require_min_role("Admin"))):
     region = data.get("region")
     if not name or not ds_type or not connection_string or not region:
         raise HTTPException(status_code=400, detail="Missing required fields: name, type, connection_string, region")
-    if "Fabric SQL" in ds_type and not data.get("database_name"):
-        raise HTTPException(status_code=400, detail="Database name is required for Fabric SQL data sources")
+    if ds_type != "StarRocks" and not data.get("database_name"):
+        raise HTTPException(status_code=400, detail=f"Database name is required for {ds_type} data sources")
     if region not in ("WW", "EU"):
         raise HTTPException(status_code=400, detail='Region must be either "WW" or "EU"')
 

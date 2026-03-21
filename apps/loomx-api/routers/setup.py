@@ -1,13 +1,14 @@
-"""Setup router — /api/v1/setup."""
+"""Setup router — /api/v1/setup + /api/v1/admin/metadata."""
 
 import os
 import re
 import sys
 import threading
 from pathlib import Path
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from models.setup import SetupConnectionBody
 import database.pool as pool
+from middleware.permissions import require_min_role
 
 router = APIRouter()
 
@@ -245,3 +246,86 @@ def setup_initialize(data: SetupConnectionBody):
     threading.Thread(target=_restart, daemon=True).start()
 
     return {"success": True, "message": "Metadata database initialised successfully. LoomX API is restarting…"}
+
+
+# ── Admin — view / reconfigure metadata server ────────────────────────────────
+
+@router.get("/admin/metadata")
+def admin_get_metadata(ctx=Depends(require_min_role("Admin"))):
+    """Return current metadata server config (admin only). Never exposes credentials."""
+    db_type = os.environ.get("METADATA_DB_TYPE") or "fabric_sql"
+    return {
+        "db_type": db_type,
+        "label": _DB_TYPE_LABELS.get(db_type, db_type),
+        "endpoint": os.environ.get("METADATA_ENDPOINT") or "",
+        "host": os.environ.get("METADATA_HOST") or "",
+        "port": os.environ.get("METADATA_PORT") or "",
+        "database": os.environ.get("METADATA_DATABASE") or "",
+    }
+
+
+@router.post("/admin/metadata/test")
+def admin_test_metadata(data: SetupConnectionBody, ctx=Depends(require_min_role("Admin"))):
+    """Test a new metadata connection without applying it (admin only)."""
+    result = _probe(data)
+    if result["success"]:
+        return {"success": True, "db_type": data.db_type}
+    error_type = result.get("error_type", "connection_failed")
+    raise HTTPException(
+        status_code=400,
+        detail={"success": False, "errors": _to_setup_errors(error_type, result.get("message", "Connection failed"))},
+    )
+
+
+@router.post("/admin/metadata/update")
+def admin_update_metadata(data: SetupConnectionBody, ctx=Depends(require_min_role("Admin"))):
+    """
+    Reconfigure the metadata database and restart the API (admin only).
+    Unlike /setup/initialize, this works even when the app is already configured.
+    """
+    schema_path = _SCHEMA_FILES.get(data.db_type)
+    if not schema_path or not schema_path.exists():
+        raise HTTPException(status_code=500, detail=f"Schema file not found for {_DB_TYPE_LABELS.get(data.db_type, data.db_type)}")
+
+    schema_sql = schema_path.read_text("utf-8")
+    if data.db_type in ("fabric_sql", "azure_sql"):
+        batches = [b.strip() for b in re.split(r"^\s*GO\s*$", schema_sql, flags=re.MULTILINE | re.IGNORECASE) if b.strip()]
+    else:
+        batches = [b.strip() for b in schema_sql.split(";") if b.strip()]
+
+    result = _probe(data, batches)
+    if not result["success"]:
+        error_type = result.get("error_type", "connection_failed")
+        raise HTTPException(
+            status_code=400,
+            detail={"success": False, "errors": _to_setup_errors(error_type, result.get("message", "Schema initialisation failed"))},
+        )
+
+    if data.db_type == "fabric_sql":
+        _fab_endpoint, _fab_database = _resolve_fabric(data)
+    else:
+        _fab_endpoint, _fab_database = (data.endpoint or ""), (data.database or "")
+
+    env_updates = {"METADATA_DB_TYPE": data.db_type, "METADATA_DATABASE": _fab_database}
+    if data.db_type in ("fabric_sql", "azure_sql"):
+        env_updates["METADATA_ENDPOINT"] = _fab_endpoint
+    else:
+        env_updates["METADATA_HOST"] = data.host or ""
+        env_updates["METADATA_PORT"] = str(data.port or ("5432" if data.db_type == "postgresql" else "3306"))
+
+    try:
+        _upsert_env(env_updates)
+    except Exception as e:
+        print(f"[Setup] Failed to update .env: {e}")
+
+    for k, v in env_updates.items():
+        os.environ[k] = v
+
+    def _restart():
+        import time as _t
+        _t.sleep(0.6)
+        print("[Setup] Restarting API after admin metadata reconfiguration…")
+        sys.exit(0)
+
+    threading.Thread(target=_restart, daemon=True).start()
+    return {"success": True, "message": "Metadata database updated. LoomX API is restarting…"}

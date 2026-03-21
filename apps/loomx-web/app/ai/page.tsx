@@ -13,9 +13,17 @@ interface Message {
   loading?: boolean;
 }
 
+interface SourceOption {
+  id: number;
+  name: string;
+  type: string;
+  database_name: string;
+}
+
 interface DatasetOption {
   id: number;
   name: string;
+  database_name?: string;
 }
 
 const QUICK_ACTIONS = [
@@ -171,20 +179,40 @@ export default function AIPage() {
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+  const [sources, setSources] = useState<SourceOption[]>([]);
   const [datasets, setDatasets] = useState<DatasetOption[]>([]);
+  const [selectedSource, setSelectedSource] = useState<SourceOption | null>(null);
   const [selectedDataset, setSelectedDataset] = useState<number | null>(null);
+  const [sqlContext, setSqlContext] = useState("");
+  const [showSqlContext, setShowSqlContext] = useState(false);
   const [sending, setSending] = useState(false);
   const [noKey, setNoKey] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Load datasets for context picker
+  // Load data sources + datasets for context pickers
   useEffect(() => {
     if (!isAuthenticated) return;
-    msalFetch(`${API_BASE}/api/v1/datasets/summary`)
-      .then(r => r.ok ? r.json() : null)
-      .then(d => setDatasets((d?.recent || []).map((ds: { id: number; dataset_name?: string; name?: string }) => ({ id: ds.id, name: ds.dataset_name || ds.name || `Dataset ${ds.id}` }))))
-      .catch(() => {});
+    const userEmail = account?.email || account?.username || "";
+    Promise.all([
+      msalFetch(`${API_BASE}/api/v1/data-sources${userEmail ? `?email=${encodeURIComponent(userEmail)}` : ""}`),
+      msalFetch(`${API_BASE}/api/v1/datasets/summary`),
+    ]).then(async ([sRes, dRes]) => {
+      if (sRes.ok) {
+        const sd = await sRes.json();
+        setSources((sd.dataSources || [])
+          .filter((s: SourceOption & { is_active?: boolean }) => s.is_active !== false)
+          .map((s: SourceOption) => ({ id: s.id, name: s.name, type: s.type, database_name: s.database_name })));
+      }
+      if (dRes.ok) {
+        const dd = await dRes.json();
+        setDatasets((dd.recent || []).map((ds: { id: number; dataset_name?: string; name?: string; database_name?: string }) => ({
+          id: ds.id,
+          name: ds.dataset_name || ds.name || `Dataset ${ds.id}`,
+          database_name: ds.database_name,
+        })));
+      }
+    }).catch(() => {});
   }, [isAuthenticated]);
 
   // Auto-scroll to latest message
@@ -203,13 +231,14 @@ export default function AIPage() {
 
     try {
       const history = [...messages, userMsg].map(m => ({ role: m.role, content: m.content }));
+      const ctx: Record<string, unknown> = {};
+      if (selectedSource) ctx.data_source_id = selectedSource.id;
+      if (selectedDataset) ctx.dataset_id = selectedDataset;
+      if (sqlContext.trim()) ctx.sql = sqlContext.trim();
       const res = await msalFetch(`${API_BASE}/api/v1/ai/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: history,
-          context: selectedDataset ? { dataset_id: selectedDataset } : undefined,
-        }),
+        body: JSON.stringify({ messages: history, context: Object.keys(ctx).length ? ctx : undefined }),
       });
       if (res.status === 400) {
         const d = await res.json();
@@ -276,30 +305,102 @@ export default function AIPage() {
             <p style={{ margin: 0, fontSize: "0.82rem", color: "#64748b" }}>Ask questions, generate SQL, create charts and dashboards</p>
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-          {/* Dataset context picker */}
-          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-            <i className="fas fa-database" style={{ fontSize: 13, color: "#64748b" }} />
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+
+          {/* 1. Data source */}
+          <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+            <i className="fas fa-server" style={{ fontSize: 12, color: "#94a3b8" }} />
+            <select
+              value={selectedSource?.id ?? ""}
+              onChange={e => {
+                const src = sources.find(s => s.id === Number(e.target.value)) ?? null;
+                setSelectedSource(src);
+                setSelectedDataset(null);
+              }}
+              style={{ fontSize: 13, border: "1px solid #e2e8f0", borderRadius: 7, padding: "0.3rem 0.55rem", color: "#374151", background: "white", cursor: "pointer", maxWidth: 160 }}
+            >
+              <option value="">All sources</option>
+              {sources.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+
+          {/* Arrow */}
+          <i className="fas fa-chevron-right" style={{ fontSize: 10, color: "#cbd5e1" }} />
+
+          {/* 2. Dataset (filtered by source) */}
+          <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+            <i className="fas fa-database" style={{ fontSize: 12, color: "#94a3b8" }} />
             <select
               value={selectedDataset ?? ""}
               onChange={e => setSelectedDataset(e.target.value ? Number(e.target.value) : null)}
-              style={{ fontSize: 13, border: "1px solid #e2e8f0", borderRadius: 7, padding: "0.35rem 0.6rem", color: "#374151", background: "white", cursor: "pointer" }}
+              style={{ fontSize: 13, border: "1px solid #e2e8f0", borderRadius: 7, padding: "0.3rem 0.55rem", color: "#374151", background: "white", cursor: "pointer", maxWidth: 160 }}
             >
-              <option value="">No dataset context</option>
-              {datasets.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+              <option value="">No dataset</option>
+              {datasets
+                .filter(d => !selectedSource || d.database_name === selectedSource.database_name)
+                .map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
           </div>
+
+          {/* 3. SQL context toggle */}
+          <button
+            type="button"
+            onClick={() => setShowSqlContext(v => !v)}
+            title="Add SQL context"
+            style={{
+              display: "inline-flex", alignItems: "center", gap: "0.3rem",
+              padding: "0.3rem 0.65rem", borderRadius: 7, fontSize: 12, cursor: "pointer",
+              border: `1px solid ${showSqlContext ? primaryColor : "#e2e8f0"}`,
+              background: showSqlContext ? `${primaryColor}10` : "white",
+              color: showSqlContext ? primaryColor : "#64748b",
+              fontWeight: showSqlContext ? 600 : 400,
+            }}
+          >
+            <i className="fas fa-code" style={{ fontSize: 11 }} />
+            {sqlContext.trim() ? "SQL ✓" : "SQL"}
+          </button>
+
+          <div style={{ width: 1, height: 18, background: "#e2e8f0" }} />
+
           {messages.length > 0 && (
             <button type="button" onClick={() => setMessages([])}
-              style={{ background: "none", border: "1px solid #e2e8f0", borderRadius: 7, padding: "0.35rem 0.75rem", fontSize: 12, color: "#64748b", cursor: "pointer" }}>
+              style={{ background: "none", border: "1px solid #e2e8f0", borderRadius: 7, padding: "0.3rem 0.65rem", fontSize: 12, color: "#64748b", cursor: "pointer" }}>
               <i className="fas fa-trash-alt" style={{ marginRight: 4 }} />Clear
             </button>
           )}
-          <a href="/settings/ai" style={{ background: "none", border: "1px solid #e2e8f0", borderRadius: 7, padding: "0.35rem 0.75rem", fontSize: 12, color: "#64748b", cursor: "pointer", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: "0.3rem" }}>
+          <a href="/settings/ai" style={{ background: "none", border: "1px solid #e2e8f0", borderRadius: 7, padding: "0.3rem 0.65rem", fontSize: 12, color: "#64748b", cursor: "pointer", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: "0.3rem" }}>
             <i className="fas fa-cog" />Keys
           </a>
         </div>
       </div>
+
+      {/* SQL context panel (collapsible) */}
+      {showSqlContext && (
+        <div style={{ padding: "0.75rem 1.5rem", background: "#f8fafc", borderBottom: "1px solid #e5e7eb", flexShrink: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.4rem" }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "#475569" }}>
+              <i className="fas fa-code" style={{ marginRight: 5 }} />SQL context — paste your current query so the AI can reference it
+            </span>
+            {sqlContext.trim() && (
+              <button type="button" onClick={() => setSqlContext("")} style={{ background: "none", border: "none", fontSize: 11, color: "#94a3b8", cursor: "pointer" }}>
+                Clear
+              </button>
+            )}
+          </div>
+          <textarea
+            value={sqlContext}
+            onChange={e => setSqlContext(e.target.value)}
+            placeholder="SELECT * FROM my_table WHERE ..."
+            rows={4}
+            style={{
+              width: "100%", boxSizing: "border-box", resize: "vertical",
+              fontFamily: "monospace", fontSize: 12, lineHeight: 1.6,
+              border: "1px solid #e2e8f0", borderRadius: 8, padding: "0.6rem 0.75rem",
+              color: "#1e293b", background: "white", outline: "none",
+            }}
+          />
+        </div>
+      )}
 
       {/* Messages area */}
       <div style={{ flex: 1, overflowY: "auto", padding: "1.25rem 1.5rem", display: "flex", flexDirection: "column", gap: "1rem" }}>

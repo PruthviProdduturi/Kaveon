@@ -1,12 +1,29 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { API_BASE } from "../../config";
 import { msalFetch } from "../../utils/msalFetch";
 import { useAuth } from "../../auth/useAuth";
 import { Button } from "../../components/Button";
 import { ListPageShell } from "../../components/ListPageShell";
 import { Pagination } from "../../components/Pagination";
+import { SOURCE_TYPE_META, SOURCE_TYPES } from "../../components/DataSourceIcons";
+
+function SourceTypeBadge({ type }: { type: string }) {
+  const meta = SOURCE_TYPE_META[type];
+  if (!meta) return <span className="muted" style={{ fontSize: 13 }}>{type}</span>;
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: 5,
+      padding: "0.2rem 0.55rem", borderRadius: 7, fontSize: 12, fontWeight: 500,
+      background: meta.bg, border: `1px solid ${meta.border}`, color: meta.color,
+      whiteSpace: "nowrap",
+    }}>
+      {meta.icon}
+      {meta.label}
+    </span>
+  );
+}
 
 interface DataSource {
   id: number;
@@ -248,7 +265,7 @@ export default function DataSourcesPage() {
                       </div>
                       {ds.description && <div className="muted" style={{ marginTop: 4, fontSize: 13 }}>{ds.description}</div>}
                     </td>
-                    <td className="muted" style={{ fontSize: 13 }}>{ds.type}</td>
+                    <td><SourceTypeBadge type={ds.type} /></td>
                     <td className="muted" style={{ fontSize: 12, fontFamily: "monospace", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ds.connection_string}</td>
                     <td className="muted" style={{ fontSize: 13 }}>{ds.database_name || "—"}</td>
                     <td>
@@ -455,28 +472,43 @@ function AddDataSourceModal({ dataSource, isCopying = false, onClose, onSuccess 
               <label className="chart-builder-label">
                 <span>Type *</span>
               </label>
-              <select
-                className="chart-builder-select"
-                value={formData.type}
-                onChange={(e) => setFormData({ ...formData, type: e.target.value })}
-                required
-              >
-                <option value="Fabric SQL AEP">Fabric SQL AEP</option>
-                <option value="Fabric SQL DW">Fabric SQL DW</option>
-                <option value="Azure SQL">Azure SQL</option>
-                <option value="PostgreSQL">PostgreSQL</option>
-              </select>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                {SOURCE_TYPES.map(t => {
+                  const meta = SOURCE_TYPE_META[t];
+                  const selected = formData.type === t;
+                  return (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setFormData({ ...formData, type: t })}
+                      style={{
+                        display: "flex", alignItems: "center", gap: "0.5rem",
+                        padding: "0.5rem 0.85rem", borderRadius: 9, cursor: "pointer",
+                        border: `2px solid ${selected ? meta.color : "#e2e8f0"}`,
+                        background: selected ? meta.bg : "white",
+                        color: selected ? meta.color : "#374151",
+                        fontWeight: selected ? 600 : 400,
+                        fontSize: 13, transition: "all 0.15s",
+                        boxShadow: selected ? `0 0 0 2px ${meta.color}20` : "none",
+                      }}
+                    >
+                      {meta.icon}
+                      {meta.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             <div className="chart-builder-field">
               <label className="chart-builder-label">
-                <span>SQL Endpoint *</span>
+                <span>{SOURCE_TYPE_META[formData.type]?.endpointLabel ?? "Endpoint"} *</span>
               </label>
               <input
                 type="text"
                 className="chart-builder-input"
                 style={{ fontFamily: 'monospace' }}
-                placeholder="e.g., your-workspace.datawarehouse.fabric.microsoft.com"
+                placeholder={SOURCE_TYPE_META[formData.type]?.endpointPlaceholder ?? ""}
                 value={formData.connection_string}
                 onChange={(e) => setFormData({ ...formData, connection_string: e.target.value })}
                 required
@@ -485,46 +517,28 @@ function AddDataSourceModal({ dataSource, isCopying = false, onClose, onSuccess 
 
             <div className="chart-builder-field">
               <label className="chart-builder-label">
-                <span>Database Name {formData.type.includes('Fabric SQL') ? '*' : ''}</span>
+                <span>{"Trino" === formData.type ? "Catalog Name *" : "StarRocks" === formData.type ? "Database Name (optional)" : "Database Name *"}</span>
               </label>
               <input
                 type="text"
                 className="chart-builder-input"
                 style={{ fontFamily: 'monospace' }}
-                placeholder="e.g., IDEASServingStoreLH"
+                placeholder={formData.type === "Trino" ? "e.g., hive" : formData.type === "StarRocks" ? "e.g., my_database" : "e.g., IDEASServingStoreLH"}
                 value={formData.database_name}
                 onChange={(e) => setFormData({ ...formData, database_name: e.target.value })}
-                required={formData.type.includes('Fabric SQL')}
+                required={formData.type !== "StarRocks"}
               />
             </div>
 
             <div className="chart-builder-field">
               <label className="chart-builder-label">
-                <span>Region *</span>
+                <span>Region</span>
               </label>
-              <div style={{ display: 'flex', gap: '1.5rem' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem' }}>
-                  <input
-                    type="radio"
-                    name="region"
-                    value="WW"
-                    checked={formData.region === "WW"}
-                    onChange={(e) => setFormData({ ...formData, region: e.target.value as "WW" | "EU" })}
-                    style={{ cursor: 'pointer' }}
-                  />
-                  <span>Worldwide (WW)</span>
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem' }}>
-                  <input
-                    type="radio"
-                    name="region"
-                    value="EU"
-                    checked={formData.region === "EU"}
-                    onChange={(e) => setFormData({ ...formData, region: e.target.value as "WW" | "EU" })}
-                    style={{ cursor: 'pointer' }}
-                  />
-                  <span>Europe (EU)</span>
-                </label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <span style={{ fontSize: 13, padding: "0.3rem 0.75rem", borderRadius: 7, background: "#dbeafe", color: "#1e40af", border: "1px solid #93c5fd", fontWeight: 600 }}>
+                  WW — Worldwide
+                </span>
+                <span style={{ fontSize: 12, color: "#94a3b8" }}>EU coming soon</span>
               </div>
             </div>
 

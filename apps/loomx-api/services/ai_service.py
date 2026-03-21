@@ -204,14 +204,42 @@ def _default_model(provider: str) -> str:
 
 # ── Schema context builder ─────────────────────────────────────────────────────
 
+def build_source_context(data_source_id: int) -> str:
+    """Fetch data source info and format for the system prompt."""
+    try:
+        src = db.query_one(
+            "SELECT name, type, database_name, region, description FROM data_sources WHERE id = @param0",
+            [data_source_id],
+        )
+        if not src:
+            return ""
+        lines = [
+            f"Data Source: {src['name']}",
+            f"Type: {src['type']}",
+            f"Database: {src['database_name']}",
+            f"Region: {src.get('region', '')}",
+        ]
+        if src.get("description"):
+            lines.append(f"Description: {src['description']}")
+        return "\n".join(l for l in lines if l)
+    except Exception:
+        return ""
+
+
 def build_dataset_context(dataset_id: int) -> str:
     """Fetch dataset + column info and format as a schema description for the system prompt."""
     try:
-        ds = db.query_one("SELECT name, dataset_name, description FROM datasets WHERE id = @param0", [dataset_id])
+        ds = db.query_one(
+            "SELECT name, dataset_name, description, fact_table, schema_name, database_name FROM datasets WHERE id = @param0",
+            [dataset_id],
+        )
         if not ds:
             return ""
         name = ds.get("dataset_name") or ds.get("name") or f"dataset_{dataset_id}"
         desc = ds.get("description") or ""
+        fact = ds.get("fact_table") or ""
+        schema = ds.get("schema_name") or "dbo"
+        database = ds.get("database_name") or ""
 
         cols = db.query(
             "SELECT column_name, data_type, description FROM dataset_columns WHERE dataset_id = @param0 ORDER BY id",
@@ -223,7 +251,13 @@ def build_dataset_context(dataset_id: int) -> str:
             [dataset_id],
         )["rows"]
 
-        lines = [f"Dataset: {name}", f"Description: {desc}" if desc else "", "Columns:"]
+        lines = [
+            f"Dataset: {name}",
+            f"Database: {database}" if database else "",
+            f"Fact table: {schema}.{fact}" if fact else "",
+            f"Description: {desc}" if desc else "",
+            "Columns:" if cols else "",
+        ]
         for c in cols:
             lines.append(f"  - {c['column_name']} ({c['data_type']})" + (f" — {c['description']}" if c.get("description") else ""))
         if metrics:
@@ -316,15 +350,30 @@ async def chat(messages: list, context: Optional[dict], user_email: str) -> dict
 
     api_key, provider, model = resolved
 
-    # Build system prompt with schema context if a dataset is provided
+    # Build system prompt with all available context
     system = _SYSTEM_BASE
     ctx = context or {}
+
+    context_sections: list[str] = []
+
+    # 1. Data source — tells the AI which DB engine, catalog name, and region
+    if ctx.get("data_source_id"):
+        src_ctx = build_source_context(int(ctx["data_source_id"]))
+        if src_ctx:
+            context_sections.append(f"### Data Source\n{src_ctx}")
+
+    # 2. Dataset — columns, metrics, fact table
     if ctx.get("dataset_id"):
-        schema = build_dataset_context(int(ctx["dataset_id"]))
-        if schema:
-            system += f"\n\nActive dataset context:\n{schema}"
-    if ctx.get("sql"):
-        system += f"\n\nCurrent SQL in editor:\n```sql\n{ctx['sql']}\n```"
+        ds_ctx = build_dataset_context(int(ctx["dataset_id"]))
+        if ds_ctx:
+            context_sections.append(f"### Dataset Schema\n{ds_ctx}")
+
+    # 3. SQL currently in the editor — explain/optimise queries
+    if ctx.get("sql") and ctx["sql"].strip():
+        context_sections.append(f"### Current SQL\n```sql\n{ctx['sql'].strip()}\n```")
+
+    if context_sections:
+        system += "\n\n## Context\n" + "\n\n".join(context_sections)
 
     msgs = [{"role": m["role"], "content": m["content"]} for m in messages]
 

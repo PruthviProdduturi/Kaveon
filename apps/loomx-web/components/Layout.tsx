@@ -153,6 +153,11 @@ export function Layout({ children }: LayoutProps) {
                   <i className="fas fa-users-cog" style={{ width: 14, color: "#059669" }} /> User Management
                 </Link>
               )}
+              {isAdmin && (
+                <Link href="/settings/metadata" className="header-dropdown-item">
+                  <i className="fas fa-database" style={{ width: 14, color: "#0ea5e9" }} /> Metadata Server
+                </Link>
+              )}
             </div>
           </div>
 

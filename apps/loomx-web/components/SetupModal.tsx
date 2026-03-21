@@ -11,6 +11,7 @@ import React, { useState, useEffect } from "react";
 import { msalFetch } from "../utils/msalFetch";
 import { API_BASE } from "../config";
 import { LoomXLogo } from "./LoomXLogo";
+import { SETUP_DB_ICONS } from "./DataSourceIcons";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -113,7 +114,6 @@ function ConnectionTestingPanel({ target }: { target: string }) {
 
 interface DbTypeConfig {
   label: string;
-  icon: string;
   defaultPort?: number;
   usesEndpoint: boolean;
   usesConnectionString?: boolean;
@@ -127,7 +127,6 @@ interface DbTypeConfig {
 const DB_TYPES: Record<DbType, DbTypeConfig> = {
   fabric_sql: {
     label: "Microsoft Fabric SQL",
-    icon: "fa-database",
     usesEndpoint: false,
     usesConnectionString: true,
     endpointLabel: "",
@@ -137,7 +136,6 @@ const DB_TYPES: Record<DbType, DbTypeConfig> = {
   },
   azure_sql: {
     label: "Azure SQL Database",
-    icon: "fa-cloud",
     usesEndpoint: true,
     endpointLabel: "Server Name",
     endpointPlaceholder: "my-server.database.windows.net",
@@ -146,7 +144,6 @@ const DB_TYPES: Record<DbType, DbTypeConfig> = {
   },
   postgresql: {
     label: "PostgreSQL",
-    icon: "fa-database",
     defaultPort: 5432,
     usesEndpoint: false,
     beta: true,
@@ -157,7 +154,6 @@ const DB_TYPES: Record<DbType, DbTypeConfig> = {
   },
   mysql: {
     label: "MySQL / MariaDB",
-    icon: "fa-database",
     defaultPort: 3306,
     usesEndpoint: false,
     beta: true,
@@ -348,7 +344,7 @@ function DbTypePicker({ value, onChange, disabled }: { value: DbType; onChange: 
           const active = value === t;
           return (
             <div key={t} style={S.dbTypeCard(active, disabled)} onClick={() => !disabled && onChange(t)}>
-              <i className={`fas ${cfg.icon}`} style={{ fontSize: 14, color: active ? "#6366f1" : "#475569", flexShrink: 0 }} />
+              <span style={{ flexShrink: 0, opacity: active ? 1 : 0.55 }}>{SETUP_DB_ICONS[t]?.icon}</span>
               <span style={{ flex: 1, ...S.dbTypeLabel(active) }}>{cfg.label}</span>
               {cfg.beta && <span style={S.betaBadge}>Beta</span>}
             </div>
