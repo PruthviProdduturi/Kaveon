@@ -25,7 +25,13 @@ interface UserKey {
   created_at: string;
 }
 
-const PROVIDER_META: Record<string, { label: string; icon: string; color: string; bg: string; border: string; models: string[] }> = {
+const PROVIDER_META: Record<string, {
+  label: string; icon: string; color: string; bg: string; border: string;
+  models: string[];
+  keyLabel: string;
+  keyPlaceholder: string;
+  howToGet: { step: string; url?: string }[];
+}> = {
   anthropic: {
     label: "Anthropic (Claude)",
     icon: "fa-robot",
@@ -33,6 +39,13 @@ const PROVIDER_META: Record<string, { label: string; icon: string; color: string
     bg: "#f5f3ff",
     border: "#c4b5fd",
     models: ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001"],
+    keyLabel: "Anthropic API Key",
+    keyPlaceholder: "sk-ant-api03-...",
+    howToGet: [
+      { step: "Sign in to the Anthropic Console", url: "https://console.anthropic.com" },
+      { step: "Go to API Keys in the left sidebar" },
+      { step: "Click Create Key, give it a name, copy it here" },
+    ],
   },
   openai: {
     label: "OpenAI",
@@ -41,6 +54,29 @@ const PROVIDER_META: Record<string, { label: string; icon: string; color: string
     bg: "#ecfdf5",
     border: "#6ee7b7",
     models: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
+    keyLabel: "OpenAI API Key",
+    keyPlaceholder: "sk-proj-...",
+    howToGet: [
+      { step: "Sign in to the OpenAI Platform", url: "https://platform.openai.com" },
+      { step: "Go to API Keys under your account" },
+      { step: "Click Create new secret key, copy it here" },
+    ],
+  },
+  github: {
+    label: "GitHub Models (Copilot)",
+    icon: "fa-github",
+    color: "#0f172a",
+    bg: "#f8fafc",
+    border: "#cbd5e1",
+    models: ["gpt-4o", "gpt-4o-mini", "claude-3-5-sonnet", "mistral-large"],
+    keyLabel: "GitHub Personal Access Token",
+    keyPlaceholder: "github_pat_...",
+    howToGet: [
+      { step: "Sign in to GitHub", url: "https://github.com" },
+      { step: "Go to Settings → Developer settings → Personal access tokens → Fine-grained tokens", url: "https://github.com/settings/tokens" },
+      { step: "Generate a new token — no special scopes needed for GitHub Models" },
+      { step: "Requires GitHub Copilot subscription or GitHub Models access (currently in beta)" },
+    ],
   },
 };
 
@@ -246,11 +282,20 @@ export default function AISettingsPage() {
           )}
         </div>
 
-        {/* Info box */}
-        <div style={{ padding: "1rem 1.25rem", borderRadius: 10, background: "#f8fafc", border: "1px solid #e2e8f0", fontSize: 13, color: "#475569", lineHeight: 1.6 }}>
-          <strong style={{ color: "#0f172a" }}>Key priority:</strong> Your personal key always takes priority over a global key.
-          If no key is configured, the AI Assistant will prompt you to add one.
-          Keys are encrypted at rest using AES-256.
+        {/* Info boxes */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+          <div style={{ padding: "1rem 1.25rem", borderRadius: 10, background: "#f8fafc", border: "1px solid #e2e8f0", fontSize: 13, color: "#475569", lineHeight: 1.6 }}>
+            <strong style={{ color: "#0f172a" }}>Key priority:</strong> Your personal key always takes priority over a global key.
+            If no key is configured, the AI Assistant will prompt you to add one.
+            Keys are encrypted at rest using AES-256.
+          </div>
+          <div style={{ padding: "1rem 1.25rem", borderRadius: 10, background: "#fffbeb", border: "1px solid #fcd34d", fontSize: 13, color: "#78350f", lineHeight: 1.6, display: "flex", gap: "0.75rem", alignItems: "flex-start" }}>
+            <i className="fas fa-shield-alt" style={{ color: "#d97706", marginTop: 2, flexShrink: 0 }} />
+            <div>
+              <strong style={{ color: "#92400e" }}>Future roadmap — Azure Key Vault integration.</strong>{" "}
+              Keys are currently stored encrypted in the metadata database. For production enterprise deployments, we plan to support Azure Key Vault so no secrets ever touch the DB.
+            </div>
+          </div>
         </div>
       </div>
 
@@ -283,6 +328,12 @@ function AddKeyModal({ isGlobal, onClose, onSuccess }: { isGlobal: boolean; onCl
 
   const meta = PROVIDER_META[provider];
 
+  const handleProviderChange = (p: string) => {
+    setProvider(p);
+    setModel(PROVIDER_META[p]?.models[0] ?? "");
+    setApiKey("");
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
@@ -310,8 +361,8 @@ function AddKeyModal({ isGlobal, onClose, onSuccess }: { isGlobal: boolean; onCl
   return (
     <>
       <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 1000 }} onClick={onClose} />
-      <div style={{ position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)", background: "white", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)", zIndex: 1001, width: "90%", maxWidth: 480 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "1.25rem 1.5rem", borderBottom: "1px solid #e5e7eb" }}>
+      <div style={{ position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)", background: "white", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)", zIndex: 1001, width: "90%", maxWidth: 520, maxHeight: "90vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "1.25rem 1.5rem", borderBottom: "1px solid #e5e7eb", position: "sticky", top: 0, background: "white", zIndex: 1 }}>
           <h2 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 700 }}>
             {isGlobal ? "Add Global AI Key" : "Add My Personal Key"}
           </h2>
@@ -326,16 +377,51 @@ function AddKeyModal({ isGlobal, onClose, onSuccess }: { isGlobal: boolean; onCl
                 <i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />{error}
               </div>
             )}
-            <div className="chart-builder-field">
+
+            {/* Provider selector — card style */}
+            <div>
               <label className="chart-builder-label"><span>Provider</span></label>
-              <select className="chart-builder-select" value={provider} onChange={e => {
-                setProvider(e.target.value);
-                setModel(PROVIDER_META[e.target.value]?.models[0] ?? "");
-              }}>
-                <option value="anthropic">Anthropic (Claude)</option>
-                <option value="openai">OpenAI</option>
-              </select>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.5rem", marginTop: "0.4rem" }}>
+                {Object.entries(PROVIDER_META).map(([key, m]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => handleProviderChange(key)}
+                    style={{
+                      padding: "0.65rem 0.5rem", borderRadius: 10, cursor: "pointer", textAlign: "center",
+                      border: `2px solid ${provider === key ? m.color : "#e2e8f0"}`,
+                      background: provider === key ? m.bg : "white",
+                      transition: "all 0.15s",
+                    }}
+                  >
+                    <i className={`fab ${m.icon}`} style={{ fontSize: 18, color: provider === key ? m.color : "#94a3b8", display: "block", marginBottom: 4 }} />
+                    <span style={{ fontSize: 11, fontWeight: 600, color: provider === key ? m.color : "#64748b", lineHeight: 1.3 }}>{m.label}</span>
+                  </button>
+                ))}
+              </div>
             </div>
+
+            {/* How to get this key */}
+            {meta && (
+              <div style={{ padding: "0.85rem 1rem", borderRadius: 9, background: `${meta.bg}`, border: `1px solid ${meta.border}`, fontSize: 13 }}>
+                <div style={{ fontWeight: 600, color: meta.color, marginBottom: "0.5rem", display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                  <i className="fas fa-circle-info" />
+                  How to get your {meta.label} key
+                </div>
+                <ol style={{ margin: 0, paddingLeft: "1.25rem", color: "#374151", lineHeight: 1.8 }}>
+                  {meta.howToGet.map((s, i) => (
+                    <li key={i}>
+                      {s.url ? (
+                        <a href={s.url} target="_blank" rel="noopener noreferrer" style={{ color: meta.color, fontWeight: 500 }}>
+                          {s.step} <i className="fas fa-external-link-alt" style={{ fontSize: 10 }} />
+                        </a>
+                      ) : s.step}
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )}
+
             {isGlobal && (
               <div className="chart-builder-field">
                 <label className="chart-builder-label"><span>Label</span></label>
@@ -343,10 +429,13 @@ function AddKeyModal({ isGlobal, onClose, onSuccess }: { isGlobal: boolean; onCl
               </div>
             )}
             <div className="chart-builder-field">
-              <label className="chart-builder-label"><span>API Key</span></label>
+              <label className="chart-builder-label"><span>{meta?.keyLabel ?? "API Key"}</span></label>
               <input className="chart-builder-input" type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
-                placeholder={provider === "anthropic" ? "sk-ant-..." : "sk-..."}
+                placeholder={meta?.keyPlaceholder ?? "paste your key here"}
                 autoComplete="new-password" required />
+              <p style={{ margin: "0.3rem 0 0", fontSize: 11, color: "#94a3b8" }}>
+                <i className="fas fa-lock" style={{ marginRight: 4 }} />Encrypted with AES-256 before storage. Never shown in plain text.
+              </p>
             </div>
             <div className="chart-builder-field">
               <label className="chart-builder-label"><span>Model</span></label>

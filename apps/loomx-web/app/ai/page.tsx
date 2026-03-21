@@ -251,7 +251,7 @@ export default function AIPage() {
   };
 
   return (
-    <div className="page-shell animate-fade-in" style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 56px)", gap: 0, padding: 0 }}>
+    <div className="animate-fade-in" style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, gap: 0 }}>
 
       {/* Header */}
       <div style={{
