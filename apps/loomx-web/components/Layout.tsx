@@ -82,12 +82,6 @@ export function Layout({ children }: LayoutProps) {
           </div>
           <nav className="top-nav" style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <Link
-              className={`header-btn ${pathname === '/' ? 'header-btn-active' : ''}`}
-              href="/"
-            >
-              <i className="fas fa-home" /> Home
-            </Link>
-            <Link
               className={`header-btn ${pathname?.startsWith('/dashboards') ? 'header-btn-active' : ''}`}
               href="/dashboards"
             >
