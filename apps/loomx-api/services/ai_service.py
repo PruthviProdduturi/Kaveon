@@ -195,7 +195,11 @@ def resolve_key(user_email: str) -> Optional[tuple[str, str, str]]:
 
 
 def _default_model(provider: str) -> str:
-    return "claude-sonnet-4-6" if provider == "anthropic" else "gpt-4o"
+    if provider == "anthropic":
+        return "claude-sonnet-4-6"
+    if provider == "github":
+        return "gpt-4o"
+    return "gpt-4o"
 
 
 # ── Schema context builder ─────────────────────────────────────────────────────
@@ -255,13 +259,14 @@ async def _call_anthropic(api_key: str, model: str, system: str, messages: list)
         return data["content"][0]["text"]
 
 
-async def _call_openai(api_key: str, model: str, system: str, messages: list) -> str:
+async def _call_openai_compat(api_key: str, model: str, system: str, messages: list, base_url: str = "https://api.openai.com/v1") -> str:
+    """Calls any OpenAI-compatible endpoint (OpenAI, GitHub Models, Azure OpenAI, etc.)."""
     all_messages = [{"role": "system", "content": system}] + [
         {"role": m["role"], "content": m["content"]} for m in messages
     ]
     async with httpx.AsyncClient(timeout=90.0) as client:
         resp = await client.post(
-            "https://api.openai.com/v1/chat/completions",
+            f"{base_url.rstrip('/')}/chat/completions",
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "content-type": "application/json",
@@ -326,7 +331,10 @@ async def chat(messages: list, context: Optional[dict], user_email: str) -> dict
     if provider == "anthropic":
         reply = await _call_anthropic(api_key, model, system, msgs)
     elif provider == "openai":
-        reply = await _call_openai(api_key, model, system, msgs)
+        reply = await _call_openai_compat(api_key, model, system, msgs)
+    elif provider == "github":
+        # GitHub Models — OpenAI-compatible endpoint, auth via GitHub PAT
+        reply = await _call_openai_compat(api_key, model, system, msgs, base_url="https://models.inference.ai.azure.com")
     else:
         raise ValueError(f"Unknown provider: {provider}")
 

@@ -58,8 +58,8 @@ def list_providers(ctx: UserContext = Depends(require_min_role("Analyst"))):
 
 @router.post("/ai/providers", status_code=201)
 def add_provider(body: AIProviderBody, ctx: UserContext = Depends(require_min_role("Admin"))):
-    if body.provider not in ("anthropic", "openai"):
-        raise HTTPException(status_code=400, detail={"code": "invalid_provider", "message": "Provider must be 'anthropic' or 'openai'."})
+    if body.provider not in ("anthropic", "openai", "github"):
+        raise HTTPException(status_code=400, detail={"code": "invalid_provider", "message": "Provider must be 'anthropic', 'openai', or 'github'."})
     result = ai_svc.upsert_provider(
         provider=body.provider,
         label=body.label,
