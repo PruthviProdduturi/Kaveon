@@ -15,7 +15,14 @@ const nextConfig: NextConfig = {
 
   // Tree-shake heavy packages — Next.js will only bundle the modules actually used.
   experimental: {
-    optimizePackageImports: ['echarts', 'echarts-for-react', '@msal/browser', '@msal/react'],
+    optimizePackageImports: ['echarts', 'echarts-for-react', '@azure/msal-browser'],
+  },
+
+  // Turbopack (used by `next dev --turbo`).
+  // root: tells Turbopack the monorepo root so it doesn't mistake a parent
+  // package-lock.json for the workspace root.
+  turbopack: {
+    root: resolve(__dirname, '../..'),
   },
 
   // Expose environment variables to the browser with NEXT_PUBLIC_ prefix
@@ -27,12 +34,14 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_AZURE_REDIRECT_URI: process.env.WEB_URL || 'http://localhost:3000',
   },
 
+  // Webpack config — applies to `next build` (production). Turbopack handles
+  // chunk splitting automatically in dev; these cacheGroups are not needed there.
   webpack(config, { isServer }) {
     if (!isServer) {
       config.optimization.splitChunks = {
         ...config.optimization.splitChunks,
         cacheGroups: {
-          // Isolate echarts + echarts-gl into their own chunk — only loaded when a chart renders
+          // Isolate echarts + echarts-gl into their own chunk
           echarts: {
             name: 'chunk-echarts',
             test: /[\\/]node_modules[\\/](echarts|echarts-gl|echarts-for-react|zrender)[\\/]/,
