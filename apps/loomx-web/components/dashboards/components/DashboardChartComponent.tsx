@@ -19,9 +19,11 @@ import type { DashboardComponentProps } from '../../../types/dashboard';
 import { msalFetch } from '../../../utils/msalFetch';
 import { API_BASE } from '../../../config';
 import { useDashboard } from '../DashboardContext';
+import dynamic from 'next/dynamic';
 import { ChartBuilderProvider } from '../../charts/ChartBuilderContext';
-import ChartHydrator from '../../charts/ChartHydrator';
-import ChartPreview from '../../charts/ChartPreview';
+
+const ChartHydrator = dynamic(() => import('../../charts/ChartHydrator'), { ssr: false });
+const ChartPreview  = dynamic(() => import('../../charts/ChartPreview'),  { ssr: false });
 import ChartActionsOverlay from './ChartActionsOverlay';
 
 interface DashboardChartLoaderProps {

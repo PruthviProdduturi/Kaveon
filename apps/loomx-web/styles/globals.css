@@ -2148,6 +2148,7 @@ main.main-lab {
 }
 
 .welcome-btn-primary:hover {
+  background: linear-gradient(135deg, var(--loomx-primary) 0%, var(--loomx-dark) 100%);
   transform: translateY(-1px);
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
   color: #ffffff;
