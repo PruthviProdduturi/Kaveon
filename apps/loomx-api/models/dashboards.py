@@ -17,7 +17,9 @@ class DashboardUpdate(BaseModel):
     description: Optional[str] = Field(default=None, max_length=1000)
     layout: Optional[Any] = None
     charts: Optional[Any] = None
+    filters: Optional[Any] = None
     visibility: Optional[Literal["private", "internal", "published"]] = None
+    is_published: Optional[bool] = None
 
 
 class DashboardFavoriteBody(BaseModel):
