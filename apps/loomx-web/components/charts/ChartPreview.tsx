@@ -2,6 +2,7 @@ import React, { useRef, useCallback, useEffect } from "react";
 import dynamic from "next/dynamic";
 import { useChartBuilder } from "./ChartBuilderContext";
 import { getPlugin } from "./chartPluginRegistry";
+import { normaliseCountryName } from "../../utils/countryAliases";
 
 const WorldMapGlobe = dynamic(() => import("./WorldMapGlobe"), { ssr: false });
 
@@ -194,11 +195,30 @@ interface TableRendererProps {
   rows: (string | number | null)[][];
   columns: string[];
   isPivot?: boolean;
+  advancedOptions?: any;
 }
 
-const TableRenderer: React.FC<TableRendererProps> = ({ rows, columns, isPivot }) => {
+// Interpolate between two hex colors by ratio 0–1
+function lerpColor(a: string, b: string, t: number): string {
+  const parse = (h: string) => [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)];
+  const [ar,ag,ab] = parse(a);
+  const [br,bg,bb] = parse(b);
+  const r = Math.round(ar + (br-ar)*t);
+  const g = Math.round(ag + (bg-ag)*t);
+  const bl = Math.round(ab + (bb-ab)*t);
+  return `rgb(${r},${g},${bl})`;
+}
+
+const TableRenderer: React.FC<TableRendererProps> = ({ rows, columns, isPivot, advancedOptions }) => {
   const [sortCol, setSortCol] = React.useState<number | null>(null);
   const [sortDir, setSortDir] = React.useState<"asc" | "desc">("asc");
+  const [search, setSearch] = React.useState("");
+  const [page, setPage] = React.useState(0);
+  const ctOpts = advancedOptions?.chartTypeOptions || {};
+  const pageSize: number = ctOpts.tablePageSize ?? 25;
+  const condFmt: boolean = ctOpts.tableCondFmt ?? false;
+  const condFmtLow: string = ctOpts.tableCondFmtLow ?? "#fee2e2";
+  const condFmtHigh: string = ctOpts.tableCondFmtHigh ?? "#dcfce7";
 
   const handleSort = (idx: number) => {
     if (sortCol === idx) {
@@ -206,26 +226,15 @@ const TableRenderer: React.FC<TableRendererProps> = ({ rows, columns, isPivot })
     } else {
       setSortCol(idx);
       setSortDir("asc");
+      setPage(0);
     }
   };
 
-  let displayRows = [...rows];
-  if (sortCol !== null) {
-    displayRows.sort((a, b) => {
-      const av = a[sortCol];
-      const bv = b[sortCol];
-      const an = Number(av);
-      const bn = Number(bv);
-      const cmp = !isNaN(an) && !isNaN(bn) ? an - bn : String(av ?? "").localeCompare(String(bv ?? ""));
-      return sortDir === "asc" ? cmp : -cmp;
-    });
-  }
-
-  // Pivot: rotate so row[0] values become column headers
+  // Pivot transform
+  let baseRows = rows;
+  let baseCols = columns;
   if (isPivot && columns.length >= 3) {
     const dimCol = columns[0];
-    const catCol = columns[1];
-    const valCol = columns[2];
     const pivotCats = [...new Set(rows.map((r) => String(r[1] ?? "")))];
     const pivotDims = [...new Set(rows.map((r) => String(r[0] ?? "")))];
     const pivotMap = new Map<string, Map<string, string | number | null>>();
@@ -235,76 +244,157 @@ const TableRenderer: React.FC<TableRendererProps> = ({ rows, columns, isPivot })
       if (!pivotMap.has(dim)) pivotMap.set(dim, new Map());
       pivotMap.get(dim)!.set(cat, r[2]);
     });
-    const pivotCols = [dimCol, ...pivotCats];
-    const pivotRows = pivotDims.map((dim) => {
+    baseCols = [dimCol, ...pivotCats];
+    baseRows = pivotDims.map((dim) => {
       const row: (string | number | null)[] = [dim];
       pivotCats.forEach((cat) => row.push(pivotMap.get(dim)?.get(cat) ?? null));
       return row;
     });
-    displayRows = pivotRows;
-    columns = pivotCols;
   }
+
+  // Search filter
+  const searchLower = search.toLowerCase();
+  const filtered = searchLower
+    ? baseRows.filter(r => r.some(c => String(c ?? "").toLowerCase().includes(searchLower)))
+    : baseRows;
+
+  // Sort
+  let sorted = [...filtered];
+  if (sortCol !== null) {
+    sorted.sort((a, b) => {
+      const av = a[sortCol], bv = b[sortCol];
+      const an = Number(av), bn = Number(bv);
+      const cmp = !isNaN(an) && !isNaN(bn) ? an - bn : String(av ?? "").localeCompare(String(bv ?? ""));
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+  }
+
+  // Pagination
+  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
+  const safePage = Math.min(page, totalPages - 1);
+  const pageRows = sorted.slice(safePage * pageSize, (safePage + 1) * pageSize);
+
+  // Conditional formatting: per-column min/max for numeric columns
+  const colStats = React.useMemo(() => {
+    return baseCols.map((_, ci) => {
+      const vals = baseRows.map(r => Number(r[ci])).filter(v => !isNaN(v));
+      if (!vals.length) return null;
+      return { min: Math.min(...vals), max: Math.max(...vals) };
+    });
+  }, [baseRows, baseCols]);
 
   const isNumeric = (v: string | number | null) => v !== null && v !== "" && !isNaN(Number(v));
 
   return (
-    <div style={{ width: "100%", height: "100%", overflow: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, tableLayout: "auto" }}>
-        <thead>
-          <tr>
-            {columns.map((col, i) => (
-              <th
-                key={i}
-                onClick={() => handleSort(i)}
-                style={{
-                  padding: "6px 10px",
-                  background: "#f8fafc",
-                  borderBottom: "2px solid #e2e8f0",
-                  textAlign: "left",
-                  fontWeight: 600,
-                  color: "#374151",
-                  whiteSpace: "nowrap",
-                  cursor: "pointer",
-                  userSelect: "none",
-                  position: "sticky",
-                  top: 0,
-                  zIndex: 1,
-                }}
-              >
-                {col.split(".").pop() ?? col}
-                {sortCol === i ? (sortDir === "asc" ? " ▲" : " ▼") : ""}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {displayRows.map((row, ri) => (
-            <tr key={ri} style={{ background: ri % 2 === 0 ? "#fff" : "#f9fafb" }}>
-              {row.map((cell, ci) => (
-                <td
-                  key={ci}
+    <div style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%" }}>
+      {/* Search bar */}
+      <div style={{ padding: "6px 8px", borderBottom: "1px solid #e2e8f0", flexShrink: 0 }}>
+        <input
+          type="text"
+          placeholder="Search…"
+          value={search}
+          onChange={e => { setSearch(e.target.value); setPage(0); }}
+          style={{
+            width: "100%", boxSizing: "border-box",
+            padding: "4px 8px", fontSize: 12,
+            border: "1px solid #e2e8f0", borderRadius: 5,
+            outline: "none", color: "#374151",
+            fontFamily: "Inter, -apple-system, sans-serif",
+          }}
+        />
+      </div>
+
+      {/* Table */}
+      <div style={{ flex: 1, overflow: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, tableLayout: "auto" }}>
+          <thead>
+            <tr>
+              {baseCols.map((col, i) => (
+                <th
+                  key={i}
+                  onClick={() => handleSort(i)}
                   style={{
-                    padding: "5px 10px",
-                    borderBottom: "1px solid #e2e8f0",
-                    textAlign: isNumeric(cell) ? "right" : "left",
-                    color: "#1f2937",
+                    padding: "6px 10px",
+                    background: "#f8fafc",
+                    borderBottom: "2px solid #e2e8f0",
+                    textAlign: "left",
+                    fontWeight: 600,
+                    color: "#374151",
                     whiteSpace: "nowrap",
-                    fontVariantNumeric: "tabular-nums",
+                    cursor: "pointer",
+                    userSelect: "none",
+                    position: "sticky",
+                    top: 0,
+                    zIndex: 1,
                   }}
                 >
-                  {cell === null || cell === undefined ? (
-                    <span style={{ color: "#9ca3af" }}>null</span>
-                  ) : isNumeric(cell) ? (
-                    Number(cell).toLocaleString()
-                  ) : (
-                    String(cell)
-                  )}
-                </td>
+                  {col.split(".").pop() ?? col}
+                  {sortCol === i ? (sortDir === "asc" ? " ▲" : " ▼") : ""}
+                </th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {pageRows.map((row, ri) => (
+              <tr key={ri} style={{ background: ri % 2 === 0 ? "#fff" : "#f9fafb" }}>
+                {row.map((cell, ci) => {
+                  const numeric = isNumeric(cell);
+                  let bg: string | undefined;
+                  if (condFmt && numeric && colStats[ci]) {
+                    const { min, max } = colStats[ci]!;
+                    const t = max === min ? 0.5 : (Number(cell) - min) / (max - min);
+                    bg = lerpColor(condFmtLow, condFmtHigh, t);
+                  }
+                  return (
+                    <td
+                      key={ci}
+                      style={{
+                        padding: "5px 10px",
+                        borderBottom: "1px solid #e2e8f0",
+                        textAlign: numeric ? "right" : "left",
+                        color: "#1f2937",
+                        whiteSpace: "nowrap",
+                        fontVariantNumeric: "tabular-nums",
+                        background: bg,
+                      }}
+                    >
+                      {cell === null || cell === undefined ? (
+                        <span style={{ color: "#9ca3af" }}>null</span>
+                      ) : numeric ? (
+                        Number(cell).toLocaleString()
+                      ) : (
+                        String(cell)
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Pagination */}
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "5px 10px", borderTop: "1px solid #e2e8f0", flexShrink: 0,
+        fontSize: 11, color: "#64748b",
+      }}>
+        <span>{filtered.length} row{filtered.length !== 1 ? "s" : ""}{search ? ` (filtered from ${baseRows.length})` : ""}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <button
+            onClick={() => setPage(p => Math.max(0, p - 1))}
+            disabled={safePage === 0}
+            style={{ padding: "2px 7px", borderRadius: 4, border: "1px solid #e2e8f0", background: "#fff", cursor: safePage === 0 ? "default" : "pointer", opacity: safePage === 0 ? 0.4 : 1 }}
+          >‹</button>
+          <span>Page {safePage + 1} of {totalPages}</span>
+          <button
+            onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
+            disabled={safePage >= totalPages - 1}
+            style={{ padding: "2px 7px", borderRadius: 4, border: "1px solid #e2e8f0", background: "#fff", cursor: safePage >= totalPages - 1 ? "default" : "pointer", opacity: safePage >= totalPages - 1 ? 0.4 : 1 }}
+          >›</button>
+        </div>
+      </div>
     </div>
   );
 };
@@ -336,21 +426,30 @@ const WorldMapRenderer: React.FC<{
             worldGeoJsonFetching = fetch("/geo/world.json")
               .then(r => r.json())
               .then(data => {
-                // echarts-gl only handles Polygon and MultiPolygon geometry types.
-                // Any other type (null, Point, LineString, GeometryCollection, etc.)
-                // produces an undefined internal region object whose .geometries
-                // access then crashes the GL mesh builder asynchronously — outside
-                // any try/catch boundary. Filter to only the two supported types
-                // and require non-empty coordinates.
-                const SUPPORTED = new Set(["Polygon", "MultiPolygon"]);
+                // echarts-gl 2.0.9 has several null-safety bugs in its mesh builder:
+                // 1. Crashes on non-Polygon/MultiPolygon geometry types
+                // 2. Crashes if any coordinate ring contains null/undefined points
+                //    (dataToPoint(undefined) → undefined[0] crash)
+                // Sanitise strictly: only keep features with fully-valid coordinate rings.
+                const isValidPt = (pt: any) =>
+                  Array.isArray(pt) && pt.length >= 2
+                  && typeof pt[0] === "number" && isFinite(pt[0])
+                  && typeof pt[1] === "number" && isFinite(pt[1]);
+                const isValidRing = (ring: any) =>
+                  Array.isArray(ring) && ring.length >= 4 && ring.every(isValidPt);
+                const isValidPolygon = (coords: any) =>
+                  Array.isArray(coords) && coords.length > 0 && coords.every(isValidRing);
+                const isValidMultiPolygon = (coords: any) =>
+                  Array.isArray(coords) && coords.length > 0 && coords.every(isValidPolygon);
+
                 worldGeoJsonCache = {
                   ...data,
                   features: (data.features ?? []).filter((f: any) => {
                     const g = f?.geometry;
-                    return g != null
-                      && SUPPORTED.has(g.type)
-                      && Array.isArray(g.coordinates)
-                      && g.coordinates.length > 0;
+                    if (!g) return false;
+                    if (g.type === "Polygon") return isValidPolygon(g.coordinates);
+                    if (g.type === "MultiPolygon") return isValidMultiPolygon(g.coordinates);
+                    return false;
                   }),
                 };
                 return worldGeoJsonCache;
@@ -393,7 +492,7 @@ const WorldMapRenderer: React.FC<{
     if (nameIdx < 0 || valIdx < 0) return null;
 
     const data = rows
-      .map(r => ({ name: String(r[nameIdx] ?? ""), value: Number(r[valIdx] ?? 0) }))
+      .map(r => ({ name: normaliseCountryName(String(r[nameIdx] ?? "")), value: Number(r[valIdx] ?? 0) }))
       .filter(d => d.name && !isNaN(d.value));
 
     const values = data.map(d => d.value);
@@ -536,7 +635,7 @@ interface ChartPreviewProps {
 }
 
 const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterExports }) => {
-  const { selectedTemplate, selectedDatasetId, previewOptions, sqlPreview, description, chartType, advancedOptions } = useChartBuilder();
+  const { selectedTemplate, selectedDatasetId, previewOptions, sqlPreview, description, chartType, advancedOptions, cancelRunningQuery, runContext } = useChartBuilder();
   const echartsInstanceRef = useRef<any>(null);
 
   // ── Download helpers ─────────────────────────────────────────────────────────
@@ -747,25 +846,40 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
     return v.toLocaleString();
   };
 
+  // chartTypeOptions flags are the authoritative source for line chart labels/markers.
+  // These are always correctly set via the checkbox handlers regardless of what
+  // happens to previewOptions.series during state updates.
+  const ctOpts = (advancedOptions as any)?.chartTypeOptions || {};
+  const ctShowDataLabels: boolean | undefined = ctOpts.showDataLabels;
+  const ctShowMarkers: boolean | undefined = ctOpts.showMarkers;
+
   if (chartOptions.series && Array.isArray(chartOptions.series)) {
     chartOptions = {
       ...chartOptions,
       series: chartOptions.series.map((series: any) => {
-        if (!series.label?.show) {
+        const isLineSeries = series.type === 'line';
+
+        // For line series, chartTypeOptions.showDataLabels is authoritative.
+        // For other series, fall back to series.label?.show.
+        const labelShouldShow = isLineSeries && ctShowDataLabels !== undefined
+          ? ctShowDataLabels === true
+          : Boolean(series.label?.show);
+
+        if (!labelShouldShow) {
           return {
             ...series,
             label: { ...(series.label || {}), show: false },
           };
         }
 
-        const pos = series.label.position || "top";
+        const pos = (series.label?.position) || "top";
         const isInside =
           pos === "inside" || pos === "insideTop" || pos === "insideBottom" ||
           pos === "insideLeft" || pos === "insideRight" || pos === "insideTopLeft" ||
           pos === "insideTopRight" || pos === "insideBottomLeft" || pos === "insideBottomRight";
 
         const font = 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-        const existingFormatter = series.label.formatter;
+        const existingFormatter = series.label?.formatter;
 
         // Shared pill style — same values whether applied directly or via rich text
         const pillStyle = {
@@ -781,20 +895,43 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
         };
 
         const styledLabel: any = {
-          ...series.label,
+          ...(series.label || {}),
+          show: true,  // always true — we only reach here when label should show
+          position: pos,
           fontSize: 11,
           fontWeight: isInside ? "700" : "600",
           fontFamily: font,
-          color: series.label.color || (isInside ? "#ffffff" : pillStyle.color),
+          color: series.label?.color || (isInside ? "#ffffff" : pillStyle.color),
           textShadowColor: isInside ? "rgba(0,0,0,0.45)" : "rgba(255,255,255,0.9)",
           textShadowBlur: isInside ? 4 : 3,
           ...(!isInside && { ...pillStyle }),
         };
 
-        if (labelStep > 1 && !isInside && typeof existingFormatter !== "string") {
-          // Density + outside: move pill into rich text so shown labels keep the
-          // container while hidden labels return "" with no label-level background
-          // (no background on label = no ghost dot artifact).
+        // For line series, always set a clean formatter driven by labelStep.
+        // The original series formatter is marker-position-based (returns "" at most points)
+        // and must not leak through — we fully own the formatting here.
+        if (isLineSeries) {
+          if (labelStep > 1 && !isInside) {
+            delete styledLabel.backgroundColor;
+            delete styledLabel.borderRadius;
+            delete styledLabel.padding;
+            delete styledLabel.borderColor;
+            delete styledLabel.borderWidth;
+            styledLabel.rich = { pill: { ...pillStyle, padding: [3, 6] } };
+            styledLabel.formatter = (params: any) => {
+              if (params.dataIndex % labelStep !== 0) return "";
+              return `{pill|${fmtLabelNum(Number(params.value ?? 0))}}`;
+            };
+          } else if (labelStep > 1) {
+            styledLabel.formatter = (params: any) => {
+              if (params.dataIndex % labelStep !== 0) return "";
+              return fmtLabelNum(Number(params.value ?? 0));
+            };
+          } else {
+            styledLabel.formatter = (params: any) => fmtLabelNum(Number(params.value ?? 0));
+          }
+        } else if (labelStep > 1 && !isInside && typeof existingFormatter !== "string") {
+          // Non-line density + outside pill
           delete styledLabel.backgroundColor;
           delete styledLabel.borderRadius;
           delete styledLabel.padding;
@@ -809,25 +946,37 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
             return `{pill|${val}}`;
           };
         } else if (labelStep > 1) {
-          // Inside or string-template: "" is safe, no background to ghost
           styledLabel.formatter = (params: any) => {
             if (params.dataIndex % labelStep !== 0) return "";
             if (typeof existingFormatter === "function") return existingFormatter(params);
             if (typeof existingFormatter === "string") return existingFormatter;
             return fmtLabelNum(Number(params.value ?? 0));
           };
+        } else if (!styledLabel.formatter) {
+          styledLabel.formatter = (params: any) => fmtLabelNum(Number(params.value ?? 0));
         }
 
-        // When density > 1, sync marker dots to the same step so labels and dots align
-        const showSymbolOverride = labelStep > 1 && series.showSymbol !== false && series.showSymbol !== undefined
+        // For line series, ctShowMarkers is authoritative when set.
+        // For other series, read from showSymbol state.
+        const markersEnabled = isLineSeries && ctShowMarkers !== undefined
+          ? ctShowMarkers === true
+          : (series.showSymbol !== false && series.showSymbol !== undefined);
+
+        // Sync marker dots to exactly the same positions as visible labels
+        // (labelStep=1 → every point, labelStep=N → every Nth point).
+        const showSymbolFinal = markersEnabled
           ? (dataIndex: number) => dataIndex % labelStep === 0
-          : series.showSymbol;
+          : false;
+
+        // ECharts cannot anchor labels when symbol is 'none' — use a hidden circle.
+        const symbolForRender = series.symbol === 'none' ? 'circle' : series.symbol;
 
         return {
           ...series,
+          symbol: symbolForRender,
+          showSymbol: showSymbolFinal,
           labelLayout: { hideOverlap: true },
           label: styledLabel,
-          ...(showSymbolOverride !== series.showSymbol && { showSymbol: showSymbolOverride }),
           emphasis: {
             ...(series.emphasis || {}),
             label: { show: false },
@@ -838,7 +987,7 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
   }
 
   // ── Reference lines (markLine) ───────────────────────────────────────────────
-  const referenceLines: any[] = (advancedOptions as any)?.referenceLines || [];
+  const referenceLines: any[] = (advancedOptions as any)?.chartTypeOptions?.referenceLines || (advancedOptions as any)?.referenceLines || [];
   if (referenceLines.length > 0 && Array.isArray(chartOptions.series) && chartOptions.series.length > 0) {
     const markLineData = referenceLines
       .filter((rl: any) => rl.value !== '' && rl.value !== null && rl.value !== undefined)
@@ -939,6 +1088,7 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
             rows={(previewOptions as any)?._rows ?? sqlPreview.dataRows}
             columns={(previewOptions as any)?._columns ?? sqlPreview.dataColumns}
             isPivot={chartType === "pivot_table"}
+            advancedOptions={advancedOptions}
           />
         ) : hasOption && !sqlPreview.isRunning && (chartType === "big_number" || chartType === "big_number_trend") ? (
           <BigNumberKpiCard options={chartOptions} rows={sqlPreview.dataRows} columns={sqlPreview.dataColumns} chartType={chartType} />
@@ -981,7 +1131,26 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
               </div>
               <div className="chart-loading-spinner"></div>
             </div>
-            <div className="chart-loading-text">Rendering your chart...</div>
+            <div className="chart-loading-text">
+              {(runContext || '').startsWith('dashboard') ? 'Querying…' : 'Rendering your chart...'}
+            </div>
+            {(runContext || '').startsWith('dashboard') && (
+              <button
+                onClick={cancelRunningQuery}
+                style={{
+                  marginTop: 10,
+                  padding: '5px 14px',
+                  background: 'transparent',
+                  border: '1px solid #cbd5e1',
+                  borderRadius: 6,
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  color: '#64748b',
+                }}
+              >
+                Cancel
+              </button>
+            )}
           </div>
         ) : (
           <div className="chart-preview-empty-state">

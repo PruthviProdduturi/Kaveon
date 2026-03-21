@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from typing import List, Optional
 import database.metadata as db
 
+VALID_VISIBILITY = {"private", "internal", "published"}
+
 
 def _expand_columns_from_dimensions(columns: list, dimensions: list) -> list:
     if not dimensions:
@@ -22,7 +24,6 @@ def _expand_columns_from_dimensions(columns: list, dimensions: list) -> list:
         if not table_name or not fact_key_lower:
             continue
 
-        # Derive semantic_type from fact_key
         semantic_type = fact_key_original
         if fact_key_lower.endswith("key"):
             semantic_type = fact_key_original[:-3]
@@ -59,7 +60,6 @@ def _expand_columns_from_dimensions(columns: list, dimensions: list) -> list:
 
 def _adapt(row: dict) -> dict:
     name = row.get("dataset_name")
-    # Extract sql_text stored inside the tables_used JSON blob (virtual datasets).
     sql_text = None
     if row.get("tables_used"):
         try:
@@ -70,7 +70,7 @@ def _adapt(row: dict) -> dict:
     return {
         "id": str(row["id"]),
         "name": name,
-        "dataset_name": name,  # duplicated for frontend compatibility
+        "dataset_name": name,
         "description": row.get("description"),
         "table_name": row.get("fact_table"),
         "schema_name": row.get("schema_name"),
@@ -78,6 +78,7 @@ def _adapt(row: dict) -> dict:
         "date_column": row.get("date_column"),
         "sql_text": sql_text,
         "tables_used": row.get("tables_used"),
+        "visibility": row.get("visibility") or "internal",
         "created_at": row.get("created_at"),
         "updated_at": row.get("modified_at"),
         "created_by": row.get("created_by"),
@@ -87,53 +88,71 @@ def _adapt(row: dict) -> dict:
     }
 
 
-def list_datasets(user_id: Optional[str] = None) -> List[dict]:
-    if user_id:
-        result = db.query("""
-            SELECT DISTINCT
-              d.id, d.dataset_name, d.description, d.fact_table, d.schema_name,
-              d.database_name, d.created_at, d.modified_at, d.date_column,
-              d.tables_used, d.created_by, d.modified_by,
-              CASE WHEN MAX(f.id) IS NOT NULL THEN 1 ELSE 0 END as favorite
-            FROM dbo.datasets d
-            LEFT JOIN dbo.favorites f
-              ON f.object_id = CAST(d.id AS NVARCHAR(255))
-              AND f.object_type = 'dataset' AND f.user_email = @param0
-            WHERE d.id IS NOT NULL
-            GROUP BY d.id, d.dataset_name, d.description, d.fact_table, d.schema_name,
-                     d.database_name, d.created_at, d.modified_at, d.date_column,
-                     d.tables_used, d.created_by, d.modified_by
-            ORDER BY d.modified_at DESC
-        """, [user_id])
-    else:
-        result = db.query("""
-            SELECT id, dataset_name, description, fact_table, schema_name,
-                   database_name, created_at, modified_at, date_column,
-                   tables_used, created_by, modified_by, 0 as favorite
-            FROM dbo.datasets WHERE id IS NOT NULL ORDER BY modified_at DESC
-        """)
+# ── Visibility SQL fragment ────────────────────────────────────────────────────
+# Params: @paramR = role string, @paramE = user email
+# Replace R and E with actual param indices when building queries.
+
+def _vis_clause(role_idx: int, email_idx: int, alias: str = "d") -> str:
+    return (
+        f"({alias}.visibility = 'published' "
+        f"OR ({alias}.visibility = 'internal' AND @param{role_idx} IN ('Analyst', 'Editor', 'Admin')) "
+        f"OR ({alias}.visibility = 'private' AND {alias}.created_by = @param{email_idx}) "
+        f"OR @param{role_idx} = 'Admin')"
+    )
+
+
+def list_datasets(user_email: str, role: str = "Viewer") -> List[dict]:
+    vis = _vis_clause(1, 0)
+    result = db.query(f"""
+        SELECT DISTINCT
+          d.id, d.dataset_name, d.description, d.fact_table, d.schema_name,
+          d.database_name, d.created_at, d.modified_at, d.date_column,
+          d.tables_used, d.created_by, d.modified_by, d.visibility,
+          CASE WHEN MAX(f.id) IS NOT NULL THEN 1 ELSE 0 END as favorite
+        FROM dbo.datasets d
+        LEFT JOIN dbo.favorites f
+          ON f.object_id = CAST(d.id AS NVARCHAR(255))
+          AND f.object_type = 'dataset' AND f.user_email = @param0
+        WHERE d.id IS NOT NULL AND {vis}
+        GROUP BY d.id, d.dataset_name, d.description, d.fact_table, d.schema_name,
+                 d.database_name, d.created_at, d.modified_at, d.date_column,
+                 d.tables_used, d.created_by, d.modified_by, d.visibility
+        ORDER BY d.modified_at DESC
+    """, [user_email, role])
     return [_adapt(r) for r in result["rows"]]
 
 
-def get_dataset_by_id(dataset_id: str, user_id: Optional[str] = None) -> Optional[dict]:
+def get_dataset_by_id(
+    dataset_id: str,
+    user_email: Optional[str] = None,
+    role: str = "Admin",
+) -> Optional[dict]:
+    """
+    Fetch a dataset by ID.
+    role defaults to 'Admin' for internal service calls (e.g. chart rendering)
+    that should not be blocked by visibility.  Pass the actual user role when
+    called from a user-facing endpoint.
+    """
     did = int(dataset_id)
-    if user_id:
-        row = db.query_one("""
+
+    if user_email:
+        vis = _vis_clause(2, 1)
+        row = db.query_one(f"""
             SELECT d.id, d.dataset_name, d.description, d.fact_table, d.schema_name,
                    d.database_name, d.created_at, d.modified_at, d.date_column,
-                   d.tables_used, d.created_by, d.modified_by,
+                   d.tables_used, d.created_by, d.modified_by, d.visibility,
                    CASE WHEN f.user_email IS NOT NULL THEN 1 ELSE 0 END as favorite
             FROM dbo.datasets d
             LEFT JOIN dbo.favorites f
               ON CAST(d.id AS NVARCHAR(255)) = f.object_id
               AND f.user_email = @param1 AND f.object_type = 'dataset'
-            WHERE d.id = @param0 AND d.id IS NOT NULL
-        """, [did, user_id])
+            WHERE d.id = @param0 AND d.id IS NOT NULL AND {vis}
+        """, [did, user_email, role])
     else:
         row = db.query_one("""
             SELECT id, dataset_name, description, fact_table, schema_name,
                    database_name, created_at, modified_at, date_column,
-                   tables_used, created_by, modified_by, 0 as favorite
+                   tables_used, created_by, modified_by, visibility, 0 as favorite
             FROM dbo.datasets WHERE id = @param0 AND id IS NOT NULL
         """, [did])
 
@@ -142,7 +161,6 @@ def get_dataset_by_id(dataset_id: str, user_id: Optional[str] = None) -> Optiona
 
     dataset = _adapt(row)
 
-    # Load dimensions
     try:
         dims_result = db.query("""
             SELECT dimension_table, table_name, join_condition,
@@ -153,7 +171,6 @@ def get_dataset_by_id(dataset_id: str, user_id: Optional[str] = None) -> Optiona
     except Exception:
         dataset["dimensions"] = []
 
-    # Load columns
     try:
         cols_result = db.query("""
             SELECT table_name, column_name, data_type, is_dimension, is_metric, semantic_type
@@ -165,7 +182,6 @@ def get_dataset_by_id(dataset_id: str, user_id: Optional[str] = None) -> Optiona
 
     dataset["columns"] = _expand_columns_from_dimensions(raw_cols, dataset["dimensions"])
 
-    # Load metrics
     try:
         metrics_result = db.query("""
             SELECT metric_name as name, expression, metric_type, format
@@ -175,7 +191,6 @@ def get_dataset_by_id(dataset_id: str, user_id: Optional[str] = None) -> Optiona
     except Exception:
         dataset["metrics"] = []
 
-    # Parse filters from tables_used
     filters = []
     if row.get("tables_used"):
         try:
@@ -196,6 +211,10 @@ def create_dataset(data: dict, user_id: str) -> dict:
         tu_payload["sql_text"] = data["sql_text"]
     tables_used = json.dumps(tu_payload)
 
+    visibility = data.get("visibility") or "internal"
+    if visibility not in VALID_VISIBILITY:
+        visibility = "internal"
+
     base_name = data["name"]
     name = base_name
     for attempt in range(1, 100):
@@ -203,15 +222,15 @@ def create_dataset(data: dict, user_id: str) -> dict:
             db.execute("""
                 INSERT INTO datasets (
                   dataset_name, description, fact_table, schema_name, database_name,
-                  date_column, tables_used, created_at, modified_at, created_by, modified_by
+                  date_column, tables_used, visibility, created_at, modified_at, created_by, modified_by
                 ) VALUES (
                   @param0, @param1, @param2, @param3, @param4,
-                  @param5, @param6, @param7, @param8, @param9, @param10
+                  @param5, @param6, @param7, @param8, @param9, @param10, @param11
                 )
             """, [
                 name, data.get("description"), data.get("table_name") or "",
                 data.get("schema_name", "dbo"), data.get("database_name", "IDEASServingStoreLH"),
-                data.get("date_column"), tables_used,
+                data.get("date_column"), tables_used, visibility,
                 now, now, user_id, user_id,
             ])
             break
@@ -279,11 +298,15 @@ def update_dataset(dataset_id: str, data: dict, user_id: str) -> Optional[dict]:
     updates, params, i = [], [], 0
     did = int(dataset_id)
 
-    for field, col in [("name", "dataset_name"), ("description", "description"),
-                       ("table_name", "fact_table"), ("schema_name", "schema_name"),
-                       ("database_name", "database_name"), ("date_column", "date_column")]:
-        if field in data:
-            updates.append(f"{col} = @param{i}"); params.append(data[field]); i += 1
+    for field_name, col in [("name", "dataset_name"), ("description", "description"),
+                             ("table_name", "fact_table"), ("schema_name", "schema_name"),
+                             ("database_name", "database_name"), ("date_column", "date_column")]:
+        if field_name in data:
+            updates.append(f"{col} = @param{i}"); params.append(data[field_name]); i += 1
+
+    if "visibility" in data:
+        vis = data["visibility"] if data["visibility"] in VALID_VISIBILITY else "internal"
+        updates.append(f"visibility = @param{i}"); params.append(vis); i += 1
 
     if "filters" in data:
         updates.append(f"tables_used = @param{i}")

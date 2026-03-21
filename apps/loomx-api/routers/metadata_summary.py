@@ -4,7 +4,7 @@ import os
 import concurrent.futures
 from fastapi import APIRouter, Response, HTTPException, Depends
 
-from middleware.auth import require_auth
+from middleware.auth import require_user_context, UserContext
 import services.datasets as datasets_svc
 import services.charts as charts_svc
 import services.dashboards as dashboards_svc
@@ -16,7 +16,7 @@ NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "n
 
 
 @router.get("/metadata/summary")
-def metadata_summary(response: Response, user: str = Depends(require_auth)):
+def metadata_summary(response: Response, ctx: UserContext = Depends(require_user_context)):
     response.headers.update(NO_CACHE)
 
     # Return empty payload while app is in setup mode — the frontend shows the setup overlay
@@ -27,11 +27,11 @@ def metadata_summary(response: Response, user: str = Depends(require_auth)):
 
     # Fetch all in parallel using threads (pyodbc is synchronous)
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        f_datasets = executor.submit(datasets_svc.list_datasets)
-        f_charts = executor.submit(charts_svc.list_charts)
-        f_dashboards = executor.submit(dashboards_svc.list_dashboards)
-        f_favorites = executor.submit(favorites_svc.list_favorites, user)
-        f_saved = executor.submit(saved_queries_svc.list_saved_queries, user)
+        f_datasets = executor.submit(datasets_svc.list_datasets, ctx.email, ctx.role)
+        f_charts = executor.submit(charts_svc.list_charts, ctx.email, ctx.role)
+        f_dashboards = executor.submit(dashboards_svc.list_dashboards, ctx.email, ctx.role)
+        f_favorites = executor.submit(favorites_svc.list_favorites, ctx.email)
+        f_saved = executor.submit(saved_queries_svc.list_saved_queries, ctx.email)
 
         datasets = f_datasets.result()
         charts = f_charts.result()

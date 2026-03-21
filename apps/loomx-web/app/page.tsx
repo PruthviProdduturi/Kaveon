@@ -108,7 +108,7 @@ function getTimeOfDayGreeting(): string {
 
 export default function Home() {
   const { isAuthenticated, account } = useAuth();
-  const { primaryColor } = useTheme();
+  const { primaryColor, gradientColors } = useTheme();
 
   const [isPageLoading, setIsPageLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -169,7 +169,7 @@ export default function Home() {
           ...fav,
           href:
             fav.kind === "dashboard" ? `/dashboards/${fav.id}/view`
-            : fav.kind === "chart"   ? `/charts`
+            : fav.kind === "chart"   ? `/charts/${fav.id}`
             : fav.kind === "dataset" ? `/datasets/${fav.id}`
             : "#",
         }))
@@ -483,7 +483,7 @@ export default function Home() {
   return (
     <>
       {isAuthenticated && (
-        <div className="homepage-container">
+        <div className="homepage-container animate-fade-in">
             <section className="welcome-section">
           <div className="welcome-content">
             <h1>
@@ -703,11 +703,13 @@ export default function Home() {
               className="stat-card"
               role="button"
               tabIndex={0}
-              onClick={() => {
-                window.location.href = "/lab";
+              onClick={(e) => {
+                if (!(e.target instanceof HTMLElement && e.target.closest('.saved-queries-toggle button'))) {
+                  window.location.href = "/lab";
+                }
               }}
               onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
+                if ((e.key === "Enter" || e.key === " ") && !(e.target instanceof HTMLElement && e.target.closest('.saved-queries-toggle button'))) {
                   e.preventDefault();
                   window.location.href = "/lab";
                 }
@@ -750,8 +752,13 @@ export default function Home() {
 
           <div className="home-main-grid">
             <div className="home-column">
-              <section className="home-panel" style={{ marginBottom: 12, padding: '16px 20px 12px 20px' }}>
-                <h2 className="home-section-title">Quick Actions</h2>
+              <section className="home-panel">
+                <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: 14 }}>
+                  <div style={{ width: 28, height: 28, borderRadius: 7, background: `linear-gradient(135deg, ${gradientColors.light}, ${gradientColors.dark})`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: `0 2px 8px ${primaryColor}25` }}>
+                    <i className="fas fa-bolt" style={{ color: "white", fontSize: 11 }} />
+                  </div>
+                  <h2 className="home-section-title" style={{ margin: 0 }}>Quick Actions</h2>
+                </div>
                 <div className="welcome-actions">
                   <button
                     className="welcome-btn welcome-btn-primary"
@@ -783,22 +790,27 @@ export default function Home() {
                   </button>
                 </div>
               </section>
-              <section className="home-panel" style={{ marginBottom: 18, padding: '16px 20px 12px 20px' }}>
-                <h2
-                  className="home-section-title clickable-section-title"
-                  style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', marginBottom: 8 }}
-                  tabIndex={0}
-                  onClick={() => window.location.href = '/favorites'}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      window.location.href = '/favorites';
-                    }
-                  }}
-                >
-                  Your Favorites
-                  <span style={{ marginLeft: 8, fontSize: 16 }} aria-hidden="true">→</span>
-                </h2>
+              <section className="home-panel">
+                <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: 8 }}>
+                  <div style={{ width: 28, height: 28, borderRadius: 7, background: `linear-gradient(135deg, ${gradientColors.light}, ${gradientColors.dark})`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: `0 2px 8px ${primaryColor}25` }}>
+                    <i className="fas fa-star" style={{ color: "white", fontSize: 11 }} />
+                  </div>
+                  <h2
+                    className="home-section-title clickable-section-title"
+                    style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', margin: 0 }}
+                    tabIndex={0}
+                    onClick={() => window.location.href = '/favorites'}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        window.location.href = '/favorites';
+                      }
+                    }}
+                  >
+                    Your Favorites
+                    <span style={{ marginLeft: 8, fontSize: 16 }} aria-hidden="true">→</span>
+                  </h2>
+                </div>
                 <div className="muted" style={{fontSize:13, marginBottom:16, marginTop:2}}>
                   Shows <b>your</b> favorite dashboards, charts, and datasets.
                 </div>
@@ -868,23 +880,28 @@ export default function Home() {
             </div>
 
             <div className="home-column">
-              <section className="home-panel" style={{ marginBottom: 32, padding: '24px 24px 20px 24px' }}>
+              <section className="home-panel">
                 <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
-                  <h2
-                    className="home-section-title clickable-section-title"
-                    style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', marginBottom: 8 }}
-                    tabIndex={0}
-                    onClick={() => window.location.href = '/workspace-activity'}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        window.location.href = '/workspace-activity';
-                      }
-                    }}
-                  >
-                    Workspace Activity
-                    <span style={{ marginLeft: 8, fontSize: 16 }} aria-hidden="true">→</span>
-                  </h2>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+                    <div style={{ width: 28, height: 28, borderRadius: 7, background: `linear-gradient(135deg, ${gradientColors.light}, ${gradientColors.dark})`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: `0 2px 8px ${primaryColor}25` }}>
+                      <i className="fas fa-history" style={{ color: "white", fontSize: 11 }} />
+                    </div>
+                    <h2
+                      className="home-section-title clickable-section-title"
+                      style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', margin: 0 }}
+                      tabIndex={0}
+                      onClick={() => window.location.href = '/workspace-activity'}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          window.location.href = '/workspace-activity';
+                        }
+                      }}
+                    >
+                      Workspace Activity
+                      <span style={{ marginLeft: 8, fontSize: 16 }} aria-hidden="true">→</span>
+                    </h2>
+                  </div>
                   <span className="saved-queries-toggle">
                     <button
                       type="button"
@@ -961,7 +978,7 @@ export default function Home() {
                           formatted = formatDatasetDate(item.date);
                           icon = <i className="fas fa-tachometer-alt" style={{marginRight:6, color: primaryColor}}/>;
                         } else if (item.kind === "chart") {
-                          href = `/charts`;
+                          href = `/charts/${item.id}`;
                           typeLabel = "Chart";
                           formatted = formatDatasetDate(item.date);
                           icon = <i className="fas fa-chart-bar" style={{marginRight:6, color: primaryColor}}/>;

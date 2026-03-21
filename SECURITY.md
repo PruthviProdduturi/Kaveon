@@ -21,6 +21,8 @@ It is intended for use by authenticated Azure AD users within the organization a
 | Internal errors | Information disclosure | Exception details are logged server-side only; clients always receive a generic error message |
 | Credential exposure | Connection string leak | `connection_string` column is excluded from all API responses via `_PUBLIC_FIELDS` constant |
 | Unauthenticated schema enumeration | Data discovery without auth | All lab, SQL, and data-source endpoints require `require_auth` dependency |
+| Content access | Unauthorized read of private/internal data | Visibility model (private/internal/published) enforced in all list/get service calls; `can_read()` helper in `middleware/permissions.py` |
+| Privilege escalation | Lower-role user performing Editor/Admin actions | `require_min_role()` dependency on all create/update/delete/admin endpoints; role resolved from JWT claim → DB → default Viewer |
 
 ---
 
@@ -47,6 +49,16 @@ FastAPI (loomx-api)
     │     Returns 401 if no authenticated user is present
     │     User email is the authoritative identity throughout all services
     │
+    ├─ require_user_context(ctx) dependency
+    │     → Returns UserContext(email, role, jwt_roles) if present
+    │     → Raises HTTP 401 if None
+    │     → Role resolved by users_svc.resolve_role() (JWT → DB → bootstrap → Viewer)
+    │
+    └─ require_min_role("Analyst") dependency factory (middleware/permissions.py)
+          → Calls require_user_context internally
+          → Returns UserContext if role level ≥ minimum
+          → Raises HTTP 403 with code "forbidden" if below minimum
+
     └─ database/pool.py — FabricSQLConnection
           Uses DefaultAzureCredential (Managed Identity in production)
           Injects token via SQL_COPT_SS_ACCESS_TOKEN (no SQL username/password)
@@ -57,11 +69,39 @@ FastAPI (loomx-api)
 
 ## Data Access Model
 
-- **Charts, Dashboards, Datasets** — readable by all authenticated users; creation is attributed to the creator.
-- **Query History** — each record is scoped to `executed_by` (user email). The workspace activity view aggregates all users' history; this is intentional for team visibility.
-- **Saved Queries** — scoped per user; list/read/update/delete operations require matching `user_id`.
+### Role-Based Access Control
+
+All authenticated users are assigned one of four roles, resolved in order:
+1. Azure AD App Role claim (`roles[]` in the JWT) — highest matching role wins
+2. DB assignment in `user_roles` table
+3. Bootstrap: first user to sign in becomes Admin (when no Admins exist)
+4. Default: **Viewer**
+
+| Role | Can read | Can create | Can publish | Can manage users/sources |
+|---|---|---|---|---|
+| Viewer | Published content only | No | No | No |
+| Analyst | Internal + published | Yes (own content) | No | No |
+| Editor | Internal + published | Yes | Yes | No |
+| Admin | All | Yes | Yes | Yes |
+
+### Content Visibility
+
+Every dataset, chart, and dashboard has a `visibility` field:
+
+| Value | Readable by |
+|---|---|
+| `private` | Owner only |
+| `internal` | Analyst, Editor, Admin |
+| `published` | All authenticated users (including Viewers) |
+
+Visibility is enforced in `services/datasets.py`, `services/charts.py`, and `services/dashboards.py` via a `_vis_clause()` SQL fragment injected into every list and get query.
+
+### Other Scoped Resources
+
+- **Query History** — each record is scoped to `executed_by`. The workspace activity view aggregates all users' history; this is intentional for team visibility.
+- **Saved Queries** — scoped per user; list/read/update/delete require matching `user_id`.
 - **Favorites** — scoped per user.
-- **Data Sources** — readable and manageable by all authenticated users; `connection_string` is never returned in any API response.
+- **Data Sources** — Admin-only for create/update/delete; readable by all authenticated users. `connection_string` is never returned in any API response.
 
 ---
 
@@ -90,6 +130,8 @@ Filter operators (e.g., `=`, `<`, `LIKE`) are validated against a strict allowli
 | **SQL injection** | Parameterized queries throughout; `quote_identifier()` for dynamic identifiers |
 | **Setup endpoint gating** | `POST /setup/test` and `POST /setup/initialize` return 403 once the app is configured |
 | **Query size limit** | 64 KB maximum enforced on all SQL execution endpoints |
+| **Role-based access control** | `require_min_role()` FastAPI dependency in `middleware/permissions.py`; role resolved from JWT → DB → default Viewer; applied on all create/update/admin endpoints |
+| **Content visibility enforcement** | `_vis_clause()` SQL fragment in all dataset/chart/dashboard service list/get calls; private/internal/published model |
 
 ---
 
@@ -119,6 +161,9 @@ Before merging a PR that touches API routes or services, verify:
 - [ ] Error responses do not expose SQL error messages, stack traces, or internal state
 - [ ] New query execution endpoints enforce the 64 KB query size limit
 - [ ] New endpoints include `user: str = Depends(require_auth)` unless explicitly public
+- [ ] New create/update/delete endpoints use `require_min_role("Analyst")` or higher, not just `require_auth`
+- [ ] Visibility filtering (`_vis_clause`) is applied in any new list or get query for user-owned objects
+- [ ] Role assignment endpoints confirm caller is Admin before mutating `user_roles`
 
 ---
 

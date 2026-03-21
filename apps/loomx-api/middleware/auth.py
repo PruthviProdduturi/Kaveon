@@ -1,22 +1,23 @@
 """
 Authentication middleware.
 
-Port of authMiddleware.ts — with JWT *signature* verification added.
-
 Security model:
   - When AZURE_CLIENT_ID + AZURE_TENANT_ID are set (production):
       ONLY a valid signed Bearer JWT grants authentication.
-      The x-user-email header is IGNORED — it can be spoofed by any caller.
+      The x-user-email header is IGNORED.
   - When Azure AD is NOT configured (first-run setup mode):
       Fall back to unverified JWT decode, then x-user-email header.
-      This is intentional — no metadata DB exists yet to verify against.
 
 Dependencies exported:
-    get_current_user(request)  → str | None  (FastAPI dependency, non-blocking)
-    require_auth(user)         → str          (FastAPI dependency, returns 401 if None)
-    get_user_email(request)    → str          (helper used across routers)
+    get_current_user(request)   → str | None          (email only, backward compat)
+    require_auth(user)          → str                  (401 if None)
+    get_user_email(request)     → str                  (helper used across routers)
+    UserContext                 — dataclass(email, role, jwt_roles)
+    get_user_context(request)   → UserContext | None   (email + resolved role)
+    require_user_context(ctx)   → UserContext          (401 if None)
 """
 
+from dataclasses import dataclass, field
 from typing import Optional
 
 import jwt
@@ -36,8 +37,19 @@ if _AAD_CONFIGURED:
     _jwks_client = PyJWKClient(_JWKS_URL, cache_keys=True)
 
 
+# ── UserContext ────────────────────────────────────────────────────────────────
+
+@dataclass
+class UserContext:
+    """Authenticated user with resolved role. Passed through role-aware endpoints."""
+    email: str
+    role: str                        # 'Viewer' | 'Analyst' | 'Editor' | 'Admin'
+    jwt_roles: list[str] = field(default_factory=list)
+
+
+# ── JWT helpers ───────────────────────────────────────────────────────────────
+
 def _email_from_payload(payload: dict) -> Optional[str]:
-    """Extract email from Azure AD JWT claims (preferred_username / email / upn)."""
     email = (
         payload.get("preferred_username")
         or payload.get("email")
@@ -48,24 +60,32 @@ def _email_from_payload(payload: dict) -> Optional[str]:
     return None
 
 
-def _extract_email_from_token(token: str) -> Optional[str]:
+def _roles_from_payload(payload: dict) -> list[str]:
+    """Extract Azure AD App Role claims from the JWT payload."""
+    VALID = {"Viewer", "Analyst", "Editor", "Admin"}
+    raw = payload.get("roles", [])
+    if not isinstance(raw, list):
+        return []
+    return [r for r in raw if r in VALID]
+
+
+def _decode_token(token: str) -> Optional[tuple[str, list[str]]]:
     """
     Decode and verify a Bearer JWT.
-    Returns the user's email, or None if the token is invalid/expired.
+    Returns (email, jwt_roles) or None if invalid/expired.
     """
     if not token:
         return None
 
     if _jwks_client is None:
-        # Setup mode — AAD not yet configured. Accept unverified decode only
-        # so the setup wizard can operate. Never reached in production.
+        # Setup mode — AAD not configured.
         try:
             payload = jwt.decode(token, options={"verify_signature": False})
-            return _email_from_payload(payload)
+            email = _email_from_payload(payload)
+            return (email, []) if email else None
         except Exception:
             return None
 
-    # Azure AD may put the audience as the plain GUID or as the api:// URI form.
     _valid_audiences = [
         settings.AZURE_CLIENT_ID,
         f"api://{settings.AZURE_CLIENT_ID}",
@@ -79,32 +99,33 @@ def _extract_email_from_token(token: str) -> Optional[str]:
             audience=_valid_audiences,
             options={"verify_exp": True},
         )
-        return _email_from_payload(payload)
+        email = _email_from_payload(payload)
+        if not email:
+            return None
+        roles = _roles_from_payload(payload)
+        return (email, roles)
     except (ExpiredSignatureError, InvalidTokenError):
         return None
     except Exception:
         return None
 
 
-# ── FastAPI dependencies ──────────────────────────────────────────────────────
+# ── FastAPI dependencies (email-only, backward-compatible) ────────────────────
 
 def get_current_user(request: Request) -> Optional[str]:
     """
-    Non-blocking dependency — attaches the authenticated user's email to
-    request.state.user.
-
-    When AAD is configured (production): ONLY a valid signed Bearer JWT works.
-    When AAD is not configured (setup mode): also accepts x-user-email header.
+    Non-blocking dependency — returns user email or None.
+    Preserved for backward compatibility with routers that only need the email.
     """
     auth_header = request.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:].strip()
-        user = _extract_email_from_token(token)
-        if user:
-            request.state.user = user
-            return user
+        result = _decode_token(token)
+        if result:
+            email, _ = result
+            request.state.user = email
+            return email
 
-    # In setup mode (no AAD config) only: accept x-user-email as fallback
     if not _AAD_CONFIGURED:
         email = request.headers.get("x-user-email", "")
         if email and "@" in email:
@@ -116,22 +137,69 @@ def get_current_user(request: Request) -> Optional[str]:
 
 
 def require_auth(user: Optional[str] = Depends(get_current_user)) -> str:
-    """Dependency that returns 401 if no authenticated user is present."""
+    """Returns email or raises 401. Backward-compatible with existing routers."""
     if not user:
         raise HTTPException(
             status_code=401,
-            detail={"code": "unauthorized", "message": "Authentication required. Include a valid Bearer token."},
+            detail={"code": "unauthorized", "message": "Authentication required."},
         )
     return user
 
 
 def get_user_email(request: Request) -> str:
-    """
-    Return the verified user email from JWT state, or 'anonymous'.
-    Never trusts raw headers when AAD is configured.
-    """
     user = getattr(request.state, "user", None)
     if not user:
-        # Ensure get_current_user runs if middleware hasn't populated state yet
         user = get_current_user(request)
     return user or "anonymous"
+
+
+# ── Role-aware dependencies ───────────────────────────────────────────────────
+
+def get_user_context(request: Request) -> Optional[UserContext]:
+    """
+    Returns a UserContext with email + resolved role, or None if unauthenticated.
+    Resolves role from: JWT claim → user_roles table → bootstrap → Viewer default.
+    """
+    auth_header = request.headers.get("authorization", "")
+    email: Optional[str] = None
+    jwt_roles: list[str] = []
+
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+        result = _decode_token(token)
+        if result:
+            email, jwt_roles = result
+
+    if not email and not _AAD_CONFIGURED:
+        raw = request.headers.get("x-user-email", "")
+        if raw and "@" in raw:
+            email = raw.lower()
+
+    if not email:
+        return None
+
+    request.state.user = email
+
+    # Resolve role (JWT → DB → bootstrap → Viewer)
+    # Import here to avoid module-level circular dependency
+    try:
+        import services.users as users_svc
+        role = users_svc.resolve_role(email, jwt_roles)
+    except Exception as e:
+        print(f"[Auth] Role resolution failed for {email}: {e}")
+        # In setup mode or DB unavailable, grant Admin so setup can proceed
+        role = "Admin" if not _AAD_CONFIGURED else "Viewer"
+
+    ctx = UserContext(email=email, role=role, jwt_roles=jwt_roles)
+    request.state.user_context = ctx
+    return ctx
+
+
+def require_user_context(ctx: Optional[UserContext] = Depends(get_user_context)) -> UserContext:
+    """Returns UserContext or raises 401."""
+    if not ctx:
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "unauthorized", "message": "Authentication required."},
+        )
+    return ctx

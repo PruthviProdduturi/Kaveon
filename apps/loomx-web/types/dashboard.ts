@@ -42,6 +42,14 @@ export interface FilterConfig {
   isLoading?: boolean;
   /** Whether the filter has pending changes */
   isPending?: boolean;
+  /** Dataset ID this filter belongs to (used for fetching distinct values) */
+  datasetId?: number;
+  /** Filter UI type: 'value' (default) or 'date_range' for date pickers */
+  filterType?: 'value' | 'date_range';
+  /** Start date for date_range filters (ISO date string YYYY-MM-DD) */
+  dateFrom?: string;
+  /** End date for date_range filters (ISO date string YYYY-MM-DD) */
+  dateTo?: string;
 }
 
 /**

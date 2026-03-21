@@ -30,6 +30,7 @@ from routers import (
     sql,
     theme,
     setup,
+    users,
 )
 
 
@@ -132,6 +133,7 @@ app.include_router(charts.router,           prefix="/api/v1")
 app.include_router(dashboards.router,       prefix="/api/v1")
 app.include_router(data_sources.router,     prefix="/api/v1")
 app.include_router(setup.router,            prefix="/api/v1")
+app.include_router(users.router,            prefix="/api/v1")
 
 
 # ── Root ──────────────────────────────────────────────────────────────────────

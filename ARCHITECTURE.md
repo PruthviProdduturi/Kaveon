@@ -13,19 +13,20 @@
 3. [Architecture Layers](#architecture-layers)
 4. [Data Flow](#data-flow)
 5. [Authentication](#authentication)
-6. [Middleware](#middleware)
-7. [Database Schema](#database-schema)
-8. [Feature Architecture](#feature-architecture)
+6. [Authorization / RBAC](#authorization--rbac)
+7. [Middleware](#middleware)
+8. [Database Schema](#database-schema)
+9. [Feature Architecture](#feature-architecture)
    - [Datasets: The Semantic Layer](#1-datasets-the-semantic-layer)
    - [Charts: Visualization Engine](#2-charts-visualization-engine)
    - [Dashboards: Multi-Chart Composition](#3-dashboards-multi-chart-composition)
    - [SQL Lab: Direct Query Interface](#4-sql-lab-direct-query-interface)
    - [How Everything Connects](#how-everything-connects)
-9. [Caching Strategy](#caching-strategy)
-10. [Component Architecture](#component-architecture)
-11. [API Design](#api-design)
-12. [Frontend Architecture](#frontend-architecture)
-13. [Deployment](#deployment)
+10. [Caching Strategy](#caching-strategy)
+11. [Component Architecture](#component-architecture)
+12. [API Design](#api-design)
+13. [Frontend Architecture](#frontend-architecture)
+14. [Deployment](#deployment)
 
 ---
 
@@ -296,6 +297,62 @@ require_auth(user) dependency
     → Raises HTTP 401 if None
 ```
 
+### Authorization — Role-Based Access Control (RBAC)
+
+Role resolution happens after token verification, on every request:
+
+```
+JWT verified → email + jwt_roles extracted
+    │
+    ▼
+users_svc.resolve_role(email, jwt_roles)
+    │
+    ├─ 1. JWT claim: if roles[] in token contains LoomX.Viewer/Analyst/Editor/Admin
+    │        → use highest matching role
+    │
+    ├─ 2. DB lookup: SELECT role FROM user_roles WHERE user_email = @email
+    │        → use DB role if found
+    │
+    ├─ 3. Bootstrap: if user_roles table has zero Admin rows
+    │        → auto-assign Admin to this user (first deployer)
+    │
+    └─ 4. Default: "Viewer"
+
+result: UserContext(email, role, jwt_roles)
+    │
+    ▼
+require_min_role("Analyst") dependency (middleware/permissions.py)
+    → Returns UserContext if role level ≥ minimum
+    → Raises HTTP 403 if below minimum
+```
+
+#### Role levels
+
+| Role | Level | Capabilities |
+|---|---|---|
+| Viewer | 0 | Read published content, view dashboards (SQL executes from dashboard context only) |
+| Analyst | 1 | SQL Lab, build charts and datasets, view internal content |
+| Editor | 2 | All Analyst + publish content (set visibility = published) |
+| Admin | 3 | All Editor + manage data sources, manage user role assignments, invalidate query cache |
+
+#### Content visibility model
+
+Each dataset, chart, and dashboard has a `visibility` column:
+
+| Value | Who can read |
+|---|---|
+| `private` | Owner only |
+| `internal` | All Analyst+ users |
+| `published` | All authenticated users (including Viewers) |
+
+`middleware/permissions.py` exposes helper functions used in all service calls:
+- `can_read(visibility, owner_email, ctx)` — read access check
+- `can_write(owner_email, ctx)` — write/delete check (owner or Admin)
+- `can_publish(ctx)` — Editor+ check
+- `can_admin(ctx)` — Admin check
+
+---
+
 ### Managed Identity — Fabric SQL Access
 
 ```
@@ -371,6 +428,9 @@ The metadata database stores all LoomX application state. Schema is in `apps/loo
 | `favorites` | `id`, `user_email`, `object_type`, `object_id`, `object_name` | Per-user favourites |
 | `data_sources` | `id`, `name`, `type`, `connection_string`, `database_name`, `region`, `is_active` | Registered Fabric endpoints |
 | `user_themes` | `id`, `user_email`, `primary_color`, `theme_config` | Per-user colour themes |
+| `user_roles` | `user_email` (UNIQUE), `role`, `granted_by`, `granted_at` | DB-level role assignments; checked during role resolution |
+
+> `visibility NVARCHAR(20) DEFAULT 'internal'` is present on `datasets`, `charts`, and `dashboards`.
 
 > `connection_string` in `data_sources` is never returned in API responses — it is excluded from all SELECT queries via the `_PUBLIC_FIELDS` constant in `routers/data_sources.py`.
 
@@ -618,7 +678,12 @@ Expires: 0
 | `LargeIntResponse` | `database/pool.py` | FastAPI response class: `datetime→ISO`, large `int→str` |
 | `get_current_user` | `middleware/auth.py` | JWT verification dependency |
 | `require_auth` | `middleware/auth.py` | Enforcing dependency — 401 if unauthenticated |
+| `UserContext` | `middleware/auth.py` | Dataclass: email, role, jwt_roles — passed through role-aware endpoints |
+| `require_user_context` | `middleware/auth.py` | Like `require_auth` but returns `UserContext` with resolved role |
+| `resolve_role` | `services/users.py` | JWT → DB → bootstrap → Viewer role resolution chain |
+| `require_min_role` | `middleware/permissions.py` | Dependency factory for role-gated endpoints |
 | `RateLimitMiddleware` | `middleware/rate_limit.py` | Per-user in-memory sliding-window rate limiter |
+| `require_min_role` | `middleware/permissions.py` | FastAPI dependency factory — returns UserContext or 403 |
 | `build_chart_preview_query` | `services/query_generator.py` | Star-schema T-SQL generation |
 | `build_distinct_filter_values_query` | `services/query_generator.py` | Filter dropdown query generation |
 | `quote_identifier` | `services/query_generator.py` | SQL identifier sanitization |
@@ -644,6 +709,8 @@ Expires: 0
 | `DashboardHeaderComponent` | `components/dashboards/components/DashboardHeaderComponent.tsx` | H1/H2/H3 inline-editable header with alignment and `react-colorful` colour picker |
 | `DashboardColumnComponent` | `components/dashboards/components/DashboardColumnComponent.tsx` | Vertical container with child drag-to-reorder and add-block dropdown (Chart/Text/Header/Divider) |
 | Monaco Editor | `app/lab/` | SQL editor with syntax highlighting |
+| `useRole` | `hooks/useRole.ts` | Returns `{role, isViewer, isAnalyst, isEditor, isAdmin, canCreate, canPublish}` |
+| `RoleGate` | `components/RoleGate.tsx` | Conditionally renders children based on `minRole` prop |
 
 ---
 
@@ -668,6 +735,9 @@ Expires: 0
 /api/v1/sql/distinct-filter-values — filter dropdown values
 /api/v1/sql/execute              — SQL execution with history logging
 /api/v1/metadata/summary         — parallel metadata summary
+/api/v1/users/me                 — current user's email + resolved role
+/api/v1/users                    — list role assignments (Admin only)
+/api/v1/users/{email}/role       — assign / remove role (Admin only)
 ```
 
 ### Response Conventions
@@ -720,6 +790,8 @@ app/
 │   ├── page.tsx            — SQL Lab (Monaco + multi-tab + results grid)
 │   └── queries/page.tsx    — Saved queries + query history
 ├── favorites/page.tsx      — Favourites list
+├── settings/
+│   └── users/page.tsx      — User role management (Admin only)
 └── workspace-activity/     — Team query history
 ```
 

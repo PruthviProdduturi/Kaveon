@@ -89,7 +89,7 @@ const FavoritesPage: React.FC = () => {
                     lastModified = fav.updated_at || "—";
                     created = fav.created_at || "—";
                   } else if (fav.kind === "chart") {
-                    href = `/charts`;
+                    href = `/charts/${fav.id}`;
                     typeLabel = "Chart";
                     lastModified = fav.updated_at || "—";
                     created = fav.created_at || "—";

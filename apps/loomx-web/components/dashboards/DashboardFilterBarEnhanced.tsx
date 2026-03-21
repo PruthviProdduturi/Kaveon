@@ -51,6 +51,7 @@ interface FilterColumnInfo {
   id: string;
   label: string;
   datasetIds: number[];
+  isDateColumn: boolean;
 }
 
 /**
@@ -130,12 +131,18 @@ const DashboardFilterBarEnhanced: React.FC = () => {
         // Build merged column list
         const columnMap = new Map<string, FilterColumnInfo>();
 
+        const isDateSemantic = (col: DatasetColumn) => {
+          const st = (col.semantic_type || '').toLowerCase();
+          return st === 'time' || st.includes('date') || st.includes('time');
+        };
+
         datasets.forEach((ds) => {
           ds.columns
-            .filter((col) => col.is_dimension)
+            .filter((col) => col.is_dimension || isDateSemantic(col))
             .forEach((col) => {
               const columnKey = `${col.table_name}.${col.column_name}`;
               const label = col.semantic_type || col.column_name;
+              const isDate = isDateSemantic(col);
 
               if (columnMap.has(columnKey)) {
                 const existing = columnMap.get(columnKey)!;
@@ -147,6 +154,7 @@ const DashboardFilterBarEnhanced: React.FC = () => {
                   id: columnKey,
                   label,
                   datasetIds: [ds.id],
+                  isDateColumn: isDate,
                 });
               }
             });
@@ -194,6 +202,26 @@ const DashboardFilterBarEnhanced: React.FC = () => {
       }
     }
 
+    // Date columns get a date_range filter; dimension columns get AllUp value filter
+    if (columnInfo.isDateColumn) {
+      addDashboardFilter({
+        column: columnId,
+        operator: '=',
+        value: '',
+        enabled: true,
+        appliesTo: 'all',
+        options: [],
+        isLoading: false,
+        isPending: false,
+        datasetId: columnInfo.datasetIds[0],
+        filterType: 'date_range',
+        dateFrom: '',
+        dateTo: '',
+      });
+      setIsAddingFilter(false);
+      return;
+    }
+
     // Default value to "AllUp"
     const defaultValue = 'AllUp';
 
@@ -220,6 +248,7 @@ const DashboardFilterBarEnhanced: React.FC = () => {
       options: [],
       isLoading: false,
       isPending: false,
+      datasetId: columnInfo.datasetIds[0],
     });
 
     setIsAddingFilter(false);
@@ -229,6 +258,11 @@ const DashboardFilterBarEnhanced: React.FC = () => {
    * Get formatted label for a filter
    */
   const getFilterLabel = (filter: DashboardFilter): string => {
+    if (filter.filterType === 'date_range') {
+      const from = filter.dateFrom || '…';
+      const to = filter.dateTo || '…';
+      return `${filter.column} between ${from} and ${to}`;
+    }
     const operatorLabel = FILTER_OPERATORS.find((op) => op.value === filter.operator)?.label || filter.operator;
     return `${filter.column} ${operatorLabel} ${filter.value}`;
   };
@@ -323,7 +357,7 @@ const DashboardFilterBarEnhanced: React.FC = () => {
             <option value="">Select a column...</option>
             {filterColumns.map((col) => (
               <option key={col.id} value={col.id}>
-                {col.label} ({col.datasetIds.length} dataset{col.datasetIds.length !== 1 ? 's' : ''})
+                {col.isDateColumn ? '📅 ' : ''}{col.label} ({col.datasetIds.length} dataset{col.datasetIds.length !== 1 ? 's' : ''})
               </option>
             ))}
           </select>

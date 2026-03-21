@@ -20,3 +20,5 @@ class SqlExecuteBody(BaseModel):
     chart_type: Optional[str] = Field(default=None, max_length=100)
     dataset_id: Optional[int] = None
     row_limit: Optional[int] = Field(default=None, ge=1, le=5000)
+    use_cache: Optional[bool] = Field(default=False)
+    cache_ttl: Optional[int] = Field(default=300, ge=30, le=3600)

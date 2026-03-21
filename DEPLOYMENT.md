@@ -243,6 +243,26 @@ From **Overview**:
 
 > After deploying loomx-web, come back and add its FQDN as a redirect URI (e.g., `https://loomx-web.politebeach-abc123.eastus.azurecontainerapps.io`).
 
+### 6.4 Configure App Roles
+
+LoomX uses Azure AD App Roles to assign user permissions. Add these four roles to the App Registration manifest.
+
+1. Open the App Registration → **App roles** → **Create app role**
+2. Create each of the following roles:
+
+| Display name | Value | Allowed member types | Description |
+|---|---|---|---|
+| LoomX Viewer | `LoomX.Viewer` | Users/Groups | Read-only access to published dashboards |
+| LoomX Analyst | `LoomX.Analyst` | Users/Groups | SQL Lab, chart and dataset creation |
+| LoomX Editor | `LoomX.Editor` | Users/Groups | All Analyst permissions + publish content |
+| LoomX Admin | `LoomX.Admin` | Users/Groups | Full access including user and data source management |
+
+3. Assign users: **Enterprise Applications** → **[your LoomX app]** → **Users and groups** → **Add user/group** → select user → select role
+
+> **Default role**: Any authenticated user without an assigned role automatically receives the **Viewer** role. The very first user to sign in is automatically promoted to **Admin** if no Admin assignments exist yet (first-deployer bootstrap).
+
+> **Role precedence**: If a user has an Azure AD App Role assigned AND a DB-level assignment in the `user_roles` table, the Azure AD App Role takes precedence.
+
 ---
 
 ## 7. Step 5 — App Registration for GitHub Actions (OIDC)
@@ -500,6 +520,14 @@ On first access, LoomX detects that the metadata database schema has not been in
 
 > Once configured, the setup endpoints return `403 Forbidden` — they cannot be invoked again without manually clearing the environment variables.
 
+### First-Admin Bootstrap
+
+After the setup wizard completes and you sign in for the first time, LoomX automatically promotes the first authenticated user to **Admin** — because the `user_roles` table is empty and no Azure AD App Roles have been assigned yet. Use this initial Admin session to:
+
+1. Navigate to **Settings → User Management** (`/settings/users`)
+2. Assign roles to other team members
+3. Or assign roles via **Enterprise Applications → Users and groups** in the Azure portal
+
 ### Triggering the wizard
 
 Navigate to `https://<your-loomx-web-fqdn>`. If `FABRIC_METADATA_ENDPOINT` / `FABRIC_METADATA_DATABASE` are not set, the wizard modal appears automatically after sign-in.
@@ -596,6 +624,15 @@ Check in Azure Portal → App Registration → Certificates & secrets → Federa
 ### `NEXT_PUBLIC_*` variables are wrong or blank in production
 
 These are baked at **build time**, not runtime. Update the GitHub variable (`LOOMX_API_FQDN`, `AZURE_CLIENT_ID`, etc.) and **re-run the workflow** to rebuild the image with the correct values.
+
+### User sees wrong role or cannot access content after role assignment
+
+Role assignments from the Azure AD portal take effect on the **next sign-in** (the JWT is issued with the new roles claim). DB-level assignments via `/settings/users` take effect immediately on the next API request.
+
+If a user reports incorrect permissions:
+1. Ask them to sign out and sign back in (refreshes the JWT roles claim)
+2. Check their assignment: **Enterprise Applications → [LoomX app] → Users and groups**
+3. Or check the DB-level assignment at `GET /api/v1/users` (Admin only)
 
 ### First page load is slow (~10–12 seconds)
 

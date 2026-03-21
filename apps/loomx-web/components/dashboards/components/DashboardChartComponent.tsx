@@ -49,10 +49,12 @@ const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({
   onDuplicate,
   onRemove,
 }) => {
-  const { getChartConfig, dashboardId } = useDashboard();
+  const { getChartConfig, dashboardId, globalRefreshTick } = useDashboard();
 
-  const [chart, setChart] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  // Initialise synchronously from preload cache when available so charts that
+  // mount after preloading skip the fetch entirely and never show a loading flash.
+  const [chart, setChart] = useState<any>(() => getChartConfig(chartId) || null);
+  const [, setIsLoading] = useState<boolean>(() => !getChartConfig(chartId));
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const hasFetchedRef = useRef(false);
@@ -62,9 +64,21 @@ const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({
   const filtersRef = useRef(filters);
   useEffect(() => { filtersRef.current = filters; }, [filters]);
 
+  // Trigger a chart re-query whenever the global refresh tick increments.
+  const prevTickRef = useRef(globalRefreshTick);
+  useEffect(() => {
+    if (globalRefreshTick !== prevTickRef.current) {
+      prevTickRef.current = globalRefreshTick;
+      setRefreshKey((k) => k + 1);
+    }
+  }, [globalRefreshTick]);
+
   useEffect(() => {
     if (hasFetchedRef.current) return;
     hasFetchedRef.current = true;
+
+    // If useState already resolved from cache, nothing to do.
+    if (chart) return;
 
     const load = async () => {
       try {
@@ -124,25 +138,19 @@ const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({
     onCrossFilter(crossFilterColumn, value);
   }, [onCrossFilter, crossFilterColumn]);
 
-  if (isLoading) {
-    return (
-      <div style={{ padding: 20, textAlign: 'center', color: '#64748b' }}>
-        <i className="fas fa-spinner fa-spin" style={{ marginRight: 8 }} />
-        Loading chart...
-      </div>
-    );
-  }
-
-  if (error || !chart) {
+  if (error) {
     return (
       <div style={{ padding: 20, color: '#dc2626', fontSize: 13 }}>
-        {error || 'Chart unavailable'}
+        {error}
       </div>
     );
   }
 
-  // Encode the dashboard ID into runContext so the API can record it in
-  // query_history.run_context for every query this chart executes.
+  // Always render ChartBuilderProvider so ChartPreview owns all loading states.
+  // When chart config is still being fetched (chart = null), ChartHydrator is a
+  // no-op and ChartPreview shows its built-in empty/loading animation.
+  // This means users see exactly ONE loading animation instead of the old
+  // "Loading chart…" text → animated bars → "Querying…" sequence.
   const runCtx = dashboardId ? `dashboard:${dashboardId}` : 'dashboard';
 
   return (

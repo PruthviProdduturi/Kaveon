@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Request, Response, HTTPException, Depends
 from middleware.auth import require_auth
+from middleware.permissions import require_min_role
 import database.metadata as db
 import database.pool as pool
 
@@ -108,7 +109,8 @@ def get_data_source(ds_id: str, response: Response, user: str = Depends(require_
 
 
 @router.post("/data-sources", status_code=201)
-def create_data_source(data: dict, user: str = Depends(require_auth)):
+def create_data_source(data: dict, ctx=Depends(require_min_role("Admin"))):
+    user = ctx.email
     name = data.get("name")
     ds_type = data.get("type")
     connection_string = data.get("connection_string")
@@ -141,7 +143,8 @@ def create_data_source(data: dict, user: str = Depends(require_auth)):
 
 
 @router.patch("/data-sources/{ds_id}")
-def update_data_source(ds_id: str, data: dict, user: str = Depends(require_auth)):
+def update_data_source(ds_id: str, data: dict, ctx=Depends(require_min_role("Admin"))):
+    user = ctx.email  # noqa: F841
     region = data.get("region")
     if region and region not in ("WW", "EU"):
         raise HTTPException(status_code=400, detail='Region must be either "WW" or "EU"')
@@ -181,7 +184,7 @@ def update_data_source(ds_id: str, data: dict, user: str = Depends(require_auth)
 
 
 @router.delete("/data-sources/{ds_id}")
-def delete_data_source(ds_id: str, user: str = Depends(require_auth)):
+def delete_data_source(ds_id: str, ctx=Depends(require_min_role("Admin"))):
     count = db.execute("DELETE FROM data_sources WHERE id = @param0", [int(ds_id)])
     if not count:
         raise HTTPException(status_code=404, detail="Data source not found")

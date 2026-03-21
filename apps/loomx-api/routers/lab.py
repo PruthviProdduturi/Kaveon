@@ -5,6 +5,7 @@ import json
 import threading
 from fastapi import APIRouter, Request, Response, HTTPException, Query, Depends
 from middleware.auth import require_auth
+from middleware.permissions import require_min_role
 from middleware.rate_limit import sql_execute_limiter
 from models.lab import SavedQueryCreate, SavedQueryUpdate, LabExecuteBody, LabQueryBody, SwitchDatabaseBody, CtasBody
 import database.pool as pool
@@ -91,7 +92,8 @@ def get_schema(schema: str, table_name: str, database: str = Query(...), user: s
 
 
 @router.post("/lab/execute")
-def execute_sql(data: LabExecuteBody, response: Response, user: str = Depends(require_auth)):
+def execute_sql(data: LabExecuteBody, response: Response, ctx=Depends(require_min_role("Analyst"))):
+    user = ctx.email
     sql_execute_limiter.check(user)
     result = pool.execute_query(data.sql, data.database)
     return {"columns": result.get("columns", []), "rows": result.get("rows", []),
@@ -99,7 +101,8 @@ def execute_sql(data: LabExecuteBody, response: Response, user: str = Depends(re
 
 
 @router.post("/lab/query")
-async def run_query(request: Request, data: LabQueryBody, user: str = Depends(require_auth)):
+async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_min_role("Analyst"))):
+    user = ctx.email
     sql_execute_limiter.check(user)
     user_id = user
     sql = data.query
@@ -181,7 +184,8 @@ async def run_query(request: Request, data: LabQueryBody, user: str = Depends(re
 
 
 @router.post("/lab/ctas", status_code=200)
-def create_table_as_select(data: CtasBody, user: str = Depends(require_auth)):
+def create_table_as_select(data: CtasBody, ctx=Depends(require_min_role("Analyst"))):
+    user = ctx.email  # noqa: F841
     """Materialise a query as a new table using SELECT … INTO [schema].[table]."""
     sql_execute_limiter.check(user)
     # Wrap user SQL in SELECT … INTO — strip trailing semicolon first
