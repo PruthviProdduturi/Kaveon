@@ -106,6 +106,9 @@ export default function DatasetsPage() {
 
   const handleSearch = (q: string) => { setSearch(q); setPage(1); };
   const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const userEmail = account?.email || account?.username || null;
+  const myCount = userEmail ? datasets.filter(d => d.created_by === userEmail).length : 0;
+  const othersCount = datasets.length - myCount;
 
   return (
     <ListPageShell
@@ -113,7 +116,9 @@ export default function DatasetsPage() {
       title="Datasets"
       subtitle="Define reusable tables and views that power charts and Lab queries."
       pills={!loading && !error ? [
-        { label: `${datasets.length} Dataset${datasets.length !== 1 ? "s" : ""}`, icon: "fa-database" },
+        { label: `${datasets.length} Total`, icon: "fa-database" },
+        ...(myCount > 0 ? [{ label: `${myCount} Mine`, icon: "fa-user" }] : []),
+        ...(othersCount > 0 ? [{ label: `${othersCount} Others`, icon: "fa-users", bg: "#f1f5f9", border: "#e2e8f0", color: "#64748b" }] : []),
       ] : []}
       action={
         <Button onClick={() => void router.push("/datasets/new")}>

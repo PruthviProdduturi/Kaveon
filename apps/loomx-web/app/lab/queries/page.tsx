@@ -588,22 +588,46 @@ const LabQueriesPage: React.FC = () => {
             <i className="fas fa-bookmark" style={{ color: "white", fontSize: 20 }} />
           </div>
           <div style={{ minWidth: 0 }}>
-            <h1 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 700, color: "#0f172a" }}>Saved Queries</h1>
+            <h1 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 700, color: "#0f172a" }}>Query Activity</h1>
             <p style={{ margin: "3px 0 0", fontSize: "0.85rem", color: "#64748b", lineHeight: 1.4 }}>
-              Your saved SQL queries and query history.
+              Your saved SQL queries and execution history.
             </p>
           </div>
-          {!isLoadingSaved && sortedSavedQueries.length > 0 && (
+          {(!isLoadingSaved || !isLoadingHistory) && (
             <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-              <span style={{
-                display: "inline-flex", alignItems: "center", gap: "0.35rem",
-                padding: "0.3rem 0.75rem", borderRadius: 20,
-                background: `${primaryColor}12`, border: `1px solid ${primaryColor}30`,
-                fontSize: 12, fontWeight: 600, color: primaryColor, whiteSpace: "nowrap",
-              }}>
-                <i className="fas fa-bookmark" style={{ fontSize: 10 }} />
-                {sortedSavedQueries.length} Saved Quer{sortedSavedQueries.length !== 1 ? "ies" : "y"}
-              </span>
+              {!isLoadingSaved && sortedSavedQueries.length > 0 && (
+                <span style={{
+                  display: "inline-flex", alignItems: "center", gap: "0.35rem",
+                  padding: "0.3rem 0.75rem", borderRadius: 20,
+                  background: `${primaryColor}12`, border: `1px solid ${primaryColor}30`,
+                  fontSize: 12, fontWeight: 600, color: primaryColor, whiteSpace: "nowrap",
+                }}>
+                  <i className="fas fa-bookmark" style={{ fontSize: 10 }} />
+                  {sortedSavedQueries.length} Saved Quer{sortedSavedQueries.length !== 1 ? "ies" : "y"}
+                </span>
+              )}
+              {!isLoadingHistory && history.length > 0 && (
+                <span style={{
+                  display: "inline-flex", alignItems: "center", gap: "0.35rem",
+                  padding: "0.3rem 0.75rem", borderRadius: 20,
+                  background: "#eff6ff", border: "1px solid #bfdbfe",
+                  fontSize: 12, fontWeight: 600, color: "#1d4ed8", whiteSpace: "nowrap",
+                }}>
+                  <i className="fas fa-history" style={{ fontSize: 10 }} />
+                  {history.length} Total Runs
+                </span>
+              )}
+              {!isLoadingHistory && userEmail && history.filter(h => h.executed_by === userEmail).length > 0 && (
+                <span style={{
+                  display: "inline-flex", alignItems: "center", gap: "0.35rem",
+                  padding: "0.3rem 0.75rem", borderRadius: 20,
+                  background: "#f1f5f9", border: "1px solid #e2e8f0",
+                  fontSize: 12, fontWeight: 600, color: "#64748b", whiteSpace: "nowrap",
+                }}>
+                  <i className="fas fa-user" style={{ fontSize: 10 }} />
+                  {history.filter(h => h.executed_by === userEmail).length} My Runs
+                </span>
+              )}
             </div>
           )}
         </div>

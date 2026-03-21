@@ -191,6 +191,9 @@ export default function DataSourcesPage() {
   const PAGE_SIZE = 20;
   const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const activeCount = dataSources.filter(ds => ds.is_active).length;
+  const userEmail = account?.email || account?.username || null;
+  const myCount = userEmail ? dataSources.filter(ds => ds.created_by === userEmail).length : 0;
+  const othersCount = dataSources.length - myCount;
 
   return (
     <>
@@ -199,7 +202,9 @@ export default function DataSourcesPage() {
         title="Data Sources"
         subtitle="Manage database connections and switch between data sources."
         pills={!loading && !error ? [
-          { label: `${dataSources.length} Source${dataSources.length !== 1 ? "s" : ""}`, icon: "fa-server" },
+          { label: `${dataSources.length} Total`, icon: "fa-server" },
+          ...(myCount > 0 ? [{ label: `${myCount} Mine`, icon: "fa-user" }] : []),
+          ...(othersCount > 0 ? [{ label: `${othersCount} Others`, icon: "fa-users", bg: "#f1f5f9", border: "#e2e8f0", color: "#64748b" }] : []),
           ...(activeCount > 0 ? [{ label: `${activeCount} Active`, icon: "fa-check-circle", bg: "#d1fae5", border: "#6ee7b7", color: "#065f46" }] : []),
         ] : []}
         action={

@@ -108,6 +108,9 @@ export default function ChartsPage() {
 
   const handleSearch = (q: string) => { setSearch(q); setPage(1); };
   const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const userEmail = account?.email || account?.username || null;
+  const myCount = userEmail ? charts.filter(c => c.created_by === userEmail || c.owner === userEmail).length : 0;
+  const othersCount = charts.length - myCount;
 
   return (
     <ListPageShell
@@ -115,7 +118,9 @@ export default function ChartsPage() {
       title="Charts"
       subtitle="Browse and manage saved charts built on top of your datasets and Lab queries."
       pills={!loading && !error ? [
-        { label: `${charts.length} Chart${charts.length !== 1 ? "s" : ""}`, icon: "fa-chart-bar" },
+        { label: `${charts.length} Total`, icon: "fa-chart-bar" },
+        ...(myCount > 0 ? [{ label: `${myCount} Mine`, icon: "fa-user" }] : []),
+        ...(othersCount > 0 ? [{ label: `${othersCount} Others`, icon: "fa-users", bg: "#f1f5f9", border: "#e2e8f0", color: "#64748b" }] : []),
       ] : []}
       action={
         <Button onClick={() => void router.push("/charts/new")}>

@@ -26,7 +26,7 @@ interface DashboardSummary {
 const PAGE_SIZE = 20;
 
 const DashboardsPage: React.FC = () => {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, account } = useAuth();
 
   const [dashboards, setDashboards] = useState<DashboardSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -120,6 +120,9 @@ const DashboardsPage: React.FC = () => {
 
   const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const publishedCount = dashboards.filter(d => d.is_published).length;
+  const userEmail = account?.email || account?.username || null;
+  const myCount = userEmail ? dashboards.filter(d => d.created_by === userEmail).length : 0;
+  const othersCount = dashboards.length - myCount;
 
   return (
     <>
@@ -128,7 +131,9 @@ const DashboardsPage: React.FC = () => {
         title="Dashboards"
         subtitle="Browse and manage your saved dashboards."
         pills={!isLoading && !error ? [
-          { label: `${dashboards.length} Dashboard${dashboards.length !== 1 ? "s" : ""}`, icon: "fa-tachometer-alt" },
+          { label: `${dashboards.length} Total`, icon: "fa-tachometer-alt" },
+          ...(myCount > 0 ? [{ label: `${myCount} Mine`, icon: "fa-user" }] : []),
+          ...(othersCount > 0 ? [{ label: `${othersCount} Others`, icon: "fa-users", bg: "#f1f5f9", border: "#e2e8f0", color: "#64748b" }] : []),
           ...(publishedCount > 0 ? [{ label: `${publishedCount} Published`, icon: "fa-globe", bg: "#d1fae5", border: "#6ee7b7", color: "#065f46" }] : []),
         ] : []}
         action={
