@@ -99,6 +99,20 @@ export function Layout({ children }: LayoutProps) {
             >
               <i className="fas fa-database" /> Datasets
             </Link>
+            <Link
+              className={`header-btn ${pathname?.startsWith('/ai') ? 'header-btn-active' : ''}`}
+              href="/ai"
+              style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem" }}
+            >
+              <i className="fas fa-magic" />
+              <span>AI</span>
+              <span style={{
+                fontSize: 9, fontWeight: 700, padding: "1px 5px", borderRadius: 8,
+                background: "linear-gradient(135deg, #7c3aed, #a855f7)",
+                color: "white", letterSpacing: "0.3px", lineHeight: 1.4,
+                verticalAlign: "middle",
+              }}>NEW</span>
+            </Link>
             <div className="header-dropdown">
               <Link
                 className={`header-btn header-dropdown-toggle ${pathname?.startsWith('/lab') ? 'header-btn-active' : ''}`}
@@ -163,6 +177,10 @@ export function Layout({ children }: LayoutProps) {
               <Link href="/data-sources" className="header-dropdown-item">
                 <i className="fas fa-server" style={{ marginRight: 6, width: 14 }} />
                 <span>Data Sources</span>
+              </Link>
+              <Link href="/settings/ai" className="header-dropdown-item">
+                <i className="fas fa-magic" style={{ marginRight: 6, width: 14 }} />
+                <span>AI Providers</span>
               </Link>
               {isAdmin && (
                 <Link href="/settings/users" className="header-dropdown-item">
