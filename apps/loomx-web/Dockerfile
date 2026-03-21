@@ -1,12 +1,12 @@
 # ── Stage 1: build Next.js ────────────────────────────────────────────────────
 FROM node:20-alpine AS builder
 
-RUN npm install -g pnpm@9
+RUN npm install -g pnpm@10
 
 WORKDIR /app
 
 # Copy workspace manifests
-COPY pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY pnpm-workspace.yaml pnpm-lock.yaml .npmrc ./
 COPY package.json ./
 COPY packages/types/package.json ./packages/types/
 COPY apps/loomx-web/package.json ./apps/loomx-web/

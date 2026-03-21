@@ -1,5 +1,9 @@
 # LoomX Startup Script
 # Starts the Python/FastAPI API and the Next.js web app
+#
+# Run from anywhere — script locates itself via $PSScriptRoot.
+
+Set-Location $PSScriptRoot
 
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  LoomX Startup" -ForegroundColor Cyan
@@ -12,42 +16,29 @@ Write-Host ""
 Write-Host "[1/6] Checking prerequisites..." -ForegroundColor Yellow
 
 # Check Python
-try {
-    $pythonVersion = python --version 2>$null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "  Python: OK ($pythonVersion)" -ForegroundColor Green
-    } else {
-        throw "Python not found"
-    }
-} catch {
+$pythonVersion = python --version 2>&1
+if ($LASTEXITCODE -ne 0) {
     Write-Host "[ERROR] Python is not installed!" -ForegroundColor Red
     Write-Host "Please install Python 3.11+ from: https://www.python.org/"
     Read-Host "Press Enter to exit"
     exit 1
 }
+Write-Host "  Python: OK ($pythonVersion)" -ForegroundColor Green
 
 # Check pnpm
-try {
-    $pnpmVersion = pnpm -v 2>$null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "  pnpm: OK ($pnpmVersion)" -ForegroundColor Green
-    } else {
-        throw "pnpm not found"
-    }
-} catch {
-    Write-Host "  pnpm not found. Installing via corepack..." -ForegroundColor Yellow
-    corepack enable
-    corepack prepare pnpm@latest --activate
-    $pnpmVersion = pnpm -v 2>$null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "  pnpm: OK ($pnpmVersion)" -ForegroundColor Green
-    } else {
+$pnpmVersion = pnpm -v 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  pnpm not found. Installing via npm..." -ForegroundColor Yellow
+    npm install -g pnpm
+    $pnpmVersion = pnpm -v 2>&1
+    if ($LASTEXITCODE -ne 0) {
         Write-Host "[ERROR] Failed to install pnpm!" -ForegroundColor Red
         Write-Host "Please run: npm install -g pnpm"
         Read-Host "Press Enter to exit"
         exit 1
     }
 }
+Write-Host "  pnpm: OK ($pnpmVersion)" -ForegroundColor Green
 
 # ============================================
 # Step 2: Check Root .env
@@ -68,10 +59,9 @@ if (-not (Test-Path ".env")) {
 Write-Host "  Root .env: OK" -ForegroundColor Green
 
 $envContent = Get-Content ".env" -Raw
-
 $missingVars = @()
 if ($envContent -notmatch "AZURE_CLIENT_ID=") { $missingVars += "AZURE_CLIENT_ID" }
-if ($envContent -notmatch "AZURE_TENANT_ID=") { $missingVars += "AZURE_TENANT_ID" }
+if ($envContent -notmatch "AZURE_TENANT_ID=")  { $missingVars += "AZURE_TENANT_ID" }
 
 if ($missingVars.Count -gt 0) {
     Write-Host "  [WARNING] Missing variables in .env:" -ForegroundColor Yellow
@@ -91,22 +81,21 @@ Push-Location "apps\loomx-api"
 if (-not (Test-Path "venv")) {
     Write-Host "  Creating Python virtual environment..." -ForegroundColor Cyan
     python -m venv venv
-    if ($?) {
-        Write-Host "  Virtual environment created." -ForegroundColor Green
-    } else {
+    if ($LASTEXITCODE -ne 0) {
         Write-Host "[ERROR] Failed to create venv!" -ForegroundColor Red
         Pop-Location
         Read-Host "Press Enter to exit"
         exit 1
     }
+    Write-Host "  Virtual environment created." -ForegroundColor Green
 }
 
-Write-Host "  Installing Python dependencies (this may take a minute)..." -ForegroundColor Cyan
-& venv\Scripts\python.exe -m pip install -r requirements.txt
-if ($?) {
-    Write-Host "  Python dependencies: OK" -ForegroundColor Green
+Write-Host "  Installing Python dependencies..." -ForegroundColor Cyan
+& venv\Scripts\python.exe -m pip install -q -r requirements.txt
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  [WARNING] Some Python packages may have failed to install." -ForegroundColor Yellow
 } else {
-    Write-Host "  [WARNING] Some packages may have failed to install." -ForegroundColor Yellow
+    Write-Host "  Python dependencies: OK" -ForegroundColor Green
 }
 
 Pop-Location
@@ -117,15 +106,14 @@ Pop-Location
 Write-Host ""
 Write-Host "[4/6] Installing Node dependencies..." -ForegroundColor Yellow
 
-pnpm install 2>&1
-if ($?) {
-    Write-Host "  Node dependencies: OK" -ForegroundColor Green
-} else {
+pnpm install -r
+if ($LASTEXITCODE -ne 0) {
     Write-Host "[ERROR] Failed to install Node dependencies!" -ForegroundColor Red
-    Write-Host "Run 'pnpm install' manually to see the error"
+    Write-Host "Run 'pnpm install -r' manually to see the full error."
     Read-Host "Press Enter to exit"
     exit 1
 }
+Write-Host "  Node dependencies: OK" -ForegroundColor Green
 
 # ============================================
 # Step 5: Kill Existing Processes on Ports
@@ -134,11 +122,11 @@ Write-Host ""
 Write-Host "[5/6] Clearing ports..." -ForegroundColor Yellow
 
 foreach ($port in @(8080, 3000)) {
-    $proc = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty OwningProcess -Unique
-    if ($proc) {
-        Write-Host "  Killing process on port $port (PID: $proc)..." -ForegroundColor Cyan
-        Stop-Process -Id $proc -Force -ErrorAction SilentlyContinue
+    $procs = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
+             Select-Object -ExpandProperty OwningProcess -Unique
+    foreach ($pid in $procs) {
+        Write-Host "  Killing process on port $port (PID: $pid)..." -ForegroundColor Cyan
+        Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -151,15 +139,22 @@ Start-Sleep -Seconds 1
 Write-Host ""
 Write-Host "[6/6] Starting services..." -ForegroundColor Yellow
 
-# Start Python API
-Start-Process cmd -ArgumentList "/k", "cd /d `"$PWD\apps\loomx-api`" && venv\Scripts\activate && python main.py" -WindowStyle Normal
-Write-Host "  API starting in new window..." -ForegroundColor Green
+# Prefer Windows Terminal (wt) for a nicer experience; fall back to cmd.
+$useWt = $null -ne (Get-Command wt -ErrorAction SilentlyContinue)
 
-Start-Sleep -Seconds 3
-
-# Start Next.js web
-Start-Process cmd -ArgumentList "/k", "cd /d `"$PWD`" && pnpm --filter loomx-web dev" -WindowStyle Normal
-Write-Host "  Web starting in new window..." -ForegroundColor Green
+if ($useWt) {
+    # Open both services in a single Windows Terminal with two tabs
+    $apiCmd  = "cmd /k `"cd /d `"$PSScriptRoot\apps\loomx-api`" && venv\Scripts\activate && python main.py`""
+    $webCmd  = "cmd /k `"cd /d `"$PSScriptRoot`" && pnpm --filter loomx-web dev`""
+    Start-Process wt -ArgumentList "new-tab --title `"LoomX API`" $apiCmd ; new-tab --title `"LoomX Web`" $webCmd"
+    Write-Host "  Services starting in Windows Terminal..." -ForegroundColor Green
+} else {
+    Start-Process cmd -ArgumentList "/k", "cd /d `"$PSScriptRoot\apps\loomx-api`" && venv\Scripts\activate && python main.py" -WindowStyle Normal
+    Write-Host "  API starting in new window..." -ForegroundColor Green
+    Start-Sleep -Seconds 2
+    Start-Process cmd -ArgumentList "/k", "cd /d `"$PSScriptRoot`" && pnpm --filter loomx-web dev" -WindowStyle Normal
+    Write-Host "  Web starting in new window..." -ForegroundColor Green
+}
 
 Start-Sleep -Seconds 3
 
@@ -172,27 +167,23 @@ Write-Host "============================================" -ForegroundColor Green
 Write-Host "  LoomX is Starting!" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "  Two terminal windows have opened:" -ForegroundColor Cyan
-Write-Host ""
 Write-Host "  1. LoomX API:  http://localhost:8080" -ForegroundColor White
-Write-Host "     - FastAPI + pyodbc + Azure AD token auth" -ForegroundColor Gray
 Write-Host "     - Health: http://localhost:8080/api/health" -ForegroundColor Gray
 Write-Host "     - Docs:   http://localhost:8080/docs" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  2. LoomX Web:  http://localhost:3000" -ForegroundColor White
-Write-Host "     - Next.js 15 frontend" -ForegroundColor Gray
+Write-Host "     - Next.js 15 + Turbopack" -ForegroundColor Gray
 Write-Host ""
 
 if ($apiListening) {
     Write-Host "  API (8080): Listening" -ForegroundColor Green
 } else {
-    Write-Host "  API (8080): Starting... (watch the API window)" -ForegroundColor Yellow
+    Write-Host "  API (8080): Starting... (check the API window)" -ForegroundColor Yellow
 }
-
 if ($webListening) {
     Write-Host "  Web (3000): Listening" -ForegroundColor Green
 } else {
-    Write-Host "  Web (3000): Starting... (watch the Web window)" -ForegroundColor Yellow
+    Write-Host "  Web (3000): Starting... (check the Web window)" -ForegroundColor Yellow
 }
 
 Write-Host ""
