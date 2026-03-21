@@ -67,21 +67,29 @@ def _resolve_roles_for_email(email: str) -> list[str]:
             "SELECT role FROM user_roles WHERE user_email = @param0",
             [email],
         )
-        if row and row.get("role"):
+        if row and row.get("role") and row["role"] != "Viewer":
             return [row["role"]]
 
-        # No explicit entry — check if any admins exist at all
+        # Either no entry or a stale Viewer row — check if any admins exist at all
         count_row = _db.query_one("SELECT COUNT(*) AS n FROM user_roles WHERE role = 'Admin'")
         if count_row and int(count_row.get("n") or 0) == 0:
-            # First login ever — persist Admin role and issue Admin JWT
+            # No admins yet (or stale Viewer) — persist Admin role and issue Admin JWT
             from datetime import datetime, timezone as _tz
             _now = datetime.now(_tz.utc).replace(tzinfo=None)
             try:
-                _db.execute(
-                    "INSERT INTO user_roles (user_email, role, granted_by, granted_at, updated_at) "
-                    "VALUES (@param0, 'Admin', 'system-bootstrap', @param1, @param2)",
-                    [email, _now, _now],
-                )
+                if row:
+                    # Upgrade existing Viewer row
+                    _db.execute(
+                        "UPDATE user_roles SET role = 'Admin', updated_at = @param0 "
+                        "WHERE user_email = @param1",
+                        [_now, email],
+                    )
+                else:
+                    _db.execute(
+                        "INSERT INTO user_roles (user_email, role, granted_by, granted_at, updated_at) "
+                        "VALUES (@param0, 'Admin', 'system-bootstrap', @param1, @param2)",
+                        [email, _now, _now],
+                    )
             except Exception:
                 pass  # Non-fatal; resolve_role will retry on next API call
             return ["Admin"]

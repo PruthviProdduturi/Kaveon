@@ -57,46 +57,55 @@ def get_user_by_id(user_id: int) -> Optional[dict]:
 
 def bootstrap_admin_if_needed() -> None:
     """
-    Insert the default admin/admin@local user with password "admin" and
-    Admin role in user_roles if the local_users table is empty.
-    Called at API startup (wrapped in try/except by main.py).
+    Ensure the default admin/admin@local user exists in local_users and
+    has Admin role in user_roles.  Called at every API startup.
+
+    - Creates the admin user if local_users is empty.
+    - Creates OR upgrades the admin@local role to Admin (fixes stale Viewer entries).
+    - user_roles operations are non-fatal (table may not exist yet pre-migration).
     """
     try:
         row = db.query_one("SELECT COUNT(*) AS n FROM local_users")
         count = int(row.get("n", 0)) if row else 0
-        if count > 0:
-            return
-
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
-        pwd_hash = hash_password("admin")
-
-        db.execute(
-            "INSERT INTO local_users "
-            "(username, email, password_hash, force_password_change, is_active, created_at, updated_at) "
-            "VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6)",
-            ["admin", "admin@local", pwd_hash, True, True, now, now],
-        )
-
-        print("[LocalAuth] Bootstrap admin user created (admin / admin@local).")
-
-        # Also ensure Admin role in user_roles (non-fatal — resolve_role bootstraps it on first login)
-        try:
-            existing_role = db.query_one(
-                "SELECT id FROM user_roles WHERE user_email = @param0",
-                ["admin@local"],
+        if count == 0:
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            pwd_hash = hash_password("admin")
+            db.execute(
+                "INSERT INTO local_users "
+                "(username, email, password_hash, force_password_change, is_active, created_at, updated_at) "
+                "VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6)",
+                ["admin", "admin@local", pwd_hash, True, True, now, now],
             )
-            if not existing_role:
-                db.execute(
-                    "INSERT INTO user_roles (user_email, role, granted_by, granted_at, updated_at) "
-                    "VALUES (@param0, 'Admin', 'system-bootstrap', @param1, @param2)",
-                    ["admin@local", now, now],
-                )
-        except Exception as role_err:
-            print(f"[LocalAuth] Could not seed admin role in user_roles (will be bootstrapped on first login): {role_err}")
-
+            print("[LocalAuth] Bootstrap admin user created (admin / admin@local).")
     except Exception as e:
         print(f"[LocalAuth] bootstrap_admin_if_needed failed: {e}")
         raise
+
+    # Always ensure admin@local has Admin role — runs even if user already existed.
+    # This fixes stale Viewer entries left by earlier code versions.
+    try:
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        existing_role = db.query_one(
+            "SELECT id, role FROM user_roles WHERE user_email = @param0",
+            ["admin@local"],
+        )
+        if existing_role:
+            if existing_role.get("role") != "Admin":
+                db.execute(
+                    "UPDATE user_roles SET role = 'Admin', updated_at = @param0 "
+                    "WHERE user_email = 'admin@local'",
+                    [now],
+                )
+                print("[LocalAuth] Bootstrap admin role corrected to Admin.")
+        else:
+            db.execute(
+                "INSERT INTO user_roles (user_email, role, granted_by, granted_at, updated_at) "
+                "VALUES (@param0, 'Admin', 'system-bootstrap', @param1, @param2)",
+                ["admin@local", now, now],
+            )
+            print("[LocalAuth] Bootstrap admin role inserted.")
+    except Exception as role_err:
+        print(f"[LocalAuth] Could not set admin@local role (will be fixed on first login): {role_err}")
 
 
 # ── CRUD ──────────────────────────────────────────────────────────────────────
