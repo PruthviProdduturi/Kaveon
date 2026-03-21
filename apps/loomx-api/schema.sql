@@ -224,6 +224,52 @@ END
 GO
 
 -- ============================================
+-- Auth Config Table
+-- ============================================
+IF OBJECT_ID('auth_config', 'U') IS NULL
+BEGIN
+    CREATE TABLE auth_config (
+        id INT IDENTITY(1,1) PRIMARY KEY,
+        provider NVARCHAR(50) NOT NULL DEFAULT 'azure_ad', -- azure_ad | local | google
+        azure_tenant_id NVARCHAR(255) NULL,
+        azure_client_id NVARCHAR(255) NULL,
+        google_client_id NVARCHAR(255) NULL,
+        google_client_secret NVARCHAR(1000) NULL, -- encrypted
+        jwt_secret NVARCHAR(1000) NULL,           -- encrypted; used for local HS256 tokens
+        updated_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+        updated_by NVARCHAR(255) NULL
+    );
+
+    PRINT 'Table auth_config created successfully';
+END
+GO
+
+-- ============================================
+-- Local Users Table
+-- ============================================
+IF OBJECT_ID('local_users', 'U') IS NULL
+BEGIN
+    CREATE TABLE local_users (
+        id INT IDENTITY(1,1) PRIMARY KEY,
+        username NVARCHAR(255) NOT NULL,
+        email NVARCHAR(255) NOT NULL,
+        password_hash NVARCHAR(255) NOT NULL,
+        force_password_change BIT NOT NULL DEFAULT 0,
+        is_active BIT NOT NULL DEFAULT 1,
+        created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+        updated_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+        CONSTRAINT UQ_local_users_username UNIQUE (username),
+        CONSTRAINT UQ_local_users_email UNIQUE (email)
+    );
+
+    CREATE INDEX idx_local_users_username ON local_users(username);
+    CREATE INDEX idx_local_users_email ON local_users(email);
+
+    PRINT 'Table local_users created successfully';
+END
+GO
+
+-- ============================================
 -- Schema Creation Complete
 -- ============================================
 PRINT '';
@@ -240,6 +286,8 @@ PRINT '  - favorites';
 PRINT '  - activity';
 PRINT '  - data_sources';
 PRINT '  - user_themes';
+PRINT '  - auth_config';
+PRINT '  - local_users';
 PRINT '';
 PRINT 'Next steps:';
 PRINT '  1. Add your data sources via the /data-sources UI';

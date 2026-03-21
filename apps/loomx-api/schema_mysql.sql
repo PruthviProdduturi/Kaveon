@@ -131,3 +131,30 @@ CREATE TABLE IF NOT EXISTS user_themes (
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_user_themes_email (user_email)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS auth_config (
+    id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    provider VARCHAR(50) NOT NULL DEFAULT 'azure_ad',
+    azure_tenant_id VARCHAR(255),
+    azure_client_id VARCHAR(255),
+    google_client_id VARCHAR(255),
+    google_client_secret VARCHAR(1000),
+    jwt_secret VARCHAR(1000),
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    updated_by VARCHAR(255)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS local_users (
+    id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    force_password_change TINYINT(1) NOT NULL DEFAULT 0,
+    is_active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT uq_local_users_username UNIQUE (username),
+    CONSTRAINT uq_local_users_email UNIQUE (email),
+    INDEX idx_local_users_username (username),
+    INDEX idx_local_users_email (email)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

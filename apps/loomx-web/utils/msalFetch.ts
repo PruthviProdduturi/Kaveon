@@ -27,27 +27,40 @@ export async function getAccessToken(): Promise<string> {
 }
 
 /**
- * Helper for making authenticated API calls with MSAL token.
+ * Helper for making authenticated API calls.
+ * For local auth (loomx_auth_provider === "local"), reads the Bearer token from
+ * localStorage instead of going through MSAL.
+ * For azure_ad (default), uses the existing MSAL token acquisition flow.
  * Usage: await msalFetch(url, { method: "GET" })
  * Automatically adds Authorization and x-user-email headers.
  */
 export async function msalFetch(input: RequestInfo, init: RequestInit = {}): Promise<Response> {
-  const tokenStart = performance.now();
-  const token = await getAccessToken();
-  const tokenEnd = performance.now();
-  if (tokenEnd - tokenStart > 100) {
-    console.log(`[msalFetch] Token acquisition took ${(tokenEnd - tokenStart).toFixed(2)}ms`);
-  }
-
-  const accounts = msalInstance.getAllAccounts();
-  const userEmail = accounts[0]?.username || accounts[0]?.name || null;
-
   const headers = new Headers(init.headers || {});
-  headers.set("Authorization", `Bearer ${token}`);
 
-  // Add user email header for backend to identify the user
-  if (userEmail) {
-    headers.set("x-user-email", userEmail);
+  if (typeof window !== "undefined" && window.localStorage.getItem("loomx_auth_provider") === "local") {
+    // Local auth: use stored JWT directly, no MSAL involved
+    const localToken = window.localStorage.getItem("loomx_local_token");
+    if (localToken) {
+      headers.set("Authorization", `Bearer ${localToken}`);
+    }
+  } else {
+    // Azure AD auth: acquire token via MSAL
+    const tokenStart = performance.now();
+    const token = await getAccessToken();
+    const tokenEnd = performance.now();
+    if (tokenEnd - tokenStart > 100) {
+      console.log(`[msalFetch] Token acquisition took ${(tokenEnd - tokenStart).toFixed(2)}ms`);
+    }
+
+    const accounts = msalInstance.getAllAccounts();
+    const userEmail = accounts[0]?.username || accounts[0]?.name || null;
+
+    headers.set("Authorization", `Bearer ${token}`);
+
+    // Add user email header for backend to identify the user
+    if (userEmail) {
+      headers.set("x-user-email", userEmail);
+    }
   }
 
   let fetchInput: RequestInfo = input;
