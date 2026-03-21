@@ -4,7 +4,7 @@
 
 ### **Live Operational Outcomes & Metrics eXperience**
 
-*Built for Advanced Analytics. Secured by Azure AD. Owned by Pruthvi Prodduturi.*
+*Built for Advanced Analytics. Multi-Provider Auth. Owned by Pruthvi Prodduturi.*
 
 <br>
 
@@ -12,7 +12,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![Azure AD](https://img.shields.io/badge/Azure_AD-Auth-0078D4?style=for-the-badge&logo=microsoftazure&logoColor=white)](https://azure.microsoft.com/en-us/products/active-directory)
+[![Auth](https://img.shields.io/badge/Auth-Local%20%7C%20Azure%20AD%20%7C%20Google-0078D4?style=for-the-badge&logo=microsoftazure&logoColor=white)](https://azure.microsoft.com/en-us/products/active-directory)
 [![Microsoft Fabric](https://img.shields.io/badge/Microsoft_Fabric-SQL-742774?style=for-the-badge&logo=microsoft&logoColor=white)](https://learn.microsoft.com/en-us/fabric/)
 [![License](https://img.shields.io/badge/License-Proprietary-red?style=for-the-badge)](./LICENSE)
 
@@ -26,9 +26,9 @@
 
 ## 🌟 What is LooMX?
 
-LooMX is a **self-hosted enterprise analytics platform** built for teams running on **Microsoft Fabric SQL**, Azure SQL, PostgreSQL, MySQL, Trino, and StarRocks. Think of it as your team's private data command centre — where everyone queries live data, builds charts, assembles dashboards, and uses AI to accelerate analysis — all secured through your existing **Azure Active Directory**.
+LooMX is a **self-hosted enterprise analytics platform** built for teams running on **Microsoft Fabric SQL**, Azure SQL, PostgreSQL, MySQL, Trino, and StarRocks. Think of it as your team's private data command centre — where everyone queries live data, builds charts, assembles dashboards, and uses AI to accelerate analysis — secured through **your choice of authentication provider**.
 
-No separate login system. No data leaves your tenant. No vendor lock-in.
+Everything is configurable from the UI. No config file changes, no restarts needed for auth setup. First-run deploys with **local login out of the box** — switch to Azure AD or Google OAuth any time from Settings.
 
 > *LooMX sits between your team and your data — making it fast to explore, easy to visualise, and safe to share.*
 
@@ -41,13 +41,14 @@ No separate login system. No data leaves your tenant. No vendor lock-in.
 <td width="50%">
 
 ### 🔐 Enterprise Security
-- Azure AD / Entra ID single sign-on
-- Full JWT signature verification (RS256 via JWKS)
-- Delegated user token auth — every user sees only what their AD permissions allow
-- No service accounts, no password storage
-- **Role-Based Access Control:** 4 Azure AD App Roles (Viewer, Analyst, Editor, Admin)
+- **Multi-provider authentication** — Local login, Azure AD / Entra ID, Google OAuth2
+- Provider switchable at runtime from **Settings → Authentication** (admin only) — no restart needed
+- **Default first-run credentials:** `admin` / `admin` (local provider, change on first login)
+- Full JWT verification: RS256 via JWKS (Azure AD & Google), HS256 (local)
+- **Role-Based Access Control:** 4 roles — Viewer, Analyst, Editor, Admin
 - Content visibility model: private / internal / published per dataset, chart, and dashboard
-- S360-compliant: security headers, hardened CORS, parameterised queries throughout
+- Secrets (Google client secret, JWT signing key) encrypted at rest with Fernet/AES
+- Security headers, hardened CORS, parameterised queries throughout
 
 </td>
 <td width="50%">
@@ -125,6 +126,8 @@ No separate login system. No data leaves your tenant. No vendor lock-in.
 <td width="50%">
 
 ### 🛠️ Admin Controls
+- **Authentication:** switch provider (Local / Azure AD / Google) and configure credentials — all from the UI, no `.env` changes
+- **Local Users:** create, deactivate, and reset passwords for local-auth users from the admin panel
 - **User Management:** assign / revoke roles per user; Azure AD App Roles always take precedence
 - **Metadata Server:** view and reconfigure the LooMX metadata database from the UI — supports all six DB types, live connection test, in-place API restart
 - **Data Sources:** full CRUD with connection testing
@@ -170,16 +173,16 @@ LooMX is a **monorepo** with two services:
 ┌─────────────────────────────────────────────────────────────────┐
 │  loomx-web  ·  Next.js 15  ·  TypeScript  ·  React 19          │
 │                                                                  │
-│  · Azure AD login (MSAL redirect flow)                           │
+│  · Multi-provider login (Local / Azure AD / Google)              │
 │  · Chart builder, dashboard builder, SQL Lab, AI assistant       │
 │  · ECharts + ECharts-GL visualisations · Monaco SQL editor       │
 └──────────────────────────────┬──────────────────────────────────┘
-                               │  REST API (Bearer token)
+                               │  REST API (Bearer JWT)
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  loomx-api  ·  FastAPI  ·  Python 3.11                          │
 │                                                                  │
-│  · JWT signature verification (RS256 / JWKS)                     │
+│  · JWT verification: RS256/JWKS (Azure AD, Google) · HS256 local │
 │  · RBAC middleware (4 roles: Viewer / Analyst / Editor / Admin)  │
 │  · Semantic SQL generation · Dataset / chart / dashboard CRUD    │
 │  · AI chat proxy (Anthropic, OpenAI, GitHub Models)              │
@@ -236,7 +239,9 @@ odbcinst -q -d -n "ODBC Driver 18 for SQL Server"
 
 ## 🔑 Azure AD App Registration
 
-LooMX uses Azure AD for all authentication. This is a **one-time setup** by your Azure admin.
+> **Optional** — LooMX defaults to local login. Configure Azure AD only if your team uses Microsoft Entra ID. Skip this section to use local auth.
+
+LooMX supports Azure AD as an optional authentication provider. This is a **one-time setup** by your Azure admin.
 
 <details>
 <summary><strong>Click to expand — App Registration steps</strong></summary>
@@ -285,9 +290,9 @@ cd LooMX
 # 2. Install Node.js dependencies (frontend only)
 pnpm install
 
-# 3. Configure environment
+# 3. Configure environment (Azure AD optional — local login works with no config)
 cp .env.example .env
-# → Edit .env with your Azure AD values
+# → Edit .env if using Azure AD; leave AZURE_* blank for local login
 
 # 4. Set up Python API
 cd apps/loomx-api
@@ -302,7 +307,9 @@ python apps/loomx-api/main.py    # Terminal 1 (API)
 pnpm --filter loomx-web dev      # Terminal 2 (Web)
 ```
 
-Open **http://localhost:3000** and sign in with your Azure AD account. ✓
+Open **http://localhost:3000**. Sign in with **username `admin`, password `admin`** (local login). You will be prompted to change the password on first login. ✓
+
+> To switch to Azure AD or Google OAuth, go to **Settings → Authentication** (Admin) after setting up your metadata database.
 
 ---
 
@@ -399,6 +406,8 @@ cd ../..
 | `user_roles` | DB-level role assignments (email → role) |
 | `ai_providers` | Global AI provider API keys (admin-managed) |
 | `user_ai_keys` | Per-user AI provider keys (personal override) |
+| `auth_config` | Singleton row: active provider, Azure/Google fields, encrypted JWT secret |
+| `local_users` | Local-auth accounts (username, bcrypt hash, force_password_change flag) |
 
 ### 6 · Start Both Services
 
@@ -442,8 +451,8 @@ pnpm --filter loomx-web dev
 ## 🎯 Your First 15 Minutes
 
 ```
-A  Sign in with Microsoft  →  Azure AD popup / redirect
-B  Add a Data Source       →  /data-sources  →  + Add Data Source
+A  Sign in               →  admin / admin (local) — or Azure AD / Google if configured
+B  Add a Data Source     →  /data-sources  →  + Add Data Source
 C  Verify in SQL Lab       →  /lab  →  pick database  →  run SELECT TOP 10 *
 D  Create a Dataset        →  /datasets  →  + New Dataset  →  set dimensions + metrics
 E  Build a Chart           →  /charts  →  + New Chart  →  pick dataset + chart type
@@ -470,6 +479,7 @@ G  Try AI in SQL Lab       →  /lab  →  click ✦ AI  →  describe what you 
 | **AI Providers** | `/settings/ai` | All (Admin for global keys) |
 | **User Management** | `/settings/users` | Admin |
 | **Metadata Server** | `/settings/metadata` | Admin |
+| **Authentication** | `/settings/auth` | Admin |
 | **About / Features** | `/about` | All |
 
 ---
@@ -479,10 +489,19 @@ G  Try AI in SQL Lab       →  /lab  →  click ✦ AI  →  describe what you 
 The FastAPI backend auto-generates Swagger UI at `http://localhost:8080/docs`. Key endpoint groups:
 
 ### Authentication
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/api/v1/auth/me` | Returns the current user's email and resolved role |
-| `GET` | `/api/v1/auth/roles` | Returns all valid roles |
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| `GET` | `/api/auth/provider` | None | Returns the active auth provider (`local`, `azure_ad`, `google`) |
+| `POST` | `/api/auth/login` | None | Local login — body `{username, password}` → returns JWT |
+| `POST` | `/api/auth/change-password` | Bearer | Local auth password change |
+| `GET` | `/api/v1/auth/me` | Bearer | Returns the current user's email and resolved role |
+| `GET` | `/api/v1/auth/roles` | Bearer | Returns all valid roles |
+| `GET` | `/api/v1/admin/auth` | Admin | Get current auth provider config (secrets masked) |
+| `POST` | `/api/v1/admin/auth` | Admin | Update auth provider config |
+| `GET` | `/api/v1/admin/local-users` | Admin | List local users |
+| `POST` | `/api/v1/admin/local-users` | Admin | Create a local user |
+| `DELETE` | `/api/v1/admin/local-users/{id}` | Admin | Deactivate a local user |
+| `POST` | `/api/v1/admin/local-users/{id}/reset-password` | Admin | Reset a local user's password |
 
 ### Setup & Admin
 | Method | Endpoint | Auth | Description |
@@ -600,9 +619,10 @@ LooMX/
 │   │   │   ├── settings/
 │   │   │   │   ├── ai/             ← AI provider key management
 │   │   │   │   ├── users/          ← Admin: user role management
-│   │   │   │   └── metadata/       ← Admin: metadata server configuration
+│   │   │   │   ├── metadata/       ← Admin: metadata server configuration
+│   │   │   │   └── auth/           ← Admin: auth provider + local user management
 │   │   │   └── workspace-activity/ ← Activity feed
-│   │   ├── auth/                   ← MSAL Azure AD configuration
+│   │   ├── auth/                   ← Multi-provider auth hook (local / Azure AD / Google)
 │   │   ├── components/             ← Reusable React components
 │   │   │   ├── DataSourceIcons.tsx ← Brand SVG icons (Fabric, Azure, PG, MySQL, Trino, StarRocks)
 │   │   │   ├── ListPageShell.tsx   ← Standard admin page shell (header + loading/error/empty)
@@ -625,12 +645,14 @@ LooMX/
 │       │   ├── metadata.py         ← Parameterised metadata DB helpers
 │       │   └── warmup.py           ← Startup warmup + 5-min heartbeat
 │       ├── middleware/
-│       │   ├── auth.py             ← JWT RS256 verification (PyJWT + JWKS)
+│       │   ├── auth.py             ← JWT verification: RS256/JWKS (Azure AD, Google) + HS256 (local)
 │       │   ├── permissions.py      ← RBAC dependency: resolves role, enforces minimum
 │       │   ├── rate_limit.py       ← Per-user in-memory rate limiter
 │       │   └── errors.py           ← Exception handlers (no detail leakage)
 │       ├── routers/                ← One file per domain
 │       │   ├── auth.py             ← /auth/me, /auth/roles
+│       │   ├── local_auth.py       ← /auth/login, /auth/change-password (local provider)
+│       │   ├── auth_config.py      ← /auth/provider (public) + /admin/auth + /admin/local-users
 │       │   ├── health.py           ← /health
 │       │   ├── setup.py            ← /setup/*, /admin/metadata/*
 │       │   ├── data_sources.py     ← /data-sources/*
@@ -647,6 +669,8 @@ LooMX/
 │       └── services/               ← Business logic layer
 │           ├── query_generator.py  ← Star-schema SQL builder
 │           ├── ai_service.py       ← AI provider routing + key resolution
+│           ├── auth_config.py      ← Active provider cache, config upsert, secret encryption
+│           ├── local_auth.py       ← bcrypt password hashing, bootstrap admin/admin, user CRUD
 │           └── ...
 │
 └── packages/
@@ -659,8 +683,9 @@ LooMX/
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `AZURE_TENANT_ID` | ✅ | — | Azure AD tenant ID — used by both API (JWT) and frontend (MSAL) |
-| `AZURE_CLIENT_ID` | ✅ | — | App Registration client ID — used by both API (audience check) and frontend (MSAL) |
+| `AZURE_TENANT_ID` | ⬜ | — | Azure AD tenant ID — required only when using Azure AD provider |
+| `AZURE_CLIENT_ID` | ⬜ | — | App Registration client ID — required only when using Azure AD provider |
+| `AI_ENCRYPTION_SECRET` | ⬜ | auto-generated | Secret used to derive the Fernet key for encrypting AI keys and auth secrets at rest |
 | `METADATA_DB_TYPE` | ⬜ | `fabric_sql` | Metadata DB type: `fabric_sql`, `azure_sql`, `postgresql`, `mysql` |
 | `METADATA_ENDPOINT` | ⬜ | — | SQL endpoint for Fabric SQL or Azure SQL metadata database |
 | `METADATA_DATABASE` | ⬜ | — | Database name in the metadata endpoint |
@@ -671,9 +696,11 @@ LooMX/
 | `API_URL` | ✅ | `http://localhost:8080` | Full URL of the API, used by the web app |
 | `WEB_URL` | ✅ | `http://localhost:3000` | Full URL of the web app, used for CORS |
 
-> `METADATA_*` variables are written automatically by the setup wizard and the **Settings → Metadata Server** admin page. You rarely need to set them manually.
+> `METADATA_*` and `AZURE_*` variables are written automatically through the setup wizard and admin settings pages. You rarely need to set them manually.
 
 > Data warehouse endpoints are **never** configured here. Register them through the UI at `/data-sources`.
+
+> **Local auth requires no environment variables at all.** The JWT signing key is auto-generated on first run and stored encrypted in the `auth_config` table.
 
 ---
 
@@ -698,6 +725,25 @@ Run from the **repository root**:
 ---
 
 ## 🔧 Troubleshooting
+
+<details>
+<summary><strong>🔴 Local login fails — "Invalid credentials"</strong></summary>
+
+- On first run, use **username: `admin`** / **password: `admin`**
+- If the metadata DB has not been configured yet, local auth uses an in-memory bootstrap check — you must sign in as admin to configure the metadata server first
+- After configuring the metadata DB, the `local_users` table is created and the admin account is seeded automatically on the next API start
+- If you reset the admin password via **Settings → Authentication → Local Users**, the new password takes effect immediately
+
+</details>
+
+<details>
+<summary><strong>🔴 Auth provider shows "azure_ad" but I only have local setup</strong></summary>
+
+- Go to **Settings → Authentication** and confirm the active provider is set to **Local Login**
+- If you cannot log in at all (Azure AD misconfigured), temporarily set `AZURE_TENANT_ID=` and `AZURE_CLIENT_ID=` to empty in `.env` and restart — the API falls back to local
+- Clear `loomx_auth_provider` from `localStorage` in DevTools → Application → Local Storage
+
+</details>
 
 <details>
 <summary><strong>🔴 ODBC Driver not found / API fails to connect to Fabric / Azure SQL</strong></summary>
@@ -826,7 +872,7 @@ Or change `API_PORT` in `.env` and restart.
 
 <div align="center">
 
-**Built for Advanced Analytics. Secured by Azure AD. Owned by Pruthvi Prodduturi.**
+**Built for Advanced Analytics. Multi-Provider Auth. Owned by Pruthvi Prodduturi.**
 
 *LooMX — Live Operational Outcomes & Metrics eXperience*
 
