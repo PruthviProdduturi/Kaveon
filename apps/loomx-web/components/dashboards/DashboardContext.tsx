@@ -123,6 +123,10 @@ interface DashboardContextState {
   preloadAllCharts: (apiBase: string, msalFetch: any) => Promise<void>;
   getChartConfig: (chartId: number) => any | null;
 
+  // Global refresh (auto-refresh / manual refresh all charts)
+  globalRefreshTick: number;
+  triggerGlobalRefresh: () => void;
+
   // UI actions
   setIsEditMode: (isEditMode: boolean) => void;
   setSelectedItemId: (itemId: string | null) => void;
@@ -190,6 +194,8 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
   // Chart config cache for parallel loading
   const [chartConfigCache, setChartConfigCache] = useState<Map<number, any>>(new Map());
   const [isPreloading, setIsPreloading] = useState<boolean>(false);
+  const [globalRefreshTick, setGlobalRefreshTick] = useState<number>(0);
+  const triggerGlobalRefresh = useCallback(() => setGlobalRefreshTick((t) => t + 1), []);
 
   // Cross-filter state
   const [crossFilters, setCrossFiltersState] = useState<Record<string, { column: string | null; value: string }>>({});
@@ -785,16 +791,40 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
         return filter.enabled && ignoreList.includes(filter.id);
       });
 
-      // Convert DashboardFilter to FilterConfig for merging
-      const dashboardFilterConfigs: FilterConfig[] = applicableDashboardFilters.map((f) => ({
-        id: f.id,
-        column: f.column,
-        operator: f.operator,
-        value: f.value,
-        options: f.options,
-        isLoading: f.isLoading,
-        isPending: f.isPending,
-      }));
+      // Convert DashboardFilter to FilterConfig for merging.
+      // date_range filters expand into two filters (>= and <=) so downstream
+      // chart execution doesn't need any special handling.
+      const dashboardFilterConfigs: FilterConfig[] = [];
+      for (const f of applicableDashboardFilters) {
+        if (f.filterType === 'date_range') {
+          if (f.dateFrom) {
+            dashboardFilterConfigs.push({
+              id: `${f.id}_from`,
+              column: f.column,
+              operator: '>=',
+              value: f.dateFrom,
+            });
+          }
+          if (f.dateTo) {
+            dashboardFilterConfigs.push({
+              id: `${f.id}_to`,
+              column: f.column,
+              operator: '<=',
+              value: f.dateTo,
+            });
+          }
+        } else {
+          dashboardFilterConfigs.push({
+            id: f.id,
+            column: f.column,
+            operator: f.operator,
+            value: f.value,
+            options: f.options,
+            isLoading: f.isLoading,
+            isPending: f.isPending,
+          });
+        }
+      }
 
       // Merge dashboard and component filters
       // Component filters with the same column override dashboard filters
@@ -1013,6 +1043,8 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
     // Chart config cache
     chartConfigCache,
     isPreloading,
+    globalRefreshTick,
+    triggerGlobalRefresh,
 
     // UI state
     selectedItemId,

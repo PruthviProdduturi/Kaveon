@@ -45,6 +45,8 @@ No separate login system. No data leaves your tenant. No vendor lock-in.
 - Full JWT signature verification (RS256 via JWKS)
 - Delegated user token auth — every user sees only what their AD permissions allow
 - No service accounts, no password storage
+- Role-Based Access Control: 4 Azure AD App Roles (Viewer, Analyst, Editor, Admin)
+- Content visibility model: private / internal / published per dataset, chart, and dashboard
 - S360-compliant: security headers, hardened CORS, parameterized queries throughout
 
 </td>
@@ -232,6 +234,17 @@ LoomX uses Azure AD for all authentication. This is a **one-time setup** by your
 
 6. **Expose an API** → **Add a scope** → accept the default App ID URI → add scope `access_as_user`
 
+7. **App roles** → **Create app role** → create all four roles below. These are the roles users will be assigned in **Enterprise Applications → [your app] → Users and groups**:
+
+   | Display name | Value | Description |
+   |---|---|---|
+   | LoomX Viewer | `LoomX.Viewer` | Read-only access to published dashboards and charts |
+   | LoomX Analyst | `LoomX.Analyst` | Run ad-hoc SQL, build charts and datasets |
+   | LoomX Editor | `LoomX.Editor` | All Analyst permissions + publish content |
+   | LoomX Admin | `LoomX.Admin` | Full access including user role management and data source configuration |
+
+   > Any authenticated user without an assigned role defaults to **Viewer** automatically.
+
 </details>
 
 ---
@@ -365,8 +378,11 @@ python -c "import pyodbc; print([d for d in pyodbc.drivers() if '18' in d])"
 | `favorites` | Per-user favourites for any object type |
 | `data_sources` | Registered Fabric warehouses and lakehouses |
 | `user_themes` | Per-user colour theme preferences |
+| `user_roles` | DB-level role assignments (email → role, with who granted it and when) |
 
 > The schema uses `IF OBJECT_ID(...) IS NULL` guards — safe to re-run.
+
+> Schema migration `apps/loomx-api/migrations/001_access_control.sql` adds the `user_roles` table and `visibility` column (DEFAULT `'internal'`) to `datasets`, `charts`, and `dashboards`. Run it after the initial `schema.sql`.
 
 ### 6 · Start Both Services
 
@@ -444,6 +460,7 @@ After 15 minutes you will have:
 | **Charts** | `/charts` | Build and manage charts |
 | **Dashboards** | `/dashboards` | Build and view dashboards |
 | **Data Sources** | `/data-sources` | Register Fabric warehouses and lakehouses |
+| **User Management** | `/settings/users` | Admin-only: assign and manage user roles |
 
 ---
 
@@ -465,10 +482,12 @@ LoomX/
 │   │   │   ├── datasets/           ← Dataset configuration
 │   │   │   ├── data-sources/       ← Data source registration
 │   │   │   ├── lab/                ← SQL Lab (Monaco editor)
+│   │   │   ├── settings/users/page.tsx ← Admin: assign and manage user roles
 │   │   │   └── layout.tsx          ← Root layout with theme + auth
 │   │   ├── auth/                   ← MSAL Azure AD configuration
 │   │   ├── components/             ← Reusable React components
 │   │   │   ├── ConfirmModal.tsx    ← Portal-based confirm dialog (ReactDOM.createPortal)
+│   │   │   ├── RoleGate.tsx        ← Render-gate component: hides UI by required role
 │   │   │   ├── charts/             ← Chart builder components
 │   │   │   │   └── ChartPreview.tsx← ECharts/table/KPI/map renderer + export hooks
 │   │   │   └── dashboards/         ← Dashboard canvas + item components
@@ -485,6 +504,8 @@ LoomX/
 │   │   │           ├── DashboardDividerComponent.tsx
 │   │   │           └── DashboardTabsComponent.tsx
 │   │   ├── contexts/               ← Theme, auth context providers
+│   │   ├── hooks/                  ← Custom React hooks
+│   │   │   └── useRole.ts          ← Returns the current user's resolved RBAC role
 │   │   └── utils/                  ← MSAL fetch, colour utilities
 │   │
 │   └── loomx-api/                  ← Python/FastAPI REST API
@@ -498,6 +519,7 @@ LoomX/
 │       │   └── warmup.py           ← Startup warmup + 5-min heartbeat
 │       ├── middleware/             ← Auth and error handling
 │       │   ├── auth.py             ← JWT RS256 verification (PyJWT + JWKS)
+│       │   ├── permissions.py      ← RBAC dependency: resolves role, enforces minimum role
 │       │   ├── rate_limit.py       ← Per-user in-memory rate limiter
 │       │   └── errors.py           ← Exception handlers (no detail leakage)
 │       ├── routers/                ← API route handlers (one file per domain)
@@ -506,12 +528,14 @@ LoomX/
 │       │   ├── data_sources.py, favorites.py
 │       │   ├── lab.py, sql.py
 │       │   ├── theme.py, metadata_summary.py
+│       │   ├── users.py            ← Admin endpoints: list users, assign/revoke roles
 │       │   └── setup.py
 │       └── services/               ← Business logic
 │           ├── query_generator.py  ← Star-schema SQL builder
 │           ├── datasets.py, charts.py, dashboards.py
 │           ├── favorites.py, saved_queries.py
 │           ├── query_history.py, theme.py
+│           ├── users.py            ← Role lookup, grant/revoke, JWT claims resolution
 │           └── sql_table_extractor.py
 │
 └── packages/

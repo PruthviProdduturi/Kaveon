@@ -3,6 +3,7 @@
 import "echarts-gl";
 import * as echarts from "echarts";
 import React from "react";
+import { normaliseCountryName } from "../../utils/countryAliases";
 
 const MAP_DEFAULT_COLORS = ["#e0f2fe", "#0ea5e9", "#0369a1"];
 
@@ -34,13 +35,26 @@ const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOption
   const nameIdx = columns.findIndex((_, i) => rows.some(r => isNaN(Number(r[i]))));
   const valIdx  = columns.length - 1 === nameIdx ? columns.length - 2 : columns.length - 1;
 
+  // Build a set of valid region names from the registered GeoJSON.
+  // echarts-gl 2.0.9 has no null guard in getRegionPolygonCoords — if a data
+  // entry's name doesn't match any GeoJSON feature it returns undefined and
+  // crashes with "Cannot read properties of undefined (reading 'geometries')".
+  const validRegionNames = React.useMemo<Set<string>>(() => {
+    if (!geoJson?.features) return new Set();
+    return new Set(
+      (geoJson.features as any[])
+        .map((f: any) => f?.properties?.name)
+        .filter(Boolean)
+    );
+  }, [geoJson]);
+
   const data = React.useMemo(() =>
     nameIdx >= 0 && valIdx >= 0
-      ? rows.map(r => ({ name: String(r[nameIdx] ?? ""), value: Number(r[valIdx] ?? 0) }))
-             .filter(d => d.name && !isNaN(d.value))
+      ? rows.map(r => ({ name: normaliseCountryName(String(r[nameIdx] ?? "")), value: Number(r[valIdx] ?? 0) }))
+             .filter(d => d.name && !isNaN(d.value) && validRegionNames.has(d.name))
       : [],
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  [JSON.stringify(rows), nameIdx, valIdx]);
+  [JSON.stringify(rows), nameIdx, valIdx, validRegionNames]);
 
   const values = data.map(d => d.value);
   const minV = values.length ? Math.min(...values) : 0;
@@ -52,7 +66,7 @@ const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOption
 
   const option = React.useMemo(() => ({
     ...titleOpt,
-    backgroundColor: "#0d1117",
+    backgroundColor: "transparent",
     tooltip: {
       trigger: "item",
       appendToBody: true,
@@ -76,10 +90,12 @@ const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOption
       textStyle: { fontSize: 11, color: "#94a3b8" },
     },
     globe: {
-      baseTexture: "#0c1e35",
-      shading: "lambert",
-      light: { ambient: { intensity: 0.6 }, main: { intensity: 1.2, shadow: false } },
+      shading: "color",
+      light: { ambient: { intensity: 1 }, main: { intensity: 0, shadow: false } },
       atmosphere: { show: true },
+      globeOuterRadius: 100,
+      environment: "#0d1117",
+      baseColor: "#0c1e35",
       viewControl: { autoRotate: false, distance: 160, minDistance: 80, maxDistance: 320, rotateSensitivity: 1, zoomSensitivity: 1, panSensitivity: 0 },
     },
     series: [{
@@ -87,12 +103,12 @@ const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOption
       coordinateSystem: "globe",
       map: "world",
       data,
-      shading: "lambert",
+      shading: "color",
       emphasis: {
         label: { show: true, textStyle: { color: "#fff", fontSize: 11, fontFamily: "Inter, sans-serif" } },
         itemStyle: { color: "#fbbf24" },
       },
-      itemStyle: { borderWidth: 0.4, borderColor: "rgba(255,255,255,0.15)" },
+      itemStyle: { color: "#1e3a5f", borderWidth: 0.4, borderColor: "rgba(255,255,255,0.2)" },
       label: { show: showLabels, textStyle: { color: "#fff", fontSize: 9, fontFamily: "Inter, sans-serif" } },
     }],
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -119,7 +135,7 @@ const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOption
       const { width, height } = container.getBoundingClientRect();
       if (width === 0 || height === 0) return; // wait for next ResizeObserver tick
       try {
-        const inst = echarts.init(container);
+        const inst = echarts.init(container, null, { renderer: "canvas" });
         chartRef.current = inst;
         inst.setOption(optionRef.current, { notMerge: true });
       } catch (_) {}
@@ -157,7 +173,7 @@ const WorldMapGlobe: React.FC<Props> = ({ rows, columns, geoJson, advancedOption
   return (
     <div
       ref={containerRef}
-      style={{ position: "absolute", inset: 0, background: "#0d1117" }}
+      style={{ position: "absolute", inset: 0 }}
     />
   );
 };

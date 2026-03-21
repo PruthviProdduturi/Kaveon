@@ -40,7 +40,7 @@ a {
 main {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 16px 20px 24px;
+  padding: 1.25rem 1.5rem;
 }
 
 main.main-lab {
@@ -105,7 +105,7 @@ main.main-lab {
   main.main-wide {
     max-width: 100%;
     margin: 0;
-    padding: 20px 40px 30px;
+    padding: 1.5rem 2rem;
     min-height: calc(100vh - 64px);
   }
 
@@ -752,22 +752,29 @@ main.main-lab {
 }
 
 .home-main-grid {
-  margin-top: 1.75rem;
+  margin-top: 1.5rem;
   display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-  gap: 1.5rem;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-auto-rows: 1fr;
+  gap: 1rem;
+  align-items: stretch;
 }
 
 .home-column {
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
+  gap: 1rem;
+}
+
+/* Last panel in each column stretches to fill remaining height */
+.home-column > .home-panel:last-child {
+  flex: 1;
 }
 
 .home-panel {
   background: #ffffff;
   border-radius: 10px;
-  padding: 1.25rem 1.5rem;
+  padding: 1.25rem;
   border: 1px solid rgba(226, 232, 240, 0.9);
   box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
 }
@@ -820,9 +827,15 @@ main.main-lab {
   color: #6b7280;
 }
 
-@media (max-width: 960px) {
+@media (max-width: 768px) {
   .home-main-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .dashboard-section {
+    padding: 1rem;
+  }
+  .welcome-section {
+    padding: 1rem;
   }
 }
 
@@ -2088,23 +2101,24 @@ main.main-lab {
 }
 
 .dashboard-section {
-  padding: 2.25rem 2rem 2.5rem 2rem;
-  max-width: 1200px;
+  padding: 2rem;
+  max-width: 1400px;
   margin: 0 auto;
+  box-sizing: border-box;
 }
 
 .stats-grid {
   display: grid;
-  /* Five main stat tiles on a single row on desktop */
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 1.25rem;
-  margin-bottom: 2rem;
+  grid-template-columns: repeat(5, minmax(0, 200px));
+  gap: 1rem;
+  margin: 0 auto 1.75rem;
+  justify-content: center;
 }
 
 .stat-card {
   background: white;
   border-radius: 10px;
-  padding: 1.4rem 1.5rem;
+  padding: 1.25rem;
   box-shadow: 0 3px 5px rgba(15, 23, 42, 0.06);
   border: 1px solid rgba(226, 232, 240, 0.8);
   transition: all 0.3s ease;
@@ -3262,7 +3276,7 @@ main.main-lab {
 main.main-wide {
   max-width: 100%;
   margin: 0;
-  padding: 20px 40px 30px;
+  padding: 1.5rem 2rem;
   min-height: calc(100vh - 64px);
 }
 

@@ -39,6 +39,14 @@ function formatYAxisValue(val: number, format: string) {
   return val.toLocaleString();
 }
 
+function createLabelFormatter(format: string, isShare: boolean) {
+  return (params: any) => {
+    const val = params.value;
+    if (isShare) return `${val.toFixed(1)}%`;
+    return formatYAxisValue(val, format);
+  };
+}
+
 // ─── Chart-type-specific options ─────────────────────────────────────────────
 
 interface ChartTypeOptionsProps {
@@ -238,8 +246,84 @@ const ChartTypeOptions: React.FC<ChartTypeOptionsProps> = ({ chartType, advanced
   const isLine = ["time_series_line","time_series_line_share","time_series_area","time_series_area_share","line_multi_series","area_stack"].includes(chartType);
   const isMixed = chartType === "mixed_line_bar";
   const isMap = chartType === "world_map";
+  const isTable = chartType === "table" || chartType === "pivot_table";
 
-  if (!isBar && !isPie && !isScatter && !isKpi && !isFunnel && !isGauge && !isHeatmap && !isRadar && !isLine && !isMixed && !isMap) return null;
+  // Line / area specific derived state
+  const isShareChart = chartType?.endsWith("_share") || false;
+  const yAxisFormat = previewOptions?.yAxisFormat || "none";
+  const lineLabels = Array.isArray(previewOptions?.series) && previewOptions.series.some((s: any) => s.label?.show);
+  const lineMarkers = Array.isArray(previewOptions?.series) && previewOptions.series.some((s: any) => s.symbol && s.symbol !== 'none');
+
+  const handleLineLabels = (enabled: boolean) => {
+    set("showDataLabels", enabled);
+    const currentFormat = previewOptions?.yAxisFormat || yAxisFormat;
+    const patchSeries = (series: any[]) =>
+      series.map((s: any) => ({
+        ...s,
+        label: {
+          ...(s.label || {}),
+          show: enabled,
+          position: 'top',
+          formatter: enabled ? createLabelFormatter(currentFormat, isShareChart) : '{c}',
+          fontSize: 10,
+          color: 'rgba(51, 65, 85, 0.85)',
+          backgroundColor: 'rgba(255, 255, 255, 0.8)',
+          padding: [2, 4],
+          borderRadius: 3,
+        },
+      }));
+    // Use previewOptions.series as the base for advancedOptions so that series
+    // names are always present — advancedOptions.series may be empty for new charts.
+    const liveSeries = previewOptions?.series || [];
+    setAdvancedOptions((prev: any) => ({
+      ...(prev || {}),
+      labelLayout: enabled ? { hideOverlap: true } : undefined,
+      series: patchSeries(prev?.series?.length ? prev.series : liveSeries),
+    }));
+    setPreviewOptions((prev: any) => ({
+      ...(prev || {}),
+      labelLayout: enabled ? { hideOverlap: true } : undefined,
+      series: patchSeries(prev?.series || []),
+    }));
+  };
+
+  const handleLineMarkers = (enabled: boolean) => {
+    set("showMarkers", enabled);
+    const makeShowSymbol = (dataLength: number) =>
+      enabled
+        ? (dataIndex: number) => {
+            if (dataIndex === 0 || dataIndex === dataLength - 1) return true;
+            const p1 = Math.round((dataLength - 1) * 1 / 5);
+            const p2 = Math.round((dataLength - 1) * 2 / 5);
+            const p3 = Math.round((dataLength - 1) * 3 / 5);
+            const p4 = Math.round((dataLength - 1) * 4 / 5);
+            return dataIndex === p1 || dataIndex === p2 || dataIndex === p3 || dataIndex === p4;
+          }
+        : false;
+
+    const patchSeries = (series: any[]) =>
+      series.map((s: any) => ({
+        ...s,
+        symbol: enabled ? 'circle' : 'none',
+        symbolSize: enabled ? 6 : 4,
+        showSymbol: makeShowSymbol(s.data?.length || 0),
+      }));
+
+    const liveSeries = previewOptions?.series || [];
+    setAdvancedOptions((prev: any) => ({
+      ...(prev || {}),
+      series: patchSeries(prev?.series?.length ? prev.series : liveSeries),
+      seriesSettings: prev?.seriesSettings
+        ? { ...prev.seriesSettings, symbol: enabled ? 'circle' : 'none', symbolSize: enabled ? 6 : 4 }
+        : undefined,
+    }));
+    setPreviewOptions((prev: any) => ({
+      ...(prev || {}),
+      series: patchSeries(prev?.series || []),
+    }));
+  };
+
+  if (!isBar && !isPie && !isScatter && !isKpi && !isFunnel && !isGauge && !isHeatmap && !isRadar && !isLine && !isMixed && !isMap && !isTable) return null;
 
   return (
     <div style={{ marginBottom: 24 }}>
@@ -447,8 +531,8 @@ const ChartTypeOptions: React.FC<ChartTypeOptionsProps> = ({ chartType, advanced
       {/* LINE / AREA OPTIONS */}
       {isLine && (
         <>
-          <CheckRow id="line-labels" label="Show data labels" checked={ctOpts.showDataLabels ?? false} onChange={(v) => set("showDataLabels", v)} />
-          {ctOpts.showDataLabels && !chartType.endsWith("_share") && (
+          <CheckRow id="line-labels" label="Show data labels" checked={lineLabels} onChange={(v) => { set("showDataLabels", v); handleLineLabels(v); }} />
+          {lineLabels && !chartType.endsWith("_share") && (
             <div className="chart-builder-field-group" style={{ marginBottom: 10 }}>
               <label className="chart-builder-label" htmlFor="line-label-fmt">Label number format</label>
               <select id="line-label-fmt" className="chart-builder-select" value={ctOpts.labelNumberFormat || "none"} onChange={(e) => set("labelNumberFormat", e.target.value)}>
@@ -460,6 +544,7 @@ const ChartTypeOptions: React.FC<ChartTypeOptionsProps> = ({ chartType, advanced
               </select>
             </div>
           )}
+          <CheckRow id="line-markers" label="Show point markers" checked={lineMarkers} onChange={handleLineMarkers} />
         </>
       )}
 
@@ -558,6 +643,41 @@ const ChartTypeOptions: React.FC<ChartTypeOptionsProps> = ({ chartType, advanced
             <CheckRow id="map-roam" label="Enable zoom / pan" checked={ctOpts.mapRoam !== false} onChange={(v) => set("mapRoam", v)} />
           )}
           <CheckRow id="map-labels" label="Show country labels" checked={ctOpts.mapShowLabels === true} onChange={(v) => set("mapShowLabels", v)} />
+        </>
+      )}
+
+      {/* TABLE OPTIONS */}
+      {isTable && (
+        <>
+          <Row2>
+            <div>
+              <label className="chart-builder-label" htmlFor="table-page-size">Rows per page</label>
+              <select id="table-page-size" className="chart-builder-select" value={ctOpts.tablePageSize ?? 25} onChange={(e) => set("tablePageSize", Number(e.target.value))}>
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+                <option value={500}>500</option>
+              </select>
+            </div>
+            <div style={{ display: "flex", alignItems: "flex-end" }}>
+              <CheckRow id="table-cond-fmt" label="Color scale" checked={ctOpts.tableCondFmt ?? false} onChange={(v) => set("tableCondFmt", v)} />
+            </div>
+          </Row2>
+          {ctOpts.tableCondFmt && (
+            <Row2>
+              <div>
+                <label className="chart-builder-label" htmlFor="tbl-low">Low color</label>
+                <input id="tbl-low" type="color" value={ctOpts.tableCondFmtLow ?? "#fee2e2"} onChange={(e) => set("tableCondFmtLow", e.target.value)}
+                  style={{ width: "100%", height: 32, border: "1px solid #e2e8f0", borderRadius: 5, cursor: "pointer" }} />
+              </div>
+              <div>
+                <label className="chart-builder-label" htmlFor="tbl-high">High color</label>
+                <input id="tbl-high" type="color" value={ctOpts.tableCondFmtHigh ?? "#dcfce7"} onChange={(e) => set("tableCondFmtHigh", e.target.value)}
+                  style={{ width: "100%", height: 32, border: "1px solid #e2e8f0", borderRadius: 5, cursor: "pointer" }} />
+              </div>
+            </Row2>
+          )}
         </>
       )}
 
@@ -797,7 +917,6 @@ const AdvancedChartOptions: React.FC = () => {
   const yAxisFormat = previewOptions?.yAxisFormat || "none";
   const stacking = Array.isArray(activeSeries) && activeSeries.some((s: any) => s.stack);
   const smooth = Array.isArray(activeSeries) && activeSeries.some((s: any) => s.smooth);
-  const markers = Array.isArray(activeSeries) && activeSeries.some((s: any) => s.showSymbol || (s.symbol && s.symbol !== "none"));
 
   const handlePaletteChange = (colors: string[]) => {
     setAdvancedOptions((prev: any) => ({ ...(prev || {}), color: colors }));
@@ -968,123 +1087,6 @@ const AdvancedChartOptions: React.FC = () => {
       series: (prev?.series || []).map((s: any) => ({ ...s, smooth: enabled })),
     }));
   };
-  const handleMarkers = (enabled: boolean) => {
-    // Create formatter based on current yAxisFormat
-    const createLabelFormatter = (format: string, isShare: boolean) => {
-      return (params: any) => {
-        const val = params.value;
-        // For share charts, always show as percentage
-        if (isShare) {
-          return `${val.toFixed(1)}%`;
-        }
-        return formatYAxisValue(val, format);
-      };
-    };
-
-    const currentFormat = previewOptions?.yAxisFormat || yAxisFormat;
-
-    setAdvancedOptions((prev: any) => ({
-      ...(prev || {}),
-      labelLayout: enabled ? {
-        hideOverlap: true,
-      } : undefined,
-      series: (prev?.series || []).map((s: any) => {
-        // Capture series data length in closure for showSymbol function
-        const seriesDataLength = s.data?.length || 0;
-        return {
-          ...s,
-          // Show exactly 6 points: first, last, and 4 evenly spaced in between
-          symbol: enabled ? 'circle' : "none",
-          symbolSize: enabled ? 6 : 4,
-          showSymbol: enabled ? function (dataIndex: number) {
-            const dataLength = seriesDataLength;
-
-            // Always show first and last
-            if (dataIndex === 0 || dataIndex === dataLength - 1) {
-              return true;
-            }
-
-            // Calculate 4 evenly spaced middle points
-            const point1 = Math.round((dataLength - 1) * 1 / 5);
-            const point2 = Math.round((dataLength - 1) * 2 / 5);
-            const point3 = Math.round((dataLength - 1) * 3 / 5);
-            const point4 = Math.round((dataLength - 1) * 4 / 5);
-
-            if (dataIndex === point1 || dataIndex === point2 || dataIndex === point3 || dataIndex === point4) {
-              return true;
-            }
-
-            return false;
-          } : false,
-          label: {
-            ...(s.label || {}),
-            show: enabled,
-            position: 'top',
-            formatter: enabled ? createLabelFormatter(currentFormat, isShareChart) : '{c}',
-            fontSize: 10,
-            color: 'rgba(51, 65, 85, 0.85)',
-            backgroundColor: 'rgba(255, 255, 255, 0.8)',
-            padding: [2, 4],
-            borderRadius: 3,
-          },
-        };
-      }),
-      // Also update seriesSettings if using new format
-      seriesSettings: prev?.seriesSettings ? {
-        ...prev.seriesSettings,
-        symbol: enabled ? 'circle' : 'none',
-        symbolSize: enabled ? 6 : 4,
-      } : undefined,
-    }));
-    setPreviewOptions((prev: any) => ({
-      ...(prev || {}),
-      labelLayout: enabled ? {
-        hideOverlap: true,
-      } : undefined,
-      series: (prev?.series || []).map((s: any) => {
-        // Capture series data length in closure for showSymbol function
-        const seriesDataLength = s.data?.length || 0;
-        return {
-          ...s,
-          // Show exactly 6 points: first, last, and 4 evenly spaced in between
-          symbol: enabled ? 'circle' : "none",
-          symbolSize: enabled ? 6 : 4,
-          showSymbol: enabled ? function (dataIndex: number) {
-            const dataLength = seriesDataLength;
-
-            // Always show first and last
-            if (dataIndex === 0 || dataIndex === dataLength - 1) {
-              return true;
-            }
-
-            // Calculate 4 evenly spaced middle points
-            const point1 = Math.round((dataLength - 1) * 1 / 5);
-            const point2 = Math.round((dataLength - 1) * 2 / 5);
-            const point3 = Math.round((dataLength - 1) * 3 / 5);
-            const point4 = Math.round((dataLength - 1) * 4 / 5);
-
-            if (dataIndex === point1 || dataIndex === point2 || dataIndex === point3 || dataIndex === point4) {
-              return true;
-            }
-
-            return false;
-          } : false,
-          label: {
-            ...(s.label || {}),
-            show: enabled,
-            position: 'top',
-            formatter: enabled ? createLabelFormatter(currentFormat, isShareChart) : '{c}',
-            fontSize: 10,
-            color: 'rgba(51, 65, 85, 0.85)',
-            backgroundColor: 'rgba(255, 255, 255, 0.8)',
-            padding: [2, 4],
-            borderRadius: 3,
-          },
-        };
-      }),
-    }));
-  };
-
   return (
     <div style={{ padding: '0 4px' }}>
       <div className="chart-builder-panel-title" style={{ marginBottom: 20 }}>Customize</div>
@@ -1171,9 +1173,6 @@ const AdvancedChartOptions: React.FC = () => {
             )}
             {isLineOrAreaChart && (
               <CheckRow id="smooth-lines" label="Smooth curves" checked={smooth} onChange={handleSmooth} />
-            )}
-            {isLineOrAreaChart && (
-              <CheckRow id="show-markers" label="Show point markers & values" checked={markers} onChange={handleMarkers} />
             )}
           </div>
         </CollapsibleSection>

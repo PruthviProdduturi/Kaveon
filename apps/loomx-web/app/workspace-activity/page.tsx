@@ -130,7 +130,7 @@ const WorkspaceActivityPage: React.FC = () => {
                     lastModified = item.updated_at || "—";
                     created = item.created_at || "—";
                   } else if (item.kind === "chart") {
-                    href = `/charts`;
+                    href = `/charts/${item.id}`;
                     typeLabel = "Chart";
                     lastModified = item.updated_at || "—";
                     created = item.created_at || "—";

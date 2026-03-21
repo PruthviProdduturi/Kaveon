@@ -1,6 +1,6 @@
 """Pydantic models — Dashboards."""
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -9,6 +9,7 @@ class DashboardCreate(BaseModel):
     description: Optional[str] = Field(default=None, max_length=1000)
     layout: Optional[Any] = None
     charts: Optional[Any] = None
+    visibility: Optional[Literal["private", "internal", "published"]] = None
 
 
 class DashboardUpdate(BaseModel):
@@ -16,6 +17,7 @@ class DashboardUpdate(BaseModel):
     description: Optional[str] = Field(default=None, max_length=1000)
     layout: Optional[Any] = None
     charts: Optional[Any] = None
+    visibility: Optional[Literal["private", "internal", "published"]] = None
 
 
 class DashboardFavoriteBody(BaseModel):

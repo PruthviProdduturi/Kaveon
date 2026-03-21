@@ -1,7 +1,8 @@
 """Dashboards router — /api/v1/dashboards."""
 
-from fastapi import APIRouter, Request, Response, HTTPException, Depends
-from middleware.auth import require_auth
+from fastapi import APIRouter, Response, HTTPException, Depends
+from middleware.auth import require_auth, require_user_context, UserContext
+from middleware.permissions import require_min_role, can_write, can_publish
 from models.dashboards import DashboardCreate, DashboardUpdate, DashboardFavoriteBody
 import services.dashboards as svc
 import services.favorites as fav_svc
@@ -15,46 +16,69 @@ NO_CACHE = {
 
 
 @router.get("/dashboards")
-def list_dashboards(response: Response, user: str = Depends(require_auth)):
+def list_dashboards(response: Response, ctx: UserContext = Depends(require_user_context)):
     response.headers.update(NO_CACHE)
-    return svc.list_dashboards()
+    return svc.list_dashboards(ctx.email, ctx.role)
 
 
 @router.get("/dashboards/summary")
-def dashboards_summary(response: Response, user: str = Depends(require_auth)):
+def dashboards_summary(response: Response, ctx: UserContext = Depends(require_user_context)):
     response.headers.update(NO_CACHE)
-    items = svc.list_dashboards(user)
+    items = svc.list_dashboards(ctx.email, ctx.role)
     return {"count": len(items), "recent": items}
 
 
 @router.get("/dashboards/{dashboard_id}")
-def get_dashboard(dashboard_id: str, response: Response, user: str = Depends(require_auth)):
+def get_dashboard(dashboard_id: str, response: Response, ctx: UserContext = Depends(require_user_context)):
     response.headers.update(NO_CACHE)
-    dashboard = svc.get_dashboard_by_id(dashboard_id)
+    dashboard = svc.get_dashboard_by_id(dashboard_id, ctx.email, ctx.role)
     if not dashboard:
         raise HTTPException(status_code=404, detail="Dashboard not found")
-    is_fav = fav_svc.is_favorite(user, "dashboard", dashboard_id)
+    is_fav = fav_svc.is_favorite(ctx.email, "dashboard", dashboard_id)
     return {**dashboard, "is_favorite": is_fav}
 
 
 @router.post("/dashboards", status_code=201)
-def create_dashboard(data: DashboardCreate, user: str = Depends(require_auth)):
-    return svc.create_dashboard(data.model_dump(exclude_none=True), user)
+def create_dashboard(
+    data: DashboardCreate,
+    ctx: UserContext = Depends(require_min_role("Analyst")),
+):
+    payload = data.model_dump(exclude_none=True)
+    if payload.get("visibility") == "published" and not can_publish(ctx):
+        payload["visibility"] = "internal"
+    return svc.create_dashboard(payload, ctx.email)
 
 
 @router.put("/dashboards/{dashboard_id}")
-def update_dashboard(dashboard_id: str, data: DashboardUpdate, user: str = Depends(require_auth)):
-    result = svc.update_dashboard(dashboard_id, data.model_dump(exclude_none=True))
+def update_dashboard(
+    dashboard_id: str,
+    data: DashboardUpdate,
+    ctx: UserContext = Depends(require_user_context),
+):
+    existing = svc.get_dashboard_by_id(dashboard_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    if not can_write(existing["created_by"], ctx):
+        raise HTTPException(status_code=403, detail="You don't have permission to edit this dashboard")
+
+    payload = data.model_dump(exclude_none=True)
+    if payload.get("visibility") == "published" and not can_publish(ctx):
+        payload["visibility"] = "internal"
+
+    result = svc.update_dashboard(dashboard_id, payload)
     if not result:
         raise HTTPException(status_code=404, detail="Dashboard not found")
     return result
 
 
 @router.delete("/dashboards/{dashboard_id}", status_code=204)
-def delete_dashboard(dashboard_id: str, user: str = Depends(require_auth)):
-    deleted = svc.delete_dashboard(dashboard_id)
-    if not deleted:
+def delete_dashboard(dashboard_id: str, ctx: UserContext = Depends(require_user_context)):
+    existing = svc.get_dashboard_by_id(dashboard_id)
+    if not existing:
         raise HTTPException(status_code=404, detail="Dashboard not found")
+    if not can_write(existing["created_by"], ctx):
+        raise HTTPException(status_code=403, detail="You don't have permission to delete this dashboard")
+    svc.delete_dashboard(dashboard_id)
 
 
 @router.put("/dashboards/{dashboard_id}/favorite")

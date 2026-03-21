@@ -1,6 +1,6 @@
 """Pydantic models — Charts."""
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -12,6 +12,7 @@ class ChartCreate(BaseModel):
     query_config: Optional[dict[str, Any]] = None
     viz_config: Optional[dict[str, Any]] = None
     description: Optional[str] = Field(default=None, max_length=1000)
+    visibility: Optional[Literal["private", "internal", "published"]] = None
 
 
 class ChartUpdate(BaseModel):

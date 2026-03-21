@@ -12,6 +12,15 @@ import { API_BASE } from "../../../../config";
 export const dynamic = 'force-dynamic';
 export const dynamicParams = true;
 
+const REFRESH_INTERVALS = [
+  { label: 'Off', value: 0 },
+  { label: '30s', value: 30 },
+  { label: '1m', value: 60 },
+  { label: '5m', value: 300 },
+  { label: '10m', value: 600 },
+  { label: '30m', value: 1800 },
+];
+
 const DashboardViewContent: React.FC<{
   isFavorite: boolean;
   isAnimating: boolean;
@@ -22,15 +31,38 @@ const DashboardViewContent: React.FC<{
   onPublish: () => void;
   onEdit: () => void;
 }> = ({ isFavorite, isAnimating, isPublished, initialConfig, publishing, onFavoriteClick, onPublish, onEdit }) => {
-  const { preloadAllCharts, isPreloading, dashboardFilters } = useDashboard();
+  const { preloadAllCharts, isPreloading, dashboardFilters, triggerGlobalRefresh } = useDashboard();
   const hasPreloadedRef = useRef(false);
+  const [chartsReady, setChartsReady] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [refreshInterval, setRefreshInterval] = useState(0);
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
+  const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     if (hasPreloadedRef.current || !initialConfig) return;
     hasPreloadedRef.current = true;
-    preloadAllCharts(API_BASE, msalFetch);
+    preloadAllCharts(API_BASE, msalFetch)
+      .then(() => setChartsReady(true))
+      .catch(() => setChartsReady(true));
   }, [initialConfig, preloadAllCharts]);
+
+  // Auto-refresh timer
+  useEffect(() => {
+    if (refreshTimerRef.current) clearInterval(refreshTimerRef.current);
+    if (refreshInterval > 0) {
+      refreshTimerRef.current = setInterval(() => {
+        triggerGlobalRefresh();
+        setLastRefreshed(new Date());
+      }, refreshInterval * 1000);
+    }
+    return () => { if (refreshTimerRef.current) clearInterval(refreshTimerRef.current); };
+  }, [refreshInterval, triggerGlobalRefresh]);
+
+  const handleManualRefresh = () => {
+    triggerGlobalRefresh();
+    setLastRefreshed(new Date());
+  };
 
   const hasFilters = dashboardFilters.length > 0;
 
@@ -44,6 +76,46 @@ const DashboardViewContent: React.FC<{
           )}
         </div>
         <div className="page-header-actions">
+          {/* Auto-refresh controls */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <button
+              onClick={handleManualRefresh}
+              title="Refresh all charts"
+              style={{
+                padding: '7px 10px',
+                background: 'transparent',
+                border: '1px solid #e2e8f0',
+                borderRadius: 6,
+                cursor: 'pointer',
+                color: '#475569',
+              }}
+            >
+              <i className="fas fa-sync-alt" style={{ fontSize: 12 }} />
+            </button>
+            <select
+              value={refreshInterval}
+              onChange={(e) => setRefreshInterval(Number(e.target.value))}
+              style={{
+                padding: '7px 10px',
+                background: refreshInterval > 0 ? '#f0fdf4' : 'transparent',
+                border: refreshInterval > 0 ? '1px solid #86efac' : '1px solid #e2e8f0',
+                borderRadius: 6,
+                cursor: 'pointer',
+                fontSize: 12,
+                color: refreshInterval > 0 ? '#15803d' : '#475569',
+              }}
+            >
+              {REFRESH_INTERVALS.map((ri) => (
+                <option key={ri.value} value={ri.value}>{ri.label === 'Off' ? 'Auto-refresh' : ri.label}</option>
+              ))}
+            </select>
+            {lastRefreshed && (
+              <span style={{ fontSize: 11, color: '#94a3b8', whiteSpace: 'nowrap' }}>
+                {lastRefreshed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </span>
+            )}
+          </div>
+
           {/* Filters toggle — only shown if dashboard has filters */}
           {hasFilters && (
             <button
@@ -147,15 +219,18 @@ const DashboardViewContent: React.FC<{
         </div>
       )}
 
-      {/* Canvas */}
+      {/* Canvas — rendered only after all chart configs are preloaded so each
+          chart mounts once with its config already in cache and runs exactly
+          one query instead of flashing through multiple loading states. */}
       <div style={{ flex: 1, overflow: 'auto', padding: '16px 24px', background: '#f8fafc' }}>
-        {isPreloading && (
-          <div style={{ padding: 20, textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>
-            <i className="fas fa-spinner fa-spin" style={{ marginRight: 8 }} />
-            Loading charts…
+        {!chartsReady ? (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 60, gap: 12, color: '#94a3b8', fontSize: 13 }}>
+            <i className="fas fa-spinner fa-spin" style={{ fontSize: 22 }} />
+            <span>Loading dashboard…</span>
           </div>
+        ) : (
+          <DashboardCanvas />
         )}
-        <DashboardCanvas />
       </div>
     </div>
   );
@@ -191,7 +266,7 @@ const DashboardViewPage: React.FC = () => {
           chartIds: JSON.parse(d.charts || "[]"),
         });
         setIsPublished(d.is_published || false);
-        setIsFavorite(d.favorite || false);
+        setIsFavorite(d.is_favorite || false);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load dashboard");
       } finally {

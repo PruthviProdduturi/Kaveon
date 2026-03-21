@@ -9,14 +9,16 @@ import { ReactNode, useState } from "react";
 import { useAuth } from "../auth/useAuth";
 import { usePathname, useRouter } from "next/navigation";
 import { useTheme } from "../contexts/ThemeContext";
+import { useRole } from "../hooks/useRole";
 
 interface LayoutProps {
   children: ReactNode;
 }
 
 export function Layout({ children }: LayoutProps) {
-  const { account, isAuthenticated, login, logout } = useAuth();
+  const { account, isAuthenticated, login, logout, role } = useAuth();
   const { primaryColor, gradientColors } = useTheme();
+  const { isAdmin } = useRole();
   const pathname = usePathname();
   const router = useRouter();
   const [isRevolving, setIsRevolving] = useState(false);
@@ -168,6 +170,12 @@ export function Layout({ children }: LayoutProps) {
                 <i className="fas fa-server" style={{ marginRight: 6, width: 14 }} />
                 <span>Data Sources</span>
               </Link>
+              {isAdmin && (
+                <Link href="/settings/users" className="header-dropdown-item">
+                  <i className="fas fa-users-cog" style={{ marginRight: 6, width: 14 }} />
+                  <span>User Management</span>
+                </Link>
+              )}
             </div>
           </div>
           <div style={{ position: "relative", display: "inline-block" }}>
@@ -218,6 +226,7 @@ export function Layout({ children }: LayoutProps) {
               <div style={{ padding: "8px 16px", borderBottom: "1px solid #444" }}>
                 <div style={{ fontWeight: "bold" }}>{account?.name || "User"}</div>
                 <div style={{ fontSize: 13, color: "#bbb" }}>{account?.email || account?.username || ""}</div>
+                {isAuthenticated && <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{role ?? "Viewer"}</div>}
               </div>
               <button
                 style={{ width: "100%", background: "none", border: "none", color: "#fff", textAlign: "left", padding: "8px 16px", cursor: "pointer" }}

@@ -1145,6 +1145,8 @@ export interface ChartBuilderContextValue {
   setFilters: React.Dispatch<React.SetStateAction<ChartFilterConfig[]>>;
   sqlPreview: SqlPreviewState;
   runPreviewQuery: (forceRegenerate?: boolean, extraFilters?: any[]) => Promise<void>;
+  cancelRunningQuery: () => void;
+  runContext?: string;
   isSaving: boolean;
   canSave: boolean;
   saveError: string | null;
@@ -1206,6 +1208,8 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
   const [previewOptions, setPreviewOptions] = useState<any | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
   const isQueryRunningRef = useRef(false);
+  const cancelQueryRef = useRef(false);
+  const activeJobIdRef = useRef<string | null>(null);
   const initialSnapshotRef = useRef<{
     config: any | null;
     name: string;
@@ -2783,30 +2787,75 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         ? (runContext || "").split(":")[1] || undefined
         : undefined;
 
-      const executeRes = await msalFetch(`${API_BASE}/api/v1/sql/execute`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        // Let the backend use its default cap (50k rows) so
-        // charts can aggregate over the full result set.
-        body: JSON.stringify({
-          sql_text: sqlText,
-          database: datasetDetail?.database_name,
-          source: executeSource,
-          tables_used: tablesUsed.length > 0 ? JSON.stringify(tablesUsed) : null,
-          // Provide full context for rich query history entries.
-          chart_id:     chartId              ?? undefined,
-          chart_type:   selectedTemplate?.id ?? undefined,
-          dataset_id:   selectedDatasetId    ?? undefined,
-          dashboard_id: dashboardIdFromContext,
-        }),
-      });
+      const executeBody = {
+        sql_text: sqlText,
+        database: datasetDetail?.database_name,
+        source: executeSource,
+        tables_used: tablesUsed.length > 0 ? JSON.stringify(tablesUsed) : null,
+        chart_id:     chartId              ?? undefined,
+        chart_type:   selectedTemplate?.id ?? undefined,
+        dataset_id:   selectedDatasetId    ?? undefined,
+        dashboard_id: dashboardIdFromContext,
+        // Cache results for dashboard charts — repeated renders of the same
+        // chart (filter changes, refresh) benefit from sub-ms cache hits.
+        use_cache:  isDashboard,
+        cache_ttl:  300,
+      };
 
-      if (!executeRes.ok) {
-        const text = await executeRes.text();
-        throw new Error(`Failed to execute SQL: ${executeRes.status} ${text}`);
+      let executeJson: any;
+
+      if (isDashboard) {
+        // Async execution path for dashboard charts: submit job, poll until done.
+        cancelQueryRef.current = false;
+        const startRes = await msalFetch(`${API_BASE}/api/v1/sql/execute-async`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(executeBody),
+        });
+        if (!startRes.ok) {
+          const text = await startRes.text();
+          throw new Error(`Failed to start async query: ${startRes.status} ${text}`);
+        }
+        const { job_id } = await startRes.json();
+        activeJobIdRef.current = job_id;
+
+        // Poll until the job completes or is cancelled
+        while (true) {
+          if (cancelQueryRef.current) {
+            // Fire-and-forget cleanup on the server
+            msalFetch(`${API_BASE}/api/v1/sql/async/${job_id}`, { method: "DELETE" }).catch(() => {});
+            activeJobIdRef.current = null;
+            isQueryRunningRef.current = false;
+            setSqlPreview((prev) => ({ ...prev, isRunning: false, error: null }));
+            return;
+          }
+          await new Promise((r) => setTimeout(r, 600));
+          const pollRes = await msalFetch(`${API_BASE}/api/v1/sql/async/${job_id}`);
+          if (!pollRes.ok) throw new Error("Failed to poll query status");
+          const job = await pollRes.json();
+          if (job.status === "success") {
+            executeJson = { columns: job.columns, rows: job.rows, duration_ms: job.duration_ms };
+            activeJobIdRef.current = null;
+            break;
+          } else if (job.status === "error") {
+            activeJobIdRef.current = null;
+            throw new Error(job.error || "Query failed");
+          }
+          // else still "running" — continue polling
+        }
+      } else {
+        // Synchronous path for chart builder
+        const executeRes = await msalFetch(`${API_BASE}/api/v1/sql/execute`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(executeBody),
+        });
+        if (!executeRes.ok) {
+          const text = await executeRes.text();
+          throw new Error(`Failed to execute SQL: ${executeRes.status} ${text}`);
+        }
+        executeJson = await executeRes.json();
       }
-
-      const executeJson = await executeRes.json();
 
       const totalDurationMs = performance.now() - start;
       const fabricDurationMs =
@@ -3362,6 +3411,8 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     setFilters,
     sqlPreview,
     runPreviewQuery,
+    cancelRunningQuery: () => { cancelQueryRef.current = true; },
+    runContext,
     isSaving,
     canSave,
     saveError,

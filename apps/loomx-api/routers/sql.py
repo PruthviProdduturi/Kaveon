@@ -1,9 +1,13 @@
 """SQL router — /api/v1/sql."""
 
+import hashlib
 import json
+import threading
 import time
-from fastapi import APIRouter, Request, Response, HTTPException, Query, Depends
-from middleware.auth import require_auth
+import uuid
+from fastapi import APIRouter, BackgroundTasks, Request, Response, HTTPException, Query, Depends
+from middleware.auth import require_auth, require_user_context, UserContext
+from middleware.permissions import require_min_role
 from middleware.rate_limit import sql_execute_limiter
 from models.sql import SqlGenerateBody, SqlExecuteBody
 import services.datasets as datasets_svc
@@ -14,6 +18,66 @@ import database.pool as pool
 
 router = APIRouter()
 NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
+
+# ── Query result cache ──────────────────────────────────────────────────────
+# Keyed by SHA-256(database + sql_text). Entries expire after their TTL.
+_QUERY_CACHE: dict[str, dict] = {}
+_QUERY_CACHE_LOCK = threading.Lock()
+
+def _cache_key(database: str, sql_text: str) -> str:
+    return hashlib.sha256(f"{database}\x00{sql_text}".encode()).hexdigest()
+
+def _cache_get(key: str, ttl: int) -> dict | None:
+    with _QUERY_CACHE_LOCK:
+        entry = _QUERY_CACHE.get(key)
+    if entry and (time.time() - entry["ts"]) < ttl:
+        return entry["result"]
+    return None
+
+def _cache_set(key: str, result: dict) -> None:
+    with _QUERY_CACHE_LOCK:
+        # Evict stale entries if cache exceeds 500 items
+        if len(_QUERY_CACHE) >= 500:
+            now = time.time()
+            stale = [k for k, v in list(_QUERY_CACHE.items()) if now - v["ts"] > 3600]
+            for k in stale[:200]:
+                _QUERY_CACHE.pop(k, None)
+        _QUERY_CACHE[key] = {"result": result, "ts": time.time()}
+
+# ── Async job store ─────────────────────────────────────────────────────────
+_ASYNC_JOBS: dict[str, dict] = {}
+_ASYNC_JOBS_LOCK = threading.Lock()
+
+def _async_job_run(job_id: str, data: SqlExecuteBody, user_id: str) -> None:
+    start_time = int(time.time() * 1000)
+    try:
+        result = pool.execute_query(data.sql_text, data.database)
+        duration_ms = int(time.time() * 1000) - start_time
+        resolved_tables = data.tables_used or json.dumps(
+            extract_tables_from_sql(data.sql_text)
+        )
+        try:
+            history_svc.create_history({
+                "sql_text": data.sql_text, "duration_ms": duration_ms,
+                "row_count": result.get("row_count") or 0, "status": "success",
+                "trigger_source": canonical_source(data.source or ""),
+                "tables_used": resolved_tables, "run_context": "{}",
+                "dataset_id": data.dataset_id,
+                "started_at": start_time,
+            }, user_id)
+        except Exception:
+            pass
+        with _ASYNC_JOBS_LOCK:
+            _ASYNC_JOBS[job_id] = {
+                "status": "success",
+                "columns": result.get("columns") or [],
+                "rows": result.get("rows") or [],
+                "duration_ms": duration_ms,
+            }
+    except Exception as e:
+        duration_ms = int(time.time() * 1000) - start_time
+        with _ASYNC_JOBS_LOCK:
+            _ASYNC_JOBS[job_id] = {"status": "error", "error": str(e), "duration_ms": duration_ms}
 
 _CANONICAL_SOURCE = {
     "dashboard": "dashboard-chart",
@@ -32,7 +96,8 @@ def canonical_source(raw: str) -> str:
 
 
 @router.post("/sql/generate")
-def generate_sql(data: SqlGenerateBody, user: str = Depends(require_auth)):
+def generate_sql(data: SqlGenerateBody, ctx=Depends(require_min_role("Analyst"))):
+    user = ctx.email
     dataset_id = data.dataset_id
     chart_type = data.chart_type
     config = data.config
@@ -188,10 +253,21 @@ def distinct_filter_values(
 
 
 @router.post("/sql/execute")
-def execute_sql(data: SqlExecuteBody, response: Response, user: str = Depends(require_auth)):
-    sql_execute_limiter.check(user)
+def execute_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Depends(require_user_context)):
+    # Viewers may only execute from dashboard/filter context — not from builder or lab
+    _dashboard_sources = {"dashboard-chart", "dashboard-filter", "dataset-filter", "dataset-preview"}
+    from middleware.permissions import ROLE_LEVELS
+    if ROLE_LEVELS.get(ctx.role, 0) < ROLE_LEVELS["Analyst"]:
+        src = (data.source or "").lower()
+        if src not in _dashboard_sources:
+            from fastapi import HTTPException as _HTTPException
+            raise _HTTPException(
+                status_code=403,
+                detail={"code": "forbidden", "message": "Analyst role required to execute queries."},
+            )
+    sql_execute_limiter.check(ctx.email)
     response.headers.update(NO_CACHE)
-    user_id = user
+    user_id = ctx.email
 
     sql_text = data.sql_text
     database = data.database
@@ -202,6 +278,8 @@ def execute_sql(data: SqlExecuteBody, response: Response, user: str = Depends(re
     chart_type = data.chart_type
     dataset_id = data.dataset_id
     row_limit = data.row_limit
+    use_cache = data.use_cache or False
+    cache_ttl = data.cache_ttl or 300
 
     trigger_source = canonical_source(source)
     resolved_tables = tables_used or json.dumps(extract_tables_from_sql(sql_text))
@@ -212,6 +290,20 @@ def execute_sql(data: SqlExecuteBody, response: Response, user: str = Depends(re
         **({} if chart_type is None else {"chartType": chart_type}),
         **({} if dataset_id is None else {"datasetId": int(dataset_id)}),
     })
+
+    # Return cached result immediately when available (dashboard-chart queries)
+    ck = _cache_key(database, sql_text)
+    if use_cache:
+        cached = _cache_get(ck, cache_ttl)
+        if cached is not None:
+            row_count = cached.get("row_count") or 0
+            return {
+                "columns": cached.get("columns") or [],
+                "rows": cached.get("rows") or [],
+                "message": f"Returned {row_count} rows (cached)" if row_count else None,
+                "duration_ms": 0,
+                "from_cache": True,
+            }
 
     start_time = int(time.time() * 1000)
     try:
@@ -239,6 +331,10 @@ def execute_sql(data: SqlExecuteBody, response: Response, user: str = Depends(re
         raise HTTPException(status_code=500, detail="Query execution failed")
 
     duration_ms = int(time.time() * 1000) - start_time
+
+    if use_cache:
+        _cache_set(ck, {"columns": result.get("columns") or [], "rows": result.get("rows") or [], "row_count": result.get("row_count") or 0})
+
     try:
         history_svc.create_history({
             "sql_text": sql_text, "duration_ms": duration_ms,
@@ -257,4 +353,53 @@ def execute_sql(data: SqlExecuteBody, response: Response, user: str = Depends(re
         "rows": result.get("rows") or [],
         "message": f"Returned {row_count} rows" if row_count else None,
         "duration_ms": duration_ms,
+        "from_cache": False,
     }
+
+
+@router.post("/sql/execute-async")
+def execute_sql_async(
+    data: SqlExecuteBody,
+    background_tasks: BackgroundTasks,
+    ctx=Depends(require_min_role("Analyst")),
+):
+    """Start an async query job. Returns job_id immediately for polling."""
+    user = ctx.email
+    sql_execute_limiter.check(user)
+    job_id = str(uuid.uuid4())
+    with _ASYNC_JOBS_LOCK:
+        _ASYNC_JOBS[job_id] = {"status": "running"}
+        # Evict completed jobs older than 10 minutes
+        now = time.time()
+        stale = [k for k, v in list(_ASYNC_JOBS.items())
+                 if v.get("status") != "running" and v.get("finished_at", now) < now - 600]
+        for k in stale[:100]:
+            _ASYNC_JOBS.pop(k, None)
+    background_tasks.add_task(_async_job_run, job_id, data, user)
+    return {"job_id": job_id}
+
+
+@router.get("/sql/async/{job_id}")
+def get_async_job(job_id: str, user: str = Depends(require_auth)):
+    """Poll the status and result of an async query job."""
+    with _ASYNC_JOBS_LOCK:
+        job = dict(_ASYNC_JOBS.get(job_id, {}))
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+@router.delete("/sql/async/{job_id}")
+def cancel_async_job(job_id: str, user: str = Depends(require_auth)):
+    """Remove a completed or running job from the store."""
+    with _ASYNC_JOBS_LOCK:
+        _ASYNC_JOBS.pop(job_id, None)
+    return {"ok": True}
+
+
+@router.delete("/sql/cache")
+def invalidate_cache(ctx=Depends(require_min_role("Admin"))):
+    """Clear the entire query result cache (admin / manual refresh)."""
+    with _QUERY_CACHE_LOCK:
+        _QUERY_CACHE.clear()
+    return {"ok": True, "cleared": True}

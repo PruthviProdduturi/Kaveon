@@ -562,6 +562,29 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
               </>
             )}
           </button>
+          {dashboardId && (
+            <button
+              onClick={() => router.push(`/dashboards/${dashboardId}/view`)}
+              style={{
+                padding: "8px 16px",
+                fontWeight: 600,
+                fontSize: 13,
+                background: "transparent",
+                color: "#475569",
+                border: "1px solid #e2e8f0",
+                borderRadius: 6,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+              onMouseOver={(e) => { e.currentTarget.style.background = "#f1f5f9"; }}
+              onMouseOut={(e) => { e.currentTarget.style.background = "transparent"; }}
+            >
+              <i className="fas fa-eye" />
+              View
+            </button>
+          )}
           {saveError && (
             <span style={{ color: "#ef4444", fontSize: 12 }}>
               <i className="fas fa-exclamation-circle" style={{ marginRight: 4 }} />
