@@ -1223,17 +1223,71 @@ return;
   useEffect(() => { runCurrentQueryRef.current = runCurrentQuery; });
   useEffect(() => { applySqlFormattingRef.current = applySqlFormattingToActiveQuery; });
 
-  // Escape exits fullscreen / closes column picker
+  // ── Inline AI ──────────────────────────────────────────────────────────────
+  const [showAiBar, setShowAiBar] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const aiInputRef = useRef<HTMLInputElement>(null);
+
+  const generateSqlWithAi = async () => {
+    const prompt = aiPrompt.trim();
+    if (!prompt || aiGenerating) return;
+    setAiGenerating(true);
+    setAiError(null);
+    const currentSql = editorRef.current?.getModel()?.getValue() ?? getActiveQuery()?.text ?? "";
+    const userEmail = account?.email || account?.username || "";
+    const ctx: Record<string, unknown> = {};
+    if (currentDataSourceId) ctx.data_source_id = currentDataSourceId;
+    if (currentSql.trim()) ctx.sql = currentSql.trim();
+    try {
+      const res = await msalFetch(`${API_BASE}/api/v1/ai/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [{ role: "user", content: `Generate a T-SQL query that: ${prompt}` }],
+          context: Object.keys(ctx).length ? ctx : undefined,
+        }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error((d as any)?.detail?.message || `HTTP ${res.status}`);
+      }
+      const data = await res.json() as { reply: string };
+      // Extract SQL from ```sql ... ``` block, or fallback to full reply
+      const match = data.reply.match(/```sql\n?([\s\S]*?)```/i);
+      const sql = (match ? match[1] : data.reply).trim();
+      if (sql) {
+        const editor = editorRef.current;
+        if (editor) {
+          editor.setValue(sql);
+          editor.focus();
+        }
+        setQueries(prev => prev.map(q => q.id === activeQueryId ? { ...q, text: sql } : q));
+      }
+      setShowAiBar(false);
+      setAiPrompt("");
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : "AI request failed");
+    } finally {
+      setAiGenerating(false);
+    }
+  };
+
+  // Escape exits fullscreen / closes column picker / AI bar
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setIsResultsFullscreen(false);
         setIsColumnPickerOpen(false);
+        setShowAiBar(false);
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []);
+
+  useEffect(() => { if (showAiBar) setTimeout(() => aiInputRef.current?.focus(), 50); }, [showAiBar]);
 
   /** Commit an in-progress tab rename. */
   const commitRename = () => {
@@ -2140,7 +2194,75 @@ return;
                 >
                   <i className="fas fa-save" /> Save
                 </button>
+                <span style={{ width: 1, background: "#e2e8f0", alignSelf: "stretch", margin: "4px 2px" }} />
+                <button
+                  type="button"
+                  className="template-btn"
+                  onClick={() => { setShowAiBar(v => !v); setAiError(null); }}
+                  title="Generate SQL with AI"
+                  style={{
+                    fontSize: "0.78rem",
+                    color: showAiBar ? "#7c3aed" : "#6b7280",
+                    background: showAiBar ? "#f5f3ff" : undefined,
+                    borderColor: showAiBar ? "#ddd6fe" : undefined,
+                    fontWeight: showAiBar ? 600 : undefined,
+                  }}
+                >
+                  <i className="fas fa-wand-magic-sparkles" style={{ marginRight: 3 }} />AI
+                </button>
               </div>
+
+              {/* ── Inline AI bar ── */}
+              {showAiBar && (
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 6,
+                  padding: "0.45rem 0.75rem",
+                  background: "#faf5ff",
+                  borderTop: "1px solid #ede9fe",
+                  flexShrink: 0,
+                }}>
+                  <i className="fas fa-magic" style={{ color: "#7c3aed", fontSize: 12, flexShrink: 0 }} />
+                  <input
+                    ref={aiInputRef}
+                    type="text"
+                    value={aiPrompt}
+                    onChange={e => setAiPrompt(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") void generateSqlWithAi(); }}
+                    placeholder="Describe the query you need… e.g. top 10 customers by revenue last month"
+                    style={{
+                      flex: 1, border: "1px solid #ddd6fe", borderRadius: 7,
+                      padding: "0.3rem 0.65rem", fontSize: "0.8rem",
+                      color: "#1e293b", background: "white", outline: "none",
+                      minWidth: 0,
+                    }}
+                    onFocus={e => { e.currentTarget.style.borderColor = "#7c3aed"; e.currentTarget.style.boxShadow = "0 0 0 2px #ede9fe"; }}
+                    onBlur={e => { e.currentTarget.style.borderColor = "#ddd6fe"; e.currentTarget.style.boxShadow = "none"; }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void generateSqlWithAi()}
+                    disabled={!aiPrompt.trim() || aiGenerating}
+                    style={{
+                      padding: "0.3rem 0.75rem", borderRadius: 7, fontSize: "0.8rem", fontWeight: 600,
+                      background: aiPrompt.trim() && !aiGenerating ? "#7c3aed" : "#e9d5ff",
+                      color: aiPrompt.trim() && !aiGenerating ? "white" : "#a78bfa",
+                      border: "none", cursor: aiPrompt.trim() && !aiGenerating ? "pointer" : "not-allowed",
+                      flexShrink: 0, whiteSpace: "nowrap",
+                    }}
+                  >
+                    {aiGenerating ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Generating…</> : <>Generate SQL</>}
+                  </button>
+                  {aiError && <span style={{ fontSize: "0.75rem", color: "#b91c1c", flexShrink: 0 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 3 }} />{aiError}</span>}
+                  <button
+                    type="button"
+                    onClick={() => { setShowAiBar(false); setAiPrompt(""); setAiError(null); }}
+                    style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: "0.2rem", fontSize: 14, flexShrink: 0 }}
+                    title="Close"
+                  >
+                    <i className="fas fa-times" />
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Vertical resize handle between editor and results */}
