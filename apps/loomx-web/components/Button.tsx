@@ -31,7 +31,9 @@ export function Button({
     borderRadius: '6px',
     cursor: disabled ? 'not-allowed' : 'pointer',
     transition: 'all 0.2s',
-    border: 'none',
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: 'transparent',
     ...sizeStyles[size],
     ...style,
   };
@@ -48,7 +50,9 @@ export function Button({
     secondary: {
       background: '#ffffff',
       color: '#374151',
-      border: '1px solid #d1d5db',
+      borderWidth: '1px',
+      borderStyle: 'solid',
+      borderColor: '#d1d5db',
       opacity: disabled ? 0.5 : 1,
     },
     ghost: {
@@ -69,6 +73,8 @@ export function Button({
       : variant === 'secondary'
       ? {
           background: '#f9fafb',
+          borderWidth: '1px',
+          borderStyle: 'solid',
           borderColor: '#9ca3af',
         }
       : {
