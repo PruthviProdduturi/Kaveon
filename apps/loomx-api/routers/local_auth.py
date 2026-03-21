@@ -53,7 +53,8 @@ def _issue_jwt(email: str, name: str, roles: list[str]) -> str:
 
 
 def _resolve_roles_for_email(email: str) -> list[str]:
-    """Resolve the user_roles DB entry for a local user email."""
+    """Resolve the user_roles DB entry for a local user email.
+    Returns [] when no entry is found so resolve_role's bootstrap can fire."""
     try:
         import database.metadata as db
         row = db.query_one(
@@ -64,7 +65,7 @@ def _resolve_roles_for_email(email: str) -> list[str]:
             return [row["role"]]
     except Exception as e:
         print(f"[LocalAuth] _resolve_roles_for_email failed for {email}: {e}")
-    return ["Viewer"]
+    return []
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
