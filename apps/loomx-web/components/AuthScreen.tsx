@@ -55,74 +55,59 @@ export function AuthScreen() {
 
           <div className="auth-content">
             {/* Heading */}
-            <p className="auth-tagline" style={{ marginBottom: "0.25rem" }}>
-              Welcome to LooMX
-            </p>
-            <p className="auth-subtitle">Sign in to continue</p>
+            <p className="auth-welcome-heading">Welcome back</p>
+            <p className="auth-welcome-sub">Sign in to {APP_DISPLAY_NAME} to continue</p>
 
             {/* Login form */}
             <div className="auth-form">
-              <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "0.75rem", width: "100%" }}>
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem", textAlign: "left" }}>
-                  <label style={{ fontSize: 12.5, fontWeight: 600, color: "rgba(255,255,255,0.75)", letterSpacing: "0.03em" }}>
-                    Username
-                  </label>
-                  <input
-                    type="text"
-                    value={username}
-                    onChange={e => setUsername(e.target.value)}
-                    placeholder="Enter your username"
-                    autoComplete="username"
-                    autoFocus
-                    disabled={isConnecting}
-                    style={{
-                      padding: "0.65rem 0.9rem",
-                      borderRadius: 8,
-                      border: "1px solid rgba(255,255,255,0.2)",
-                      background: "rgba(255,255,255,0.1)",
-                      color: "white",
-                      fontSize: 14,
-                      outline: "none",
-                      width: "100%",
-                      boxSizing: "border-box",
-                    }}
-                  />
-                </div>
+              <form onSubmit={handleSubmit}>
+                <div className="auth-form-fields">
+                  {/* Username */}
+                  <div className="auth-input-group">
+                    <label className="auth-input-label">Username</label>
+                    <div className="auth-input-wrapper">
+                      <input
+                        type="text"
+                        className="auth-input"
+                        value={username}
+                        onChange={e => setUsername(e.target.value)}
+                        placeholder="Enter your username"
+                        autoComplete="username"
+                        autoFocus
+                        disabled={isConnecting}
+                      />
+                      <i className="fas fa-user auth-input-icon" />
+                    </div>
+                  </div>
 
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem", textAlign: "left" }}>
-                  <label style={{ fontSize: 12.5, fontWeight: 600, color: "rgba(255,255,255,0.75)", letterSpacing: "0.03em" }}>
-                    Password
-                  </label>
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={e => setPassword(e.target.value)}
-                    placeholder="Enter your password"
-                    autoComplete="current-password"
-                    disabled={isConnecting}
-                    style={{
-                      padding: "0.65rem 0.9rem",
-                      borderRadius: 8,
-                      border: "1px solid rgba(255,255,255,0.2)",
-                      background: "rgba(255,255,255,0.1)",
-                      color: "white",
-                      fontSize: 14,
-                      outline: "none",
-                      width: "100%",
-                      boxSizing: "border-box",
-                    }}
-                  />
+                  {/* Password */}
+                  <div className="auth-input-group">
+                    <label className="auth-input-label">Password</label>
+                    <div className="auth-input-wrapper">
+                      <input
+                        type="password"
+                        className="auth-input"
+                        value={password}
+                        onChange={e => setPassword(e.target.value)}
+                        placeholder="Enter your password"
+                        autoComplete="current-password"
+                        disabled={isConnecting}
+                      />
+                      <i className="fas fa-lock auth-input-icon" />
+                    </div>
+                  </div>
                 </div>
 
                 <button
                   type="submit"
                   className="auth-button"
                   disabled={isConnecting || !username.trim() || !password}
-                  style={{ marginTop: "0.25rem" }}
                 >
-                  <i className="fas fa-sign-in-alt" />
-                  <span>{isConnecting ? "Signing In…" : "Sign In"}</span>
-                  {isConnecting && <i className="fas fa-spinner fa-spin" />}
+                  {isConnecting ? (
+                    <><i className="fas fa-spinner fa-spin" /><span>Signing In…</span></>
+                  ) : (
+                    <><i className="fas fa-arrow-right-to-bracket" /><span>Sign In</span></>
+                  )}
                 </button>
               </form>
             </div>
@@ -135,9 +120,10 @@ export function AuthScreen() {
               </div>
             )}
 
-            {/* Hint */}
-            <div className="auth-footer">
-              <p style={{ fontSize: 11.5, opacity: 0.6 }}>Default credentials: admin / admin</p>
+            {/* Default credentials hint */}
+            <div className="auth-default-hint">
+              <i className="fas fa-circle-info" />
+              <span>First-run default: <strong>admin</strong> / <strong>admin</strong></span>
             </div>
           </div>
         </div>
