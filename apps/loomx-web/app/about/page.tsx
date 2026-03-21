@@ -395,9 +395,9 @@ export default function AboutPage() {
             fontSize: "clamp(1rem, 2vw, 1.2rem)", color: "#94a3b8", lineHeight: 1.7,
             margin: "0 auto 40px", maxWidth: 600,
           }}>
-            A self-hosted, enterprise-grade analytics platform secured by Azure Active Directory.
-            Connect any data source, build visualisations, assemble dashboards, and generate SQL with AI —
-            all without a single secret leaving your tenant.
+            A self-hosted, enterprise-grade analytics platform with multi-provider authentication —
+            Local login, Azure AD / Entra ID, or Google OAuth2. Connect any data source, build
+            visualisations, assemble dashboards, and generate SQL with AI. Everything configurable from the UI.
           </p>
 
           <div style={{ display: "flex", gap: 14, justifyContent: "center", flexWrap: "wrap" }}>
@@ -713,16 +713,16 @@ export default function AboutPage() {
           <SectionLabel text="Security" color="#dc2626" />
           <SectionHeading center>Enterprise-grade security by design</SectionHeading>
           <SectionSub center>
-            LooMX stores no credentials, uses no shared service accounts, and verifies every request
-            against your Azure AD tenant's public keys.
+            Multi-provider OAuth2 / OIDC authentication, cryptographic JWT verification, zero plaintext secrets,
+            and role-based access control — all configurable from the UI with no server restart.
           </SectionSub>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
           {[
-            { icon: "fa-key", color: "#dc2626", title: "JWT RS256 Verification", body: "Every API request verifies the Bearer token against your tenant's JWKS endpoint. Tokens are validated for audience, issuer, expiry, and signature." },
-            { icon: "fa-user-shield", color: "#7c3aed", title: "Delegated Token Auth", body: "Queries run as the authenticated Azure AD user via SQL_COPT_SS_ACCESS_TOKEN. The user's own Fabric / Azure SQL permissions are enforced at the database level." },
-            { icon: "fa-layer-group", color: "#2563eb", title: "4-Role RBAC", body: "Viewer → Analyst → Editor → Admin. Resolved from Azure AD App Roles (JWT claims) first, DB assignments second. Content visibility enforced at query time." },
-            { icon: "fa-shield-halved", color: "#059669", title: "No Password Storage", body: "LooMX never stores user passwords, Azure AD tokens, or Fabric credentials. Connection strings are stored encrypted and never returned to the browser." },
+            { icon: "fa-key", color: "#dc2626", title: "Multi-Provider Auth", body: "Local login (bcrypt + HS256 JWT), Azure AD / Entra ID (OAuth2 OIDC, RS256 JWKS), and Google OAuth2 (RS256 JWKS). Switch providers live from Settings — no restart, no .env changes." },
+            { icon: "fa-user-shield", color: "#7c3aed", title: "Cryptographic JWT Verification", body: "Azure AD and Google tokens are verified against live JWKS endpoints (RS256). Local tokens are HS256-signed with an auto-generated secret stored encrypted in the DB." },
+            { icon: "fa-layer-group", color: "#2563eb", title: "4-Role RBAC", body: "Viewer → Analyst → Editor → Admin. Resolved from JWT claims first, DB assignments second. Content visibility (private / internal / published) enforced at query time." },
+            { icon: "fa-shield-halved", color: "#059669", title: "Encrypted Secrets", body: "Google client secrets and JWT signing keys are encrypted at rest with Fernet (AES-128-CBC). Connection strings are stored encrypted and never returned to the browser." },
             { icon: "fa-lock", color: "#d97706", title: "Parameterised Queries", body: "All metadata DB operations use parameterised queries (@param0, @param1…). User data SQL passes through the ODBC driver without string interpolation." },
             { icon: "fa-ban", color: "#dc2626", title: "Security Headers", body: "Hardened CORS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, and Content-Security-Policy headers on all API responses." },
           ].map(c => (
@@ -756,8 +756,17 @@ export default function AboutPage() {
           {
             group: "Authentication", color: "#dc2626",
             rows: [
-              { method: "GET",  path: "/api/v1/auth/me",    desc: "Current user email and resolved role",  auth: "User"    },
-              { method: "GET",  path: "/api/v1/auth/roles", desc: "List of all valid RBAC roles",           auth: "User"    },
+              { method: "GET",  path: "/api/auth/provider",                      desc: "Active auth provider (local / azure_ad / google)",  auth: "None"   },
+              { method: "POST", path: "/api/auth/login",                          desc: "Local login — returns HS256 JWT",                   auth: "None"   },
+              { method: "POST", path: "/api/auth/change-password",               desc: "Change own local password",                         auth: "User"   },
+              { method: "GET",  path: "/api/v1/auth/me",                          desc: "Current user email and resolved role",              auth: "User"   },
+              { method: "GET",  path: "/api/v1/auth/roles",                       desc: "List of all valid RBAC roles",                      auth: "User"   },
+              { method: "GET",  path: "/api/v1/admin/auth",                       desc: "Get auth provider config (secrets masked)",         auth: "Admin"  },
+              { method: "POST", path: "/api/v1/admin/auth",                       desc: "Update auth provider config",                       auth: "Admin"  },
+              { method: "GET",  path: "/api/v1/admin/local-users",               desc: "List local users",                                  auth: "Admin"  },
+              { method: "POST", path: "/api/v1/admin/local-users",               desc: "Create a local user",                               auth: "Admin"  },
+              { method: "DELETE", path: "/api/v1/admin/local-users/{id}",        desc: "Deactivate a local user",                           auth: "Admin"  },
+              { method: "POST", path: "/api/v1/admin/local-users/{id}/reset-password", desc: "Reset local user password",                  auth: "Admin"  },
             ],
           },
           {
