@@ -5,6 +5,34 @@ import Link from "next/link";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useRole } from "../../hooks/useRole";
 
+// ── force a hex color to at least minL% lightness (so text is always visible on dark bg) ──
+function forceLightHex(hex: string, minL = 72): string {
+  const m = hex.match(/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i);
+  if (!m) return "#ffffff";
+  const r = parseInt(m[1], 16) / 255, g = parseInt(m[2], 16) / 255, b = parseInt(m[3], 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h = 0, s = 0, l = (max + min) / 2;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    h = max === r ? ((g - b) / d + (g < b ? 6 : 0)) / 6
+      : max === g ? ((b - r) / d + 2) / 6
+      : ((r - g) / d + 4) / 6;
+  }
+  l = Math.max(l * 100, minL) / 100;
+  const hue2rgb = (p: number, q: number, t: number) => {
+    if (t < 0) t += 1; if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const hex2 = (v: number) => Math.round(hue2rgb(p, q, v) * 255).toString(16).padStart(2, "0");
+  return `#${hex2(h + 1 / 3)}${hex2(h)}${hex2(h - 1 / 3)}`;
+}
+
 // ── tiny helpers ──────────────────────────────────────────────────────────────
 
 function Section({ id, children, bg }: { id?: string; children: React.ReactNode; bg?: string }) {
@@ -291,7 +319,11 @@ export default function AboutPage() {
             lineHeight: 1.1, margin: "0 0 20px", letterSpacing: "-1.5px",
           }}>
             Live Operational Outcomes<br />
-            <span style={{ background: `linear-gradient(135deg, ${gradientColors.light}, ${gradientColors.dark})`, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+            <span style={{
+              background: `linear-gradient(135deg, ${forceLightHex(primaryColor, 72)}, ${forceLightHex(primaryColor, 90)})`,
+              WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
+              backgroundClip: "text",
+            }}>
               &amp; Metrics eXperience
             </span>
           </h1>
