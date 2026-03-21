@@ -53,19 +53,46 @@ def _issue_jwt(email: str, name: str, roles: list[str]) -> str:
 
 
 def _resolve_roles_for_email(email: str) -> list[str]:
-    """Resolve the user_roles DB entry for a local user email.
-    Returns [] when no entry is found so resolve_role's bootstrap can fire."""
+    """Resolve the role for a local user at login time.
+
+    Priority:
+      1. Explicit row in user_roles  → return that role
+      2. No admins exist yet          → this is the bootstrap admin; grant Admin + persist
+      3. user_roles unreachable       → grant Admin (setup/pre-migration state)
+      4. Otherwise                    → return [] so caller's default applies
+    """
     try:
-        import database.metadata as db
-        row = db.query_one(
+        import database.metadata as _db
+        row = _db.query_one(
             "SELECT role FROM user_roles WHERE user_email = @param0",
             [email],
         )
         if row and row.get("role"):
             return [row["role"]]
+
+        # No explicit entry — check if any admins exist at all
+        count_row = _db.query_one("SELECT COUNT(*) AS n FROM user_roles WHERE role = 'Admin'")
+        if count_row and int(count_row.get("n") or 0) == 0:
+            # First login ever — persist Admin role and issue Admin JWT
+            from datetime import datetime, timezone as _tz
+            _now = datetime.now(_tz.utc).replace(tzinfo=None)
+            try:
+                _db.execute(
+                    "INSERT INTO user_roles (user_email, role, granted_by, granted_at, updated_at) "
+                    "VALUES (@param0, 'Admin', 'system-bootstrap', @param1, @param2)",
+                    [email, _now, _now],
+                )
+            except Exception:
+                pass  # Non-fatal; resolve_role will retry on next API call
+            return ["Admin"]
+
+        return []
+
     except Exception as e:
         print(f"[LocalAuth] _resolve_roles_for_email failed for {email}: {e}")
-    return []
+        # user_roles table unavailable (pre-migration) — grant Admin so the first user
+        # can access Settings and apply the migration
+        return ["Admin"]
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
