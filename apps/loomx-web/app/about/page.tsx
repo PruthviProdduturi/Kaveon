@@ -851,7 +851,7 @@ export default function AboutPage() {
       </Section>
 
       {/* ── Getting started CTA ── */}
-      <Section bg={`linear-gradient(135deg, #0f172a 0%, #1e293b 60%, ${primaryColor}18 100%)`}>
+      <Section bg="linear-gradient(135deg, #0f172a 0%, #1e293b 95%, #1e293b 100%)"  >
         <div style={{ textAlign: "center" }}>
           <h2 style={{ fontSize: "clamp(1.75rem, 3vw, 2.5rem)", fontWeight: 900, color: "white", marginBottom: 16 }}>
             Ready to explore your data?
