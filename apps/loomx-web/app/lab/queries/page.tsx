@@ -9,6 +9,7 @@ import { format as formatSql } from "sql-formatter";
 import { msalFetch } from "../../../utils/msalFetch";
 import { useAuth } from "../../../auth/useAuth";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useTheme } from "../../../contexts/ThemeContext";
 
 // using same-origin relative API calls
 
@@ -183,6 +184,7 @@ function getSortIcon(currentKey: string | null, currentDirection: SortDirection,
 
 const LabQueriesPage: React.FC = () => {
   const { isAuthenticated, account } = useAuth();
+  const { primaryColor, gradientColors } = useTheme();
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -565,21 +567,47 @@ const LabQueriesPage: React.FC = () => {
   };
 
   return (
-    <div className="page-shell">
-      <header className="page-header-with-actions">
-        <div className="page-header-main">
-          <h1 className="page-header-title">SQL activity</h1>
-          <p className="page-header-subtitle">
-            Review your saved Lab queries and recent query history.
-          </p>
+    <div className="page-shell animate-fade-in">
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        flexWrap: "wrap", gap: "1rem",
+        marginBottom: "1.25rem",
+        padding: "1.25rem 1.5rem",
+        background: "white",
+        borderRadius: 12,
+        border: "1px solid #e5e7eb",
+        boxShadow: "0 1px 4px rgba(15,23,42,0.06)",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "1.25rem", flexWrap: "wrap", flex: 1, minWidth: 0 }}>
+          <div style={{
+            width: 48, height: 48, borderRadius: 12, flexShrink: 0,
+            background: `linear-gradient(135deg, ${gradientColors.light}, ${gradientColors.dark})`,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            boxShadow: `0 4px 14px ${primaryColor}35`,
+          }}>
+            <i className="fas fa-bookmark" style={{ color: "white", fontSize: 20 }} />
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <h1 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 700, color: "#0f172a" }}>Saved Queries</h1>
+            <p style={{ margin: "3px 0 0", fontSize: "0.85rem", color: "#64748b", lineHeight: 1.4 }}>
+              Your saved SQL queries and query history.
+            </p>
+          </div>
+          {!isLoadingSaved && sortedSavedQueries.length > 0 && (
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              <span style={{
+                display: "inline-flex", alignItems: "center", gap: "0.35rem",
+                padding: "0.3rem 0.75rem", borderRadius: 20,
+                background: `${primaryColor}12`, border: `1px solid ${primaryColor}30`,
+                fontSize: 12, fontWeight: 600, color: primaryColor, whiteSpace: "nowrap",
+              }}>
+                <i className="fas fa-bookmark" style={{ fontSize: 10 }} />
+                {sortedSavedQueries.length} Saved Quer{sortedSavedQueries.length !== 1 ? "ies" : "y"}
+              </span>
+            </div>
+          )}
         </div>
-        <Button
-          onClick={() => void router.push("/lab")}
-          style={{ flexShrink: 0 }}
-        >
-          <i className="fas fa-plus" /> New query
-        </Button>
-      </header>
+      </div>
 
       {!isAuthenticated && (
         <p className="muted">Sign in to view your saved queries and history.</p>

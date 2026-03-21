@@ -6,6 +6,7 @@ import { API_BASE } from "../../config";
 import { LoadingOverlay } from "../../components/LoadingOverlay";
 import { msalFetch } from "../../utils/msalFetch";
 import { useAuth } from "../../auth/useAuth";
+import { useTheme } from "../../contexts/ThemeContext";
 
 // API_BASE not required; using same-origin relative API calls
 
@@ -20,6 +21,7 @@ interface FavoriteItem {
 
 const FavoritesPage: React.FC = () => {
   const { isAuthenticated } = useAuth();
+  const { primaryColor, gradientColors } = useTheme();
   const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,14 +42,47 @@ const FavoritesPage: React.FC = () => {
   }, [isAuthenticated]);
 
   return (
-    <div className="page-shell">
-      <header className="page-header">
-        <h1 className="page-header-title">Your Favorites</h1>
-        <p className="page-header-subtitle">
-          All dashboards, charts, and datasets you have marked as favorites.<br />
-          <span className="muted" style={{fontSize:13}}>This table shows only <b>your</b> favorites.</span>
-        </p>
-      </header>
+    <div className="page-shell animate-fade-in">
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        flexWrap: "wrap", gap: "1rem",
+        marginBottom: "1.25rem",
+        padding: "1.25rem 1.5rem",
+        background: "white",
+        borderRadius: 12,
+        border: "1px solid #e5e7eb",
+        boxShadow: "0 1px 4px rgba(15,23,42,0.06)",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "1.25rem", flexWrap: "wrap", flex: 1, minWidth: 0 }}>
+          <div style={{
+            width: 48, height: 48, borderRadius: 12, flexShrink: 0,
+            background: `linear-gradient(135deg, ${gradientColors.light}, ${gradientColors.dark})`,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            boxShadow: `0 4px 14px ${primaryColor}35`,
+          }}>
+            <i className="fas fa-star" style={{ color: "white", fontSize: 20 }} />
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <h1 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 700, color: "#0f172a" }}>Favorites</h1>
+            <p style={{ margin: "3px 0 0", fontSize: "0.85rem", color: "#64748b", lineHeight: 1.4 }}>
+              Your bookmarked dashboards, charts, and datasets.
+            </p>
+          </div>
+          {!loading && favorites.length > 0 && (
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              <span style={{
+                display: "inline-flex", alignItems: "center", gap: "0.35rem",
+                padding: "0.3rem 0.75rem", borderRadius: 20,
+                background: `${primaryColor}12`, border: `1px solid ${primaryColor}30`,
+                fontSize: 12, fontWeight: 600, color: primaryColor, whiteSpace: "nowrap",
+              }}>
+                <i className="fas fa-star" style={{ fontSize: 10 }} />
+                {favorites.length} Favorite{favorites.length !== 1 ? "s" : ""}
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
 
       {loading && <LoadingOverlay />}
       {error && (
