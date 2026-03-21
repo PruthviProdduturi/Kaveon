@@ -1,6 +1,6 @@
 <div align="center">
 
-# ✦ LoomX
+# ✦ LooMX
 
 ### **Live Operational Outcomes & Metrics eXperience**
 
@@ -24,13 +24,13 @@
 
 ---
 
-## 🌟 What is LoomX?
+## 🌟 What is LooMX?
 
-LoomX is a **self-hosted enterprise analytics platform** built for teams running on **Microsoft Fabric SQL**, Azure SQL, PostgreSQL, MySQL, Trino, and StarRocks. Think of it as your team's private data command centre — where everyone queries live data, builds charts, assembles dashboards, and uses AI to accelerate analysis — all secured through your existing **Azure Active Directory**.
+LooMX is a **self-hosted enterprise analytics platform** built for teams running on **Microsoft Fabric SQL**, Azure SQL, PostgreSQL, MySQL, Trino, and StarRocks. Think of it as your team's private data command centre — where everyone queries live data, builds charts, assembles dashboards, and uses AI to accelerate analysis — all secured through your existing **Azure Active Directory**.
 
 No separate login system. No data leaves your tenant. No vendor lock-in.
 
-> *LoomX sits between your team and your data — making it fast to explore, easy to visualise, and safe to share.*
+> *LooMX sits between your team and your data — making it fast to explore, easy to visualise, and safe to share.*
 
 ---
 
@@ -126,7 +126,7 @@ No separate login system. No data leaves your tenant. No vendor lock-in.
 
 ### 🛠️ Admin Controls
 - **User Management:** assign / revoke roles per user; Azure AD App Roles always take precedence
-- **Metadata Server:** view and reconfigure the LoomX metadata database from the UI — supports all six DB types, live connection test, in-place API restart
+- **Metadata Server:** view and reconfigure the LooMX metadata database from the UI — supports all six DB types, live connection test, in-place API restart
 - **Data Sources:** full CRUD with connection testing
 - **AI Providers:** manage global and personal API keys
 
@@ -158,7 +158,7 @@ No separate login system. No data leaves your tenant. No vendor lock-in.
 
 ## 🏛️ Architecture
 
-LoomX is a **monorepo** with two services:
+LooMX is a **monorepo** with two services:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -194,7 +194,7 @@ LoomX is a **monorepo** with two services:
 │                                                                  │
 │  ┌─────────────────────┐   ┌──────────────────────────────────┐ │
 │  │  Metadata Database  │   │  Your Data Sources (1 to N)      │ │
-│  │  (LoomX app data)   │   │  Fabric SQL · Azure SQL          │ │
+│  │  (LooMX app data)   │   │  Fabric SQL · Azure SQL          │ │
 │  │  Any supported DB   │   │  PostgreSQL · MySQL              │ │
 │  └─────────────────────┘   │  Trino · StarRocks               │ │
 │                             └──────────────────────────────────┘ │
@@ -205,7 +205,7 @@ LoomX is a **monorepo** with two services:
 
 | Database | Purpose | Configured via |
 |---|---|---|
-| **Metadata DB** | Stores LoomX app data: datasets, charts, dashboards, query history, themes, roles | Setup wizard or **Settings → Metadata Server** (admin) |
+| **Metadata DB** | Stores LooMX app data: datasets, charts, dashboards, query history, themes, roles | Setup wizard or **Settings → Metadata Server** (admin) |
 | **Your Data Sources** | Your actual warehouses, lakehouses, databases | UI at `/data-sources` |
 
 ---
@@ -236,7 +236,7 @@ odbcinst -q -d -n "ODBC Driver 18 for SQL Server"
 
 ## 🔑 Azure AD App Registration
 
-LoomX uses Azure AD for all authentication. This is a **one-time setup** by your Azure admin.
+LooMX uses Azure AD for all authentication. This is a **one-time setup** by your Azure admin.
 
 <details>
 <summary><strong>Click to expand — App Registration steps</strong></summary>
@@ -246,7 +246,7 @@ LoomX uses Azure AD for all authentication. This is a **one-time setup** by your
 1. Go to [portal.azure.com](https://portal.azure.com) → **Microsoft Entra ID** → **App registrations** → **New registration**
 
 2. Fill in:
-   - **Name:** `LoomX`
+   - **Name:** `LooMX`
    - **Supported account types:** `Accounts in this organizational directory only`
    - **Redirect URI:** `Single-page application (SPA)` → `http://localhost:3000`
 
@@ -264,10 +264,10 @@ LoomX uses Azure AD for all authentication. This is a **one-time setup** by your
 
    | Display name | Value | Description |
    |---|---|---|
-   | LoomX Viewer | `LoomX.Viewer` | Read-only access to published dashboards and charts |
-   | LoomX Analyst | `LoomX.Analyst` | Run ad-hoc SQL, build charts and datasets |
-   | LoomX Editor | `LoomX.Editor` | All Analyst permissions + publish content |
-   | LoomX Admin | `LoomX.Admin` | Full access including user management, data source and metadata server configuration |
+   | LooMX Viewer | `LooMX.Viewer` | Read-only access to published dashboards and charts |
+   | LooMX Analyst | `LooMX.Analyst` | Run ad-hoc SQL, build charts and datasets |
+   | LooMX Editor | `LooMX.Editor` | All Analyst permissions + publish content |
+   | LooMX Admin | `LooMX.Admin` | Full access including user management, data source and metadata server configuration |
 
    > Any authenticated user without an assigned role defaults to **Viewer** automatically.
 
@@ -280,7 +280,7 @@ LoomX uses Azure AD for all authentication. This is a **one-time setup** by your
 ```bash
 # 1. Clone
 git clone <your-repo-url>
-cd LoomX
+cd LooMX
 
 # 2. Install Node.js dependencies (frontend only)
 pnpm install
@@ -312,7 +312,7 @@ Open **http://localhost:3000** and sign in with your Azure AD account. ✓
 
 ```bash
 git clone <your-github-repo-url>
-cd LoomX
+cd LooMX
 ```
 
 ### 2 · Install Node.js Dependencies
@@ -323,7 +323,7 @@ pnpm install
 
 ### 3 · Configure Environment Variables
 
-LoomX uses a **single `.env` file at the repository root**. Both services read from it.
+LooMX uses a **single `.env` file at the repository root**. Both services read from it.
 
 ```bash
 cp .env.example .env
@@ -410,7 +410,7 @@ python main.py
 ```
 ```
 ============================================
-LoomX API
+LooMX API
 ============================================
 Server: http://localhost:8080
 Health: http://localhost:8080/api/health
@@ -435,7 +435,7 @@ pnpm --filter loomx-web dev
 |---|---|---|
 | API | http://localhost:8080/api/health | `{"status": "ok"}` |
 | API Docs | http://localhost:8080/docs | Swagger UI |
-| Web | http://localhost:3000 | LoomX login page |
+| Web | http://localhost:3000 | LooMX login page |
 
 ---
 
@@ -580,7 +580,7 @@ The FastAPI backend auto-generates Swagger UI at `http://localhost:8080/docs`. K
 ## 📁 Project Structure
 
 ```
-LoomX/
+LooMX/
 ├── .env.example                    ← Copy to .env and fill in your values
 ├── .env                            ← Your local config (gitignored)
 ├── pnpm-workspace.yaml             ← pnpm monorepo workspace config
@@ -729,7 +729,7 @@ Run from the **repository root**:
 <details>
 <summary><strong>🔴 Cannot connect to metadata database</strong></summary>
 
-- Check **Settings → Metadata Server** in the LoomX UI (Admin) — use the built-in connection tester
+- Check **Settings → Metadata Server** in the LooMX UI (Admin) — use the built-in connection tester
 - Confirm your Azure AD account (or Managed Identity in production) has `db_datareader` + `db_datawriter` + `db_ddladmin` on the metadata database
 - Test the connection directly in Azure Data Studio to rule out network issues
 
@@ -738,14 +738,14 @@ Run from the **repository root**:
 <details>
 <summary><strong>🔴 Queries time out on first run</strong></summary>
 
-Fabric serverless endpoints have a cold start (~10s on first connection). LoomX warms the connection pool at API startup. Wait a few seconds after seeing `[API] Connection pool warmup started.` in the API logs before running your first query.
+Fabric serverless endpoints have a cold start (~10s on first connection). LooMX warms the connection pool at API startup. Wait a few seconds after seeing `[API] Connection pool warmup started.` in the API logs before running your first query.
 
 </details>
 
 <details>
 <summary><strong>🔴 AI chat returns "No AI provider configured"</strong></summary>
 
-- Go to **Settings (⚙) → AI Providers** in the LoomX header
+- Go to **Settings (⚙) → AI Providers** in the LooMX header
 - Add a global key (Admin) or a personal key (any user)
 - Supported: Anthropic (Claude), OpenAI (GPT-4o), GitHub Models
 
@@ -828,6 +828,6 @@ Or change `API_PORT` in `.env` and restart.
 
 **Built for Advanced Analytics. Secured by Azure AD. Owned by Pruthvi Prodduturi.**
 
-*LoomX — Live Operational Outcomes & Metrics eXperience*
+*LooMX — Live Operational Outcomes & Metrics eXperience*
 
 </div>

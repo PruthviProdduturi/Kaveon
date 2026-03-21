@@ -1,7 +1,7 @@
 /**
  * Authentication Module - Azure AD Integration via MSAL
  *
- * This module provides authentication functionality for LoomX using
+ * This module provides authentication functionality for LooMX using
  * Microsoft Authentication Library (MSAL) for Azure AD/Entra ID integration.
  *
  * Key Features:

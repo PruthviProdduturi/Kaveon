@@ -128,7 +128,7 @@ export function Layout({ children }: LayoutProps) {
         {/* ── Right: actions + user ── */}
         <div className="header-right">
           {/* About / Help */}
-          <Link href="/about" className="header-icon-btn" title="About LoomX — features, API reference, docs">
+          <Link href="/about" className="header-icon-btn" title="About LooMX — features, API reference, docs">
             <i className="fas fa-circle-question" />
           </Link>
 

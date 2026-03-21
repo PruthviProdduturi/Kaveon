@@ -86,7 +86,7 @@ export default function MetadataSettingsPage() {
     <ListPageShell
       icon="fa-database"
       title="Metadata Server"
-      subtitle="The database LoomX uses to store its own metadata — datasets, charts, dashboards, and users."
+      subtitle="The database LooMX uses to store its own metadata — datasets, charts, dashboards, and users."
       loading={loading || roleLoading}
       loadingMessage="Loading metadata server config"
       error={error}
@@ -152,7 +152,7 @@ export default function MetadataSettingsPage() {
           {/* Divider + info note */}
           <div style={{ marginTop: "1.5rem", paddingTop: "1.25rem", borderTop: "1px solid #f1f5f9", fontSize: 12.5, color: "#64748b", display: "flex", gap: 8 }}>
             <i className="fas fa-info-circle" style={{ color: primaryColor, marginTop: 1, flexShrink: 0 }} />
-            Changing the metadata server will re-run the schema initialisation and restart the LoomX API. Existing data will be preserved if the database already contains the schema.
+            Changing the metadata server will re-run the schema initialisation and restart the LooMX API. Existing data will be preserved if the database already contains the schema.
           </div>
         </div>
       )}
@@ -262,7 +262,7 @@ function EditMetadataModal({ current, onClose, onSuccess }: EditModalProps) {
       });
       const body = await res.json().catch(() => ({}));
       if (res.ok) {
-        onSuccess(body?.message ?? "Metadata server updated. LoomX API is restarting…");
+        onSuccess(body?.message ?? "Metadata server updated. LooMX API is restarting…");
       } else {
         const msg: string = body?.detail?.errors?.[0]?.message ?? body?.detail ?? "Update failed.";
         setSaveError(msg);
@@ -371,7 +371,7 @@ function EditMetadataModal({ current, onClose, onSuccess }: EditModalProps) {
               <div className="chart-builder-field">
                 <label className="chart-builder-label"><span>Database Name *</span></label>
                 <input className="chart-builder-input" type="text" value={form.database}
-                  onChange={e => setField("database", e.target.value)} placeholder="LoomX"
+                  onChange={e => setField("database", e.target.value)} placeholder="LooMX"
                   style={{ borderColor: errors.database ? "#ef4444" : undefined }} />
                 {errors.database && <p style={{ margin: "2px 0 0", fontSize: 11.5, color: "#dc2626" }}>{errors.database}</p>}
               </div>
@@ -449,7 +449,7 @@ function EditMetadataModal({ current, onClose, onSuccess }: EditModalProps) {
             color: "#92400e", display: "flex", gap: 8, alignItems: "flex-start",
           }}>
             <i className="fas fa-triangle-exclamation" style={{ marginTop: 1, flexShrink: 0 }} />
-            <span>Saving will <strong>restart the LoomX API</strong>. Connected users will experience a brief interruption.</span>
+            <span>Saving will <strong>restart the LooMX API</strong>. Connected users will experience a brief interruption.</span>
           </div>
         </div>
 
