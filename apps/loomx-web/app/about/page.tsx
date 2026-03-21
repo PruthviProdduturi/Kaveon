@@ -292,7 +292,7 @@ export default function AboutPage() {
 
       {/* ── Hero ── */}
       <div ref={heroRef} style={{
-        background: `linear-gradient(160deg, #0f172a 0%, #1e293b 60%, ${primaryColor}22 100%)`,
+        background: "linear-gradient(160deg, #0f172a 0%, #1e293b 95%, #1e293b 100%)",
         padding: "100px 24px 90px", textAlign: "center", position: "relative", overflow: "hidden",
       }}>
         {/* Background grid pattern */}
@@ -320,7 +320,7 @@ export default function AboutPage() {
           }}>
             Live Operational Outcomes<br />
             <span style={{
-              background: `linear-gradient(135deg, ${forceLightHex(primaryColor, 72)}, ${forceLightHex(primaryColor, 90)})`,
+              backgroundImage: `linear-gradient(135deg, ${forceLightHex(primaryColor, 72)}, ${forceLightHex(primaryColor, 90)})`,
               WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
               backgroundClip: "text",
             }}>
