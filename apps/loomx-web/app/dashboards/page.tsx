@@ -1,14 +1,13 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { loginRequest, msalInstance } from "../../auth/msalConfig";
-
 import { API_BASE } from "../../config";
-import { LoadingOverlay } from "../../components/LoadingOverlay";
 import { msalFetch } from "../../utils/msalFetch";
 import { useAuth } from "../../auth/useAuth";
 import { Button } from "../../components/Button";
 import { ConfirmModal } from "../../components/ConfirmModal";
+import { ListPageShell } from "../../components/ListPageShell";
+import { Pagination } from "../../components/Pagination";
 
 interface DashboardSummary {
   id: string;
@@ -24,55 +23,35 @@ interface DashboardSummary {
   is_archived?: boolean;
 }
 
-interface UserInfo {
-  id: string;
-  email: string;
-}
+const PAGE_SIZE = 20;
 
 const DashboardsPage: React.FC = () => {
   const { isAuthenticated } = useAuth();
 
   const [dashboards, setDashboards] = useState<DashboardSummary[]>([]);
-  // No longer needed: const [userMap, setUserMap] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<DashboardSummary | null>(null);
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
 
-  // On first load, migrate localStorage favorites to backend and clear localStorage
-  // Helper to load dashboards from backend
   const loadDashboards = async () => {
     setIsLoading(true);
     setError(null);
     try {
       const res = await msalFetch(`${API_BASE}/api/v1/dashboards/summary`);
-      if (!res.ok) {
-        throw new Error("Failed to load dashboards");
-      }
+      if (!res.ok) throw new Error("Failed to load dashboards");
       const data = await res.json();
-      console.log("[loadDashboards] Received data:", data);
       const dashboardsData = Array.isArray(data.recent) ? data.recent : [];
-      // Normalize favorite field (backend might return is_favorite or favorite)
-      const normalizedData = dashboardsData.map((d: any) => {
-        const favValue = d.favorite ?? d.is_favorite ?? false;
-        console.log(`[loadDashboards] Dashboard ${d.id} (${d.name}): favorite=${d.favorite}, is_favorite=${d.is_favorite}, normalized=${favValue}`);
-        return {
-          ...d,
-          favorite: favValue,
-        };
-      });
-      console.log("[loadDashboards] Setting dashboards with favorites:", normalizedData.map((d: any) => ({ id: d.id, name: d.name, favorite: d.favorite })));
-      setDashboards(normalizedData);
+      setDashboards(dashboardsData.map((d: any) => ({ ...d, favorite: d.favorite ?? d.is_favorite ?? false })));
     } catch (err) {
-      console.error("Error loading dashboards:", err);
-      const message = err instanceof Error ? err.message : "Failed to load dashboards";
-      setError(message);
+      setError(err instanceof Error ? err.message : "Failed to load dashboards");
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Migrate localStorage favorites to backend on first load
   useEffect(() => {
     if (!isAuthenticated) return;
     const migrateFavorites = async () => {
@@ -82,75 +61,39 @@ const DashboardsPage: React.FC = () => {
           const parsed = JSON.parse(raw) as Record<string, boolean>;
           await Promise.all(
             Object.entries(parsed).map(async ([id, value]) => {
-              if (value) {
-                await msalFetch(`${API_BASE}/api/v1/dashboards/${id}/favorite?is_favorite=true`, { method: "PUT" });
-              }
+              if (value) await msalFetch(`${API_BASE}/api/v1/dashboards/${id}/favorite?is_favorite=true`, { method: "PUT" });
             })
           );
           window.localStorage.removeItem("fabric_dashboard_favorites");
         } catch {}
       }
     };
-    migrateFavorites().finally(() => {
-      loadDashboards();
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    migrateFavorites().finally(() => loadDashboards());
   }, [isAuthenticated]);
 
-  // Refresh dashboards when page regains focus
   useEffect(() => {
     if (!isAuthenticated) return;
-    const handleFocus = () => {
-      loadDashboards();
-    };
+    const handleFocus = () => loadDashboards();
     window.addEventListener("focus", handleFocus);
-    return () => {
-      window.removeEventListener("focus", handleFocus);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => window.removeEventListener("focus", handleFocus);
   }, [isAuthenticated]);
 
-  const formatDateTime = (value?: string | null) => {
-    if (!value) return "—";
-    // Return raw SQL date without formatting
-    return value;
-  };
+  const formatDateTime = (value?: string | null) => value ?? "—";
 
-
-  const isFavorite = (id: number | string) => {
-    const dash = dashboards.find((d) => d.id === id);
-    return dash ? !!dash.favorite : false;
-  };
-
-  const toggleFavorite = async (id: number | string) => {
-    const dash = dashboards.find((d) => d.id === id);
+  const toggleFavorite = async (id: string) => {
+    const dash = dashboards.find(d => d.id === id);
     if (!dash) return;
     const newFav = !dash.favorite;
-    console.log(`[toggleFavorite] Dashboard ${id} (${dash.name}): current=${dash.favorite}, new=${newFav}`);
-    // Optimistically update UI
-    setDashboards((prev) => prev.map((d) =>
-      d.id === id ? { ...d, favorite: newFav } : d
-    ));
-    // Update backend
+    setDashboards(prev => prev.map(d => d.id === id ? { ...d, favorite: newFav } : d));
     try {
-      const response = await msalFetch(`${API_BASE}/api/v1/dashboards/${id}/favorite`, {
+      const res = await msalFetch(`${API_BASE}/api/v1/dashboards/${id}/favorite`, {
         method: "PUT",
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ is_favorite: newFav }),
       });
-      if (!response.ok) {
-        throw new Error(`Failed to update favorite status: ${response.status}`);
-      }
-      const result = await response.json();
-      console.log(`[toggleFavorite] Backend response:`, result);
-    } catch (err) {
-      console.error('Error toggling favorite:', err);
-      // On error, revert UI
-      setDashboards((prev) => prev.map((d) =>
-        d.id === id ? { ...d, favorite: dash.favorite } : d
-      ));
+      if (!res.ok) throw new Error();
+    } catch {
+      setDashboards(prev => prev.map(d => d.id === id ? { ...d, favorite: dash.favorite } : d));
     }
   };
 
@@ -158,14 +101,9 @@ const DashboardsPage: React.FC = () => {
     setConfirmDelete(null);
     setDeletingId(dashboard.id);
     try {
-      // Use msalFetch (includes Bearer token) to prevent CSRF on destructive operations
-      const res = await msalFetch(`${API_BASE}/api/v1/dashboards/${dashboard.id}`, {
-        method: "DELETE",
-      });
-      if (!res.ok && res.status !== 204) {
-        throw new Error(`Failed to delete dashboard (${res.status})`);
-      }
-      setDashboards((prev) => prev.filter((d) => d.id !== dashboard.id));
+      const res = await msalFetch(`${API_BASE}/api/v1/dashboards/${dashboard.id}`, { method: "DELETE" });
+      if (!res.ok && res.status !== 204) throw new Error(`Failed to delete dashboard (${res.status})`);
+      setDashboards(prev => prev.filter(d => d.id !== dashboard.id));
     } catch (err) {
       console.error("Failed to delete dashboard", err);
     } finally {
@@ -173,147 +111,87 @@ const DashboardsPage: React.FC = () => {
     }
   };
 
-  const dashboardCount = dashboards.length;
+  const filtered = dashboards.filter(d =>
+    !search || d.name.toLowerCase().includes(search.toLowerCase()) || (d.description ?? "").toLowerCase().includes(search.toLowerCase())
+  );
+
+  // Reset to page 1 when search changes
+  const handleSearch = (q: string) => { setSearch(q); setPage(1); };
+
+  const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const publishedCount = dashboards.filter(d => d.is_published).length;
 
   return (
-    <div className="page-shell">
-      <header className="page-header-with-actions">
-        <div className="page-header-main">
-          <h1 className="page-header-title">Dashboards</h1>
-        </div>
-        <Button
-          onClick={() => {
-            window.location.href = "/dashboards/new";
-          }}
-          style={{ flexShrink: 0 }}
-        >
-          <i className="fas fa-plus" /> New dashboard
-        </Button>
-      </header>
-
-      {!isAuthenticated && <p className="muted">Sign in to explore your dashboards.</p>}
-
-      {isAuthenticated && isLoading && <LoadingOverlay />}
-
-      {isAuthenticated && !isLoading && error && (
-        <div className="card page-empty-card">
-          <p className="page-empty-title">Unable to load dashboards</p>
-          <p className="page-empty-body">{error}</p>
-        </div>
-      )}
-
-
-      {isAuthenticated && !isLoading && !error && dashboardCount === 0 && (
-        <div className="card page-empty-card" style={{ marginTop: 12 }}>
-          <p className="page-empty-title">No dashboards yet</p>
-        </div>
-      )}
-
-      {/* Button is now in the header */}
-
-      {isAuthenticated && !isLoading && !error && dashboardCount > 0 && (
-        <div className="page-header-actions-row" style={{ display: 'none' }}>
-          {/* Button moved to header */}
-        </div>
-      )}
-
-      {isAuthenticated && !isLoading && !error && dashboardCount > 0 && (
-        <div className="card" style={{ marginTop: 12 }}>
+    <>
+      <ListPageShell
+        icon="fa-tachometer-alt"
+        title="Dashboards"
+        subtitle="Browse and manage your saved dashboards."
+        pills={!isLoading && !error ? [
+          { label: `${dashboards.length} Dashboard${dashboards.length !== 1 ? "s" : ""}`, icon: "fa-tachometer-alt" },
+          ...(publishedCount > 0 ? [{ label: `${publishedCount} Published`, icon: "fa-globe", bg: "#d1fae5", border: "#6ee7b7", color: "#065f46" }] : []),
+        ] : []}
+        action={
+          <Button onClick={() => { window.location.href = "/dashboards/new"; }}>
+            <i className="fas fa-plus" /> New dashboard
+          </Button>
+        }
+        loading={isLoading}
+        loadingMessage="Loading dashboards"
+        error={error}
+        empty={!isLoading && !error && dashboards.length === 0}
+        emptyTitle="No dashboards yet"
+        emptyBody="Create your first dashboard to start visualising your data."
+        emptyAction={<Button onClick={() => { window.location.href = "/dashboards/new"; }}><i className="fas fa-plus" /> New dashboard</Button>}
+        search={search}
+        onSearch={handleSearch}
+        resultCount={search ? filtered.length : undefined}
+      >
+        <div className="card">
           <div className="results-table-container">
             <table className="results-table">
               <thead>
                 <tr>
-                  <th>
-                    <span className="column-header-label">Name</span>
-                  </th>
-                  <th>
-                    <span className="column-header-label">Owner</span>
-                  </th>
-                  <th>
-                    <span className="column-header-label">Modified by</span>
-                  </th>
-                  <th>
-                    <span className="column-header-label">Last modified</span>
-                  </th>
-                  <th>
-                    <span className="column-header-label">Status</span>
-                  </th>
-                  <th>
-                    <span className="column-header-label">Actions</span>
-                  </th>
+                  <th><span className="column-header-label">Name</span></th>
+                  <th><span className="column-header-label">Owner</span></th>
+                  <th><span className="column-header-label">Modified by</span></th>
+                  <th><span className="column-header-label">Last modified</span></th>
+                  <th><span className="column-header-label">Status</span></th>
+                  <th><span className="column-header-label">Actions</span></th>
                 </tr>
               </thead>
               <tbody>
-                {dashboards.map((d) => (
-                  <tr
-                    key={d.id}
-                    onClick={() => {
-                      window.location.href = `/dashboards/${d.id}/view`;
-                    }}
-                    style={{ cursor: "pointer" }}
-                  >
+                {paged.map(d => (
+                  <tr key={d.id} onClick={() => { window.location.href = `/dashboards/${d.id}/view`; }} style={{ cursor: "pointer" }}>
                     <td>
                       <strong>{d.name}</strong>
-                      {d.description && (
-                        <div className="muted" style={{ marginTop: 4, fontSize: 13 }}>
-                          {d.description}
-                        </div>
-                      )}
+                      {d.description && <div className="muted" style={{ marginTop: 4, fontSize: 13 }}>{d.description}</div>}
                     </td>
-                    <td className="muted" style={{ fontSize: 13 }}>
-                      {d.owner || d.created_by || "—"}
-                    </td>
-                    <td className="muted" style={{ fontSize: 13 }}>
-                      {d.modified_by ? d.modified_by : (d.owner || d.created_by || "—")}
-                    </td>
-                    <td className="muted" style={{ fontSize: 13 }}>
-                      {formatDateTime(d.updated_at || d.created_at || null)}
-                    </td>
-                    <td className="muted" style={{ fontSize: 13 }}>
-                      {d.is_archived ? "Archived" : d.is_published ? "Published" : "Draft"}
+                    <td className="muted" style={{ fontSize: 13 }}>{d.owner || d.created_by || "—"}</td>
+                    <td className="muted" style={{ fontSize: 13 }}>{d.modified_by || d.owner || d.created_by || "—"}</td>
+                    <td className="muted" style={{ fontSize: 13 }}>{formatDateTime(d.updated_at || d.created_at)}</td>
+                    <td>
+                      <span style={{
+                        padding: "0.2rem 0.6rem", borderRadius: 6, fontSize: "0.75rem", fontWeight: 600,
+                        background: d.is_archived ? "#f3f4f6" : d.is_published ? "#d1fae5" : "#eff6ff",
+                        color: d.is_archived ? "#6b7280" : d.is_published ? "#065f46" : "#1d4ed8",
+                      }}>
+                        {d.is_archived ? "Archived" : d.is_published ? "Published" : "Draft"}
+                      </span>
                     </td>
                     <td className="actions-cell">
                       <div className="row-actions">
-                        <button
-                          type="button"
-                          className="action-icon-btn"
-                          title={isFavorite(d.id) ? "Unfavorite" : "Mark as favorite"}
-                          aria-label={isFavorite(d.id) ? "Unfavorite dashboard" : "Mark dashboard as favorite"}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleFavorite(d.id);
-                          }}
-                        >
-                          <i
-                            className={isFavorite(d.id) ? "fas fa-star" : "far fa-star"}
-                            aria-hidden="true"
-                            style={isFavorite(d.id) ? { color: "#f5c518" } : {}}
-                          />
+                        <button type="button" className="action-icon-btn" title={d.favorite ? "Unfavorite" : "Favorite"}
+                          onClick={e => { e.stopPropagation(); toggleFavorite(d.id); }}>
+                          <i className={d.favorite ? "fas fa-star" : "far fa-star"} style={d.favorite ? { color: "#f5c518" } : {}} />
                         </button>
-                        <button
-                          type="button"
-                          className="action-icon-btn"
-                          title="Edit dashboard"
-                          aria-label="Edit dashboard"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            window.location.href = `/dashboards/${d.id}/edit`;
-                          }}
-                        >
-                          <i className="fas fa-edit" aria-hidden="true" />
+                        <button type="button" className="action-icon-btn" title="Edit dashboard"
+                          onClick={e => { e.stopPropagation(); window.location.href = `/dashboards/${d.id}/edit`; }}>
+                          <i className="fas fa-edit" />
                         </button>
-                        <button
-                          type="button"
-                          className="action-icon-btn"
-                          title="Delete dashboard"
-                          aria-label="Delete dashboard"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setConfirmDelete(d);
-                          }}
-                          disabled={deletingId === d.id}
-                        >
-                          <i className="fas fa-trash" aria-hidden="true" />
+                        <button type="button" className="action-icon-btn" title="Delete dashboard"
+                          onClick={e => { e.stopPropagation(); setConfirmDelete(d); }} disabled={deletingId === d.id}>
+                          <i className={deletingId === d.id ? "fas fa-spinner fa-spin" : "fas fa-trash"} />
                         </button>
                       </div>
                     </td>
@@ -322,20 +200,20 @@ const DashboardsPage: React.FC = () => {
               </tbody>
             </table>
           </div>
+          <Pagination total={filtered.length} page={page} pageSize={PAGE_SIZE} onChange={setPage} />
         </div>
-      )}
+      </ListPageShell>
 
       <ConfirmModal
         isOpen={!!confirmDelete}
         title="Delete dashboard"
-        message={confirmDelete ? `"${confirmDelete.name}" will be permanently deleted. This cannot be undone.` : ''}
+        message={confirmDelete ? `"${confirmDelete.name}" will be permanently deleted. This cannot be undone.` : ""}
         confirmLabel="Delete"
         onConfirm={() => confirmDelete && void handleDeleteDashboard(confirmDelete)}
         onCancel={() => setConfirmDelete(null)}
       />
-    </div>
+    </>
   );
 };
 
 export default DashboardsPage;
-

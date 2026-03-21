@@ -472,7 +472,7 @@ export default function Home() {
       return !Number.isNaN(ts);
     })
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-    .slice(0, 8);
+    .slice(0, 10);
 
   const hasRecentUserActivity = recentUserActivityItems.length > 0;
 
@@ -961,7 +961,7 @@ export default function Home() {
                   const all = [...dashboardItems, ...chartItems, ...datasetItems, ...savedQueryItems]
                     .filter((item) => item.date && !Number.isNaN(new Date(item.date).getTime()))
                     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-                  const filtered = filterByScope(all).slice(0, 8);
+                  const filtered = filterByScope(all).slice(0, 10);
                   if (filtered.length === 0) {
                     return <p className="muted">No recent changes in this workspace.</p>;
                   }

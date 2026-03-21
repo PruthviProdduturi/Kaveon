@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { API_BASE } from "../../config";
 import { msalFetch } from "../../utils/msalFetch";
 import { useAuth } from "../../auth/useAuth";
 import { Button } from "../../components/Button";
+import { ListPageShell } from "../../components/ListPageShell";
+import { Pagination } from "../../components/Pagination";
 
 interface DataSource {
   id: number;
@@ -24,7 +25,6 @@ interface DataSource {
 }
 
 export default function DataSourcesPage() {
-  const router = useRouter();
   const { account, isAuthenticated } = useAuth();
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
   const [loading, setLoading] = useState(true);
@@ -34,6 +34,8 @@ export default function DataSourcesPage() {
   const [copyingDataSource, setCopyingDataSource] = useState<DataSource | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [tableCounts, setTableCounts] = useState<Record<number, number | null>>({});
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -180,210 +182,101 @@ export default function DataSourcesPage() {
     }
   };
 
+  const filtered = dataSources.filter(ds =>
+    !search || ds.name.toLowerCase().includes(search.toLowerCase()) ||
+    (ds.description ?? "").toLowerCase().includes(search.toLowerCase()) ||
+    (ds.connection_string ?? "").toLowerCase().includes(search.toLowerCase())
+  );
+  const handleSearch = (q: string) => { setSearch(q); setPage(1); };
+  const PAGE_SIZE = 20;
+  const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const activeCount = dataSources.filter(ds => ds.is_active).length;
+
   return (
-    <div className="page-shell">
-      <header className="page-header-with-actions">
-        <div className="page-header-main">
-          <h1 className="page-header-title">Data Sources</h1>
-          <p className="page-header-subtitle">
-            Manage database connections and switch between data sources
-          </p>
-        </div>
-        <Button
-          onClick={() => setShowAddModal(true)}
-          style={{ flexShrink: 0 }}
-        >
-          <i className="fas fa-plus" /> New Data Source
-        </Button>
-      </header>
-
-      {!isAuthenticated && <p className="muted">Sign in to manage data sources.</p>}
-
-      {error && (
-        <div className="card page-empty-card">
-          <p className="page-empty-title">Problem loading data sources</p>
-          <p className="page-empty-body">{error}</p>
-        </div>
-      )}
-
-      {isAuthenticated && loading && (
-        <div className="card page-empty-card" style={{ marginTop: 12 }}>
-          <i className="fas fa-spinner fa-spin" style={{ fontSize: 24, color: 'var(--loomx-primary)' }} />
-          <p style={{ marginTop: 12 }}>Loading data sources...</p>
-        </div>
-      )}
-
-      {isAuthenticated && !loading && !error && dataSources.length === 0 && (
-        <div className="card page-empty-card" style={{ marginTop: 12 }}>
-          <p className="page-empty-title">No data sources yet</p>
-          <p className="page-empty-body">
-            Add your first database connection to get started
-          </p>
-          <Button
-            style={{ marginTop: 12 }}
-            onClick={() => setShowAddModal(true)}
-          >
-            <i className="fas fa-plus" /> Add Data Source
+    <>
+      <ListPageShell
+        icon="fa-server"
+        title="Data Sources"
+        subtitle="Manage database connections and switch between data sources."
+        pills={!loading && !error ? [
+          { label: `${dataSources.length} Source${dataSources.length !== 1 ? "s" : ""}`, icon: "fa-server" },
+          ...(activeCount > 0 ? [{ label: `${activeCount} Active`, icon: "fa-check-circle", bg: "#d1fae5", border: "#6ee7b7", color: "#065f46" }] : []),
+        ] : []}
+        action={
+          <Button onClick={() => setShowAddModal(true)}>
+            <i className="fas fa-plus" /> New Data Source
           </Button>
-        </div>
-      )}
-
-      {isAuthenticated && !loading && !error && dataSources.length > 0 && (
-        <div className="card" style={{ marginTop: 12 }}>
+        }
+        loading={loading}
+        loadingMessage="Loading data sources"
+        error={error}
+        empty={!loading && !error && dataSources.length === 0}
+        emptyTitle="No data sources yet"
+        emptyBody="Add your first database connection to get started."
+        emptyAction={<Button onClick={() => setShowAddModal(true)}><i className="fas fa-plus" /> Add Data Source</Button>}
+        search={search}
+        onSearch={handleSearch}
+        resultCount={search ? filtered.length : undefined}
+      >
+        <div className="card">
           <div className="results-table-container">
             <table className="results-table">
               <thead>
                 <tr>
-                  <th>
-                    <span className="column-header-label">Name</span>
-                  </th>
-                  <th>
-                    <span className="column-header-label">Type</span>
-                  </th>
-                  <th>
-                    <span className="column-header-label">Endpoint</span>
-                  </th>
-                  <th>
-                    <span className="column-header-label">Database</span>
-                  </th>
-                  <th>
-                    <span className="column-header-label">Region</span>
-                  </th>
-                  <th>
-                    <span className="column-header-label">Status</span>
-                  </th>
-                  <th>
-                    <span className="column-header-label">Tables</span>
-                  </th>
-                  <th>
-                    <span className="column-header-label">Actions</span>
-                  </th>
+                  <th><span className="column-header-label">Name</span></th>
+                  <th><span className="column-header-label">Type</span></th>
+                  <th><span className="column-header-label">Endpoint</span></th>
+                  <th><span className="column-header-label">Database</span></th>
+                  <th><span className="column-header-label">Region</span></th>
+                  <th><span className="column-header-label">Status</span></th>
+                  <th><span className="column-header-label">Tables</span></th>
+                  <th><span className="column-header-label">Actions</span></th>
                 </tr>
               </thead>
               <tbody>
-                {dataSources.map((ds) => (
+                {paged.map(ds => (
                   <tr key={ds.id}>
                     <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                         <strong>{ds.name}</strong>
-                        {ds.is_favorite === 1 && (
-                          <i
-                            className="fas fa-star"
-                            style={{ color: '#f59e0b', fontSize: '0.85rem' }}
-                            title="Favorite data source"
-                          />
-                        )}
+                        {ds.is_favorite === 1 && <i className="fas fa-star" style={{ color: "#f59e0b", fontSize: "0.85rem" }} title="Favorite data source" />}
                       </div>
-                      {ds.description && (
-                        <div className="muted" style={{ marginTop: 4, fontSize: 13 }}>
-                          {ds.description}
-                        </div>
-                      )}
+                      {ds.description && <div className="muted" style={{ marginTop: 4, fontSize: 13 }}>{ds.description}</div>}
                     </td>
-                    <td className="muted" style={{ fontSize: 13 }}>
-                      {ds.type}
-                    </td>
-                    <td className="muted" style={{ fontSize: 12, fontFamily: 'monospace', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {ds.connection_string}
-                    </td>
-                    <td className="muted" style={{ fontSize: 13 }}>
-                      {ds.database_name || '—'}
-                    </td>
+                    <td className="muted" style={{ fontSize: 13 }}>{ds.type}</td>
+                    <td className="muted" style={{ fontSize: 12, fontFamily: "monospace", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ds.connection_string}</td>
+                    <td className="muted" style={{ fontSize: 13 }}>{ds.database_name || "—"}</td>
                     <td>
-                      <span
-                        style={{
-                          padding: '0.25rem 0.5rem',
-                          borderRadius: '6px',
-                          fontSize: '0.75rem',
-                          fontWeight: 600,
-                          background: ds.region === 'WW' ? '#dbeafe' : '#fef3c7',
-                          color: ds.region === 'WW' ? '#1e40af' : '#92400e'
-                        }}
-                      >
+                      <span style={{ padding: "0.2rem 0.5rem", borderRadius: 6, fontSize: "0.75rem", fontWeight: 600, background: ds.region === "WW" ? "#dbeafe" : "#fef3c7", color: ds.region === "WW" ? "#1e40af" : "#92400e" }}>
                         {ds.region}
                       </span>
                     </td>
                     <td>
-                      <span
-                        style={{
-                          padding: '0.25rem 0.5rem',
-                          borderRadius: '6px',
-                          fontSize: '0.75rem',
-                          fontWeight: 600,
-                          background: ds.is_active ? '#d1fae5' : '#f3f4f6',
-                          color: ds.is_active ? '#065f46' : '#6b7280'
-                        }}
-                      >
-                        {ds.is_active ? 'Active' : 'Inactive'}
+                      <span style={{ padding: "0.2rem 0.5rem", borderRadius: 6, fontSize: "0.75rem", fontWeight: 600, background: ds.is_active ? "#d1fae5" : "#f3f4f6", color: ds.is_active ? "#065f46" : "#6b7280" }}>
+                        {ds.is_active ? "Active" : "Inactive"}
                       </span>
                     </td>
                     <td className="muted" style={{ fontSize: 13 }}>
                       {tableCounts[ds.id] !== undefined ? (
-                        tableCounts[ds.id] !== null ? (
-                          <span style={{ fontWeight: 600, color: '#059669' }}>
-                            {tableCounts[ds.id]} tables
-                          </span>
-                        ) : (
-                          <span style={{ color: '#9ca3af' }}>—</span>
-                        )
-                      ) : (
-                        <i className="fas fa-spinner fa-spin" style={{ fontSize: 11, color: 'var(--loomx-primary)' }} />
-                      )}
+                        tableCounts[ds.id] !== null ? <span style={{ fontWeight: 600, color: "#059669" }}>{tableCounts[ds.id]} tables</span> : <span style={{ color: "#9ca3af" }}>—</span>
+                      ) : <i className="fas fa-spinner fa-spin" style={{ fontSize: 11, color: "var(--loomx-primary)" }} />}
                     </td>
                     <td className="actions-cell">
                       <div className="row-actions">
-                        <button
-                          type="button"
-                          className="action-icon-btn"
-                          title={ds.is_favorite === 1 ? "Remove favorite (only one favorite allowed)" : "Set as favorite"}
-                          aria-label={ds.is_favorite === 1 ? "Remove favorite" : "Set as favorite"}
-                          onClick={e => toggleFavorite(ds, e)}
-                          style={{ color: ds.is_favorite === 1 ? "#f59e0b" : undefined }}
-                        >
-                          <i className={ds.is_favorite === 1 ? "fas fa-star" : "far fa-star"} aria-hidden="true" />
+                        <button type="button" className="action-icon-btn" title={ds.is_favorite === 1 ? "Remove favorite" : "Set as favorite"} onClick={e => toggleFavorite(ds, e)} style={{ color: ds.is_favorite === 1 ? "#f59e0b" : undefined }}>
+                          <i className={ds.is_favorite === 1 ? "fas fa-star" : "far fa-star"} />
                         </button>
-                        <button
-                          type="button"
-                          className="action-icon-btn"
-                          title={ds.is_active ? "Deactivate" : "Activate"}
-                          aria-label={ds.is_active ? "Deactivate" : "Activate"}
-                          onClick={e => toggleDataSource(ds, e)}
-                        >
-                          <i className={`fas fa-${ds.is_active ? 'pause' : 'play'}-circle`} aria-hidden="true" />
+                        <button type="button" className="action-icon-btn" title={ds.is_active ? "Deactivate" : "Activate"} onClick={e => toggleDataSource(ds, e)}>
+                          <i className={`fas fa-${ds.is_active ? "pause" : "play"}-circle`} />
                         </button>
-                        <button
-                          type="button"
-                          className="action-icon-btn"
-                          title="Copy data source"
-                          aria-label="Copy data source"
-                          onClick={e => {
-                            e.stopPropagation();
-                            setCopyingDataSource(ds);
-                          }}
-                        >
-                          <i className="fas fa-copy" aria-hidden="true" />
+                        <button type="button" className="action-icon-btn" title="Copy data source" onClick={e => { e.stopPropagation(); setCopyingDataSource(ds); }}>
+                          <i className="fas fa-copy" />
                         </button>
-                        <button
-                          type="button"
-                          className="action-icon-btn"
-                          title="Edit data source"
-                          aria-label="Edit data source"
-                          onClick={e => {
-                            e.stopPropagation();
-                            setEditingDataSource(ds);
-                          }}
-                        >
-                          <i className="fas fa-edit" aria-hidden="true" />
+                        <button type="button" className="action-icon-btn" title="Edit data source" onClick={e => { e.stopPropagation(); setEditingDataSource(ds); }}>
+                          <i className="fas fa-edit" />
                         </button>
-                        <button
-                          type="button"
-                          className="action-icon-btn"
-                          title="Delete data source"
-                          aria-label="Delete data source"
-                          onClick={(e) => deleteDataSource(ds, e)}
-                          disabled={deletingId === ds.id}
-                        >
-                          <i className="fas fa-trash" aria-hidden="true" />
+                        <button type="button" className="action-icon-btn" title="Delete data source" onClick={e => deleteDataSource(ds, e)} disabled={deletingId === ds.id}>
+                          <i className={deletingId === ds.id ? "fas fa-spinner fa-spin" : "fas fa-trash"} />
                         </button>
                       </div>
                     </td>
@@ -392,42 +285,14 @@ export default function DataSourcesPage() {
               </tbody>
             </table>
           </div>
+          <Pagination total={filtered.length} page={page} pageSize={PAGE_SIZE} onChange={setPage} />
         </div>
-      )}
+      </ListPageShell>
 
-      {showAddModal && (
-        <AddDataSourceModal
-          onClose={() => setShowAddModal(false)}
-          onSuccess={() => {
-            setShowAddModal(false);
-            loadDataSources();
-          }}
-        />
-      )}
-
-      {editingDataSource && (
-        <AddDataSourceModal
-          dataSource={editingDataSource}
-          onClose={() => setEditingDataSource(null)}
-          onSuccess={() => {
-            setEditingDataSource(null);
-            loadDataSources();
-          }}
-        />
-      )}
-
-      {copyingDataSource && (
-        <AddDataSourceModal
-          dataSource={copyingDataSource}
-          isCopying={true}
-          onClose={() => setCopyingDataSource(null)}
-          onSuccess={() => {
-            setCopyingDataSource(null);
-            loadDataSources();
-          }}
-        />
-      )}
-    </div>
+      {showAddModal && <AddDataSourceModal onClose={() => setShowAddModal(false)} onSuccess={() => { setShowAddModal(false); loadDataSources(); }} />}
+      {editingDataSource && <AddDataSourceModal dataSource={editingDataSource} onClose={() => setEditingDataSource(null)} onSuccess={() => { setEditingDataSource(null); loadDataSources(); }} />}
+      {copyingDataSource && <AddDataSourceModal dataSource={copyingDataSource} isCopying={true} onClose={() => setCopyingDataSource(null)} onSuccess={() => { setCopyingDataSource(null); loadDataSources(); }} />}
+    </>
   );
 }
 
