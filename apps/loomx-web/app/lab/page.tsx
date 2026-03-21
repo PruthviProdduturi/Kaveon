@@ -1633,7 +1633,7 @@ return;
     <>
       {!isAuthenticated && (
         <p className="muted" style={{ margin: "1.5rem" }}>
-          Sign in and connect to LoomX to use SQL Lab.
+          Sign in and connect to LooMX to use SQL Lab.
         </p>
       )}
 
@@ -2683,7 +2683,7 @@ return;
             </div>
             <div className="save-query-modal-body">
               <p style={{ fontSize: "0.85rem", color: "#374151", marginBottom: 12 }}>
-                LoomX will create a virtual dataset from your SQL query, then open the chart builder.
+                LooMX will create a virtual dataset from your SQL query, then open the chart builder.
               </p>
               <p style={{ fontSize: "0.8rem", fontWeight: 600, marginBottom: 8 }}>Choose chart type:</p>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>

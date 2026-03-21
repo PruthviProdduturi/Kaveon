@@ -1,6 +1,6 @@
 /**
  * Country name alias map — normalises ISO codes, common names, and variations
- * to the canonical names used in the Natural Earth GeoJSON bundled with LoomX.
+ * to the canonical names used in the Natural Earth GeoJSON bundled with LooMX.
  *
  * Keys are lower-cased for case-insensitive lookup.
  * Values are exact GeoJSON feature.properties.name strings.

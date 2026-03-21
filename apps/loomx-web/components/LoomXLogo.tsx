@@ -54,7 +54,7 @@ export function LoomXLogo({ size = 48, animate = 'none', onClick, className = ''
         paddingRight: 4,
       }}
       role={onClick ? 'button' : undefined}
-      aria-label="LoomX"
+      aria-label="LooMX"
     >
       <svg ref={svgRef} width={width} height={height} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMinYMid" aria-hidden="false">
         <defs>

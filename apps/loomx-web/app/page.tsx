@@ -791,28 +791,30 @@ export default function Home() {
                 </div>
               </section>
               <section className="home-panel">
-                <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: 8 }}>
-                  <div style={{ width: 28, height: 28, borderRadius: 7, background: `linear-gradient(135deg, ${gradientColors.light}, ${gradientColors.dark})`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: `0 2px 8px ${primaryColor}25` }}>
-                    <i className="fas fa-star" style={{ color: "white", fontSize: 11 }} />
+                <div style={{ marginBottom: 16, paddingBottom: 12, borderBottom: "1px solid #f1f5f9", background: "linear-gradient(to bottom, #f8fafc, white)", margin: "-1px -1px 16px", padding: "10px 14px 12px", borderRadius: "12px 12px 0 0" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+                    <div style={{ width: 28, height: 28, borderRadius: 7, background: `linear-gradient(135deg, ${gradientColors.light}, ${gradientColors.dark})`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: `0 2px 8px ${primaryColor}25` }}>
+                      <i className="fas fa-star" style={{ color: "white", fontSize: 11 }} />
+                    </div>
+                    <h2
+                      className="home-section-title clickable-section-title"
+                      style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', margin: 0 }}
+                      tabIndex={0}
+                      onClick={() => window.location.href = '/favorites'}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          window.location.href = '/favorites';
+                        }
+                      }}
+                    >
+                      Your Favorites
+                      <span style={{ marginLeft: 8, fontSize: 16 }} aria-hidden="true">→</span>
+                    </h2>
                   </div>
-                  <h2
-                    className="home-section-title clickable-section-title"
-                    style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', margin: 0 }}
-                    tabIndex={0}
-                    onClick={() => window.location.href = '/favorites'}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        window.location.href = '/favorites';
-                      }
-                    }}
-                  >
-                    Your Favorites
-                    <span style={{ marginLeft: 8, fontSize: 16 }} aria-hidden="true">→</span>
-                  </h2>
-                </div>
-                <div className="muted" style={{fontSize:13, marginBottom:16, marginTop:2}}>
-                  Shows <b>your</b> favorite dashboards, charts, and datasets.
+                  <div className="muted" style={{ fontSize: 12, marginTop: 5, paddingLeft: 36 }}>
+                    Shows <b>your</b> favorite dashboards, charts, and datasets.
+                  </div>
                 </div>
                 {allFavorites.length === 0 && (
                   <p className="muted">No favorites yet. Mark dashboards, charts, or datasets as favorites to see them here.</p>
@@ -881,46 +883,48 @@ export default function Home() {
 
             <div className="home-column">
               <section className="home-panel">
-                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-                    <div style={{ width: 28, height: 28, borderRadius: 7, background: `linear-gradient(135deg, ${gradientColors.light}, ${gradientColors.dark})`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: `0 2px 8px ${primaryColor}25` }}>
-                      <i className="fas fa-history" style={{ color: "white", fontSize: 11 }} />
+                <div style={{ marginBottom: 16, paddingBottom: 12, borderBottom: "1px solid #f1f5f9", background: "linear-gradient(to bottom, #f8fafc, white)", margin: "-1px -1px 16px", padding: "10px 14px 12px", borderRadius: "12px 12px 0 0" }}>
+                  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+                      <div style={{ width: 28, height: 28, borderRadius: 7, background: `linear-gradient(135deg, ${gradientColors.light}, ${gradientColors.dark})`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: `0 2px 8px ${primaryColor}25` }}>
+                        <i className="fas fa-history" style={{ color: "white", fontSize: 11 }} />
+                      </div>
+                      <h2
+                        className="home-section-title clickable-section-title"
+                        style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', margin: 0 }}
+                        tabIndex={0}
+                        onClick={() => window.location.href = '/workspace-activity'}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            window.location.href = '/workspace-activity';
+                          }
+                        }}
+                      >
+                        Workspace Activity
+                        <span style={{ marginLeft: 8, fontSize: 16 }} aria-hidden="true">→</span>
+                      </h2>
                     </div>
-                    <h2
-                      className="home-section-title clickable-section-title"
-                      style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', margin: 0 }}
-                      tabIndex={0}
-                      onClick={() => window.location.href = '/workspace-activity'}
-                      onKeyDown={e => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          window.location.href = '/workspace-activity';
-                        }
-                      }}
-                    >
-                      Workspace Activity
-                      <span style={{ marginLeft: 8, fontSize: 16 }} aria-hidden="true">→</span>
-                    </h2>
+                    <span className="saved-queries-toggle">
+                      <button
+                        type="button"
+                        className={activityScope === 'mine' ? 'active' : ''}
+                        onClick={() => setActivityScope('mine')}
+                      >
+                        Mine
+                      </button>
+                      <button
+                        type="button"
+                        className={activityScope === 'all' ? 'active' : ''}
+                        onClick={() => setActivityScope('all')}
+                      >
+                        All
+                      </button>
+                    </span>
                   </div>
-                  <span className="saved-queries-toggle">
-                    <button
-                      type="button"
-                      className={activityScope === 'mine' ? 'active' : ''}
-                      onClick={() => setActivityScope('mine')}
-                    >
-                      Mine
-                    </button>
-                    <button
-                      type="button"
-                      className={activityScope === 'all' ? 'active' : ''}
-                      onClick={() => setActivityScope('all')}
-                    >
-                      All
-                    </button>
-                  </span>
-                </div>
-                <div className="muted" style={{fontSize:13, marginBottom:16, marginTop:2}}>
-                  Recent dashboards, charts, datasets and saved queries.
+                  <div className="muted" style={{fontSize:12, marginTop:5, paddingLeft:36}}>
+                    Recent dashboards, charts, datasets and saved queries.
+                  </div>
                 </div>
                 {(() => {
                   const userEmail = account?.email || account?.username || null;

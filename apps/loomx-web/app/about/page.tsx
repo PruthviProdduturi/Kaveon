@@ -238,15 +238,27 @@ export default function AboutPage() {
     return () => window.removeEventListener("scroll", handler);
   }, []);
 
-  // ── nav anchors ──
-  const navItems = [
+  // ── nav structure ──
+  const [openNav, setOpenNav] = useState<string | null>(null);
+  const navGroups: Array<{ label: string; href?: string; items?: { label: string; href: string }[]; dividerBefore?: boolean }> = [
     { label: "Features", href: "#features" },
-    { label: "Charts", href: "#charts" },
-    { label: "Data Sources", href: "#datasources" },
-    { label: "AI", href: "#ai" },
+    { label: "Platform", dividerBefore: true, items: [
+      { label: "Charts", href: "#charts" },
+      { label: "Dashboards", href: "#dashboards" },
+      { label: "Data Sources", href: "#datasources" },
+      { label: "SQL Lab", href: "#sqllab" },
+      { label: "AI", href: "#ai" },
+    ]},
     { label: "Security", href: "#security" },
-    { label: "API", href: "#api" },
-    { label: "Stack", href: "#stack" },
+    { label: "Developers", items: [
+      { label: "API Reference", href: "#api" },
+      { label: "Tech Stack", href: "#stack" },
+    ]},
+    { label: "Resources", dividerBefore: true, items: [
+      { label: "Getting Started", href: "#start" },
+      { label: "What's New", href: "#whatsnew" },
+      { label: "FAQ", href: "#faq" },
+    ]},
   ];
 
   return (
@@ -260,21 +272,72 @@ export default function AboutPage() {
         boxShadow: scrolled ? "0 1px 12px rgba(0,0,0,0.08)" : "none",
       }}>
         <div style={{ maxWidth: 1140, margin: "0 auto", padding: "0 24px", display: "flex", alignItems: "center", gap: 32, height: 52 }}>
-          <span style={{ fontWeight: 800, fontSize: 15, color: primaryColor, letterSpacing: "-0.3px", flexShrink: 0 }}>
-            LoomX
+          <span
+            style={{ fontWeight: 800, fontSize: 15, color: primaryColor, letterSpacing: "-0.3px", flexShrink: 0, cursor: "pointer" }}
+            onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          >
+            LooMX
           </span>
-          <div style={{ display: "flex", gap: 4, overflow: "auto", msOverflowStyle: "none" }}>
-            {navItems.map(n => (
-              <a key={n.href} href={n.href} style={{
-                padding: "6px 12px", borderRadius: 7, fontSize: 13, fontWeight: 500,
-                color: "#475569", textDecoration: "none", whiteSpace: "nowrap",
-                transition: "background 0.15s, color 0.15s",
-              }}
-                onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.background = `${primaryColor}12`; (e.currentTarget as HTMLAnchorElement).style.color = primaryColor; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.background = ""; (e.currentTarget as HTMLAnchorElement).style.color = "#475569"; }}
-              >
-                {n.label}
-              </a>
+          <div style={{ display: "flex", alignItems: "center" }}>
+            {navGroups.map(g => (
+              <React.Fragment key={g.label}>
+                {g.dividerBefore && (
+                  <div style={{ width: 1, height: 16, background: "#e2e8f0", margin: "0 4px", flexShrink: 0 }} />
+                )}
+                {g.href ? (
+                  <a href={g.href} style={{
+                    display: "flex", alignItems: "center", height: 32,
+                    padding: "0 11px", borderRadius: 7, fontSize: 13, fontWeight: 500,
+                    color: "#475569", textDecoration: "none", whiteSpace: "nowrap",
+                    transition: "background 0.15s, color 0.15s",
+                  }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.background = `${primaryColor}12`; (e.currentTarget as HTMLAnchorElement).style.color = primaryColor; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.background = ""; (e.currentTarget as HTMLAnchorElement).style.color = "#475569"; }}
+                  >
+                    {g.label}
+                  </a>
+                ) : (
+                  <div style={{ position: "relative" }}
+                    onMouseEnter={() => setOpenNav(g.label)}
+                    onMouseLeave={() => setOpenNav(null)}
+                  >
+                    <button style={{
+                      display: "flex", alignItems: "center", height: 32, gap: 5,
+                      padding: "0 11px", borderRadius: 7, fontSize: 13, fontWeight: 500,
+                      color: openNav === g.label ? primaryColor : "#475569",
+                      background: openNav === g.label ? `${primaryColor}12` : "none",
+                      border: "none", cursor: "pointer", whiteSpace: "nowrap",
+                      lineHeight: 1, transition: "background 0.15s, color 0.15s",
+                    }}>
+                      {g.label}
+                      <i className="fas fa-caret-down" style={{ fontSize: 10, opacity: 0.6 }} />
+                    </button>
+                    {openNav === g.label && (
+                      <div style={{
+                        position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 50,
+                        background: "white", border: "1px solid #e5e7eb", borderRadius: 10,
+                        boxShadow: "0 8px 24px rgba(0,0,0,0.1)", padding: "6px", minWidth: 180,
+                      }}>
+                        {g.items!.map(item => (
+                          <a key={item.href} href={item.href} style={{
+                            display: "flex", alignItems: "center", height: 34,
+                            padding: "0 12px", borderRadius: 7,
+                            fontSize: 13, fontWeight: 500, color: "#334155",
+                            textDecoration: "none", whiteSpace: "nowrap",
+                            transition: "background 0.12s, color 0.12s",
+                          }}
+                            onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.background = `${primaryColor}10`; (e.currentTarget as HTMLAnchorElement).style.color = primaryColor; }}
+                            onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.background = ""; (e.currentTarget as HTMLAnchorElement).style.color = "#334155"; }}
+                            onClick={() => setOpenNav(null)}
+                          >
+                            {item.label}
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </React.Fragment>
             ))}
           </div>
           <div style={{ marginLeft: "auto", flexShrink: 0 }}>
@@ -316,15 +379,15 @@ export default function AboutPage() {
 
           <h1 style={{
             fontSize: "clamp(2.5rem, 6vw, 4rem)", fontWeight: 900, color: "white",
-            lineHeight: 1.1, margin: "0 0 20px", letterSpacing: "-1.5px",
+            lineHeight: 1.15, margin: "0 0 20px", letterSpacing: "-1.5px",
           }}>
-            Live Operational Outcomes<br />
+            Live Operational Outcomes &amp; Metrics<br />
             <span style={{
               backgroundImage: `linear-gradient(135deg, ${forceLightHex(primaryColor, 72)}, ${forceLightHex(primaryColor, 90)})`,
               WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
               backgroundClip: "text",
             }}>
-              &amp; Metrics eXperience
+              eXperience
             </span>
           </h1>
 
@@ -344,7 +407,7 @@ export default function AboutPage() {
               color: "white", textDecoration: "none",
               boxShadow: `0 4px 18px ${primaryColor}40`,
             }}>
-              <i className="fas fa-arrow-right" style={{ marginRight: 8 }} />Open LoomX
+              <i className="fas fa-arrow-right" style={{ marginRight: 8 }} />Open LooMX
             </Link>
             <a href="#features" style={{
               padding: "13px 28px", borderRadius: 10, fontSize: 15, fontWeight: 600,
@@ -400,7 +463,7 @@ export default function AboutPage() {
             body="Bar, line, area, pie, scatter, heatmap, funnel, gauge, treemap, waterfall, calendar heat map, world map globe (3D WebGL), KPI cards, and more. All powered by Apache ECharts." />
           <FeatureCard icon="fa-layer-group" color="#0ea5e9"
             title="Semantic Datasets"
-            body="Define dimensions, metrics, and filter columns once. LoomX auto-generates optimised SQL with multi-table JOINs. Change the dataset — every chart and dashboard updates automatically." />
+            body="Define dimensions, metrics, and filter columns once. LooMX auto-generates optimised SQL with multi-table JOINs. Change the dataset — every chart and dashboard updates automatically." />
           <FeatureCard icon="fa-th-large" color="#d97706"
             title="Dashboard Builder"
             body="Drag-and-drop canvas with resizable chart tiles, row/column/tab containers, rich markdown text blocks, headers, and dividers. Cross-chart filtering with one click." />
@@ -413,8 +476,129 @@ export default function AboutPage() {
         </div>
       </Section>
 
+      {/* ── Chart types ── */}
+      <Section id="charts" bg="white">
+        <div style={{ textAlign: "center", marginBottom: 48 }}>
+          <SectionLabel text="Visualisations" color="#059669" />
+          <SectionHeading center>20+ chart types out of the box</SectionHeading>
+          <SectionSub center>
+            From simple bar charts to 3D globe maps powered by WebGL — all driven by Apache ECharts 5
+            and configured through an intuitive point-and-click builder.
+          </SectionSub>
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center" }}>
+          {[
+            ["fa-chart-bar",       "#2563eb", "Bar Chart"],
+            ["fa-chart-line",      "#059669", "Line Chart"],
+            ["fa-chart-area",      "#7c3aed", "Area Chart"],
+            ["fa-chart-pie",       "#d97706", "Pie / Donut"],
+            ["fa-circle-dot",      "#0ea5e9", "Scatter Plot"],
+            ["fa-fire",            "#ef4444", "Heatmap"],
+            ["fa-filter",          "#059669", "Funnel"],
+            ["fa-tachometer-alt",  "#7c3aed", "Gauge"],
+            ["fa-sitemap",         "#0ea5e9", "Treemap"],
+            ["fa-water",           "#2563eb", "Waterfall"],
+            ["fa-calendar",        "#d97706", "Calendar Heat"],
+            ["fa-globe",           "#059669", "World Map Globe"],
+            ["fa-table",           "#64748b", "Table"],
+            ["fa-hashtag",         "#7c3aed", "KPI / Big Number"],
+            ["fa-chart-column",    "#2563eb", "Grouped Bar"],
+            ["fa-layer-group",     "#0ea5e9", "Stacked Bar"],
+            ["fa-wind",            "#059669", "Candlestick"],
+            ["fa-diagram-project", "#d97706", "Sankey Diagram"],
+            ["fa-chart-gantt",     "#ef4444", "Box Plot"],
+            ["fa-radar",           "#7c3aed", "Radar Chart"],
+          ].map(([icon, color, label]) => (
+            <ChartPill key={label as string} icon={icon as string} color={color as string} label={label as string} />
+          ))}
+        </div>
+
+        {/* Advanced chart options */}
+        <div style={{ marginTop: 48, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 16 }}>
+          {[
+            { icon: "fa-pen-ruler", color: "#2563eb", title: "Advanced Options", body: "Reference lines, goal markers, annotation layers, custom colour schemes, and axis configuration." },
+            { icon: "fa-filter", color: "#059669", title: "Live Filter Dropdowns", body: "Filter values sourced directly from your data at query time — always up to date, never stale." },
+            { icon: "fa-link", color: "#7c3aed", title: "Cross-Chart Filtering", body: "Click any bar, slice, or data point to instantly filter every connected chart on the dashboard." },
+            { icon: "fa-expand", color: "#d97706", title: "Full-Screen Mode", body: "Expand any chart to full screen. Download as PNG or export the underlying data as CSV." },
+          ].map(c => (
+            <div key={c.title} style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 12, padding: "20px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                <i className={`fas ${c.icon}`} style={{ color: c.color, fontSize: 15 }} />
+                <span style={{ fontWeight: 700, fontSize: 14, color: "#0f172a" }}>{c.title}</span>
+              </div>
+              <p style={{ margin: 0, fontSize: 13.5, color: "#64748b", lineHeight: 1.6 }}>{c.body}</p>
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      {/* ── Dashboard builder ── */}
+      <Section id="dashboards" bg="#f8fafc">
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 60, alignItems: "center" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            {[
+              { icon: "fa-grip-vertical", color: "#2563eb", title: "Drag-and-Drop Canvas", body: "Resize, rearrange, and nest chart tiles with react-grid-layout." },
+              { icon: "fa-filter", color: "#059669", title: "Filter Bar", body: "Dashboard-level filters slice every chart simultaneously with a single selection." },
+              { icon: "fa-file-alt", color: "#7c3aed", title: "Rich Text Blocks", body: "Full Markdown support with bold, italic, links, code blocks, and blockquotes." },
+              { icon: "fa-tabs", color: "#d97706", title: "Tab Containers", body: "Group charts into tabbed views to keep dashboards clean and focused." },
+              { icon: "fa-arrows-to-dot", color: "#dc2626", title: "Cross-Chart Filters", body: "Click any data point to filter all connected charts on the page instantly." },
+              { icon: "fa-expand-alt", color: "#0ea5e9", title: "Full-Screen Charts", body: "Expand any chart tile for a focused deep-dive view without leaving the dashboard." },
+            ].map(c => (
+              <div key={c.title} style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 10, padding: "16px" }}>
+                <i className={`fas ${c.icon}`} style={{ color: c.color, fontSize: 16, marginBottom: 8, display: "block" }} />
+                <div style={{ fontWeight: 700, fontSize: 13, color: "#0f172a", marginBottom: 4 }}>{c.title}</div>
+                <div style={{ fontSize: 12.5, color: "#64748b", lineHeight: 1.55 }}>{c.body}</div>
+              </div>
+            ))}
+          </div>
+          <div>
+            <SectionLabel text="Dashboards" color="#d97706" />
+            <SectionHeading>Compose stories from your data</SectionHeading>
+            <p style={{ fontSize: 15.5, color: "#475569", lineHeight: 1.75 }}>
+              The LooMX dashboard builder gives you a pixel-precise drag-and-drop canvas. Combine charts,
+              KPI cards, rich text, headers, and tab containers into polished operational dashboards.
+              Publish to your team, set visibility to internal, or keep it private while you build.
+            </p>
+          </div>
+        </div>
+      </Section>
+
+      {/* ── Data Sources ── */}
+      <Section id="datasources" bg="white">
+        <div style={{ textAlign: "center", marginBottom: 48 }}>
+          <SectionLabel text="Data Sources" color="#0ea5e9" />
+          <SectionHeading center>Connect any modern data platform</SectionHeading>
+          <SectionSub center>
+            Register data sources from the UI — no .env changes, no API restarts.
+            LooMX creates a dedicated connection pool for each source at registration time.
+          </SectionSub>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 16 }}>
+          <DbCard icon={<FabricSvg />} name="Microsoft Fabric SQL" color="#0E6961" />
+          <DbCard icon={<AzureSvg />} name="Azure SQL Database" color="#0078D4" />
+          <DbCard icon={<PgSvg />} name="PostgreSQL" color="#336791" badge="BETA" />
+          <DbCard icon={<MySQLSvg />} name="MySQL / MariaDB" color="#4479A1" badge="BETA" />
+          <DbCard icon={<TrinoSvg />} name="Trino" color="#DD1C1C" badge="BETA" />
+          <DbCard icon={<StarRocksSvg />} name="StarRocks" color="#01808F" badge="BETA" />
+        </div>
+
+        <div style={{ marginTop: 40, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 20 }}>
+          {[
+            { icon: "fa-plug", color: "#0ea5e9", title: "Connection Testing", body: "Built-in connection tester at registration time — verify before you commit." },
+            { icon: "fa-swimming-pool", color: "#059669", title: "Per-DB Connection Pool", body: "Each data source gets its own pyodbc pool, warmed at startup and kept alive by a 5-minute heartbeat." },
+            { icon: "fa-lock", color: "#7c3aed", title: "No Credential Storage", body: "Fabric and Azure SQL use delegated Azure AD tokens. The connection string is stored encrypted and never returned to the browser." },
+          ].map(c => (
+            <div key={c.title} style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 12, padding: "20px" }}>
+              <i className={`fas ${c.icon}`} style={{ color: c.color, fontSize: 18, marginBottom: 10, display: "block" }} />
+              <div style={{ fontWeight: 700, fontSize: 14, color: "#0f172a", marginBottom: 6 }}>{c.title}</div>
+              <p style={{ margin: 0, fontSize: 13.5, color: "#64748b", lineHeight: 1.6 }}>{c.body}</p>
+            </div>
+          ))}
+        </div>
+      </Section>
+
       {/* ── SQL Lab deep-dive ── */}
-      <Section bg="white">
+      <Section id="sqllab" bg="#f8fafc">
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 60, alignItems: "center" }}>
           <div>
             <SectionLabel text="SQL Lab" color="#2563eb" />
@@ -470,104 +654,14 @@ export default function AboutPage() {
         </div>
       </Section>
 
-      {/* ── Chart types ── */}
-      <Section id="charts" bg="#f8fafc">
-        <div style={{ textAlign: "center", marginBottom: 48 }}>
-          <SectionLabel text="Visualisations" color="#059669" />
-          <SectionHeading center>20+ chart types out of the box</SectionHeading>
-          <SectionSub center>
-            From simple bar charts to 3D globe maps powered by WebGL — all driven by Apache ECharts 5
-            and configured through an intuitive point-and-click builder.
-          </SectionSub>
-        </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center" }}>
-          {[
-            ["fa-chart-bar",       "#2563eb", "Bar Chart"],
-            ["fa-chart-line",      "#059669", "Line Chart"],
-            ["fa-chart-area",      "#7c3aed", "Area Chart"],
-            ["fa-chart-pie",       "#d97706", "Pie / Donut"],
-            ["fa-circle-dot",      "#0ea5e9", "Scatter Plot"],
-            ["fa-fire",            "#ef4444", "Heatmap"],
-            ["fa-filter",          "#059669", "Funnel"],
-            ["fa-tachometer-alt",  "#7c3aed", "Gauge"],
-            ["fa-sitemap",         "#0ea5e9", "Treemap"],
-            ["fa-water",           "#2563eb", "Waterfall"],
-            ["fa-calendar",        "#d97706", "Calendar Heat"],
-            ["fa-globe",           "#059669", "World Map Globe"],
-            ["fa-table",           "#64748b", "Table"],
-            ["fa-hashtag",         "#7c3aed", "KPI / Big Number"],
-            ["fa-chart-column",    "#2563eb", "Grouped Bar"],
-            ["fa-layer-group",     "#0ea5e9", "Stacked Bar"],
-            ["fa-wind",            "#059669", "Candlestick"],
-            ["fa-diagram-project", "#d97706", "Sankey Diagram"],
-            ["fa-chart-gantt",     "#ef4444", "Box Plot"],
-            ["fa-radar",           "#7c3aed", "Radar Chart"],
-          ].map(([icon, color, label]) => (
-            <ChartPill key={label as string} icon={icon as string} color={color as string} label={label as string} />
-          ))}
-        </div>
-
-        {/* Advanced chart options */}
-        <div style={{ marginTop: 48, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 16 }}>
-          {[
-            { icon: "fa-pen-ruler", color: "#2563eb", title: "Advanced Options", body: "Reference lines, goal markers, annotation layers, custom colour schemes, and axis configuration." },
-            { icon: "fa-filter", color: "#059669", title: "Live Filter Dropdowns", body: "Filter values sourced directly from your data at query time — always up to date, never stale." },
-            { icon: "fa-link", color: "#7c3aed", title: "Cross-Chart Filtering", body: "Click any bar, slice, or data point to instantly filter every connected chart on the dashboard." },
-            { icon: "fa-expand", color: "#d97706", title: "Full-Screen Mode", body: "Expand any chart to full screen. Download as PNG or export the underlying data as CSV." },
-          ].map(c => (
-            <div key={c.title} style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 12, padding: "20px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                <i className={`fas ${c.icon}`} style={{ color: c.color, fontSize: 15 }} />
-                <span style={{ fontWeight: 700, fontSize: 14, color: "#0f172a" }}>{c.title}</span>
-              </div>
-              <p style={{ margin: 0, fontSize: 13.5, color: "#64748b", lineHeight: 1.6 }}>{c.body}</p>
-            </div>
-          ))}
-        </div>
-      </Section>
-
-      {/* ── Data Sources ── */}
-      <Section id="datasources" bg="white">
-        <div style={{ textAlign: "center", marginBottom: 48 }}>
-          <SectionLabel text="Data Sources" color="#0ea5e9" />
-          <SectionHeading center>Connect any modern data platform</SectionHeading>
-          <SectionSub center>
-            Register data sources from the UI — no .env changes, no API restarts.
-            LoomX creates a dedicated connection pool for each source at registration time.
-          </SectionSub>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 16 }}>
-          <DbCard icon={<FabricSvg />} name="Microsoft Fabric SQL" color="#0E6961" />
-          <DbCard icon={<AzureSvg />} name="Azure SQL Database" color="#0078D4" />
-          <DbCard icon={<PgSvg />} name="PostgreSQL" color="#336791" badge="BETA" />
-          <DbCard icon={<MySQLSvg />} name="MySQL / MariaDB" color="#4479A1" badge="BETA" />
-          <DbCard icon={<TrinoSvg />} name="Trino" color="#DD1C1C" badge="BETA" />
-          <DbCard icon={<StarRocksSvg />} name="StarRocks" color="#01808F" badge="BETA" />
-        </div>
-
-        <div style={{ marginTop: 40, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 20 }}>
-          {[
-            { icon: "fa-plug", color: "#0ea5e9", title: "Connection Testing", body: "Built-in connection tester at registration time — verify before you commit." },
-            { icon: "fa-swimming-pool", color: "#059669", title: "Per-DB Connection Pool", body: "Each data source gets its own pyodbc pool, warmed at startup and kept alive by a 5-minute heartbeat." },
-            { icon: "fa-lock", color: "#7c3aed", title: "No Credential Storage", body: "Fabric and Azure SQL use delegated Azure AD tokens. The connection string is stored encrypted and never returned to the browser." },
-          ].map(c => (
-            <div key={c.title} style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 12, padding: "20px" }}>
-              <i className={`fas ${c.icon}`} style={{ color: c.color, fontSize: 18, marginBottom: 10, display: "block" }} />
-              <div style={{ fontWeight: 700, fontSize: 14, color: "#0f172a", marginBottom: 6 }}>{c.title}</div>
-              <p style={{ margin: 0, fontSize: 13.5, color: "#64748b", lineHeight: 1.6 }}>{c.body}</p>
-            </div>
-          ))}
-        </div>
-      </Section>
-
       {/* ── AI ── */}
-      <Section id="ai" bg="#f8fafc">
+      <Section id="ai" bg="white">
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 60, alignItems: "center" }}>
           <div>
             <SectionLabel text="AI Assistant" color="#7c3aed" />
             <SectionHeading>Natural language to SQL,<br />right where you work</SectionHeading>
             <p style={{ fontSize: 15.5, color: "#475569", lineHeight: 1.75, marginBottom: 28 }}>
-              The LoomX AI Assistant understands your data context — pass the active SQL, the data source,
+              The LooMX AI Assistant understands your data context — pass the active SQL, the data source,
               and a plain-English description. Get a production-ready query back in seconds.
             </p>
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -614,12 +708,12 @@ export default function AboutPage() {
       </Section>
 
       {/* ── Security ── */}
-      <Section id="security" bg="white">
+      <Section id="security" bg="#f8fafc">
         <div style={{ textAlign: "center", marginBottom: 56 }}>
           <SectionLabel text="Security" color="#dc2626" />
           <SectionHeading center>Enterprise-grade security by design</SectionHeading>
           <SectionSub center>
-            LoomX stores no credentials, uses no shared service accounts, and verifies every request
+            LooMX stores no credentials, uses no shared service accounts, and verifies every request
             against your Azure AD tenant's public keys.
           </SectionSub>
         </div>
@@ -628,7 +722,7 @@ export default function AboutPage() {
             { icon: "fa-key", color: "#dc2626", title: "JWT RS256 Verification", body: "Every API request verifies the Bearer token against your tenant's JWKS endpoint. Tokens are validated for audience, issuer, expiry, and signature." },
             { icon: "fa-user-shield", color: "#7c3aed", title: "Delegated Token Auth", body: "Queries run as the authenticated Azure AD user via SQL_COPT_SS_ACCESS_TOKEN. The user's own Fabric / Azure SQL permissions are enforced at the database level." },
             { icon: "fa-layer-group", color: "#2563eb", title: "4-Role RBAC", body: "Viewer → Analyst → Editor → Admin. Resolved from Azure AD App Roles (JWT claims) first, DB assignments second. Content visibility enforced at query time." },
-            { icon: "fa-shield-halved", color: "#059669", title: "No Password Storage", body: "LoomX never stores user passwords, Azure AD tokens, or Fabric credentials. Connection strings are stored encrypted and never returned to the browser." },
+            { icon: "fa-shield-halved", color: "#059669", title: "No Password Storage", body: "LooMX never stores user passwords, Azure AD tokens, or Fabric credentials. Connection strings are stored encrypted and never returned to the browser." },
             { icon: "fa-lock", color: "#d97706", title: "Parameterised Queries", body: "All metadata DB operations use parameterised queries (@param0, @param1…). User data SQL passes through the ODBC driver without string interpolation." },
             { icon: "fa-ban", color: "#dc2626", title: "Security Headers", body: "Hardened CORS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, and Content-Security-Policy headers on all API responses." },
           ].map(c => (
@@ -642,37 +736,6 @@ export default function AboutPage() {
               <p style={{ margin: 0, fontSize: 13.5, color: "#475569", lineHeight: 1.65 }}>{c.body}</p>
             </div>
           ))}
-        </div>
-      </Section>
-
-      {/* ── Dashboard builder ── */}
-      <Section bg="#f8fafc">
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 60, alignItems: "center" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            {[
-              { icon: "fa-grip-vertical", color: "#2563eb", title: "Drag-and-Drop Canvas", body: "Resize, rearrange, and nest chart tiles with react-grid-layout." },
-              { icon: "fa-filter", color: "#059669", title: "Filter Bar", body: "Dashboard-level filters slice every chart simultaneously with a single selection." },
-              { icon: "fa-file-alt", color: "#7c3aed", title: "Rich Text Blocks", body: "Full Markdown support with bold, italic, links, code blocks, and blockquotes." },
-              { icon: "fa-tabs", color: "#d97706", title: "Tab Containers", body: "Group charts into tabbed views to keep dashboards clean and focused." },
-              { icon: "fa-arrows-to-dot", color: "#dc2626", title: "Cross-Chart Filters", body: "Click any data point to filter all connected charts on the page instantly." },
-              { icon: "fa-expand-alt", color: "#0ea5e9", title: "Full-Screen Charts", body: "Expand any chart tile for a focused deep-dive view without leaving the dashboard." },
-            ].map(c => (
-              <div key={c.title} style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 10, padding: "16px" }}>
-                <i className={`fas ${c.icon}`} style={{ color: c.color, fontSize: 16, marginBottom: 8, display: "block" }} />
-                <div style={{ fontWeight: 700, fontSize: 13, color: "#0f172a", marginBottom: 4 }}>{c.title}</div>
-                <div style={{ fontSize: 12.5, color: "#64748b", lineHeight: 1.55 }}>{c.body}</div>
-              </div>
-            ))}
-          </div>
-          <div>
-            <SectionLabel text="Dashboards" color="#d97706" />
-            <SectionHeading>Compose stories from your data</SectionHeading>
-            <p style={{ fontSize: 15.5, color: "#475569", lineHeight: 1.75 }}>
-              The LoomX dashboard builder gives you a pixel-precise drag-and-drop canvas. Combine charts,
-              KPI cards, rich text, headers, and tab containers into polished operational dashboards.
-              Publish to your team, set visibility to internal, or keep it private while you build.
-            </p>
-          </div>
         </div>
       </Section>
 
@@ -850,6 +913,223 @@ export default function AboutPage() {
         </div>
       </Section>
 
+      {/* ── Getting Started ── */}
+      <Section id="start" bg="white">
+        <div style={{ textAlign: "center", marginBottom: 56 }}>
+          <SectionLabel text="Getting Started" color="#2563eb" />
+          <SectionHeading center>Up and running in under 10 minutes</SectionHeading>
+          <SectionSub center>
+            Four steps from zero to your first published dashboard.
+            No CLI, no config files — everything happens in the UI.
+          </SectionSub>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 24, counterReset: "steps" }}>
+          {[
+            {
+              step: "01", color: "#2563eb", icon: "fa-sign-in-alt",
+              title: "Sign In with Azure AD",
+              body: "Open LooMX in your browser and click Sign In. Authenticate with your Microsoft work account — no separate username or password needed. Your Azure AD App Role determines your access level automatically.",
+              links: [{ label: "Go to sign-in", href: "/" }],
+            },
+            {
+              step: "02", color: "#0ea5e9", icon: "fa-database",
+              title: "Register a Data Source",
+              body: "Navigate to Settings → Data Sources and click Add Data Source. Choose your engine (Fabric SQL, Azure SQL, PostgreSQL, MySQL, Trino, or StarRocks), enter the connection details, and hit Test Connection. Save when green.",
+              links: [{ label: "Data Sources →", href: "/data-sources" }],
+            },
+            {
+              step: "03", color: "#059669", icon: "fa-layer-group",
+              title: "Create a Dataset",
+              body: "Go to Datasets → New Dataset. Pick your data source and table (or write a custom SQL query as a virtual dataset). Define which columns are dimensions, metrics, and filters. Save — every chart built on this dataset stays in sync automatically.",
+              links: [{ label: "Datasets →", href: "/datasets" }],
+            },
+            {
+              step: "04", color: "#d97706", icon: "fa-tachometer-alt",
+              title: "Build a Chart & Publish",
+              body: "Open Charts → New Chart, pick your dataset and chart type, configure axes and metrics in the builder, then Save. Head to Dashboards → New Dashboard, drag your chart onto the canvas, arrange tiles, add filters, and Publish.",
+              links: [{ label: "Charts →", href: "/charts" }, { label: "Dashboards →", href: "/dashboards" }],
+            },
+          ].map(({ step, color, icon, title, body, links }) => (
+            <div key={step} style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 16, padding: "28px 24px", position: "relative", overflow: "hidden" }}>
+              <div style={{ position: "absolute", top: 16, right: 20, fontSize: 48, fontWeight: 900, color: `${color}0d`, lineHeight: 1, userSelect: "none" }}>{step}</div>
+              <div style={{ width: 44, height: 44, borderRadius: 12, background: `${color}12`, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 16 }}>
+                <i className={`fas ${icon}`} style={{ color, fontSize: 18 }} />
+              </div>
+              <div style={{ fontWeight: 800, fontSize: 15, color: "#0f172a", marginBottom: 10 }}>{title}</div>
+              <p style={{ margin: "0 0 16px", fontSize: 13.5, color: "#475569", lineHeight: 1.7 }}>{body}</p>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {links.map(l => (
+                  <Link key={l.href} href={l.href} style={{
+                    fontSize: 12.5, fontWeight: 600, color, textDecoration: "none",
+                    padding: "4px 10px", borderRadius: 6, background: `${color}10`,
+                    border: `1px solid ${color}20`,
+                  }}>{l.label}</Link>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Admin setup callout */}
+        {isAdmin && (
+          <div style={{ marginTop: 40, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 14, padding: "24px 28px", display: "flex", gap: 20, alignItems: "flex-start" }}>
+            <div style={{ width: 40, height: 40, borderRadius: 10, background: "#dcfce7", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <i className="fas fa-shield-alt" style={{ color: "#059669", fontSize: 16 }} />
+            </div>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 14, color: "#166534", marginBottom: 6 }}>Admin first-run checklist</div>
+              <ul style={{ margin: 0, padding: "0 0 0 16px", fontSize: 13.5, color: "#166534", lineHeight: 2 }}>
+                <li>Settings → <Link href="/settings/metadata" style={{ color: "#059669" }}>Metadata Server</Link> — confirm the metadata DB is connected and schema is initialised</li>
+                <li>Settings → <Link href="/data-sources" style={{ color: "#059669" }}>Data Sources</Link> — register at least one data source for your team</li>
+                <li>Settings → <Link href="/settings/ai" style={{ color: "#059669" }}>AI Providers</Link> — add an API key to enable the AI Assistant for all users</li>
+                <li>Settings → <Link href="/settings/users" style={{ color: "#059669" }}>User Management</Link> — assign roles to team members who need Analyst / Editor / Admin access</li>
+              </ul>
+            </div>
+          </div>
+        )}
+      </Section>
+
+      {/* ── What's New ── */}
+      <Section id="whatsnew" bg="#f8fafc">
+        <div style={{ textAlign: "center", marginBottom: 56 }}>
+          <SectionLabel text="What's New" color="#7c3aed" />
+          <SectionHeading center>Recent releases &amp; highlights</SectionHeading>
+          <SectionSub center>LooMX ships improvements continuously. Here are the most recent highlights.</SectionSub>
+        </div>
+        <div style={{ maxWidth: 760, margin: "0 auto", display: "flex", flexDirection: "column", gap: 0 }}>
+          {[
+            {
+              version: "v2.4", date: "Mar 2025", color: "#7c3aed",
+              badge: "Latest",
+              items: [
+                "World Map Globe — 3D WebGL country-level heatmap powered by ECharts-GL",
+                "Trino & StarRocks data source support (Beta)",
+                "Inline AI bar in SQL Lab — natural language to SQL without leaving the editor",
+                "Dashboard cross-chart filtering — click any data point to filter the whole page",
+                "Admin metadata server reconfiguration from the UI — no server restart needed",
+              ],
+            },
+            {
+              version: "v2.3", date: "Feb 2025", color: "#2563eb",
+              badge: null,
+              items: [
+                "PostgreSQL & MySQL / MariaDB data source support (Beta)",
+                "Real brand SVG icons for all data source types",
+                "AI Providers settings page with per-user key override",
+                "Workspace Activity feed on the home page",
+                "Saved queries page with full history and audit trail",
+              ],
+            },
+            {
+              version: "v2.2", date: "Jan 2025", color: "#059669",
+              badge: null,
+              items: [
+                "Dashboard filter bar with live dropdowns sourced from data",
+                "Semantic datasets — define dimensions & metrics once, reuse everywhere",
+                "Role-based content visibility (private / internal / published)",
+                "Setup wizard for first-run metadata database configuration",
+                "Full API reference and About page",
+              ],
+            },
+            {
+              version: "v2.1", date: "Dec 2024", color: "#d97706",
+              badge: null,
+              items: [
+                "Monaco Editor (VS Code engine) for SQL Lab",
+                "20+ chart types via Apache ECharts 5",
+                "Azure AD JWT RS256 authentication with PKCE flow",
+                "4-role RBAC: Viewer, Analyst, Editor, Admin",
+                "Fabric SQL & Azure SQL delegated token authentication",
+              ],
+            },
+          ].map(({ version, date, color, badge, items }, i, arr) => (
+            <div key={version} style={{ display: "flex", gap: 24 }}>
+              {/* Timeline spine */}
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 40, flexShrink: 0 }}>
+                <div style={{ width: 14, height: 14, borderRadius: "50%", background: color, border: "3px solid white", boxShadow: `0 0 0 3px ${color}30`, marginTop: 4, flexShrink: 0 }} />
+                {i < arr.length - 1 && <div style={{ width: 2, flex: 1, background: "#e5e7eb", marginTop: 4 }} />}
+              </div>
+              {/* Content */}
+              <div style={{ paddingBottom: i < arr.length - 1 ? 40 : 0, flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+                  <span style={{ fontWeight: 800, fontSize: 16, color: "#0f172a" }}>{version}</span>
+                  <span style={{ fontSize: 12, color: "#94a3b8" }}>{date}</span>
+                  {badge && (
+                    <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 8, background: `${color}15`, color, border: `1px solid ${color}30` }}>{badge}</span>
+                  )}
+                </div>
+                <ul style={{ margin: 0, padding: "0 0 0 16px", display: "flex", flexDirection: "column", gap: 6 }}>
+                  {items.map(item => (
+                    <li key={item} style={{ fontSize: 13.5, color: "#475569", lineHeight: 1.6 }}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      {/* ── FAQ ── */}
+      <Section id="faq" bg="white">
+        <div style={{ textAlign: "center", marginBottom: 56 }}>
+          <SectionLabel text="FAQ" color="#0ea5e9" />
+          <SectionHeading center>Frequently asked questions</SectionHeading>
+          <SectionSub center>Common questions from users and admins. Can&apos;t find your answer? Open SQL Lab and ask the AI.</SectionSub>
+        </div>
+        <div style={{ maxWidth: 820, margin: "0 auto", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+          {[
+            {
+              q: "Do I need an Azure subscription?",
+              a: "Yes — LooMX uses Azure AD for authentication. Your organisation needs an Azure AD tenant and an App Registration with the four App Roles defined. The data sources themselves can be on any supported engine.",
+            },
+            {
+              q: "Which browsers are supported?",
+              a: "Any modern Chromium-based browser (Chrome, Edge, Arc) or Firefox. The 3D globe visualisation requires WebGL 2.0 support. Safari has limited WebGL support and may show a fallback.",
+            },
+            {
+              q: "Can I use my own AI API key?",
+              a: "Yes. Admins set a global key that applies to all users. Any user can override it with their own key in the AI Providers settings. Keys are AES-256 encrypted at rest and never returned to the browser.",
+            },
+            {
+              q: "How do I add a new team member?",
+              a: "Assign the appropriate Azure AD App Role (Viewer / Analyst / Editor / Admin) to the user in your Azure portal. They can sign in immediately. Alternatively, use Settings → User Management to assign roles from within LooMX.",
+            },
+            {
+              q: "What happens if the metadata DB goes down?",
+              a: "The LooMX API will return 503 for endpoints that require metadata. The UI shows a connection error. Existing browser sessions are preserved — as soon as the DB recovers, the API reconnects automatically.",
+            },
+            {
+              q: "Can I connect multiple data sources of the same type?",
+              a: "Yes. Each data source registration is independent with its own connection pool. You can have multiple Fabric SQL databases, multiple PostgreSQL instances, and so on — all available from a single LooMX instance.",
+            },
+            {
+              q: "How are queries executed? Does LooMX cache results?",
+              a: "Queries run on-demand through the registered ODBC connection pool directly against your data source. There is no result cache by default — each chart load executes a fresh query to ensure data is always live.",
+            },
+            {
+              q: "Can I self-host without Azure AD?",
+              a: "Not currently. Azure AD is the only supported identity provider. Support for OIDC-compatible providers (Okta, Auth0, Entra External ID) is on the roadmap.",
+            },
+            {
+              q: "What SQL dialects are supported?",
+              a: "Each data source uses its native dialect — T-SQL for Fabric / Azure SQL, standard SQL for PostgreSQL and MySQL, Trino SQL for Trino, and StarRocks SQL for StarRocks. LooMX passes queries through without rewriting.",
+            },
+            {
+              q: "How do I back up my dashboards and charts?",
+              a: "All metadata (dashboards, charts, datasets, users, saved queries) is stored in the configured metadata database. Back up that database using your standard DB backup process. No additional export step is needed.",
+            },
+          ].map(({ q, a }) => (
+            <div key={q} style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 14, padding: "22px 24px" }}>
+              <div style={{ fontWeight: 700, fontSize: 14, color: "#0f172a", marginBottom: 8, display: "flex", gap: 8 }}>
+                <span style={{ color: "#0ea5e9", flexShrink: 0 }}>Q.</span>
+                <span>{q}</span>
+              </div>
+              <div style={{ fontSize: 13.5, color: "#475569", lineHeight: 1.7, paddingLeft: 22 }}>{a}</div>
+            </div>
+          ))}
+        </div>
+      </Section>
+
       {/* ── Getting started CTA ── */}
       <Section bg="linear-gradient(135deg, #0f172a 0%, #1e293b 95%, #1e293b 100%)"  >
         <div style={{ textAlign: "center" }}>
@@ -917,7 +1197,7 @@ export default function AboutPage() {
         padding: "28px 24px", textAlign: "center",
       }}>
         <div style={{ fontSize: 13, color: "#475569" }}>
-          <strong style={{ color: "#94a3b8" }}>LoomX</strong> — Live Operational Outcomes &amp; Metrics eXperience
+          <strong style={{ color: "#94a3b8" }}>LooMX</strong> — Live Operational Outcomes &amp; Metrics eXperience
           {" · "}Built for Advanced Analytics. Secured by Azure AD.
           {" · "}Owned by Pruthvi Prodduturi.
         </div>

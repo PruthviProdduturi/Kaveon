@@ -3,7 +3,7 @@
 /**
  * Setup Modal
  *
- * Guides the user through connecting a metadata database to LoomX.
+ * Guides the user through connecting a metadata database to LooMX.
  * Supports: Microsoft Fabric SQL, Azure SQL, PostgreSQL, MySQL.
  */
 
@@ -140,7 +140,7 @@ const DB_TYPES: Record<DbType, DbTypeConfig> = {
     endpointLabel: "Server Name",
     endpointPlaceholder: "my-server.database.windows.net",
     endpointHint: "Found in Azure Portal → SQL Server → Server name.",
-    dbHint: "The Azure SQL database that will store LoomX metadata.",
+    dbHint: "The Azure SQL database that will store LooMX metadata.",
   },
   postgresql: {
     label: "PostgreSQL",
@@ -510,7 +510,7 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
                 />
                 <p style={S.hint}>
                   Copy from Fabric workspace → SQL Database → Connection strings → ODBC.
-                  LoomX extracts the server and database automatically.
+                  LooMX extracts the server and database automatically.
                 </p>
               </>
             )}
@@ -657,12 +657,12 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
 
         {phase === "connection_failed" && (
           <ErrorState errType="connection_failed" title="Cannot Connect"
-            description="LoomX cannot reach the configured metadata database. Check your connection details and retry." />
+            description="LooMX cannot reach the configured metadata database. Check your connection details and retry." />
         )}
 
         {phase === "access_denied" && (
           <ErrorState errType="access_denied" title="Access Denied"
-            description="LoomX reached the host but authentication failed. Verify credentials or Azure AD role assignments." />
+            description="LooMX reached the host but authentication failed. Verify credentials or Azure AD role assignments." />
         )}
 
         {phase === "db_not_found" && (
@@ -675,8 +675,8 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
             <StepBar step={3} testOk phase="schema_missing" />
             <h2 style={S.heading}>Initialize Database</h2>
             <p style={S.sub}>
-              LoomX connected successfully. The required tables haven't been created yet —
-              click below and LoomX will set them up in seconds.
+              LooMX connected successfully. The required tables haven't been created yet —
+              click below and LooMX will set them up in seconds.
             </p>
             <div style={S.infoBox}>
               <i className="fas fa-check-circle" style={{ marginRight: 6, color: "#4ade80" }} />
@@ -706,7 +706,7 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
         {phase === "initializing" && (
           <>
             <StepBar step={3} testOk={false} phase="initializing" />
-            <h2 style={S.heading}>Setting Up LoomX…</h2>
+            <h2 style={S.heading}>Setting Up LooMX…</h2>
             <p style={S.sub}>Creating tables in your metadata database. This usually takes a few seconds.</p>
             <div style={{ textAlign: "center", padding: "28px 0", color: "#6366f1", fontSize: 38 }}>
               <i className="fas fa-spinner fa-spin" />
@@ -718,7 +718,7 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
           <>
             <h2 style={{ ...S.heading, color: "#4ade80" }}>All Set!</h2>
             <p style={S.sub}>
-              Metadata database initialised successfully. LoomX is restarting to apply the
+              Metadata database initialised successfully. LooMX is restarting to apply the
               configuration — the page will reload automatically.
             </p>
             <div style={{ textAlign: "center", padding: "20px 0", color: "#4ade80", fontSize: 44 }}>
