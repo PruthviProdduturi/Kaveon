@@ -1,7 +1,7 @@
 /**
  * Dashboard Canvas Component
  *
- * Renders the dashboard as a vertical stack of rows (Apache Superset style).
+ * Renders the dashboard as a vertical stack of rows.
  * Each root-level item is rendered in order with full width.
  * In edit mode an "+ Add Row" button appears at the bottom.
  * In edit mode rows can be reordered by dragging the grip handle.

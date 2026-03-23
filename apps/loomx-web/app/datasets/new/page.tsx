@@ -9,7 +9,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { DataSourceSelector } from "../../../components/DataSourceSelector";
 import { useTheme } from "../../../contexts/ThemeContext";
 
-const PRIMARY_DB_NAME = process.env.NEXT_PUBLIC_PRIMARY_DATABASE_NAME || "IDEASServingStoreLH";
+const PRIMARY_DB_NAME = process.env.NEXT_PUBLIC_PRIMARY_DATABASE_NAME || "";
 
 interface DatabaseConfig {
   database: string;

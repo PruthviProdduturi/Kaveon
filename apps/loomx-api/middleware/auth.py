@@ -206,11 +206,14 @@ def _decode_token(token: str) -> Optional[tuple[str, list[str]]]:
     elif provider == "google":
         return _decode_google(token)
 
-    # Setup/fallback mode — accept any structurally valid JWT without signature verification
+    # Setup/fallback mode — accept any structurally valid JWT without signature verification.
+    # Preserve the roles claim from the payload so bootstrap Admin tokens stay Admin.
     try:
         payload = jwt.decode(token, options={"verify_signature": False})
         email = _email_from_payload(payload)
-        return (email, []) if email else None
+        if not email:
+            return None
+        return (email, _roles_from_payload(payload))
     except Exception:
         return None
 

@@ -229,7 +229,7 @@ def create_dataset(data: dict, user_id: str) -> dict:
                 )
             """, [
                 name, data.get("description"), data.get("table_name") or "",
-                data.get("schema_name", "dbo"), data.get("database_name", "IDEASServingStoreLH"),
+                data.get("schema_name", "dbo"), data.get("database_name", ""),
                 data.get("date_column"), tables_used, visibility,
                 now, now, user_id, user_id,
             ])

@@ -78,8 +78,7 @@ def bootstrap_admin_if_needed() -> None:
             )
             print("[LocalAuth] Bootstrap admin user created (admin / admin@local).")
     except Exception as e:
-        print(f"[LocalAuth] bootstrap_admin_if_needed failed: {e}")
-        raise
+        print(f"[LocalAuth] bootstrap_admin_if_needed (user creation) failed: {e}")
 
     # Always ensure admin@local has Admin role — runs even if user already existed.
     # This fixes stale Viewer entries left by earlier code versions.

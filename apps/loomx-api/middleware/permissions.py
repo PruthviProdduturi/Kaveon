@@ -10,6 +10,8 @@ Exports:
     can_admin(...)       — check if user has Admin role
 """
 
+from typing import Optional
+
 from fastapi import HTTPException, Depends
 
 # Import here to avoid circular — auth defines UserContext
@@ -35,7 +37,12 @@ def require_min_role(min_role: str):
         @router.post("/something", dependencies=[Depends(require_min_role("Analyst"))])
         def endpoint(ctx: UserContext = Depends(require_min_role("Analyst"))): ...
     """
-    def _dep(ctx: UserContext = Depends(get_user_context)) -> UserContext:
+    def _dep(ctx: Optional[UserContext] = Depends(get_user_context)) -> UserContext:
+        if ctx is None:
+            raise HTTPException(
+                status_code=401,
+                detail={"code": "unauthorized", "message": "Authentication required."},
+            )
         if _level(ctx.role) < _level(min_role):
             raise HTTPException(
                 status_code=403,

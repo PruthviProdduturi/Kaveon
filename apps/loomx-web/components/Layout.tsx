@@ -147,8 +147,8 @@ export function Layout({ children }: LayoutProps) {
                 <i className="fas fa-palette" style={{ width: 14, color: "#8b5cf6" }} /> Themes
               </button>
               {isAdmin && (
-                <Link href="/settings/auth" className="header-dropdown-item">
-                  <i className="fas fa-lock" style={{ width: 14, color: "#dc2626" }} /> Authentication
+                <Link href="/settings/system" className="header-dropdown-item">
+                  <i className="fas fa-sliders" style={{ width: 14, color: "#dc2626" }} /> System
                 </Link>
               )}
               <div className="header-dropdown-divider" />
@@ -161,11 +161,6 @@ export function Layout({ children }: LayoutProps) {
               {isAdmin && (
                 <Link href="/settings/users" className="header-dropdown-item">
                   <i className="fas fa-users-cog" style={{ width: 14, color: "#059669" }} /> User Management
-                </Link>
-              )}
-              {isAdmin && (
-                <Link href="/settings/metadata" className="header-dropdown-item">
-                  <i className="fas fa-database" style={{ width: 14, color: "#0ea5e9" }} /> Metadata Server
                 </Link>
               )}
             </div>

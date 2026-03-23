@@ -35,6 +35,8 @@ class AuthConfigBody(BaseModel):
     jwt_secret: Optional[str] = None
 
 
+
+
 class CreateLocalUserBody(BaseModel):
     username: str = Field(..., min_length=1, max_length=255)
     email: str = Field(..., min_length=3, max_length=255)
@@ -90,6 +92,47 @@ def admin_upsert_auth_config(
     saved = auth_config_svc.upsert_config(data)
     auth_config_svc.refresh_auth_config()
     return {"success": True, "config": saved}
+
+
+class SetupAppRolesBody(BaseModel):
+    graph_token: str = Field(..., min_length=1)
+    client_id:   str = Field(..., min_length=1)
+    tenant_id:   str = Field(..., min_length=1)
+
+
+@router.post("/v1/admin/auth/setup-app-roles")
+def admin_setup_app_roles(
+    body: SetupAppRolesBody,
+    ctx: UserContext = Depends(require_min_role("Admin")),
+):
+    """
+    Create the 4 LoomX App Roles in the Azure AD App Registration using a
+    delegated Graph API token acquired by the frontend via MSAL popup.
+    Idempotent — roles that already exist are skipped.
+    Returns 403 with a clear message if the user lacks owner/write permission.
+    """
+    try:
+        result = auth_config_svc.setup_azure_app_roles(
+            graph_token=body.graph_token,
+            client_id=body.client_id,
+            tenant_id=body.tenant_id,
+        )
+        return result
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "insufficient_permissions", "message": str(e)},
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "setup_failed", "message": str(e)},
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "unexpected_error", "message": str(e)},
+        )
 
 
 # ── Admin — local users ───────────────────────────────────────────────────────

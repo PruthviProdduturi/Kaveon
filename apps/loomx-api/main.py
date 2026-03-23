@@ -7,8 +7,8 @@ import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 import time
 
 from config import settings
@@ -41,33 +41,43 @@ from routers import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Seed os.environ from settings so routers that call os.environ.get() see
-    # the values pydantic-settings loaded from .env (pydantic-settings does NOT
-    # write to os.environ itself).
     import os as _os
-    for _k, _v in {
-        "METADATA_DB_TYPE": settings.METADATA_DB_TYPE,
-        "METADATA_ENDPOINT": settings.METADATA_ENDPOINT,
-        "METADATA_DATABASE": settings.METADATA_DATABASE,
-        "METADATA_HOST": settings.METADATA_HOST,
-        "METADATA_PORT": str(settings.METADATA_PORT),
-    }.items():
-        _os.environ.setdefault(_k, _v)
+
+    # Determine whether a metadata DB is configured by reading the .env file
+    # directly — os.environ / settings may hold stale values from a previous
+    # process (e.g. uvicorn --reload), so the file is the source of truth.
+    from routers.setup import _read_env_vars as _get_env
+    _cfg = _get_env()
+    _db_configured = bool(
+        _cfg["database"] and (
+            _cfg["endpoint"] or  # Fabric SQL / Azure SQL
+            _cfg["host"]         # PostgreSQL / MySQL
+        )
+    )
+    # Sync to os.environ so pool/other code that reads os.environ gets the correct value
+    _os.environ["METADATA_DB_TYPE"]  = _cfg["db_type"]
+    _os.environ["METADATA_ENDPOINT"] = _cfg["endpoint"]
+    _os.environ["METADATA_DATABASE"] = _cfg["database"]
+    _os.environ["METADATA_HOST"]     = _cfg["host"]
+    _os.environ["METADATA_PORT"]     = _cfg["port"]
 
     # Startup: kick off pool warmup + heartbeat in the background
-    if settings.METADATA_ENDPOINT and settings.METADATA_DATABASE:
+    if _db_configured:
         threading.Thread(target=start_warmup_and_heartbeat, daemon=True).start()
         print("[API] Connection pool warmup started.")
     else:
-        print("[API] WARNING: METADATA_ENDPOINT / METADATA_DATABASE not set.")
-        print("[API] Starting in setup mode — /api/v1/setup/status is available.")
+        print("[API] No metadata database configured — starting in setup mode.")
+        print("[API] Setup wizard is available. Default login: admin / admin")
 
-    # Bootstrap local admin user if the local_users table is empty
-    try:
-        import services.local_auth as _local_auth_svc
-        _local_auth_svc.bootstrap_admin_if_needed()
-    except Exception as _e:
-        print(f"[API] bootstrap_admin_if_needed skipped: {_e}")
+    # Bootstrap local admin user (creates admin row + ensures Admin role).
+    # Skipped gracefully when no DB is configured — the hardcoded _BOOTSTRAP_HASH
+    # in services/local_auth.py handles the pre-DB admin/admin fallback instead.
+    if _db_configured:
+        try:
+            import services.local_auth as _local_auth_svc
+            _local_auth_svc.bootstrap_admin_if_needed()
+        except Exception as _e:
+            print(f"[API] bootstrap_admin_if_needed skipped (will retry on next restart): {_e}")
 
     yield
     # Shutdown: pools close via GC; nothing explicit needed
@@ -82,14 +92,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — only the known frontend origin; explicit method list (no wildcard)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[settings.WEB_URL],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "x-user-email", "Cache-Control"],
-)
+_CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Authorization, Content-Type, x-user-email, Cache-Control",
+    "Access-Control-Max-Age": "600",
+}
 
 async def _token_auth_handler(request: Request, exc: TokenAuthError) -> JSONResponse:
     print(f"[API] Token auth failure — {request.method} {request.url.path}")
@@ -109,7 +117,10 @@ app.add_exception_handler(Exception, generic_error_handler)
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
+    if request.method == "OPTIONS":
+        return Response(status_code=200, headers=_CORS_HEADERS)
     response = await call_next(request)
+    response.headers.update(_CORS_HEADERS)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"

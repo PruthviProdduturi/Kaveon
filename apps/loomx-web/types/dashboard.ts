@@ -348,7 +348,7 @@ export interface DashboardGridConfig {
 }
 
 /**
- * Number of horizontal grid columns in a row (Superset-style 12-column grid)
+ * Number of horizontal grid columns in a row (12-column grid)
  */
 export const GRID_COLUMNS = 12;
 

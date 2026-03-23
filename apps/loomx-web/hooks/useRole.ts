@@ -13,10 +13,11 @@ function atLeast(role: UserRole | null, min: UserRole): boolean {
 }
 
 export function useRole() {
-	const { role } = useAuth();
+	const { role, isConnecting } = useAuth();
 
 	return {
 		role,
+		loading: isConnecting,
 		isViewer: role !== null,                    // all authenticated users are at least Viewer
 		isAnalyst: atLeast(role, "Analyst"),
 		isEditor: atLeast(role, "Editor"),

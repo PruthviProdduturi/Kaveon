@@ -1,5 +1,5 @@
 /**
- * Dashboard Row Component (Superset-style)
+ * Dashboard Row Component
  *
  * Renders a full-width horizontal container whose children (columns or charts)
  * are placed side-by-side with flex-grow widths proportional to their `w` value.
@@ -101,7 +101,7 @@ const DashboardRowComponent: React.FC<DashboardComponentProps> = ({
       ref={rowRef}
       data-container-id={item.i}
       data-container-type="row"
-      className="dashboard-row-superset"
+      className="dashboard-row"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       style={{
