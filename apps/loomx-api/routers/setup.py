@@ -46,6 +46,37 @@ _DB_TYPE_LABELS = {
 }
 
 
+def _read_env_vars() -> dict:
+    """
+    Read METADATA_* vars from the .env file directly.
+
+    This is the source of truth for "is the app configured?".
+    Reading from os.environ is unreliable — a running process retains old values
+    after the .env is cleaned, and uvicorn --reload does not create a fresh env.
+    Falls back to os.environ only when no .env file exists (Docker / k8s deployments).
+    """
+    if ENV_PATH.exists():
+        content = ENV_PATH.read_text("utf-8")
+        def _get(key: str) -> str:
+            m = re.search(rf'^\s*{re.escape(key)}\s*=\s*(.+?)\s*$', content, re.MULTILINE)
+            return m.group(1).strip().strip("\"'") if m else ""
+        return {
+            "db_type":  _get("METADATA_DB_TYPE") or "fabric_sql",
+            "endpoint": _get("METADATA_ENDPOINT"),
+            "database": _get("METADATA_DATABASE"),
+            "host":     _get("METADATA_HOST"),
+            "port":     _get("METADATA_PORT"),
+        }
+    # No .env file — deployment via env vars (Docker / k8s)
+    return {
+        "db_type":  os.environ.get("METADATA_DB_TYPE") or "fabric_sql",
+        "endpoint": os.environ.get("METADATA_ENDPOINT") or "",
+        "database": os.environ.get("METADATA_DATABASE") or "",
+        "host":     os.environ.get("METADATA_HOST") or "",
+        "port":     os.environ.get("METADATA_PORT") or "",
+    }
+
+
 def _to_setup_errors(error_type: str, message: str) -> list:
     return [{
         "message": message, "error_type": error_type, "level": "error",
@@ -121,9 +152,10 @@ def _probe(data: SetupConnectionBody, statements=None):
 
 @router.get("/setup/status")
 def setup_status():
-    endpoint = os.environ.get("METADATA_ENDPOINT")
-    database = os.environ.get("METADATA_DATABASE")
-    db_type = os.environ.get("METADATA_DB_TYPE") or "fabric_sql"
+    cfg = _read_env_vars()
+    endpoint = cfg["endpoint"]
+    database = cfg["database"]
+    db_type  = cfg["db_type"]
 
     if not database:
         return {"status": "not_configured"}
@@ -140,8 +172,8 @@ def setup_status():
             "SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'datasets'",
         ],
         db_type=db_type,
-        host=os.environ.get("METADATA_HOST") or "",
-        port=int(os.environ.get("METADATA_PORT") or 0),
+        host=cfg["host"],
+        port=int(cfg["port"] or 0),
     )
 
     if not result["success"]:
@@ -250,17 +282,36 @@ def setup_initialize(data: SetupConnectionBody):
 
 # ── Admin — view / reconfigure metadata server ────────────────────────────────
 
+def _is_ui_configured() -> bool:
+    """
+    Return True if the metadata DB is configured and can be reset.
+
+    When a .env file exists it is the sole source of truth — OS env vars are
+    intentionally ignored so that a reset (which comments out the keys in the
+    file) immediately takes effect on the next restart, even if METADATA_*
+    vars are still present in the Windows/OS environment.
+
+    Falls back to os.environ only when no .env file exists at all
+    (Docker / k8s deployments that configure entirely via env vars).
+    """
+    if ENV_PATH.exists():
+        content = ENV_PATH.read_text("utf-8")
+        return bool(re.search(r"^\s*METADATA_DATABASE\s*=\s*\S", content, re.MULTILINE))
+    return bool(os.environ.get("METADATA_DATABASE"))
+
+
 @router.get("/admin/metadata")
 def admin_get_metadata(ctx=Depends(require_min_role("Admin"))):
     """Return current metadata server config (admin only). Never exposes credentials."""
-    db_type = os.environ.get("METADATA_DB_TYPE") or "fabric_sql"
+    cfg = _read_env_vars()
     return {
-        "db_type": db_type,
-        "label": _DB_TYPE_LABELS.get(db_type, db_type),
-        "endpoint": os.environ.get("METADATA_ENDPOINT") or "",
-        "host": os.environ.get("METADATA_HOST") or "",
-        "port": os.environ.get("METADATA_PORT") or "",
-        "database": os.environ.get("METADATA_DATABASE") or "",
+        "db_type":      cfg["db_type"],
+        "label":        _DB_TYPE_LABELS.get(cfg["db_type"], cfg["db_type"]),
+        "endpoint":     cfg["endpoint"],
+        "host":         cfg["host"],
+        "port":         cfg["port"],
+        "database":     cfg["database"],
+        "ui_configured": _is_ui_configured(),
     }
 
 
@@ -329,3 +380,62 @@ def admin_update_metadata(data: SetupConnectionBody, ctx=Depends(require_min_rol
 
     threading.Thread(target=_restart, daemon=True).start()
     return {"success": True, "message": "Metadata database updated. LoomX API is restarting…"}
+
+
+# ── Start Fresh ───────────────────────────────────────────────────────────────
+
+@router.post("/admin/reset")
+def admin_start_fresh(ctx=Depends(require_min_role("Admin"))):
+    """
+    Reset LoomX to a fresh state: clears the metadata database configuration
+    and auth config, then restarts the API so the setup wizard is shown again.
+
+    Only available when the metadata DB was configured via the UI (not via
+    deployment env vars), to prevent accidental resets on managed deployments.
+    """
+    if not _is_ui_configured():
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "deployment_configured",
+                "message": (
+                    "Start Fresh is only available when LoomX was configured "
+                    "through the UI. This instance appears to be configured via "
+                    "deployment environment variables."
+                ),
+            },
+        )
+
+    # Comment out METADATA_* and AUTH_* keys from the .env file
+    _KEYS_TO_CLEAR = [
+        "METADATA_DB_TYPE", "METADATA_DATABASE", "METADATA_ENDPOINT",
+        "METADATA_HOST", "METADATA_PORT",
+        "AUTH_PROVIDER", "AUTH_AZURE_TENANT_ID", "AUTH_AZURE_CLIENT_ID",
+        "AUTH_GOOGLE_CLIENT_ID", "AUTH_GOOGLE_CLIENT_SECRET",
+    ]
+    try:
+        if ENV_PATH.exists():
+            content = ENV_PATH.read_text("utf-8")
+            for key in _KEYS_TO_CLEAR:
+                content = re.sub(
+                    rf"^(\s*){re.escape(key)}\s*=.*$",
+                    rf"\g<1># {key}=",
+                    content,
+                    flags=re.MULTILINE,
+                )
+            ENV_PATH.write_text(content, "utf-8")
+    except Exception as e:
+        print(f"[Setup] start-fresh: failed to update .env: {e}")
+
+    # Clear from the live process environment
+    for key in _KEYS_TO_CLEAR:
+        os.environ.pop(key, None)
+
+    def _restart():
+        import time as _t
+        _t.sleep(0.4)
+        print("[Setup] Restarting API after Start Fresh…")
+        sys.exit(0)
+
+    threading.Thread(target=_restart, daemon=True).start()
+    return {"success": True, "message": "Configuration cleared. LoomX is restarting…"}

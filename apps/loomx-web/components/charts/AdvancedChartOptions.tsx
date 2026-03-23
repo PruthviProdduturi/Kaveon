@@ -23,7 +23,7 @@ const numberFormatOptions = [
 
 const colorPalettes = [
   { name: "Default", colors: ["#5470C6", "#91CC75", "#EE6666", "#FAC858", "#73C0DE", "#3BA272", "#FC8452", "#9A60B4", "#EA7CCC"] },
-  { name: "Superset", colors: ["#1FA8C9", "#FF5A5F", "#FFB400", "#00BFAE", "#A3333D", "#7B615C", "#F7B7A3", "#B2C9AB", "#F6D55C"] },
+  { name: "Ocean", colors: ["#1FA8C9", "#FF5A5F", "#FFB400", "#00BFAE", "#A3333D", "#7B615C", "#F7B7A3", "#B2C9AB", "#F6D55C"] },
   { name: "Pastel", colors: ["#A3A1FB", "#FFD6E0", "#B5FFE1", "#FFABAB", "#FFC3A0", "#FF677D", "#D4A5A5", "#392F5A", "#31A2AC"] },
   { name: "Vivid", colors: ["#E4572E", "#29335C", "#F3A712", "#A8C686", "#669BBC", "#2E4057", "#EA5E5E", "#F4D35E", "#EE964B"] },
   { name: "Dark", colors: ["#22223B", "#4A4E69", "#9A8C98", "#C9ADA7", "#F2E9E4", "#3D405B", "#81B29A", "#E07A5F", "#F4F1DE"] },

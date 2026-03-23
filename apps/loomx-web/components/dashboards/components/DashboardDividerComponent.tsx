@@ -2,7 +2,7 @@
  * Dashboard Divider Component
  *
  * A clean horizontal rule that separates dashboard sections.
- * Superset-style: no header bar, just the line.
+ * No header bar, just the line.
  * In edit mode a hover overlay shows delete + line-style controls.
  */
 

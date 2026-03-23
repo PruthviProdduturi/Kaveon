@@ -587,9 +587,19 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
             )}
 
             {testOk ? (
-              <button style={S.btnPrimary()} onClick={() => handleInitialize()}>
-                <i className="fas fa-magic" style={{ marginRight: 8 }} />Initialize Database
-              </button>
+              <>
+                <div style={{
+                  background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.2)",
+                  borderRadius: 8, padding: "10px 14px", marginBottom: 14,
+                  fontSize: 12, color: "#86efac", display: "flex", gap: 8, alignItems: "flex-start",
+                }}>
+                  <i className="fas fa-shield-check" style={{ marginTop: 1, flexShrink: 0 }} />
+                  <span>If this database already has LooMX data, <strong>nothing will be deleted</strong> — tables are only created if they don&apos;t already exist.</span>
+                </div>
+                <button style={S.btnPrimary()} onClick={() => handleInitialize()}>
+                  <i className="fas fa-magic" style={{ marginRight: 8 }} />Initialize Database
+                </button>
+              </>
             ) : (
               <button style={S.btnPrimary(!canTest())} onClick={handleTest} disabled={!canTest()}>
                 <i className="fas fa-plug" style={{ marginRight: 8 }} />Test Connection
@@ -675,9 +685,18 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
             <StepBar step={3} testOk phase="schema_missing" />
             <h2 style={S.heading}>Initialize Database</h2>
             <p style={S.sub}>
-              LooMX connected successfully. The required tables haven't been created yet —
-              click below and LooMX will set them up in seconds.
+              Connected successfully. Click below to create the LooMX tables in this database.
             </p>
+            <div style={{
+              background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.2)",
+              borderRadius: 8, padding: "10px 14px", marginBottom: 16,
+              fontSize: 12, color: "#86efac", display: "flex", gap: 8, alignItems: "flex-start",
+            }}>
+              <i className="fas fa-shield-check" style={{ marginTop: 1, flexShrink: 0 }} />
+              <span>
+                If this database already has LooMX data, <strong>nothing will be deleted</strong> — tables are only created if they don&apos;t already exist.
+              </span>
+            </div>
             <div style={S.infoBox}>
               <i className="fas fa-check-circle" style={{ marginRight: 6, color: "#4ade80" }} />
               <strong>Endpoint</strong>&nbsp; {data.endpoint ?? endpoint}<br />
@@ -716,15 +735,42 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
 
         {phase === "success" && (
           <>
-            <h2 style={{ ...S.heading, color: "#4ade80" }}>All Set!</h2>
+            <h2 style={{ ...S.heading, color: "#4ade80" }}>
+              <i className="fas fa-check-circle" style={{ marginRight: 10 }} />All Set!
+            </h2>
             <p style={S.sub}>
-              Metadata database initialised successfully. LooMX is restarting to apply the
-              configuration — the page will reload automatically.
+              Metadata database initialised. LooMX is restarting — the page will reload automatically.
             </p>
-            <div style={{ textAlign: "center", padding: "20px 0", color: "#4ade80", fontSize: 44 }}>
-              <i className="fas fa-check-circle" />
+
+            {/* Next steps */}
+            <div style={{
+              background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.25)",
+              borderRadius: 10, padding: "14px 16px", marginBottom: 20,
+            }}>
+              <div style={{ fontSize: 11.5, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 10 }}>
+                What to do after reload
+              </div>
+              {[
+                { icon: "fa-key", label: "Configure authentication", sub: "Settings → Authentication — choose Local, Azure AD, or Google." },
+                { icon: "fa-database", label: "Add data sources", sub: "Settings → Data Sources — connect your warehouses." },
+                { icon: "fa-users", label: "Invite users", sub: "Settings → Users — assign roles to your team." },
+              ].map(({ icon, label, sub }) => (
+                <div key={label} style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+                  <div style={{
+                    width: 28, height: 28, borderRadius: 7, flexShrink: 0,
+                    background: "rgba(99,102,241,0.15)", display: "flex", alignItems: "center", justifyContent: "center",
+                  }}>
+                    <i className={`fas ${icon}`} style={{ fontSize: 12, color: "#a5b4fc" }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 12.5, fontWeight: 600, color: "#e2e8f0" }}>{label}</div>
+                    <div style={{ fontSize: 11.5, color: "#64748b", marginTop: 1 }}>{sub}</div>
+                  </div>
+                </div>
+              ))}
             </div>
-            <div style={{ textAlign: "center", color: "#475569", fontSize: 12.5, marginTop: 8 }}>
+
+            <div style={{ textAlign: "center", color: "#475569", fontSize: 12.5 }}>
               <i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Reloading in a few seconds…
             </div>
           </>

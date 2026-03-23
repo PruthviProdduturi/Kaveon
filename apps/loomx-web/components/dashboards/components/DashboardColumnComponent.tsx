@@ -1,5 +1,5 @@
 /**
- * Dashboard Column Component (Superset-style)
+ * Dashboard Column Component
  *
  * Renders a vertical container whose children are stacked top-to-bottom.
  * No header bar — edit actions appear as a floating overlay on hover.
@@ -135,7 +135,7 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
     <div
       data-container-id={item.i}
       data-container-type="column"
-      className="dashboard-column-superset"
+      className="dashboard-column"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => { setIsHovered(false); setMenuOpen(false); }}
       style={{

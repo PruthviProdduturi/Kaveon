@@ -81,11 +81,14 @@ def query(sql: str, params: Optional[List[Any]] = None) -> dict:
     Parameters are passed to the DB driver directly — no string interpolation.
     Returns {"rows": list[dict], "row_count": int}.
     """
-    db = settings.METADATA_DATABASE
+    import os as _os
+    # Read from os.environ directly — settings is frozen at import time and will
+    # hold stale values if the .env was changed after startup.
+    db = _os.environ.get("METADATA_DATABASE") or settings.METADATA_DATABASE
     if not db:
         raise RuntimeError("METADATA_DATABASE is not configured")
 
-    db_type = settings.METADATA_DB_TYPE or "fabric_sql"
+    db_type = _os.environ.get("METADATA_DB_TYPE") or settings.METADATA_DB_TYPE or "fabric_sql"
     adapted = _adapt_sql(sql, db_type)
     native_sql, native_params = _to_native_params(adapted, params, db_type)
 

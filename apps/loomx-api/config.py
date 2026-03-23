@@ -20,7 +20,7 @@ class Settings(BaseSettings):
 
     # ── Metadata database ─────────────────────────────────────────────────────
     # Supported types: fabric_sql | azure_sql | postgresql | mysql
-    METADATA_DB_TYPE: str = "fabric_sql"
+    METADATA_DB_TYPE: str = ""
     METADATA_ENDPOINT: str = ""   # Fabric SQL / Azure SQL FQDN
     METADATA_DATABASE: str = ""
     METADATA_HOST: str = ""       # PostgreSQL / MySQL host

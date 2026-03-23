@@ -1,297 +1,331 @@
--- ============================================
--- LoomX Production Database Schema
--- ============================================
--- Run this script in your metadata database to create all required tables
--- This is a complete schema including all migrations
+-- ============================================================
+-- LoomX Production Database Schema — SQL Server / Fabric SQL / Azure SQL
+-- ============================================================
+-- Run this script once against your metadata database.
+-- All statements are idempotent (safe to re-run).
+-- ============================================================
 
--- ============================================
--- Datasets Table
--- ============================================
+-- ── Datasets ──────────────────────────────────────────────────────────────────
 IF OBJECT_ID('datasets', 'U') IS NULL
 BEGIN
     CREATE TABLE datasets (
-        id NVARCHAR(36) PRIMARY KEY,
-        name NVARCHAR(255) NOT NULL,
-        description NVARCHAR(MAX),
-        table_name NVARCHAR(255) NOT NULL,
-        schema_name NVARCHAR(255),
-        database_name NVARCHAR(255), -- Added to support multiple data sources
-        columns NVARCHAR(MAX), -- JSON array of columns
-        dimensions NVARCHAR(MAX), -- JSON array of dimensions
-        metrics NVARCHAR(MAX), -- JSON array of metrics
-        created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
-        updated_at DATETIME2 NOT NULL DEFAULT GETDATE(),
-        created_by NVARCHAR(255) NOT NULL DEFAULT 'system'
+        id              INT           IDENTITY(1,1) PRIMARY KEY,
+        dataset_name    NVARCHAR(500) NOT NULL,
+        description     NVARCHAR(MAX) NULL,
+        fact_table      NVARCHAR(500) NOT NULL DEFAULT '',
+        schema_name     NVARCHAR(255) NOT NULL DEFAULT 'dbo',
+        database_name   NVARCHAR(255) NULL,
+        date_column     NVARCHAR(255) NULL,
+        tables_used     NVARCHAR(MAX) NULL,   -- JSON: { filters, sql_text }
+        visibility      NVARCHAR(20)  NOT NULL DEFAULT 'internal'
+                        CONSTRAINT CK_datasets_visibility CHECK (visibility IN ('private','internal','published')),
+        created_at      DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+        modified_at     DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+        created_by      NVARCHAR(255) NOT NULL DEFAULT 'system',
+        modified_by     NVARCHAR(255) NULL
     );
-
-    CREATE INDEX idx_datasets_name ON datasets(name);
-    CREATE INDEX idx_datasets_created_at ON datasets(created_at);
+    CREATE INDEX idx_datasets_dataset_name  ON datasets(dataset_name);
     CREATE INDEX idx_datasets_database_name ON datasets(database_name);
-
-    PRINT 'Table datasets created successfully';
+    CREATE INDEX idx_datasets_visibility    ON datasets(visibility);
+    CREATE INDEX idx_datasets_modified_at   ON datasets(modified_at);
+    PRINT 'Table datasets created';
 END
 GO
 
--- ============================================
--- Charts Table
--- ============================================
+-- ── Dataset Dimensions ────────────────────────────────────────────────────────
+IF OBJECT_ID('dataset_dimensions', 'U') IS NULL
+BEGIN
+    CREATE TABLE dataset_dimensions (
+        id               INT           IDENTITY(1,1) PRIMARY KEY,
+        dataset_id       INT           NOT NULL,
+        dimension_table  NVARCHAR(500) NULL,
+        table_name       NVARCHAR(255) NULL,
+        join_condition   NVARCHAR(MAX) NULL,
+        fact_key         NVARCHAR(255) NULL,
+        join_key         NVARCHAR(255) NULL,
+        dim_name         NVARCHAR(255) NULL,
+        display_name     NVARCHAR(255) NULL,
+        created_at       DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+        CONSTRAINT FK_dataset_dimensions_dataset FOREIGN KEY (dataset_id) REFERENCES datasets(id) ON DELETE CASCADE
+    );
+    CREATE INDEX idx_dataset_dimensions_dataset_id ON dataset_dimensions(dataset_id);
+    PRINT 'Table dataset_dimensions created';
+END
+GO
+
+-- ── Dataset Columns ───────────────────────────────────────────────────────────
+IF OBJECT_ID('dataset_columns', 'U') IS NULL
+BEGIN
+    CREATE TABLE dataset_columns (
+        id            INT           IDENTITY(1,1) PRIMARY KEY,
+        dataset_id    INT           NOT NULL,
+        table_name    NVARCHAR(255) NOT NULL DEFAULT '',
+        column_name   NVARCHAR(255) NOT NULL DEFAULT '',
+        data_type     NVARCHAR(255) NULL,
+        is_dimension  BIT           NOT NULL DEFAULT 0,
+        is_metric     BIT           NOT NULL DEFAULT 0,
+        semantic_type NVARCHAR(255) NULL,
+        CONSTRAINT FK_dataset_columns_dataset FOREIGN KEY (dataset_id) REFERENCES datasets(id) ON DELETE CASCADE
+    );
+    CREATE INDEX idx_dataset_columns_dataset_id ON dataset_columns(dataset_id);
+    PRINT 'Table dataset_columns created';
+END
+GO
+
+-- ── Dataset Metrics ───────────────────────────────────────────────────────────
+IF OBJECT_ID('dataset_metrics', 'U') IS NULL
+BEGIN
+    CREATE TABLE dataset_metrics (
+        id          INT           IDENTITY(1,1) PRIMARY KEY,
+        dataset_id  INT           NOT NULL,
+        metric_name NVARCHAR(255) NOT NULL,
+        expression  NVARCHAR(MAX) NULL,
+        metric_type NVARCHAR(50)  NOT NULL DEFAULT 'sum',
+        format      NVARCHAR(255) NULL,
+        CONSTRAINT FK_dataset_metrics_dataset FOREIGN KEY (dataset_id) REFERENCES datasets(id) ON DELETE CASCADE
+    );
+    CREATE INDEX idx_dataset_metrics_dataset_id ON dataset_metrics(dataset_id);
+    PRINT 'Table dataset_metrics created';
+END
+GO
+
+-- ── Charts ────────────────────────────────────────────────────────────────────
 IF OBJECT_ID('charts', 'U') IS NULL
 BEGIN
     CREATE TABLE charts (
-        id NVARCHAR(36) PRIMARY KEY,
-        name NVARCHAR(255) NOT NULL,
-        description NVARCHAR(MAX),
-        dataset_id NVARCHAR(36) NOT NULL,
-        chart_type NVARCHAR(50) NOT NULL, -- bar, line, pie, table, scatter
-        config NVARCHAR(MAX) NOT NULL, -- JSON configuration
-        created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
-        updated_at DATETIME2 NOT NULL DEFAULT GETDATE(),
-        created_by NVARCHAR(255) NOT NULL DEFAULT 'system',
-        FOREIGN KEY (dataset_id) REFERENCES datasets(id) ON DELETE CASCADE
+        id          NVARCHAR(36)  NOT NULL PRIMARY KEY,
+        name        NVARCHAR(255) NOT NULL,
+        description NVARCHAR(MAX) NULL,
+        dataset_id  INT           NOT NULL,
+        chart_type  NVARCHAR(50)  NOT NULL,
+        config      NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+        visibility  NVARCHAR(20)  NOT NULL DEFAULT 'internal'
+                    CONSTRAINT CK_charts_visibility CHECK (visibility IN ('private','internal','published')),
+        created_at  DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+        modified_at DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+        created_by  NVARCHAR(255) NOT NULL DEFAULT 'system',
+        modified_by NVARCHAR(255) NULL,
+        CONSTRAINT FK_charts_dataset FOREIGN KEY (dataset_id) REFERENCES datasets(id) ON DELETE CASCADE
     );
-
-    CREATE INDEX idx_charts_dataset_id ON charts(dataset_id);
-    CREATE INDEX idx_charts_name ON charts(name);
-    CREATE INDEX idx_charts_created_at ON charts(created_at);
-
-    PRINT 'Table charts created successfully';
+    CREATE INDEX idx_charts_dataset_id  ON charts(dataset_id);
+    CREATE INDEX idx_charts_name        ON charts(name);
+    CREATE INDEX idx_charts_visibility  ON charts(visibility);
+    CREATE INDEX idx_charts_modified_at ON charts(modified_at);
+    PRINT 'Table charts created';
 END
 GO
 
--- ============================================
--- Dashboards Table
--- ============================================
+-- ── Dashboards ────────────────────────────────────────────────────────────────
 IF OBJECT_ID('dashboards', 'U') IS NULL
 BEGIN
     CREATE TABLE dashboards (
-        id NVARCHAR(36) PRIMARY KEY,
-        name NVARCHAR(255) NOT NULL,
-        description NVARCHAR(MAX),
-        layout NVARCHAR(MAX) NOT NULL, -- JSON layout configuration
-        created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
-        updated_at DATETIME2 NOT NULL DEFAULT GETDATE(),
-        created_by NVARCHAR(255) NOT NULL DEFAULT 'system'
+        id           NVARCHAR(36)  NOT NULL PRIMARY KEY,
+        name         NVARCHAR(255) NOT NULL,
+        slug         NVARCHAR(255) NULL,
+        description  NVARCHAR(MAX) NULL,
+        layout       NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        charts       NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        filters      NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        theme        NVARCHAR(MAX) NULL,
+        tags         NVARCHAR(MAX) NULL,
+        visibility   NVARCHAR(20)  NOT NULL DEFAULT 'internal'
+                     CONSTRAINT CK_dashboards_visibility CHECK (visibility IN ('private','internal','published')),
+        is_published BIT           NOT NULL DEFAULT 0,
+        is_archived  BIT           NOT NULL DEFAULT 0,
+        created_at   DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+        modified_at  DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+        created_by   NVARCHAR(255) NOT NULL DEFAULT 'system',
+        modified_by  NVARCHAR(255) NULL
     );
-
-    CREATE INDEX idx_dashboards_name ON dashboards(name);
-    CREATE INDEX idx_dashboards_created_at ON dashboards(created_at);
-
-    PRINT 'Table dashboards created successfully';
+    CREATE INDEX idx_dashboards_name        ON dashboards(name);
+    CREATE INDEX idx_dashboards_slug        ON dashboards(slug);
+    CREATE INDEX idx_dashboards_visibility  ON dashboards(visibility);
+    CREATE INDEX idx_dashboards_modified_at ON dashboards(modified_at);
+    PRINT 'Table dashboards created';
 END
 GO
 
--- ============================================
--- Saved Queries Table
--- ============================================
+-- ── Saved Queries ─────────────────────────────────────────────────────────────
 IF OBJECT_ID('saved_queries', 'U') IS NULL
 BEGIN
     CREATE TABLE saved_queries (
-        id NVARCHAR(36) PRIMARY KEY,
-        name NVARCHAR(255) NOT NULL,
-        description NVARCHAR(MAX),
-        sql NVARCHAR(MAX) NOT NULL,
-        database_name NVARCHAR(255), -- Which database this query runs against
-        created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
-        updated_at DATETIME2 NOT NULL DEFAULT GETDATE(),
-        created_by NVARCHAR(255) NOT NULL DEFAULT 'system'
+        id            NVARCHAR(36)  NOT NULL PRIMARY KEY,
+        name          NVARCHAR(255) NOT NULL,
+        description   NVARCHAR(MAX) NULL,
+        sql           NVARCHAR(MAX) NOT NULL,
+        database_name NVARCHAR(255) NULL,
+        created_at    DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+        updated_at    DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+        created_by    NVARCHAR(255) NOT NULL DEFAULT 'system'
     );
-
-    CREATE INDEX idx_saved_queries_name ON saved_queries(name);
-    CREATE INDEX idx_saved_queries_created_at ON saved_queries(created_at);
+    CREATE INDEX idx_saved_queries_name       ON saved_queries(name);
     CREATE INDEX idx_saved_queries_created_by ON saved_queries(created_by);
-
-    PRINT 'Table saved_queries created successfully';
+    PRINT 'Table saved_queries created';
 END
 GO
 
--- ============================================
--- Query History Table
--- ============================================
+-- ── Query History ─────────────────────────────────────────────────────────────
 IF OBJECT_ID('query_history', 'U') IS NULL
 BEGIN
     CREATE TABLE query_history (
-        id NVARCHAR(36) PRIMARY KEY,
-        sql_text NVARCHAR(MAX) NOT NULL,
-        database_name NVARCHAR(255), -- Which database the query ran against
-        executed_at DATETIME2 NOT NULL DEFAULT GETDATE(),
-        execution_time FLOAT NOT NULL, -- Execution time in seconds
-        row_count INT NOT NULL,
-        status NVARCHAR(20) NOT NULL, -- success, error
-        error_message NVARCHAR(MAX),
-        user_email NVARCHAR(255) NOT NULL DEFAULT 'system',
-        trigger_source NVARCHAR(50), -- e.g., 'lab', 'dataset-preview', 'chart-builder'
-        dataset_id NVARCHAR(36), -- If query was from a dataset
-        tables_used NVARCHAR(MAX) -- JSON array of table names
+        id             NVARCHAR(36)  NOT NULL PRIMARY KEY,
+        sql_text       NVARCHAR(MAX) NOT NULL,
+        database_name  NVARCHAR(255) NULL,
+        executed_at    DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+        execution_time FLOAT         NOT NULL DEFAULT 0,
+        row_count      INT           NOT NULL DEFAULT 0,
+        status         NVARCHAR(20)  NOT NULL DEFAULT 'success',
+        error_message  NVARCHAR(MAX) NULL,
+        user_email     NVARCHAR(255) NOT NULL DEFAULT 'system',
+        trigger_source NVARCHAR(50)  NULL,
+        dataset_id     NVARCHAR(36)  NULL,
+        tables_used    NVARCHAR(MAX) NULL
     );
-
     CREATE INDEX idx_query_history_executed_at ON query_history(executed_at);
-    CREATE INDEX idx_query_history_user_email ON query_history(user_email);
-    CREATE INDEX idx_query_history_status ON query_history(status);
-
-    PRINT 'Table query_history created successfully';
+    CREATE INDEX idx_query_history_user_email  ON query_history(user_email);
+    CREATE INDEX idx_query_history_status      ON query_history(status);
+    PRINT 'Table query_history created';
 END
 GO
 
--- ============================================
--- Favorites Table
--- ============================================
+-- ── Favorites ─────────────────────────────────────────────────────────────────
 IF OBJECT_ID('favorites', 'U') IS NULL
 BEGIN
     CREATE TABLE favorites (
-        id NVARCHAR(36) PRIMARY KEY DEFAULT NEWID(),
-        user_email NVARCHAR(255) NOT NULL,
-        object_type NVARCHAR(50) NOT NULL, -- dataset, chart, dashboard, query, data_source
-        object_id NVARCHAR(36) NOT NULL,
+        id          NVARCHAR(36)  NOT NULL PRIMARY KEY DEFAULT NEWID(),
+        user_email  NVARCHAR(255) NOT NULL,
+        object_type NVARCHAR(50)  NOT NULL,
+        object_id   NVARCHAR(36)  NOT NULL,
         object_name NVARCHAR(255) NOT NULL,
-        created_at DATETIME2 NOT NULL DEFAULT GETDATE()
+        created_at  DATETIME2     NOT NULL DEFAULT GETUTCDATE()
     );
-
-    CREATE INDEX idx_favorites_user_email ON favorites(user_email);
-    CREATE INDEX idx_favorites_object_type ON favorites(object_type);
-    CREATE INDEX idx_favorites_user_object ON favorites(user_email, object_id, object_type);
-
-    PRINT 'Table favorites created successfully';
+    CREATE INDEX idx_favorites_user_email   ON favorites(user_email);
+    CREATE INDEX idx_favorites_object_type  ON favorites(object_type);
+    CREATE INDEX idx_favorites_user_object  ON favorites(user_email, object_id, object_type);
+    PRINT 'Table favorites created';
 END
 GO
 
--- ============================================
--- Activity Log Table
--- ============================================
+-- ── Activity Log ──────────────────────────────────────────────────────────────
 IF OBJECT_ID('activity', 'U') IS NULL
 BEGIN
     CREATE TABLE activity (
-        id NVARCHAR(36) PRIMARY KEY DEFAULT NEWID(),
-        action NVARCHAR(50) NOT NULL, -- created, updated, deleted, viewed, executed
-        object_type NVARCHAR(50) NOT NULL, -- dataset, chart, dashboard, query
-        object_id NVARCHAR(36) NOT NULL,
+        id          NVARCHAR(36)  NOT NULL PRIMARY KEY DEFAULT NEWID(),
+        action      NVARCHAR(50)  NOT NULL,
+        object_type NVARCHAR(50)  NOT NULL,
+        object_id   NVARCHAR(36)  NOT NULL,
         object_name NVARCHAR(255) NOT NULL,
-        timestamp DATETIME2 NOT NULL DEFAULT GETDATE(),
-        user_email NVARCHAR(255) NOT NULL DEFAULT 'system',
-        details NVARCHAR(MAX) -- JSON details
+        timestamp   DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+        user_email  NVARCHAR(255) NOT NULL DEFAULT 'system',
+        details     NVARCHAR(MAX) NULL
     );
-
-    CREATE INDEX idx_activity_timestamp ON activity(timestamp);
-    CREATE INDEX idx_activity_user_email ON activity(user_email);
+    CREATE INDEX idx_activity_timestamp   ON activity(timestamp);
+    CREATE INDEX idx_activity_user_email  ON activity(user_email);
     CREATE INDEX idx_activity_object_type ON activity(object_type);
-
-    PRINT 'Table activity created successfully';
+    PRINT 'Table activity created';
 END
 GO
 
--- ============================================
--- Data Sources Table
--- ============================================
+-- ── Data Sources ──────────────────────────────────────────────────────────────
 IF OBJECT_ID('data_sources', 'U') IS NULL
 BEGIN
     CREATE TABLE data_sources (
-        id INT IDENTITY(1,1) PRIMARY KEY,
-        name NVARCHAR(255) NOT NULL,
-        type NVARCHAR(100) NOT NULL, -- e.g., 'Fabric SQL AEP', 'Fabric SQL DW', 'Azure SQL'
-        connection_string NVARCHAR(1000) NOT NULL, -- SQL endpoint
-        database_name NVARCHAR(255) NULL, -- Database name (required for Fabric SQL)
-        region NVARCHAR(10) NOT NULL CHECK (region IN ('WW', 'EU')), -- Worldwide or Europe
-        description NVARCHAR(MAX) NULL,
-        created_by NVARCHAR(255) NULL,
-        created_at DATETIME2 DEFAULT GETDATE(),
-        updated_at DATETIME2 DEFAULT GETDATE(),
-        is_active BIT DEFAULT 1, -- Whether this data source is currently active
+        id                INT           IDENTITY(1,1) PRIMARY KEY,
+        name              NVARCHAR(255) NOT NULL,
+        type              NVARCHAR(100) NOT NULL,
+        connection_string NVARCHAR(1000) NOT NULL,
+        database_name     NVARCHAR(255) NULL,
+        region            NVARCHAR(10)  NOT NULL DEFAULT 'WW'
+                          CONSTRAINT CK_data_sources_region CHECK (region IN ('WW','EU')),
+        description       NVARCHAR(MAX) NULL,
+        created_by        NVARCHAR(255) NULL,
+        created_at        DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+        updated_at        DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+        is_active         BIT           NOT NULL DEFAULT 1,
         CONSTRAINT UQ_data_sources_name UNIQUE (name)
     );
-
-    CREATE INDEX IX_data_sources_region ON data_sources(region);
-    CREATE INDEX IX_data_sources_is_active ON data_sources(is_active);
-
-    PRINT 'Table data_sources created successfully';
+    CREATE INDEX ix_data_sources_region    ON data_sources(region);
+    CREATE INDEX ix_data_sources_is_active ON data_sources(is_active);
+    PRINT 'Table data_sources created';
 END
 GO
 
--- ============================================
--- User Themes Table
--- ============================================
+-- ── User Themes ───────────────────────────────────────────────────────────────
 IF OBJECT_ID('user_themes', 'U') IS NULL
 BEGIN
     CREATE TABLE user_themes (
-        user_email NVARCHAR(255) NOT NULL PRIMARY KEY,
-        theme_color NVARCHAR(7) NOT NULL, -- Hex color format: #RRGGBB
-        created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
-        updated_at DATETIME2 NOT NULL DEFAULT GETDATE()
+        user_email  NVARCHAR(255) NOT NULL PRIMARY KEY,
+        theme_color NVARCHAR(7)   NOT NULL DEFAULT '#6366f1',
+        created_at  DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+        updated_at  DATETIME2     NOT NULL DEFAULT GETUTCDATE()
     );
-
-    CREATE INDEX idx_user_themes_email ON user_themes(user_email);
-
-    PRINT 'Table user_themes created successfully';
+    PRINT 'Table user_themes created';
 END
 GO
 
--- ============================================
--- Auth Config Table
--- ============================================
+-- ── User Roles (RBAC) ─────────────────────────────────────────────────────────
+IF OBJECT_ID('user_roles', 'U') IS NULL
+BEGIN
+    CREATE TABLE user_roles (
+        id         NVARCHAR(36)  NOT NULL PRIMARY KEY DEFAULT NEWID(),
+        user_email NVARCHAR(255) NOT NULL,
+        role       NVARCHAR(20)  NOT NULL
+                   CONSTRAINT CK_user_roles_role CHECK (role IN ('Viewer','Analyst','Editor','Admin')),
+        granted_by NVARCHAR(255) NOT NULL DEFAULT 'system',
+        granted_at DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+        updated_at DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+        CONSTRAINT UQ_user_roles_email UNIQUE (user_email)
+    );
+    CREATE INDEX idx_user_roles_email ON user_roles(user_email);
+    PRINT 'Table user_roles created';
+END
+GO
+
+-- ── Auth Config ───────────────────────────────────────────────────────────────
 IF OBJECT_ID('auth_config', 'U') IS NULL
 BEGIN
     CREATE TABLE auth_config (
-        id INT IDENTITY(1,1) PRIMARY KEY,
-        provider NVARCHAR(50) NOT NULL DEFAULT 'azure_ad', -- azure_ad | local | google
-        azure_tenant_id NVARCHAR(255) NULL,
-        azure_client_id NVARCHAR(255) NULL,
-        google_client_id NVARCHAR(255) NULL,
-        google_client_secret NVARCHAR(1000) NULL, -- encrypted
-        jwt_secret NVARCHAR(1000) NULL,           -- encrypted; used for local HS256 tokens
-        updated_at DATETIME2 NOT NULL DEFAULT GETDATE(),
-        updated_by NVARCHAR(255) NULL
+        id                   INT           IDENTITY(1,1) PRIMARY KEY,
+        provider             NVARCHAR(50)  NOT NULL DEFAULT 'local',
+        azure_tenant_id      NVARCHAR(255) NULL,
+        azure_client_id      NVARCHAR(255) NULL,
+        google_client_id     NVARCHAR(255) NULL,
+        google_client_secret NVARCHAR(1000) NULL,   -- Fernet-encrypted
+        jwt_secret           NVARCHAR(1000) NULL,   -- Fernet-encrypted
+        updated_at           DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+        updated_by           NVARCHAR(255) NULL
     );
-
-    PRINT 'Table auth_config created successfully';
+    PRINT 'Table auth_config created';
 END
 GO
 
--- ============================================
--- Local Users Table
--- ============================================
+-- ── Local Users ───────────────────────────────────────────────────────────────
 IF OBJECT_ID('local_users', 'U') IS NULL
 BEGIN
     CREATE TABLE local_users (
-        id INT IDENTITY(1,1) PRIMARY KEY,
-        username NVARCHAR(255) NOT NULL,
-        email NVARCHAR(255) NOT NULL,
-        password_hash NVARCHAR(255) NOT NULL,
-        force_password_change BIT NOT NULL DEFAULT 0,
-        is_active BIT NOT NULL DEFAULT 1,
-        created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
-        updated_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+        id                    INT           IDENTITY(1,1) PRIMARY KEY,
+        username              NVARCHAR(255) NOT NULL,
+        email                 NVARCHAR(255) NOT NULL,
+        password_hash         NVARCHAR(255) NOT NULL,
+        force_password_change BIT           NOT NULL DEFAULT 0,
+        is_active             BIT           NOT NULL DEFAULT 1,
+        created_at            DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+        updated_at            DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
         CONSTRAINT UQ_local_users_username UNIQUE (username),
-        CONSTRAINT UQ_local_users_email UNIQUE (email)
+        CONSTRAINT UQ_local_users_email    UNIQUE (email)
     );
-
     CREATE INDEX idx_local_users_username ON local_users(username);
-    CREATE INDEX idx_local_users_email ON local_users(email);
-
-    PRINT 'Table local_users created successfully';
+    CREATE INDEX idx_local_users_email    ON local_users(email);
+    PRINT 'Table local_users created';
 END
 GO
 
--- ============================================
--- Schema Creation Complete
--- ============================================
 PRINT '';
-PRINT '============================================';
-PRINT 'LoomX Production Schema Created Successfully';
-PRINT '============================================';
-PRINT 'Tables created:';
-PRINT '  - datasets (with database_name support)';
-PRINT '  - charts';
-PRINT '  - dashboards';
-PRINT '  - saved_queries';
-PRINT '  - query_history';
-PRINT '  - favorites';
-PRINT '  - activity';
-PRINT '  - data_sources';
-PRINT '  - user_themes';
-PRINT '  - auth_config';
-PRINT '  - local_users';
-PRINT '';
-PRINT 'Next steps:';
-PRINT '  1. Add your data sources via the /data-sources UI';
-PRINT '  2. Configure METADATA_ENDPOINT and METADATA_DATABASE in .env';
-PRINT '  3. Start creating datasets, charts, and dashboards!';
-PRINT '============================================';
+PRINT '============================================================';
+PRINT 'LoomX schema initialised successfully.';
+PRINT 'Tables: datasets, dataset_dimensions, dataset_columns,';
+PRINT '        dataset_metrics, charts, dashboards, saved_queries,';
+PRINT '        query_history, favorites, activity, data_sources,';
+PRINT '        user_themes, user_roles, auth_config, local_users';
+PRINT '============================================================';
 GO

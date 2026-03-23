@@ -57,18 +57,7 @@ if (-not (Test-Path ".env")) {
 }
 
 Write-Host "  Root .env: OK" -ForegroundColor Green
-
-$envContent = Get-Content ".env" -Raw
-$missingVars = @()
-if ($envContent -notmatch "AZURE_CLIENT_ID=") { $missingVars += "AZURE_CLIENT_ID" }
-if ($envContent -notmatch "AZURE_TENANT_ID=")  { $missingVars += "AZURE_TENANT_ID" }
-
-if ($missingVars.Count -gt 0) {
-    Write-Host "  [WARNING] Missing variables in .env:" -ForegroundColor Yellow
-    foreach ($var in $missingVars) { Write-Host "    - $var" -ForegroundColor Red }
-} else {
-    Write-Host "  All required variables present" -ForegroundColor Green
-}
+Write-Host "  Auth + database configured via UI on first launch." -ForegroundColor DarkGray
 
 # ============================================
 # Step 3: Set Up Python API venv
@@ -124,9 +113,9 @@ Write-Host "[5/6] Clearing ports..." -ForegroundColor Yellow
 foreach ($port in @(8080, 3000)) {
     $procs = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
              Select-Object -ExpandProperty OwningProcess -Unique
-    foreach ($pid in $procs) {
-        Write-Host "  Killing process on port $port (PID: $pid)..." -ForegroundColor Cyan
-        Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+    foreach ($procId in $procs) {
+        Write-Host "  Killing process on port $port (PID: $procId)..." -ForegroundColor Cyan
+        Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
     }
 }
 

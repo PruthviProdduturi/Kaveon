@@ -23,26 +23,12 @@ import React, {
 	type ReactNode,
 } from "react";
 
-import { loginRequest, msalInstance } from "./msalConfig";
-
-// Singleton promise to ensure MSAL is initialized only once
-let msalInitPromise: Promise<void> | null = null;
-
-/**
- * Ensure MSAL library is initialized before any auth operations.
- * This prevents race conditions during app startup.
- */
-async function ensureMsalInitialized(): Promise<void> {
-	if (!msalInitPromise) {
-		msalInitPromise = msalInstance.initialize();
-	}
-	await msalInitPromise;
-}
+import { loginRequest, configureMsal, getMsalInstance, ensureMsalInitialized } from "./msalConfig";
 
 import { API_BASE } from "../config";
 
 // LocalStorage key for caching authentication state (Azure AD)
-const AUTH_CACHE_KEY = "fabric-explorer-auth-cache";
+const AUTH_CACHE_KEY = "loomx-auth-cache";
 // LocalStorage key for caching resolved role
 const ROLE_CACHE_KEY = "loomx-user-role";
 // LocalStorage key for the active auth provider
@@ -96,6 +82,27 @@ function parseJwtPayload(token: string): Record<string, unknown> {
 	} catch {
 		return {};
 	}
+}
+
+const _ROLE_LEVELS: Record<string, number> = { Viewer: 0, Analyst: 1, Editor: 2, Admin: 3 };
+
+/**
+ * Extract the highest-priority role from a JWT payload.
+ * The backend issues `roles: string[]`; some providers use `role: string`.
+ */
+function roleFromPayload(payload: Record<string, unknown>): UserRole {
+	const arr = Array.isArray(payload.roles)
+		? (payload.roles as string[]).filter((r) => r in _ROLE_LEVELS)
+		: [];
+	if (arr.length > 0) {
+		return arr.reduce((best, r) =>
+			(_ROLE_LEVELS[r] ?? 0) > (_ROLE_LEVELS[best] ?? 0) ? r : best
+		) as UserRole;
+	}
+	// Fallback: singular `role` claim (some providers)
+	const singular = payload.role as string | undefined;
+	if (singular && singular in _ROLE_LEVELS) return singular as UserRole;
+	return "Viewer";
 }
 
 /**
@@ -156,6 +163,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 							google_client_id?: string;
 						};
 						resolvedProvider = providerData.provider;
+						// Configure MSAL with the runtime client/tenant IDs from the API
+						if (providerData.provider === "azure_ad" && providerData.azure_client_id) {
+							configureMsal(
+								providerData.azure_client_id,
+								providerData.azure_tenant_id ?? "common",
+							);
+						}
 					}
 				} catch {
 					// If the provider endpoint fails, fall back to whatever is cached
@@ -184,7 +198,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 							username: (payload.sub as string) ?? undefined,
 							email: (payload.email as string) ?? (payload.sub as string) ?? undefined,
 						});
-						setRole((payload.role as UserRole) ?? cachedRole);
+						setRole(roleFromPayload(payload) ?? cachedRole);
 					}
 					// If token is missing or expired, stay unauthenticated → show login screen
 					setIsConnecting(false);
@@ -199,13 +213,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
 				// ── Azure AD flow (unchanged) ─────────────────────────────────────────
 				await ensureMsalInitialized();
-				const redirectResponse = await msalInstance.handleRedirectPromise();
+				const redirectResponse = await getMsalInstance().handleRedirectPromise();
 
 				if (redirectResponse) {
-					const primaryAccount = redirectResponse.account ?? msalInstance.getAllAccounts()[0];
+					const primaryAccount = redirectResponse.account ?? getMsalInstance().getAllAccounts()[0];
 					if (primaryAccount) {
 						try {
-							const tok = await msalInstance.acquireTokenSilent({ ...loginRequest, account: primaryAccount });
+							const tok = await getMsalInstance().acquireTokenSilent({ ...loginRequest, account: primaryAccount });
 							const authHeaders = {
 								"Authorization": `Bearer ${tok.accessToken}`,
 								"x-user-email": primaryAccount.username,
@@ -263,7 +277,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 					return;
 				}
 
-				const accounts = msalInstance.getAllAccounts();
+				const accounts = getMsalInstance().getAllAccounts();
 				const primary = accounts[0];
 				if (!primary) {
 					window.localStorage.removeItem(AUTH_CACHE_KEY);
@@ -293,7 +307,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 				setRole(cachedRole);
 
 				// Re-fetch role in background
-				msalInstance.acquireTokenSilent({ ...loginRequest, account: primary })
+				getMsalInstance().acquireTokenSilent({ ...loginRequest, account: primary })
 					.then(tok => fetch(`${API_BASE}/api/v1/users/me`, {
 						headers: {
 							"Authorization": `Bearer ${tok.accessToken}`,
@@ -347,7 +361,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 				window.localStorage.setItem(LOCAL_TOKEN_KEY, token);
 				window.localStorage.setItem(LOCAL_TOKEN_EXP_KEY, String(exp));
 
-				const userRole = (payload.role as UserRole) ?? "Viewer";
+				const userRole = roleFromPayload(payload);
 				window.localStorage.setItem(ROLE_CACHE_KEY, userRole);
 
 				setIsAuthenticated(true);
@@ -368,7 +382,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
 			// Azure AD: redirect flow
 			await ensureMsalInitialized();
-			await msalInstance.loginRedirect(loginRequest);
+			await getMsalInstance().loginRedirect(loginRequest);
 		} catch (e) {
 			const message = e instanceof Error ? e.message : "Connection failed";
 			setError(message);

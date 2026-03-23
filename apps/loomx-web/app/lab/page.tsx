@@ -12,7 +12,7 @@ import { msalFetch } from "../../utils/msalFetch";
 import { useAuth } from "../../auth/useAuth";
 import { useRouter, useSearchParams } from "next/navigation";
 // using same-origin relative API calls
-const PRIMARY_DB_NAME = process.env.NEXT_PUBLIC_PRIMARY_DATABASE_NAME || "IDEASServingStoreLH";
+const PRIMARY_DB_NAME = process.env.NEXT_PUBLIC_PRIMARY_DATABASE_NAME || "";
 
 interface DatabaseConfig {
   database: string;
@@ -1308,7 +1308,7 @@ return;
   };
 
   /**
-   * Visualize: follows Superset's route — creates a virtual dataset backed by
+   * Visualize: creates a virtual dataset backed by
    * the Lab SQL, creates a chart on that dataset, then navigates to the builder.
    */
   const visualizeResults = async (chartType: string) => {

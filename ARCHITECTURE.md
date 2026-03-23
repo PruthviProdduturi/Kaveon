@@ -552,7 +552,7 @@ DashboardItem
  └── 'tabs'    → DashboardTabsComponent   (tabbed container)
 ```
 
-**Self-managed components** (`text`, `header`, `divider`, `row`, `column`) bypass the default card wrapper — they render borderless, Superset-style, and handle their own hover toolbars, inline editing, and confirm dialogs. They receive `onRemove` as a **direct removal function** (not a re-open-confirm wrapper) because they own their own confirm modals.
+**Self-managed components** (`text`, `header`, `divider`, `row`, `column`) bypass the default card wrapper — they render borderless with their own hover toolbars, inline editing, and confirm dialogs. They receive `onRemove` as a **direct removal function** (not a re-open-confirm wrapper) because they own their own confirm modals.
 
 **Chart cards** (`chart` type) get a card wrapper (border, shadow) and are rendered via:
 

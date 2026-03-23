@@ -523,7 +523,7 @@ function AddDataSourceModal({ dataSource, isCopying = false, onClose, onSuccess 
                 type="text"
                 className="chart-builder-input"
                 style={{ fontFamily: 'monospace' }}
-                placeholder={formData.type === "Trino" ? "e.g., hive" : formData.type === "StarRocks" ? "e.g., my_database" : "e.g., IDEASServingStoreLH"}
+                placeholder={formData.type === "Trino" ? "e.g., hive" : formData.type === "StarRocks" ? "e.g., my_database" : "e.g., my_database"}
                 value={formData.database_name}
                 onChange={(e) => setFormData({ ...formData, database_name: e.target.value })}
                 required={formData.type !== "StarRocks"}

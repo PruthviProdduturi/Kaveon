@@ -1033,7 +1033,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
         </div>
       </div>
 
-      {/* Chart Picker Modal — Superset-style tiles (container-targeted) */}
+      {/* Chart Picker Modal — tile grid (container-targeted) */}
       {showChartPicker && (
           <div
             style={{

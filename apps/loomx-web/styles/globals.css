@@ -1167,8 +1167,7 @@ main.main-lab {
   }
 }
 
-/* Header layout copied from legacy */
-/* ── App Header ──────────────────────────────────────────────────────────── */
+/* ── App Header ─────────────────────────────────────────────────────────── */
 
 .app-header {
   background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
@@ -1616,7 +1615,7 @@ main.main-lab {
   }
 }
 
-/* Authentication section - copied from legacy */
+/* ── Authentication ─────────────────────────────────────────────────────── */
 .auth-section {
   min-height: 100vh;
   display: flex;
@@ -2104,7 +2103,7 @@ main.main-lab {
   }
 }
 
-/* Homepage layout - copied from legacy IDEAS Explorer */
+/* ── Homepage ───────────────────────────────────────────────────────────── */
 .homepage-container {
   width: 100%;
   min-height: calc(100vh - 56px);
