@@ -2535,7 +2535,9 @@ return;
                 >
                   <div className="save-query-modal-header">
                     <h3 id="lab-error-title" className="save-query-modal-title">
-                      Connection problem
+                      {typeof sessionStorage !== "undefined" && sessionStorage.getItem("loomx_setup_ok") !== "1"
+                        ? "Metadata database not configured"
+                        : "Connection problem"}
                     </h3>
                     <button
                       type="button"
@@ -2547,14 +2549,26 @@ return;
                     </button>
                   </div>
                   <div className="save-query-modal-body">
-                    <p style={{ marginBottom: 8 }}>
-                      We couldn&apos;t connect to the primary database for Lab.
-                    </p>
-                    <p className="save-query-modal-error">{loadError}</p>
-                    <p style={{ fontSize: "0.8rem", color: "#6b7280", marginTop: 8 }}>
-                      You can try again from the header refresh button or adjust the
-                      Fabric SQL connection settings.
-                    </p>
+                    {typeof sessionStorage !== "undefined" && sessionStorage.getItem("loomx_setup_ok") !== "1" ? (
+                      <p style={{ marginBottom: 8 }}>
+                        LoomX needs a metadata database to load data sources.{" "}
+                        <a href="/settings/system" style={{ color: "#2563eb", textDecoration: "underline" }}>
+                          Go to System Settings
+                        </a>{" "}
+                        to configure it.
+                      </p>
+                    ) : (
+                      <>
+                        <p style={{ marginBottom: 8 }}>
+                          We couldn&apos;t connect to the primary database for Lab.
+                        </p>
+                        <p className="save-query-modal-error">{loadError}</p>
+                        <p style={{ fontSize: "0.8rem", color: "#6b7280", marginTop: 8 }}>
+                          You can try again from the header refresh button or adjust the
+                          data source connection settings.
+                        </p>
+                      </>
+                    )}
                   </div>
                   <div className="save-query-modal-footer">
                     <button
