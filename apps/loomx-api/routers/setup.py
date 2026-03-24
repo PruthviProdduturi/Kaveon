@@ -164,34 +164,33 @@ def setup_status():
     if db_type in ("fabric_sql", "azure_sql") and not endpoint:
         return {"status": "not_configured"}
 
-    result = pool.probe_connection(
-        endpoint=endpoint or "",
-        database=database,
-        statements=[
-            "SELECT 1 AS connection_test",
+    # Use the already-warmed connection pool instead of probe_connection, which
+    # creates a fresh one-off connection (cold Azure AD auth + TCP handshake every call).
+    try:
+        result = pool.execute_query(
             "SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'datasets'",
-        ],
-        db_type=db_type,
-        host=cfg["host"],
-        port=int(cfg["port"] or 0),
-    )
-
-    if not result["success"]:
-        error_type = result.get("error_type", "connection_failed")
+            database,
+        )
+        cnt = None
+        try:
+            cnt = result.get("rows_objects", [{}])[0].get("cnt")
+        except (IndexError, TypeError):
+            pass
+        if cnt is None or int(cnt) == 0:
+            return {"status": "schema_missing", "endpoint": endpoint, "database": database}
+        return {"status": "ok"}
+    except Exception as e:
+        err_msg = str(e)
+        if "timeout" in err_msg.lower():
+            error_type = "timeout"
+        elif "login" in err_msg.lower() or "authentication" in err_msg.lower():
+            error_type = "auth_failed"
+        else:
+            error_type = "connection_failed"
         return {
             "status": error_type, "endpoint": endpoint, "database": database,
-            "errors": _to_setup_errors(error_type, result.get("message", "Connection failed")),
+            "errors": _to_setup_errors(error_type, err_msg),
         }
-
-    cnt = None
-    try:
-        cnt = result.get("results", [{}])[1].get("rows", [[None]])[0][0]
-    except (IndexError, TypeError):
-        pass
-    if cnt is None or int(cnt) == 0:
-        return {"status": "schema_missing", "endpoint": endpoint, "database": database}
-
-    return {"status": "ok"}
 
 
 def _assert_setup_mode():

@@ -28,23 +28,21 @@ def _warm_pool(db_name: str, n_conns: int, label: str) -> bool:
     for attempt, delay in enumerate(delays, 1):
         if delay:
             time.sleep(delay)
-        conns = []
         try:
             print(f"[Warmup] Warming {label} ({db_name}) — attempt {attempt}/3…")
             pool = get_connection_pool(db_name)
             for _ in range(n_conns):
                 conn = pool.get_connection()
-                conn.execute_query("SELECT 1 AS warmup")
-                conns.append((pool, conn))
+                try:
+                    conn.execute_query("SELECT 1 AS warmup")
+                finally:
+                    pool.return_connection(conn)
             print(f"[Warmup] {label} ready ({n_conns} connection(s) warmed).")
             return True
         except Exception as e:
             print(f"[Warmup] {label} attempt {attempt} failed: {e}")
             if attempt < len(delays):
                 print(f"[Warmup] Retrying {label} in {delays[attempt]}s…")
-        finally:
-            for pool, conn in conns:
-                pool.return_connection(conn)
     print(f"[Warmup] {label} gave up — first request will connect lazily.")
     return False
 
