@@ -165,18 +165,43 @@ export function ListPageShell({
       {loading && <LoomXLoading message={loadingMessage} />}
 
       {/* ── Error ── */}
-      {!loading && error && (
-        <div className="card page-empty-card">
-          <div style={{
-            width: 48, height: 48, borderRadius: 12, margin: "0 auto 12px",
-            background: "#fef2f2", display: "flex", alignItems: "center", justifyContent: "center",
-          }}>
-            <i className="fas fa-exclamation-triangle" style={{ color: "#dc2626", fontSize: 20 }} />
+      {!loading && error && (() => {
+        const metadataReady = typeof sessionStorage !== "undefined"
+          ? sessionStorage.getItem("loomx_setup_ok") === "1"
+          : true;
+        if (!metadataReady) {
+          return (
+            <div className="card page-empty-card">
+              <div style={{
+                width: 48, height: 48, borderRadius: 12, margin: "0 auto 12px",
+                background: "#fef3c7", display: "flex", alignItems: "center", justifyContent: "center",
+              }}>
+                <i className="fas fa-database" style={{ color: "#d97706", fontSize: 20 }} />
+              </div>
+              <p className="page-empty-title">Metadata database not configured</p>
+              <p className="page-empty-body">
+                LoomX needs a metadata database to store dashboards, charts, and datasets.{" "}
+                <a href="/settings/system" style={{ color: "#2563eb", textDecoration: "underline" }}>
+                  Go to System Settings
+                </a>{" "}
+                to configure it.
+              </p>
+            </div>
+          );
+        }
+        return (
+          <div className="card page-empty-card">
+            <div style={{
+              width: 48, height: 48, borderRadius: 12, margin: "0 auto 12px",
+              background: "#fef2f2", display: "flex", alignItems: "center", justifyContent: "center",
+            }}>
+              <i className="fas fa-exclamation-triangle" style={{ color: "#dc2626", fontSize: 20 }} />
+            </div>
+            <p className="page-empty-title">Something went wrong</p>
+            <p className="page-empty-body">{error}</p>
           </div>
-          <p className="page-empty-title">Something went wrong</p>
-          <p className="page-empty-body">{error}</p>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ── Empty state ── */}
       {!loading && !error && empty && (

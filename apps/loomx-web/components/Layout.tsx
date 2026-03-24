@@ -158,11 +158,6 @@ export function Layout({ children }: LayoutProps) {
               <Link href="/settings/ai" className="header-dropdown-item">
                 <i className="fas fa-magic" style={{ width: 14, color: "#7c3aed" }} /> AI Providers
               </Link>
-              {isAdmin && (
-                <Link href="/settings/users" className="header-dropdown-item">
-                  <i className="fas fa-users-cog" style={{ width: 14, color: "#059669" }} /> User Management
-                </Link>
-              )}
             </div>
           </div>
 

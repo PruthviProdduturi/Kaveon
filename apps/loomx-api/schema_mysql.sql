@@ -204,19 +204,6 @@ CREATE TABLE IF NOT EXISTS user_themes (
     INDEX idx_user_themes_email (user_email)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- ── User Roles (RBAC) ─────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS user_roles (
-    id         VARCHAR(36)  NOT NULL PRIMARY KEY,
-    user_email VARCHAR(255) NOT NULL,
-    role       VARCHAR(20)  NOT NULL,
-    granted_by VARCHAR(255) NOT NULL DEFAULT 'system',
-    granted_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    CONSTRAINT ck_user_roles_role CHECK (role IN ('Viewer','Analyst','Editor','Admin')),
-    CONSTRAINT uq_user_roles_email UNIQUE (user_email),
-    INDEX idx_user_roles_email (user_email)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
 -- ── Auth Config ───────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS auth_config (
     id                   INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -236,10 +223,12 @@ CREATE TABLE IF NOT EXISTS local_users (
     username              VARCHAR(255) NOT NULL,
     email                 VARCHAR(255) NOT NULL,
     password_hash         VARCHAR(255) NOT NULL,
+    role                  VARCHAR(20)  NOT NULL DEFAULT 'Viewer',
     force_password_change TINYINT(1)   NOT NULL DEFAULT 0,
     is_active             TINYINT(1)   NOT NULL DEFAULT 1,
     created_at            DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at            DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT ck_local_users_role CHECK (role IN ('Viewer','Analyst','Editor','Admin')),
     CONSTRAINT uq_local_users_username UNIQUE (username),
     CONSTRAINT uq_local_users_email    UNIQUE (email),
     INDEX idx_local_users_username (username),

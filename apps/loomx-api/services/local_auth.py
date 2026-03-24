@@ -34,7 +34,7 @@ def get_user_by_username(username: str) -> Optional[dict]:
     """Return a local_users row by username, or None.
     Raises on DB errors so the caller can detect DB unavailability."""
     return db.query_one(
-        "SELECT id, username, email, password_hash, force_password_change, is_active "
+        "SELECT id, username, email, password_hash, role, force_password_change, is_active "
         "FROM local_users WHERE username = @param0",
         [username],
     )
@@ -44,7 +44,7 @@ def get_user_by_id(user_id: int) -> Optional[dict]:
     """Return a local_users row by id, or None."""
     try:
         return db.query_one(
-            "SELECT id, username, email, password_hash, force_password_change, is_active "
+            "SELECT id, username, email, password_hash, role, force_password_change, is_active "
             "FROM local_users WHERE id = @param0",
             [user_id],
         )
@@ -57,12 +57,8 @@ def get_user_by_id(user_id: int) -> Optional[dict]:
 
 def bootstrap_admin_if_needed() -> None:
     """
-    Ensure the default admin/admin@local user exists in local_users and
-    has Admin role in user_roles.  Called at every API startup.
-
-    - Creates the admin user if local_users is empty.
-    - Creates OR upgrades the admin@local role to Admin (fixes stale Viewer entries).
-    - user_roles operations are non-fatal (table may not exist yet pre-migration).
+    Ensure the default admin/admin@local user exists in local_users with Admin role.
+    Called at every API startup. Creates the user if local_users is empty.
     """
     try:
         row = db.query_one("SELECT COUNT(*) AS n FROM local_users")
@@ -72,84 +68,34 @@ def bootstrap_admin_if_needed() -> None:
             pwd_hash = hash_password("admin")
             db.execute(
                 "INSERT INTO local_users "
-                "(username, email, password_hash, force_password_change, is_active, created_at, updated_at) "
-                "VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6)",
-                ["admin", "admin@local", pwd_hash, True, True, now, now],
+                "(username, email, password_hash, role, force_password_change, is_active, created_at, updated_at) "
+                "VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6, @param7)",
+                ["admin", "admin@local", pwd_hash, "Admin", True, True, now, now],
             )
             print("[LocalAuth] Bootstrap admin user created (admin / admin@local).")
     except Exception as e:
-        print(f"[LocalAuth] bootstrap_admin_if_needed (user creation) failed: {e}")
-
-    # Always ensure admin@local has Admin role — runs even if user already existed.
-    # This fixes stale Viewer entries left by earlier code versions.
-    try:
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
-        existing_role = db.query_one(
-            "SELECT id, role FROM user_roles WHERE user_email = @param0",
-            ["admin@local"],
-        )
-        if existing_role:
-            if existing_role.get("role") != "Admin":
-                db.execute(
-                    "UPDATE user_roles SET role = 'Admin', updated_at = @param0 "
-                    "WHERE user_email = 'admin@local'",
-                    [now],
-                )
-                print("[LocalAuth] Bootstrap admin role corrected to Admin.")
-        else:
-            db.execute(
-                "INSERT INTO user_roles (user_email, role, granted_by, granted_at, updated_at) "
-                "VALUES (@param0, 'Admin', 'system-bootstrap', @param1, @param2)",
-                ["admin@local", now, now],
-            )
-            print("[LocalAuth] Bootstrap admin role inserted.")
-    except Exception as role_err:
-        print(f"[LocalAuth] Could not set admin@local role (will be fixed on first login): {role_err}")
+        print(f"[LocalAuth] bootstrap_admin_if_needed failed: {e}")
 
 
 # ── CRUD ──────────────────────────────────────────────────────────────────────
 
 def create_local_user(username: str, email: str, password: str, role: str) -> dict:
-    """
-    Create a new local user and assign their role in user_roles.
-    Returns the created user dict (no password_hash).
-    """
+    """Create a new local user. Role is stored in local_users.role."""
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     pwd_hash = hash_password(password)
 
     db.execute(
         "INSERT INTO local_users "
-        "(username, email, password_hash, force_password_change, is_active, created_at, updated_at) "
-        "VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6)",
-        [username, email.lower(), pwd_hash, False, True, now, now],
+        "(username, email, password_hash, role, force_password_change, is_active, created_at, updated_at) "
+        "VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6, @param7)",
+        [username, email.lower(), pwd_hash, role, False, True, now, now],
     )
 
     row = db.query_one(
-        "SELECT id, username, email, force_password_change, is_active, created_at "
+        "SELECT id, username, email, role, force_password_change, is_active, created_at "
         "FROM local_users WHERE username = @param0",
         [username],
     )
-
-    # Assign role in user_roles
-    try:
-        existing_role = db.query_one(
-            "SELECT id FROM user_roles WHERE user_email = @param0",
-            [email.lower()],
-        )
-        if existing_role:
-            db.execute(
-                "UPDATE user_roles SET role = @param0, updated_at = @param1 WHERE user_email = @param2",
-                [role, now, email.lower()],
-            )
-        else:
-            db.execute(
-                "INSERT INTO user_roles (user_email, role, granted_by, granted_at, updated_at) "
-                "VALUES (@param0, @param1, 'admin', @param2, @param3)",
-                [email.lower(), role, now, now],
-            )
-    except Exception as e:
-        print(f"[LocalAuth] create_local_user role assignment failed: {e}")
-
     return row or {}
 
 
