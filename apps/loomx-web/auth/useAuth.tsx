@@ -214,7 +214,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 				}
 
 				// ── Azure AD flow (unchanged) ─────────────────────────────────────────
-				await ensureMsalInitialized();
+				try {
+					await ensureMsalInitialized();
+				} catch {
+					setIsConnecting(false);
+					return;
+				}
 				const redirectResponse = await getMsalInstance().handleRedirectPromise();
 
 				if (redirectResponse) {

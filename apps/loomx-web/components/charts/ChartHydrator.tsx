@@ -93,7 +93,7 @@ const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = 
   // crossFilterExtra is kept SEPARATE from externalFilters so it is NOT baked into
   // context filter state during hydration — preventing dashboard filters from being
   // applied twice and making clear/restore work correctly.
-  const prevCrossFilterSerialRef = useRef('');
+  const prevCrossFilterSerialRef = useRef<string>(JSON.stringify(crossFilterExtra ?? []));
   useEffect(() => {
     if (!hasAutoRunRef.current) return;
     const serial = JSON.stringify(crossFilterExtra);
