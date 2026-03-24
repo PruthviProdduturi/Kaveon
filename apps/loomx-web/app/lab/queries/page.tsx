@@ -660,7 +660,9 @@ const LabQueriesPage: React.FC = () => {
             <div className="results-table-container">
               {isLoadingSaved && <LoadingOverlay />}
               {!isLoadingSaved && errorSaved && (
-                <p className="muted">{errorSaved}</p>
+                typeof sessionStorage !== "undefined" && sessionStorage.getItem("loomx_setup_ok") !== "1"
+                  ? <p className="muted">Metadata database not configured. <a href="/settings/system" style={{ color: "#2563eb" }}>Go to System Settings</a> to set it up.</p>
+                  : <p className="muted">{errorSaved}</p>
               )}
               {!isLoadingSaved && !errorSaved && sortedSavedQueries.length === 0 && (
                 <p className="muted">No saved queries yet.</p>
@@ -790,7 +792,9 @@ const LabQueriesPage: React.FC = () => {
             <div className="results-table-container">
               {isLoadingHistory && <LoadingOverlay />}
               {!isLoadingHistory && errorHistory && (
-                <p className="muted">{errorHistory}</p>
+                typeof sessionStorage !== "undefined" && sessionStorage.getItem("loomx_setup_ok") !== "1"
+                  ? <p className="muted">Metadata database not configured. <a href="/settings/system" style={{ color: "#2563eb" }}>Go to System Settings</a> to set it up.</p>
+                  : <p className="muted">{errorHistory}</p>
               )}
               {!isLoadingHistory && !errorHistory && history.length === 0 && (
                 <p className="muted">No query history available yet.</p>
