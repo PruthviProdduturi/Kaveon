@@ -39,6 +39,7 @@ interface MetadataFormState {
 
 interface AuthConfig {
   provider: AuthProvider;
+  ui_configured?: boolean;
   azure_client_id?: string;
   azure_tenant_id?: string;
   google_client_id?: string;
@@ -118,10 +119,13 @@ export default function SystemSettingsPage() {
 
   const authMeta     = AUTH_PROVIDERS.find(p => p.key === (authConfig?.provider ?? "local"))!;
   const metaIconMeta = SETUP_DB_ICONS[metaConfig?.db_type ?? "fabric_sql"];
-  const hostDisplay  = metaConfig
-    ? (metaConfig.db_type === "fabric_sql" || metaConfig.db_type === "azure_sql")
-      ? metaConfig.endpoint
-      : metaConfig.host ? `${metaConfig.host}${metaConfig.port ? `:${metaConfig.port}` : ""}` : "—"
+  const metaConfigured = !!metaConfig?.ui_configured;
+  const authConfigured = !!authConfig?.ui_configured;
+  const fabricWithoutAzureAuth = metaConfigured && metaConfig!.db_type === "fabric_sql" && authConfig?.provider !== "azure_ad";
+  const hostDisplay  = metaConfigured
+    ? (metaConfig!.db_type === "fabric_sql" || metaConfig!.db_type === "azure_sql")
+      ? metaConfig!.endpoint
+      : metaConfig!.host ? `${metaConfig!.host}${metaConfig!.port ? `:${metaConfig!.port}` : ""}` : "—"
     : "—";
 
   return (
@@ -130,7 +134,7 @@ export default function SystemSettingsPage() {
       title="System"
       subtitle="Core infrastructure — authentication and metadata database."
       loading={roleLoading || metaLoading}
-      action={
+      action={metaConfigured || authConfigured ? (
         <button
           onClick={() => setShowReset(true)}
           style={{
@@ -143,7 +147,7 @@ export default function SystemSettingsPage() {
           <i className="fas fa-rotate-left" style={{ fontSize: 12 }} />
           Reset
         </button>
-      }
+      ) : undefined}
     >
       <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
 
@@ -152,13 +156,13 @@ export default function SystemSettingsPage() {
 
         <SectionCard
           accentColor={primaryColor}
-          status="active"
+          status={authConfigured ? "active" : "warning"}
           header={
             <CardHeader
               icon="fa-lock"
               title="Authentication"
               subtitle="Controls how users sign in to LoomX"
-              status="active"
+              status={authConfigured ? "active" : "warning"}
               primaryColor={primaryColor}
               action={
                 <Button onClick={() => { setAuthBanner(null); setShowAuthModal(true); }}>
@@ -211,24 +215,24 @@ export default function SystemSettingsPage() {
 
         <SectionCard
           accentColor={primaryColor}
-          status={metaConfig ? "active" : "warning"}
+          status={metaConfigured ? "active" : "warning"}
           header={
             <CardHeader
               icon="fa-database"
               title="Metadata Database"
               subtitle="Stores dashboards, charts, datasets, and user data"
-              status={metaConfig ? "active" : "warning"}
-              statusLabel={metaConfig ? "Connected" : "Not configured"}
+              status={metaConfigured ? "active" : "warning"}
+              statusLabel={metaConfigured ? "Connected" : "Not configured"}
               primaryColor={primaryColor}
               action={
                 <Button onClick={() => { setMetaBanner(null); setShowMetaModal(true); }}>
-                  {metaConfig ? <><i className="fas fa-edit" /> Edit</> : <><i className="fas fa-plug" /> Configure</>}
+                  {metaConfigured ? <><i className="fas fa-edit" /> Edit</> : <><i className="fas fa-plug" /> Configure</>}
                 </Button>
               }
             />
           }
         >
-          {!metaConfig ? (
+          {!metaConfigured ? (
             <div style={{
               display: "flex", alignItems: "center", gap: 14,
               padding: "0.75rem 1rem", borderRadius: 10,
@@ -255,7 +259,7 @@ export default function SystemSettingsPage() {
                   {metaIconMeta?.icon}
                 </div>
                 <div>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", marginBottom: 3 }}>{metaConfig.label}</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", marginBottom: 3 }}>{metaConfig!.label}</div>
                   <div style={{ fontSize: 12.5, color: "#64748b", fontFamily: "monospace" }}>{hostDisplay || "—"}</div>
                 </div>
               </div>
@@ -265,11 +269,31 @@ export default function SystemSettingsPage() {
                 padding: "0.875rem 1rem", borderRadius: 10,
                 background: "#f8fafc", border: "1px solid #f1f5f9",
               }}>
-                <FieldPair label="Database" value={metaConfig.database || "—"} />
-                {metaConfig.endpoint && <FieldPair label="Endpoint" value={metaConfig.endpoint} />}
-                {metaConfig.host     && <FieldPair label="Host"     value={metaConfig.host} />}
-                {metaConfig.port     && <FieldPair label="Port"     value={metaConfig.port} />}
+                <FieldPair label="Database" value={metaConfig!.database || "—"} />
+                {metaConfig!.endpoint && <FieldPair label="Endpoint" value={metaConfig!.endpoint} />}
+                {metaConfig!.host     && <FieldPair label="Host"     value={metaConfig!.host} />}
+                {metaConfig!.port     && <FieldPair label="Port"     value={metaConfig!.port} />}
               </div>
+
+              {fabricWithoutAzureAuth && (
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 12,
+                  marginTop: "1rem", padding: "0.75rem 1rem", borderRadius: 10,
+                  background: "#fffbeb", border: "1px solid #fde68a",
+                }}>
+                  <i className="fas fa-triangle-exclamation" style={{ fontSize: 15, color: "#d97706", flexShrink: 0 }} />
+                  <div style={{ fontSize: 12.5, color: "#92400e", flex: 1 }}>
+                    <strong>Microsoft Fabric detected</strong> — Azure AD authentication is recommended.
+                    Fabric SQL endpoints require Azure AD tokens for user queries.{" "}
+                    <button
+                      onClick={() => setShowAuthModal(true)}
+                      style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontSize: 12.5, color: "#d97706", fontWeight: 600, textDecoration: "underline" }}
+                    >
+                      Configure Azure AD →
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div style={{ marginTop: "1rem", fontSize: 12, color: "#94a3b8", display: "flex", gap: 6, alignItems: "flex-start" }}>
                 <i className="fas fa-info-circle" style={{ color: primaryColor, marginTop: 1, flexShrink: 0 }} />
@@ -362,10 +386,8 @@ export default function SystemSettingsPage() {
           gradientColors={gradientColors}
           onClose={() => setShowMetaModal(false)}
           onSuccess={() => {
+            // Modal handles health polling + reload internally; just close on any other success path.
             setShowMetaModal(false);
-            // API restarts after metadata save — reload the page so the setup
-            // check re-runs and the "Setup Required" overlay clears.
-            setTimeout(() => { window.location.reload(); }, 3000);
           }}
         />
       )}
@@ -554,6 +576,7 @@ function GoogleIcon({ size = 22 }: { size?: number }) {
 
 function ResetModal({ gradientColors, onClose }: { gradientColors: { light: string; dark: string }; onClose: () => void }) {
   const [busy,  setBusy]  = useState(false);
+  const [done,  setDone]  = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleConfirm = async () => {
@@ -564,47 +587,77 @@ function ResetModal({ gradientColors, onClose }: { gradientColors: { light: stri
         ["loomx_local_token","loomx_local_token_exp","loomx_auth_provider","loomx-auth-cache","loomx-user-role"]
           .forEach(k => localStorage.removeItem(k));
         sessionStorage.removeItem("loomx_setup_ok");
-        setTimeout(() => { window.location.href = "/"; }, 1200);
+        setDone(true);
       } else {
         const body = await res.json().catch(() => ({}));
         setError((body as any)?.detail?.message ?? (body as any)?.detail ?? (body as any)?.error?.message ?? "Reset failed. Please try again.");
-        setBusy(false);
       }
-    } catch (e) { setError(String(e)); setBusy(false); }
+    } catch (e) { setError(String(e)); }
+    setBusy(false);
   };
 
   return (
     <>
-      <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 1000 }} onClick={onClose} />
+      <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 1000 }} onClick={done ? undefined : onClose} />
       <div style={{ position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)", background: "white", borderRadius: 14, boxShadow: "0 24px 64px rgba(0,0,0,0.22)", zIndex: 1001, width: "90%", maxWidth: 460, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <div style={{ height: 4, background: "linear-gradient(90deg,#ef4444,#dc2626)", flexShrink: 0 }} />
+        <div style={{ height: 4, background: done ? "linear-gradient(90deg,#10b981,#059669)" : "linear-gradient(90deg,#ef4444,#dc2626)", flexShrink: 0 }} />
         <div style={{ padding: "1.5rem" }}>
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: "1rem" }}>
-            <div style={{ width: 44, height: 44, borderRadius: 10, flexShrink: 0, background: "#fef2f2", border: "1px solid #fecaca", display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <i className="fas fa-triangle-exclamation" style={{ color: "#dc2626", fontSize: 18 }} />
-            </div>
-            <div>
-              <h2 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 700, color: "#0f172a" }}>Reset System?</h2>
-              <p style={{ margin: "4px 0 0", fontSize: 13, color: "#64748b", lineHeight: 1.5 }}>
-                This will clear the metadata database configuration and authentication settings. LoomX will restart and show the setup wizard.
-              </p>
-            </div>
-          </div>
-          <div style={{ padding: "0.75rem 1rem", borderRadius: 8, fontSize: 12.5, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", display: "flex", gap: 8, marginBottom: "1rem" }}>
-            <i className="fas fa-circle-info" style={{ marginTop: 1, flexShrink: 0 }} />
-            Your data is <strong style={{ margin: "0 3px" }}>not deleted</strong>. You can reconnect to the same database in the setup wizard.
-          </div>
-          {error && (
-            <div style={{ padding: "0.75rem 1rem", borderRadius: 8, fontSize: 13, background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b", display: "flex", gap: 8, marginBottom: "1rem" }}>
-              <i className="fas fa-exclamation-circle" />{error}
-            </div>
+          {done ? (
+            <>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: "1.25rem" }}>
+                <div style={{ width: 44, height: 44, borderRadius: 10, flexShrink: 0, background: "#f0fdf4", border: "1px solid #bbf7d0", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <i className="fas fa-check" style={{ color: "#16a34a", fontSize: 18 }} />
+                </div>
+                <div>
+                  <h2 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 700, color: "#0f172a" }}>Reset complete</h2>
+                  <p style={{ margin: "4px 0 0", fontSize: 13, color: "#64748b", lineHeight: 1.5 }}>
+                    Configuration has been cleared. Restart the API, then open LoomX in a new tab to run the setup wizard.
+                  </p>
+                </div>
+              </div>
+              <div style={{ padding: "0.75rem 1rem", borderRadius: 8, fontSize: 12.5, background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534", display: "flex", gap: 8, marginBottom: "1.25rem" }}>
+                <i className="fas fa-circle-info" style={{ marginTop: 1, flexShrink: 0 }} />
+                Your data is <strong style={{ margin: "0 3px" }}>not deleted</strong>. Reconnect to the same database in the setup wizard.
+              </div>
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <button
+                  onClick={() => { window.open("/", "_blank"); }}
+                  style={{ padding: "0.5rem 1.25rem", borderRadius: 8, border: "none", background: "#16a34a", color: "white", fontSize: 13.5, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 7 }}
+                >
+                  <i className="fas fa-arrow-up-right-from-square" /> Open in new tab
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: "1rem" }}>
+                <div style={{ width: 44, height: 44, borderRadius: 10, flexShrink: 0, background: "#fef2f2", border: "1px solid #fecaca", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <i className="fas fa-triangle-exclamation" style={{ color: "#dc2626", fontSize: 18 }} />
+                </div>
+                <div>
+                  <h2 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 700, color: "#0f172a" }}>Reset System?</h2>
+                  <p style={{ margin: "4px 0 0", fontSize: 13, color: "#64748b", lineHeight: 1.5 }}>
+                    This will clear the metadata database configuration and authentication settings. LoomX will restart and show the setup wizard.
+                  </p>
+                </div>
+              </div>
+              <div style={{ padding: "0.75rem 1rem", borderRadius: 8, fontSize: 12.5, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", display: "flex", gap: 8, marginBottom: "1rem" }}>
+                <i className="fas fa-circle-info" style={{ marginTop: 1, flexShrink: 0 }} />
+                Your data is <strong style={{ margin: "0 3px" }}>not deleted</strong>. You can reconnect to the same database in the setup wizard.
+              </div>
+              {error && (
+                <div style={{ padding: "0.75rem 1rem", borderRadius: 8, fontSize: 13, background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b", display: "flex", gap: 8, marginBottom: "1rem" }}>
+                  <i className="fas fa-exclamation-circle" />{error}
+                </div>
+              )}
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
+                <button onClick={handleConfirm} disabled={busy} style={{ padding: "0.5rem 1.25rem", borderRadius: 8, cursor: busy ? "not-allowed" : "pointer", border: "none", background: busy ? "#fca5a5" : "#dc2626", color: "white", fontSize: 13.5, fontWeight: 600, display: "flex", alignItems: "center", gap: 7, opacity: busy ? 0.7 : 1 }}>
+                  {busy ? <><i className="fas fa-spinner fa-spin" /> Resetting…</> : <><i className="fas fa-rotate-left" /> Yes, Reset</>}
+                </button>
+              </div>
+            </>
           )}
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-            <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
-            <button onClick={handleConfirm} disabled={busy} style={{ padding: "0.5rem 1.25rem", borderRadius: 8, cursor: busy ? "not-allowed" : "pointer", border: "none", background: busy ? "#fca5a5" : "#dc2626", color: "white", fontSize: 13.5, fontWeight: 600, display: "flex", alignItems: "center", gap: 7, opacity: busy ? 0.7 : 1 }}>
-              {busy ? <><i className="fas fa-spinner fa-spin" /> Resetting…</> : <><i className="fas fa-rotate-left" /> Yes, Reset</>}
-            </button>
-          </div>
         </div>
       </div>
     </>
@@ -814,8 +867,8 @@ function EditAuthModal({ current, gradientColors, onClose, onSuccess }: {
                   </div>
                 )}
 
-                {/* Manual fallback — always visible after a permission failure, or on demand */}
-                {(rolesStatus?.showManifest || (!rolesStatus && !azureTenantId.trim())) && (
+                {/* Manual fallback — visible until roles are successfully created */}
+                {(!rolesStatus || !rolesStatus.ok) && (
                   <div>
                     <p style={{ margin: "0 0 6px", fontSize: 11.5, color: "#64748b" }}>Paste this into the <strong>appRoles</strong> array in Azure Portal → App Registrations → your app → Manifest:</p>
                     <div style={{ position: "relative" }}>
@@ -1040,14 +1093,29 @@ function EditMetadataModal({ current, onClose, onSuccess }: {
     try {
       const res = await msalFetch(`${API_BASE}/api/v1/admin/metadata/update`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(buildPayload()) });
       const b = await res.json().catch(() => ({}));
-      if (res.ok) { setSaved(true); onSuccess((b as any)?.message ?? "Metadata server updated. Restarting…"); }
+      if (res.ok) {
+        setSaved(true);
+        // Poll /api/auth/provider — lightest endpoint, no DB needed, returns 200 as soon
+        // as the API process is alive. Once it's up, reload so the page re-fetches everything.
+        (async () => {
+          // Wait for the process to begin shutting down before polling.
+          await new Promise<void>(r => setTimeout(r, 2000));
+          for (let i = 0; i < 90; i++) {
+            await new Promise<void>(r => setTimeout(r, 1000));
+            try {
+              const p = await fetch(`${API_BASE}/api/auth/provider`, { cache: "no-store" });
+              if (p.ok) { window.location.reload(); return; }
+            } catch { /* still restarting */ }
+          }
+        })();
+      }
       else { setSaveError((b as any)?.detail?.errors?.[0]?.message ?? (b as any)?.detail ?? "Update failed."); }
     } catch (e) { setSaveError(String(e)); }
     finally { setSaving(false); }
   };
 
   return (
-    <div style={DM.overlay} onClick={onClose}>
+    <div style={DM.overlay} onClick={saved ? undefined : onClose}>
       <div style={DM.card} onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div style={DM.header}>
@@ -1055,9 +1123,9 @@ function EditMetadataModal({ current, onClose, onSuccess }: {
             <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#f1f5f9" }}>Metadata Database</h2>
             <p style={{ margin: "3px 0 0", fontSize: 13, color: "#64748b" }}>Update your connection details and test before saving.</p>
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: 18, padding: "4px 6px", lineHeight: 1 }}>
+          {!saved && <button onClick={onClose} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: 18, padding: "4px 6px", lineHeight: 1 }}>
             <i className="fas fa-times" />
-          </button>
+          </button>}
         </div>
 
         {/* Body */}
@@ -1068,11 +1136,17 @@ function EditMetadataModal({ current, onClose, onSuccess }: {
               <div style={{ width: 56, height: 56, borderRadius: "50%", background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.3)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
                 <i className="fas fa-check" style={{ fontSize: 22, color: "#4ade80" }} />
               </div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: "#f1f5f9", marginBottom: 6 }}>Configuration saved!</div>
-              <div style={{ fontSize: 13, color: "#64748b" }}>The API is restarting. Page will reload shortly…</div>
-              <div style={{ marginTop: 20, display: "flex", justifyContent: "center", gap: 5 }}>
+              <div style={{ fontSize: 16, fontWeight: 700, color: "#f1f5f9", marginBottom: 6 }}>Configuration saved</div>
+              <div style={{ fontSize: 13, color: "#64748b", marginBottom: 20 }}>Waiting for the API to restart…</div>
+              <div style={{ display: "flex", justifyContent: "center", gap: 5, marginBottom: 24 }}>
                 {[0,1,2].map(i => <div key={i} style={{ width: 6, height: 6, borderRadius: "50%", background: "#6366f1", animation: "lx-meta-dot 1.2s ease-in-out infinite", animationDelay: `${i * 0.18}s` }} />)}
               </div>
+              <button
+                onClick={() => window.location.reload()}
+                style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#475569", textDecoration: "underline" }}
+              >
+                Taking too long? Reload manually
+              </button>
             </div>
           ) : (
           <>

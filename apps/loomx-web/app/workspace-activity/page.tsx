@@ -6,6 +6,7 @@ import { API_BASE } from "../../config";
 import { LoadingOverlay } from "../../components/LoadingOverlay";
 import { msalFetch } from "../../utils/msalFetch";
 import { useAuth } from "../../auth/useAuth";
+import { useSetup } from "../../components/ClientLayout";
 import { useTheme } from "../../contexts/ThemeContext";
 
 interface WorkspaceActivityItem {
@@ -19,13 +20,14 @@ interface WorkspaceActivityItem {
 
 const WorkspaceActivityPage: React.FC = () => {
   const { isAuthenticated } = useAuth();
+  const { isSetupOk } = useSetup();
   const { primaryColor, gradientColors } = useTheme();
   const [activity, setActivity] = useState<WorkspaceActivityItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!isAuthenticated) return;
+    if (!isAuthenticated || isSetupOk !== true) return;
     setLoading(true);
     setError(null);
     Promise.all([
@@ -81,7 +83,7 @@ const WorkspaceActivityPage: React.FC = () => {
     }).catch(e => {
       setError("Failed to load workspace activity");
     }).finally(() => setLoading(false));
-  }, [isAuthenticated]);
+  }, [isAuthenticated, isSetupOk]);
 
   return (
     <div className="page-shell animate-fade-in">

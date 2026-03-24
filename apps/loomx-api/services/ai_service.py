@@ -87,6 +87,9 @@ def ensure_tables() -> None:
             )
         """)
     except Exception as e:
+        from fastapi import HTTPException
+        if isinstance(e, HTTPException) and e.status_code == 503:
+            return  # setup mode — metadata DB not configured yet, skip silently
         print(f"[AI] Warning: could not ensure AI tables — {e}")
 
 

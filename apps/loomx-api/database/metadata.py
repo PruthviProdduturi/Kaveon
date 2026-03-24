@@ -86,7 +86,11 @@ def query(sql: str, params: Optional[List[Any]] = None) -> dict:
     # hold stale values if the .env was changed after startup.
     db = _os.environ.get("METADATA_DATABASE") or settings.METADATA_DATABASE
     if not db:
-        raise RuntimeError("METADATA_DATABASE is not configured")
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "setup_required", "message": "Metadata database is not configured. Please complete setup."},
+        )
 
     db_type = _os.environ.get("METADATA_DB_TYPE") or settings.METADATA_DB_TYPE or "fabric_sql"
     adapted = _adapt_sql(sql, db_type)

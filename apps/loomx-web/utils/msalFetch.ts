@@ -37,29 +37,31 @@ export async function getAccessToken(): Promise<string> {
 export async function msalFetch(input: RequestInfo, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers || {});
 
-  if (typeof window !== "undefined" && window.localStorage.getItem("loomx_auth_provider") === "local") {
+  const storedProvider = typeof window !== "undefined" ? window.localStorage.getItem("loomx_auth_provider") : null;
+  if (!storedProvider || storedProvider === "local") {
     // Local auth: use stored JWT directly, no MSAL involved
     const localToken = window.localStorage.getItem("loomx_local_token");
     if (localToken) {
       headers.set("Authorization", `Bearer ${localToken}`);
     }
   } else {
-    // Azure AD auth: acquire token via MSAL
-    const tokenStart = performance.now();
-    const token = await getAccessToken();
-    const tokenEnd = performance.now();
-    if (tokenEnd - tokenStart > 100) {
-      console.log(`[msalFetch] Token acquisition took ${(tokenEnd - tokenStart).toFixed(2)}ms`);
-    }
+    // Azure AD auth: acquire token via MSAL (may not be configured yet if API is still starting)
+    try {
+      const tokenStart = performance.now();
+      const token = await getAccessToken();
+      const tokenEnd = performance.now();
+      if (tokenEnd - tokenStart > 100) {
+        console.log(`[msalFetch] Token acquisition took ${(tokenEnd - tokenStart).toFixed(2)}ms`);
+      }
 
-    const accounts = getMsalInstance().getAllAccounts();
-    const userEmail = accounts[0]?.username || accounts[0]?.name || null;
+      const accounts = getMsalInstance().getAllAccounts();
+      const userEmail = accounts[0]?.username || accounts[0]?.name || null;
 
-    headers.set("Authorization", `Bearer ${token}`);
-
-    // Add user email header for backend to identify the user
-    if (userEmail) {
-      headers.set("x-user-email", userEmail);
+      headers.set("Authorization", `Bearer ${token}`);
+      if (userEmail) headers.set("x-user-email", userEmail);
+    } catch {
+      // MSAL not yet configured (API still starting) — request proceeds without auth header,
+      // will return 401 and the auth layer will handle it.
     }
   }
 

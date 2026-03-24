@@ -98,8 +98,13 @@ def get_active_provider() -> str:
 
 def get_config() -> dict:
     """Return full auth config. Secrets are masked."""
+    provider_raw = _read_key("AUTH_PROVIDER")
     return {
-        "provider":            _read_key("AUTH_PROVIDER") or "local",
+        "provider":            provider_raw or "local",
+        # ui_configured is True only when AUTH_PROVIDER has been explicitly saved via
+        # the admin UI. Absent/empty means the instance is still using the default
+        # local fallback and has never been configured through the settings page.
+        "ui_configured":       bool(provider_raw),
         "azure_tenant_id":     _read_key("AUTH_AZURE_TENANT_ID"),
         "azure_client_id":     _read_key("AUTH_AZURE_CLIENT_ID"),
         "google_client_id":    _read_key("AUTH_GOOGLE_CLIENT_ID"),

@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode, useState, useEffect, useRef } from "react";
+import { ReactNode, useState, useEffect, useRef, createContext, useContext } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "../auth/useAuth";
 import { AuthScreen } from "./AuthScreen";
@@ -11,6 +11,14 @@ import { msalFetch } from "../utils/msalFetch";
 import { API_BASE } from "../config";
 
 interface SetupData { status: string; endpoint?: string; database?: string; }
+
+// ── Setup context — pages consume this to skip data calls when not set up ──────
+interface SetupContextType {
+  /** true = setup complete, false = setup required, null = check in progress */
+  isSetupOk: boolean | null;
+}
+const SetupContext = createContext<SetupContextType>({ isSetupOk: null });
+export function useSetup() { return useContext(SetupContext); }
 
 interface ClientLayoutProps {
   children: ReactNode;
@@ -108,11 +116,13 @@ export function ClientLayout({ children }: ClientLayoutProps) {
 
   const [setupData,  setSetupData]  = useState<SetupData | null>(null);
   const [dismissed,  setDismissed]  = useState(false);
+  const [isSetupOk,  setIsSetupOk]  = useState<boolean | null>(null);
   const checkedRef = useRef(false);
 
   useEffect(() => {
     if (!isAuthenticated && typeof sessionStorage !== "undefined") {
       sessionStorage.removeItem(SETUP_OK_KEY);
+      setIsSetupOk(null);
     }
   }, [isAuthenticated]);
 
@@ -126,12 +136,15 @@ export function ClientLayout({ children }: ClientLayoutProps) {
         const data: SetupData = await res.json();
         if (data.status === "ok") {
           sessionStorage.setItem(SETUP_OK_KEY, "1");
+          setIsSetupOk(true);
         } else {
           sessionStorage.removeItem(SETUP_OK_KEY);
           setSetupData(data);
+          setIsSetupOk(false);
         }
       } catch {
-        // API not yet reachable — fail open.
+        // API not yet reachable — fail open so pages can still load.
+        setIsSetupOk(true);
       }
     })();
   }, [isAuthenticated]);
@@ -147,11 +160,11 @@ export function ClientLayout({ children }: ClientLayoutProps) {
     pathname !== "/settings/system";
 
   return (
-    <>
+    <SetupContext.Provider value={{ isSetupOk }}>
       <Layout>{children}</Layout>
       {showOverlay && (
         <SetupRedirectOverlay onDismiss={() => setDismissed(true)} />
       )}
-    </>
+    </SetupContext.Provider>
   );
 }

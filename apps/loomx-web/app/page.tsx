@@ -7,6 +7,7 @@ import { API_BASE } from "../config";
 import { LoomXLoading } from "../components/LoomXLoading";
 import { msalFetch } from "../utils/msalFetch";
 import { useAuth } from "../auth/useAuth";
+import { useSetup } from "../components/ClientLayout";
 import { useTheme } from "../contexts/ThemeContext";
 
 // using same-origin relative API calls
@@ -108,6 +109,7 @@ function getTimeOfDayGreeting(): string {
 
 export default function Home() {
   const { isAuthenticated, account } = useAuth();
+  const { isSetupOk } = useSetup();
   const { primaryColor, gradientColors } = useTheme();
 
   const [isPageLoading, setIsPageLoading] = useState(true);
@@ -146,6 +148,9 @@ export default function Home() {
       setIsPageLoading(true);        // reset so next sign-in shows loader
       return;
     }
+
+    // Wait until setup check completes; skip data calls if not set up.
+    if (isSetupOk !== true) return;
 
     const userEmail = account?.email || account?.username || null;
 
@@ -300,7 +305,7 @@ export default function Home() {
     Promise.all([summaryPromise, listPromise, tablesPromise])
       .finally(() => setIsPageLoading(false));
 
-  }, [isAuthenticated, account]);
+  }, [isAuthenticated, isSetupOk, account]);
 
   // Lazy-load total table count across ALL data sources.
   // Only fires when the user explicitly switches to "all" scope — avoids a
