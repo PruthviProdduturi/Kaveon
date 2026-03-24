@@ -310,13 +310,9 @@ users_svc.resolve_role(email, jwt_roles)
     ├─ 1. JWT claim: if roles[] in token contains LoomX.Viewer/Analyst/Editor/Admin
     │        → use highest matching role
     │
-    ├─ 2. DB lookup: SELECT role FROM user_roles WHERE user_email = @email
-    │        → use DB role if found
+    ├─ 2. azure_ad / google with no JWT role → None (403 NoAccess)
     │
-    ├─ 3. Bootstrap: if user_roles table has zero Admin rows
-    │        → auto-assign Admin to this user (first deployer)
-    │
-    └─ 4. Default: "Viewer"
+    └─ 3. local auth with no JWT role → "Viewer" default
 
 result: UserContext(email, role, jwt_roles)
     │
@@ -428,7 +424,7 @@ The metadata database stores all LoomX application state. Schema is in `apps/loo
 | `favorites` | `id`, `user_email`, `object_type`, `object_id`, `object_name` | Per-user favourites |
 | `data_sources` | `id`, `name`, `type`, `connection_string`, `database_name`, `region`, `is_active` | Registered Fabric endpoints |
 | `user_themes` | `id`, `user_email`, `primary_color`, `theme_config` | Per-user colour themes |
-| `user_roles` | `user_email` (UNIQUE), `role`, `granted_by`, `granted_at` | DB-level role assignments; checked during role resolution |
+| `local_users` | includes `role` column | Role for local auth users (dev only); azure_ad roles come from JWT |
 
 > `visibility NVARCHAR(20) DEFAULT 'internal'` is present on `datasets`, `charts`, and `dashboards`.
 
@@ -680,7 +676,7 @@ Expires: 0
 | `require_auth` | `middleware/auth.py` | Enforcing dependency — 401 if unauthenticated |
 | `UserContext` | `middleware/auth.py` | Dataclass: email, role, jwt_roles — passed through role-aware endpoints |
 | `require_user_context` | `middleware/auth.py` | Like `require_auth` but returns `UserContext` with resolved role |
-| `resolve_role` | `services/users.py` | JWT → DB → bootstrap → Viewer role resolution chain |
+| `resolve_role` | `services/users.py` | JWT-only role resolution; None for oauth with no App Role (→ 403) |
 | `require_min_role` | `middleware/permissions.py` | Dependency factory for role-gated endpoints |
 | `RateLimitMiddleware` | `middleware/rate_limit.py` | Per-user in-memory sliding-window rate limiter |
 | `require_min_role` | `middleware/permissions.py` | FastAPI dependency factory — returns UserContext or 403 |

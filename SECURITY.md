@@ -52,7 +52,7 @@ FastAPI (loomx-api)
     ├─ require_user_context(ctx) dependency
     │     → Returns UserContext(email, role, jwt_roles) if present
     │     → Raises HTTP 401 if None
-    │     → Role resolved by users_svc.resolve_role() (JWT → DB → bootstrap → Viewer)
+    │     → Role resolved by users_svc.resolve_role() (JWT only; None → 403 for oauth)
     │
     └─ require_min_role("Analyst") dependency factory (middleware/permissions.py)
           → Calls require_user_context internally
@@ -71,11 +71,10 @@ FastAPI (loomx-api)
 
 ### Role-Based Access Control
 
-All authenticated users are assigned one of four roles, resolved in order:
+All authenticated users are assigned one of four roles from JWT claims only:
 1. Azure AD App Role claim (`roles[]` in the JWT) — highest matching role wins
-2. DB assignment in `user_roles` table
-3. Bootstrap: first user to sign in becomes Admin (when no Admins exist)
-4. Default: **Viewer**
+2. Azure AD/Google users with no App Role → **NoAccess** (403, sign-out screen shown)
+3. Local auth users with no JWT role → **Viewer** default (dev fallback)
 
 | Role | Can read | Can create | Can publish | Can manage users/sources |
 |---|---|---|---|---|
@@ -163,7 +162,7 @@ Before merging a PR that touches API routes or services, verify:
 - [ ] New endpoints include `user: str = Depends(require_auth)` unless explicitly public
 - [ ] New create/update/delete endpoints use `require_min_role("Analyst")` or higher, not just `require_auth`
 - [ ] Visibility filtering (`_vis_clause`) is applied in any new list or get query for user-owned objects
-- [ ] Role assignment endpoints confirm caller is Admin before mutating `user_roles`
+- [ ] New Admin-only endpoints use `require_min_role("Admin")` dependency
 
 ---
 

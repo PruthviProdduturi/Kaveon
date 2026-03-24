@@ -268,7 +268,7 @@ def get_user_email(request: Request) -> str:
 def get_user_context(request: Request) -> Optional[UserContext]:
     """
     Returns a UserContext with email + resolved role, or None if unauthenticated.
-    Resolves role from: JWT claim → user_roles table → bootstrap → Viewer default.
+    Resolves role from: JWT claim (azure_ad/google) or JWT + Viewer fallback (local).
     """
     auth_header = request.headers.get("authorization", "")
     email: Optional[str] = None
