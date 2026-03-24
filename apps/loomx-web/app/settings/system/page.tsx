@@ -656,6 +656,12 @@ function EditAuthModal({ current, gradientColors, onClose, onSuccess }: {
             </div>
           )}
 
+          {(provider === "azure_ad" || provider === "google") && (
+            <div style={{ padding: "0.75rem 1rem", borderRadius: 8, fontSize: 12.5, background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e40af", display: "flex", gap: 8, lineHeight: 1.55 }}>
+              <i className="fas fa-circle-info" style={{ marginTop: 1, flexShrink: 0 }} />
+              <span>Before saving, make sure you have assigned yourself the <strong>Admin</strong> App Role in Azure Portal → Enterprise Applications → your app → Users and groups. Without it you will sign back in as a Viewer.</span>
+            </div>
+          )}
           <div style={{ padding: "0.75rem 1rem", borderRadius: 8, fontSize: 12.5, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", display: "flex", gap: 8 }}>
             <i className="fas fa-triangle-exclamation" style={{ marginTop: 1, flexShrink: 0 }} />
             Changing the provider will <strong style={{ margin: "0 3px" }}>sign out all current users</strong>.

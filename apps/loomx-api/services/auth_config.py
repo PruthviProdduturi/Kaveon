@@ -95,10 +95,6 @@ def get_active_provider() -> str:
     return _cached_provider
 
 
-def get_bootstrap_admin_email() -> str:
-    """Return the email of the admin who configured OAuth, if stored."""
-    return _read_key("AUTH_BOOTSTRAP_ADMIN_EMAIL")
-
 
 def get_config() -> dict:
     """Return full auth config. Secrets are masked."""
@@ -129,12 +125,7 @@ def upsert_config(data: dict) -> dict:
         if raw_secret and raw_secret != "***":
             updates["AUTH_GOOGLE_CLIENT_SECRET"] = _encrypt(raw_secret)
 
-    # Store the email of whoever configured OAuth so they are auto-granted Admin
-    # on first sign-in, even before App Roles or user_roles table are set up.
-    if provider in ("azure_ad", "google") and data.get("updated_by"):
-        updates["AUTH_BOOTSTRAP_ADMIN_EMAIL"] = data["updated_by"]
-
-    _upsert_env(updates)
+_upsert_env(updates)
     for k, v in updates.items():
         os.environ[k] = v
 
