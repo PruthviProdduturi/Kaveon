@@ -201,19 +201,6 @@ CREATE TABLE IF NOT EXISTS user_themes (
     updated_at  TIMESTAMP    NOT NULL DEFAULT NOW()
 );
 
--- ── User Roles (RBAC) ─────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS user_roles (
-    id         VARCHAR(36)  NOT NULL PRIMARY KEY DEFAULT gen_random_uuid()::VARCHAR,
-    user_email VARCHAR(255) NOT NULL,
-    role       VARCHAR(20)  NOT NULL
-               CONSTRAINT ck_user_roles_role CHECK (role IN ('Viewer','Analyst','Editor','Admin')),
-    granted_by VARCHAR(255) NOT NULL DEFAULT 'system',
-    granted_at TIMESTAMP    NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP    NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_user_roles_email UNIQUE (user_email)
-);
-CREATE INDEX IF NOT EXISTS idx_user_roles_email ON user_roles(user_email);
-
 -- ── Auth Config ───────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS auth_config (
     id                   SERIAL       PRIMARY KEY,
@@ -233,6 +220,8 @@ CREATE TABLE IF NOT EXISTS local_users (
     username              VARCHAR(255) NOT NULL,
     email                 VARCHAR(255) NOT NULL,
     password_hash         VARCHAR(255) NOT NULL,
+    role                  VARCHAR(20)  NOT NULL DEFAULT 'Viewer'
+                          CONSTRAINT ck_local_users_role CHECK (role IN ('Viewer','Analyst','Editor','Admin')),
     force_password_change BOOLEAN      NOT NULL DEFAULT FALSE,
     is_active             BOOLEAN      NOT NULL DEFAULT TRUE,
     created_at            TIMESTAMP    NOT NULL DEFAULT NOW(),

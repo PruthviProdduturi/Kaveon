@@ -263,24 +263,6 @@ BEGIN
 END
 GO
 
--- ── User Roles (RBAC) ─────────────────────────────────────────────────────────
-IF OBJECT_ID('user_roles', 'U') IS NULL
-BEGIN
-    CREATE TABLE user_roles (
-        id         NVARCHAR(36)  NOT NULL PRIMARY KEY DEFAULT NEWID(),
-        user_email NVARCHAR(255) NOT NULL,
-        role       NVARCHAR(20)  NOT NULL
-                   CONSTRAINT CK_user_roles_role CHECK (role IN ('Viewer','Analyst','Editor','Admin')),
-        granted_by NVARCHAR(255) NOT NULL DEFAULT 'system',
-        granted_at DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
-        updated_at DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
-        CONSTRAINT UQ_user_roles_email UNIQUE (user_email)
-    );
-    CREATE INDEX idx_user_roles_email ON user_roles(user_email);
-    PRINT 'Table user_roles created';
-END
-GO
-
 -- ── Auth Config ───────────────────────────────────────────────────────────────
 IF OBJECT_ID('auth_config', 'U') IS NULL
 BEGIN
@@ -307,6 +289,8 @@ BEGIN
         username              NVARCHAR(255) NOT NULL,
         email                 NVARCHAR(255) NOT NULL,
         password_hash         NVARCHAR(255) NOT NULL,
+        role                  NVARCHAR(20)  NOT NULL DEFAULT 'Viewer'
+                              CONSTRAINT CK_local_users_role CHECK (role IN ('Viewer','Analyst','Editor','Admin')),
         force_password_change BIT           NOT NULL DEFAULT 0,
         is_active             BIT           NOT NULL DEFAULT 1,
         created_at            DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
@@ -326,6 +310,6 @@ PRINT 'LoomX schema initialised successfully.';
 PRINT 'Tables: datasets, dataset_dimensions, dataset_columns,';
 PRINT '        dataset_metrics, charts, dashboards, saved_queries,';
 PRINT '        query_history, favorites, activity, data_sources,';
-PRINT '        user_themes, user_roles, auth_config, local_users';
+PRINT '        user_themes, auth_config, local_users';
 PRINT '============================================================';
 GO
