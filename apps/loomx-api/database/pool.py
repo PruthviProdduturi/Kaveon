@@ -144,7 +144,6 @@ class FabricSQLConnection:
 
     def _try_token_auth(self) -> bool:
         try:
-            print(f"[Pool] Token auth -> {mask_endpoint(self.server)}/{self.database}")
             token_response = _azure_credential.get_token(TOKEN_URL)
             token_bytes = token_response.token.encode("UTF-16-LE")
             token_struct = struct.pack(f"<I{len(token_bytes)}s", len(token_bytes), token_bytes)
@@ -318,7 +317,6 @@ class PostgreSQLConnection:
         if self.connection:
             return
         import psycopg2
-        print(f"[Pool] Token auth (PostgreSQL) -> {self.host}:{self.port}/{self.database}")
         token, username = _get_ossrdbms_token()
         self.connection = psycopg2.connect(
             host=self.host, port=self.port, dbname=self.database,
@@ -399,7 +397,6 @@ class MySQLConnection:
         if self.connection:
             return
         import pymysql
-        print(f"[Pool] Token auth (MySQL) -> {self.host}:{self.port}/{self.database}")
         token, username = _get_ossrdbms_token()
         self.connection = pymysql.connect(
             host=self.host, port=self.port, database=self.database,

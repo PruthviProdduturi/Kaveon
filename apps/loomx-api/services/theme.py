@@ -21,7 +21,8 @@ def save_user_theme(user_email: str, theme_color: str) -> None:
     if not re.match(r"^#[0-9A-Fa-f]{6}$", theme_color):
         raise ValueError("Invalid hex color format. Expected format: #RRGGBB")
 
-    db.execute(
+    try:
+        db.execute(
         """
         MERGE INTO dbo.user_themes AS target
         USING (SELECT @param0 AS user_email, @param1 AS theme_color) AS source
@@ -32,11 +33,16 @@ def save_user_theme(user_email: str, theme_color: str) -> None:
             INSERT (user_email, theme_color) VALUES (source.user_email, source.theme_color);
         """,
         [user_email, theme_color],
-    )
+        )
+    except Exception:
+        pass  # setup mode — no metadata DB yet, ignore silently
 
 
 def delete_user_theme(user_email: str) -> None:
-    db.execute(
-        "DELETE FROM dbo.user_themes WHERE user_email = @param0",
-        [user_email],
-    )
+    try:
+        db.execute(
+            "DELETE FROM dbo.user_themes WHERE user_email = @param0",
+            [user_email],
+        )
+    except Exception:
+        pass  # setup mode — no metadata DB yet, ignore silently

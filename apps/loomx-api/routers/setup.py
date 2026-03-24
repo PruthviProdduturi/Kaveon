@@ -283,22 +283,30 @@ def setup_initialize(data: SetupConnectionBody):
 
 # ── Admin — view / reconfigure metadata server ────────────────────────────────
 
-def _is_ui_configured() -> bool:
-    """
-    Return True if the metadata DB is configured and can be reset.
-
-    When a .env file exists it is the sole source of truth — OS env vars are
-    intentionally ignored so that a reset (which comments out the keys in the
-    file) immediately takes effect on the next restart, even if METADATA_*
-    vars are still present in the Windows/OS environment.
-
-    Falls back to os.environ only when no .env file exists at all
-    (Docker / k8s deployments that configure entirely via env vars).
-    """
+def _is_metadata_configured() -> bool:
+    """Return True if the metadata DB was configured via the UI (.env file)."""
     if ENV_PATH.exists():
         content = ENV_PATH.read_text("utf-8")
         return bool(re.search(r"^\s*METADATA_DATABASE\s*=\s*\S", content, re.MULTILINE))
     return bool(os.environ.get("METADATA_DATABASE"))
+
+
+def _is_reset_allowed() -> bool:
+    """
+    Return True if a reset is meaningful — either metadata DB or auth has been
+    configured via the UI. Prevents accidental resets on deployments configured
+    entirely via OS env vars.
+
+    When a .env file exists it is the sole source of truth — OS env vars are
+    intentionally ignored so that a reset (which comments out the keys in the
+    file) immediately takes effect on the next restart.
+    """
+    if ENV_PATH.exists():
+        content = ENV_PATH.read_text("utf-8")
+        has_metadata = bool(re.search(r"^\s*METADATA_DATABASE\s*=\s*\S", content, re.MULTILINE))
+        has_auth     = bool(re.search(r"^\s*AUTH_PROVIDER\s*=\s*\S",     content, re.MULTILINE))
+        return has_metadata or has_auth
+    return bool(os.environ.get("METADATA_DATABASE") or os.environ.get("AUTH_PROVIDER"))
 
 
 @router.get("/admin/metadata")
@@ -312,7 +320,7 @@ def admin_get_metadata(ctx=Depends(require_min_role("Admin"))):
         "host":         cfg["host"],
         "port":         cfg["port"],
         "database":     cfg["database"],
-        "ui_configured": _is_ui_configured(),
+        "ui_configured": _is_metadata_configured(),
     }
 
 
@@ -395,7 +403,7 @@ def admin_start_fresh(ctx=Depends(require_min_role("Admin"))):
     Only available when the metadata DB was configured via the UI (not via
     deployment env vars), to prevent accidental resets on managed deployments.
     """
-    if not _is_ui_configured():
+    if not _is_reset_allowed():
         raise HTTPException(
             status_code=403,
             detail={

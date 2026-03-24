@@ -154,9 +154,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 		(async () => {
 			try {
 				// ── 1. Resolve the active auth provider ──────────────────────────────
-				let resolvedProvider: AuthProvider = "azure_ad";
+				let resolvedProvider: AuthProvider = "local";
 				try {
-					const providerRes = await fetch(`${API_BASE}/api/auth/provider`);
+					const _providerAbort = new AbortController();
+					const _providerTimeout = setTimeout(() => _providerAbort.abort(), 4000);
+					const providerRes = await fetch(`${API_BASE}/api/auth/provider`, { signal: _providerAbort.signal }).finally(() => clearTimeout(_providerTimeout));
 					if (providerRes.ok) {
 						const providerData = await providerRes.json() as {
 							provider: AuthProvider;
@@ -392,8 +394,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 				return;
 			}
 
-			// Azure AD: redirect flow
-			await ensureMsalInitialized();
+			// Azure AD: redirect flow.
+			// If MSAL wasn't configured on page load (API was still starting), try now.
+			try { await ensureMsalInitialized(); } catch {
+				const provRes = await fetch(`${API_BASE}/api/auth/provider`);
+				if (provRes.ok) {
+					const provData = await provRes.json() as { provider: AuthProvider; azure_client_id?: string; azure_tenant_id?: string };
+					if (provData.azure_client_id) configureMsal(provData.azure_client_id, provData.azure_tenant_id ?? "common");
+				}
+				await ensureMsalInitialized();
+			}
 			await getMsalInstance().loginRedirect(loginRequest);
 		} catch (e) {
 			const message = e instanceof Error ? e.message : "Connection failed";

@@ -89,7 +89,9 @@ def login(body: LoginBody):
     try:
         user_row = local_auth_svc.get_user_by_username(username)
     except Exception as e:
-        print(f"[LocalAuth] login DB error: {e}")
+        from fastapi import HTTPException
+        if not (isinstance(e, HTTPException) and e.status_code == 503):
+            print(f"[LocalAuth] login DB error: {e}")
         db_available = False
 
     if db_available:

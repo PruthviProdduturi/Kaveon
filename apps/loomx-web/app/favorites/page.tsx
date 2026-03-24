@@ -6,6 +6,7 @@ import { API_BASE } from "../../config";
 import { LoadingOverlay } from "../../components/LoadingOverlay";
 import { msalFetch } from "../../utils/msalFetch";
 import { useAuth } from "../../auth/useAuth";
+import { useSetup } from "../../components/ClientLayout";
 import { useTheme } from "../../contexts/ThemeContext";
 
 // API_BASE not required; using same-origin relative API calls
@@ -21,13 +22,14 @@ interface FavoriteItem {
 
 const FavoritesPage: React.FC = () => {
   const { isAuthenticated } = useAuth();
+  const { isSetupOk } = useSetup();
   const { primaryColor, gradientColors } = useTheme();
   const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!isAuthenticated) return;
+    if (!isAuthenticated || isSetupOk !== true) return;
     setLoading(true);
     setError(null);
     msalFetch(`${API_BASE}/api/v1/favorites`)
@@ -48,7 +50,7 @@ const FavoritesPage: React.FC = () => {
         setError("Failed to load favorites");
       })
       .finally(() => setLoading(false));
-  }, [isAuthenticated]);
+  }, [isAuthenticated, isSetupOk]);
 
   return (
     <div className="page-shell animate-fade-in">
