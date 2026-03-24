@@ -18,53 +18,34 @@ def resolve_role(user_email: str, jwt_roles: list[str], provider: str = "local")
     """
     Determine the effective role for a user.
 
-    Priority (highest wins):
-      1. JWT roles claim  — assigned via Azure AD App Role assignments
-      2. user_roles table — assigned via LoomX Admin UI
-      3. Bootstrap        — if NO admins exist yet, first user becomes Admin
-      4. Default          — Viewer for local; None (no access) for oauth providers
+    For azure_ad / google: role comes exclusively from JWT claims (App Role
+    assignments in Azure AD). No DB lookup, no bootstrap.
 
-    Returning None signals the caller to reject with 403 — the user is
-    authenticated but has not been granted any role in LoomX.
+    For local auth: falls back to the user_roles DB table, then Viewer.
+
+    Returns None to signal 403 NoAccess — authenticated but not assigned any role.
     """
-    jwt_role: Optional[str] = None
-    try:
-        # 1. Resolve JWT role (highest valid role in the claim)
-        valid_jwt = [r for r in jwt_roles if r in VALID_ROLES]
-        jwt_role = max(valid_jwt, key=lambda r: ROLE_LEVELS[r]) if valid_jwt else None
+    # 1. JWT roles — source of truth for oauth providers
+    valid_jwt = [r for r in jwt_roles if r in VALID_ROLES]
+    if valid_jwt:
+        return max(valid_jwt, key=lambda r: ROLE_LEVELS[r])
 
-        # 2. Resolve DB role
+    # For oauth providers JWT is the only source — no DB fallback, no bootstrap
+    if provider in ("azure_ad", "google"):
+        return None  # No App Role assigned — caller rejects with 403
+
+    # 2. Local auth: DB assignment
+    try:
         row = db.query_one(
             "SELECT role FROM user_roles WHERE user_email = @param0",
             [user_email],
         )
-        db_role = row["role"] if row else None
-
-        # Take highest of the two
-        candidates = [r for r in [jwt_role, db_role] if r]
-        if candidates:
-            return max(candidates, key=lambda r: ROLE_LEVELS[r])
-
-        # 3. Bootstrap: if no admins exist yet, this user becomes Admin
-        count_row = db.query_one(
-            "SELECT COUNT(*) AS n FROM user_roles WHERE role = 'Admin'",
-        )
-        if (count_row and (count_row.get("n") or 0) == 0):
-            db.execute(
-                "INSERT INTO user_roles (user_email, role, granted_by) "
-                "VALUES (@param0, 'Admin', 'system-bootstrap')",
-                [user_email],
-            )
-            return "Admin"
-
+        if row and row.get("role"):
+            return row["role"]
     except Exception as e:
-        print(f"[Users] resolve_role failed for {user_email}: {e}")
-        if jwt_role:
-            return jwt_role
+        print(f"[Users] resolve_role DB lookup failed for {user_email}: {e}")
 
-    # 4. Default — local users fall back to Viewer; oauth users are blocked
-    if provider in ("azure_ad", "google"):
-        return None  # No role assigned — caller should reject with 403
+    # 3. Local default: Viewer
     return "Viewer"
 
 
