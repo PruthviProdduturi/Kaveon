@@ -4,7 +4,7 @@
 
 ### **Live Operational Outcomes & Metrics eXperience**
 
-*Built for Advanced Analytics. Multi-Provider Auth. Owned by Pruthvi Prodduturi.*
+*Built for Advanced Analytics. Multi-Provider Auth. Open Source.*
 
 <br>
 
@@ -14,7 +14,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Auth](https://img.shields.io/badge/Auth-Local%20%7C%20Azure%20AD%20%7C%20Google-0078D4?style=for-the-badge&logo=microsoftazure&logoColor=white)](https://azure.microsoft.com/en-us/products/active-directory)
 [![Microsoft Fabric](https://img.shields.io/badge/Microsoft_Fabric-SQL-742774?style=for-the-badge&logo=microsoft&logoColor=white)](https://learn.microsoft.com/en-us/fabric/)
-[![License](https://img.shields.io/badge/License-Proprietary-red?style=for-the-badge)](./LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](./LICENSE)
 
 <br>
 
@@ -870,7 +870,7 @@ Or change `API_PORT` in `.env` and restart.
 
 <div align="center">
 
-**Built for Advanced Analytics. Multi-Provider Auth. Owned by Pruthvi Prodduturi.**
+**Built for Advanced Analytics. Multi-Provider Auth. Open Source.**
 
 *LooMX — Live Operational Outcomes & Metrics eXperience*
 
