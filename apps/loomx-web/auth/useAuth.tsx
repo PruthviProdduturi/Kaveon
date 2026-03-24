@@ -61,6 +61,7 @@ export type UserRole = "Viewer" | "Analyst" | "Editor" | "Admin";
 interface AuthContextValue {
 	isAuthenticated: boolean;
 	isConnecting: boolean;
+	noAccess: boolean;
 	error: string | null;
 	login: (credentials?: { username: string; password: string }) => Promise<void>;
 	logout: () => Promise<void>;
@@ -138,6 +139,7 @@ function getCachedAuth(): { timestamp: number; authenticated: boolean } | null {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
 	const [isAuthenticated, setIsAuthenticated] = useState(false);
 	const [isConnecting, setIsConnecting] = useState(true);
+	const [noAccess, setNoAccess] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [account, setAccount] = useState<SimpleAccount | null>(null);
 	const [role, setRole] = useState<UserRole | null>(null);
@@ -262,6 +264,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 									AUTH_CACHE_KEY,
 									JSON.stringify({ authenticated: true, timestamp: Date.now() })
 								);
+								await checkAccess({
+									"Authorization": `Bearer ${tok.accessToken}`,
+									"x-user-email": primaryAccount.username,
+								});
 								setIsConnecting(false);
 								return;
 							}
@@ -371,6 +377,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 					email: (payload.email as string) ?? (payload.sub as string) ?? undefined,
 				});
 				setRole(userRole);
+				await checkAccess({ "Authorization": `Bearer ${token}` });
 				return;
 			}
 
@@ -420,9 +427,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 		}
 	}, []);
 
+	// After any login, verify the user has a role assigned
+	const checkAccess = async (headers: Record<string, string>) => {
+		try {
+			const res = await fetch(`${API_BASE}/api/v1/users/me`, { headers });
+			if (res.status === 403) {
+				const body = await res.json().catch(() => ({}));
+				if ((body as any)?.detail?.code === "no_role") {
+					setNoAccess(true);
+					setIsAuthenticated(false);
+					return false;
+				}
+			}
+			if (res.ok) {
+				const data = await res.json().catch(() => ({}));
+				if ((data as any)?.role) {
+					setRole((data as any).role as UserRole);
+					if (typeof window !== "undefined")
+						window.localStorage.setItem(ROLE_CACHE_KEY, (data as any).role);
+				}
+			}
+		} catch { /* non-fatal */ }
+		return true;
+	};
+
 	const value: AuthContextValue = {
 		isAuthenticated,
 		isConnecting,
+		noAccess,
 		error,
 		login,
 		logout,

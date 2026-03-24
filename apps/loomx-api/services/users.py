@@ -14,20 +14,20 @@ ROLE_LEVELS: dict[str, int] = {
 VALID_ROLES = set(ROLE_LEVELS.keys())
 
 
-def resolve_role(user_email: str, jwt_roles: list[str]) -> str:
+def resolve_role(user_email: str, jwt_roles: list[str], provider: str = "local") -> Optional[str]:
     """
     Determine the effective role for a user.
 
     Priority (highest wins):
-      1. JWT roles claim  — assigned via Azure AD Enterprise Apps
+      1. JWT roles claim  — assigned via Azure AD App Role assignments
       2. user_roles table — assigned via LoomX Admin UI
       3. Bootstrap        — if NO admins exist yet, first user becomes Admin
-      4. Default          — Viewer
+      4. Default          — Viewer for local; None (no access) for oauth providers
 
-    This means an Azure AD assignment always wins over a LoomX UI assignment,
-    and the LoomX UI wins over the default Viewer. Admin bootstrap only fires
-    once on a fresh deployment.
+    Returning None signals the caller to reject with 403 — the user is
+    authenticated but has not been granted any role in LoomX.
     """
+    jwt_role: Optional[str] = None
     try:
         # 1. Resolve JWT role (highest valid role in the claim)
         valid_jwt = [r for r in jwt_roles if r in VALID_ROLES]
@@ -59,12 +59,12 @@ def resolve_role(user_email: str, jwt_roles: list[str]) -> str:
 
     except Exception as e:
         print(f"[Users] resolve_role failed for {user_email}: {e}")
-        # DB unavailable — honour the cryptographically-signed JWT claim rather than
-        # falling back to Viewer (which would silently strip Admin from local bootstrap users)
         if jwt_role:
             return jwt_role
 
-    # 4. Default
+    # 4. Default — local users fall back to Viewer; oauth users are blocked
+    if provider in ("azure_ad", "google"):
+        return None  # No role assigned — caller should reject with 403
     return "Viewer"
 
 

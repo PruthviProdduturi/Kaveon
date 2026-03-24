@@ -125,7 +125,7 @@ def upsert_config(data: dict) -> dict:
         if raw_secret and raw_secret != "***":
             updates["AUTH_GOOGLE_CLIENT_SECRET"] = _encrypt(raw_secret)
 
-_upsert_env(updates)
+    _upsert_env(updates)
     for k, v in updates.items():
         os.environ[k] = v
 
