@@ -145,118 +145,200 @@ export default function SystemSettingsPage() {
         </button>
       }
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
 
         {/* ── Authentication ───────────────────────────────────────────────── */}
         {authBanner && <InlineBanner banner={authBanner} onDismiss={() => setAuthBanner(null)} />}
 
-        <div className="card">
-          <div style={{ padding: "1rem 1.25rem", borderBottom: "1px solid #f1f5f9", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-              <i className="fas fa-lock" style={{ color: primaryColor, fontSize: 14 }} />
-              <strong style={{ fontSize: 14, color: "#0f172a" }}>Authentication</strong>
+        <SectionCard
+          accentColor={primaryColor}
+          status="active"
+          header={
+            <CardHeader
+              icon="fa-lock"
+              title="Authentication"
+              subtitle="Controls how users sign in to LoomX"
+              status="active"
+              primaryColor={primaryColor}
+              action={
+                <Button onClick={() => { setAuthBanner(null); setShowAuthModal(true); }}>
+                  <i className="fas fa-edit" /> Edit
+                </Button>
+              }
+            />
+          }
+        >
+          {authLoading ? (
+            <div style={{ color: "#64748b", fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+              <i className="fas fa-spinner fa-spin" /> Loading…
             </div>
-            <Button onClick={() => { setAuthBanner(null); setShowAuthModal(true); }}>
-              <i className="fas fa-edit" /> Edit
-            </Button>
-          </div>
-
-          <div style={{ padding: "1.25rem" }}>
-            {authLoading ? (
-              <div style={{ color: "#64748b", fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
-                <i className="fas fa-spinner fa-spin" /> Loading…
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              <div style={{
+                width: 48, height: 48, borderRadius: 12, flexShrink: 0,
+                background: authMeta.bg, border: `1.5px solid ${authMeta.border}`,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                boxShadow: `0 1px 4px ${authMeta.border}60`,
+              }}>
+                {authConfig?.provider === "azure_ad" ? <MicrosoftIcon size={22} />
+                  : authConfig?.provider === "google" ? <GoogleIcon size={20} />
+                  : <i className="fas fa-lock" style={{ fontSize: 18, color: "#475569" }} />}
               </div>
-            ) : (
-              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-                <div style={{
-                  width: 44, height: 44, borderRadius: 11, flexShrink: 0,
-                  background: authMeta.bg, border: `1px solid ${authMeta.border}`,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                }}>
-                  {authConfig?.provider === "azure_ad" ? <MicrosoftIcon size={22} />
-                    : authConfig?.provider === "google" ? <GoogleIcon size={20} />
-                    : <i className="fas fa-lock" style={{ fontSize: 18, color: "#475569" }} />}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>{authMeta.label}</span>
+                  {authMeta.beta && <BetaBadge />}
                 </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                    <span style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>{authMeta.label}</span>
-                    {authMeta.beta && <BetaBadge />}
+                {authConfig?.provider === "azure_ad" && (
+                  <div style={{ display: "flex", gap: "1.5rem", flexWrap: "wrap" }}>
+                    <FieldPair label="Tenant ID" value={maskId(authConfig.azure_tenant_id)} />
+                    <FieldPair label="Client ID" value={maskId(authConfig.azure_client_id)} />
                   </div>
-                  {authConfig?.provider === "azure_ad" && (
-                    <div style={{ display: "flex", gap: "1.5rem", flexWrap: "wrap" }}>
-                      <FieldPair label="Tenant ID" value={maskId(authConfig.azure_tenant_id)} />
-                      <FieldPair label="Client ID" value={maskId(authConfig.azure_client_id)} />
-                    </div>
-                  )}
-                  {authConfig?.provider === "google" && (
-                    <FieldPair label="Client ID" value={maskId(authConfig.google_client_id)} />
-                  )}
-                  {authConfig?.provider === "local" && (
-                    <span style={{ fontSize: 12.5, color: "#64748b" }}>Users sign in with a username and password managed in LoomX.</span>
-                  )}
-                </div>
+                )}
+                {authConfig?.provider === "google" && (
+                  <FieldPair label="Client ID" value={maskId(authConfig.google_client_id)} />
+                )}
+                {authConfig?.provider === "local" && (
+                  <span style={{ fontSize: 12.5, color: "#64748b" }}>Users sign in with a username and password managed in LoomX.</span>
+                )}
               </div>
-            )}
-          </div>
-        </div>
+            </div>
+          )}
+        </SectionCard>
 
         {/* ── Metadata Database ────────────────────────────────────────────── */}
         {metaBanner && <InlineBanner banner={metaBanner} onDismiss={() => setMetaBanner(null)} />}
 
-        <div className="card">
-          <div style={{ padding: "1rem 1.25rem", borderBottom: "1px solid #f1f5f9", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-              <i className="fas fa-database" style={{ color: primaryColor, fontSize: 14 }} />
-              <strong style={{ fontSize: 14, color: "#0f172a" }}>Metadata Database</strong>
+        <SectionCard
+          accentColor={primaryColor}
+          status={metaConfig ? "active" : "warning"}
+          header={
+            <CardHeader
+              icon="fa-database"
+              title="Metadata Database"
+              subtitle="Stores dashboards, charts, datasets, and user data"
+              status={metaConfig ? "active" : "warning"}
+              statusLabel={metaConfig ? "Connected" : "Not configured"}
+              primaryColor={primaryColor}
+              action={
+                <Button onClick={() => { setMetaBanner(null); setShowMetaModal(true); }}>
+                  {metaConfig ? <><i className="fas fa-edit" /> Edit</> : <><i className="fas fa-plug" /> Configure</>}
+                </Button>
+              }
+            />
+          }
+        >
+          {!metaConfig ? (
+            <div style={{
+              display: "flex", alignItems: "center", gap: 14,
+              padding: "0.75rem 1rem", borderRadius: 10,
+              background: "#fffbeb", border: "1px solid #fde68a",
+            }}>
+              <div style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0, background: "#fef3c7", border: "1px solid #fcd34d", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <i className="fas fa-triangle-exclamation" style={{ fontSize: 16, color: "#d97706" }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 13.5, fontWeight: 700, color: "#92400e", marginBottom: 2 }}>No database connected</div>
+                <div style={{ fontSize: 12.5, color: "#b45309" }}>LoomX cannot store any data until a metadata database is configured.</div>
+              </div>
             </div>
-            <Button onClick={() => { setMetaBanner(null); setShowMetaModal(true); }}>
-              {metaConfig ? <><i className="fas fa-edit" /> Edit</> : <><i className="fas fa-plug" /> Configure</>}
-            </Button>
-          </div>
-
-          <div style={{ padding: "1.25rem" }}>
-            {!metaConfig ? (
-              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-                <div style={{ width: 44, height: 44, borderRadius: 11, flexShrink: 0, background: "#f8fafc", border: "1px solid #e2e8f0", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <i className="fas fa-database" style={{ fontSize: 18, color: "#cbd5e1" }} />
+          ) : (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: "1.25rem" }}>
+                <div style={{
+                  width: 48, height: 48, borderRadius: 12, flexShrink: 0,
+                  background: metaIconMeta?.bg ?? "#f0f9ff",
+                  border: `1.5px solid ${metaIconMeta?.border ?? "#bae6fd"}`,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  boxShadow: `0 1px 4px ${metaIconMeta?.border ?? "#bae6fd"}80`,
+                }}>
+                  {metaIconMeta?.icon}
                 </div>
                 <div>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: "#94a3b8", marginBottom: 3 }}>Not configured</div>
-                  <div style={{ fontSize: 12.5, color: "#cbd5e1" }}>Click Configure to connect a metadata database.</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", marginBottom: 3 }}>{metaConfig.label}</div>
+                  <div style={{ fontSize: 12.5, color: "#64748b", fontFamily: "monospace" }}>{hostDisplay || "—"}</div>
                 </div>
               </div>
-            ) : (
-              <>
-                <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: "1.25rem" }}>
-                  <div style={{
-                    width: 44, height: 44, borderRadius: 11, flexShrink: 0,
-                    background: metaIconMeta?.bg ?? "#f0f9ff",
-                    border: `1px solid ${metaIconMeta?.border ?? "#bae6fd"}`,
-                    display: "flex", alignItems: "center", justifyContent: "center",
+
+              <div style={{
+                display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: "0.75rem",
+                padding: "0.875rem 1rem", borderRadius: 10,
+                background: "#f8fafc", border: "1px solid #f1f5f9",
+              }}>
+                <FieldPair label="Database" value={metaConfig.database || "—"} />
+                {metaConfig.endpoint && <FieldPair label="Endpoint" value={metaConfig.endpoint} />}
+                {metaConfig.host     && <FieldPair label="Host"     value={metaConfig.host} />}
+                {metaConfig.port     && <FieldPair label="Port"     value={metaConfig.port} />}
+              </div>
+
+              <div style={{ marginTop: "1rem", fontSize: 12, color: "#94a3b8", display: "flex", gap: 6, alignItems: "flex-start" }}>
+                <i className="fas fa-info-circle" style={{ color: primaryColor, marginTop: 1, flexShrink: 0 }} />
+                Changing the metadata server re-runs schema initialisation and restarts the API. Existing data is preserved.
+              </div>
+            </>
+          )}
+        </SectionCard>
+
+        {/* ── Azure Key Vault — coming soon ────────────────────────────────── */}
+        <div style={{
+          borderRadius: 12, overflow: "hidden",
+          border: "1.5px dashed #e2e8f0",
+          background: "linear-gradient(135deg, #fafbfc 0%, #f8fafc 100%)",
+          opacity: 0.9,
+        }}>
+          <div style={{
+            padding: "0.875rem 1.25rem",
+            background: `linear-gradient(135deg, ${primaryColor}06 0%, transparent 60%)`,
+            borderBottom: "1px solid #f1f5f9",
+            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{
+                width: 36, height: 36, borderRadius: 9, flexShrink: 0,
+                background: "#f0f9ff", border: "1px solid #bae6fd",
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}>
+                <AzureKeyVaultIcon size={22} />
+              </div>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 1 }}>
+                  <strong style={{ fontSize: 14, color: "#64748b" }}>Azure Key Vault</strong>
+                  <span style={{
+                    fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
+                    padding: "2px 8px", borderRadius: 20,
+                    background: `${primaryColor}12`, border: `1px solid ${primaryColor}28`,
+                    color: primaryColor,
                   }}>
-                    {metaIconMeta?.icon}
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", marginBottom: 2 }}>{metaConfig.label}</div>
-                    <div style={{ fontSize: 12.5, color: "#64748b", fontFamily: "monospace" }}>{hostDisplay || "—"}</div>
-                  </div>
+                    Coming soon
+                  </span>
                 </div>
+                <div style={{ fontSize: 11.5, color: "#94a3b8" }}>Secure secret management for connection strings and credentials</div>
+              </div>
+            </div>
+          </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: "1rem" }}>
-                  <FieldPair label="Database" value={metaConfig.database || "—"} />
-                  {metaConfig.endpoint && <FieldPair label="Endpoint" value={metaConfig.endpoint} />}
-                  {metaConfig.host     && <FieldPair label="Host"     value={metaConfig.host} />}
-                  {metaConfig.port     && <FieldPair label="Port"     value={metaConfig.port} />}
+          <div style={{ padding: "1.125rem 1.25rem" }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.875rem" }}>
+              {[
+                { icon: "fa-key",           text: "Data source connection strings stored as Key Vault secret references — never as plain text in the database" },
+                { icon: "fa-shield-halved", text: "Managed Identity access to Key Vault — no client secrets or passwords to manage" },
+                { icon: "fa-lock",          text: "Centralised credential management across all data sources from a single vault" },
+                { icon: "fa-clock-rotate-left", text: "Full audit trail of secret access via Azure Monitor and Key Vault diagnostics" },
+              ].map(({ icon, text }) => (
+                <div key={text} style={{
+                  display: "flex", alignItems: "flex-start", gap: 8,
+                  flex: "1 1 280px", minWidth: 0,
+                  padding: "0.6rem 0.75rem", borderRadius: 8,
+                  background: "#fff", border: "1px solid #f1f5f9",
+                }}>
+                  <i className={`fas ${icon}`} style={{ color: primaryColor, fontSize: 12, marginTop: 2, opacity: 0.65, flexShrink: 0 }} />
+                  <span style={{ fontSize: 12.5, color: "#64748b", lineHeight: 1.45 }}>{text}</span>
                 </div>
-
-                <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid #f8fafc", fontSize: 12, color: "#94a3b8", display: "flex", gap: 6 }}>
-                  <i className="fas fa-info-circle" style={{ color: primaryColor, marginTop: 1, flexShrink: 0 }} />
-                  Changing the metadata server re-runs schema initialisation and restarts the API. Existing data is preserved.
-                </div>
-              </>
-            )}
+              ))}
+            </div>
           </div>
         </div>
+
       </div>
 
       {showAuthModal && (
@@ -294,6 +376,96 @@ export default function SystemSettingsPage() {
 
 // ── Tiny helpers ───────────────────────────────────────────────────────────────
 
+// ── Section card with themed accent border ──────────────────────────────────
+
+function SectionCard({
+  accentColor, status, header, children,
+}: {
+  accentColor: string;
+  status: "active" | "warning";
+  header: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const borderColor = status === "active" ? accentColor : "#f59e0b";
+  return (
+    <div
+      className="card"
+      style={{
+        borderLeft: `3px solid ${borderColor}`,
+        overflow: "hidden",
+        boxShadow: `0 1px 4px rgba(0,0,0,0.06), 0 0 0 0.5px #e2e8f0`,
+      }}
+    >
+      {header}
+      <div style={{ padding: "1.25rem" }}>{children}</div>
+    </div>
+  );
+}
+
+function CardHeader({
+  icon, title, subtitle, status, statusLabel, primaryColor, action,
+}: {
+  icon: string;
+  title: string;
+  subtitle: string;
+  status: "active" | "warning";
+  statusLabel?: string;
+  primaryColor: string;
+  action: React.ReactNode;
+}) {
+  return (
+    <div style={{
+      padding: "0.875rem 1.25rem",
+      borderBottom: "1px solid #f1f5f9",
+      background: `linear-gradient(135deg, ${primaryColor}08 0%, transparent 60%)`,
+      display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+    }}>
+      <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 12 }}>
+        {/* Icon badge */}
+        <div style={{
+          width: 36, height: 36, borderRadius: 9, flexShrink: 0,
+          background: `${primaryColor}14`,
+          border: `1px solid ${primaryColor}28`,
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>
+          <i className={`fas ${icon}`} style={{ color: primaryColor, fontSize: 14 }} />
+        </div>
+        {/* Title + subtitle */}
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 1 }}>
+            <strong style={{ fontSize: 14, color: "#0f172a" }}>{title}</strong>
+            <StatusPill active={status === "active"} label={statusLabel ?? (status === "active" ? "Active" : "Not configured")} primaryColor={primaryColor} />
+          </div>
+          <div style={{ fontSize: 11.5, color: "#94a3b8" }}>{subtitle}</div>
+        </div>
+      </div>
+      {action}
+    </div>
+  );
+}
+
+function StatusPill({ active, label, primaryColor }: { active: boolean; label: string; primaryColor?: string }) {
+  const dotColor  = active ? (primaryColor ?? "#22c55e") : "#f59e0b";
+  const bgColor   = active ? `${primaryColor ?? "#22c55e"}14` : "#fffbeb";
+  const bdrColor  = active ? `${primaryColor ?? "#22c55e"}38` : "#fde68a";
+  const txtColor  = active ? (primaryColor ?? "#15803d") : "#b45309";
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: 5,
+      fontSize: 11, fontWeight: 600, letterSpacing: "0.02em",
+      padding: "2px 9px", borderRadius: 20,
+      background: bgColor, border: `1px solid ${bdrColor}`,
+      color: txtColor, whiteSpace: "nowrap",
+    }}>
+      <span style={{
+        width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
+        background: dotColor,
+      }} />
+      {label}
+    </span>
+  );
+}
+
 function FieldPair({ label, value }: { label: string; value: string | undefined }) {
   return (
     <div>
@@ -317,6 +489,33 @@ function InlineBanner({ banner, onDismiss }: { banner: { ok: boolean; message: s
         <i className="fas fa-times" style={{ fontSize: 12 }} />
       </button>
     </div>
+  );
+}
+
+// Azure Key Vault official icon (approximated from Azure icon set)
+function AzureKeyVaultIcon({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+      {/* Shield / hex background */}
+      <path
+        d="M9 1L2 4v5c0 3.55 2.96 6.87 7 7.93C13.04 15.87 16 12.55 16 9V4L9 1z"
+        fill="#50e6ff"
+        opacity="0.25"
+      />
+      <path
+        d="M9 1L2 4v5c0 3.55 2.96 6.87 7 7.93C13.04 15.87 16 12.55 16 9V4L9 1z"
+        stroke="#0078d4"
+        strokeWidth="1"
+        fill="none"
+      />
+      {/* Key head (circle) */}
+      <circle cx="8" cy="8" r="2.2" stroke="#0078d4" strokeWidth="1.1" fill="none" />
+      {/* Key shaft */}
+      <line x1="9.9" y1="8" x2="13.5" y2="8" stroke="#0078d4" strokeWidth="1.1" strokeLinecap="round" />
+      {/* Key teeth */}
+      <line x1="12.5" y1="8" x2="12.5" y2="9.4" stroke="#0078d4" strokeWidth="1" strokeLinecap="round" />
+      <line x1="11" y1="8" x2="11" y2="9.1" stroke="#0078d4" strokeWidth="1" strokeLinecap="round" />
+    </svg>
   );
 }
 

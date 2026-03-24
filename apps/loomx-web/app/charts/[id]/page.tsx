@@ -6,7 +6,7 @@ import {
 } from "../../../components/charts/ChartBuilderContext";
 import ChartHydrator from "../../../components/charts/ChartHydrator";
 import React, { useEffect, useRef, useState } from "react";
-import { loginRequest, msalInstance } from "../../../auth/msalConfig";
+import { loginRequest, getMsalInstance } from "../../../auth/msalConfig";
 
 import { API_BASE } from "../../../config";
 import CreateChartLayout from "../../../components/charts/CreateChartLayout";
@@ -194,9 +194,9 @@ const ChartDetailPage: React.FC = () => {
   useEffect(() => {
     if (!isAuthenticated) return;
     const getToken = async () => {
-      const accounts = msalInstance.getAllAccounts();
+      const accounts = getMsalInstance().getAllAccounts();
       if (accounts && accounts.length > 0) {
-        const result = await msalInstance.acquireTokenSilent({ ...loginRequest, account: accounts[0] });
+        const result = await getMsalInstance().acquireTokenSilent({ ...loginRequest, account: accounts[0] });
         setAccessToken(result.accessToken);
       }
     };

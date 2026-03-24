@@ -3,7 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, ReactNode } from 'react';
 import { useAuth } from '../auth/useAuth';
 import { msalFetch } from '../utils/msalFetch';
-import { generateGradients, GradientColors } from '../utils/colorUtils';
+import { generateGradients, GradientColors, hexToRGB } from '../utils/colorUtils';
 
 const DEFAULT_THEME_COLOR = '#0078D4'; // Microsoft signature blue
 
@@ -85,6 +85,13 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     document.documentElement.style.setProperty('--loomx-accent', gradients.lighter);
     document.documentElement.style.setProperty('--loomx-dark', gradients.dark);
     document.documentElement.style.setProperty('--loomx-light', gradients.lighter);
+
+    // Keep RGB component vars in sync so rgba(var(--loomx-primary-rgb), α) works everywhere
+    const toRgbStr = (hex: string) => { const { r, g, b } = hexToRGB(hex); return `${r}, ${g}, ${b}`; };
+    document.documentElement.style.setProperty('--loomx-primary-rgb',   toRgbStr(primaryColor));
+    document.documentElement.style.setProperty('--loomx-secondary-rgb', toRgbStr(gradients.light));
+    document.documentElement.style.setProperty('--loomx-accent-rgb',    toRgbStr(gradients.lighter));
+    document.documentElement.style.setProperty('--loomx-dark-rgb',      toRgbStr(gradients.dark));
 
     console.log('[ThemeContext] CSS variables updated:', {
       primary: primaryColor,
