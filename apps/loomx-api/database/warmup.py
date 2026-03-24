@@ -54,7 +54,8 @@ def start_warmup_and_heartbeat():
     Entry point — run in a daemon thread from main.py lifespan startup.
     Warms all pools, then runs a heartbeat loop forever.
     """
-    meta_db = settings.METADATA_DATABASE
+    from database.pool import _live_meta_db
+    meta_db = _live_meta_db()
     meta_ok = _warm_pool(meta_db, 6, "metadata")
 
     if not meta_ok:

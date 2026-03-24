@@ -259,9 +259,7 @@ LoomX uses Azure AD App Roles to assign user permissions. Add these four roles t
 
 3. Assign users: **Enterprise Applications** → **[your LoomX app]** → **Users and groups** → **Add user/group** → select user → select role
 
-> **Default role**: Any authenticated user without an assigned role automatically receives the **Viewer** role. The very first user to sign in is automatically promoted to **Admin** if no Admin assignments exist yet (first-deployer bootstrap).
-
-> **Role precedence**: If a user has an Azure AD App Role assigned AND a DB-level assignment in the `user_roles` table, the Azure AD App Role takes precedence.
+> **No role = no access**: Azure AD users without an assigned App Role receive a 403 "No Access" response and are shown a sign-out screen. Assign the App Role in Azure portal before they sign in.
 
 ---
 
@@ -520,13 +518,9 @@ On first access, LoomX detects that the metadata database schema has not been in
 
 > Once configured, the setup endpoints return `403 Forbidden` — they cannot be invoked again without manually clearing the environment variables.
 
-### First-Admin Bootstrap
+### First-Admin Setup
 
-After the setup wizard completes and you sign in for the first time, LoomX automatically promotes the first authenticated user to **Admin** — because the `user_roles` table is empty and no Azure AD App Roles have been assigned yet. Use this initial Admin session to:
-
-1. Navigate to **Settings → User Management** (`/settings/users`)
-2. Assign roles to other team members
-3. Or assign roles via **Enterprise Applications → Users and groups** in the Azure portal
+Before switching to Azure AD auth, assign the **Admin** App Role to yourself in Azure portal (Enterprise Applications → LoomX → Users and groups). Then save the auth config — you will be signed in as Admin on the next login.
 
 ### Triggering the wizard
 
@@ -627,7 +621,7 @@ These are baked at **build time**, not runtime. Update the GitHub variable (`LOO
 
 ### User sees wrong role or cannot access content after role assignment
 
-Role assignments from the Azure AD portal take effect on the **next sign-in** (the JWT is issued with the new roles claim). DB-level assignments via `/settings/users` take effect immediately on the next API request.
+Role assignments from the Azure AD portal take effect on the **next sign-in** (the JWT is issued with the new roles claim).
 
 If a user reports incorrect permissions:
 1. Ask them to sign out and sign back in (refreshes the JWT roles claim)

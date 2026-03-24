@@ -403,11 +403,10 @@ cd ../..
 | `favorites` | Per-user favourites for any object type |
 | `data_sources` | Registered data warehouses and databases |
 | `user_themes` | Per-user colour theme preferences |
-| `user_roles` | DB-level role assignments (email → role) |
+| `local_users` | Local-auth accounts with role column (dev/bootstrap only) |
 | `ai_providers` | Global AI provider API keys (admin-managed) |
 | `user_ai_keys` | Per-user AI provider keys (personal override) |
 | `auth_config` | Singleton row: active provider, Azure/Google fields, encrypted JWT secret |
-| `local_users` | Local-auth accounts (username, bcrypt hash, force_password_change flag) |
 
 ### 6 · Start Both Services
 
@@ -477,7 +476,6 @@ G  Try AI in SQL Lab       →  /lab  →  click ✦ AI  →  describe what you 
 | **Favourites** | `/favorites` | All |
 | **Data Sources** | `/data-sources` | All (Admin to edit) |
 | **AI Providers** | `/settings/ai` | All (Admin for global keys) |
-| **User Management** | `/settings/users` | Admin |
 | **Metadata Server** | `/settings/metadata` | Admin |
 | **Authentication** | `/settings/auth` | Admin |
 | **About / Features** | `/about` | All |

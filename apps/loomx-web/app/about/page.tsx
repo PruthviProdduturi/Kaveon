@@ -833,11 +833,9 @@ export default function AboutPage() {
             ],
           },
           {
-            group: "Users (Admin)", color: "#dc2626",
+            group: "Users", color: "#dc2626",
             rows: [
-              { method: "GET",    path: "/api/v1/users",                  desc: "List all role assignments",  auth: "Admin"  },
-              { method: "PUT",    path: "/api/v1/users/{email}/role",     desc: "Assign or update role",      auth: "Admin"  },
-              { method: "DELETE", path: "/api/v1/users/{email}/role",     desc: "Revoke role (→ Viewer)",     auth: "Admin"  },
+              { method: "GET", path: "/api/v1/users/me", desc: "Current user's email + role", auth: "Any" },
             ],
           },
         ] as Array<{ group: string; color: string; rows: Array<{ method: string; path: string; desc: string; auth: string }> }>)
@@ -991,7 +989,7 @@ export default function AboutPage() {
                 <li>Settings → <Link href="/settings/metadata" style={{ color: "#059669" }}>Metadata Server</Link> — confirm the metadata DB is connected and schema is initialised</li>
                 <li>Settings → <Link href="/data-sources" style={{ color: "#059669" }}>Data Sources</Link> — register at least one data source for your team</li>
                 <li>Settings → <Link href="/settings/ai" style={{ color: "#059669" }}>AI Providers</Link> — add an API key to enable the AI Assistant for all users</li>
-                <li>Settings → <Link href="/settings/users" style={{ color: "#059669" }}>User Management</Link> — assign roles to team members who need Analyst / Editor / Admin access</li>
+                <li>Azure AD → Enterprise Applications → LoomX → Users and groups — assign Azure AD App Roles (Viewer / Analyst / Editor / Admin) to team members</li>
               </ul>
             </div>
           </div>
@@ -1101,7 +1099,7 @@ export default function AboutPage() {
             },
             {
               q: "How do I add a new team member?",
-              a: "Assign the appropriate Azure AD App Role (Viewer / Analyst / Editor / Admin) to the user in your Azure portal. They can sign in immediately. Alternatively, use Settings → User Management to assign roles from within LooMX.",
+              a: "Assign the appropriate Azure AD App Role (Viewer / Analyst / Editor / Admin) to the user in Azure portal → Enterprise Applications → LoomX → Users and groups. They can sign in immediately.",
             },
             {
               q: "What happens if the metadata DB goes down?",
@@ -1178,7 +1176,6 @@ export default function AboutPage() {
               { href: "/data-sources", icon: "fa-database",    label: "Data Sources" },
               { href: "/settings/ai",  icon: "fa-key",         label: "AI Providers" },
               ...(isAdmin ? [
-                { href: "/settings/users",    icon: "fa-users-cog",  label: "User Management" },
                 { href: "/settings/metadata", icon: "fa-database",   label: "Metadata Server" },
               ] : []),
             ].map(({ href, icon, label }) => (

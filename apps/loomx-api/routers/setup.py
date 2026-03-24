@@ -271,9 +271,10 @@ def setup_initialize(data: SetupConnectionBody):
 
     def _restart():
         import time as _t
+        import os as _os
         _t.sleep(0.6)
         print("[Setup] Restarting API to apply new metadata database configuration…")
-        sys.exit(0)
+        _os._exit(0)
 
     threading.Thread(target=_restart, daemon=True).start()
 
@@ -374,9 +375,10 @@ def admin_update_metadata(data: SetupConnectionBody, ctx=Depends(require_min_rol
 
     def _restart():
         import time as _t
+        import os as _os
         _t.sleep(0.6)
         print("[Setup] Restarting API after admin metadata reconfiguration…")
-        sys.exit(0)
+        _os._exit(0)
 
     threading.Thread(target=_restart, daemon=True).start()
     return {"success": True, "message": "Metadata database updated. LoomX API is restarting…"}
@@ -433,9 +435,10 @@ def admin_start_fresh(ctx=Depends(require_min_role("Admin"))):
 
     def _restart():
         import time as _t
+        import os as _os
         _t.sleep(0.4)
         print("[Setup] Restarting API after Start Fresh…")
-        sys.exit(0)
+        _os._exit(0)
 
     threading.Thread(target=_restart, daemon=True).start()
     return {"success": True, "message": "Configuration cleared. LoomX is restarting…"}

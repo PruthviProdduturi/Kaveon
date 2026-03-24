@@ -558,25 +558,49 @@ _pools: Dict[str, ConnectionPool] = {}
 _pool_lock = Lock()
 
 
+def _live_meta_db() -> str:
+    """Return the current metadata database name from os.environ (kept live by
+    main.py lifespan and config update endpoints) with fallback to the frozen
+    settings object for deployments that don't use .env files."""
+    import os as _os
+    return _os.environ.get("METADATA_DATABASE") or settings.METADATA_DATABASE
+
+
+def _live_meta_endpoint() -> str:
+    import os as _os
+    return _os.environ.get("METADATA_ENDPOINT") or settings.METADATA_ENDPOINT
+
+
+def _live_meta_db_type() -> str:
+    import os as _os
+    return _os.environ.get("METADATA_DB_TYPE") or settings.METADATA_DB_TYPE or "fabric_sql"
+
+
 def get_connection_pool(database: str) -> ConnectionPool:
-    """Get or create the pool for *database* (keyed by database name)."""
+    """Get or create the pool for *database* (keyed by database name).
+
+    Uses os.environ for metadata DB identity so live config updates take effect
+    without requiring a full process restart.
+    """
     with _pool_lock:
         if database in _pools:
             return _pools[database]
 
-        if database == settings.METADATA_DATABASE:
-            db_type = settings.METADATA_DB_TYPE or "fabric_sql"
+        if database == _live_meta_db():
+            db_type = _live_meta_db_type()
             pool_size = settings.MAX_POOL_SIZE_METADATA
             if db_type in ("fabric_sql", "azure_sql"):
-                endpoint = settings.METADATA_ENDPOINT
+                endpoint = _live_meta_endpoint()
                 if not endpoint:
                     raise ValueError(f"No endpoint configured for metadata database: {database}")
                 pool = ConnectionPool(endpoint, database, pool_size=pool_size, db_type=db_type)
             else:
+                import os as _os
                 pool = ConnectionPool(
                     "", database, pool_size=pool_size, db_type=db_type,
-                    host=settings.METADATA_HOST,
-                    port=settings.METADATA_PORT or (5432 if db_type == "postgresql" else 3306),
+                    host=_os.environ.get("METADATA_HOST") or settings.METADATA_HOST,
+                    port=int(_os.environ.get("METADATA_PORT") or settings.METADATA_PORT or
+                             (5432 if db_type == "postgresql" else 3306)),
                 )
         else:
             # Data warehouse — always Fabric SQL / Azure SQL via pyodbc
@@ -591,7 +615,7 @@ def get_connection_pool(database: str) -> ConnectionPool:
 
 def _resolve_endpoint(database: str) -> str:
     """Query data_sources in the metadata DB to find the endpoint for *database*."""
-    meta_db = settings.METADATA_DATABASE
+    meta_db = _live_meta_db()
     if meta_db not in _pools:
         # Metadata pool not yet created — fall back to env var
         return settings.DATAWAREHOUSE_ENDPOINT or ""
