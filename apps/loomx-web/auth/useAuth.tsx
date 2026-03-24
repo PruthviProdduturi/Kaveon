@@ -234,29 +234,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 								"x-user-email": primaryAccount.username,
 							};
 
-							const [connectRes] = await Promise.all([
-								fetch(`${API_BASE}/api/connect`, {
-									method: "POST",
-									headers: { "Content-Type": "application/json" },
-									body: JSON.stringify({ initialize_only: true }),
-								}),
-								fetch(`${API_BASE}/api/v1/theme`, { headers: authHeaders })
-									.then(r => r.ok ? r.json() : null)
-									.then((themeData: any) => {
-										if (themeData?.theme_color && typeof window !== "undefined") {
-											window.localStorage.setItem("loomx-theme-color", themeData.theme_color);
-										}
-									})
-									.catch(() => { /* non-fatal */ }),
-								fetch(`${API_BASE}/api/v1/users/me`, { headers: authHeaders })
-									.then(r => r.ok ? r.json() : null)
-									.then((meData: any) => {
-										if (meData?.role && typeof window !== "undefined") {
-											window.localStorage.setItem(ROLE_CACHE_KEY, meData.role);
-										}
-									})
-									.catch(() => { /* non-fatal */ }),
-							]);
+							// Theme is non-blocking — fire and forget so it doesn't delay auth state
+						fetch(`${API_BASE}/api/v1/theme`, { headers: authHeaders })
+							.then(r => r.ok ? r.json() : null)
+							.then((themeData: any) => {
+								if (themeData?.theme_color && typeof window !== "undefined") {
+									window.localStorage.setItem("loomx-theme-color", themeData.theme_color);
+								}
+							})
+							.catch(() => { /* non-fatal */ });
+
+						const [connectRes] = await Promise.all([
+							fetch(`${API_BASE}/api/connect`, {
+								method: "POST",
+								headers: { "Content-Type": "application/json" },
+								body: JSON.stringify({ initialize_only: true }),
+							}),
+							fetch(`${API_BASE}/api/v1/users/me`, { headers: authHeaders })
+								.then(r => r.ok ? r.json() : null)
+								.then((meData: any) => {
+									if (meData?.role && typeof window !== "undefined") {
+										window.localStorage.setItem(ROLE_CACHE_KEY, meData.role);
+									}
+								})
+								.catch(() => { /* non-fatal */ }),
+						]);
 							const connectData = await connectRes.json();
 							if (connectRes.ok && connectData?.success) {
 								const cachedRole = window.localStorage.getItem(ROLE_CACHE_KEY) as UserRole | null;
