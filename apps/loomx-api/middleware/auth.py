@@ -292,16 +292,17 @@ def get_user_context(request: Request) -> Optional[UserContext]:
 
     request.state.user = email
 
-    # Resolve role (JWT → DB → bootstrap → Viewer)
+    # Resolve role (JWT → DB → bootstrap → Viewer/NoAccess)
+    provider = _get_active_provider()
     try:
         import services.users as users_svc
-        role = users_svc.resolve_role(email, jwt_roles)
+        role = users_svc.resolve_role(email, jwt_roles, provider)
     except Exception as e:
         print(f"[Auth] Role resolution failed for {email}: {e}")
-        # In setup mode or DB unavailable, grant Admin so setup can proceed
-        role = "Admin" if not _AAD_CONFIGURED else "Viewer"
+        role = "Admin" if not _AAD_CONFIGURED else None
 
-    ctx = UserContext(email=email, role=role, jwt_roles=jwt_roles)
+    # None means the user is authenticated but has no role assigned
+    ctx = UserContext(email=email, role=role or "NoAccess", jwt_roles=jwt_roles)
     request.state.user_context = ctx
     return ctx
 

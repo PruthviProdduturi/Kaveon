@@ -43,6 +43,14 @@ def require_min_role(min_role: str):
                 status_code=401,
                 detail={"code": "unauthorized", "message": "Authentication required."},
             )
+        if ctx.role == "NoAccess":
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "no_role",
+                    "message": "You have not been assigned a role in LoomX. Contact your administrator to be assigned a role.",
+                },
+            )
         if _level(ctx.role) < _level(min_role):
             raise HTTPException(
                 status_code=403,

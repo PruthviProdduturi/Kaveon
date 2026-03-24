@@ -80,8 +80,30 @@ function SetupRedirectOverlay({ onDismiss }: { onDismiss: () => void }) {
 
 const SETUP_OK_KEY = "loomx_setup_ok";
 
+function NoAccessScreen({ onLogout }: { onLogout: () => void }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#f8fafc", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ textAlign: "center", maxWidth: 400 }}>
+        <div style={{ width: 64, height: 64, borderRadius: "50%", background: "#fef2f2", border: "1px solid #fecaca", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
+          <i className="fas fa-ban" style={{ fontSize: 26, color: "#dc2626" }} />
+        </div>
+        <h2 style={{ fontSize: 20, fontWeight: 700, color: "#0f172a", margin: "0 0 10px" }}>No Access</h2>
+        <p style={{ fontSize: 14, color: "#64748b", lineHeight: 1.6, margin: "0 0 28px" }}>
+          You don&apos;t have a role assigned in LoomX. Contact your administrator and ask them to assign you a role via Azure AD → Enterprise Applications → LoomX → Users and groups.
+        </p>
+        <button
+          onClick={onLogout}
+          style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 20px", borderRadius: 8, border: "none", background: "#0f172a", color: "#fff", fontSize: 13.5, fontWeight: 600, cursor: "pointer" }}
+        >
+          <i className="fas fa-right-from-bracket" /> Sign out
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function ClientLayout({ children }: ClientLayoutProps) {
-  const { isAuthenticated, isConnecting } = useAuth();
+  const { isAuthenticated, isConnecting, noAccess, logout } = useAuth();
   const pathname = usePathname();
 
   const [setupData,  setSetupData]  = useState<SetupData | null>(null);
@@ -115,6 +137,7 @@ export function ClientLayout({ children }: ClientLayoutProps) {
   }, [isAuthenticated]);
 
   if (isConnecting) return <LoadingOverlay />;
+  if (noAccess) return <NoAccessScreen onLogout={logout} />;
   if (!isAuthenticated) return <AuthScreen />;
 
   const showOverlay =
