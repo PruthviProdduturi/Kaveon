@@ -45,19 +45,6 @@ def resolve_role(user_email: str, jwt_roles: list[str]) -> str:
         if candidates:
             return max(candidates, key=lambda r: ROLE_LEVELS[r])
 
-        # 3a. Bootstrap admin: whoever configured OAuth is always Admin
-        try:
-            import services.auth_config as _ac
-            bootstrap_email = _ac.get_bootstrap_admin_email()
-            if bootstrap_email and bootstrap_email.lower() == user_email.lower():
-                try:
-                    assign_role(user_email, "Admin", "oauth-bootstrap")
-                except Exception:
-                    pass  # DB unavailable — still grant Admin via return below
-                return "Admin"
-        except Exception:
-            pass
-
         # 3. Bootstrap: if no admins exist yet, this user becomes Admin
         count_row = db.query_one(
             "SELECT COUNT(*) AS n FROM user_roles WHERE role = 'Admin'",
