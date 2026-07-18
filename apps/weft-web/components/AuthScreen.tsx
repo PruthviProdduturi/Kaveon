@@ -17,7 +17,7 @@ export function AuthScreen() {
       {APP_LOGO_URL ? (
         <img src={APP_LOGO_URL} alt={`${APP_DISPLAY_NAME} logo`} style={{ height: 80 }} />
       ) : (
-        <WeftLogo size={80} animate="pulse" />
+        <WeftLogo size={52} animate="pulse" />
       )}
     </div>
   );
