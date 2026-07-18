@@ -1,31 +1,37 @@
-import { useState } from "react";
 import { APP_DISPLAY_NAME, APP_LOGO_URL } from "../constants/branding";
 import { WeftLogo } from "./WeftLogo";
 import { useAuth } from "../auth/useAuth";
 
+/**
+ * AuthScreen — the Weft sign-in surface.
+ *
+ * Sign-in is delegated to Kaveon Identity (the suite gateway): one account works
+ * across Forge, Weft & Anima. Only real identity providers — Microsoft (work,
+ * school and personal) and Google. No local passwords, no dev logins.
+ */
 export function AuthScreen() {
-  const { login, isConnecting, error: authError, provider } = useAuth();
+  const { login, isConnecting, error: authError } = useAuth();
 
-  // Local auth form state
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
+  const Logo = (
+    <div className="auth-logo">
+      {APP_LOGO_URL ? (
+        <img src={APP_LOGO_URL} alt={`${APP_DISPLAY_NAME} logo`} style={{ height: 80 }} />
+      ) : (
+        <WeftLogo size={80} animate="pulse" />
+      )}
+    </div>
+  );
 
-  // Loading state — provider is being resolved
-  if (provider === null) {
+  // Resolving the suite session.
+  if (isConnecting) {
     return (
       <div className="auth-section">
         <div className="auth-container">
-          <div className="auth-logo">
-            {APP_LOGO_URL ? (
-              <img src={APP_LOGO_URL} alt={`${APP_DISPLAY_NAME} logo`} style={{ height: 80 }} />
-            ) : (
-              <WeftLogo size={80} animate="pulse" />
-            )}
-          </div>
+          {Logo}
           <div className="auth-content">
             <p className="auth-subtitle" style={{ textAlign: "center" }}>
               <i className="fas fa-spinner fa-spin" style={{ marginRight: 8 }} />
-              Loading…
+              Connecting…
             </p>
           </div>
         </div>
@@ -33,208 +39,35 @@ export function AuthScreen() {
     );
   }
 
-  // ── Local login form ────────────────────────────────────────────────────────
-  if (provider === "local") {
-    const handleSubmit = (e: React.FormEvent) => {
-      e.preventDefault();
-      if (!username.trim() || !password) return;
-      void login({ username: username.trim(), password });
-    };
-
-    return (
-      <div className="auth-section">
-        <div className="auth-container">
-          {/* Logo */}
-          <div className="auth-logo">
-            {APP_LOGO_URL ? (
-              <img src={APP_LOGO_URL} alt={`${APP_DISPLAY_NAME} logo`} style={{ height: 80 }} />
-            ) : (
-              <WeftLogo size={80} animate="pulse" />
-            )}
-          </div>
-
-          <div className="auth-content">
-            {/* Heading */}
-            <p className="auth-welcome-heading">Welcome back</p>
-            <p className="auth-welcome-sub">Sign in to {APP_DISPLAY_NAME} to continue</p>
-
-            {/* Login form */}
-            <div className="auth-form">
-              <form onSubmit={handleSubmit}>
-                <div className="auth-form-fields">
-                  {/* Username */}
-                  <div className="auth-input-group">
-                    <label className="auth-input-label">Username</label>
-                    <div className="auth-input-wrapper">
-                      <input
-                        type="text"
-                        className="auth-input"
-                        value={username}
-                        onChange={e => setUsername(e.target.value)}
-                        placeholder="Enter your username"
-                        autoComplete="username"
-                        autoFocus
-                        disabled={isConnecting}
-                      />
-                      <i className="fas fa-user auth-input-icon" />
-                    </div>
-                  </div>
-
-                  {/* Password */}
-                  <div className="auth-input-group">
-                    <label className="auth-input-label">Password</label>
-                    <div className="auth-input-wrapper">
-                      <input
-                        type="password"
-                        className="auth-input"
-                        value={password}
-                        onChange={e => setPassword(e.target.value)}
-                        placeholder="Enter your password"
-                        autoComplete="current-password"
-                        disabled={isConnecting}
-                      />
-                      <i className="fas fa-lock auth-input-icon" />
-                    </div>
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  className="auth-button"
-                  disabled={isConnecting || !username.trim() || !password}
-                >
-                  {isConnecting ? (
-                    <><i className="fas fa-spinner fa-spin" /><span>Signing In…</span></>
-                  ) : (
-                    <><i className="fas fa-arrow-right-to-bracket" /><span>Sign In</span></>
-                  )}
-                </button>
-              </form>
-            </div>
-
-            {/* Error message */}
-            {authError && (
-              <div className="auth-error">
-                <i className="fas fa-exclamation-triangle" />
-                <span>{authError}</span>
-              </div>
-            )}
-
-            {/* Default credentials hint */}
-            <div className="auth-default-hint">
-              <i className="fas fa-circle-info" />
-              <span>First-run default: <strong>admin</strong> / <strong>admin</strong></span>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ── Google stub ─────────────────────────────────────────────────────────────
-  if (provider === "google") {
-    return (
-      <div className="auth-section">
-        <div className="auth-container">
-          <div className="auth-logo">
-            {APP_LOGO_URL ? (
-              <img src={APP_LOGO_URL} alt={`${APP_DISPLAY_NAME} logo`} style={{ height: 80 }} />
-            ) : (
-              <WeftLogo size={80} animate="pulse" />
-            )}
-          </div>
-
-          <div className="auth-content">
-            <p className="auth-tagline">
-              <strong>L</strong>ive <strong>O</strong>perational <strong>O</strong>utcomes &amp; <strong>M</strong>etrics e<strong>X</strong>perience
-            </p>
-            <p className="auth-subtitle">Enterprise data exploration and analytics platform</p>
-
-            <div className="auth-form">
-              <button
-                className="auth-button"
-                onClick={() => void login()}
-                disabled={isConnecting}
-              >
-                <i className="fab fa-google" />
-                <span>Sign in with Google</span>
-              </button>
-            </div>
-
-            {authError && (
-              <div className="auth-error">
-                <i className="fas fa-exclamation-triangle" />
-                <span>{authError}</span>
-              </div>
-            )}
-
-            <div className="auth-footer">
-              <p>Secure sign-in with Google</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ── Azure AD (default) ──────────────────────────────────────────────────────
   return (
     <div className="auth-section">
       <div className="auth-container">
-        {/* Logo with animation - outside the card */}
-        <div className="auth-logo">
-          {APP_LOGO_URL ? (
-            <img
-              src={APP_LOGO_URL}
-              alt={`${APP_DISPLAY_NAME} logo`}
-              style={{ height: 80 }}
-            />
-          ) : (
-            <WeftLogo size={80} animate="pulse" />
-          )}
-        </div>
+        {Logo}
 
         <div className="auth-content">
-          {/* Tagline */}
-          <p className="auth-tagline">
-            <strong>L</strong>ive <strong>O</strong>perational <strong>O</strong>utcomes &amp; <strong>M</strong>etrics e<strong>X</strong>perience
-          </p>
+          <p className="auth-tagline">See the pattern.</p>
+          <p className="auth-subtitle">The analyze layer of the Kaveon data platform</p>
 
-          {/* Subtitle */}
-          <p className="auth-subtitle">
-            Enterprise data exploration and analytics platform
-          </p>
-
-          {/* Features Grid */}
-          <div className="auth-features">
-            <div className="feature-item">
-              <i className="fas fa-chart-line"></i>
-              <span>Real-time Analytics</span>
-            </div>
-            <div className="feature-item">
-              <i className="fas fa-database"></i>
-              <span>Multi-source Support</span>
-            </div>
-            <div className="feature-item">
-              <i className="fas fa-bolt"></i>
-              <span>Lightning Fast</span>
-            </div>
-          </div>
-
-          {/* Sign in button */}
-          <div className="auth-form">
+          <div className="auth-form" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <button
               className="auth-button"
-              onClick={() => void login()}
+              onClick={() => void login("microsoft")}
               disabled={isConnecting}
             >
-              <i className="fas fa-sign-in-alt"></i>
-              <span>{isConnecting ? "Signing In..." : "Sign In with Azure AD"}</span>
-              {isConnecting && <i className="fas fa-spinner fa-spin"></i>}
+              <i className="fab fa-microsoft" />
+              <span>Continue with Microsoft</span>
+            </button>
+
+            <button
+              className="auth-button"
+              onClick={() => void login("google")}
+              disabled={isConnecting}
+            >
+              <i className="fab fa-google" />
+              <span>Continue with Google</span>
             </button>
           </div>
 
-          {/* Error message */}
           {authError && (
             <div className="auth-error">
               <i className="fas fa-exclamation-triangle" />
@@ -242,9 +75,11 @@ export function AuthScreen() {
             </div>
           )}
 
-          {/* Footer */}
           <div className="auth-footer">
-            <p>Secure sign-in with Azure Active Directory</p>
+            <p>
+              One <strong>Kaveon</strong> account works across Forge, Weft &amp; Anima.
+              Microsoft covers work, school &amp; personal.
+            </p>
           </div>
         </div>
       </div>
