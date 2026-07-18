@@ -1,5 +1,5 @@
 # ────────────────────────────────────────────────────────────────────────────────
-# LoomX — Azure Container Apps Deployment
+# Weft — Azure Container Apps Deployment
 #
 # Authentication: OIDC (Workload Identity Federation) — NO client_secret stored
 # anywhere. GitHub's OIDC provider is federated with an Azure AD App Registration.
@@ -10,12 +10,12 @@
 #   AZURE_SUBSCRIPTION_ID  — Azure subscription ID
 #   ACR_NAME               — Container Registry name (without .azurecr.io)
 #   RESOURCE_GROUP         — Resource group name
-#   LOOMX_API_FQDN         — Public FQDN of loomx-api Container App (without https://)
-#   LOOMX_WEB_URL          — Public URL of loomx-web Container App (e.g. https://web.example.com)
+#   WEFT_API_FQDN         — Public FQDN of weft-api Container App (without https://)
+#   WEFT_WEB_URL          — Public URL of weft-web Container App (e.g. https://web.example.com)
 #   AZURE_CLIENT_ID          — MSAL App Registration client ID (for the web frontend)
 #   AZURE_TENANT_ID          — MSAL App Registration tenant ID
-#   CONTAINER_APP_WEB      — Container App name for loomx-web
-#   CONTAINER_APP_API      — Container App name for loomx-api (Python/FastAPI)
+#   CONTAINER_APP_WEB      — Container App name for weft-web
+#   CONTAINER_APP_API      — Container App name for weft-api (Python/FastAPI)
 # ────────────────────────────────────────────────────────────────────────────────
 
 name: Deploy to Azure Container Apps
@@ -56,45 +56,45 @@ jobs:
       - name: Log in to Azure Container Registry
         run: az acr login --name ${{ vars.ACR_NAME }}
 
-      # ── Build & Push: loomx-api ───────────────────────────────────────────────
-      - name: Build & push loomx-api
+      # ── Build & Push: weft-api ───────────────────────────────────────────────
+      - name: Build & push weft-api
         run: |
           docker build \
-            -t ${{ env.ACR_LOGIN_SERVER }}/loomx-api:${{ env.IMAGE_TAG }} \
-            -t ${{ env.ACR_LOGIN_SERVER }}/loomx-api:latest \
-            -f apps/loomx-api/Dockerfile \
+            -t ${{ env.ACR_LOGIN_SERVER }}/weft-api:${{ env.IMAGE_TAG }} \
+            -t ${{ env.ACR_LOGIN_SERVER }}/weft-api:latest \
+            -f apps/weft-api/Dockerfile \
             .
-          docker push ${{ env.ACR_LOGIN_SERVER }}/loomx-api:${{ env.IMAGE_TAG }}
-          docker push ${{ env.ACR_LOGIN_SERVER }}/loomx-api:latest
+          docker push ${{ env.ACR_LOGIN_SERVER }}/weft-api:${{ env.IMAGE_TAG }}
+          docker push ${{ env.ACR_LOGIN_SERVER }}/weft-api:latest
 
-      # ── Build & Push: loomx-web ───────────────────────────────────────────────
+      # ── Build & Push: weft-web ───────────────────────────────────────────────
       # NEXT_PUBLIC_* env vars are baked at build time — pass as build-args.
-      - name: Build & push loomx-web
+      - name: Build & push weft-web
         run: |
           docker build \
-            --build-arg API_URL=https://${{ vars.LOOMX_API_FQDN }} \
+            --build-arg API_URL=https://${{ vars.WEFT_API_FQDN }} \
             --build-arg AZURE_CLIENT_ID=${{ vars.AZURE_CLIENT_ID }} \
             --build-arg AZURE_TENANT_ID=${{ vars.AZURE_TENANT_ID }} \
-            --build-arg WEB_URL=${{ vars.LOOMX_WEB_URL }} \
-            -t ${{ env.ACR_LOGIN_SERVER }}/loomx-web:${{ env.IMAGE_TAG }} \
-            -t ${{ env.ACR_LOGIN_SERVER }}/loomx-web:latest \
-            -f apps/loomx-web/Dockerfile \
+            --build-arg WEB_URL=${{ vars.WEFT_WEB_URL }} \
+            -t ${{ env.ACR_LOGIN_SERVER }}/weft-web:${{ env.IMAGE_TAG }} \
+            -t ${{ env.ACR_LOGIN_SERVER }}/weft-web:latest \
+            -f apps/weft-web/Dockerfile \
             .
-          docker push ${{ env.ACR_LOGIN_SERVER }}/loomx-web:${{ env.IMAGE_TAG }}
-          docker push ${{ env.ACR_LOGIN_SERVER }}/loomx-web:latest
+          docker push ${{ env.ACR_LOGIN_SERVER }}/weft-web:${{ env.IMAGE_TAG }}
+          docker push ${{ env.ACR_LOGIN_SERVER }}/weft-web:latest
 
-      # ── Deploy: loomx-api ─────────────────────────────────────────────────────
-      - name: Deploy loomx-api
+      # ── Deploy: weft-api ─────────────────────────────────────────────────────
+      - name: Deploy weft-api
         uses: azure/container-apps-deploy-action@v1
         with:
           resourceGroup: ${{ vars.RESOURCE_GROUP }}
           containerAppName: ${{ vars.CONTAINER_APP_API }}
-          imageToDeploy: ${{ env.ACR_LOGIN_SERVER }}/loomx-api:${{ env.IMAGE_TAG }}
+          imageToDeploy: ${{ env.ACR_LOGIN_SERVER }}/weft-api:${{ env.IMAGE_TAG }}
 
-      # ── Deploy: loomx-web ─────────────────────────────────────────────────────
-      - name: Deploy loomx-web
+      # ── Deploy: weft-web ─────────────────────────────────────────────────────
+      - name: Deploy weft-web
         uses: azure/container-apps-deploy-action@v1
         with:
           resourceGroup: ${{ vars.RESOURCE_GROUP }}
           containerAppName: ${{ vars.CONTAINER_APP_WEB }}
-          imageToDeploy: ${{ env.ACR_LOGIN_SERVER }}/loomx-web:${{ env.IMAGE_TAG }}
+          imageToDeploy: ${{ env.ACR_LOGIN_SERVER }}/weft-web:${{ env.IMAGE_TAG }}

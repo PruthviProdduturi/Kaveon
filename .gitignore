@@ -50,19 +50,19 @@ prisma/migrations/*/steps.json
 generated/
 
 # ---------------------------------------------------------
-# Next.js (LoomX Web)
+# Next.js (Weft Web)
 # ---------------------------------------------------------
-apps/loomx-web/.next/
-apps/loomx-web/out/
-apps/loomx-web/.vercel/
-apps/loomx-web/.cache/
+apps/weft-web/.next/
+apps/weft-web/out/
+apps/weft-web/.vercel/
+apps/weft-web/.cache/
 
 # ---------------------------------------------------------
-# API (LoomX API)
+# API (Weft API)
 # ---------------------------------------------------------
-apps/loomx-api/dist/
-apps/loomx-api/build/
-apps/loomx-api/.cache/
+apps/weft-api/dist/
+apps/weft-api/build/
+apps/weft-api/.cache/
 
 # ---------------------------------------------------------
 # OS / Editor Junk

@@ -1,4 +1,4 @@
-# LoomX — Azure Deployment Guide
+# Weft — Azure Deployment Guide
 
 > **Security principle throughout this guide**: No Service Principal secrets, no client credentials, no passwords stored anywhere. Every Azure resource interaction uses either OIDC Workload Identity Federation (GitHub Actions) or Managed Identity (running services).
 
@@ -29,7 +29,7 @@
 │                        Azure Container Apps Environment                  │
 │                                                                          │
 │   ┌──────────────────────────┐       ┌──────────────────────────┐       │
-│   │   loomx-web              │       │   loomx-api              │       │
+│   │   weft-web              │       │   weft-api              │       │
 │   │   Next.js 15             │       │   FastAPI / Python 3.11  │       │
 │   │   Port 3000              │       │   Port 8080              │       │
 │   │   EXTERNAL               │       │   EXTERNAL               │       │
@@ -44,9 +44,9 @@
                                            metadata DB)
 
 Authentication:
-  • Browser → loomx-web: Azure AD MSAL (PKCE, no client_secret)
-  • Browser → loomx-api: Azure AD Bearer tokens (RS256 verified by API)
-  • loomx-api → Fabric SQL: DefaultAzureCredential (Managed Identity token)
+  • Browser → weft-web: Azure AD MSAL (PKCE, no client_secret)
+  • Browser → weft-api: Azure AD Bearer tokens (RS256 verified by API)
+  • weft-api → Fabric SQL: DefaultAzureCredential (Managed Identity token)
   • GitHub Actions → Azure: OIDC Workload Identity Federation (no secret)
 ```
 
@@ -54,10 +54,10 @@ Authentication:
 
 | Service | Visibility | Purpose |
 |---|---|---|
-| `loomx-web` | External (HTTPS) | Next.js frontend, served to browsers |
-| `loomx-api` | External (HTTPS) | FastAPI backend — REST API, business logic, and direct ODBC connection pool to Fabric SQL |
+| `weft-web` | External (HTTPS) | Next.js frontend, served to browsers |
+| `weft-api` | External (HTTPS) | FastAPI backend — REST API, business logic, and direct ODBC connection pool to Fabric SQL |
 
-> The former `loomx-python-proxy` Flask sidecar has been eliminated. The FastAPI backend handles ODBC connectivity in-process via `pyodbc` + `azure-identity`, removing the inter-service HTTP hop.
+> The former `weft-python-proxy` Flask sidecar has been eliminated. The FastAPI backend handles ODBC connectivity in-process via `pyodbc` + `azure-identity`, removing the inter-service HTTP hop.
 
 ---
 
@@ -84,7 +84,7 @@ az extension add --name containerapp --upgrade
 
 ```bash
 LOCATION="eastus"          # choose a region close to your users
-RG="loomx-rg"              # your resource group name
+RG="weft-rg"              # your resource group name
 
 az group create \
   --name "$RG" \
@@ -96,7 +96,7 @@ az group create \
 > ACR stores all Docker images. Admin credentials are **disabled** — images are pushed/pulled via Managed Identity and OIDC.
 
 ```bash
-ACR_NAME="loomxacr"        # globally unique; lowercase alphanumeric only
+ACR_NAME="weftacr"        # globally unique; lowercase alphanumeric only
 
 az acr create \
   --resource-group "$RG" \
@@ -118,7 +118,7 @@ A single User-Assigned Managed Identity (UAMI) is assigned to both Container App
 ### 4.1 Create the identity
 
 ```bash
-IDENTITY_NAME="loomx-identity"
+IDENTITY_NAME="weft-identity"
 
 az identity create \
   --resource-group "$RG" \
@@ -159,7 +159,7 @@ Microsoft Fabric SQL uses Azure AD token authentication. The Managed Identity mu
 
 1. Open the Microsoft Fabric portal → your workspace → **Manage access**
 2. Click **Add people or groups**
-3. Search for `loomx-identity` (the display name of your UAMI)
+3. Search for `weft-identity` (the display name of your UAMI)
 4. Assign the **Contributor** role (allows schema read/write for the setup wizard) or **Member** role for read-only after initial setup
 
 > **No SQL username/password is ever stored.** The API uses `azure.identity.DefaultAzureCredential` to obtain a token from the UAMI and passes it as the ODBC connection attribute (`SQL_COPT_SS_ACCESS_TOKEN`).
@@ -173,7 +173,7 @@ Both containers share one environment (shared VNet, log analytics, etc.).
 ### 5.1 Create Log Analytics workspace
 
 ```bash
-LAW_NAME="loomx-logs"
+LAW_NAME="weft-logs"
 
 az monitor log-analytics workspace create \
   --resource-group "$RG" \
@@ -193,7 +193,7 @@ LAW_KEY=$(az monitor log-analytics workspace get-shared-keys \
 ### 5.2 Create the Container Apps Environment
 
 ```bash
-CAE_NAME="loomx-env"
+CAE_NAME="weft-env"
 
 az containerapp env create \
   --resource-group "$RG" \
@@ -212,7 +212,7 @@ This App Registration is what the browser uses to sign users in via Azure AD. It
 ### 6.1 Create the App Registration
 
 1. Azure Portal → **Azure Active Directory** → **App registrations** → **New registration**
-2. Name: `LoomX Web`
+2. Name: `Weft Web`
 3. Supported account types: **Single tenant** (or Multi-tenant if needed)
 4. Redirect URI:
    - Platform: **Single-page application (SPA)**
@@ -225,7 +225,7 @@ After registration:
 
 1. **Authentication** tab:
    - Ensure **Access tokens** and **ID tokens** are checked under Implicit grant (for MSAL)
-   - Add `http://localhost:3000` and `https://<your-loomx-web-fqdn>` as allowed redirect URIs
+   - Add `http://localhost:3000` and `https://<your-weft-web-fqdn>` as allowed redirect URIs
    - Set **Allow public client flows** to **Yes**
 
 2. **API permissions** tab:
@@ -241,23 +241,23 @@ From **Overview**:
 - **Application (client) ID** → `AZURE_CLIENT_ID` / `AZURE_CLIENT_ID`
 - **Directory (tenant) ID** → `AZURE_TENANT_ID` / `AZURE_TENANT_ID`
 
-> After deploying loomx-web, come back and add its FQDN as a redirect URI (e.g., `https://loomx-web.politebeach-abc123.eastus.azurecontainerapps.io`).
+> After deploying weft-web, come back and add its FQDN as a redirect URI (e.g., `https://weft-web.politebeach-abc123.eastus.azurecontainerapps.io`).
 
 ### 6.4 Configure App Roles
 
-LoomX uses Azure AD App Roles to assign user permissions. Add these four roles to the App Registration manifest.
+Weft uses Azure AD App Roles to assign user permissions. Add these four roles to the App Registration manifest.
 
 1. Open the App Registration → **App roles** → **Create app role**
 2. Create each of the following roles:
 
 | Display name | Value | Allowed member types | Description |
 |---|---|---|---|
-| LoomX Viewer | `LoomX.Viewer` | Users/Groups | Read-only access to published dashboards |
-| LoomX Analyst | `LoomX.Analyst` | Users/Groups | SQL Lab, chart and dataset creation |
-| LoomX Editor | `LoomX.Editor` | Users/Groups | All Analyst permissions + publish content |
-| LoomX Admin | `LoomX.Admin` | Users/Groups | Full access including user and data source management |
+| Weft Viewer | `Weft.Viewer` | Users/Groups | Read-only access to published dashboards |
+| Weft Analyst | `Weft.Analyst` | Users/Groups | SQL Lab, chart and dataset creation |
+| Weft Editor | `Weft.Editor` | Users/Groups | All Analyst permissions + publish content |
+| Weft Admin | `Weft.Admin` | Users/Groups | Full access including user and data source management |
 
-3. Assign users: **Enterprise Applications** → **[your LoomX app]** → **Users and groups** → **Add user/group** → select user → select role
+3. Assign users: **Enterprise Applications** → **[your Weft app]** → **Users and groups** → **Add user/group** → select user → select role
 
 > **No role = no access**: Azure AD users without an assigned App Role receive a 403 "No Access" response and are shown a sign-out screen. Assign the App Role in Azure portal before they sign in.
 
@@ -270,7 +270,7 @@ GitHub Actions authenticates to Azure using **OIDC Workload Identity Federation*
 ### 7.1 Create the App Registration
 
 1. Azure Portal → **Azure Active Directory** → **App registrations** → **New registration**
-2. Name: `LoomX GitHub Actions`
+2. Name: `Weft GitHub Actions`
 3. Supported account types: **Single tenant**
 4. No redirect URI needed
 5. Click **Register**
@@ -282,10 +282,10 @@ GitHub Actions authenticates to Azure using **OIDC Workload Identity Federation*
 3. Scenario: **GitHub Actions deploying Azure resources**
 4. Fill in:
    - **Organization**: your GitHub organization/username
-   - **Repository**: your repository name (e.g., `my-org/LoomX`)
+   - **Repository**: your repository name (e.g., `my-org/Weft`)
    - **Entity type**: **Branch**
    - **Branch**: `main`
-   - **Name**: `loomx-main-deploy`
+   - **Name**: `weft-main-deploy`
 5. Click **Add**
 
 ### 7.3 Grant the identity Azure RBAC permissions
@@ -293,7 +293,7 @@ GitHub Actions authenticates to Azure using **OIDC Workload Identity Federation*
 ```bash
 # Get the App Registration's service principal object ID
 GITHUB_SP_ID=$(az ad sp list \
-  --display-name "LoomX GitHub Actions" \
+  --display-name "Weft GitHub Actions" \
   --query "[0].id" -o tsv)
 
 # Grant Contributor on the resource group (needed for Container Apps deploy)
@@ -331,26 +331,26 @@ Build and push placeholder images first:
 az login
 az acr login --name "$ACR_NAME"
 
-# Build and push loomx-api image
-docker build -t "${ACR_NAME}.azurecr.io/loomx-api:init" \
-  -f apps/loomx-api/Dockerfile .
-docker push "${ACR_NAME}.azurecr.io/loomx-api:init"
+# Build and push weft-api image
+docker build -t "${ACR_NAME}.azurecr.io/weft-api:init" \
+  -f apps/weft-api/Dockerfile .
+docker push "${ACR_NAME}.azurecr.io/weft-api:init"
 
-# Build and push loomx-web image (placeholder build-args)
+# Build and push weft-web image (placeholder build-args)
 docker build \
   --build-arg API_URL="https://placeholder.example.com" \
   --build-arg AZURE_CLIENT_ID="placeholder" \
   --build-arg AZURE_TENANT_ID="placeholder" \
   --build-arg WEB_URL="http://localhost:3000" \
-  -t "${ACR_NAME}.azurecr.io/loomx-web:init" \
-  -f apps/loomx-web/Dockerfile .
-docker push "${ACR_NAME}.azurecr.io/loomx-web:init"
+  -t "${ACR_NAME}.azurecr.io/weft-web:init" \
+  -f apps/weft-web/Dockerfile .
+docker push "${ACR_NAME}.azurecr.io/weft-web:init"
 ```
 
-### 8.1 Deploy loomx-api
+### 8.1 Deploy weft-api
 
 ```bash
-API_APP_NAME="loomx-api"
+API_APP_NAME="weft-api"
 AZURE_CLIENT_ID="<your-msal-app-registration-client-id>"
 AZURE_TENANT_ID="<your-azure-ad-tenant-id>"
 
@@ -358,7 +358,7 @@ az containerapp create \
   --name "$API_APP_NAME" \
   --resource-group "$RG" \
   --environment "$CAE_NAME" \
-  --image "${ACR_NAME}.azurecr.io/loomx-api:init" \
+  --image "${ACR_NAME}.azurecr.io/weft-api:init" \
   --registry-server "${ACR_NAME}.azurecr.io" \
   --registry-identity "$IDENTITY_RESOURCE_ID" \
   --user-assigned-identities "$IDENTITY_RESOURCE_ID" \
@@ -392,23 +392,23 @@ API_FQDN=$(az containerapp show \
   --resource-group "$RG" \
   --query "properties.configuration.ingress.fqdn" -o tsv)
 echo "API public FQDN: $API_FQDN"
-# e.g. loomx-api.politebeach-abc123.eastus.azurecontainerapps.io
+# e.g. weft-api.politebeach-abc123.eastus.azurecontainerapps.io
 ```
 
-Update loomx-api with its own public URL for CORS:
+Update weft-api with its own public URL for CORS:
 ```bash
 az containerapp update \
   --name "$API_APP_NAME" \
   --resource-group "$RG" \
-  --set-env-vars "WEB_URL=https://<loomx-web-fqdn>"
+  --set-env-vars "WEB_URL=https://<weft-web-fqdn>"
 ```
 
-### 8.2 Deploy loomx-web
+### 8.2 Deploy weft-web
 
 The Next.js frontend bakes the API URL and AAD credentials into the bundle **at build time** via Docker `--build-arg`.
 
 ```bash
-WEB_APP_NAME="loomx-web"
+WEB_APP_NAME="weft-web"
 
 # Rebuild the web image with correct build-args
 docker build \
@@ -416,15 +416,15 @@ docker build \
   --build-arg AZURE_CLIENT_ID="${AZURE_CLIENT_ID}" \
   --build-arg AZURE_TENANT_ID="${AZURE_TENANT_ID}" \
   --build-arg WEB_URL="https://<placeholder-web-fqdn>" \
-  -t "${ACR_NAME}.azurecr.io/loomx-web:init-configured" \
-  -f apps/loomx-web/Dockerfile .
-docker push "${ACR_NAME}.azurecr.io/loomx-web:init-configured"
+  -t "${ACR_NAME}.azurecr.io/weft-web:init-configured" \
+  -f apps/weft-web/Dockerfile .
+docker push "${ACR_NAME}.azurecr.io/weft-web:init-configured"
 
 az containerapp create \
   --name "$WEB_APP_NAME" \
   --resource-group "$RG" \
   --environment "$CAE_NAME" \
-  --image "${ACR_NAME}.azurecr.io/loomx-web:init-configured" \
+  --image "${ACR_NAME}.azurecr.io/weft-web:init-configured" \
   --registry-server "${ACR_NAME}.azurecr.io" \
   --registry-identity "$IDENTITY_RESOURCE_ID" \
   --user-assigned-identities "$IDENTITY_RESOURCE_ID" \
@@ -443,13 +443,13 @@ WEB_FQDN=$(az containerapp show \
   --resource-group "$RG" \
   --query "properties.configuration.ingress.fqdn" -o tsv)
 echo "Web public FQDN: $WEB_FQDN"
-# e.g. loomx-web.politebeach-abc123.eastus.azurecontainerapps.io
+# e.g. weft-web.politebeach-abc123.eastus.azurecontainerapps.io
 ```
 
 **Important final step**: Now that you have the real web FQDN:
 1. Add `https://${WEB_FQDN}` as a redirect URI in the MSAL App Registration (Step 6)
-2. Update loomx-api's `WEB_URL` env var to `https://${WEB_FQDN}` (for CORS)
-3. Rebuild and redeploy loomx-web with `WEB_URL=https://${WEB_FQDN}` as the `--build-arg`
+2. Update weft-api's `WEB_URL` env var to `https://${WEB_FQDN}` (for CORS)
+3. Rebuild and redeploy weft-web with `WEB_URL=https://${WEB_FQDN}` as the `--build-arg`
 
 ---
 
@@ -464,14 +464,14 @@ Create each of the following:
 | `AZURE_CLIENT_ID` | `<App Registration client ID from Step 7>` | GitHub Actions OIDC app |
 | `AZURE_TENANT_ID` | `<Your Azure AD tenant ID>` | GitHub Actions OIDC |
 | `AZURE_SUBSCRIPTION_ID` | `<Your Azure subscription ID>` | GitHub Actions OIDC |
-| `ACR_NAME` | `loomxacr` | Your ACR name (without `.azurecr.io`) |
-| `RESOURCE_GROUP` | `loomx-rg` | Azure resource group |
-| `LOOMX_API_FQDN` | `loomx-api.politebeach-abc123.eastus.azurecontainerapps.io` | API FQDN **without** `https://` |
-| `LOOMX_WEB_URL` | `https://loomx-web.politebeach-abc123.eastus.azurecontainerapps.io` | Web URL **with** `https://` |
+| `ACR_NAME` | `weftacr` | Your ACR name (without `.azurecr.io`) |
+| `RESOURCE_GROUP` | `weft-rg` | Azure resource group |
+| `WEFT_API_FQDN` | `weft-api.politebeach-abc123.eastus.azurecontainerapps.io` | API FQDN **without** `https://` |
+| `WEFT_WEB_URL` | `https://weft-web.politebeach-abc123.eastus.azurecontainerapps.io` | Web URL **with** `https://` |
 | `AZURE_CLIENT_ID` | `<MSAL App Registration client ID from Step 6>` | Frontend MSAL + API JWT verification |
 | `AZURE_TENANT_ID` | `<Your Azure AD tenant ID>` | Frontend MSAL + API JWT verification |
-| `CONTAINER_APP_WEB` | `loomx-web` | Container App name |
-| `CONTAINER_APP_API` | `loomx-api` | Container App name |
+| `CONTAINER_APP_WEB` | `weft-web` | Container App name |
+| `CONTAINER_APP_API` | `weft-api` | Container App name |
 
 > **Why variables and not secrets?** These values are not sensitive (they're public URLs and IDs, not passwords or keys). Using **Variables** (not Secrets) makes them visible in the GitHub UI for easier auditing and maintenance. The only truly secret information — Fabric SQL endpoints and database names — live as Container App secrets in Azure, not in GitHub at all.
 
@@ -479,7 +479,7 @@ Create each of the following:
 
 ## 10. Step 8 — Environment Variables Reference
 
-### loomx-api
+### weft-api
 
 Authentication to Fabric SQL uses `azure.identity.DefaultAzureCredential`, which automatically picks up the Container App's User-Assigned Managed Identity — no credentials in env vars.
 
@@ -487,18 +487,18 @@ Authentication to Fabric SQL uses `azure.identity.DefaultAzureCredential`, which
 |---|---|---|
 | `AZURE_CLIENT_ID` | Container App env var | App Registration client ID for JWT audience verification |
 | `AZURE_TENANT_ID` | Container App env var | Azure AD tenant ID for JWKS endpoint construction |
-| `WEB_URL` | Container App env var | Allowed CORS origin (your loomx-web FQDN with `https://`) |
+| `WEB_URL` | Container App env var | Allowed CORS origin (your weft-web FQDN with `https://`) |
 | `FABRIC_METADATA_ENDPOINT` | Container App secret | Fabric metadata DB ODBC hostname |
 | `FABRIC_METADATA_DATABASE` | Container App secret | Fabric metadata DB name |
 | `API_PORT` | Dockerfile default (`8080`) | Port gunicorn/uvicorn listens on |
 
-### loomx-web
+### weft-web
 
 All `NEXT_PUBLIC_*` variables are **baked into the bundle at Docker build time** via `--build-arg`. They are not runtime environment variables.
 
 | Build Arg | Maps to | Description |
 |---|---|---|
-| `API_URL` | `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_API_URL` | Full `https://` URL of loomx-api |
+| `API_URL` | `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_API_URL` | Full `https://` URL of weft-api |
 | `AZURE_CLIENT_ID` | `NEXT_PUBLIC_AZURE_CLIENT_ID`, `NEXT_PUBLIC_AZURE_CLIENT_ID` | MSAL app client ID |
 | `AZURE_TENANT_ID` | `NEXT_PUBLIC_AZURE_TENANT_ID`, `NEXT_PUBLIC_AZURE_TENANT_ID` | Azure AD tenant ID |
 | `WEB_URL` | `NEXT_PUBLIC_AAD_REDIRECT_URI`, `NEXT_PUBLIC_AZURE_REDIRECT_URI` | Redirect URI after AAD login |
@@ -507,7 +507,7 @@ All `NEXT_PUBLIC_*` variables are **baked into the bundle at Docker build time**
 
 ## 11. Step 9 — First-Run Setup Wizard
 
-On first access, LoomX detects that the metadata database schema has not been initialised and presents the **Setup Wizard**.
+On first access, Weft detects that the metadata database schema has not been initialised and presents the **Setup Wizard**.
 
 ### What the wizard does
 
@@ -520,11 +520,11 @@ On first access, LoomX detects that the metadata database schema has not been in
 
 ### First-Admin Setup
 
-Before switching to Azure AD auth, assign the **Admin** App Role to yourself in Azure portal (Enterprise Applications → LoomX → Users and groups). Then save the auth config — you will be signed in as Admin on the next login.
+Before switching to Azure AD auth, assign the **Admin** App Role to yourself in Azure portal (Enterprise Applications → Weft → Users and groups). Then save the auth config — you will be signed in as Admin on the next login.
 
 ### Triggering the wizard
 
-Navigate to `https://<your-loomx-web-fqdn>`. If `FABRIC_METADATA_ENDPOINT` / `FABRIC_METADATA_DATABASE` are not set, the wizard modal appears automatically after sign-in.
+Navigate to `https://<your-weft-web-fqdn>`. If `FABRIC_METADATA_ENDPOINT` / `FABRIC_METADATA_DATABASE` are not set, the wizard modal appears automatically after sign-in.
 
 ### Running setup manually (optional)
 
@@ -552,10 +552,10 @@ Every push to `main` triggers `.github/workflows/deploy.yml`, which:
 ```
 git push origin main
     └─► GitHub Actions trigger
-            ├─ docker build + push: loomx-api:<sha>
-            ├─ docker build + push: loomx-web:<sha>  (bakes API_URL, AAD creds)
-            ├─ az containerapp update: loomx-api
-            └─ az containerapp update: loomx-web
+            ├─ docker build + push: weft-api:<sha>
+            ├─ docker build + push: weft-web:<sha>  (bakes API_URL, AAD creds)
+            ├─ az containerapp update: weft-api
+            └─ az containerapp update: weft-web
 ```
 
 ### Scaling
@@ -564,8 +564,8 @@ Container Apps scale to zero when idle (saving cost) and scale out under load. M
 
 ```bash
 az containerapp update \
-  --name loomx-api \
-  --resource-group loomx-rg \
+  --name weft-api \
+  --resource-group weft-rg \
   --min-replicas 1 \
   --max-replicas 10
 ```
@@ -579,8 +579,8 @@ az containerapp update \
 ```bash
 # View last 100 log lines
 az containerapp logs show \
-  --name loomx-api \
-  --resource-group loomx-rg \
+  --name weft-api \
+  --resource-group weft-rg \
   --tail 100
 ```
 
@@ -601,8 +601,8 @@ az role assignment list \
 3. Test the Managed Identity token:
    ```bash
    az containerapp exec \
-     --name loomx-api \
-     --resource-group loomx-rg \
+     --name weft-api \
+     --resource-group weft-rg \
      --command "python -c \"from azure.identity import DefaultAzureCredential; t = DefaultAzureCredential().get_token('https://database.windows.net/.default'); print('Token OK:', t.token[:20])\""
    ```
 
@@ -617,7 +617,7 @@ Check in Azure Portal → App Registration → Certificates & secrets → Federa
 
 ### `NEXT_PUBLIC_*` variables are wrong or blank in production
 
-These are baked at **build time**, not runtime. Update the GitHub variable (`LOOMX_API_FQDN`, `AZURE_CLIENT_ID`, etc.) and **re-run the workflow** to rebuild the image with the correct values.
+These are baked at **build time**, not runtime. Update the GitHub variable (`WEFT_API_FQDN`, `AZURE_CLIENT_ID`, etc.) and **re-run the workflow** to rebuild the image with the correct values.
 
 ### User sees wrong role or cannot access content after role assignment
 
@@ -625,12 +625,12 @@ Role assignments from the Azure AD portal take effect on the **next sign-in** (t
 
 If a user reports incorrect permissions:
 1. Ask them to sign out and sign back in (refreshes the JWT roles claim)
-2. Check their assignment: **Enterprise Applications → [LoomX app] → Users and groups**
+2. Check their assignment: **Enterprise Applications → [Weft app] → Users and groups**
 3. Or check the DB-level assignment at `GET /api/v1/users` (Admin only)
 
 ### First page load is slow (~10–12 seconds)
 
-This is expected on the **very first sign-in** after a deployment or after a period of inactivity. Microsoft Fabric SQL Serverless has a cold-start time of approximately 10 seconds when no connections have been made recently. LoomX mitigates this with:
+This is expected on the **very first sign-in** after a deployment or after a period of inactivity. Microsoft Fabric SQL Serverless has a cold-start time of approximately 10 seconds when no connections have been made recently. Weft mitigates this with:
 
 - **Connection pool warmup** triggered at API startup
 - **Heartbeat thread** that pings the pool every 5 minutes to keep Fabric serverless warm
@@ -640,4 +640,4 @@ After the first cold start, subsequent page loads complete in under 1 second.
 
 ---
 
-*LoomX deployment guide — last updated March 2026*
+*Weft deployment guide — last updated March 2026*

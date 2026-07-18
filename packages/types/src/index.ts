@@ -1,5 +1,5 @@
 // ============================================
-// Shared TypeScript Types for LoomX v2
+// Shared TypeScript Types for Weft v2
 // ============================================
 
 // Core Entities

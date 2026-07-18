@@ -1,6 +1,6 @@
 <div align="center">
 
-# ✦ LooMX
+# ✦ Weft
 
 ### **Live Operational Outcomes & Metrics eXperience**
 
@@ -24,13 +24,13 @@
 
 ---
 
-## 🌟 What is LooMX?
+## 🌟 What is Weft?
 
-LooMX is a **self-hosted enterprise analytics platform** built for teams running on **Microsoft Fabric SQL**, Azure SQL, PostgreSQL, MySQL, Trino, and StarRocks. Think of it as your team's private data command centre — where everyone queries live data, builds charts, assembles dashboards, and uses AI to accelerate analysis — secured through **your choice of authentication provider**.
+Weft is a **self-hosted enterprise analytics platform** built for teams running on **Microsoft Fabric SQL**, Azure SQL, PostgreSQL, MySQL, Trino, and StarRocks. Think of it as your team's private data command centre — where everyone queries live data, builds charts, assembles dashboards, and uses AI to accelerate analysis — secured through **your choice of authentication provider**.
 
 Everything is configurable from the UI. No config file changes, no restarts needed for auth setup. First-run deploys with **local login out of the box** — switch to Azure AD or Google OAuth any time from Settings.
 
-> *LooMX sits between your team and your data — making it fast to explore, easy to visualise, and safe to share.*
+> *Weft sits between your team and your data — making it fast to explore, easy to visualise, and safe to share.*
 
 ---
 
@@ -129,7 +129,7 @@ Everything is configurable from the UI. No config file changes, no restarts need
 - **Authentication:** switch provider (Local / Azure AD / Google) and configure credentials — all from the UI, no `.env` changes
 - **Local Users:** create, deactivate, and reset passwords for local-auth users from the admin panel
 - **User Management:** assign / revoke roles per user; Azure AD App Roles always take precedence
-- **Metadata Server:** view and reconfigure the LooMX metadata database from the UI — supports all six DB types, live connection test, in-place API restart
+- **Metadata Server:** view and reconfigure the Weft metadata database from the UI — supports all six DB types, live connection test, in-place API restart
 - **Data Sources:** full CRUD with connection testing
 - **AI Providers:** manage global and personal API keys
 
@@ -161,7 +161,7 @@ Everything is configurable from the UI. No config file changes, no restarts need
 
 ## 🏛️ Architecture
 
-LooMX is a **monorepo** with two services:
+Weft is a **monorepo** with two services:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -171,7 +171,7 @@ LooMX is a **monorepo** with two services:
                                │  HTTPS / MSAL
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  loomx-web  ·  Next.js 15  ·  TypeScript  ·  React 19          │
+│  weft-web  ·  Next.js 15  ·  TypeScript  ·  React 19          │
 │                                                                  │
 │  · Multi-provider login (Local / Azure AD / Google)              │
 │  · Chart builder, dashboard builder, SQL Lab, AI assistant       │
@@ -180,7 +180,7 @@ LooMX is a **monorepo** with two services:
                                │  REST API (Bearer JWT)
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  loomx-api  ·  FastAPI  ·  Python 3.11                          │
+│  weft-api  ·  FastAPI  ·  Python 3.11                          │
 │                                                                  │
 │  · JWT verification: RS256/JWKS (Azure AD, Google) · HS256 local │
 │  · RBAC middleware (4 roles: Viewer / Analyst / Editor / Admin)  │
@@ -197,7 +197,7 @@ LooMX is a **monorepo** with two services:
 │                                                                  │
 │  ┌─────────────────────┐   ┌──────────────────────────────────┐ │
 │  │  Metadata Database  │   │  Your Data Sources (1 to N)      │ │
-│  │  (LooMX app data)   │   │  Fabric SQL · Azure SQL          │ │
+│  │  (Weft app data)   │   │  Fabric SQL · Azure SQL          │ │
 │  │  Any supported DB   │   │  PostgreSQL · MySQL              │ │
 │  └─────────────────────┘   │  Trino · StarRocks               │ │
 │                             └──────────────────────────────────┘ │
@@ -208,7 +208,7 @@ LooMX is a **monorepo** with two services:
 
 | Database | Purpose | Configured via |
 |---|---|---|
-| **Metadata DB** | Stores LooMX app data: datasets, charts, dashboards, query history, themes, roles | Setup wizard or **Settings → Metadata Server** (admin) |
+| **Metadata DB** | Stores Weft app data: datasets, charts, dashboards, query history, themes, roles | Setup wizard or **Settings → Metadata Server** (admin) |
 | **Your Data Sources** | Your actual warehouses, lakehouses, databases | UI at `/data-sources` |
 
 ---
@@ -239,9 +239,9 @@ odbcinst -q -d -n "ODBC Driver 18 for SQL Server"
 
 ## 🔑 Azure AD App Registration
 
-> **Optional** — LooMX defaults to local login. Configure Azure AD only if your team uses Microsoft Entra ID. Skip this section to use local auth.
+> **Optional** — Weft defaults to local login. Configure Azure AD only if your team uses Microsoft Entra ID. Skip this section to use local auth.
 
-LooMX supports Azure AD as an optional authentication provider. This is a **one-time setup** by your Azure admin.
+Weft supports Azure AD as an optional authentication provider. This is a **one-time setup** by your Azure admin.
 
 <details>
 <summary><strong>Click to expand — App Registration steps</strong></summary>
@@ -251,7 +251,7 @@ LooMX supports Azure AD as an optional authentication provider. This is a **one-
 1. Go to [portal.azure.com](https://portal.azure.com) → **Microsoft Entra ID** → **App registrations** → **New registration**
 
 2. Fill in:
-   - **Name:** `LooMX`
+   - **Name:** `Weft`
    - **Supported account types:** `Accounts in this organizational directory only`
    - **Redirect URI:** `Single-page application (SPA)` → `http://localhost:3000`
 
@@ -269,10 +269,10 @@ LooMX supports Azure AD as an optional authentication provider. This is a **one-
 
    | Display name | Value | Description |
    |---|---|---|
-   | LooMX Viewer | `LooMX.Viewer` | Read-only access to published dashboards and charts |
-   | LooMX Analyst | `LooMX.Analyst` | Run ad-hoc SQL, build charts and datasets |
-   | LooMX Editor | `LooMX.Editor` | All Analyst permissions + publish content |
-   | LooMX Admin | `LooMX.Admin` | Full access including user management, data source and metadata server configuration |
+   | Weft Viewer | `Weft.Viewer` | Read-only access to published dashboards and charts |
+   | Weft Analyst | `Weft.Analyst` | Run ad-hoc SQL, build charts and datasets |
+   | Weft Editor | `Weft.Editor` | All Analyst permissions + publish content |
+   | Weft Admin | `Weft.Admin` | Full access including user management, data source and metadata server configuration |
 
    > Any authenticated user without an assigned role defaults to **Viewer** automatically.
 
@@ -285,7 +285,7 @@ LooMX supports Azure AD as an optional authentication provider. This is a **one-
 ```bash
 # 1. Clone
 git clone <your-repo-url>
-cd LooMX
+cd Weft
 
 # 2. Install Node.js dependencies (frontend only)
 pnpm install
@@ -295,7 +295,7 @@ cp .env.example .env
 # → Edit .env if using Azure AD; leave AZURE_* blank for local login
 
 # 4. Set up Python API
-cd apps/loomx-api
+cd apps/weft-api
 python -m venv venv
 venv\Scripts\activate        # Windows
 # source venv/bin/activate   # macOS / Linux
@@ -303,8 +303,8 @@ pip install -r requirements.txt
 cd ../..
 
 # 5. Start both services — two terminals
-python apps/loomx-api/main.py    # Terminal 1 (API)
-pnpm --filter loomx-web dev      # Terminal 2 (Web)
+python apps/weft-api/main.py    # Terminal 1 (API)
+pnpm --filter weft-web dev      # Terminal 2 (Web)
 ```
 
 Open **http://localhost:3000**. Sign in with **username `admin`, password `admin`** (local login). You will be prompted to change the password on first login. ✓
@@ -319,7 +319,7 @@ Open **http://localhost:3000**. Sign in with **username `admin`, password `admin
 
 ```bash
 git clone <your-github-repo-url>
-cd LooMX
+cd Weft
 ```
 
 ### 2 · Install Node.js Dependencies
@@ -330,7 +330,7 @@ pnpm install
 
 ### 3 · Configure Environment Variables
 
-LooMX uses a **single `.env` file at the repository root**. Both services read from it.
+Weft uses a **single `.env` file at the repository root**. Both services read from it.
 
 ```bash
 cp .env.example .env
@@ -361,7 +361,7 @@ WEB_URL=http://localhost:3000
 ### 4 · Set Up the Python API
 
 ```bash
-cd apps/loomx-api
+cd apps/weft-api
 
 # Create virtual environment
 python -m venv venv
@@ -388,7 +388,7 @@ cd ../..
 
 1. Open **Azure Data Studio** (or your DB client)
 2. Connect to your metadata database
-3. Open `apps/loomx-api/schema.sql`
+3. Open `apps/weft-api/schema.sql`
 4. Run the file
 
 **Tables created:**
@@ -412,13 +412,13 @@ cd ../..
 
 **Terminal 1 — API (Python/FastAPI)**
 ```bash
-cd apps/loomx-api
+cd apps/weft-api
 venv\Scripts\activate   # Windows  |  source venv/bin/activate  (macOS/Linux)
 python main.py
 ```
 ```
 ============================================
-LooMX API
+Weft API
 ============================================
 Server: http://localhost:8080
 Health: http://localhost:8080/api/health
@@ -429,7 +429,7 @@ Docs:   http://localhost:8080/docs
 
 **Terminal 2 — Web (Next.js)**
 ```bash
-pnpm --filter loomx-web dev
+pnpm --filter weft-web dev
 ```
 ```
 ▲ Next.js 15.x.x
@@ -443,7 +443,7 @@ pnpm --filter loomx-web dev
 |---|---|---|
 | API | http://localhost:8080/api/health | `{"status": "ok"}` |
 | API Docs | http://localhost:8080/docs | Swagger UI |
-| Web | http://localhost:3000 | LooMX login page |
+| Web | http://localhost:3000 | Weft login page |
 
 ---
 
@@ -597,14 +597,14 @@ The FastAPI backend auto-generates Swagger UI at `http://localhost:8080/docs`. K
 ## 📁 Project Structure
 
 ```
-LooMX/
+Weft/
 ├── .env.example                    ← Copy to .env and fill in your values
 ├── .env                            ← Your local config (gitignored)
 ├── pnpm-workspace.yaml             ← pnpm monorepo workspace config
 │
 ├── apps/
 │   │
-│   ├── loomx-web/                  ← Next.js 15 frontend (TypeScript)
+│   ├── weft-web/                  ← Next.js 15 frontend (TypeScript)
 │   │   ├── app/                    ← App Router pages
 │   │   │   ├── about/              ← Feature showcase + API reference page
 │   │   │   ├── ai/                 ← AI assistant (NL → SQL, chat)
@@ -631,7 +631,7 @@ LooMX/
 │   │   ├── hooks/                  ← useRole, useTheme, etc.
 │   │   └── utils/                  ← MSAL fetch, colour utilities
 │   │
-│   └── loomx-api/                  ← Python/FastAPI REST API
+│   └── weft-api/                  ← Python/FastAPI REST API
 │       ├── main.py                 ← FastAPI entry point + router registration
 │       ├── config.py               ← Pydantic settings (reads root .env)
 │       ├── requirements.txt        ← Python dependencies
@@ -713,7 +713,7 @@ Run from the **repository root**:
 | `pnpm check-types` | TypeScript type checking |
 | `pnpm clean` | Delete all build artifacts |
 
-**Python API** (from `apps/loomx-api/`):
+**Python API** (from `apps/weft-api/`):
 
 | Command | Description |
 |---|---|
@@ -739,7 +739,7 @@ Run from the **repository root**:
 
 - Go to **Settings → Authentication** and confirm the active provider is set to **Local Login**
 - If you cannot log in at all (Azure AD misconfigured), temporarily set `AZURE_TENANT_ID=` and `AZURE_CLIENT_ID=` to empty in `.env` and restart — the API falls back to local
-- Clear `loomx_auth_provider` from `localStorage` in DevTools → Application → Local Storage
+- Clear `weft_auth_provider` from `localStorage` in DevTools → Application → Local Storage
 
 </details>
 
@@ -773,7 +773,7 @@ Run from the **repository root**:
 <details>
 <summary><strong>🔴 Cannot connect to metadata database</strong></summary>
 
-- Check **Settings → Metadata Server** in the LooMX UI (Admin) — use the built-in connection tester
+- Check **Settings → Metadata Server** in the Weft UI (Admin) — use the built-in connection tester
 - Confirm your Azure AD account (or Managed Identity in production) has `db_datareader` + `db_datawriter` + `db_ddladmin` on the metadata database
 - Test the connection directly in Azure Data Studio to rule out network issues
 
@@ -782,14 +782,14 @@ Run from the **repository root**:
 <details>
 <summary><strong>🔴 Queries time out on first run</strong></summary>
 
-Fabric serverless endpoints have a cold start (~10s on first connection). LooMX warms the connection pool at API startup. Wait a few seconds after seeing `[API] Connection pool warmup started.` in the API logs before running your first query.
+Fabric serverless endpoints have a cold start (~10s on first connection). Weft warms the connection pool at API startup. Wait a few seconds after seeing `[API] Connection pool warmup started.` in the API logs before running your first query.
 
 </details>
 
 <details>
 <summary><strong>🔴 AI chat returns "No AI provider configured"</strong></summary>
 
-- Go to **Settings (⚙) → AI Providers** in the LooMX header
+- Go to **Settings (⚙) → AI Providers** in the Weft header
 - Add a global key (Admin) or a personal key (any user)
 - Supported: Anthropic (Claude), OpenAI (GPT-4o), GitHub Models
 
@@ -804,10 +804,10 @@ rm -rf node_modules apps/*/node_modules packages/*/node_modules
 pnpm install
 
 # Clear Next.js cache
-rm -rf apps/loomx-web/.next
+rm -rf apps/weft-web/.next
 
 # Reinstall Python dependencies
-cd apps/loomx-api && pip install -r requirements.txt
+cd apps/weft-api && pip install -r requirements.txt
 
 # Re-check types
 pnpm check-types
@@ -837,7 +837,7 @@ Or change `API_PORT` in `.env` and restart.
 
 ## 🧰 Tech Stack
 
-### Frontend — `loomx-web`
+### Frontend — `weft-web`
 
 | Technology | Version | Role |
 |---|---|---|
@@ -851,7 +851,7 @@ Or change `API_PORT` in `.env` and restart.
 | [react-grid-layout](https://github.com/react-grid-layout/react-grid-layout) | 2.x | Drag-and-drop dashboard builder |
 | [react-colorful](https://omgovich.github.io/react-colorful/) | 5.x | Colour picker for user themes |
 
-### Backend — `loomx-api`
+### Backend — `weft-api`
 
 | Technology | Version | Role |
 |---|---|---|
@@ -872,6 +872,6 @@ Or change `API_PORT` in `.env` and restart.
 
 **Built for Advanced Analytics. Multi-Provider Auth. Open Source.**
 
-*LooMX — Live Operational Outcomes & Metrics eXperience*
+*Weft — Live Operational Outcomes & Metrics eXperience*
 
 </div>
