@@ -153,11 +153,10 @@ export function ClientLayout({ children }: ClientLayoutProps) {
   if (noAccess) return <NoAccessScreen onLogout={logout} />;
   if (!isAuthenticated) return <AuthScreen />;
 
-  const showOverlay =
-    setupData &&
-    setupData.status !== "ok" &&
-    !dismissed &&
-    pathname !== "/settings/system";
+  // Setup is optional — never block entry on it. Land straight in the app;
+  // System Settings is still reachable for anyone who wants to configure a DB.
+  const showOverlay = false;
+  void setupData; void dismissed; void pathname;
 
   return (
     <SetupContext.Provider value={{ isSetupOk }}>
