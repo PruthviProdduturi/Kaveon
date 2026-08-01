@@ -5,8 +5,8 @@ import { Providers } from "./providers";
 import { ClientLayout } from "../components/ClientLayout";
 
 export const metadata: Metadata = {
-  title: "LENS",
-  description: "Live Operational Outcomes & Metrics eXperience",
+  title: "Lens",
+  description: "Lens — self-hosted analytics & BI. Explore data, build charts and dashboards, and use AI to see the pattern, over Microsoft Fabric SQL and more.",
 };
 
 export default function RootLayout({
