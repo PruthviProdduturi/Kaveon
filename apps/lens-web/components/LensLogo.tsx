@@ -82,7 +82,7 @@ export function LensLogo({ size = 48, animate = "none", onClick, className = "" 
         height: size,
         display: "inline-flex",
         alignItems: "center",
-        gap: markH * 0.24,
+        gap: markH * 0.1,
         userSelect: "none",
         color: "var(--lens-primary, #46c7d9)",
       }}
