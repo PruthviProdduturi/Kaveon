@@ -1,8 +1,8 @@
-# Weft Architecture
+# Lens Architecture
 
 **Live Operational Outcomes & Metrics eXperience**
 
-> Comprehensive technical architecture documentation for the Weft platform
+> Comprehensive technical architecture documentation for the Lens platform
 
 ---
 
@@ -32,7 +32,7 @@
 
 ## System Overview
 
-Weft is a modern data exploration platform built with a clean, two-tier service architecture. The system consists of two main services:
+Lens is a modern data exploration platform built with a clean, two-tier service architecture. The system consists of two main services:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -61,7 +61,7 @@ Weft is a modern data exploration platform built with a clean, two-tier service 
 ┌─────────────────────────────────────────────────────────────┐
 │                Microsoft Fabric SQL Endpoints                │
 │  ┌──────────────────────────────────────────────────────┐   │
-│  │  Metadata Database (Weft tables)                    │   │
+│  │  Metadata Database (Lens tables)                    │   │
 │  │  - stores: datasets, charts, dashboards, etc.        │   │
 │  │  - stores: data_sources table (warehouse configs)    │   │
 │  └──────────────────────────────────────────────────────┘   │
@@ -84,15 +84,15 @@ Python is the only runtime with a mature ODBC driver (`pyodbc`) that supports Az
 
 ### Single Root `.env` File Pattern
 
-Weft uses a **centralized configuration approach** with a single `.env` file at the repository root. Both services load their configuration from this shared file.
+Lens uses a **centralized configuration approach** with a single `.env` file at the repository root. Both services load their configuration from this shared file.
 
 ```
-Weft/
+Lens/
 ├── .env                           ← Single configuration file
 ├── apps/
-│   ├── weft-api/
+│   ├── lens-api/
 │   │   └── config.py              → Loads ../../.env via python-dotenv
-│   └── weft-web/
+│   └── lens-web/
 │       └── next.config.ts         → Reads NEXT_PUBLIC_* env vars at build time
 ```
 
@@ -201,7 +201,7 @@ Browser Request
 └─────────────────────────────────────────────────────────┘
      │
      ▼
-Weft FastAPI (Bearer token authenticated)
+Lens FastAPI (Bearer token authenticated)
 ```
 
 ---
@@ -307,7 +307,7 @@ JWT verified → email + jwt_roles extracted
     ▼
 users_svc.resolve_role(email, jwt_roles)
     │
-    ├─ 1. JWT claim: if roles[] in token contains Weft.Viewer/Analyst/Editor/Admin
+    ├─ 1. JWT claim: if roles[] in token contains Lens.Viewer/Analyst/Editor/Admin
     │        → use highest matching role
     │
     ├─ 2. azure_ad / google with no JWT role → None (403 NoAccess)
@@ -410,7 +410,7 @@ CORSMiddleware(
 
 ## Database Schema
 
-The metadata database stores all Weft application state. Schema is in `apps/weft-api/schema.sql`.
+The metadata database stores all Lens application state. Schema is in `apps/lens-api/schema.sql`.
 
 | Table | Key Columns | Purpose |
 |---|---|---|
@@ -444,7 +444,7 @@ Datasets are the core abstraction. They define:
 
 #### Role-Playing Dimensions
 
-A "role-playing dimension" is when two different foreign keys in the fact table both reference the same dimension table (e.g., `order_date_key` and `ship_date_key` both reference `dim_date`). Weft handles this via `COALESCE` in JOIN conditions:
+A "role-playing dimension" is when two different foreign keys in the fact table both reference the same dimension table (e.g., `order_date_key` and `ship_date_key` both reference `dim_date`). Lens handles this via `COALESCE` in JOIN conditions:
 
 ```sql
 LEFT JOIN [dim_date] AS [dim_date_1]
@@ -647,7 +647,7 @@ data_sources table
 
 ## Caching Strategy
 
-Weft intentionally avoids server-side caching of query results — all data is fetched live from Fabric SQL on every request. This ensures users always see the most current data.
+Lens intentionally avoids server-side caching of query results — all data is fetched live from Fabric SQL on every request. This ensures users always see the most current data.
 
 What IS cached:
 - **JWKS public keys**: `PyJWKClient(cache_keys=True)` — avoids repeated HTTPS calls to Azure AD
@@ -763,7 +763,7 @@ conn.execute_query("SELECT * FROM table WHERE id = ?", [record_id])
 
 ### Next.js App Router
 
-Weft uses the **Next.js 15 App Router** with all interactive pages rendered client-side (no SSR data fetching — all data comes from the authenticated API).
+Lens uses the **Next.js 15 App Router** with all interactive pages rendered client-side (no SSR data fetching — all data comes from the authenticated API).
 
 ```
 app/

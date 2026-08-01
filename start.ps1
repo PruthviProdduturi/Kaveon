@@ -1,4 +1,4 @@
-# Weft Startup Script
+# Lens Startup Script
 # Starts the Python/FastAPI API and the Next.js web app
 #
 # Run from anywhere — script locates itself via $PSScriptRoot.
@@ -6,7 +6,7 @@
 Set-Location $PSScriptRoot
 
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  Weft Startup" -ForegroundColor Cyan
+Write-Host "  Lens Startup" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -65,7 +65,7 @@ Write-Host "  Auth + database configured via UI on first launch." -ForegroundCol
 Write-Host ""
 Write-Host "[3/6] Setting up Python API..." -ForegroundColor Yellow
 
-Push-Location "apps\weft-api"
+Push-Location "apps\lens-api"
 
 if (-not (Test-Path "venv")) {
     Write-Host "  Creating Python virtual environment..." -ForegroundColor Cyan
@@ -133,15 +133,15 @@ $useWt = $null -ne (Get-Command wt -ErrorAction SilentlyContinue)
 
 if ($useWt) {
     # Open both services in a single Windows Terminal with two tabs
-    $apiCmd  = "cmd /k `"cd /d `"$PSScriptRoot\apps\weft-api`" && venv\Scripts\activate && python main.py`""
-    $webCmd  = "cmd /k `"cd /d `"$PSScriptRoot`" && pnpm --filter weft-web dev`""
-    Start-Process wt -ArgumentList "new-tab --title `"Weft API`" $apiCmd ; new-tab --title `"Weft Web`" $webCmd"
+    $apiCmd  = "cmd /k `"cd /d `"$PSScriptRoot\apps\lens-api`" && venv\Scripts\activate && python main.py`""
+    $webCmd  = "cmd /k `"cd /d `"$PSScriptRoot`" && pnpm --filter lens-web dev`""
+    Start-Process wt -ArgumentList "new-tab --title `"Lens API`" $apiCmd ; new-tab --title `"Lens Web`" $webCmd"
     Write-Host "  Services starting in Windows Terminal..." -ForegroundColor Green
 } else {
-    Start-Process cmd -ArgumentList "/k", "cd /d `"$PSScriptRoot\apps\weft-api`" && venv\Scripts\activate && python main.py" -WindowStyle Normal
+    Start-Process cmd -ArgumentList "/k", "cd /d `"$PSScriptRoot\apps\lens-api`" && venv\Scripts\activate && python main.py" -WindowStyle Normal
     Write-Host "  API starting in new window..." -ForegroundColor Green
     Start-Sleep -Seconds 2
-    Start-Process cmd -ArgumentList "/k", "cd /d `"$PSScriptRoot`" && pnpm --filter weft-web dev" -WindowStyle Normal
+    Start-Process cmd -ArgumentList "/k", "cd /d `"$PSScriptRoot`" && pnpm --filter lens-web dev" -WindowStyle Normal
     Write-Host "  Web starting in new window..." -ForegroundColor Green
 }
 
@@ -153,14 +153,14 @@ $webListening = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction 
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Green
-Write-Host "  Weft is Starting!" -ForegroundColor Green
+Write-Host "  Lens is Starting!" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "  1. Weft API:  http://localhost:8080" -ForegroundColor White
+Write-Host "  1. Lens API:  http://localhost:8080" -ForegroundColor White
 Write-Host "     - Health: http://localhost:8080/api/health" -ForegroundColor Gray
 Write-Host "     - Docs:   http://localhost:8080/docs" -ForegroundColor Gray
 Write-Host ""
-Write-Host "  2. Weft Web:  http://localhost:3000" -ForegroundColor White
+Write-Host "  2. Lens Web:  http://localhost:3000" -ForegroundColor White
 Write-Host "     - Next.js 15 + Turbopack" -ForegroundColor Gray
 Write-Host ""
 
