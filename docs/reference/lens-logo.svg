@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 250 72" fill="none" role="img" aria-label="Lens">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 182 72" fill="none" role="img" aria-label="Lens">
   <defs>
     <linearGradient id="g" gradientUnits="userSpaceOnUse" x1="0" y1="8" x2="0" y2="64">
       <stop offset="0" stop-color="#7be0ef"/>
@@ -6,15 +6,15 @@
     </linearGradient>
   </defs>
   <!-- Aperture mark: six blades around an open centre (Lens focuses; it has no pupil) -->
-  <circle cx="36.0" cy="36.0" r="26.5" fill="none" stroke="url(#g)" stroke-width="3.4"/>
-  <path d="M 42.52 28.75 L 32.99 26.73 L 26.46 33.97 L 29.48 43.25 L 39.01 45.27 L 45.54 38.03 Z" fill="#46c7d9" opacity="0.12"/>
-    <line x1="42.52" y1="28.75" x2="36.00" y2="10.50" stroke="url(#g)" stroke-width="3.6" stroke-linecap="round"/>
-    <line x1="32.99" y1="26.73" x2="13.92" y2="23.25" stroke="url(#g)" stroke-width="3.6" stroke-linecap="round"/>
-    <line x1="26.46" y1="33.97" x2="13.92" y2="48.75" stroke="url(#g)" stroke-width="3.6" stroke-linecap="round"/>
-    <line x1="29.48" y1="43.25" x2="36.00" y2="61.50" stroke="url(#g)" stroke-width="3.6" stroke-linecap="round"/>
-    <line x1="39.01" y1="45.27" x2="58.08" y2="48.75" stroke="url(#g)" stroke-width="3.6" stroke-linecap="round"/>
-    <line x1="45.54" y1="38.03" x2="58.08" y2="23.25" stroke="url(#g)" stroke-width="3.6" stroke-linecap="round"/>
-  <line x1="32.99" y1="26.73" x2="13.92" y2="23.25" stroke="#bff0f7" stroke-width="3.6" stroke-linecap="round" opacity="0.55"/>
-  <!-- Wordmark -->
-  <text x="82" y="49" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-weight="800" font-size="42" letter-spacing="1.5" fill="url(#g)">LENS</text>
+  <circle cx="32.0" cy="36.0" r="26.5" fill="none" stroke="url(#g)" stroke-width="3.4"/>
+  <path d="M 38.52 28.75 L 28.99 26.73 L 22.46 33.97 L 25.48 43.25 L 35.01 45.27 L 41.54 38.03 Z" fill="#46c7d9" opacity="0.12"/>
+    <line x1="38.52" y1="28.75" x2="32.00" y2="10.50" stroke="url(#g)" stroke-width="3.6" stroke-linecap="round"/>
+    <line x1="28.99" y1="26.73" x2="9.92" y2="23.25" stroke="url(#g)" stroke-width="3.6" stroke-linecap="round"/>
+    <line x1="22.46" y1="33.97" x2="9.92" y2="48.75" stroke="url(#g)" stroke-width="3.6" stroke-linecap="round"/>
+    <line x1="25.48" y1="43.25" x2="32.00" y2="61.50" stroke="url(#g)" stroke-width="3.6" stroke-linecap="round"/>
+    <line x1="35.01" y1="45.27" x2="54.08" y2="48.75" stroke="url(#g)" stroke-width="3.6" stroke-linecap="round"/>
+    <line x1="41.54" y1="38.03" x2="54.08" y2="23.25" stroke="url(#g)" stroke-width="3.6" stroke-linecap="round"/>
+  <line x1="28.99" y1="26.73" x2="9.92" y2="23.25" stroke="#bff0f7" stroke-width="3.6" stroke-linecap="round" opacity="0.55"/>
+  <!-- Wordmark, tight to the mark -->
+  <text x="63" y="49" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-weight="800" font-size="42" letter-spacing="0.5" fill="url(#g)">LENS</text>
 </svg>
