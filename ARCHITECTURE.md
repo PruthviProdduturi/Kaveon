@@ -1,6 +1,6 @@
 # Lens Architecture
 
-**Live Operational Outcomes & Metrics eXperience**
+**See the pattern.**
 
 > Comprehensive technical architecture documentation for the Lens platform
 

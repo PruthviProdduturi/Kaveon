@@ -1,8 +1,8 @@
 <div align="center">
 
-# ✦ Lens
+<img src="docs/reference/lens-logo.svg" alt="Lens" width="260" />
 
-### **Live Operational Outcomes & Metrics eXperience**
+### **See the pattern.**
 
 *Built for Advanced Analytics. Multi-Provider Auth. Open Source.*
 
@@ -872,6 +872,6 @@ Or change `API_PORT` in `.env` and restart.
 
 **Built for Advanced Analytics. Multi-Provider Auth. Open Source.**
 
-*Lens — Live Operational Outcomes & Metrics eXperience*
+*Lens — See the pattern.*
 
 </div>
