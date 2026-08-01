@@ -141,3 +141,6 @@ __pycache__/
 # Tool Configs (dev tooling, not project source)
 # ---------------------------------------------------------
 .claude/
+
+# per-repo memory, local only
+CLAUDE.md
