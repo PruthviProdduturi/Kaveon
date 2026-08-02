@@ -166,6 +166,32 @@ export function LensLoading({
             }}
           ></div>
 
+          {/* LENS wordmark in the absolute center of the rings */}
+          <div style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10,
+            filter: `drop-shadow(0 0 20px ${ar(0.4)}) drop-shadow(0 0 40px ${pr(0.3)})`,
+          }}>
+            <span style={{
+              fontSize: 44,
+              fontWeight: 800,
+              letterSpacing: '0.12em',
+              fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif",
+              lineHeight: 1,
+              backgroundImage: `linear-gradient(180deg, ${primary} 0%, ${secondary} 100%)`,
+              WebkitBackgroundClip: 'text',
+              backgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              color: primary,
+            }}>
+              LENS
+            </span>
+          </div>
+
           {/* Orbiting Dots with Enhanced Glow */}
           {/* Dot 1 - Outer Ring */}
           <div style={{ position: 'absolute', inset: 0, animation: 'spin-smooth 4s linear infinite', willChange: 'transform', backfaceVisibility: 'hidden', transform: 'translateZ(0)' }}>
