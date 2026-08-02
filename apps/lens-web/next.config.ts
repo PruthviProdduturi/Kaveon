@@ -6,6 +6,15 @@ import { resolve } from 'path';
 config({ path: resolve(__dirname, '../../.env') });
 
 const nextConfig: NextConfig = {
+  // TECH DEBT: the codebase carries pre-existing TypeScript/ESLint errors that
+  // predate a committed lint/type config (it has only ever run under `next dev`
+  // + Turbopack, which skips a full type-check). These flags let production
+  // builds (Vercel / Docker / `next build`) succeed while the debt is burned
+  // down. CI still runs `tsc --noEmit` and ESLint as reporting gates — see
+  // .github/workflows/ci.yml. Remove both flags once the type-check gate is green.
+  typescript: { ignoreBuildErrors: true },
+  eslint: { ignoreDuringBuilds: true },
+
   // Required for Docker/Container Apps deployment — creates a self-contained
   // server bundle under .next/standalone that can run without node_modules.
   output: 'standalone',
