@@ -640,4 +640,12 @@ After the first cold start, subsequent page loads complete in under 1 second.
 
 ---
 
+## 14. Alternative — Deploy the Frontend to Vercel
+
+The full guide above deploys **both** services to Azure Container Apps. If you prefer, `lens-web` (the Next.js frontend) can be hosted on **Vercel** while `lens-api` continues to run on Container Apps (or any host reachable over HTTPS). This mirrors the rest of the Kaveon suite.
+
+See the dedicated guide: [**docs/guides/vercel-deployment.md**](docs/guides/vercel-deployment.md). In short — Root Directory `apps/lens-web`, production branch `dev`, set `NEXT_PUBLIC_*` env vars, and keep `lens-api` on Container Apps (Vercel serverless can't hold the pyodbc connection pool).
+
+---
+
 *Lens deployment guide — last updated March 2026*

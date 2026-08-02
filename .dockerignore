@@ -1,0 +1,47 @@
+# =============================================================================
+# .dockerignore — repo-root build context
+#
+# Both apps/lens-api/Dockerfile and apps/lens-web/Dockerfile build from the
+# repo root (COPY needs the monorepo layout + shared packages). Everything
+# below is excluded to keep the build context small and secret-free.
+# =============================================================================
+
+# Dependencies & build output
+node_modules
+**/node_modules
+.pnpm-store
+.turbo
+**/.next
+**/out
+**/dist
+**/build
+
+# Python
+**/venv
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+
+# Environment & secrets — never ship into an image
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.pfx
+
+# VCS & tooling
+.git
+.github
+.vscode
+.idea
+.claude
+CLAUDE.md
+
+# Docs & local junk
+*.md
+!README.md
+.DS_Store
+Thumbs.db
+*.log

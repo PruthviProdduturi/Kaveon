@@ -8,6 +8,10 @@
 
 <br>
 
+[![CI](https://github.com/PruthviProdduturi/Lens/actions/workflows/ci.yml/badge.svg)](https://github.com/PruthviProdduturi/Lens/actions/workflows/ci.yml) [![Deploy](https://github.com/PruthviProdduturi/Lens/actions/workflows/deploy.yml/badge.svg)](https://github.com/PruthviProdduturi/Lens/actions/workflows/deploy.yml)
+
+<br>
+
 [![Next.js](https://img.shields.io/badge/Next.js-15-0e7490?style=for-the-badge&logo=next.js&logoColor=white)](https://nextjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-0e7490?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Python](https://img.shields.io/badge/Python-3.11+-0e7490?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
