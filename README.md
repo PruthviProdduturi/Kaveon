@@ -163,46 +163,7 @@ Everything is configurable from the UI. No config file changes, no restarts need
 
 Lens is a **monorepo** with two services:
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Your Browser                              │
-│                    http://localhost:3000                          │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │  HTTPS / MSAL
-                               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  lens-web  ·  Next.js 15  ·  TypeScript  ·  React 19          │
-│                                                                  │
-│  · Multi-provider login (Local / Azure AD / Google)              │
-│  · Chart builder, dashboard builder, SQL Lab, AI assistant       │
-│  · ECharts + ECharts-GL visualisations · Monaco SQL editor       │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │  REST API (Bearer JWT)
-                               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  lens-api  ·  FastAPI  ·  Python 3.11                          │
-│                                                                  │
-│  · JWT verification: RS256/JWKS (Azure AD, Google) · HS256 local │
-│  · RBAC middleware (4 roles: Viewer / Analyst / Editor / Admin)  │
-│  · Semantic SQL generation · Dataset / chart / dashboard CRUD    │
-│  · AI chat proxy (Anthropic, OpenAI, GitHub Models)              │
-│  · pyodbc + ODBC Driver 18 connection pool (in-process)          │
-│  · Azure AD token injection via SQL_COPT_SS_ACCESS_TOKEN         │
-│  · Per-database pool · Startup warmup · 5-min heartbeat          │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │  ODBC / native drivers
-                               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  Data Sources                                                    │
-│                                                                  │
-│  ┌─────────────────────┐   ┌──────────────────────────────────┐ │
-│  │  Metadata Database  │   │  Your Data Sources (1 to N)      │ │
-│  │  (Lens app data)   │   │  Fabric SQL · Azure SQL          │ │
-│  │  Any supported DB   │   │  PostgreSQL · MySQL              │ │
-│  └─────────────────────┘   │  Trino · StarRocks               │ │
-│                             └──────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────┘
-```
+<p align="center"><img src="docs/reference/lens-architecture.svg" alt="Lens architecture: browser to lens-web (Next.js) to lens-api (FastAPI) to the metadata DB and your data sources" width="820"></p>
 
 ### Two databases
 
