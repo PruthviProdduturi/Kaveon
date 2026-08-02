@@ -151,10 +151,16 @@ export default function Home() {
 
     // Wait until the setup check completes (null = still checking → keep loader).
     if (isSetupOk === null) return;
-    // No metadata DB configured — nothing to fetch. Drop the loader and render
-    // the empty workspace shell instead of hanging on the spinner forever.
+    // No metadata DB configured — nothing to fetch. Drop the loader and show a
+    // real empty state (zeros, not the "•••" loading placeholder) so it doesn't
+    // look like it's still loading.
     if (isSetupOk === false) {
       setIsPageLoading(false);
+      setDashboardCount(0);
+      setChartCount(0);
+      setDatasetCount(0);
+      setSavedQueriesCount(0);
+      setLabTableCount(0);
       return;
     }
 
