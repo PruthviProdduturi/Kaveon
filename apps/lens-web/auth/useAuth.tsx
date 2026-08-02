@@ -1,26 +1,17 @@
 /**
- * Authentication — Kaveon Identity (suite-wide SSO).
+ * Authentication — NextAuth session (OAuth only: GitHub, Google, Microsoft).
  *
- * Lens delegates sign-in to the Kaveon Identity gateway. The user authenticates
- * once (Microsoft work/school/personal, or Google) and the gateway issues a
- * shared session honoured across the whole suite. This module just reads that
- * session (GET {IDENTITY_BASE}/api/auth/me) and hands off to the gateway for
- * sign-in/out. No local passwords, no dev logins.
+ * Lens is self-contained: sign-in runs inside the Next.js app via NextAuth
+ * (see ../auth.ts). This hook exposes the session to the rest of the app in the
+ * same shape components already expect. No local passwords, no external gateway.
  */
 
 "use client";
 
-import React, {
-	createContext,
-	useCallback,
-	useContext,
-	useEffect,
-	useState,
-} from "react";
+import React, { createContext, useCallback, useContext } from "react";
+import { SessionProvider as NextAuthSessionProvider, useSession, signIn, signOut } from "next-auth/react";
 
-import { IDENTITY_BASE } from "../config";
-
-export type AuthProvider = "microsoft" | "google";
+export type AuthProvider = "github" | "google" | "microsoft-entra-id";
 export type UserRole = "Viewer" | "Analyst" | "Editor" | "Admin";
 
 interface SimpleAccount {
@@ -34,8 +25,8 @@ interface AuthContextValue {
 	isConnecting: boolean;
 	noAccess: boolean;
 	error: string | null;
-	/** Start sign-in via the gateway. `provider` is "microsoft" (default) or "google". */
-	login: (provider?: string) => Promise<void>;
+	/** Start sign-in with a provider ("github" | "google" | "microsoft-entra-id"). */
+	login: (provider?: AuthProvider) => Promise<void>;
 	logout: () => Promise<void>;
 	account: SimpleAccount | null;
 	role: UserRole | null;
@@ -44,80 +35,42 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+/**
+ * AuthProvider — derives auth state from the NextAuth session.
+ * Must be rendered inside next-auth's <SessionProvider> (see app/providers.tsx).
+ */
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-	const [isAuthenticated, setIsAuthenticated] = useState(false);
-	const [isConnecting, setIsConnecting] = useState(true);
-	const [noAccess, setNoAccess] = useState(false);
-	const [error, setError] = useState<string | null>(null);
-	const [account, setAccount] = useState<SimpleAccount | null>(null);
-	const [role, setRole] = useState<UserRole | null>(null);
-	const [provider, setProvider] = useState<AuthProvider | null>(null);
+	const { data: session, status } = useSession();
 
-	// Restore the suite session from the gateway on mount.
-	useEffect(() => {
-		if (typeof window === "undefined") {
-			setIsConnecting(false);
-			return;
-		}
-		(async () => {
-			try {
-				const res = await fetch(`${IDENTITY_BASE}/api/auth/me`, {
-					credentials: "include",
-				});
-				if (res.ok) {
-					const data = (await res.json()) as {
-						email: string;
-						name: string;
-						role: UserRole;
-						provider: AuthProvider;
-					};
-					setIsAuthenticated(true);
-					setAccount({ name: data.name, username: data.email, email: data.email });
-					setRole(data.role);
-					setProvider(data.provider);
-				}
-			} catch {
-				// Gateway unreachable / not signed in → show the sign-in screen.
-			} finally {
-				setIsConnecting(false);
-			}
-		})();
+	const login = useCallback(async (provider?: AuthProvider) => {
+		await signIn(provider, { callbackUrl: "/" });
 	}, []);
 
-	const login = useCallback(async (prov: string = "microsoft"): Promise<void> => {
-		setError(null);
-		const next = encodeURIComponent(window.location.origin + "/");
-		window.location.href =
-			`${IDENTITY_BASE}/oauth2/sign_in?provider=${prov}&next=${next}`;
+	const logout = useCallback(async () => {
+		await signOut({ callbackUrl: "/login" });
 	}, []);
 
-	const logout = useCallback(async (): Promise<void> => {
-		setIsAuthenticated(false);
-		setAccount(null);
-		setRole(null);
-		setNoAccess(false);
-		window.location.href = `${IDENTITY_BASE}/oauth2/sign_out`;
-	}, []);
-
+	const user = session?.user ?? null;
 	const value: AuthContextValue = {
-		isAuthenticated,
-		isConnecting,
-		noAccess,
-		error,
+		isAuthenticated: status === "authenticated",
+		isConnecting: status === "loading",
+		noAccess: false,
+		error: null,
 		login,
 		logout,
-		account: isAuthenticated ? account : null,
-		role: isAuthenticated ? role : null,
-		provider,
+		account: user
+			? { name: user.name ?? undefined, username: user.email ?? undefined, email: user.email ?? undefined }
+			: null,
+		role: (user as { role?: UserRole } | null)?.role ?? (user ? "Viewer" : null),
+		provider: null,
 	};
 
 	return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-/**
- * useAuth — access authentication state and actions.
- * @throws if used outside of AuthProvider
- */
+/** Re-export NextAuth's SessionProvider for the app root. */
+export { NextAuthSessionProvider };
+
 export function useAuth(): AuthContextValue {
 	const ctx = useContext(AuthContext);
 	if (!ctx) {

@@ -18,9 +18,3 @@ function normalizeApiBase(value?: string) {
 }
 
 export const API_BASE = normalizeApiBase(raw);
-
-// Kaveon Identity — the suite-wide auth gateway. Sign-in and the shared SSO
-// session live here (Microsoft work+personal, Google). In production it fronts
-// the app (same-origin ""); in local dev it runs on :8080.
-export const IDENTITY_BASE =
-  process.env.NEXT_PUBLIC_IDENTITY_URL ?? "http://localhost:8080";

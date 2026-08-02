@@ -1,88 +1,119 @@
-import { APP_DISPLAY_NAME, APP_LOGO_URL } from "../constants/branding";
+"use client";
+
+import { useState } from "react";
+import { signIn } from "next-auth/react";
 import { LensLogo } from "./LensLogo";
-import { useAuth } from "../auth/useAuth";
+import { LensLoading } from "./LensLoading";
+import { APP_TAGLINE } from "../constants/branding";
 
 /**
- * AuthScreen — the Lens sign-in surface.
- *
- * Sign-in is delegated to Kaveon Identity (the suite gateway): one account works
- * across Forge, Lens & Anima. Only real identity providers — Microsoft (work,
- * school and personal) and Google. No local passwords, no dev logins.
+ * AuthScreen — Lens sign-in. OAuth only (GitHub, Google, Microsoft) via NextAuth.
+ * No local username/password, no external gateway.
  */
 export function AuthScreen() {
-  const { login, isConnecting, error: authError } = useAuth();
+	const [loading, setLoading] = useState<string | null>(null);
 
-  const Logo = (
-    <div className="auth-logo">
-      {APP_LOGO_URL ? (
-        <img src={APP_LOGO_URL} alt={`${APP_DISPLAY_NAME} logo`} style={{ height: 80 }} />
-      ) : (
-        <LensLogo size={52} animate="pulse" />
-      )}
-    </div>
-  );
+	const start = (provider: string) => {
+		setLoading(provider);
+		signIn(provider, { callbackUrl: "/" });
+	};
 
-  // Resolving the suite session.
-  if (isConnecting) {
-    return (
-      <div className="auth-section">
-        <div className="auth-container">
-          {Logo}
-          <div className="auth-content">
-            <p className="auth-subtitle" style={{ textAlign: "center" }}>
-              <i className="fas fa-spinner fa-spin" style={{ marginRight: 8 }} />
-              Connecting…
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
+	// While redirecting to the identity provider, reuse the branded Lens loader
+	// (aperture + rings) rather than a generic spinner.
+	if (loading) {
+		return <LensLoading message="Signing in" />;
+	}
 
-  return (
-    <div className="auth-section">
-      <div className="auth-container">
-        {Logo}
+	const btnBase: React.CSSProperties = {
+		width: "100%",
+		display: "flex",
+		alignItems: "center",
+		justifyContent: "center",
+		gap: 10,
+		padding: "11px 16px",
+		fontSize: 14,
+		fontWeight: 600,
+		borderRadius: 10,
+		cursor: "pointer",
+		marginBottom: 10,
+	};
 
-        <div className="auth-content">
-          <p className="auth-tagline">See the pattern.</p>
-          <p className="auth-subtitle">The analyze layer of the Kaveon data platform</p>
+	return (
+		<div
+			style={{
+				position: "fixed",
+				inset: 0,
+				display: "flex",
+				alignItems: "center",
+				justifyContent: "center",
+				background: "radial-gradient(1200px 600px at 50% -10%, #0e2a33, #0a101e)",
+				padding: 20,
+			}}
+		>
+			<div
+				style={{
+					width: "100%",
+					maxWidth: 400,
+					background: "#111a2e",
+					border: "1px solid #22304d",
+					borderRadius: 18,
+					padding: "40px 36px 32px",
+					boxShadow: "0 32px 72px rgba(0,0,0,0.55)",
+					textAlign: "center",
+				}}
+			>
+				{/* Logo already includes the LENS wordmark — no separate heading. */}
+				<div style={{ display: "flex", justifyContent: "center", marginBottom: 8 }}>
+					<LensLogo size={44} />
+				</div>
+				<p style={{ fontSize: 13, color: "#7dd3e0", margin: "0 0 26px" }}>{APP_TAGLINE}</p>
 
-          <div className="auth-form" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <button
-              className="auth-button"
-              onClick={() => void login("microsoft")}
-              disabled={isConnecting}
-            >
-              <i className="fab fa-microsoft" />
-              <span>Continue with Microsoft</span>
-            </button>
+				{/* GitHub */}
+				<button
+					type="button"
+					onClick={() => start("github")}
+					style={{ ...btnBase, background: "#24292e", color: "#fff", border: "none" }}
+				>
+					<svg width="18" height="18" viewBox="0 0 24 24" fill="white" aria-hidden="true">
+						<path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
+					</svg>
+					Sign in with GitHub
+				</button>
 
-            <button
-              className="auth-button"
-              onClick={() => void login("google")}
-              disabled={isConnecting}
-            >
-              <i className="fab fa-google" />
-              <span>Continue with Google</span>
-            </button>
-          </div>
+				{/* Google */}
+				<button
+					type="button"
+					onClick={() => start("google")}
+					style={{ ...btnBase, background: "#fff", color: "#3c4043", border: "1px solid #dadce0" }}
+				>
+					<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+						<path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4" />
+						<path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
+						<path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05" />
+						<path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
+					</svg>
+					Sign in with Google
+				</button>
 
-          {authError && (
-            <div className="auth-error">
-              <i className="fas fa-exclamation-triangle" />
-              <span>{authError}</span>
-            </div>
-          )}
+				{/* Microsoft */}
+				<button
+					type="button"
+					onClick={() => start("microsoft-entra-id")}
+					style={{ ...btnBase, background: "#fff", color: "#3c4043", border: "1px solid #dadce0" }}
+				>
+					<svg width="16" height="16" viewBox="0 0 21 21" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+						<rect x="1" y="1" width="9" height="9" fill="#f25022" />
+						<rect x="11" y="1" width="9" height="9" fill="#7fba00" />
+						<rect x="1" y="11" width="9" height="9" fill="#00a4ef" />
+						<rect x="11" y="11" width="9" height="9" fill="#ffb900" />
+					</svg>
+					Sign in with Microsoft
+				</button>
 
-          <div className="auth-footer">
-            <p>
-              One <strong>Kaveon</strong> account works across Forge, Lens &amp; Anima.
-              Microsoft covers work, school &amp; personal.
-            </p>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+				<p style={{ fontSize: 11.5, color: "#5b6b86", marginTop: 22 }}>
+					© {new Date().getFullYear()} Lens — a Kaveon platform module
+				</p>
+			</div>
+		</div>
+	);
 }
