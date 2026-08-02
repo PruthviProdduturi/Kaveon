@@ -20,9 +20,11 @@
 
 name: Deploy to Azure Container Apps
 
+# Manual-only: this deploy needs Azure OIDC repo variables (AZURE_CLIENT_ID,
+# AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, ACR_NAME, RESOURCE_GROUP, …) to be
+# configured first — see DEPLOYMENT.md. Until then, run it on demand from the
+# Actions tab ("Run workflow") rather than auto-firing (and failing) on push.
 on:
-  push:
-    branches: [dev]
   workflow_dispatch:
 
 permissions:
