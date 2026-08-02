@@ -37,6 +37,32 @@ _GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs"
 
 _AAD_CONFIGURED = bool(settings.AZURE_CLIENT_ID and settings.AZURE_TENANT_ID)
 
+
+# ── Proxy-injected identity (NextAuth flow, à la Forge) ───────────────────────
+# The lens-web Next.js proxy verifies the NextAuth session server-side and
+# forwards X-User-Email / X-User-Name / X-User-Role / X-User-Roles, stamped with
+# X-Proxy-Secret. We trust those headers ONLY when the secret matches — so a
+# browser hitting the API directly cannot spoof an identity. A LENS_DEV_USER_EMAIL
+# env bypasses auth entirely for local dev (never set in production).
+
+def _proxy_identity(request: Request) -> Optional[tuple[str, str, list[str], str]]:
+    """Return (email, role, roles, name) from trusted proxy headers, or None."""
+    # Local dev bypass — no proxy, no secret.
+    dev_email = settings.LENS_DEV_USER_EMAIL
+    if dev_email and "@" in dev_email:
+        role = settings.LENS_DEV_USER_ROLE or "Admin"
+        return (dev_email.lower(), role, [role], settings.LENS_DEV_USER_NAME or "Dev User")
+
+    secret = settings.LENS_PROXY_SECRET
+    if secret and request.headers.get("x-proxy-secret", "") == secret:
+        email = request.headers.get("x-user-email", "")
+        if email and "@" in email:
+            role = request.headers.get("x-user-role", "") or "Viewer"
+            roles = [r for r in request.headers.get("x-user-roles", "").split(",") if r]
+            name = request.headers.get("x-user-name", "") or email.split("@")[0]
+            return (email.lower(), role, roles or [role], name)
+    return None
+
 _aad_jwks_client: Optional[PyJWKClient] = None
 if _AAD_CONFIGURED:
     _aad_jwks_client = PyJWKClient(_AAD_JWKS_URL, cache_keys=True)
@@ -225,6 +251,13 @@ def get_current_user(request: Request) -> Optional[str]:
     Non-blocking dependency — returns user email or None.
     Preserved for backward compatibility with routers that only need the email.
     """
+    # Trusted proxy identity (NextAuth flow) takes precedence.
+    proxied = _proxy_identity(request)
+    if proxied:
+        email = proxied[0]
+        request.state.user = email
+        return email
+
     auth_header = request.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:].strip()
@@ -234,14 +267,8 @@ def get_current_user(request: Request) -> Optional[str]:
             request.state.user = email
             return email
 
-    # x-user-email header fallback — only in setup mode (no AAD config and no DB provider)
-    provider = _get_active_provider()
-    if not _AAD_CONFIGURED and provider in ("local",):
-        email = request.headers.get("x-user-email", "")
-        if email and "@" in email:
-            request.state.user = email.lower()
-            return email.lower()
-
+    # Note: a raw x-user-email header is NOT trusted. Identity comes only from a
+    # verified Bearer JWT or the secret-stamped proxy headers (_proxy_identity).
     request.state.user = None
     return None
 
@@ -270,6 +297,16 @@ def get_user_context(request: Request) -> Optional[UserContext]:
     Returns a UserContext with email + resolved role, or None if unauthenticated.
     Resolves role from: JWT claim (azure_ad/google) or JWT + Viewer fallback (local).
     """
+    # Trusted proxy identity (NextAuth flow) — role comes straight from the
+    # header the proxy set from the NextAuth session; no DB lookup needed.
+    proxied = _proxy_identity(request)
+    if proxied:
+        email, role, roles, _name = proxied
+        request.state.user = email
+        ctx = UserContext(email=email, role=role or "Viewer", jwt_roles=roles)
+        request.state.user_context = ctx
+        return ctx
+
     auth_header = request.headers.get("authorization", "")
     email: Optional[str] = None
     jwt_roles: list[str] = []
@@ -280,13 +317,9 @@ def get_user_context(request: Request) -> Optional[UserContext]:
         if result:
             email, jwt_roles = result
 
-    # x-user-email fallback — only when AAD is not configured and provider is local
-    provider = _get_active_provider()
-    if not email and not _AAD_CONFIGURED and provider in ("local",):
-        raw = request.headers.get("x-user-email", "")
-        if raw and "@" in raw:
-            email = raw.lower()
-
+    # NOTE: a raw x-user-email header is NOT trusted here — that was a spoof
+    # vector. Trusted identity comes only from _proxy_identity (secret-gated,
+    # handled above) or a verified Bearer JWT.
     if not email:
         return None
 
