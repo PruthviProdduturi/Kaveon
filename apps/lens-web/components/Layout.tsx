@@ -74,7 +74,7 @@ export function Layout({ children }: LayoutProps) {
         <div className="header-left">
           {/* Logo */}
           <div className="header-logo-area" onClick={handleLogoClick}>
-            <LensLogo size={64} animate={isRevolving ? "revolve" : "none"} />
+            <LensLogo size={30} animate={isRevolving ? "revolve" : "none"} />
           </div>
 
           {/* Separator */}
