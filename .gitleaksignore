@@ -1,0 +1,9 @@
+# gitleaks allowlist — false positives only.
+#
+# The default first-run local credential is `admin` / `admin`. It is a
+# well-known bootstrap default documented in the README, not a secret, and it
+# lives in source as a fallback constant. If gitleaks ever flags it, add the
+# specific finding fingerprint below (format: <commit>:<path>:<rule>:<line>).
+#
+# Do NOT add real secrets here. Connection strings, JWT signing keys, and AI
+# provider keys are stored encrypted at rest (Fernet/AES) and never committed.
