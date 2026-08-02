@@ -24,8 +24,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: pnpm
 
+      # Note: pnpm-lock.yaml is intentionally gitignored in this repo, so
+      # setup-node's pnpm cache can't be used and install runs unfrozen.
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
