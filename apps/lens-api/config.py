@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     METADATA_DATABASE: str = ""
     METADATA_HOST: str = ""       # PostgreSQL / MySQL host
     METADATA_PORT: int = 0        # 0 = use driver default
+    # Standard username/password auth for PostgreSQL / MySQL metadata DBs
+    # (e.g. Neon, Supabase, PlanetScale). When USER+PASSWORD are set they are
+    # used; otherwise the connection falls back to Azure AD Managed Identity.
+    METADATA_USER: str = ""
+    METADATA_PASSWORD: str = ""
+    METADATA_SSLMODE: str = "require"   # PostgreSQL sslmode; Neon needs "require"
 
     # ── Data warehouse (optional fallback) ────────────────────────────────────
     DATAWAREHOUSE_ENDPOINT: str = ""

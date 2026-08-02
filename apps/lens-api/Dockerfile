@@ -39,6 +39,7 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')" || exit 1
 
-# Uvicorn workers managed by Gunicorn for production multi-threading
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "4", "--threads", "8", \
-     "--timeout", "120", "--worker-class", "uvicorn.workers.UvicornWorker", "main:app"]
+# Uvicorn workers managed by Gunicorn for production multi-threading.
+# Shell form so ${PORT} expands — hosts like Render/Fly inject $PORT; 8080 local.
+CMD gunicorn --bind 0.0.0.0:${PORT:-8080} --workers 4 --threads 8 \
+     --timeout 120 --worker-class uvicorn.workers.UvicornWorker main:app
