@@ -149,8 +149,14 @@ export default function Home() {
       return;
     }
 
-    // Wait until setup check completes; skip data calls if not set up.
-    if (isSetupOk !== true) return;
+    // Wait until the setup check completes (null = still checking → keep loader).
+    if (isSetupOk === null) return;
+    // No metadata DB configured — nothing to fetch. Drop the loader and render
+    // the empty workspace shell instead of hanging on the spinner forever.
+    if (isSetupOk === false) {
+      setIsPageLoading(false);
+      return;
+    }
 
     const userEmail = account?.email || account?.username || null;
 
