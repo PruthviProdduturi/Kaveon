@@ -316,13 +316,26 @@ class PostgreSQLConnection:
     def connect(self):
         if self.connection:
             return
+        import os as _os
         import psycopg2
-        token, username = _get_ossrdbms_token()
-        self.connection = psycopg2.connect(
-            host=self.host, port=self.port, dbname=self.database,
-            user=username, password=token,
-            sslmode="require", connect_timeout=30,
-        )
+        user = _os.environ.get("METADATA_USER") or settings.METADATA_USER
+        password = _os.environ.get("METADATA_PASSWORD") or settings.METADATA_PASSWORD
+        if user and password:
+            # Standard username/password auth — Neon, Supabase, self-hosted PG.
+            sslmode = _os.environ.get("METADATA_SSLMODE") or settings.METADATA_SSLMODE or "require"
+            self.connection = psycopg2.connect(
+                host=self.host, port=self.port, dbname=self.database,
+                user=user, password=password,
+                sslmode=sslmode, connect_timeout=30,
+            )
+        else:
+            # Azure AD Managed Identity (Azure Database for PostgreSQL).
+            token, username = _get_ossrdbms_token()
+            self.connection = psycopg2.connect(
+                host=self.host, port=self.port, dbname=self.database,
+                user=username, password=token,
+                sslmode="require", connect_timeout=30,
+            )
         self.connection.autocommit = False
         print(f"[Pool] Connected (PostgreSQL) -> {self.database}")
 
@@ -396,15 +409,29 @@ class MySQLConnection:
     def connect(self):
         if self.connection:
             return
+        import os as _os
         import pymysql
-        token, username = _get_ossrdbms_token()
-        self.connection = pymysql.connect(
-            host=self.host, port=self.port, database=self.database,
-            user=username, password=token,
-            charset="utf8mb4", connect_timeout=30,
-            ssl={"ssl": {}},
-            cursorclass=pymysql.cursors.Cursor,
-        )
+        user = _os.environ.get("METADATA_USER") or settings.METADATA_USER
+        password = _os.environ.get("METADATA_PASSWORD") or settings.METADATA_PASSWORD
+        if user and password:
+            # Standard username/password auth — PlanetScale, self-hosted MySQL.
+            self.connection = pymysql.connect(
+                host=self.host, port=self.port, database=self.database,
+                user=user, password=password,
+                charset="utf8mb4", connect_timeout=30,
+                ssl={"ssl": {}},
+                cursorclass=pymysql.cursors.Cursor,
+            )
+        else:
+            # Azure AD Managed Identity (Azure Database for MySQL).
+            token, username = _get_ossrdbms_token()
+            self.connection = pymysql.connect(
+                host=self.host, port=self.port, database=self.database,
+                user=username, password=token,
+                charset="utf8mb4", connect_timeout=30,
+                ssl={"ssl": {}},
+                cursorclass=pymysql.cursors.Cursor,
+            )
         print(f"[Pool] Connected (MySQL) -> {self.database}")
 
     def execute_query(self, sql: str, params: Optional[list] = None) -> Dict[str, Any]:

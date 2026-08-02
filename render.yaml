@@ -1,0 +1,45 @@
+# Render Blueprint — deploys lens-api (FastAPI) from its Dockerfile.
+#
+# Use: https://render.com → New → Blueprint → connect this repo. Render reads
+# this file and prompts for the `sync: false` secrets (Neon connection + the
+# shared proxy secret) at create time. lens-web is deployed separately on Vercel.
+#
+# See docs/guides/deploy-vercel-render-neon.md for the full walkthrough.
+services:
+  - type: web
+    name: lens-api
+    runtime: docker
+    repo: https://github.com/PruthviProdduturi/Lens
+    branch: dev
+    dockerfilePath: apps/lens-api/Dockerfile
+    dockerContext: .            # repo root — the Dockerfile COPYs apps/lens-api/
+    plan: free
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # ── Metadata DB — Neon (open-source Postgres) ──────────────────────────
+      - key: METADATA_DB_TYPE
+        value: postgresql
+      - key: METADATA_HOST
+        sync: false             # <endpoint>.neon.tech
+      - key: METADATA_PORT
+        value: "5432"
+      - key: METADATA_DATABASE
+        sync: false             # e.g. lens
+      - key: METADATA_USER
+        sync: false             # Neon role
+      - key: METADATA_PASSWORD
+        sync: false             # Neon password
+      - key: METADATA_SSLMODE
+        value: require
+      # ── Identity bridge — must equal Vercel's LENS_PROXY_SECRET ─────────────
+      - key: LENS_PROXY_SECRET
+        sync: false
+      # ── CORS allow-origin (your Vercel URL, https://…) ─────────────────────
+      - key: WEB_URL
+        sync: false
+      # ── Encrypts AI keys / secrets at rest ─────────────────────────────────
+      - key: AI_ENCRYPTION_SECRET
+        generateValue: true
