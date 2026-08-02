@@ -18,6 +18,20 @@ class Settings(BaseSettings):
     AZURE_TENANT_ID: str = ""
     AZURE_CLIENT_ID: str = ""
 
+    # ── Proxy-injected identity (NextAuth flow, à la Forge) ────────────────────
+    # The lens-web Next.js proxy authenticates the NextAuth session server-side
+    # and forwards requests with X-User-Email / X-User-Name / X-User-Role headers,
+    # stamped with X-Proxy-Secret. lens-api trusts those headers ONLY when the
+    # secret matches this value — so a browser hitting the API directly cannot
+    # spoof an identity. Leave blank to disable the proxy trust path.
+    LENS_PROXY_SECRET: str = ""
+
+    # Local dev bypass — set to a real email to skip auth entirely (no proxy).
+    # Never set in production.
+    LENS_DEV_USER_EMAIL: str = ""
+    LENS_DEV_USER_NAME: str = "Dev User"
+    LENS_DEV_USER_ROLE: str = "Admin"
+
     # ── Metadata database ─────────────────────────────────────────────────────
     # Supported types: fabric_sql | azure_sql | postgresql | mysql
     METADATA_DB_TYPE: str = ""
