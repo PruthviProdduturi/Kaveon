@@ -13,6 +13,7 @@ Key design decisions preserved from the proxy:
 """
 
 import os
+import re
 import struct
 import json
 import time
@@ -21,6 +22,7 @@ from datetime import datetime, date
 from queue import Queue, Empty
 from threading import Lock
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse, unquote, parse_qs
 
 from azure.identity import DefaultAzureCredential
 from fastapi.responses import JSONResponse
@@ -128,6 +130,77 @@ def is_connection_error(e: Exception) -> bool:
     """True for transient TCP/ODBC errors on a stale pooled socket."""
     msg = str(e).lower()
     return "08s01" in msg or "10054" in msg or "communication link failure" in msg
+
+
+# ── Dialect adaptation ─────────────────────────────────────────────────────────
+# Chart/dataset SQL is generated in T-SQL (SQL Server). When a data source is
+# PostgreSQL or MySQL we translate the common idioms so those queries run there.
+# Idempotent — safe to apply more than once (a second pass finds nothing to change).
+
+def adapt_sql(sql: str, db_type: str) -> str:
+    """Translate T-SQL idioms to the target dialect (postgresql / mysql)."""
+    if db_type in ("fabric_sql", "azure_sql", ""):
+        return sql
+
+    sql = re.sub(r"\bdbo\.", "", sql, flags=re.IGNORECASE)
+
+    # SELECT TOP N / TOP (@x) → … LIMIT N
+    top_match = re.search(r"\bSELECT\s+TOP\s+\(?([^\s)]+)\)?\b", sql, re.IGNORECASE)
+    if top_match:
+        n = top_match.group(1)
+        sql = re.sub(r"\bSELECT\s+TOP\s+\(?[^\s)]+\)?\s*", "SELECT ", sql, count=1, flags=re.IGNORECASE)
+        sql = sql.rstrip().rstrip(";") + f" LIMIT {n}"
+
+    sql = re.sub(r"\bGETDATE\(\)", "NOW()", sql, flags=re.IGNORECASE)
+    sql = re.sub(r"\bISNULL\(", "COALESCE(", sql, flags=re.IGNORECASE)
+
+    # [ident] → "ident" (PostgreSQL) or `ident` (MySQL)
+    if db_type == "postgresql":
+        sql = re.sub(r"\[([^\]]+)\]", r'"\1"', sql)
+    elif db_type == "mysql":
+        sql = re.sub(r"\[([^\]]+)\]", r"`\1`", sql)
+
+    return sql
+
+
+# ── Data source connection info ────────────────────────────────────────────────
+
+def _map_ds_type(raw: Optional[str]) -> str:
+    """Map a data_sources.type label to an internal db_type."""
+    t = (raw or "").strip().lower()
+    if "postgre" in t:
+        return "postgresql"
+    if "mysql" in t or "mariadb" in t:
+        return "mysql"
+    if "star" in t:            # StarRocks speaks the MySQL protocol
+        return "mysql"
+    return "fabric_sql"        # Fabric SQL / Azure SQL (default)
+
+
+def parse_db_url(conn: str) -> Dict[str, Any]:
+    """Parse a PostgreSQL/MySQL connection URL into parts.
+
+    Accepts e.g. postgresql://user:pass@host:5432/db?sslmode=require
+    (the format Neon/Supabase give you). Returns host/port/user/password/sslmode/database.
+    """
+    conn = (conn or "").strip()
+    out: Dict[str, Any] = {"host": "", "port": 0, "user": "", "password": "", "sslmode": "", "database": ""}
+    if not conn:
+        return out
+    # Normalise scheme so urlparse populates netloc
+    normalized = re.sub(r"^(postgres(ql)?|mysql)\+?\w*://", "scheme://", conn, flags=re.IGNORECASE)
+    if "://" not in normalized:
+        normalized = "scheme://" + normalized
+    u = urlparse(normalized)
+    out["host"] = u.hostname or ""
+    out["port"] = u.port or 0
+    out["user"] = unquote(u.username) if u.username else ""
+    out["password"] = unquote(u.password) if u.password else ""
+    out["database"] = (u.path or "").lstrip("/")
+    q = parse_qs(u.query or "")
+    if "sslmode" in q:
+        out["sslmode"] = q["sslmode"][0]
+    return out
 
 
 # ── FabricSQLConnection ───────────────────────────────────────────────────────
@@ -303,12 +376,20 @@ class FabricSQLConnection:
 # ── PostgreSQLConnection ──────────────────────────────────────────────────────
 
 class PostgreSQLConnection:
-    """Single psycopg2 connection to Azure Database for PostgreSQL via Managed Identity."""
+    """Single psycopg2 connection to PostgreSQL.
 
-    def __init__(self, host: str, port: int, database: str):
+    Auth precedence: explicit user/password (data sources, e.g. a registered Neon
+    source) → METADATA_USER/PASSWORD env (metadata DB) → Azure AD Managed Identity.
+    """
+
+    def __init__(self, host: str, port: int, database: str,
+                 user: str = "", password: str = "", sslmode: str = ""):
         self.host = host
         self.port = port or 5432
         self.database = database
+        self.user = user
+        self.password = password
+        self.sslmode = sslmode
         self.connection = None
         self.in_use: bool = False
         self.last_used: float = time.time()
@@ -318,11 +399,11 @@ class PostgreSQLConnection:
             return
         import os as _os
         import psycopg2
-        user = _os.environ.get("METADATA_USER") or settings.METADATA_USER
-        password = _os.environ.get("METADATA_PASSWORD") or settings.METADATA_PASSWORD
+        user = self.user or _os.environ.get("METADATA_USER") or settings.METADATA_USER
+        password = self.password or _os.environ.get("METADATA_PASSWORD") or settings.METADATA_PASSWORD
         if user and password:
             # Standard username/password auth — Neon, Supabase, self-hosted PG.
-            sslmode = _os.environ.get("METADATA_SSLMODE") or settings.METADATA_SSLMODE or "require"
+            sslmode = self.sslmode or _os.environ.get("METADATA_SSLMODE") or settings.METADATA_SSLMODE or "require"
             self.connection = psycopg2.connect(
                 host=self.host, port=self.port, dbname=self.database,
                 user=user, password=password,
@@ -396,12 +477,19 @@ class PostgreSQLConnection:
 # ── MySQLConnection ───────────────────────────────────────────────────────────
 
 class MySQLConnection:
-    """Single PyMySQL connection to Azure Database for MySQL via Managed Identity."""
+    """Single PyMySQL connection to MySQL.
 
-    def __init__(self, host: str, port: int, database: str):
+    Auth precedence: explicit user/password (data sources) → METADATA_USER/PASSWORD
+    env (metadata DB) → Azure AD Managed Identity.
+    """
+
+    def __init__(self, host: str, port: int, database: str,
+                 user: str = "", password: str = "", sslmode: str = ""):
         self.host = host
         self.port = port or 3306
         self.database = database
+        self.user = user
+        self.password = password
         self.connection = None
         self.in_use: bool = False
         self.last_used: float = time.time()
@@ -411,8 +499,8 @@ class MySQLConnection:
             return
         import os as _os
         import pymysql
-        user = _os.environ.get("METADATA_USER") or settings.METADATA_USER
-        password = _os.environ.get("METADATA_PASSWORD") or settings.METADATA_PASSWORD
+        user = self.user or _os.environ.get("METADATA_USER") or settings.METADATA_USER
+        password = self.password or _os.environ.get("METADATA_PASSWORD") or settings.METADATA_PASSWORD
         if user and password:
             # Standard username/password auth — PlanetScale, self-hosted MySQL.
             self.connection = pymysql.connect(
@@ -496,6 +584,7 @@ class ConnectionPool:
         self, endpoint: str, database: str, pool_size: int = 10,
         db_type: str = "fabric_sql",
         host: str = "", port: int = 0,
+        user: str = "", password: str = "", sslmode: str = "",
     ):
         self.endpoint = endpoint
         self.database = database
@@ -503,6 +592,9 @@ class ConnectionPool:
         self.db_type = db_type
         self.host = host
         self.port = port
+        self.user = user
+        self.password = password
+        self.sslmode = sslmode
         self.available: Queue = Queue(maxsize=pool_size)
         self.all_connections: List[Any] = []
         self.lock = Lock()
@@ -512,9 +604,11 @@ class ConnectionPool:
         if self.db_type in ("fabric_sql", "azure_sql"):
             return FabricSQLConnection(self.endpoint, self.database)
         if self.db_type == "postgresql":
-            return PostgreSQLConnection(self.host, self.port, self.database)
+            return PostgreSQLConnection(self.host, self.port, self.database,
+                                        self.user, self.password, self.sslmode)
         if self.db_type == "mysql":
-            return MySQLConnection(self.host, self.port, self.database)
+            return MySQLConnection(self.host, self.port, self.database,
+                                   self.user, self.password, self.sslmode)
         raise ValueError(f"Unsupported db_type: {self.db_type}")
 
     def get_connection(self) -> Any:
@@ -627,14 +721,62 @@ def get_connection_pool(database: str) -> ConnectionPool:
                              (5432 if db_type == "postgresql" else 3306)),
                 )
         else:
-            # Data warehouse — always Fabric SQL / Azure SQL via pyodbc
-            endpoint = _resolve_endpoint(database)
-            if not endpoint:
-                raise ValueError(f"No endpoint configured for database: {database}")
-            pool = ConnectionPool(endpoint, database, pool_size=settings.MAX_POOL_SIZE_DATAWAREHOUSE)
+            # Data source — resolve its type + connection info from data_sources.
+            ds = _resolve_data_source(database)
+            ds_type = _map_ds_type(ds.get("type") if ds else None)
+            pool_size = settings.MAX_POOL_SIZE_DATAWAREHOUSE
+            if ds_type in ("postgresql", "mysql"):
+                # e.g. a registered Neon / Supabase / PlanetScale source. The
+                # connection URL (with credentials) lives in connection_string.
+                info = parse_db_url(ds.get("connection_string", "") if ds else "")
+                if not info["host"]:
+                    raise ValueError(f"Invalid {ds_type} connection string for data source: {database}")
+                pool = ConnectionPool(
+                    "", database, pool_size=pool_size, db_type=ds_type,
+                    host=info["host"],
+                    port=info["port"] or (5432 if ds_type == "postgresql" else 3306),
+                    user=info["user"], password=info["password"], sslmode=info["sslmode"],
+                )
+            else:
+                # Fabric SQL / Azure SQL — connection_string is the ODBC endpoint.
+                endpoint = (ds.get("connection_string", "") if ds else "") or settings.DATAWAREHOUSE_ENDPOINT or ""
+                if not endpoint:
+                    raise ValueError(f"No endpoint configured for database: {database}")
+                pool = ConnectionPool(endpoint, database, pool_size=pool_size)
 
         _pools[database] = pool
         return pool
+
+
+def _resolve_data_source(database: str) -> Optional[Dict[str, Any]]:
+    """Return {type, connection_string} for a registered data source, or None.
+
+    Dialect-aware: uses %s / TRUE against a Postgres/MySQL metadata DB and ? / 1
+    against Fabric/Azure SQL.
+    """
+    meta_db = _live_meta_db()
+    if meta_db not in _pools:
+        return None
+    meta_pool = _pools[meta_db]
+    is_pg_my = meta_pool.db_type in ("postgresql", "mysql")
+    ph = "%s" if is_pg_my else "?"
+    active = "TRUE" if is_pg_my else "1"
+    conn = None
+    try:
+        conn = meta_pool.get_connection()
+        result = conn.execute_query(
+            f"SELECT type, connection_string FROM data_sources "
+            f"WHERE database_name = {ph} AND is_active = {active} ORDER BY id DESC",
+            [database],
+        )
+        rows = result["rows_objects"]
+        return rows[0] if rows else None
+    except Exception as e:
+        print(f"[Pool] Could not resolve data source {database}: {e}")
+        return None
+    finally:
+        if conn:
+            meta_pool.return_connection(conn)
 
 
 def _resolve_endpoint(database: str) -> str:
@@ -671,6 +813,8 @@ def execute_query(sql: str, database: str, params: Optional[list] = None) -> Dic
     Retries once on stale-connection errors (08S01 / 10054).
     """
     pool = get_connection_pool(database)
+    # Translate T-SQL idioms when the target is Postgres/MySQL (idempotent).
+    sql = adapt_sql(sql, pool.db_type)
     for attempt in range(2):
         conn = pool.get_connection()
         try:
@@ -692,6 +836,7 @@ def execute_query_cancellable(
 ) -> Dict[str, Any]:
     """execute_query variant that supports mid-flight cancellation via cancel_event."""
     db_pool = get_connection_pool(database)
+    sql = adapt_sql(sql, db_pool.db_type)
     conn = db_pool.get_connection()
     try:
         result = conn.execute_query_cancellable(sql, params, cancel_event=cancel_event)
