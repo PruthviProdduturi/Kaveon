@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { LensLogo } from './LensLogo';
 
 /**
  * LensLoading — full-screen branded loading screen.
@@ -166,19 +165,6 @@ export function LensLoading({
               animation: 'pulse-glow 2.5s ease-in-out infinite',
             }}
           ></div>
-
-          {/* Logo in Absolute Center with Glow */}
-          <div style={{
-            position: 'absolute',
-            inset: 0,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 10,
-            filter: `drop-shadow(0 0 20px ${ar(0.4)}) drop-shadow(0 0 40px ${pr(0.3)})`,
-          }}>
-            <LensLogo size={120} animate="pulse" />
-          </div>
 
           {/* Orbiting Dots with Enhanced Glow */}
           {/* Dot 1 - Outer Ring */}
