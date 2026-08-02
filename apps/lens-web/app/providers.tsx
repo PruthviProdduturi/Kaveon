@@ -6,16 +6,19 @@ import "@fortawesome/fontawesome-free/css/regular.min.css";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 
+import { SessionProvider } from "next-auth/react";
 import { AuthProvider } from "../auth/useAuth";
 import { ThemeProvider } from "../contexts/ThemeContext";
 import { ReactNode } from "react";
 
 export function Providers({ children }: { children: ReactNode }) {
   return (
-    <AuthProvider>
-      <ThemeProvider>
-        {children}
-      </ThemeProvider>
-    </AuthProvider>
+    <SessionProvider>
+      <AuthProvider>
+        <ThemeProvider>
+          {children}
+        </ThemeProvider>
+      </AuthProvider>
+    </SessionProvider>
   );
 }
