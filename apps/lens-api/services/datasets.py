@@ -270,8 +270,8 @@ def create_dataset(data: dict, user_id: str) -> dict:
               is_dimension, is_metric, semantic_type
             ) VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6)
         """, [dataset_id, col.get("table_name") or "", col.get("column_name") or "", col.get("data_type") or "",
-              1 if col.get("is_dimension") else 0,
-              1 if col.get("is_metric") else 0,
+              bool(col.get("is_dimension")),
+              bool(col.get("is_metric")),
               col.get("semantic_type")])
 
     try:
@@ -346,8 +346,8 @@ def update_dataset(dataset_id: str, data: dict, user_id: str) -> Optional[dict]:
                   is_dimension, is_metric, semantic_type
                 ) VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6)
             """, [did, col.get("table_name"), col.get("column_name"), col.get("data_type"),
-                  1 if col.get("is_dimension") else 0,
-                  1 if col.get("is_metric") else 0,
+                  bool(col.get("is_dimension")),
+                  bool(col.get("is_metric")),
                   col.get("semantic_type")])
 
     if "metrics" in data and isinstance(data["metrics"], list):

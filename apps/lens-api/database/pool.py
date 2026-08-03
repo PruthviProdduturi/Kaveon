@@ -156,11 +156,13 @@ def adapt_sql(sql: str, db_type: str) -> str:
 
     sql = re.sub(r"\bdbo\.", "", sql, flags=re.IGNORECASE)
 
-    # SELECT TOP N / TOP (@x) → … LIMIT N
-    top_match = re.search(r"\bSELECT\s+TOP\s+\(?([^\s)]+)\)?\b", sql, re.IGNORECASE)
+    # SELECT [DISTINCT] TOP N / TOP (@x) → … LIMIT N  (keep DISTINCT if present)
+    top_match = re.search(r"\bSELECT\s+(DISTINCT\s+)?TOP\s+\(?([^\s)]+)\)?\b", sql, re.IGNORECASE)
     if top_match:
-        n = top_match.group(1)
-        sql = re.sub(r"\bSELECT\s+TOP\s+\(?[^\s)]+\)?\s*", "SELECT ", sql, count=1, flags=re.IGNORECASE)
+        distinct = top_match.group(1) or ""
+        n = top_match.group(2)
+        sql = re.sub(r"\bSELECT\s+(?:DISTINCT\s+)?TOP\s+\(?[^\s)]+\)?\s*",
+                     f"SELECT {distinct}", sql, count=1, flags=re.IGNORECASE)
         sql = sql.rstrip().rstrip(";") + f" LIMIT {n}"
 
     sql = re.sub(r"\bGET(?:UTC)?DATE\(\)", "NOW()", sql, flags=re.IGNORECASE)

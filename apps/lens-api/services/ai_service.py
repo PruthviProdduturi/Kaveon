@@ -111,14 +111,14 @@ def upsert_provider(provider: str, label: str, api_key: str, model: str, is_acti
     if existing:
         db.execute(
             "UPDATE ai_providers SET api_key_enc=@param0, model=@param1, is_active=@param2, updated_at=GETUTCDATE() WHERE id=@param3",
-            [enc, model, 1 if is_active else 0, existing["id"]],
+            [enc, model, bool(is_active), existing["id"]],
         )
         pid = existing["id"]
     else:
         row = db.query_one(
             "INSERT INTO ai_providers (provider, label, api_key_enc, model, is_active, created_by) "
             "OUTPUT INSERTED.id VALUES (@param0, @param1, @param2, @param3, @param4, @param5)",
-            [provider, label, enc, model, 1 if is_active else 0, created_by],
+            [provider, label, enc, model, bool(is_active), created_by],
         )
         pid = row["id"] if row else None
     return {"id": pid, "provider": provider, "label": label, "model": model, "is_active": is_active}

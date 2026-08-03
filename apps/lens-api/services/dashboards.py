@@ -113,8 +113,8 @@ def create_dashboard(data: dict, user_id: str) -> dict:
         _to_str(data.get("charts", [])),
         _to_str(data.get("filters", [])),
         None, None, visibility,
-        1 if data.get("is_published") else 0,
-        1 if data.get("is_archived") else 0,
+        bool(data.get("is_published")),
+        bool(data.get("is_archived")),
         user_id, user_id, now, now,
     ])
     created = get_dashboard_by_id(d_id)
@@ -143,7 +143,9 @@ def update_dashboard(dashboard_id: str, data: dict) -> Optional[dict]:
         if field_name in data:
             updates.append(f"{col} = @param{i}"); params.append(_to_str(data[field_name])); i += 1
     if "is_published" in data:
-        updates.append(f"is_published = @param{i}"); params.append(1 if data["is_published"] else 0); i += 1
+        # Boolean, not 1/0 — Postgres won't implicitly cast int→boolean in a
+        # parameterised UPDATE (MSSQL's bit column accepts bool fine too).
+        updates.append(f"is_published = @param{i}"); params.append(bool(data["is_published"])); i += 1
     if "visibility" in data:
         vis = data["visibility"] if data["visibility"] in VALID_VISIBILITY else "internal"
         updates.append(f"visibility = @param{i}"); params.append(vis); i += 1
