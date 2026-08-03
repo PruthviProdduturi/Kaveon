@@ -286,7 +286,7 @@ const DashboardFilterBarReadOnly: React.FC = () => {
       )}
 
       <div className="chart-filter-body">
-        <div className="chart-filter-list" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+        <div className="chart-filter-list" style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center', justifyContent: 'flex-start' }}>
           {dashboardFilters.map((filter) => {
             const isEditing = editingFilterId === filter.id;
             const isDisabled = !filter.enabled;

@@ -35,10 +35,10 @@ interface BigNumberKpiCardProps {
 }
 
 // Inline sparkline SVG for big_number_trend with hover tooltip
-const SparkLine: React.FC<{ values: number[]; color: string; rowLabels?: string[]; formatValue?: (v: number) => string }> = ({ values, color, rowLabels, formatValue }) => {
+const SparkLine: React.FC<{ values: number[]; color: string; rowLabels?: string[]; formatValue?: (v: number) => string; fill?: boolean }> = ({ values, color, rowLabels, formatValue, fill }) => {
   const [hoverIdx, setHoverIdx] = React.useState<number | null>(null);
   if (values.length < 2) return null;
-  const W = 240, H = 56, PAD = 4;
+  const W = 240, H = fill ? 120 : 56, PAD = fill ? 0 : 4;
   const min = Math.min(...values);
   const max = Math.max(...values);
   const range = max - min || 1;
@@ -51,10 +51,11 @@ const SparkLine: React.FC<{ values: number[]; color: string; rowLabels?: string[
 
   const hov = hoverIdx !== null ? hoverIdx : null;
 
+  const gradId = `spark-grad-${fill ? 'f' : 's'}`;
   return (
-    <div style={{ position: 'relative', display: 'inline-block' }}>
+    <div style={{ position: 'relative', display: fill ? 'block' : 'inline-block', width: fill ? '100%' : undefined, height: fill ? '100%' : undefined }}>
       {/* Hover tooltip */}
-      {hov !== null && (
+      {hov !== null && !fill && (
         <div style={{
           position: 'absolute',
           left: toX(hov) - 30,
@@ -73,16 +74,20 @@ const SparkLine: React.FC<{ values: number[]; color: string; rowLabels?: string[
           {rowLabels?.[hov] ? `${rowLabels[hov]}: ` : ''}{formatValue ? formatValue(values[hov]) : values[hov].toLocaleString(undefined, { maximumFractionDigits: 2 })}
         </div>
       )}
-      <svg width={W} height={H} style={{ overflow: 'visible', display: 'block', cursor: 'crosshair' }}>
+      <svg
+        width={fill ? '100%' : W} height={fill ? '100%' : H}
+        viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none"
+        style={{ overflow: 'visible', display: 'block', cursor: 'crosshair' }}
+      >
         <defs>
-          <linearGradient id="spark-grad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={color} stopOpacity="0.22" />
+          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity={fill ? 0.35 : 0.22} />
             <stop offset="100%" stopColor={color} stopOpacity="0.02" />
           </linearGradient>
         </defs>
-        <polygon points={fillPts} fill="url(#spark-grad)" />
-        <polyline points={linePts} fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-        <circle cx={lastX} cy={lastY} r="3.5" fill={color} />
+        <polygon points={fillPts} fill={`url(#${gradId})`} />
+        <polyline points={linePts} fill="none" stroke={color} strokeWidth={fill ? 2 : 2.2} vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
+        {!fill && <circle cx={lastX} cy={lastY} r="3.5" fill={color} />}
         {/* Hover dot */}
         {hov !== null && (
           <circle cx={toX(hov)} cy={toY(values[hov])} r="4.5" fill={color} stroke="#fff" strokeWidth="1.5" />
@@ -168,25 +173,30 @@ const BigNumberKpiCard: React.FC<BigNumberKpiCardProps> = ({ options, rows, colu
   // Custom label overrides auto-detected column name
   const displayLabel = kpiOpts.labelText || label;
 
+  const hasSpark = showTrend && sparkValues.length >= 2;
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: showTrend ? 6 : 8, padding: 24 }}>
-      {options?.title?.text && (
-        <div style={{ fontSize: 13, color: "#6b7280", fontWeight: 500, textAlign: "center" }}>{options.title.text}</div>
-      )}
-      <div style={{ fontSize: 52, fontWeight: 700, color: "#0f172a", lineHeight: 1, letterSpacing: "-2px" }}>{formatted}</div>
-      {displayLabel && <div style={{ fontSize: 13, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>{displayLabel}</div>}
-      {/* Sparkline — only for big_number_trend */}
-      {showTrend && sparkValues.length >= 2 && (
-        <div style={{ marginTop: 4, marginBottom: 2 }}>
-          <SparkLine values={sparkValues} color={trendColor} rowLabels={sparkLabels.length ? sparkLabels : undefined} formatValue={(v) => `${prefix}${formatKpiValue(v)}${suffix}`} />
+    <div style={{ position: "relative", height: "100%", width: "100%", overflow: "hidden" }}>
+      {/* Trend area fills the whole card as a subtle backdrop */}
+      {hasSpark && (
+        <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, top: "38%", opacity: 0.9, pointerEvents: "none" }}>
+          <SparkLine values={sparkValues} color={trendColor} fill />
         </div>
       )}
-      {trend !== null && (
-        <div style={{ fontSize: 14, color: trendColor, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
-          <span>{trendIcon}</span>
-          <span>{Math.abs(trend).toFixed(1)}% vs prior period</span>
-        </div>
-      )}
+      {/* Number + label, centred over the chart */}
+      <div style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 6, padding: "16px 20px" }}>
+        {options?.title?.text && (
+          <div style={{ fontSize: 13, color: "#6b7280", fontWeight: 500, textAlign: "center" }}>{options.title.text}</div>
+        )}
+        <div style={{ fontSize: 46, fontWeight: 800, color: "#0f172a", lineHeight: 1, letterSpacing: "-1.5px" }}>{formatted}</div>
+        {displayLabel && <div style={{ fontSize: 12, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>{displayLabel}</div>}
+        {trend !== null && (
+          <div style={{ fontSize: 13, color: trendColor, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
+            <span>{trendIcon}</span>
+            <span>{Math.abs(trend).toFixed(1)}% vs prior period</span>
+          </div>
+        )}
+      </div>
     </div>
   );
 };
