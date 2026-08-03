@@ -145,8 +145,8 @@ def main():
           {"metrics": [M("new_confirmed", "SUM", "New Cases")], "time_column": "dt", "time_grain": "week",
            "time_range": "all_time", "query_mode": agg, "row_limit": 5000})
     ids["global_cum"] = chart("Global Cumulative Cases", daily, "time_series_area",
-          {"metrics": [M("confirmed", "SUM", "Total Cases")], "time_column": "dt", "time_grain": "day",
-           "time_range": "all_time", "query_mode": agg, "row_limit": 5000})
+          {"metrics": [M("new_confirmed", "SUM", "Cumulative Cases")], "time_column": "dt", "time_grain": "week",
+           "rolling_calc": "cumulative_sum", "time_range": "all_time", "query_mode": agg, "row_limit": 5000})
     ids["map"] = chart("Confirmed Cases by Country", country, "world_map",
           {"metrics": [M("confirmed", "SUM", "Cases")], "groupby": ["country"],
            "sort_by": {"column": "confirmed", "direction": "desc"}, "query_mode": agg, "row_limit": 250})
