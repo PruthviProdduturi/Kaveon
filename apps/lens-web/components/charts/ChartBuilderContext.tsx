@@ -55,13 +55,21 @@ export function buildEChartsOptionsFromQueryResult(
   // remaining dimension columns define series keys.
   const metricIndex = columns.length - 1;
   let timeIndex = columns.findIndex((c) => /date|time/i.test(c));
-  if (timeIndex === -1 && columns.length >= 2) {
+  // Only assume a positional time axis for time-series chart kinds. For
+  // categorical charts (bar/pie/donut/map) there is no time column — the first
+  // non-metric column is the x-axis category, not a series.
+  const _isTimeKind = /time_series|_line|_area|line_multi|area_stack/.test(chartKind);
+  if (timeIndex === -1 && columns.length >= 2 && _isTimeKind) {
     timeIndex = 1;
   }
+  // x-axis column: the time column when present, else the first column.
+  const xIndex = timeIndex >= 0 ? timeIndex : 0;
 
+  // Series = every column that is neither the x-axis nor the metric. For a plain
+  // (dimension, metric) result this is empty → a single series named after the metric.
   const dimensionIndexes: number[] = [];
   columns.forEach((_, idx) => {
-    if (idx !== metricIndex && idx !== timeIndex) {
+    if (idx !== metricIndex && idx !== xIndex) {
       dimensionIndexes.push(idx);
     }
   });
