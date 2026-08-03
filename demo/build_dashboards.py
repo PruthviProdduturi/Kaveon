@@ -7,7 +7,9 @@ ship. Idempotent-ish: clears prior demo datasets/charts/dashboards first.
 Env: NEON_URL, LENS_PROXY_SECRET (defaults to the local dev secret).
 """
 import os
+import re
 import json
+import uuid
 import requests
 import psycopg2
 
@@ -81,6 +83,24 @@ def M(col, agg, label):
     return {"column": col, "aggregate": agg, "label": label}
 
 
+def tile(chart_id, x, y, w, h):
+    return {"i": "t" + uuid.uuid4().hex[:8], "type": "chart", "chartId": chart_id,
+            "x": x, "y": y, "w": w, "h": h, "minW": 2, "minH": 2, "maxW": 12, "maxH": 24}
+
+
+def dash(name, description, layout):
+    slug = re.sub(r"[^a-z0-9-]", "", name.lower().replace(" ", "-"))
+    chart_ids = [t["chartId"] for t in layout if t.get("chartId")]
+    did = uuid.uuid4().hex
+    cur.execute("""INSERT INTO dashboards
+        (id, name, slug, description, layout, charts, filters, theme, tags, visibility,
+         is_published, is_archived, created_by, modified_by, created_at, modified_at)
+        VALUES (%s,%s,%s,%s,%s,%s,'[]',NULL,NULL,'published',true,false,%s,%s,now(),now())""",
+        (did, name, slug, description, json.dumps(layout), json.dumps(chart_ids), EMAIL, EMAIL))
+    print(f"  dashboard: {name}  id={did}  ({len(layout)} tiles)")
+    return did
+
+
 def main():
     print("reset…"); reset(); data_source()
 
@@ -96,32 +116,57 @@ def main():
     ])
     print(f"datasets: daily={daily} country={country}")
 
-    # ── COVID charts ──────────────────────────────────────────────────────────
+    # ── COVID charts (chart_type = real builder template ids) ──────────────────
     print("COVID charts:")
     agg = "aggregate"
-    chart("Global New Cases Over Time", daily, "line",
+    ids = {}
+    ids["kpi_cases"] = chart("Total Confirmed Cases", country, "big_number",
+          {"metrics": [M("confirmed", "SUM", "Total Cases")], "query_mode": agg})
+    ids["kpi_deaths"] = chart("Total Deaths", country, "big_number",
+          {"metrics": [M("deaths", "SUM", "Total Deaths")], "query_mode": agg})
+    ids["global_new"] = chart("Global New Cases Over Time", daily, "time_series_line",
           {"metrics": [M("new_confirmed", "SUM", "New Cases")], "groupby": ["dt"],
            "sort_by": {"column": "dt", "direction": "asc"}, "query_mode": agg, "row_limit": 2000})
-    chart("Global Cumulative Cases", daily, "area",
+    ids["global_cum"] = chart("Global Cumulative Cases", daily, "time_series_area",
           {"metrics": [M("confirmed", "SUM", "Total Cases")], "groupby": ["dt"],
            "sort_by": {"column": "dt", "direction": "asc"}, "query_mode": agg, "row_limit": 2000})
-    chart("Top 15 Countries by Cases", country, "bar",
+    ids["map"] = chart("Confirmed Cases by Country", country, "world_map",
+          {"metrics": [M("confirmed", "SUM", "Cases")], "groupby": ["country"],
+           "sort_by": {"column": "confirmed", "direction": "desc"}, "query_mode": agg, "row_limit": 250})
+    ids["top_cases"] = chart("Top 15 Countries by Cases", country, "bar_horizontal",
           {"metrics": [M("confirmed", "SUM", "Total Cases")], "groupby": ["country"],
            "sort_by": {"column": "confirmed", "direction": "desc"}, "query_mode": agg, "row_limit": 15})
-    chart("Top 15 Countries by Deaths", country, "bar",
+    ids["top_deaths"] = chart("Top 15 Countries by Deaths", country, "bar_horizontal",
           {"metrics": [M("deaths", "SUM", "Total Deaths")], "groupby": ["country"],
            "sort_by": {"column": "deaths", "direction": "desc"}, "query_mode": agg, "row_limit": 15})
-    chart("Deaths Share — Top 10", country, "pie",
+    ids["share"] = chart("Deaths Share — Top 10", country, "donut",
           {"metrics": [M("deaths", "SUM", "Deaths")], "groupby": ["country"],
            "sort_by": {"column": "deaths", "direction": "desc"}, "query_mode": agg, "row_limit": 10})
-    chart("US Daily New Cases", daily, "line",
+    ids["us_new"] = chart("US Daily New Cases", daily, "time_series_line",
           {"metrics": [M("new_confirmed", "SUM", "New Cases")], "groupby": ["dt"],
            "filters": [{"column": "country", "op": "=", "value": "US"}],
            "sort_by": {"column": "dt", "direction": "asc"}, "query_mode": agg, "row_limit": 2000})
-    chart("Country Summary", country, "table",
+    ids["summary"] = chart("Country Summary", country, "table",
           {"metrics": [M("confirmed", "SUM", "Cases"), M("deaths", "SUM", "Deaths")], "groupby": ["country"],
            "sort_by": {"column": "confirmed", "direction": "desc"}, "query_mode": agg, "row_limit": 100})
 
+    print("chart ids:", {k: v for k, v in ids.items() if v})
+
+    # ── COVID dashboard ───────────────────────────────────────────────────────
+    dash("COVID-19 Global Overview",
+         "Global COVID-19 cases, deaths, trends and country breakdowns — live from Neon Postgres.",
+         [
+             tile(ids["kpi_cases"], 0, 0, 3, 3),
+             tile(ids["kpi_deaths"], 3, 0, 3, 3),
+             tile(ids["map"], 6, 0, 6, 7),
+             tile(ids["global_new"], 0, 3, 6, 6),
+             tile(ids["top_cases"], 6, 7, 6, 6),
+             tile(ids["global_cum"], 0, 9, 6, 6),
+             tile(ids["top_deaths"], 6, 13, 6, 6),
+             tile(ids["share"], 0, 15, 6, 6),
+             tile(ids["us_new"], 6, 19, 6, 6),
+             tile(ids["summary"], 0, 21, 12, 7),
+         ])
     print("done.")
     cur.close(); conn.close()
 
