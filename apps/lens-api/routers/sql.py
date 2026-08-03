@@ -324,6 +324,7 @@ def execute_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Dep
                 result["row_count"] = lim
     except Exception as e:
         duration_ms = int(time.time() * 1000) - start_time
+        print(f"[SQL EXEC FAILED] {type(e).__name__}: {e}\n  DB: {database}\n  SQL: {sql_text[:500]}")
         try:
             history_svc.create_history({
                 "sql_text": sql_text, "duration_ms": duration_ms,

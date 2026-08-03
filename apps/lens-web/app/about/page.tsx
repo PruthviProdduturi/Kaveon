@@ -101,11 +101,10 @@ function Hero() {
         `}</style>
         <div style={{ display: "flex", justifyContent: "center", marginBottom: 22 }}>
           <div className="hero-logo" style={{
-            display: "inline-flex", padding: 14, borderRadius: "50%",
-            background: "rgba(124,224,239,0.06)", border: "1px solid rgba(124,224,239,0.18)",
-            boxShadow: "0 0 50px rgba(70,199,217,0.25)",
+            display: "inline-flex",
+            filter: "drop-shadow(0 0 34px rgba(70,199,217,0.45))",
           }}>
-            <LensMark size={70} />
+            <LensMark size={76} />
           </div>
         </div>
         <div style={{
