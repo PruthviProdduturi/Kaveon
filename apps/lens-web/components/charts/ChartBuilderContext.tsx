@@ -1732,17 +1732,20 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
 
     const displayFormat: DateDisplayFormat = xAxisDateFormat;
 
-    // Heuristics: last column is metric, a column containing "date"/"time" is x-axis,
-    // remaining dimension columns define series keys.
+    // Last column is the metric. A column named date/time is the x-axis for
+    // time-series charts; for categorical charts (bar/pie/donut/map) the FIRST
+    // column is the x-axis category — NOT a series. Series = any remaining column.
     const metricIndex = columns.length - 1;
     let timeIndex = columns.findIndex((c) => /date|time/i.test(c));
-    if (timeIndex === -1 && columns.length >= 2) {
+    const _isTimeKind = /time_series|_line|_area|line_multi|area_stack/.test(chartKind);
+    if (timeIndex === -1 && columns.length >= 2 && _isTimeKind) {
       timeIndex = 1;
     }
+    const xIndex = timeIndex >= 0 ? timeIndex : 0;
 
     const dimensionIndexes: number[] = [];
     columns.forEach((_, idx) => {
-      if (idx !== metricIndex && idx !== timeIndex) {
+      if (idx !== metricIndex && idx !== xIndex) {
         dimensionIndexes.push(idx);
       }
     });
@@ -1752,7 +1755,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     const dataMap = new Map<string, Map<string, number>>();
 
     rows.forEach((row) => {
-      const xRaw = timeIndex >= 0 ? row[timeIndex] : row[0];
+      const xRaw = row[xIndex];
       const x = xRaw == null ? "" : String(xRaw);
       if (!xValues.includes(x)) xValues.push(x);
 
