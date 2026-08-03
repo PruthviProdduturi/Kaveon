@@ -506,10 +506,13 @@ const WorldMapRenderer: React.FC<{
 
     const visualMap = {
       min: minV, max: maxV,
-      left: "left", bottom: 30,
+      left: "left", bottom: 24,
+      itemWidth: 12, itemHeight: 110,
+      // calculable:false → no draggable handles showing raw min/max numbers;
+      // just a clean gradient bar with formatted endpoints.
+      calculable: false,
       text: [fmtVal(maxV), fmtVal(minV)],
       inRange: { color: colorScheme },
-      calculable: true,
       textStyle: { fontSize: 11, color: isGlobe ? "#94a3b8" : "#475569" },
     };
 
@@ -585,14 +588,14 @@ const WorldMapRenderer: React.FC<{
     return {
       ...titleOpt,
       tooltip: tooltipStyle,
-      visualMap: { ...visualMap, left: 8, bottom: 12, itemWidth: 12, itemHeight: 70 },
+      visualMap: { ...visualMap, left: 8, bottom: 14, itemWidth: 11, itemHeight: 90 },
       series: [{
         type: "map",
         map: "world",
         roam: showRoam,
-        layoutCenter: ["52%", "55%"],
-        layoutSize: "132%",
-        aspectScale: 0.86,
+        layoutCenter: ["50%", "52%"],
+        layoutSize: "155%",
+        aspectScale: 0.9,
         data,
         select: { itemStyle: { areaColor: "#f59e0b" } },
         emphasis: { label: { show: true, fontSize: 11 }, itemStyle: { areaColor: "#fbbf24" } },
