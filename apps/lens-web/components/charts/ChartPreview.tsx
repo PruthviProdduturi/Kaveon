@@ -183,8 +183,8 @@ const BigNumberKpiCard: React.FC<BigNumberKpiCardProps> = ({ options, rows, colu
         {options?.title?.text && (
           <div style={{ fontSize: 13, color: "#6b7280", fontWeight: 500, textAlign: "center" }}>{options.title.text}</div>
         )}
-        <div style={{ fontSize: hasSpark ? "clamp(34px, 5.2vw, 60px)" : "clamp(40px, 6vw, 76px)", fontWeight: 800, color: "#0f172a", lineHeight: 1, letterSpacing: "-2px" }}>{formatted}</div>
-        {displayLabel && <div style={{ fontSize: 13, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600 }}>{displayLabel}</div>}
+        <div style={{ fontSize: hasSpark ? "clamp(30px, 4.6vw, 56px)" : "clamp(36px, 5.4vw, 68px)", fontWeight: 800, color: "#0f172a", lineHeight: 1, letterSpacing: "-2px", whiteSpace: "nowrap", maxWidth: "100%" }}>{formatted}</div>
+        {displayLabel && <div style={{ fontSize: 13, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>{displayLabel}</div>}
         {trend !== null && (
           <div style={{ fontSize: 13, color: trendColor, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
             <span>{trendIcon}</span>
