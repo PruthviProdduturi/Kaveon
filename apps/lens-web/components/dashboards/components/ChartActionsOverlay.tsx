@@ -65,6 +65,7 @@ const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
   };
 
   const menuItems = [
+    { icon: 'fas fa-arrow-up-right-from-square', label: 'View chart', action: () => { router.push(`/charts/${chartId}`); setOpen(false); } },
     { icon: 'fas fa-sync-alt',     label: 'Refresh',           action: () => { onRefresh(); setOpen(false); } },
     { icon: 'fas fa-expand',       label: 'Full screen',       action: () => { setFullScreen(true); setOpen(false); } },
     DIVIDER,
