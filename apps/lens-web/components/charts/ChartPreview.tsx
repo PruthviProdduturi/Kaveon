@@ -637,18 +637,23 @@ const WorldMapRenderer: React.FC<{
 
   if (!option) return null;
 
+  // Wrap in a stretch container: the parent .chart-builder-preview-inner uses
+  // align-items:center, which otherwise collapses a height:100% ECharts child to
+  // near-zero (making the map a tiny thumbnail).
   return (
-    <ReactECharts
-      option={option}
-      style={{ width: "100%", height: "100%", cursor: onCrossFilter ? "pointer" : undefined }}
-      onChartReady={(instance: any) => { eRef.current = instance; }}
-      onEvents={onCrossFilter ? {
-        click: (params: any) => {
-          const val = params?.name || (Array.isArray(params?.value) ? String(params.value[0]) : "");
-          if (val) onCrossFilter(String(val));
-        },
-      } : undefined}
-    />
+    <div style={{ position: "relative", width: "100%", height: "100%", flex: 1, alignSelf: "stretch", minHeight: 240 }}>
+      <ReactECharts
+        option={option}
+        style={{ width: "100%", height: "100%", cursor: onCrossFilter ? "pointer" : undefined }}
+        onChartReady={(instance: any) => { eRef.current = instance; }}
+        onEvents={onCrossFilter ? {
+          click: (params: any) => {
+            const val = params?.name || (Array.isArray(params?.value) ? String(params.value[0]) : "");
+            if (val) onCrossFilter(String(val));
+          },
+        } : undefined}
+      />
+    </div>
   );
 };
 
