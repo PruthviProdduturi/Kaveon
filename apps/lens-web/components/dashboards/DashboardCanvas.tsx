@@ -15,7 +15,7 @@ interface DashboardCanvasProps {
   className?: string;
 }
 
-const ROW_UNIT = 32;               // px per grid-height unit
+const ROW_UNIT = 30;               // px per grid-height unit (matches DEFAULT_GRID_CONFIG.rowHeight + columns)
 const MIN_ROW_UNITS = 2;
 
 const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => {

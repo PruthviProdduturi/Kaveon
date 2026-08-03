@@ -387,8 +387,16 @@ def _build_optimized_filter_clause(
     alias, col_name = _resolve_column_alias(col, fact_alias, alias_map, column_table_map)
     quoted_col = f"{alias}.{quote_identifier(col_name)}"
 
-    def _q(v):
-        return "'" + str(v).replace("'", "''") + "'"
+    def _is_num(v):
+        try:
+            float(str(v)); return str(v).strip() != ""
+        except (TypeError, ValueError):
+            return False
+
+    def _lit(v):
+        # Numeric values unquoted (quoting breaks bigint/numeric key columns on PG);
+        # everything else single-quoted with escaping.
+        return str(v) if _is_num(v) else "'" + str(v).replace("'", "''") + "'"
 
     # Multi-value → IN / NOT IN. Accept a real list, or a comma-joined string
     # (how the dashboard multi-select filter serialises its selection).
@@ -398,12 +406,11 @@ def _build_optimized_filter_clause(
         if not vals:
             return None
         if len(vals) == 1 and not isinstance(val, list) and not is_in:
-            return f"{quoted_col} = {_q(vals[0])}"
+            return f"{quoted_col} = {_lit(vals[0])}"
         keyword = "NOT IN" if raw_op == "NOT IN" else "IN"
-        return f"{quoted_col} {keyword} ({', '.join(_q(v) for v in vals)})"
+        return f"{quoted_col} {keyword} ({', '.join(_lit(v) for v in vals)})"
 
-    safe_val = str(val).replace("'", "''")
-    return f"{quoted_col} {op} '{safe_val}'"
+    return f"{quoted_col} {op} {_lit(val)}"
 
 
 # ─── Filtering strategy ───────────────────────────────────────────────────────
@@ -735,11 +742,12 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
             cte_parts.append(f"{time_grain_expr} AS [__time__]")
             cte_parts.extend(metric_agg_parts)
 
-            top_cte = f"TOP {int(row_limit)} " if row_limit and int(row_limit) > 0 else ""
-            cte_select_clause = f"SELECT {top_cte}{', '.join(cte_parts)}"
-            # NOTE: ORDER BY is intentionally omitted from the CTE — SQL Server
-            # forbids ORDER BY inside a CTE without TOP/OFFSET.
+            # Row cap belongs on the OUTER query, not the CTE — otherwise the
+            # single-TOP→LIMIT adapter relocates the cap to the outer result set
+            # anyway and changes semantics. Keep the CTE uncapped.
+            cte_select_clause = f"SELECT {', '.join(cte_parts)}"
             cte_body = " ".join([p for p in [cte_select_clause, from_clause, join_clause, where_clause, group_by_clause] if p])
+            outer_top = f"TOP {int(row_limit)} " if row_limit and int(row_limit) > 0 else ""
 
             # PARTITION BY per dimension so window runs per series, not across all data
             partition_by = f"PARTITION BY {', '.join(dim_aliases)} " if dim_aliases else ""
@@ -759,7 +767,7 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
                 outer_dims = ", ".join(dim_aliases + ["[__time__]"])
                 window_query = (
                     f"WITH base AS ({cte_body}) "
-                    f"SELECT {outer_dims}, {', '.join(window_selects)} "
+                    f"SELECT {outer_top}{outer_dims}, {', '.join(window_selects)} "
                     f"FROM base "
                     f"ORDER BY {', '.join(dim_aliases + ['[__time__]'])} ASC"
                 )

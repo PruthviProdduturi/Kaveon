@@ -273,18 +273,20 @@ def main():
         desc="Share of global deaths held by the 10 hardest-hit countries.", viz=_viz(PALETTE))
 
     # ── Impact / per-capita (filter-exempt for the same reason) ───────────────────
+    # Ratios (pct_affected, cfr) are non-additive — use AVG, not SUM, so grouping
+    # never sums percentages into nonsense (each country has one row, so AVG = value).
     i["pct_aff"] = chart("% Population Affected — Top 15", country, "bar_horizontal",
-        {"metrics": [M("pct_affected", "SUM", "Pct Affected")], "groupby": ["country"],
+        {"metrics": [M("pct_affected", "AVG", "Pct Affected")], "groupby": ["country"],
          "sort_by": {"column": "pct_affected", "direction": "desc"}, "query_mode": agg, "row_limit": 15},
         desc="Confirmed cases as a share of national population — normalises for size.", viz=_viz(["#f59e0b"]))
     i["cfr_rank"] = chart("Case Fatality Rate — Top 15", country, "bar_horizontal",
-        {"metrics": [M("cfr", "SUM", "CFR")], "groupby": ["country"],
+        {"metrics": [M("cfr", "AVG", "CFR")], "groupby": ["country"],
          "sort_by": {"column": "cfr", "direction": "desc"}, "query_mode": agg, "row_limit": 15},
         desc="Deaths ÷ cases by country. Highest ratios track fragile health systems.", viz=_viz(["#ec4899"]))
     i["detail"] = chart("Country Detail", country, "table",
         {"metrics": [M("population", "SUM", "Population"), M("confirmed", "SUM", "Cases"),
-                     M("deaths", "SUM", "Deaths"), M("pct_affected", "SUM", "Pct Affected"),
-                     M("cfr", "SUM", "CFR")],
+                     M("deaths", "SUM", "Deaths"), M("pct_affected", "AVG", "Pct Affected"),
+                     M("cfr", "AVG", "CFR")],
          "groupby": ["country"], "sort_by": {"column": "confirmed", "direction": "desc"},
          "query_mode": agg, "row_limit": 250},
         desc="Full per-country breakdown — searchable and sortable.")

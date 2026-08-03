@@ -219,8 +219,10 @@ export const DashboardChartComponent: React.FC<DashboardComponentProps> = ({ ite
   const activeCrossFilter = crossFilters[item.i];
 
   const handleCrossFilter = useCallback((column: string | null, value: string) => {
-    // Toggle: clicking the same value again clears the filter
-    if (activeCrossFilter?.value === value) {
+    // Ignore empty/blank axis clicks — they'd otherwise become a real `= ''` predicate.
+    if (value === null || value === undefined || String(value).trim() === '') return;
+    // Toggle: clicking the same column+value again clears the filter.
+    if (activeCrossFilter && activeCrossFilter.value === value && activeCrossFilter.column === column) {
       clearCrossFilter(item.i);
     } else {
       setCrossFilter(item.i, column, value);
