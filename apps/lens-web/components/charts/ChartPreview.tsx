@@ -177,13 +177,14 @@ const BigNumberKpiCard: React.FC<BigNumberKpiCardProps> = ({ options, rows, colu
 
   return (
     <div style={{ position: "relative", height: "100%", width: "100%", overflow: "hidden", display: "flex", flexDirection: "column" }}>
-      {/* Number + label — own zone, never overlapping the trend */}
-      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 5, padding: hasSpark ? "14px 20px 4px" : "16px 20px" }}>
+      {/* Number + label — own zone, never overlapping the trend. Uses clamp()
+          so the value scales with the card and fills the available space. */}
+      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, padding: hasSpark ? "10px 20px 2px" : "12px 20px" }}>
         {options?.title?.text && (
           <div style={{ fontSize: 13, color: "#6b7280", fontWeight: 500, textAlign: "center" }}>{options.title.text}</div>
         )}
-        <div style={{ fontSize: 44, fontWeight: 800, color: "#0f172a", lineHeight: 1, letterSpacing: "-1.5px" }}>{formatted}</div>
-        {displayLabel && <div style={{ fontSize: 12, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>{displayLabel}</div>}
+        <div style={{ fontSize: hasSpark ? "clamp(34px, 5.2vw, 60px)" : "clamp(40px, 6vw, 76px)", fontWeight: 800, color: "#0f172a", lineHeight: 1, letterSpacing: "-2px" }}>{formatted}</div>
+        {displayLabel && <div style={{ fontSize: 13, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600 }}>{displayLabel}</div>}
         {trend !== null && (
           <div style={{ fontSize: 13, color: trendColor, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
             <span>{trendIcon}</span>
@@ -193,7 +194,7 @@ const BigNumberKpiCard: React.FC<BigNumberKpiCardProps> = ({ options, rows, colu
       </div>
       {/* Trend band — separate zone at the bottom, no overlap with the text */}
       {hasSpark && (
-        <div style={{ height: "34%", minHeight: 46, flexShrink: 0, pointerEvents: "none" }}>
+        <div style={{ height: "42%", minHeight: 54, flexShrink: 0, pointerEvents: "none" }}>
           <SparkLine values={sparkValues} color={trendColor} fill />
         </div>
       )}
