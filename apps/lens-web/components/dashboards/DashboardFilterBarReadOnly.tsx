@@ -46,6 +46,8 @@ const DashboardFilterBarReadOnly: React.FC = () => {
   const [editingFilterId, setEditingFilterId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
   const [editValueKey, setEditValueKey] = useState<string>('');
+  const [editValues, setEditValues] = useState<string[]>([]);   // multi-select selection
+  const [optSearch, setOptSearch] = useState<string>('');       // dropdown search box
   const [editDateFrom, setEditDateFrom] = useState<string>('');
   const [editDateTo, setEditDateTo] = useState<string>('');
 
@@ -180,8 +182,14 @@ const DashboardFilterBarReadOnly: React.FC = () => {
     } else {
       setEditValue(filter.value);
       setEditValueKey(filter.valueKey ?? filter.value);
+      setEditValues(filter.value ? filter.value.split(',').map((s) => s.trim()).filter(Boolean) : []);
+      setOptSearch('');
       loadOptions(filter);
     }
+  };
+
+  const toggleEditValue = (v: string) => {
+    setEditValues((prev) => prev.includes(v) ? prev.filter((x) => x !== v) : [...prev, v]);
   };
 
   const handleSaveValue = (filterId: string) => {
@@ -190,29 +198,39 @@ const DashboardFilterBarReadOnly: React.FC = () => {
     if (filter.filterType === 'date_range') {
       updateDashboardFilter(filterId, { dateFrom: editDateFrom, dateTo: editDateTo, value: `${editDateFrom} – ${editDateTo}`, enabled: true });
     } else {
-      if (!editValue.trim()) return;
-      // Applying a value auto-enables the filter so it takes effect immediately.
-      updateDashboardFilter(filterId, { value: editValue, valueKey: editValueKey, enabled: true });
+      const vals = editValues.filter(Boolean);
+      if (!vals.length) return;
+      // Multi-select → IN; single → =. Applying auto-enables the filter.
+      updateDashboardFilter(filterId, {
+        value: vals.join(', '),
+        operator: vals.length > 1 ? 'IN' : '=',
+        enabled: true,
+      });
     }
-    setEditingFilterId(null);
-    setEditValue('');
-    setEditValueKey('');
-    setEditDateFrom('');
-    setEditDateTo('');
+    resetEdit();
   };
 
-  const handleCancelEdit = () => {
+  const resetEdit = () => {
     setEditingFilterId(null);
-    setEditValue('');
-    setEditValueKey('');
-    setEditDateFrom('');
-    setEditDateTo('');
+    setEditValue(''); setEditValueKey(''); setEditValues([]); setOptSearch('');
+    setEditDateFrom(''); setEditDateTo('');
   };
+
+  const handleCancelEdit = () => resetEdit();
 
   const handleToggleFilter = (filterId: string) => {
     const filter = dashboardFilters.find((f) => f.id === filterId);
     if (filter) updateDashboardFilter(filterId, { enabled: !filter.enabled });
   };
+
+  const clearAll = () => {
+    dashboardFilters.forEach((f) => {
+      if (f.enabled || f.value) updateDashboardFilter(f.id, { enabled: false, value: '' });
+    });
+    resetEdit();
+  };
+
+  const activeCount = dashboardFilters.filter((f) => f.enabled && String(f.value ?? '').trim()).length;
 
   const getFilterLabel = (filter: DashboardFilter): string => {
     const name = filter.label?.trim() || filter.column.split('.').pop() || filter.column;
@@ -223,8 +241,9 @@ const DashboardFilterBarReadOnly: React.FC = () => {
     }
     const value = filter.value?.trim();
     if (!value) return name;              // "Country" (unset) rather than "…country Equals "
-    const op = FILTER_OPERATORS.find((o) => o.value === filter.operator)?.label ?? filter.operator;
-    return `${name} ${op} ${value}`;
+    const parts = value.split(',').map((s) => s.trim()).filter(Boolean);
+    if (parts.length > 1) return `${name}: ${parts.length} selected`;
+    return `${name}: ${parts[0]}`;
   };
 
   if (dashboardFilters.length === 0) {
@@ -251,6 +270,18 @@ const DashboardFilterBarReadOnly: React.FC = () => {
               {filterLogic}
             </span>
           </div>
+        </div>
+      )}
+
+      {activeCount > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 12px' }}>
+          <span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>
+            {activeCount} active filter{activeCount === 1 ? '' : 's'}
+          </span>
+          <button type="button" onClick={clearAll}
+            style={{ background: 'none', border: 'none', color: '#2563eb', cursor: 'pointer', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+            <i className="fas fa-times-circle" style={{ fontSize: 11 }} /> Clear all
+          </button>
         </div>
       )}
 
@@ -318,47 +349,62 @@ const DashboardFilterBarReadOnly: React.FC = () => {
               </>
             ) : (
               <>
-                <label className="chart-builder-label" htmlFor="filter-value-input" style={{ fontSize: '0.75rem' }}>
-                  Value
-                </label>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <label className="chart-builder-label" style={{ fontSize: '0.75rem', margin: 0 }}>
+                    Values {editValues.length > 0 && <span style={{ color: '#2563eb', fontWeight: 600 }}>· {editValues.length}</span>}
+                  </label>
+                  {editValues.length > 0 && (
+                    <button type="button" onClick={() => setEditValues([])}
+                      style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 11 }}>
+                      Clear
+                    </button>
+                  )}
+                </div>
                 {isEditingLoading ? (
                   <div className="chart-filter-value-field">
-                    <select className="chart-builder-select" disabled>
-                      <option>{editValue ? `${editValue} (loading…)` : 'Loading values…'}</option>
-                    </select>
-                    <div className="chart-filter-spinner" aria-label="Loading values" />
+                    <div className="chart-filter-spinner" aria-label="Loading values" /> Loading values…
                   </div>
                 ) : editingOptions && editingOptions.length > 0 ? (
-                  <select
-                    id="filter-value-input"
-                    className="chart-builder-select"
-                    value={editValue}
-                    onChange={(e) => {
-                      const sel = e.target.value;
-                      const matched = editingOptions.find((o) => o.value === sel);
-                      setEditValue(sel);
-                      setEditValueKey(computeValueKey(sel, editingKeyCol, matched?.key));
-                    }}
-                    autoFocus
-                  >
-                    <option value="">Select value…</option>
-                    {editingOptions.map((opt, i) => (
-                      <option key={opt.key || `opt-${i}`} value={opt.value}>
-                        {opt.value}
-                      </option>
-                    ))}
-                  </select>
+                  <>
+                    <input
+                      type="text"
+                      className="chart-builder-input"
+                      placeholder="Search…"
+                      value={optSearch}
+                      onChange={(e) => setOptSearch(e.target.value)}
+                      autoFocus
+                      style={{ marginBottom: 6 }}
+                    />
+                    <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: 6 }}>
+                      {editingOptions
+                        .filter((opt) => !optSearch || opt.value.toLowerCase().includes(optSearch.toLowerCase()))
+                        .slice(0, 300)
+                        .map((opt, i) => {
+                          const checked = editValues.includes(opt.value);
+                          return (
+                            <label key={opt.key || `opt-${i}`}
+                              style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', cursor: 'pointer',
+                                       fontSize: 13, background: checked ? '#eff6ff' : 'transparent' }}
+                              onMouseOver={(e) => { if (!checked) e.currentTarget.style.background = '#f8fafc'; }}
+                              onMouseOut={(e) => { if (!checked) e.currentTarget.style.background = 'transparent'; }}>
+                              <input type="checkbox" checked={checked} onChange={() => toggleEditValue(opt.value)} />
+                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{opt.value}</span>
+                            </label>
+                          );
+                        })}
+                      {editingOptions.filter((opt) => !optSearch || opt.value.toLowerCase().includes(optSearch.toLowerCase())).length === 0 && (
+                        <div style={{ padding: 10, color: '#94a3b8', fontSize: 12 }}>No matches</div>
+                      )}
+                    </div>
+                  </>
                 ) : (
                   <input
                     id="filter-value-input"
                     type="text"
                     className="chart-builder-input"
-                    value={editValue}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setEditValue(v);
-                      setEditValueKey(computeValueKey(v, editingKeyCol));
-                    }}
+                    placeholder="Type a value and press Enter"
+                    value={editValues[0] ?? ''}
+                    onChange={(e) => setEditValues(e.target.value ? [e.target.value] : [])}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') handleSaveValue(editingFilter.id);
                       else if (e.key === 'Escape') handleCancelEdit();
