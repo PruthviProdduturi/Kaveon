@@ -127,9 +127,21 @@ def mask_endpoint(endpoint: str) -> str:
 
 
 def is_connection_error(e: Exception) -> bool:
-    """True for transient TCP/ODBC errors on a stale pooled socket."""
+    """True for transient errors on a stale pooled socket (ODBC + Postgres/MySQL).
+
+    Neon/serverless Postgres closes idle connections, so we must recognise
+    psycopg2/pymysql 'connection already closed' style errors and retry with a
+    fresh connection.
+    """
     msg = str(e).lower()
-    return "08s01" in msg or "10054" in msg or "communication link failure" in msg
+    patterns = (
+        "08s01", "10054", "communication link failure",       # MSSQL / ODBC
+        "connection already closed", "server closed the connection",
+        "ssl connection has been closed", "connection not open",
+        "terminating connection", "consuming input failed",   # psycopg2
+        "lost connection", "mysql server has gone away", "broken pipe",  # pymysql
+    )
+    return any(p in msg for p in patterns)
 
 
 # ── Dialect adaptation ─────────────────────────────────────────────────────────
@@ -151,8 +163,11 @@ def adapt_sql(sql: str, db_type: str) -> str:
         sql = re.sub(r"\bSELECT\s+TOP\s+\(?[^\s)]+\)?\s*", "SELECT ", sql, count=1, flags=re.IGNORECASE)
         sql = sql.rstrip().rstrip(";") + f" LIMIT {n}"
 
-    sql = re.sub(r"\bGETDATE\(\)", "NOW()", sql, flags=re.IGNORECASE)
+    sql = re.sub(r"\bGET(?:UTC)?DATE\(\)", "NOW()", sql, flags=re.IGNORECASE)
     sql = re.sub(r"\bISNULL\(", "COALESCE(", sql, flags=re.IGNORECASE)
+    # T-SQL string types → portable types (NVARCHAR(MAX)/VARCHAR(MAX) → TEXT; NVARCHAR(n) → VARCHAR(n))
+    sql = re.sub(r"\b(?:N)?VARCHAR\s*\(\s*MAX\s*\)", "TEXT", sql, flags=re.IGNORECASE)
+    sql = re.sub(r"\bNVARCHAR\b", "VARCHAR", sql, flags=re.IGNORECASE)
 
     # [ident] → "ident" (PostgreSQL) or `ident` (MySQL)
     if db_type == "postgresql":
@@ -417,7 +432,9 @@ class PostgreSQLConnection:
                 user=username, password=token,
                 sslmode="require", connect_timeout=30,
             )
-        self.connection.autocommit = False
+        # autocommit avoids a failed statement poisoning the pooled connection
+        # ("current transaction is aborted") — important for serverless Postgres.
+        self.connection.autocommit = True
         print(f"[Pool] Connected (PostgreSQL) -> {self.database}")
 
     def execute_query(self, sql: str, params: Optional[list] = None) -> Dict[str, Any]:
@@ -507,7 +524,7 @@ class MySQLConnection:
                 host=self.host, port=self.port, database=self.database,
                 user=user, password=password,
                 charset="utf8mb4", connect_timeout=30,
-                ssl={"ssl": {}},
+                ssl={"ssl": {}}, autocommit=True,
                 cursorclass=pymysql.cursors.Cursor,
             )
         else:
@@ -517,7 +534,7 @@ class MySQLConnection:
                 host=self.host, port=self.port, database=self.database,
                 user=username, password=token,
                 charset="utf8mb4", connect_timeout=30,
-                ssl={"ssl": {}},
+                ssl={"ssl": {}}, autocommit=True,
                 cursorclass=pymysql.cursors.Cursor,
             )
         print(f"[Pool] Connected (MySQL) -> {self.database}")

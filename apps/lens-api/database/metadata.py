@@ -32,11 +32,30 @@ def _adapt_sql(sql: str, db_type: str) -> str:
         sql = re.sub(r"\bSELECT\s+TOP\s+\(?[^\s)]+\)?\s*", "SELECT ", sql, count=1, flags=re.IGNORECASE)
         sql = sql.rstrip().rstrip(";") + f" LIMIT {n}"
 
-    # GETDATE() → NOW()
-    sql = re.sub(r"\bGETDATE\(\)", "NOW()", sql, flags=re.IGNORECASE)
+    # INSERT ... ) OUTPUT INSERTED.col VALUES (...)  →  INSERT ... ) VALUES (...) RETURNING col
+    _out = re.search(r"\bOUTPUT\s+INSERTED\.(\w+)", sql, flags=re.IGNORECASE)
+    if _out:
+        sql = re.sub(r"\bOUTPUT\s+INSERTED\.\w+\s*", "", sql, flags=re.IGNORECASE)
+        sql = sql.rstrip().rstrip(";") + f" RETURNING {_out.group(1)}"
+
+    # GETDATE() / GETUTCDATE() → NOW()
+    sql = re.sub(r"\bGET(?:UTC)?DATE\(\)", "NOW()", sql, flags=re.IGNORECASE)
 
     # ISNULL(x, y) → COALESCE(x, y)
     sql = re.sub(r"\bISNULL\(", "COALESCE(", sql, flags=re.IGNORECASE)
+
+    # T-SQL string types → portable (NVARCHAR(MAX)/VARCHAR(MAX) → TEXT; NVARCHAR(n) → VARCHAR(n))
+    sql = re.sub(r"\b(?:N)?VARCHAR\s*\(\s*MAX\s*\)", "TEXT", sql, flags=re.IGNORECASE)
+    sql = re.sub(r"\bNVARCHAR\b", "VARCHAR", sql, flags=re.IGNORECASE)
+
+    # JSON_VALUE(col, '$.key') → PostgreSQL (col::json ->> 'key') / MySQL JSON_EXTRACT
+    # TRY_CAST(x AS INT) → (x)::int  (safe-ish; our JSON values are numeric)
+    if db_type == "postgresql":
+        sql = re.sub(r"JSON_VALUE\(\s*(.+?)\s*,\s*'\$\.([A-Za-z0-9_]+)'\s*\)", r"(\1::json ->> '\2')", sql, flags=re.IGNORECASE)
+        sql = re.sub(r"TRY_CAST\(\s*(.+?)\s+AS\s+INT\s*\)", r"(\1)::int", sql, flags=re.IGNORECASE)
+    elif db_type == "mysql":
+        sql = re.sub(r"JSON_VALUE\(\s*(.+?)\s*,\s*('\$\.[A-Za-z0-9_]+')\s*\)", r"JSON_UNQUOTE(JSON_EXTRACT(\1, \2))", sql, flags=re.IGNORECASE)
+        sql = re.sub(r"TRY_CAST\(\s*(.+?)\s+AS\s+INT\s*\)", r"CAST(\1 AS SIGNED)", sql, flags=re.IGNORECASE)
 
     # [bracket_identifier] → "double_quote" (PostgreSQL) or `backtick` (MySQL)
     if db_type == "postgresql":
