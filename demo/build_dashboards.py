@@ -117,33 +117,21 @@ def M(col, agg, label):
     return {"column": col, "aggregate": agg, "label": label}
 
 
-# ── Layout primitives ────────────────────────────────────────────────────────
+# ── Flat layout primitives (react-grid-layout: absolute x/y/w/h on a 12-col grid) ─
 
-def _chart_child(cid, parent, w, h, exempt=False):
-    node = {"i": "c" + uuid.uuid4().hex[:8], "type": "chart", "chartId": cid, "parentId": parent,
-            "x": 0, "y": 0, "w": w, "h": h, "minW": 2, "minH": 2, "maxW": 12, "maxH": 24}
+def C(cid, x, y, w, h, exempt=False):
+    """A chart tile positioned on the grid."""
+    node = {"i": "c" + uuid.uuid4().hex[:8], "type": "chart", "chartId": cid,
+            "x": x, "y": y, "w": w, "h": h, "minW": 2, "minH": 2, "maxW": 12, "maxH": 40}
     if exempt:
         node["exemptFromFilters"] = True
     return node
 
 
-def _row(items, height, y, widths=None):
-    """items: list of (chart_id, exempt) or bare chart_id."""
-    norm = [(it if isinstance(it, tuple) else (it, False)) for it in items]
-    rid = "row" + uuid.uuid4().hex[:8]
-    n = len(norm)
-    if not widths:
-        base = 12 // n
-        widths = [base] * n
-        widths[0] += 12 - base * n
-    children = [_chart_child(cid, rid, widths[i], height, ex) for i, (cid, ex) in enumerate(norm)]
-    return {"i": rid, "type": "row", "x": 0, "y": y, "w": 12, "h": height,
-            "minW": 12, "minH": 2, "maxW": 12, "maxH": 24, "children": children}
-
-
-def _text(md, height, y, size=14, color="#475569"):
-    return {"i": "txt" + uuid.uuid4().hex[:8], "type": "text", "x": 0, "y": y, "w": 12, "h": height,
-            "minW": 2, "minH": 1, "maxW": 12, "maxH": 24,
+def T(md, x, y, w, h, size=14, color="#475569"):
+    """A markdown text tile positioned on the grid."""
+    return {"i": "t" + uuid.uuid4().hex[:8], "type": "text",
+            "x": x, "y": y, "w": w, "h": h, "minW": 2, "minH": 1, "maxW": 12, "maxH": 40,
             "textConfig": {"content": md, "alignment": "left", "fontSize": size, "color": color}}
 
 
@@ -159,30 +147,18 @@ def _date_filter(dataset_id):
             "datasetId": dataset_id, "filterType": "date_range"}
 
 
-class Blocks:
-    """Accumulates positioned layout blocks with running y."""
-    def __init__(self):
-        self.items, self.y = [], 0
-
-    def text(self, md, h, **kw):
-        self.items.append(_text(md, h, self.y, **kw)); self.y += h; return self
-
-    def row(self, items, h, widths=None):
-        self.items.append(_row(items, h, self.y, widths)); self.y += h; return self
-
-
-def dash(name, description, blocks, filters=None):
-    layout = blocks.items
-    all_ids = [ch["chartId"] for b in layout for ch in b.get("children", []) if ch.get("chartId")]
+def dash(name, description, items, filters=None):
+    """items: flat list of chart/text tiles with x/y/w/h."""
+    all_ids = [it["chartId"] for it in items if it.get("chartId")]
     slug = re.sub(r"[^a-z0-9-]", "", name.lower().replace(" ", "-"))
     did = uuid.uuid4().hex
     cur.execute("""INSERT INTO dashboards
         (id, name, slug, description, layout, charts, filters, theme, tags, visibility,
          is_published, is_archived, created_by, modified_by, created_at, modified_at)
         VALUES (%s,%s,%s,%s,%s,%s,%s,NULL,NULL,'published',true,false,%s,%s,now(),now())""",
-        (did, name, slug, description, json.dumps(layout), json.dumps(all_ids),
+        (did, name, slug, description, json.dumps(items), json.dumps(all_ids),
          json.dumps(filters or []), EMAIL, EMAIL))
-    print(f"  dashboard: {name}  id={did}  ({len(layout)} blocks, {len(all_ids)} tiles)")
+    print(f"  dashboard: {name}  id={did}  ({len(items)} tiles, {len(all_ids)} charts)")
     return did
 
 
@@ -296,51 +272,48 @@ def main():
 
     cf = [_country_filter(country), _date_filter(daily)]
 
-    # ── Deep-dive dashboards (build first so we can link to them) ─────────────────
-    trends = Blocks()
-    trends.text("How the pandemic's waves unfolded — worldwide and in the US. "
-                "Pick a country in the **Filters** bar to see its own curve.", 2, size=14, color="#475569")
-    trends.row([i["global_new"], i["global_cum"]], 7)
-    trends.row([i["global_deaths"], i["us_new"]], 7)
+    # ── Deep-dive dashboards (flat 12-col grid; build first so we can link them) ──
     id_trends = dash("COVID-19 · Trends Over Time",
-                     "Weekly waves, cumulative growth and the US curve — live from Neon.", trends, cf)
+        "Weekly waves, cumulative growth and the US curve — live from Neon.", [
+            T("How the pandemic's waves unfolded — worldwide and in the US. "
+              "Pick a country in the **Filters** bar to see its own curve.", 0, 0, 12, 2),
+            C(i["global_new"], 0, 2, 6, 8), C(i["global_cum"], 6, 2, 6, 8),
+            C(i["global_deaths"], 0, 10, 6, 8), C(i["us_new"], 6, 10, 6, 8),
+        ], cf)
 
-    rankings = Blocks()
-    rankings.text("Who was hit hardest in **absolute** terms. "
-                  "These rankings stay global on purpose (they ignore the country filter).", 2, size=14, color="#475569")
-    rankings.row([i["top_cases"], i["top_deaths"]], 8)
-    rankings.row([(i["share"], True)], 8)
     id_rank = dash("COVID-19 · Country Rankings",
-                   "Top countries by cases and deaths, plus the global deaths share.", rankings, cf)
+        "Top countries by cases and deaths, plus the global deaths share.", [
+            T("Who was hit hardest in **absolute** terms. "
+              "These rankings stay global on purpose (they ignore the country filter).", 0, 0, 12, 2),
+            C(i["top_cases"], 0, 2, 6, 9), C(i["top_deaths"], 6, 2, 6, 9),
+            C(i["share"], 0, 11, 12, 9, exempt=True),
+        ], cf)
 
-    impact = Blocks()
-    impact.text("Normalised views — cases **per capita** and **case-fatality rate** — "
-                "reveal a very different picture than raw totals.", 2, size=14, color="#475569")
-    impact.row([(i["pct_aff"], True), (i["cfr_rank"], True)], 8)
-    impact.row([i["detail"]], 10)
     id_impact = dash("COVID-19 · Impact & Comparisons",
-                     "Per-capita spread, case-fatality rates and the full country table.", impact, cf)
+        "Per-capita spread, case-fatality rates and the full country table.", [
+            T("Normalised views — cases **per capita** and **case-fatality rate** — "
+              "reveal a very different picture than raw totals.", 0, 0, 12, 2),
+            C(i["pct_aff"], 0, 2, 6, 9, exempt=True), C(i["cfr_rank"], 6, 2, 6, 9, exempt=True),
+            C(i["detail"], 0, 11, 12, 10),
+        ], cf)
 
     base = "/dashboards"
-    overview = Blocks()
-    overview.text(
-        "A live command-centre view of the pandemic, queried in real time from **Neon Postgres**. "
-        "**Click a country on the map** to cross-filter, or jump into a deep-dive below.", 2,
-        size=14, color="#475569")
-    overview.row([i["kpi_pop"], i["kpi_cases"], i["kpi_deaths"], i["kpi_cfr"]], 5)
-    overview.row([(i["map"], True)], 13)
-    overview.text(
-        "## 🔎 Dive deeper\n"
-        f"- 📈 **[Trends Over Time]({base}/{id_trends}/view)** — weekly waves, cumulative growth, the US curve\n"
-        f"- 🏆 **[Country Rankings]({base}/{id_rank}/view)** — who was hit hardest in absolute terms\n"
-        f"- 🧭 **[Impact & Comparisons]({base}/{id_impact}/view)** — per-capita spread & case-fatality rates",
-        4, size=14, color="#475569")
-    overview.text("---\n*Data: Johns Hopkins CSSE (cases/deaths) + JHU population lookup. "
-                  "CFR = deaths ÷ confirmed and is sensitive to testing coverage. Demo snapshot.*",
-                  2, size=12, color="#94a3b8")
     dash("COVID-19 Global Overview",
-         "Global KPIs, world map and links to the trend, ranking and impact deep-dives — live from Neon.",
-         overview, cf)
+        "Global KPIs, world map and links to the trend, ranking and impact deep-dives — live from Neon.", [
+            T("A live command-centre view of the pandemic, queried in real time from **Neon Postgres**. "
+              "**Click a country on the map** to cross-filter, or jump into a deep-dive below.", 0, 0, 12, 2),
+            C(i["kpi_pop"], 0, 2, 3, 5), C(i["kpi_cases"], 3, 2, 3, 5),
+            C(i["kpi_deaths"], 6, 2, 3, 5), C(i["kpi_cfr"], 9, 2, 3, 5),
+            C(i["map"], 0, 7, 8, 13, exempt=True),
+            T("## 🔎 Dive deeper\n"
+              f"- 📈 **[Trends Over Time]({base}/{id_trends}/view)** — weekly waves, cumulative growth, the US curve\n"
+              f"- 🏆 **[Country Rankings]({base}/{id_rank}/view)** — who was hit hardest in absolute terms\n"
+              f"- 🧭 **[Impact & Comparisons]({base}/{id_impact}/view)** — per-capita spread & case-fatality rates",
+              8, 7, 4, 13, size=14),
+            T("---\n*Data: Johns Hopkins CSSE (cases/deaths) + JHU population lookup. "
+              "CFR = deaths ÷ confirmed and is sensitive to testing coverage. Demo snapshot.*",
+              0, 20, 12, 2, size=12, color="#94a3b8"),
+        ], cf)
 
     print("done.")
     cur.close(); conn.close()
