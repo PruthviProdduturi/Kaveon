@@ -15,13 +15,42 @@ interface DashboardCanvasProps {
   className?: string;
 }
 
+const ROW_UNIT = 32;               // px per grid-height unit
+const MIN_ROW_UNITS = 2;
+
 const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => {
-  const { layout, setLayout, isEditMode, addLayoutItem } = useDashboard();
+  const { layout, setLayout, isEditMode, addLayoutItem, updateLayoutItem } = useDashboard();
 
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   // Only show root-level items (items without a parentId)
   const rootItems = layout.filter((item) => !item.parentId);
+
+  // Text/header/divider grow with content; everything else gets a fixed height
+  // derived from its grid `h` so charts fill a consistent, adjustable box.
+  const autoHeightTypes = new Set(['text', 'header', 'divider']);
+
+  const startRowResize = (item: any, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startY = e.clientY;
+    const startH = item.h || 8;
+    const onMove = (me: MouseEvent) => {
+      const deltaUnits = Math.round((me.clientY - startY) / ROW_UNIT);
+      const newH = Math.max(MIN_ROW_UNITS, startH + deltaUnits);
+      if (newH !== (item.h || 8)) updateLayoutItem(item.i, { h: newH });
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'ns-resize';
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
 
   const handleDragStart = (e: React.DragEvent, index: number) => {
     e.dataTransfer.setData('text/plain', String(index));
@@ -117,7 +146,10 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
       style={{ paddingBottom: 32 }}
       onDragLeave={handleDragLeave}
     >
-      {rootItems.map((item, index) => (
+      {rootItems.map((item, index) => {
+        const isAuto = autoHeightTypes.has(item.type);
+        const pxHeight = item.h ? item.h * ROW_UNIT : undefined;
+        return (
         <div
           key={item.i}
           onDragOver={(e) => handleDragOver(e, index)}
@@ -125,6 +157,7 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
           style={{
             marginBottom: 16,
             borderRadius: 8,
+            position: 'relative',
             outline:
               dragOverIndex === index
                 ? '2px dashed #2563eb'
@@ -157,9 +190,29 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
             </div>
           )}
 
-          <DashboardItem item={item} isEditMode={isEditMode} />
+          <div style={isAuto
+            ? { minHeight: pxHeight }
+            : { height: pxHeight ?? 300, minHeight: MIN_ROW_UNITS * ROW_UNIT }}>
+            <DashboardItem item={item} isEditMode={isEditMode} />
+          </div>
+
+          {/* Row-height resize handle (edit mode, fixed-height rows only) */}
+          {isEditMode && !isAuto && (
+            <div
+              onMouseDown={(e) => startRowResize(item, e)}
+              title="Drag to resize row height"
+              style={{
+                position: 'absolute', left: 0, right: 0, bottom: -8, height: 14,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                cursor: 'ns-resize', zIndex: 6,
+              }}
+            >
+              <div style={{ width: 44, height: 4, borderRadius: 2, background: '#cbd5e1' }} />
+            </div>
+          )}
         </div>
-      ))}
+        );
+      })}
 
       {/* Add Row button */}
       {isEditMode && (
