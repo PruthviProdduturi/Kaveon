@@ -129,8 +129,13 @@ export default function DatasetsPage() {
       loadingMessage="Loading datasets"
       error={error}
       empty={!loading && !error && datasets.length === 0}
-      emptyTitle="No datasets yet"
-      emptyBody="Register a table or view to start building charts and running queries against it."
+      emptyTitle="Register your first dataset"
+      emptyBody="A dataset is a table, view or query that Lens can chart and explore. Connect one to unlock charts and dashboards."
+      emptySteps={[
+        { icon: "fa-plug", title: "Connect a source", desc: "Postgres, MySQL, Fabric or Azure SQL — add a data source." },
+        { icon: "fa-table", title: "Choose a table", desc: "Pick a table or view, or paste a SQL query as the source." },
+        { icon: "fa-wand-magic-sparkles", title: "Define semantics", desc: "Mark dimensions and metrics so charts just work." },
+      ]}
       emptyAction={<Button onClick={() => void router.push("/datasets/new")}><i className="fas fa-plus" /> New dataset</Button>}
       search={search}
       onSearch={handleSearch}

@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode } from "react";
+import React, { ReactNode } from "react";
 import { useTheme } from "../contexts/ThemeContext";
 import { LensLoading } from "./LensLoading";
 
@@ -32,6 +32,10 @@ interface ListPageShellProps {
   emptyTitle?: string;
   emptyBody?: string;
   emptyAction?: ReactNode;
+  /** Optional secondary link/action shown beneath the primary empty CTA */
+  emptySecondaryAction?: ReactNode;
+  /** Optional guided steps rendered in the empty state for a systematic onboarding */
+  emptySteps?: { icon: string; title: string; desc: string }[];
   /** Search bar */
   search?: string;
   onSearch?: (q: string) => void;
@@ -46,7 +50,7 @@ export function ListPageShell({
   icon, title, subtitle, pills, action,
   loading, loadingMessage,
   error,
-  empty, emptyIcon, emptyTitle, emptyBody, emptyAction,
+  empty, emptyIcon, emptyTitle, emptyBody, emptyAction, emptySecondaryAction, emptySteps,
   search, onSearch, searchPlaceholder, resultCount,
   children,
 }: ListPageShellProps) {
@@ -99,12 +103,12 @@ export function ListPageShell({
             </div>
           )}
         </div>
-        {/* Right: action */}
-        {action && <div style={{ flexShrink: 0 }}>{action}</div>}
+        {/* Right: action — hidden in empty/error states so those cards own the CTA */}
+        {action && !empty && !error && <div style={{ flexShrink: 0 }}>{action}</div>}
       </div>
 
-      {/* ── Search bar ── */}
-      {onSearch && (
+      {/* ── Search bar (hidden when there is nothing to search) ── */}
+      {onSearch && !empty && !error && (
         <div style={{ position: "relative", marginBottom: "1rem" }}>
           <i className="fas fa-search" style={{
             position: "absolute", left: "0.85rem", top: "50%", transform: "translateY(-50%)",
@@ -169,53 +173,128 @@ export function ListPageShell({
         const metadataReady = typeof sessionStorage !== "undefined"
           ? sessionStorage.getItem("lens_setup_ok") === "1"
           : true;
+        const panel: React.CSSProperties = {
+          background: "white", borderRadius: 16, border: "1px solid #e5e7eb",
+          boxShadow: "0 1px 4px rgba(15,23,42,0.06)",
+          padding: "3.5rem 2rem", textAlign: "center",
+          display: "flex", flexDirection: "column", alignItems: "center",
+        };
+        const iconWrap = (bg: string): React.CSSProperties => ({
+          width: 68, height: 68, borderRadius: 18, marginBottom: 18,
+          background: bg, display: "flex", alignItems: "center", justifyContent: "center",
+        });
+        const titleStyle: React.CSSProperties = { margin: 0, fontSize: "1.35rem", fontWeight: 800, color: "#0f172a", letterSpacing: "-0.4px" };
+        const bodyStyle: React.CSSProperties = { margin: "8px 0 0", fontSize: "0.95rem", color: "#64748b", maxWidth: 460, lineHeight: 1.55 };
         if (!metadataReady) {
           return (
-            <div className="card page-empty-card">
-              <div style={{
-                width: 48, height: 48, borderRadius: 12, margin: "0 auto 12px",
-                background: "#fef3c7", display: "flex", alignItems: "center", justifyContent: "center",
-              }}>
-                <i className="fas fa-database" style={{ color: "#d97706", fontSize: 20 }} />
+            <div style={panel}>
+              <div style={iconWrap("#fef3c7")}>
+                <i className="fas fa-database" style={{ color: "#d97706", fontSize: 28 }} />
               </div>
-              <p className="page-empty-title">Metadata database not configured</p>
-              <p className="page-empty-body">
-                Lens needs a metadata database to store dashboards, charts, and datasets.{" "}
-                <a href="/settings/system" style={{ color: "#2563eb", textDecoration: "underline" }}>
-                  Go to System Settings
-                </a>{" "}
-                to configure it.
+              <h2 style={titleStyle}>Connect a metadata database</h2>
+              <p style={bodyStyle}>
+                Lens stores your dashboards, charts and datasets in a metadata database.
+                Configure one to get started — it takes about a minute.
               </p>
+              <a
+                href="/settings/system"
+                style={{
+                  marginTop: 24, display: "inline-flex", alignItems: "center", gap: 8,
+                  padding: "0.6rem 1.1rem", borderRadius: 8, textDecoration: "none",
+                  background: `linear-gradient(135deg, ${gradientColors.light}, ${gradientColors.dark})`,
+                  color: "white", fontWeight: 600, fontSize: "0.9rem",
+                  boxShadow: `0 6px 18px ${primaryColor}35`,
+                }}
+              >
+                <i className="fas fa-sliders-h" /> Open System Settings
+              </a>
             </div>
           );
         }
         return (
-          <div className="card page-empty-card">
-            <div style={{
-              width: 48, height: 48, borderRadius: 12, margin: "0 auto 12px",
-              background: "#fef2f2", display: "flex", alignItems: "center", justifyContent: "center",
-            }}>
-              <i className="fas fa-exclamation-triangle" style={{ color: "#dc2626", fontSize: 20 }} />
+          <div style={panel}>
+            <div style={iconWrap("#fef2f2")}>
+              <i className="fas fa-exclamation-triangle" style={{ color: "#dc2626", fontSize: 28 }} />
             </div>
-            <p className="page-empty-title">Something went wrong</p>
-            <p className="page-empty-body">{error}</p>
+            <h2 style={titleStyle}>Something went wrong</h2>
+            <p style={bodyStyle}>{error}</p>
           </div>
         );
       })()}
 
-      {/* ── Empty state ── */}
+      {/* ── Empty state — centered, systematic onboarding ── */}
       {!loading && !error && empty && (
-        <div className="card page-empty-card">
+        <div style={{
+          background: "white", borderRadius: 16, border: "1px solid #e5e7eb",
+          boxShadow: "0 1px 4px rgba(15,23,42,0.06)",
+          padding: "3.5rem 2rem", textAlign: "center",
+          display: "flex", flexDirection: "column", alignItems: "center",
+        }}>
           <div style={{
-            width: 56, height: 56, borderRadius: 14, margin: "0 auto 14px",
+            width: 68, height: 68, borderRadius: 18, marginBottom: 18,
             background: `linear-gradient(135deg, ${gradientColors.light}, ${gradientColors.dark})`,
             display: "flex", alignItems: "center", justifyContent: "center",
+            boxShadow: `0 10px 28px ${primaryColor}30`,
           }}>
-            <i className={`fas ${emptyIcon ?? icon}`} style={{ color: "white", fontSize: 22 }} />
+            <i className={`fas ${emptyIcon ?? icon}`} style={{ color: "white", fontSize: 28 }} />
           </div>
-          <p className="page-empty-title">{emptyTitle ?? `No ${title.toLowerCase()} yet`}</p>
-          {emptyBody && <p className="page-empty-body">{emptyBody}</p>}
-          {emptyAction && <div style={{ marginTop: 14 }}>{emptyAction}</div>}
+          <h2 style={{ margin: 0, fontSize: "1.35rem", fontWeight: 800, color: "#0f172a", letterSpacing: "-0.4px" }}>
+            {emptyTitle ?? `No ${title.toLowerCase()} yet`}
+          </h2>
+          {emptyBody && (
+            <p style={{ margin: "8px 0 0", fontSize: "0.95rem", color: "#64748b", maxWidth: 460, lineHeight: 1.55 }}>
+              {emptyBody}
+            </p>
+          )}
+
+          {/* Guided steps */}
+          {emptySteps && emptySteps.length > 0 && (
+            <div style={{
+              display: "flex", alignItems: "stretch", justifyContent: "center",
+              gap: 0, flexWrap: "wrap", margin: "28px 0 4px", maxWidth: 760, width: "100%",
+            }}>
+              {emptySteps.map((step, i) => (
+                <React.Fragment key={i}>
+                  <div style={{
+                    flex: "1 1 200px", maxWidth: 230, minWidth: 180,
+                    background: "#f8fafc", border: "1px solid #eef2f7",
+                    borderRadius: 12, padding: "18px 16px", textAlign: "left",
+                    display: "flex", flexDirection: "column", gap: 8, position: "relative",
+                  }}>
+                    <div style={{
+                      display: "flex", alignItems: "center", gap: 10,
+                    }}>
+                      <span style={{
+                        width: 30, height: 30, borderRadius: 8, flexShrink: 0,
+                        background: `${primaryColor}12`, color: primaryColor,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        fontSize: 13,
+                      }}>
+                        <i className={`fas ${step.icon}`} />
+                      </span>
+                      <span style={{
+                        fontSize: 11, fontWeight: 700, color: "#94a3b8",
+                        textTransform: "uppercase", letterSpacing: "0.6px",
+                      }}>Step {i + 1}</span>
+                    </div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>{step.title}</div>
+                    <div style={{ fontSize: 12.5, color: "#64748b", lineHeight: 1.5 }}>{step.desc}</div>
+                  </div>
+                  {i < emptySteps.length - 1 && (
+                    <div style={{
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      padding: "0 6px", color: "#cbd5e1", fontSize: 14,
+                    }}>
+                      <i className="fas fa-chevron-right" />
+                    </div>
+                  )}
+                </React.Fragment>
+              ))}
+            </div>
+          )}
+
+          {emptyAction && <div style={{ marginTop: 28 }}>{emptyAction}</div>}
+          {emptySecondaryAction && <div style={{ marginTop: 12 }}>{emptySecondaryAction}</div>}
         </div>
       )}
 
