@@ -514,9 +514,34 @@ const WorldMapRenderer: React.FC<{
     // Heavily-skewed data (e.g. US dwarfs everyone) makes a linear scale all one
     // colour. Cap the colour range at the ~85th percentile so mid countries get
     // vivid hues; countries above clamp to the hottest colour.
-    const sortedAsc = [...values].sort((a, b) => a - b);
-    const pct = (q: number) => sortedAsc[Math.min(sortedAsc.length - 1, Math.floor(q * (sortedAsc.length - 1)))] ?? maxV;
-    const visMax = Math.max(pct(0.85), minV + 1);
+    // Build log-decade tiers (…, 100K–1M, 1M–10M, 10M+). A linear scale on this
+    // hugely-skewed data paints almost everything one colour AND a percentile cap
+    // over-paints the top tier — both mislead. Tiered log buckets are colourful
+    // *and* truthful: each order of magnitude gets its own hue.
+    const positive = values.filter((v) => v > 0);
+    const hiV = positive.length ? Math.max(...positive) : 1;
+    const loV = positive.length ? Math.min(...positive) : 1;
+    let edges: number[] = [];
+    const startExp = Math.max(0, Math.floor(Math.log10(Math.max(loV, 1))));
+    const endExp = Math.ceil(Math.log10(Math.max(hiV, 10)));
+    for (let e = startExp; e <= endExp; e++) edges.push(Math.pow(10, e));
+    while (edges.length > 7) edges = edges.filter((_, idx) => idx % 2 === 0 || idx === edges.length - 1);
+    const nPieces = Math.max(1, edges.length - 1);
+    const sampleColor = (k: number) => {
+      const scheme = colorScheme.length >= 2 ? colorScheme : MAP_DEFAULT_COLORS;
+      const pos = nPieces === 1 ? 0 : (k / (nPieces - 1)) * (scheme.length - 1);
+      const lo = Math.floor(pos), hi = Math.min(scheme.length - 1, lo + 1);
+      return lerpColor(scheme[lo], scheme[hi], pos - lo);
+    };
+    const pieces = Array.from({ length: nPieces }, (_, k) => {
+      const lo = edges[k];
+      const hi = k === nPieces - 1 ? undefined : edges[k + 1];
+      return {
+        gte: lo, ...(hi !== undefined ? { lt: hi } : {}),
+        color: sampleColor(k),
+        label: hi !== undefined ? `${fmtVal(lo)} – ${fmtVal(hi)}` : `${fmtVal(lo)}+`,
+      };
+    }).reverse(); // largest tier on top of the legend
 
     // Data labels for the top ~12 countries only (labelling all ~196 is noise).
     const topN = ctOpts.mapLabelTopN ?? 12;
@@ -535,15 +560,12 @@ const WorldMapRenderer: React.FC<{
       ? { title: { text: advancedOptions.title.text, left: "center", top: 5, textStyle: { fontSize: Number(advancedOptions.titleSize) || 20, fontFamily: advancedOptions.titleFont || "sans-serif" } } }
       : {};
 
+    // Piecewise (tiered) legend — accurate for skewed data and reads cleanly.
     const visualMap = {
-      min: minV, max: visMax,
-      left: "left", bottom: 24,
-      itemWidth: 12, itemHeight: 110,
-      // calculable:false → no draggable handles showing raw min/max numbers;
-      // just a clean gradient bar with formatted endpoints (true max shown with +).
-      calculable: false,
-      text: [`${fmtVal(maxV)}`, fmtVal(minV)],
-      inRange: { color: colorScheme },
+      type: "piecewise",
+      pieces,
+      left: "left", bottom: 20,
+      itemWidth: 14, itemHeight: 12, itemGap: 4,
       textStyle: { fontSize: 11, color: isGlobe ? "#94a3b8" : "#475569" },
     };
 
