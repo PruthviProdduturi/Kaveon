@@ -527,8 +527,12 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
             else:
                 grain_expr = _apply_date_format(raw_expr, date_display_format, db_type)
             time_grain_expr = grain_expr
-            if grain_expr not in select_parts:
-                select_parts.append(grain_expr)
+            # Alias the time bucket as "date" so the frontend reliably treats it as
+            # the x-axis. Without this, CAST(dt AS DATE) is named "dt" (no date/time
+            # token) and the chart mis-classifies every date as a separate series.
+            grain_select = f"{grain_expr} AS {quote_identifier('date')}"
+            if grain_select not in select_parts:
+                select_parts.append(grain_select)
 
         for m in metric_list:
             agg_func = (m.get("aggregate") or m.get("agg") or "SUM").upper()
@@ -649,6 +653,12 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
                  or (m.get("label") or m.get("name")) == sb_col),
                 None,
             )
+            # Is the sort column one of the GROUP BY dimensions? (then sort by it directly)
+            _sb_norm = normalize_column_name(sb_col).split(".")[-1].lower()
+            _sb_in_groupby = any(
+                normalize_column_name(g).split(".")[-1].lower() == _sb_norm for g in groupby
+            ) or (time_column and normalize_column_name(time_column).split(".")[-1].lower() == _sb_norm)
+
             if sb_metric and query_mode != "raw":
                 agg_func = (sb_metric.get("aggregate") or sb_metric.get("agg") or "SUM").upper()
                 m_alias, m_col = _resolve_column_alias(
@@ -657,6 +667,10 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
                     sb_expr = f"COUNT(DISTINCT {m_alias}.{quote_identifier(m_col)})"
                 else:
                     sb_expr = f"{agg_func}({m_alias}.{quote_identifier(m_col)})"
+            elif query_mode != "raw" and not _sb_in_groupby:
+                # Sort by a non-grouped measure → aggregate it so it's valid under GROUP BY.
+                s_alias, s_col = _resolve_column_alias(sb_col, fact_alias, alias_map, column_table_map)
+                sb_expr = f"SUM({s_alias}.{quote_identifier(s_col)})"
             else:
                 sb_expr = _resolve_column_expression(sb_col, fact_alias, alias_map, column_table_map, coalesce_map)
             order_by_clause = f"ORDER BY {sb_expr} {sb_dir}"
