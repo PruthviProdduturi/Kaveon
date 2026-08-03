@@ -186,7 +186,22 @@ def main():
         ("total_deaths", "bigint", False, True), ("cfr_pct", "double precision", False, True),
         ("pct_affected_pct", "double precision", False, True),
     ])
-    print(f"datasets: daily={daily} country={country} summary={summary}")
+
+    # Case-outcome breakdown (of confirmed cases): Survived vs Deaths — the Deaths
+    # slice equals the CFR. A meaningful donut (unlike mixing population + a rate).
+    cur.execute("DROP TABLE IF EXISTS covid_case_outcome")
+    cur.execute("""
+        CREATE TABLE covid_case_outcome AS
+        SELECT 'Survived' AS outcome, (SUM(confirmed) - SUM(deaths))::bigint AS cases, 1 AS ord
+        FROM covid_country_latest
+        UNION ALL
+        SELECT 'Deaths' AS outcome, SUM(deaths)::bigint AS cases, 2 AS ord
+        FROM covid_country_latest
+    """)
+    outcome = dataset("COVID-19 Case Outcomes", "covid_case_outcome", [
+        ("outcome", "varchar", True, False), ("cases", "bigint", False, True), ("ord", "int", False, True),
+    ])
+    print(f"datasets: daily={daily} country={country} summary={summary} outcome={outcome}")
 
     agg = "aggregate"
     i = {}
@@ -214,6 +229,12 @@ def main():
          "sort_by": {"column": "confirmed", "direction": "desc"}, "query_mode": agg, "row_limit": 250},
         desc="Choropleth of cumulative cases. Click a country to cross-filter the deep-dives.",
         viz=_viz(MAP_SCALE, mapNumberFormat="m"))
+
+    i["outcome"] = chart("Case Outcomes", outcome, "donut",
+        {"metrics": [M("cases", "SUM", "Cases")], "groupby": ["outcome"],
+         "sort_by": {"column": "ord", "direction": "asc"}, "query_mode": agg, "row_limit": 5},
+        desc="Of all confirmed cases: survived vs died. The Deaths slice is the 1.02% case-fatality rate; centre shows total cases.",
+        viz=_viz(["#10b981", "#ef4444"]))
 
     # ── Trends ────────────────────────────────────────────────────────────────────
     i["global_new"] = chart("Global New Cases (weekly)", daily, "time_series_line",
@@ -305,11 +326,12 @@ def main():
             C(i["kpi_pop"], 0, 2, 3, 5), C(i["kpi_cases"], 3, 2, 3, 5),
             C(i["kpi_deaths"], 6, 2, 3, 5), C(i["kpi_cfr"], 9, 2, 3, 5),
             C(i["map"], 0, 7, 8, 13, exempt=True),
+            C(i["outcome"], 8, 7, 4, 7, exempt=True),
             T("## 🔎 Dive deeper\n"
               f"- 📈 **[Trends Over Time]({base}/{id_trends}/view)** — weekly waves, cumulative growth, the US curve\n"
               f"- 🏆 **[Country Rankings]({base}/{id_rank}/view)** — who was hit hardest in absolute terms\n"
               f"- 🧭 **[Impact & Comparisons]({base}/{id_impact}/view)** — per-capita spread & case-fatality rates",
-              8, 7, 4, 13, size=14),
+              8, 14, 4, 6, size=14),
             T("---\n*Data: Johns Hopkins CSSE (cases/deaths) + JHU population lookup. "
               "CFR = deaths ÷ confirmed and is sensitive to testing coverage. Demo snapshot.*",
               0, 20, 12, 2, size=12, color="#94a3b8"),
