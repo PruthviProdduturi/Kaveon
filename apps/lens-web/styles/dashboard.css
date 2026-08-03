@@ -13,6 +13,11 @@
   transition-property: left, top, width, height;
 }
 
+/* v2 positions items with CSS transforms by default */
+.react-grid-item.cssTransforms {
+  transition-property: transform, width, height;
+}
+
 .react-grid-item img {
   pointer-events: none;
   user-select: none;
