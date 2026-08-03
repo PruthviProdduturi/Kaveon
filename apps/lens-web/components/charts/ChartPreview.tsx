@@ -176,19 +176,13 @@ const BigNumberKpiCard: React.FC<BigNumberKpiCardProps> = ({ options, rows, colu
   const hasSpark = showTrend && sparkValues.length >= 2;
 
   return (
-    <div style={{ position: "relative", height: "100%", width: "100%", overflow: "hidden" }}>
-      {/* Trend area fills the whole card as a subtle backdrop */}
-      {hasSpark && (
-        <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, top: "38%", opacity: 0.9, pointerEvents: "none" }}>
-          <SparkLine values={sparkValues} color={trendColor} fill />
-        </div>
-      )}
-      {/* Number + label, centred over the chart */}
-      <div style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 6, padding: "16px 20px" }}>
+    <div style={{ position: "relative", height: "100%", width: "100%", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+      {/* Number + label — own zone, never overlapping the trend */}
+      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 5, padding: hasSpark ? "14px 20px 4px" : "16px 20px" }}>
         {options?.title?.text && (
           <div style={{ fontSize: 13, color: "#6b7280", fontWeight: 500, textAlign: "center" }}>{options.title.text}</div>
         )}
-        <div style={{ fontSize: 46, fontWeight: 800, color: "#0f172a", lineHeight: 1, letterSpacing: "-1.5px" }}>{formatted}</div>
+        <div style={{ fontSize: 44, fontWeight: 800, color: "#0f172a", lineHeight: 1, letterSpacing: "-1.5px" }}>{formatted}</div>
         {displayLabel && <div style={{ fontSize: 12, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>{displayLabel}</div>}
         {trend !== null && (
           <div style={{ fontSize: 13, color: trendColor, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
@@ -197,6 +191,12 @@ const BigNumberKpiCard: React.FC<BigNumberKpiCardProps> = ({ options, rows, colu
           </div>
         )}
       </div>
+      {/* Trend band — separate zone at the bottom, no overlap with the text */}
+      {hasSpark && (
+        <div style={{ height: "34%", minHeight: 46, flexShrink: 0, pointerEvents: "none" }}>
+          <SparkLine values={sparkValues} color={trendColor} fill />
+        </div>
+      )}
     </div>
   );
 };
