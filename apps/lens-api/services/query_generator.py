@@ -387,12 +387,23 @@ def _build_optimized_filter_clause(
     alias, col_name = _resolve_column_alias(col, fact_alias, alias_map, column_table_map)
     quoted_col = f"{alias}.{quote_identifier(col_name)}"
 
-    if isinstance(val, list):
-        values = ", ".join(f"'{str(v).replace(chr(39), chr(39)*2)}'" for v in val)
-        return f"{quoted_col} IN ({values})"
-    else:
-        safe_val = str(val).replace("'", "''")
-        return f"{quoted_col} {op} '{safe_val}'"
+    def _q(v):
+        return "'" + str(v).replace("'", "''") + "'"
+
+    # Multi-value → IN / NOT IN. Accept a real list, or a comma-joined string
+    # (how the dashboard multi-select filter serialises its selection).
+    is_in = raw_op in ("IN", "NOT IN")
+    if isinstance(val, list) or is_in:
+        vals = val if isinstance(val, list) else [v.strip() for v in str(val).split(",") if v.strip()]
+        if not vals:
+            return None
+        if len(vals) == 1 and not isinstance(val, list) and not is_in:
+            return f"{quoted_col} = {_q(vals[0])}"
+        keyword = "NOT IN" if raw_op == "NOT IN" else "IN"
+        return f"{quoted_col} {keyword} ({', '.join(_q(v) for v in vals)})"
+
+    safe_val = str(val).replace("'", "''")
+    return f"{quoted_col} {op} '{safe_val}'"
 
 
 # ─── Filtering strategy ───────────────────────────────────────────────────────
