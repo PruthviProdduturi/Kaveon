@@ -326,7 +326,7 @@ def main():
         "**Click a country on the map** to cross-filter, or jump into a deep-dive below.", 2,
         size=14, color="#475569")
     overview.row([i["kpi_pop"], i["kpi_cases"], i["kpi_deaths"], i["kpi_cfr"]], 5)
-    overview.row([(i["map"], True)], 9)
+    overview.row([(i["map"], True)], 13)
     overview.text(
         "## 🔎 Dive deeper\n"
         f"- 📈 **[Trends Over Time]({base}/{id_trends}/view)** — weekly waves, cumulative growth, the US curve\n"

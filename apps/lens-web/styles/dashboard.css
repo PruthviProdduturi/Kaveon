@@ -156,11 +156,20 @@
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
 }
 
-/* ChartPreview fills the full card height inside a dashboard chart */
+/* ChartPreview fills the full card height inside a dashboard chart.
+   Strip the inner card's border/shadow so tiles aren't a box-in-a-box, and
+   drop the 220px min-height so KPIs/short tiles don't get a tall empty panel. */
 .dashboard-component-chart .chart-builder-preview-card {
   height: 100%;
   box-shadow: none;
+  border: none;
   border-radius: 0;
+  background: transparent;
+}
+
+.dashboard-component-chart .chart-builder-preview-inner {
+  min-height: 0;
+  padding: 4px 12px 12px;
   background: transparent;
 }
 
