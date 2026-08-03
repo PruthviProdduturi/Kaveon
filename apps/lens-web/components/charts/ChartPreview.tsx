@@ -409,7 +409,8 @@ const WorldMapRenderer: React.FC<{
   rows: (string | number | null)[][];
   columns: string[];
   advancedOptions?: any;
-}> = ({ rows, columns, advancedOptions }) => {
+  onCrossFilter?: (value: string) => void;
+}> = ({ rows, columns, advancedOptions, onCrossFilter }) => {
   const [ready, setReady] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const eRef = React.useRef<any>(null);
@@ -579,18 +580,23 @@ const WorldMapRenderer: React.FC<{
       };
     }
 
-    // Flat map
+    // Flat map — layoutCenter/layoutSize make the map fill wide, short tiles
+    // instead of collapsing to a tiny centred thumbnail.
     return {
       ...titleOpt,
       tooltip: tooltipStyle,
-      visualMap,
+      visualMap: { ...visualMap, left: 8, bottom: 12, itemWidth: 12, itemHeight: 70 },
       series: [{
         type: "map",
         map: "world",
         roam: showRoam,
+        layoutCenter: ["52%", "55%"],
+        layoutSize: "132%",
+        aspectScale: 0.86,
         data,
+        select: { itemStyle: { areaColor: "#f59e0b" } },
         emphasis: { label: { show: true, fontSize: 11 }, itemStyle: { areaColor: "#fbbf24" } },
-        itemStyle: { borderColor: "#fff", borderWidth: 0.5 },
+        itemStyle: { borderColor: "#fff", borderWidth: 0.5, areaColor: "#eef2f7" },
         label: { show: showLabels, fontSize: 10, color: "#1e293b" },
       }],
     };
@@ -621,8 +627,14 @@ const WorldMapRenderer: React.FC<{
   return (
     <ReactECharts
       option={option}
-      style={{ width: "100%", height: "100%" }}
+      style={{ width: "100%", height: "100%", cursor: onCrossFilter ? "pointer" : undefined }}
       onChartReady={(instance: any) => { eRef.current = instance; }}
+      onEvents={onCrossFilter ? {
+        click: (params: any) => {
+          const val = params?.name || (Array.isArray(params?.value) ? String(params.value[0]) : "");
+          if (val) onCrossFilter(String(val));
+        },
+      } : undefined}
     />
   );
 };
@@ -1097,6 +1109,7 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
             rows={(previewOptions as any)?._rows ?? sqlPreview.dataRows}
             columns={(previewOptions as any)?._columns ?? sqlPreview.dataColumns}
             advancedOptions={advancedOptions}
+            onCrossFilter={onCrossFilter}
           />
         ) : hasOption && !sqlPreview.isRunning && chartType && getPlugin(chartType)?.Renderer ? (
           (() => {

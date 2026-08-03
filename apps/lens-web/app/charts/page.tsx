@@ -131,8 +131,13 @@ export default function ChartsPage() {
       loadingMessage="Loading charts"
       error={error}
       empty={!loading && !error && charts.length === 0}
-      emptyTitle="No charts yet"
-      emptyBody="Build a chart from any dataset or Lab query using the New chart button."
+      emptyTitle="Create your first chart"
+      emptyBody="Charts turn a dataset or Lab query into a visual — KPIs, time-series, maps, tables and more. Here's the path."
+      emptySteps={[
+        { icon: "fa-database", title: "Pick a dataset", desc: "Choose a table, view or saved query as the chart's source." },
+        { icon: "fa-sliders-h", title: "Shape the data", desc: "Add metrics, group-bys, filters and a visualization type." },
+        { icon: "fa-floppy-disk", title: "Save & reuse", desc: "Save the chart to drop it onto any dashboard." },
+      ]}
       emptyAction={<Button onClick={() => void router.push("/charts/new")}><i className="fas fa-plus" /> New chart</Button>}
       search={search}
       onSearch={handleSearch}

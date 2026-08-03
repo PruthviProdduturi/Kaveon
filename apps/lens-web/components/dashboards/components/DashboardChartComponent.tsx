@@ -124,16 +124,12 @@ const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({
   const normCol = (s: string | null | undefined) =>
     s ? s.replace(/\[|\]/g, '').split('.').pop()!.toLowerCase() : '';
 
-  // Only apply incoming cross-filters where the source column matches one of
-  // THIS chart's columns (time column or any groupby). Prevents nonsensical
-  // filters being applied to unrelated charts.
-  const relevantCrossExtras = crossFilterFilters.filter(cf => {
-    if (!cf.column) return false;
-    const cfNorm = normCol(cf.column);
-    if (qc.time_column && normCol(qc.time_column) === cfNorm) return true;
-    if (Array.isArray(qc.groupby) && qc.groupby.some((g: string) => normCol(g) === cfNorm)) return true;
-    return false;
-  });
+  // Broadcast every cross-filter to all tiles. The backend gracefully skips a
+  // filter whose column isn't in a chart's dataset, so clicking (e.g.) a country
+  // on the map filters every COVID chart that has a `country` column and is a
+  // no-op on the rest — no per-chart gating needed, and no spurious errors.
+  const relevantCrossExtras = crossFilterFilters.filter(cf => !!cf.column);
+  void normCol; // retained for potential future column-aware gating
 
   // Inject the resolved column before calling parent
   const handleCrossFilter = useCallback((value: string) => {
@@ -155,6 +151,9 @@ const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({
   // "Loading chart…" text → animated bars → "Querying…" sequence.
   const runCtx = dashboardId ? `dashboard:${dashboardId}` : 'dashboard';
 
+  const tileTitle: string = chart?.name || '';
+  const tileInfo: string = chart?.description && chart.description !== chart?.name ? chart.description : '';
+
   return (
     <ChartBuilderProvider runContext={runCtx}>
       {/* ChartHydrator renders null — it only populates context state */}
@@ -164,6 +163,29 @@ const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({
         externalFilters={filtersRef.current}
         crossFilterExtra={relevantCrossExtras}
       />
+      {/* Tile title bar — gives every chart a clear name + optional info tooltip */}
+      {tileTitle && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '7px 12px 3px', flexShrink: 0, minHeight: 0,
+        }}>
+          <span
+            title={tileTitle}
+            style={{
+              fontSize: 12.5, fontWeight: 700, color: '#0f172a', letterSpacing: '-0.2px',
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}
+          >{tileTitle}</span>
+          {tileInfo && (
+            <span
+              title={tileInfo}
+              style={{ color: '#94a3b8', fontSize: 11, cursor: 'help', flexShrink: 0, lineHeight: 1 }}
+            >
+              <i className="fas fa-circle-info" />
+            </span>
+          )}
+        </div>
+      )}
       <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
         <ChartPreview
           onCrossFilter={isEditMode ? undefined : handleCrossFilter}

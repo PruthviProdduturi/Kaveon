@@ -145,9 +145,15 @@ const DashboardsPage: React.FC = () => {
         loadingMessage="Loading dashboards"
         error={error}
         empty={!isLoading && !error && dashboards.length === 0}
-        emptyTitle="No dashboards yet"
-        emptyBody="Create your first dashboard to start visualising your data."
+        emptyTitle="Build your first dashboard"
+        emptyBody="Dashboards bring your charts together into a single, interactive view — with filters, cross-filtering and live data. Here's how to get there."
+        emptySteps={[
+          { icon: "fa-database", title: "Connect a dataset", desc: "Point Lens at a table or query — Postgres, MySQL, Fabric and more." },
+          { icon: "fa-chart-column", title: "Create charts", desc: "Explore your data and save KPIs, time-series, maps and tables." },
+          { icon: "fa-tachometer-alt", title: "Assemble the dashboard", desc: "Drag charts onto a grid, add filters, and publish to share." },
+        ]}
         emptyAction={<Button onClick={() => { window.location.href = "/dashboards/new"; }}><i className="fas fa-plus" /> New dashboard</Button>}
+        emptySecondaryAction={<a href="/charts" style={{ fontSize: 13, color: "#64748b", textDecoration: "none" }}>or browse your charts first →</a>}
         search={search}
         onSearch={handleSearch}
         resultCount={search ? filtered.length : undefined}
