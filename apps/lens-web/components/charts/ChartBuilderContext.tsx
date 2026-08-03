@@ -2134,6 +2134,11 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
           return `${params.marker} ${params.name}: ${formattedValue} (${params.percent}%)`;
         };
 
+        const pieTotal = pieData.reduce((s: number, d: any) => s + (Number(d.value) || 0), 0);
+        const pieTotalFmt = Math.abs(pieTotal) >= 1e9 ? `${(pieTotal / 1e9).toFixed(1)}B`
+          : Math.abs(pieTotal) >= 1e6 ? `${(pieTotal / 1e6).toFixed(1)}M`
+          : Math.abs(pieTotal) >= 1e3 ? `${(pieTotal / 1e3).toFixed(1)}K`
+          : pieTotal.toLocaleString(undefined, { maximumFractionDigits: 2 });
         return {
           // Explicitly clear cartesian components — pie/donut has no axes, and
           // without this an ECharts option merge can leave a prior chart's
@@ -2150,6 +2155,16 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
           // donut sits below it so labels never collide with the legend.
           legend: { type: "scroll", orient: "horizontal", top: 6, left: "center", icon: "circle",
                     itemWidth: 10, itemHeight: 10, itemGap: 14, textStyle: { fontSize: 12, color: "#475569" } },
+          // Donut centre total (the whole selling point of a donut vs pie)
+          ...(chartKind === "donut" ? {
+            graphic: [{
+              type: "text", left: "center", top: "50%",
+              style: { text: "TOTAL", textAlign: "center", fill: "#94a3b8", fontSize: 10, fontWeight: 600 },
+            }, {
+              type: "text", left: "center", top: "55%",
+              style: { text: pieTotalFmt, textAlign: "center", fill: "#0f172a", fontSize: 22, fontWeight: 700, fontFamily: "Inter, sans-serif" },
+            }],
+          } : {}),
           series: [
             {
               name: "Share",
@@ -2927,6 +2942,29 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
       // Build a lightweight ECharts option for live preview from the
       // preview result set so users see an immediate chart.
       let option = buildEchartsOptionFromPreview(selectedTemplate.id, executeJson, config) || {};
+
+      // ── Shared high-end theme: crisp typography + faint dashed gridlines,
+      //    so cartesian charts stop looking like raw ECharts demos. Applied
+      //    before advancedOptions so user overrides still win. ──────────────
+      const INTER = "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+      option.textStyle = { fontFamily: INTER, color: "#334155", ...(option.textStyle || {}) };
+      const themeAxis = (ax: any) => {
+        if (!ax || typeof ax !== "object") return ax;
+        const isValue = ax.type === "value";
+        return {
+          ...ax,
+          axisLine: { show: !isValue, lineStyle: { color: "#e2e8f0" }, ...(ax.axisLine || {}) },
+          axisTick: { show: false, ...(ax.axisTick || {}) },
+          axisLabel: { color: "#64748b", fontSize: 11, fontFamily: INTER, ...(ax.axisLabel || {}) },
+          splitLine: { show: isValue, lineStyle: { color: "#f1f5f9", type: "dashed" }, ...(ax.splitLine || {}) },
+        };
+      };
+      if (option.xAxis) option.xAxis = Array.isArray(option.xAxis) ? option.xAxis.map(themeAxis) : themeAxis(option.xAxis);
+      if (option.yAxis) option.yAxis = Array.isArray(option.yAxis) ? option.yAxis.map(themeAxis) : themeAxis(option.yAxis);
+      if (option.legend && !Array.isArray(option.legend)) {
+        option.legend = { textStyle: { color: "#475569", fontFamily: INTER, fontSize: 12 }, ...option.legend };
+      }
+
       // Merge in advancedOptions for title, font, size, legend, color, axis titles, yAxisFormat, stacking, smooth, marker, and date settings
       if (advancedOptions) {
         // X Axis Date Format is now handled in buildCategoryAxis for live and persisted preview
