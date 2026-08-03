@@ -611,7 +611,24 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
         if sort_by and sort_by.get("column"):
             sb_col = sort_by["column"]
             sb_dir = "DESC" if str(sort_by.get("direction", "asc")).upper() == "DESC" else "ASC"
-            sb_expr = _resolve_column_expression(sb_col, fact_alias, alias_map, column_table_map, coalesce_map)
+            # Sorting by a metric under GROUP BY must use the aggregate, not the
+            # raw column (which is invalid SQL in both T-SQL and Postgres).
+            sb_metric = next(
+                (m for m in metric_list
+                 if (m.get("column") or m.get("field")) == sb_col
+                 or (m.get("label") or m.get("name")) == sb_col),
+                None,
+            )
+            if sb_metric and query_mode != "raw":
+                agg_func = (sb_metric.get("aggregate") or sb_metric.get("agg") or "SUM").upper()
+                m_alias, m_col = _resolve_column_alias(
+                    sb_metric.get("column") or sb_metric.get("field"), fact_alias, alias_map, column_table_map)
+                if agg_func == "COUNT_DISTINCT":
+                    sb_expr = f"COUNT(DISTINCT {m_alias}.{quote_identifier(m_col)})"
+                else:
+                    sb_expr = f"{agg_func}({m_alias}.{quote_identifier(m_col)})"
+            else:
+                sb_expr = _resolve_column_expression(sb_col, fact_alias, alias_map, column_table_map, coalesce_map)
             order_by_clause = f"ORDER BY {sb_expr} {sb_dir}"
         elif time_grain_expr:
             order_by_clause = f"ORDER BY {time_grain_expr} ASC"
