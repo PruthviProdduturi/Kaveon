@@ -533,13 +533,20 @@ const WorldMapRenderer: React.FC<{
       const lo = Math.floor(pos), hi = Math.min(scheme.length - 1, lo + 1);
       return lerpColor(scheme[lo], scheme[hi], pos - lo);
     };
+    // Adaptive K/M/B for legend tiers (so sub-million tiers don't all read "0.0M").
+    const autoNum = (v: number): string => {
+      if (v >= 1e9) return `${+(v / 1e9).toFixed(v % 1e9 ? 1 : 0)}B`;
+      if (v >= 1e6) return `${+(v / 1e6).toFixed(v % 1e6 ? 1 : 0)}M`;
+      if (v >= 1e3) return `${+(v / 1e3).toFixed(v % 1e3 ? 1 : 0)}K`;
+      return `${v}`;
+    };
     const pieces = Array.from({ length: nPieces }, (_, k) => {
       const lo = edges[k];
       const hi = k === nPieces - 1 ? undefined : edges[k + 1];
       return {
         gte: lo, ...(hi !== undefined ? { lt: hi } : {}),
         color: sampleColor(k),
-        label: hi !== undefined ? `${fmtVal(lo)} – ${fmtVal(hi)}` : `${fmtVal(lo)}+`,
+        label: hi !== undefined ? `${autoNum(lo)} – ${autoNum(hi)}` : `${autoNum(lo)}+`,
       };
     }).reverse(); // largest tier on top of the legend
 
