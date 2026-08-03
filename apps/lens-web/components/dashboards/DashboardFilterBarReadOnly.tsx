@@ -286,13 +286,13 @@ const DashboardFilterBarReadOnly: React.FC = () => {
       )}
 
       <div className="chart-filter-body">
-        <div className="chart-filter-list">
+        <div className="chart-filter-list" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
           {dashboardFilters.map((filter) => {
             const isEditing = editingFilterId === filter.id;
             const isDisabled = !filter.enabled;
 
             return (
-              <div key={filter.id} className="chart-filter-list-item" style={{ opacity: isDisabled ? 0.5 : 1 }}>
+              <div key={filter.id} className="chart-filter-list-item" style={{ opacity: isDisabled ? 0.5 : 1, width: 'auto', flex: '0 0 auto' }}>
                 <div className="chart-filter-list-main">
                   <button
                     className="chart-filter-chip-remove"

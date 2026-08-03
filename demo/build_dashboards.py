@@ -153,6 +153,12 @@ def _country_filter(dataset_id):
             "datasetId": dataset_id, "filterType": "value"}
 
 
+def _date_filter(dataset_id):
+    return {"id": "flt-date", "column": "covid_daily.dt", "label": "Date",
+            "operator": ">=", "value": "", "appliesTo": "all", "enabled": False,
+            "datasetId": dataset_id, "filterType": "date_range"}
+
+
 class Blocks:
     """Accumulates positioned layout blocks with running y."""
     def __init__(self):
@@ -286,7 +292,7 @@ def main():
     if any(v is None for v in i.values()):
         print("!! some charts failed:", [k for k, v in i.items() if v is None]); return
 
-    cf = [_country_filter(country)]
+    cf = [_country_filter(country), _date_filter(daily)]
 
     # ── Deep-dive dashboards (build first so we can link to them) ─────────────────
     trends = Blocks()
