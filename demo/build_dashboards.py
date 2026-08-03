@@ -126,10 +126,10 @@ def main():
           {"metrics": [M("deaths", "SUM", "Total Deaths")], "query_mode": agg})
     ids["global_new"] = chart("Global New Cases (weekly)", daily, "time_series_line",
           {"metrics": [M("new_confirmed", "SUM", "New Cases")], "time_column": "dt", "time_grain": "week",
-           "query_mode": agg, "row_limit": 5000})
+           "time_range": "all_time", "query_mode": agg, "row_limit": 5000})
     ids["global_cum"] = chart("Global Cumulative Cases", daily, "time_series_area",
           {"metrics": [M("confirmed", "SUM", "Total Cases")], "time_column": "dt", "time_grain": "day",
-           "query_mode": agg, "row_limit": 5000})
+           "time_range": "all_time", "query_mode": agg, "row_limit": 5000})
     ids["map"] = chart("Confirmed Cases by Country", country, "world_map",
           {"metrics": [M("confirmed", "SUM", "Cases")], "groupby": ["country"],
            "sort_by": {"column": "confirmed", "direction": "desc"}, "query_mode": agg, "row_limit": 250})
@@ -145,7 +145,7 @@ def main():
     ids["us_new"] = chart("US New Cases (weekly)", daily, "time_series_line",
           {"metrics": [M("new_confirmed", "SUM", "New Cases")], "time_column": "dt", "time_grain": "week",
            "filters": [{"column": "country", "op": "=", "value": "US"}],
-           "query_mode": agg, "row_limit": 5000})
+           "time_range": "all_time", "query_mode": agg, "row_limit": 5000})
     ids["summary"] = chart("Country Summary", country, "table",
           {"metrics": [M("confirmed", "SUM", "Cases"), M("deaths", "SUM", "Deaths")], "groupby": ["country"],
            "sort_by": {"column": "confirmed", "direction": "desc"}, "query_mode": agg, "row_limit": 100})
