@@ -64,7 +64,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     // Route protection lives in middleware.ts; keep everything else signed-in.
     authorized({ auth: session, request: { nextUrl } }) {
       const isLoggedIn = !!session?.user;
-      const isPublic = nextUrl.pathname === "/login";
+      const isPublic = nextUrl.pathname === "/login" || nextUrl.pathname === "/about";
       if (isPublic) return true;
       if (!isLoggedIn) return Response.redirect(new URL("/login", nextUrl));
       return true;

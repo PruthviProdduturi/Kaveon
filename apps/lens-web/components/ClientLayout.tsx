@@ -149,6 +149,9 @@ export function ClientLayout({ children }: ClientLayoutProps) {
     })();
   }, [isAuthenticated]);
 
+  // Public, full-bleed marketing page — no app chrome, no auth gate, no white gutters.
+  if (pathname === "/about") return <>{children}</>;
+
   if (isConnecting) return <LoadingOverlay />;
   if (noAccess) return <NoAccessScreen onLogout={logout} />;
   if (!isAuthenticated) return <AuthScreen />;

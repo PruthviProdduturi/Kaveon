@@ -30,13 +30,25 @@ export function configureMsal(clientId: string, tenantId = "common"): void {
   _initPromise = null; // reset so ensureMsalInitialized re-initialises the new instance
 }
 
+// Auth is NextAuth now — MSAL is usually unconfigured. Return a harmless stub so
+// legacy callers (getAllAccounts/acquireToken*) degrade to no-ops instead of
+// throwing. Data calls are authenticated by the /api/lens proxy (session cookie).
+const _STUB = {
+  getAllAccounts: () => [] as unknown[],
+  acquireTokenSilent: async () => ({ accessToken: "" }),
+  acquireTokenPopup: async () => ({ accessToken: "" }),
+  loginRedirect: async () => {},
+  logoutRedirect: async () => {},
+  handleRedirectPromise: async () => null,
+  initialize: async () => {},
+} as unknown as PublicClientApplication;
+
 export function getMsalInstance(): PublicClientApplication {
-  if (!_instance) throw new Error("[MSAL] Not configured — call configureMsal() first.");
-  return _instance;
+  return _instance ?? _STUB;
 }
 
 export async function ensureMsalInitialized(): Promise<void> {
-  if (!_instance) throw new Error("[MSAL] Not configured — call configureMsal() first.");
+  if (!_instance) return;
   if (!_initPromise) {
     _initPromise = _instance.initialize();
   }
