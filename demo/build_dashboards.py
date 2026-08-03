@@ -36,7 +36,7 @@ cur = conn.cursor()
 # ── Colour palettes ──────────────────────────────────────────────────────────
 PALETTE = ["#6366f1", "#ec4899", "#14b8a6", "#f59e0b", "#8b5cf6", "#06b6d4",
            "#ef4444", "#10b981", "#f97316", "#3b82f6", "#a855f7", "#84cc16"]
-MAP_SCALE = ["#dbeafe", "#93c5fd", "#6366f1", "#a21caf", "#be123c"]  # cool → hot
+MAP_SCALE = ["#3b82f6", "#22d3ee", "#10b981", "#facc15", "#f97316", "#ef4444"]  # vivid turbo heat
 
 
 def _viz(color=None, **cto):

@@ -413,7 +413,8 @@ const TableRenderer: React.FC<TableRendererProps> = ({ rows, columns, isPivot, a
 let worldGeoJsonCache: any = null;
 let worldGeoJsonFetching: Promise<any> | null = null;
 
-const MAP_DEFAULT_COLORS = ["#e0f2fe", "#0ea5e9", "#0369a1"];
+// Vivid "turbo"-style heat ramp so choropleths read as colourful, not all-blue.
+const MAP_DEFAULT_COLORS = ["#3b82f6", "#22d3ee", "#10b981", "#facc15", "#f97316", "#ef4444"];
 
 const WorldMapRenderer: React.FC<{
   rows: (string | number | null)[][];
@@ -509,6 +510,12 @@ const WorldMapRenderer: React.FC<{
     const values = data.map(d => d.value);
     const minV = Math.min(...values);
     const maxV = Math.max(...values);
+    // Heavily-skewed data (e.g. US dwarfs everyone) makes a linear scale all one
+    // colour. Cap the colour range at the ~85th percentile so mid countries get
+    // vivid hues; countries above clamp to the hottest colour.
+    const sortedAsc = [...values].sort((a, b) => a - b);
+    const pct = (q: number) => sortedAsc[Math.min(sortedAsc.length - 1, Math.floor(q * (sortedAsc.length - 1)))] ?? maxV;
+    const visMax = Math.max(pct(0.85), minV + 1);
 
     // Data labels for the top ~12 countries only (labelling all ~196 is noise).
     const topN = ctOpts.mapLabelTopN ?? 12;
@@ -528,13 +535,13 @@ const WorldMapRenderer: React.FC<{
       : {};
 
     const visualMap = {
-      min: minV, max: maxV,
+      min: minV, max: visMax,
       left: "left", bottom: 24,
       itemWidth: 12, itemHeight: 110,
       // calculable:false → no draggable handles showing raw min/max numbers;
-      // just a clean gradient bar with formatted endpoints.
+      // just a clean gradient bar with formatted endpoints (true max shown with +).
       calculable: false,
-      text: [fmtVal(maxV), fmtVal(minV)],
+      text: [`${fmtVal(maxV)}`, fmtVal(minV)],
       inRange: { color: colorScheme },
       textStyle: { fontSize: 11, color: isGlobe ? "#94a3b8" : "#475569" },
     };
