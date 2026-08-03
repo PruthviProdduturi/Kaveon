@@ -83,21 +83,38 @@ def M(col, agg, label):
     return {"column": col, "aggregate": agg, "label": label}
 
 
-def tile(chart_id, x, y, w, h):
-    return {"i": "t" + uuid.uuid4().hex[:8], "type": "chart", "chartId": chart_id,
-            "x": x, "y": y, "w": w, "h": h, "minW": 2, "minH": 2, "maxW": 12, "maxH": 24}
+def _chart_child(cid, parent, w, h):
+    return {"i": "c" + uuid.uuid4().hex[:8], "type": "chart", "chartId": cid, "parentId": parent,
+            "x": 0, "y": 0, "w": w, "h": h, "minW": 2, "minH": 2, "maxW": 12, "maxH": 24}
 
 
-def dash(name, description, layout):
+def _row(chart_ids, height, y):
+    """A row container holding chart tiles side-by-side (widths sum to 12)."""
+    rid = "row" + uuid.uuid4().hex[:8]
+    n = len(chart_ids)
+    base = 12 // n
+    widths = [base] * n
+    widths[0] += 12 - base * n  # give remainder to the first tile
+    children = [_chart_child(cid, rid, widths[i], height) for i, cid in enumerate(chart_ids)]
+    return {"i": rid, "type": "row", "x": 0, "y": y, "w": 12, "h": height,
+            "minW": 12, "minH": 2, "maxW": 12, "maxH": 24, "children": children}
+
+
+def dash(name, description, rows):
+    """rows: list of (height, [chart_id, ...]) — each becomes a grid row."""
+    layout, y, all_ids = [], 0, []
+    for height, cids in rows:
+        layout.append(_row(cids, height, y))
+        y += height
+        all_ids += cids
     slug = re.sub(r"[^a-z0-9-]", "", name.lower().replace(" ", "-"))
-    chart_ids = [t["chartId"] for t in layout if t.get("chartId")]
     did = uuid.uuid4().hex
     cur.execute("""INSERT INTO dashboards
         (id, name, slug, description, layout, charts, filters, theme, tags, visibility,
          is_published, is_archived, created_by, modified_by, created_at, modified_at)
         VALUES (%s,%s,%s,%s,%s,%s,'[]',NULL,NULL,'published',true,false,%s,%s,now(),now())""",
-        (did, name, slug, description, json.dumps(layout), json.dumps(chart_ids), EMAIL, EMAIL))
-    print(f"  dashboard: {name}  id={did}  ({len(layout)} tiles)")
+        (did, name, slug, description, json.dumps(layout), json.dumps(all_ids), EMAIL, EMAIL))
+    print(f"  dashboard: {name}  id={did}  ({len(layout)} rows, {len(all_ids)} tiles)")
     return did
 
 
@@ -156,16 +173,12 @@ def main():
     dash("COVID-19 Global Overview",
          "Global COVID-19 cases, deaths, trends and country breakdowns — live from Neon Postgres.",
          [
-             tile(ids["kpi_cases"], 0, 0, 3, 3),
-             tile(ids["kpi_deaths"], 3, 0, 3, 3),
-             tile(ids["map"], 6, 0, 6, 7),
-             tile(ids["global_new"], 0, 3, 6, 6),
-             tile(ids["top_cases"], 6, 7, 6, 6),
-             tile(ids["global_cum"], 0, 9, 6, 6),
-             tile(ids["top_deaths"], 6, 13, 6, 6),
-             tile(ids["share"], 0, 15, 6, 6),
-             tile(ids["us_new"], 6, 19, 6, 6),
-             tile(ids["summary"], 0, 21, 12, 7),
+             (3, [ids["kpi_cases"], ids["kpi_deaths"]]),       # KPI row (two cards)
+             (8, [ids["map"]]),                                 # world map, full width
+             (6, [ids["global_new"], ids["global_cum"]]),       # two time-series
+             (6, [ids["top_cases"], ids["top_deaths"]]),        # two rankings
+             (6, [ids["share"], ids["us_new"]]),                # donut + US line
+             (7, [ids["summary"]]),                             # country table, full width
          ])
     print("done.")
     cur.close(); conn.close()
