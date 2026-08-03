@@ -25,13 +25,13 @@ function parseInline(text: string, key?: string | number): React.ReactNode[] {
     if (m.index > last) nodes.push(text.slice(last, m.index));
     const k = `${key}-${m.index}`;
     if (m[1].startsWith('**'))
-      nodes.push(<strong key={k}>{m[2]}</strong>);
+      nodes.push(<strong key={k}>{parseInline(m[2], k + 'b')}</strong>);
     else if (m[1].startsWith('*'))
-      nodes.push(<em key={k}>{m[3]}</em>);
+      nodes.push(<em key={k}>{parseInline(m[3], k + 'i')}</em>);
     else if (m[1].startsWith('`'))
       nodes.push(<code key={k} style={{ background: '#f1f5f9', padding: '1px 5px', borderRadius: 3, fontFamily: 'ui-monospace,monospace', fontSize: '0.88em', color: '#c7254e' }}>{m[4]}</code>);
     else if (m[1].startsWith('['))
-      nodes.push(<a key={k} href={m[6]} target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb', textDecoration: 'underline' }}>{m[5]}</a>);
+      nodes.push(<a key={k} href={m[6]} target={m[6].startsWith('/') ? '_self' : '_blank'} rel="noopener noreferrer" style={{ color: '#2563eb', textDecoration: 'underline', fontWeight: 600 }}>{parseInline(m[5], k + 'l')}</a>);
     last = m.index + m[0].length;
   }
   if (last < text.length) nodes.push(text.slice(last));

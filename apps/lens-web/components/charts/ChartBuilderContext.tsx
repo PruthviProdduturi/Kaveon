@@ -1836,12 +1836,32 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         }
       }
 
-      return seriesNames.map((name) => ({
+      const _palette: string[] = (advancedOptions?.color && advancedOptions.color.length)
+        ? advancedOptions.color
+        : DEFAULT_ADVANCED_OPTIONS.color;
+      // Single-series categorical bars get per-bar colours (colourful, PBI-like);
+      // multi-series keep one colour per series so the legend stays meaningful.
+      const _colorByData = opts.type === "bar" && seriesNames.length === 1 && !isTimeSeriesKind;
+
+      return seriesNames.map((name, sIdx) => {
+        const _c = _palette[sIdx % _palette.length];
+        // Vertical gradient fill for area charts: series colour → transparent.
+        const _areaGradient = {
+          color: {
+            type: "linear", x: 0, y: 0, x2: 0, y2: 1,
+            colorStops: [
+              { offset: 0, color: _c + "66" },
+              { offset: 1, color: _c + "05" },
+            ],
+          },
+        };
+        return {
         name,
         type: opts.type,
+        colorBy: _colorByData ? "data" : "series",
         stack: (isShareChart ? (stackingOverride ? "total" : undefined) : (opts.stacked ? "total" : undefined)),
         smooth: (isShareChart ? !!smoothOverride : (opts.smooth ?? (opts.type === "line"))),
-        // High-end line styling: thicker, rounded stroke + soft area fill
+        // High-end line styling: thicker, rounded stroke + soft gradient area fill
         lineStyle: opts.type === "line" ? { width: 3, cap: "round", join: "round" } : undefined,
         itemStyle: opts.type === "bar" ? { borderRadius: 4 } : undefined,
         // Only show markers for line charts when enabled
@@ -1870,8 +1890,8 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
               return false;
             }
           : false,
-        // Area charts (filled line): all *_area variants and area_stack share this feature
-        areaStyle: isAreaChart ? {} : undefined,
+        // Area charts (filled line): soft vertical gradient from the series colour
+        areaStyle: isAreaChart ? _areaGradient : undefined,
         // Show labels on marker points only
         label: markersEnabled
           ? {
@@ -1930,7 +1950,8 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
           if (dataIndex === xValues.length - 1) return { value, label: { align: 'right' } };
           return value;
         }),
-      }));
+      };
+      });
     };
 
     // Build custom tooltip formatter based on user preferences
