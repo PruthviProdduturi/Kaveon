@@ -123,6 +123,12 @@ def generate_sql(data: SqlGenerateBody, ctx=Depends(require_min_role("Analyst"))
         else table_name
     )
 
+    # Resolve the target dialect so date grain/format SQL is generated correctly.
+    try:
+        db_type = pool.get_connection_pool(dataset.get("database_name")).db_type
+    except Exception:
+        db_type = "fabric_sql"
+
     params = {
         "datasource": datasource,
         "sql_text": dataset.get("sql_text") or "",
@@ -130,6 +136,7 @@ def generate_sql(data: SqlGenerateBody, ctx=Depends(require_min_role("Analyst"))
         "dimensions": dimensions,
         "columns": dataset.get("columns") or [],
         "database_name": dataset.get("database_name"),
+        "db_type": db_type,
     }
 
     sql_text = build_chart_preview_query(params)

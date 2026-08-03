@@ -34,11 +34,28 @@ def _parse_join_condition(join_condition: str) -> Tuple[Optional[str], Optional[
     return None, None
 
 
-def _apply_date_format(col_expr: str, date_format: Optional[str]) -> str:
+def _apply_date_format(col_expr: str, date_format: Optional[str], db_type: str = "fabric_sql") -> str:
     if not date_format:
         return col_expr
     fmt = date_format.lower()
     if fmt in ("day", "auto"):
+        return col_expr
+    pg = db_type in ("postgresql", "mysql")
+    if pg:
+        # Postgres / MySQL: truncate via date_trunc; label formats via to_char.
+        if db_type == "postgresql":
+            if fmt == "month":        return f"DATE_TRUNC('month', {col_expr})::date"
+            if fmt == "quarter":      return f"DATE_TRUNC('quarter', {col_expr})::date"
+            if fmt == "year":         return f"DATE_TRUNC('year', {col_expr})::date"
+            if fmt == "week":         return f"DATE_TRUNC('week', {col_expr})::date"
+            if fmt == "month-year":   return f"TO_CHAR({col_expr}, 'Mon YYYY')"
+            if fmt == "quarter-year": return f"CONCAT('Q', EXTRACT(QUARTER FROM {col_expr})::int, ' ', EXTRACT(YEAR FROM {col_expr})::int)"
+            return col_expr
+        # mysql
+        if fmt == "month":        return f"DATE_FORMAT({col_expr}, '%Y-%m-01')"
+        if fmt == "year":         return f"DATE_FORMAT({col_expr}, '%Y-01-01')"
+        if fmt == "week":         return f"DATE(DATE_SUB({col_expr}, INTERVAL WEEKDAY({col_expr}) DAY))"
+        if fmt == "month-year":   return f"DATE_FORMAT({col_expr}, '%b %Y')"
         return col_expr
     if fmt == "month":
         return f"DATEFROMPARTS(YEAR({col_expr}), MONTH({col_expr}), 1)"
@@ -55,9 +72,21 @@ def _apply_date_format(col_expr: str, date_format: Optional[str]) -> str:
     return col_expr
 
 
-def _apply_time_grain(col_expr: str, grain: str) -> str:
-    """Truncate a datetime expression to the given time grain (SQL Server T-SQL)."""
+def _apply_time_grain(col_expr: str, grain: str, db_type: str = "fabric_sql") -> str:
+    """Truncate a datetime expression to the given time grain (dialect-aware)."""
     g = (grain or "").lower()
+    if db_type == "postgresql":
+        if g in ("", "none", "day"): return f"CAST({col_expr} AS DATE)"
+        if g in ("week", "month", "quarter", "year"):
+            return f"DATE_TRUNC('{g}', {col_expr})::date"
+        return col_expr
+    if db_type == "mysql":
+        if g in ("", "none", "day"): return f"DATE({col_expr})"
+        if g == "week":  return f"DATE(DATE_SUB({col_expr}, INTERVAL WEEKDAY({col_expr}) DAY))"
+        if g == "month": return f"DATE_FORMAT({col_expr}, '%Y-%m-01')"
+        if g == "year":  return f"DATE_FORMAT({col_expr}, '%Y-01-01')"
+        return f"DATE({col_expr})"
+    # SQL Server / Fabric (T-SQL)
     if g in ("", "none", "day"):
         return f"CAST({col_expr} AS DATE)"
     if g == "week":
@@ -424,6 +453,7 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
         query_mode = (params.get("query_mode") or "aggregate").lower()
         rolling_calc = (params.get("rolling_calc") or "none").lower()  # "none", "rolling_avg", "cumulative_sum"
         rolling_window = max(2, int(params.get("rolling_window") or 3))
+        db_type = (params.get("db_type") or "fabric_sql").lower()  # dialect for date grain/format
 
         datasource = normalize_column_name(raw_datasource)
 
@@ -493,9 +523,9 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
         if time_column:
             raw_expr = _resolve_column_expression(time_column, fact_alias, alias_map, column_table_map, coalesce_map)
             if time_grain and time_grain != "none":
-                grain_expr = _apply_time_grain(raw_expr, time_grain)
+                grain_expr = _apply_time_grain(raw_expr, time_grain, db_type)
             else:
-                grain_expr = _apply_date_format(raw_expr, date_display_format)
+                grain_expr = _apply_date_format(raw_expr, date_display_format, db_type)
             time_grain_expr = grain_expr
             if grain_expr not in select_parts:
                 select_parts.append(grain_expr)
