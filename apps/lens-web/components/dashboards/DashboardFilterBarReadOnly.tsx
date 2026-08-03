@@ -214,13 +214,16 @@ const DashboardFilterBarReadOnly: React.FC = () => {
   };
 
   const getFilterLabel = (filter: DashboardFilter): string => {
+    const name = filter.label?.trim() || filter.column.split('.').pop() || filter.column;
     if (filter.filterType === 'date_range') {
       const from = filter.dateFrom || '…';
       const to = filter.dateTo || '…';
-      return `${filter.column}: ${from} – ${to}`;
+      return `${name}: ${from} – ${to}`;
     }
+    const value = filter.value?.trim();
+    if (!value) return name;              // "Country" (unset) rather than "…country Equals "
     const op = FILTER_OPERATORS.find((o) => o.value === filter.operator)?.label ?? filter.operator;
-    return `${filter.column} ${op} ${filter.value}`;
+    return `${name} ${op} ${value}`;
   };
 
   if (dashboardFilters.length === 0) {

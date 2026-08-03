@@ -211,7 +211,11 @@ const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({
 export const DashboardChartComponent: React.FC<DashboardComponentProps> = ({ item, effectiveFilters, isEditMode, onRemove, onDuplicate }) => {
   const { setCrossFilter, clearCrossFilter, getCrossFilterFilters, crossFilters } = useDashboard();
 
-  const crossFilterFilters = getCrossFilterFilters(item.i);
+  // Charts marked exempt ignore ALL dashboard + cross filters (e.g. a share-by-
+  // country donut that would otherwise collapse to 100% when a country is picked).
+  const isExempt = !!item.exemptFromFilters;
+  const appliedFilters = isExempt ? [] : effectiveFilters;
+  const crossFilterFilters = isExempt ? [] : getCrossFilterFilters(item.i);
   const activeCrossFilter = crossFilters[item.i];
 
   const handleCrossFilter = useCallback((column: string | null, value: string) => {
@@ -256,7 +260,7 @@ export const DashboardChartComponent: React.FC<DashboardComponentProps> = ({ ite
       <DashboardChartLoader
         itemId={item.i}
         chartId={item.chartId!}
-        filters={effectiveFilters}
+        filters={appliedFilters}
         crossFilterFilters={crossFilterFilters}
         onCrossFilter={handleCrossFilter}
         isEditMode={isEditMode}
