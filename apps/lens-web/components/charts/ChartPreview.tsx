@@ -510,6 +510,19 @@ const WorldMapRenderer: React.FC<{
     const minV = Math.min(...values);
     const maxV = Math.max(...values);
 
+    // Data labels for the top ~12 countries only (labelling all ~196 is noise).
+    const topN = ctOpts.mapLabelTopN ?? 12;
+    const labelThreshold = [...values].sort((a, b) => b - a)[Math.min(topN - 1, values.length - 1)] ?? Infinity;
+    const dataLabel = {
+      show: true,
+      fontSize: 9,
+      color: "#0f172a",
+      formatter: (p: any) => {
+        const v = Number(p.value);
+        return !isNaN(v) && v >= labelThreshold ? `${p.name}\n${fmtVal(v)}` : "";
+      },
+    };
+
     const titleOpt = advancedOptions?.title?.text
       ? { title: { text: advancedOptions.title.text, left: "center", top: 5, textStyle: { fontSize: Number(advancedOptions.titleSize) || 20, fontFamily: advancedOptions.titleFont || "sans-serif" } } }
       : {};
@@ -608,9 +621,10 @@ const WorldMapRenderer: React.FC<{
         aspectScale: 0.9,
         data,
         select: { itemStyle: { areaColor: "#f59e0b" } },
-        emphasis: { label: { show: true, fontSize: 11 }, itemStyle: { areaColor: "#fbbf24" } },
+        emphasis: { label: { show: true, fontSize: 11, color: "#0f172a", fontWeight: "bold" }, itemStyle: { areaColor: "#fbbf24" } },
         itemStyle: { borderColor: "#fff", borderWidth: 0.5, areaColor: "#eef2f7" },
-        label: { show: showLabels, fontSize: 10, color: "#1e293b" },
+        labelLayout: { hideOverlap: true },
+        label: showLabels ? { show: true, fontSize: 10, color: "#1e293b" } : dataLabel,
       }],
     };
   }, [ready, rows, columns, advancedOptions, isGlobe]);
