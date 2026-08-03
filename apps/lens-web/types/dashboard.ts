@@ -28,6 +28,8 @@ export interface FilterConfig {
   id: string;
   /** Column to filter on (format: table_name.column_name) */
   column: string;
+  /** Friendly display name shown in the filter bar (defaults to the column) */
+  label?: string;
   /** Filter operator */
   operator: FilterOperator;
   /** Filter value(s) - comma-separated for IN/NOT IN operators */
@@ -220,6 +222,11 @@ export interface DashboardLayoutItem {
 
   /** Dashboard filter IDs that this component should ignore */
   ignoreFilters?: string[];
+
+  /** When true, this chart ignores ALL dashboard filters and cross-filters.
+   *  Use for charts where a filter makes no sense (e.g. a "share by country"
+   *  donut would collapse to 100% if filtered to a single country). */
+  exemptFromFilters?: boolean;
 
   /** Minimum width constraint (in grid units) */
   minW?: number;

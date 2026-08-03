@@ -8,6 +8,7 @@ import { Button } from "../../components/Button";
 import { ConfirmModal } from "../../components/ConfirmModal";
 import { ListPageShell } from "../../components/ListPageShell";
 import { Pagination } from "../../components/Pagination";
+import { relativeTime } from "../../utils/relativeTime";
 
 interface DashboardSummary {
   id: string;
@@ -78,7 +79,7 @@ const DashboardsPage: React.FC = () => {
     return () => window.removeEventListener("focus", handleFocus);
   }, [isAuthenticated]);
 
-  const formatDateTime = (value?: string | null) => value ?? "—";
+  const formatDateTime = (value?: string | null) => relativeTime(value);
 
   const toggleFavorite = async (id: string) => {
     const dash = dashboards.find(d => d.id === id);

@@ -8,6 +8,7 @@ import { useAuth } from "../../auth/useAuth";
 import { useRouter } from "next/navigation";
 import { Button } from "../../components/Button";
 import { ListPageShell } from "../../components/ListPageShell";
+import { relativeTime } from "../../utils/relativeTime";
 import { Pagination } from "../../components/Pagination";
 
 interface ChartSummary {
@@ -78,7 +79,7 @@ export default function ChartsPage() {
 
   const formatDateTime = (value?: string | null) => {
     if (!value) return "—";
-    try { return new Date(value).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }); }
+    try { return relativeTime(value); }
     catch { return value; }
   };
 

@@ -14,7 +14,9 @@ export const DEFAULT_ADVANCED_OPTIONS = {
   titleSize: "20",
   xAxis: { show: true, name: "" },
   yAxis: { show: true, name: "" },
-  color: ["#5470C6", "#91CC75", "#EE6666", "#FAC858", "#73C0DE", "#3BA272", "#FC8452", "#9A60B4", "#EA7CCC"],
+  // Vibrant, graceful default palette (indigo→pink→teal→amber…) so charts are
+  // colourful out of the box instead of the muted ECharts blue-heavy default.
+  color: ["#6366f1", "#ec4899", "#14b8a6", "#f59e0b", "#8b5cf6", "#06b6d4", "#ef4444", "#10b981", "#f97316", "#3b82f6", "#a855f7", "#84cc16"],
   legend: { show: true, left: "top", order: undefined as string[] | undefined },
   tooltip: { show: true, dateFormat: "auto", numberFormat: "none", decimalPlaces: 2, useCommas: true },
   yAxisFormat: "none",
@@ -1839,6 +1841,9 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         type: opts.type,
         stack: (isShareChart ? (stackingOverride ? "total" : undefined) : (opts.stacked ? "total" : undefined)),
         smooth: (isShareChart ? !!smoothOverride : (opts.smooth ?? (opts.type === "line"))),
+        // High-end line styling: thicker, rounded stroke + soft area fill
+        lineStyle: opts.type === "line" ? { width: 3, cap: "round", join: "round" } : undefined,
+        itemStyle: opts.type === "bar" ? { borderRadius: 4 } : undefined,
         // Only show markers for line charts when enabled
         // Show exactly 6 points: first, last, and 4 evenly spaced in between
         symbol: opts.type === "line" && isTimeSeriesKind && markersEnabled ? 'circle' : "none",
@@ -2109,31 +2114,53 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         };
 
         return {
+          // Explicitly clear cartesian components — pie/donut has no axes, and
+          // without this an ECharts option merge can leave a prior chart's
+          // xAxis/yAxis/grid drawing empty axis lines behind the pie.
+          xAxis: [],
+          yAxis: [],
+          grid: undefined,
           tooltip: {
             trigger: "item",
+            appendToBody: true,
             formatter: tooltipNumberFormat !== "none" || tooltipUseCommas ? pieTooltipFormatter : undefined,
           },
-          legend: { orient: "vertical", left: "left" },
-          grid: {
-            left: 10,
-            right: 10,
-            top: 10,
-            bottom: 10,
-            containLabel: true,
-          },
+          // Horizontal scrolling legend across the top (PBI/Superset style); the
+          // donut sits below it so labels never collide with the legend.
+          legend: { type: "scroll", orient: "horizontal", top: 6, left: "center", icon: "circle",
+                    itemWidth: 10, itemHeight: 10, itemGap: 14, textStyle: { fontSize: 12, color: "#475569" } },
           series: [
             {
               name: "Share",
               type: "pie",
-              radius: chartKind === "donut" ? ["50%", "75%"] : "70%",
-              center: ["55%", "50%"],
-              avoidLabelOverlap: false,
+              radius: chartKind === "donut" ? ["46%", "70%"] : ["0%", "68%"],
+              center: ["50%", "57%"],
+              avoidLabelOverlap: true,
+              minAngle: 3,
+              padAngle: chartKind === "donut" ? 2 : 0,
               itemStyle: { borderRadius: 6, borderColor: "#ffffff", borderWidth: 2 },
-              label: { show: false, position: "center" },
-              emphasis: {
-                label: { show: true, fontSize: 14, fontWeight: "bold" },
+              label: {
+                show: true,
+                position: "outside",
+                formatter: "{d}%",
+                fontSize: 11,
+                fontWeight: 600,
+                color: "#475569",
               },
-              labelLine: { show: false },
+              labelLine: { show: true, length: 12, length2: 12, smooth: true, lineStyle: { color: "#cbd5e1" } },
+              // Donut centre total
+              ...(chartKind === "donut" ? {
+                emphasis: {
+                  scale: true, scaleSize: 6,
+                  label: { show: true, fontSize: 15, fontWeight: "bold" },
+                  itemStyle: { shadowBlur: 18, shadowColor: "rgba(0,0,0,0.20)" },
+                },
+              } : {
+                emphasis: {
+                  scale: true, scaleSize: 8,
+                  itemStyle: { shadowBlur: 18, shadowColor: "rgba(0,0,0,0.20)" },
+                },
+              }),
               data: pieData,
             },
           ],
