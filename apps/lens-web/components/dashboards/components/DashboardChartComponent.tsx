@@ -173,7 +173,9 @@ const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({
             title={tileTitle}
             style={{
               fontSize: 12.5, fontWeight: 700, color: '#0f172a', letterSpacing: '-0.2px',
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              // Wrap up to 2 lines instead of hard-trimming a single line.
+              display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+              overflow: 'hidden', lineHeight: 1.2,
             }}
           >{tileTitle}</span>
           {tileInfo && (
