@@ -134,12 +134,17 @@ const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = 
       setDescription(chart.description ?? "");
       if (chart.chart_type) setChartType(chart.chart_type as ChartKind);
 
-      if (chart.viz_config) {
-        const echartsOption = chart.viz_config.echarts_option || chart.viz_config;
-        setAdvancedOptions(mergeAdvancedOptions(echartsOption));
-      } else {
-        setAdvancedOptions(DEFAULT_ADVANCED_OPTIONS);
+      const mergedAdv = chart.viz_config
+        ? mergeAdvancedOptions(chart.viz_config.echarts_option || chart.viz_config)
+        : { ...DEFAULT_ADVANCED_OPTIONS };
+      // Rolling calc lives in advancedOptions at query time, but is often saved
+      // on query_config — restore it so cumulative/rolling charts (and KPI trends)
+      // re-run correctly instead of silently degrading to raw values.
+      if (typeof qc.rolling_calc === "string" && qc.rolling_calc !== "none") {
+        (mergedAdv as any).rollingCalc = qc.rolling_calc;
+        if (qc.rolling_window) (mergedAdv as any).rollingWindow = qc.rolling_window;
       }
+      setAdvancedOptions(mergedAdv);
 
       hasSetMetadataRef.current = true;
     }
