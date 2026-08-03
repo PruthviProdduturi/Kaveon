@@ -188,10 +188,11 @@ const DashboardFilterBarReadOnly: React.FC = () => {
     const filter = dashboardFilters.find((f) => f.id === filterId);
     if (!filter) return;
     if (filter.filterType === 'date_range') {
-      updateDashboardFilter(filterId, { dateFrom: editDateFrom, dateTo: editDateTo, value: `${editDateFrom} – ${editDateTo}` });
+      updateDashboardFilter(filterId, { dateFrom: editDateFrom, dateTo: editDateTo, value: `${editDateFrom} – ${editDateTo}`, enabled: true });
     } else {
       if (!editValue.trim()) return;
-      updateDashboardFilter(filterId, { value: editValue, valueKey: editValueKey });
+      // Applying a value auto-enables the filter so it takes effect immediately.
+      updateDashboardFilter(filterId, { value: editValue, valueKey: editValueKey, enabled: true });
     }
     setEditingFilterId(null);
     setEditValue('');

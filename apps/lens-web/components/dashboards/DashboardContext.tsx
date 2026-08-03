@@ -777,6 +777,10 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
         // Skip if not enabled
         if (!filter.enabled) return false;
 
+        // Skip enabled-but-empty value filters so they don't wipe out all data
+        // (e.g. an unset "Country" filter would otherwise become country = '').
+        if (filter.filterType !== 'date_range' && !String(filter.value ?? '').trim()) return false;
+
         // Skip if in ignore list
         if (ignoreList.includes(filter.id)) return false;
 
