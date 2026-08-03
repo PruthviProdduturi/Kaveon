@@ -374,6 +374,15 @@ def _build_optimized_filter_clause(
             safe_val = str(value_key).replace("'", "''")
             return f"{quoted_key_col} {op} '{safe_val}'"
 
+    # Graceful skip: when we have schema info and this single-part column is not
+    # part of this dataset, drop the filter instead of emitting fact.<unknown>.
+    # This lets a dashboard/cross-filter (e.g. clicking a country on the map) be
+    # broadcast to every tile — it applies only to charts whose dataset has the
+    # column, and is silently ignored elsewhere rather than erroring.
+    _parts = [p for p in normalize_column_name(col).split(".") if p]
+    if len(_parts) == 1 and column_table_map and _parts[0].lower() not in column_table_map:
+        return None
+
     # Tier 3: dimension display column
     alias, col_name = _resolve_column_alias(col, fact_alias, alias_map, column_table_map)
     quoted_col = f"{alias}.{quote_identifier(col_name)}"
@@ -690,9 +699,15 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
             dim_aliases = [f"[__dim_{i}__]" for i in range(len(dim_exprs))]
 
             # Metric aggregation parts = select_parts entries that are NOT in group_by_parts
-            # (they contain the SUM/AVG/COUNT aggregations with AS aliases)
+            # (they contain the SUM/AVG/COUNT aggregations with AS aliases).
+            # Exclude the time-grain bucket alias (e.g. "DATE_TRUNC(...) AS [date]"),
+            # otherwise the accumulator wraps it as SUM(date) → "function sum(date)
+            # does not exist". The outer query already carries the axis as [__time__].
             group_by_set = set(group_by_parts)
-            metric_agg_parts = [sp for sp in select_parts if sp not in group_by_set]
+            metric_agg_parts = [
+                sp for sp in select_parts
+                if sp not in group_by_set and not sp.startswith(time_grain_expr)
+            ]
 
             # Extract the quoted alias from "AGG(x) AS [alias]" → "[alias]"
             metric_aliases = []
