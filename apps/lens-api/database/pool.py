@@ -440,7 +440,13 @@ class PostgreSQLConnection:
     def execute_query(self, sql: str, params: Optional[list] = None) -> Dict[str, Any]:
         self.connect()
         cursor = self.connection.cursor()
-        cursor.execute(sql, params or [])
+        # Only pass params when present — an empty sequence still makes the driver
+        # perform %-interpolation, which breaks any literal '%' (e.g. a "% Affected"
+        # column alias) with "not enough arguments for format string".
+        if params:
+            cursor.execute(sql, params)
+        else:
+            cursor.execute(sql)
         sql_upper = sql.strip().upper()
         is_modification = sql_upper.startswith(("INSERT", "UPDATE", "DELETE", "MERGE"))
 
@@ -542,7 +548,13 @@ class MySQLConnection:
     def execute_query(self, sql: str, params: Optional[list] = None) -> Dict[str, Any]:
         self.connect()
         cursor = self.connection.cursor()
-        cursor.execute(sql, params or [])
+        # Only pass params when present — an empty sequence still makes the driver
+        # perform %-interpolation, which breaks any literal '%' (e.g. a "% Affected"
+        # column alias) with "not enough arguments for format string".
+        if params:
+            cursor.execute(sql, params)
+        else:
+            cursor.execute(sql)
         sql_upper = sql.strip().upper()
         is_modification = sql_upper.startswith(("INSERT", "UPDATE", "DELETE", "MERGE"))
 
