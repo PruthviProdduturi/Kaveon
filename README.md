@@ -8,7 +8,7 @@
 
 <br>
 
-[![CI](https://github.com/PruthviProdduturi/Lens/actions/workflows/ci.yml/badge.svg)](https://github.com/PruthviProdduturi/Lens/actions/workflows/ci.yml) [![Deploy](https://github.com/PruthviProdduturi/Lens/actions/workflows/deploy.yml/badge.svg)](https://github.com/PruthviProdduturi/Lens/actions/workflows/deploy.yml)
+[![CI](https://github.com/PruthviProdduturi/Lens/actions/workflows/ci.yml/badge.svg)](https://github.com/PruthviProdduturi/Lens/actions/workflows/ci.yml) [![Live Demo](https://img.shields.io/badge/Live-lens--analytics.vercel.app-0e7490?style=flat&logo=vercel&logoColor=white)](https://lens-analytics.vercel.app)
 
 <br>
 
