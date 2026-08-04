@@ -664,7 +664,7 @@ const WorldMapRenderer: React.FC<{
         map: REGION.mapName,
         roam: showRoam,
         layoutCenter: ["50%", "52%"],
-        layoutSize: region === "usa" ? "115%" : "155%",
+        layoutSize: region === "usa" ? "148%" : "155%",
         aspectScale: 0.9,
         data,
         select: { itemStyle: { areaColor: "#f59e0b" } },
