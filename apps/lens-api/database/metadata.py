@@ -57,6 +57,12 @@ def _adapt_sql(sql: str, db_type: str) -> str:
         sql = re.sub(r"JSON_VALUE\(\s*(.+?)\s*,\s*('\$\.[A-Za-z0-9_]+')\s*\)", r"JSON_UNQUOTE(JSON_EXTRACT(\1, \2))", sql, flags=re.IGNORECASE)
         sql = re.sub(r"TRY_CAST\(\s*(.+?)\s+AS\s+INT\s*\)", r"CAST(\1 AS SIGNED)", sql, flags=re.IGNORECASE)
 
+    # T-SQL bit literals → boolean (Postgres rejects `is_active = 1`; the bit
+    # columns follow the is_* naming convention across the metadata schema).
+    if db_type in ("postgresql", "mysql"):
+        sql = re.sub(r"\b(is_[a-z_]+)\s*=\s*1\b", r"\1 = TRUE", sql, flags=re.IGNORECASE)
+        sql = re.sub(r"\b(is_[a-z_]+)\s*=\s*0\b", r"\1 = FALSE", sql, flags=re.IGNORECASE)
+
     # [bracket_identifier] → "double_quote" (PostgreSQL) or `backtick` (MySQL)
     if db_type == "postgresql":
         sql = re.sub(r"\[([^\]]+)\]", r'"\1"', sql)
