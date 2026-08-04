@@ -144,3 +144,7 @@ __pycache__/
 
 # per-repo memory, local only
 CLAUDE.md
+
+# Local dev logs
+.weblog.txt
+.api_err.log
