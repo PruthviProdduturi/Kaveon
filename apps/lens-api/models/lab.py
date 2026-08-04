@@ -32,7 +32,7 @@ class SavedQueryUpdate(BaseModel):
 
 class LabExecuteBody(BaseModel):
     sql: str = Field(..., min_length=1)
-    database: str = Field(..., min_length=1, max_length=255)
+    database: Optional[str] = Field(default=None, max_length=255)
 
     @field_validator("sql")
     @classmethod
@@ -44,7 +44,7 @@ class LabExecuteBody(BaseModel):
 
 class LabQueryBody(BaseModel):
     query: str = Field(..., min_length=1)
-    database: str = Field(..., min_length=1, max_length=255)
+    database: Optional[str] = Field(default=None, max_length=255)
     datasetId: Optional[int] = None
     runContext: Optional[str] = Field(default=None, max_length=64)
     tablesUsed: Optional[list[str]] = None
