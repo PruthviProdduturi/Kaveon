@@ -22,6 +22,7 @@ def _adapt(row: dict) -> dict:
         "id": row.get("id"),
         "name": row.get("name"),
         "description": row.get("description"),
+        "theme": row.get("theme"),
         "layout": layout,
         "charts": row.get("charts") or "[]",
         "filters": row.get("filters") or "[]",
@@ -112,7 +113,7 @@ def create_dashboard(data: dict, user_id: str) -> dict:
         _to_str(data.get("layout", [])),
         _to_str(data.get("charts", [])),
         _to_str(data.get("filters", [])),
-        None, None, visibility,
+        data.get("theme"), None, visibility,
         bool(data.get("is_published")),
         bool(data.get("is_archived")),
         user_id, user_id, now, now,
@@ -135,6 +136,8 @@ def update_dashboard(dashboard_id: str, data: dict) -> Optional[dict]:
         updates.append(f"slug = @param{i}"); params.append(slug); i += 1
     if "description" in data:
         updates.append(f"description = @param{i}"); params.append(data["description"]); i += 1
+    if "theme" in data:
+        updates.append(f"theme = @param{i}"); params.append(data["theme"]); i += 1
 
     def _to_str(v):
         return v if isinstance(v, str) else json.dumps(v)

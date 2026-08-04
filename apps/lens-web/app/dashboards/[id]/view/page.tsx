@@ -240,6 +240,7 @@ const DashboardViewPage: React.FC = () => {
           id: d.id,
           name: d.name,
           description: d.description || "",
+          theme: d.theme || "default",
           layout: (() => { const p = JSON.parse(d.layout || "[]"); return Array.isArray(p) ? p : []; })(),
           filters: JSON.parse(d.filters || "[]"),
           filterLogic: "AND",

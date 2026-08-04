@@ -263,6 +263,9 @@ export interface DashboardConfig {
   /** Dashboard description */
   description?: string;
 
+  /** Colour theme key (see DASHBOARD_THEMES) — recolours all charts */
+  theme?: string;
+
   /** Layout items in the dashboard */
   layout: DashboardLayoutItem[];
 
@@ -353,6 +356,19 @@ export interface DashboardGridConfig {
   /** Whether items can be resized */
   isResizable: boolean;
 }
+
+/**
+ * Dashboard colour themes — a theme recolours every chart on the board at once.
+ * The `default` theme has no colours (each chart keeps its own palette).
+ */
+export const DASHBOARD_THEMES: Record<string, { label: string; colors: string[] }> = {
+  default: { label: "Default", colors: [] },
+  vibrant: { label: "Vibrant", colors: ["#6366f1", "#ec4899", "#14b8a6", "#f59e0b", "#8b5cf6", "#06b6d4", "#ef4444", "#10b981", "#f97316", "#3b82f6"] },
+  ocean:   { label: "Ocean",   colors: ["#0ea5e9", "#0369a1", "#06b6d4", "#3b82f6", "#6366f1", "#38bdf8", "#0891b2", "#22d3ee"] },
+  sunset:  { label: "Sunset",  colors: ["#f59e0b", "#ef4444", "#ec4899", "#f97316", "#e11d48", "#fb923c", "#f43f5e", "#facc15"] },
+  forest:  { label: "Forest",  colors: ["#10b981", "#14b8a6", "#84cc16", "#22c55e", "#059669", "#65a30d", "#4ade80", "#a3e635"] },
+  slate:   { label: "Slate",   colors: ["#334155", "#0ea5e9", "#64748b", "#38bdf8", "#475569", "#93c5fd", "#94a3b8", "#0369a1"] },
+};
 
 /**
  * Number of horizontal grid columns in a row (12-column grid)

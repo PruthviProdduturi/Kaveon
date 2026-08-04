@@ -18,6 +18,7 @@ const DashboardNewPage: React.FC = () => {
       const payload = {
         name: config.name,
         description: config.description || "",
+        theme: config.theme || "default",
         layout: JSON.stringify(config.layout),
         charts: JSON.stringify(config.chartIds || []),
         filters: JSON.stringify(config.filters || []),

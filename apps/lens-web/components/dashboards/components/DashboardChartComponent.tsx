@@ -51,7 +51,7 @@ const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({
   onDuplicate,
   onRemove,
 }) => {
-  const { getChartConfig, dashboardId, globalRefreshTick } = useDashboard();
+  const { getChartConfig, dashboardId, globalRefreshTick, themePalette } = useDashboard();
 
   // Initialise synchronously from preload cache when available so charts that
   // mount after preloading skip the fetch entirely and never show a loading flash.
@@ -158,10 +158,11 @@ const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({
     <ChartBuilderProvider runContext={runCtx}>
       {/* ChartHydrator renders null — it only populates context state */}
       <ChartHydrator
-        key={refreshKey}
+        key={`${refreshKey}:${themePalette ? themePalette.join(',') : 'none'}`}
         chart={chart}
         externalFilters={filtersRef.current}
         crossFilterExtra={relevantCrossExtras}
+        paletteOverride={themePalette}
       />
       {/* Tile title bar — gives every chart a clear name + optional info tooltip */}
       {tileTitle && (

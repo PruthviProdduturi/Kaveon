@@ -15,6 +15,7 @@ import DashboardProperties from "./DashboardProperties";
 import DashboardFilterBarEnhanced from "./DashboardFilterBarEnhanced";
 import { msalFetch } from "../../utils/msalFetch";
 import { API_BASE } from "../../config";
+import { DASHBOARD_THEMES } from "../../types/dashboard";
 import { useAuth } from "../../auth/useAuth";
 import type { ComponentType } from "../../types/dashboard";
 
@@ -47,6 +48,8 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
     isSaving,
     saveError,
     saveDashboard,
+    theme,
+    setTheme,
   } = useDashboard();
 
   const [charts, setCharts] = useState<Chart[]>([]);
@@ -522,6 +525,19 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
               )}
             </button>
           )}
+          {/* Colour theme picker — recolours every chart on the board */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginRight: 4 }} title="Colour theme — recolours all charts">
+            <i className="fas fa-palette" style={{ color: "#64748b", fontSize: 13 }} />
+            <select
+              value={theme || "default"}
+              onChange={(e) => setTheme(e.target.value)}
+              style={{ padding: "7px 8px", fontSize: 13, borderRadius: 6, border: "1px solid #e2e8f0", background: "#fff", color: "#334155", cursor: "pointer" }}
+            >
+              {Object.entries(DASHBOARD_THEMES).map(([key, t]) => (
+                <option key={key} value={key}>{t.label}</option>
+              ))}
+            </select>
+          </div>
           <button
             onClick={handleSave}
             disabled={!hasUnsavedChanges || isSaving}
