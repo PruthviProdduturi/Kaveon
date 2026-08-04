@@ -263,6 +263,15 @@ def main():
     nyc_day = dataset("NYC Taxi Daily", "nyc_taxi_daily", [
         ("dt", "date", True, False), ("trips", "bigint", False, True), ("revenue", "double precision", False, True),
     ], date_col="dt")
+
+    # ── COVID's impact on NYC crossover (loaded by demo/load_covid_nyc_impact.py) ─
+    nyc_impact = dataset("COVID's Impact on NYC", "covid_nyc_impact", [
+        ("dt", "date", True, False), ("cases", "double precision", False, True),
+        ("deaths", "double precision", False, True), ("hospitalized", "double precision", False, True),
+        ("subway_riders", "double precision", False, True), ("subway_pct", "double precision", False, True),
+        ("bus_pct", "double precision", False, True), ("road_traffic", "double precision", False, True),
+        ("road_pct", "double precision", False, True),
+    ], date_col="dt")
     print(f"datasets: daily={daily} country={country} summary={summary} outcome={outcome} "
           f"us_daily={us_daily} us_state={us_state} us_summary={us_summary} "
           f"nyc={nyc_sum}/{nyc_boro}/{nyc_zone}/{nyc_hour}/{nyc_day}")
@@ -448,6 +457,41 @@ def main():
          "query_mode": agg, "row_limit": 300},
         desc="Every pickup zone — trips, revenue, avg fare and distance.")
 
+    # ── COVID's impact on NYC — crossover (cases vs mobility collapse/recovery) ───
+    print("Crossover charts:")
+    PCT0 = dict(numberFormat="fixed", decimalPlaces=0, suffix="%")
+    i["imp_peak"] = chart("Peak Daily Cases", nyc_impact, "big_number",
+        {"metrics": [M("cases", "MAX", "Peak Cases")], "query_mode": agg},
+        desc="Highest single-day NYC case count (Omicron, Jan 2022).", viz=_viz(**KPI_BIG))
+    i["imp_deaths_kpi"] = chart("Total NYC Deaths", nyc_impact, "big_number",
+        {"metrics": [M("deaths", "SUM", "Deaths")], "query_mode": agg},
+        desc="Cumulative confirmed COVID-19 deaths in NYC.", viz=_viz(**KPI_BIG))
+    i["imp_trough"] = chart("Subway Low", nyc_impact, "big_number",
+        {"metrics": [M("subway_pct", "MIN", "Subway Low")], "query_mode": agg},
+        desc="Subway ridership bottomed at this % of a pre-pandemic day (Apr 2020).", viz=_viz(**PCT0))
+    i["imp_recovery"] = chart("Subway Peak Recovery", nyc_impact, "big_number",
+        {"metrics": [M("subway_pct", "MAX", "Recovery")], "query_mode": agg},
+        desc="Best subway recovery since — still short of 100% of pre-pandemic.", viz=_viz(**PCT0))
+    i["imp_cases"] = chart("NYC COVID Cases (weekly)", nyc_impact, "time_series_area",
+        {"metrics": [M("cases", "SUM", "Cases")], "time_column": "dt", "time_grain": "week",
+         "time_range": "all_time", "query_mode": agg, "row_limit": 5000},
+        desc="Confirmed cases per week — the pandemic waves that hit NYC.", viz=_viz(["#6366f1"]))
+    i["imp_mobility"] = chart("Mobility vs Pre-Pandemic (weekly)", nyc_impact, "time_series_line",
+        {"metrics": [M("subway_pct", "AVG", "Subway"), M("bus_pct", "AVG", "Bus"),
+                     M("road_pct", "AVG", "Road (bridges & tunnels)")],
+         "time_column": "dt", "time_grain": "week", "time_range": "all_time",
+         "query_mode": agg, "row_limit": 5000},
+        desc="Each mode as % of a comparable pre-pandemic day. Roads recovered fast; transit lagged.",
+        viz=_viz(["#0ea5e9", "#f59e0b", "#10b981"]))
+    i["imp_deaths"] = chart("NYC Deaths (weekly)", nyc_impact, "time_series_area",
+        {"metrics": [M("deaths", "SUM", "Deaths")], "time_column": "dt", "time_grain": "week",
+         "time_range": "all_time", "query_mode": agg, "row_limit": 5000},
+        desc="Confirmed COVID-19 deaths per week in NYC.", viz=_viz(["#ef4444"]))
+    i["imp_hosp"] = chart("NYC Hospitalizations (weekly)", nyc_impact, "time_series_area",
+        {"metrics": [M("hospitalized", "SUM", "Hospitalized")], "time_column": "dt", "time_grain": "week",
+         "time_range": "all_time", "query_mode": agg, "row_limit": 5000},
+        desc="Confirmed COVID-19 hospitalizations per week in NYC.", viz=_viz(["#f97316"]))
+
     if any(v is None for v in i.values()):
         print("!! some charts failed:", [k for k, v in i.items() if v is None]); return
 
@@ -506,6 +550,26 @@ def main():
             C(i["nyc_boro_donut"], 0, 27, 4, 9, exempt=True), C(i["nyc_table"], 4, 27, 8, 9),
         ], nycf)
 
+    # ── COVID's Impact on NYC — crossover dashboard ──────────────────────────────
+    impf = [{"id": "flt-impdate", "column": "covid_nyc_impact.dt", "label": "Date",
+             "operator": ">=", "value": "", "appliesTo": "all", "enabled": False,
+             "datasetId": nyc_impact, "filterType": "date_range"}]
+    id_impact_nyc = dash("COVID's Impact on NYC",
+        "How the pandemic reshaped New York City — cases & deaths against the collapse and recovery of city mobility.", [
+            T("# When COVID emptied New York\n"
+              "As the waves hit, **subway ridership collapsed to ~7% of a normal day** and deaths surged. "
+              "Watch the two panels line up: **cases spike → the city stops moving**, then recovers unevenly — "
+              "**roads bounced back fast, transit is still catching up.** Data: NYC DOHMH + MTA.", 0, 0, 12, 3, size=14, color="#334155"),
+            C(i["imp_peak"], 0, 3, 3, 5), C(i["imp_deaths_kpi"], 3, 3, 3, 5),
+            C(i["imp_trough"], 6, 3, 3, 5), C(i["imp_recovery"], 9, 3, 3, 5),
+            C(i["imp_cases"], 0, 8, 12, 7),
+            C(i["imp_mobility"], 0, 15, 12, 8),
+            C(i["imp_deaths"], 0, 23, 6, 7), C(i["imp_hosp"], 6, 23, 6, 7),
+            T("---\n*The two time-series share one axis: read them together. Cases/deaths from NYC DOHMH; "
+              "mobility from MTA daily ridership (% of a comparable pre-pandemic day). Demo snapshot.*",
+              0, 30, 12, 2, size=12, color="#94a3b8"),
+        ], impf)
+
     base = "/dashboards"
     dash("COVID-19 Global Overview",
         "Global KPIs, world map and links to the trend, ranking and impact deep-dives — live from Neon.", [
@@ -520,8 +584,9 @@ def main():
               f"- 🏆 **[Country Rankings]({base}/{id_rank}/view)** — who was hit hardest in absolute terms\n"
               f"- 🧭 **[Impact & Comparisons]({base}/{id_impact}/view)** — per-capita spread & case-fatality rates\n"
               f"- 🇺🇸 **[United States]({base}/{id_us}/view)** — state-by-state map, rankings & trends\n"
-              f"- 🚕 **[NYC Yellow Taxi]({base}/{id_nyc}/view)** — 3M rides by borough, zone, hour & day",
-              8, 14, 4, 7, size=14),
+              f"- 🚕 **[NYC Yellow Taxi]({base}/{id_nyc}/view)** — 3M rides by borough, zone, hour & day\n"
+              f"- 🗽 **[COVID's Impact on NYC]({base}/{id_impact_nyc}/view)** — cases vs the city's mobility collapse",
+              8, 14, 4, 8, size=14),
             T("---\n*Data: Johns Hopkins CSSE (cases/deaths) + JHU population lookup. "
               "CFR = deaths ÷ confirmed and is sensitive to testing coverage. Demo snapshot.*",
               0, 20, 12, 2, size=12, color="#94a3b8"),
