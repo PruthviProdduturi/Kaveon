@@ -2,7 +2,7 @@
 
 > Branch: `dev` (default)
 > Module: Analyze module of the Kaveon suite
-> Deploy: Azure Container Apps (`.github/workflows/deploy.yml`) · Frontend also deployable to Vercel
+> Deploy: Vercel (lens-web) + Render (lens-api) + Neon (Postgres) · [lens-analytics.vercel.app](https://lens-analytics.vercel.app)
 
 ---
 
@@ -73,7 +73,7 @@
 | Item | Status |
 |------|--------|
 | CI with gates (`.github/workflows/ci.yml`) — web lint/type-check/build, API syntax/tests, secret scan | ✅ Done |
-| CD — Azure Container Apps (`deploy.yml`, OIDC, no secrets) | ✅ Done |
+| CD — Vercel (auto-deploy `dev`) + Render Blueprint (`render.yaml`) | ✅ Done |
 | Vercel app config (`apps/lens-web/vercel.json`) | ✅ Done |
 | CONTRIBUTING.md · SECURITY.md · LICENSE · ARCHITECTURE.md · DEPLOYMENT.md | ✅ Done |
 | PR template · issue templates (bug/feature) | ✅ Done |

@@ -352,7 +352,7 @@ Each dataset, chart, and dashboard has a `visibility` column:
 ### Managed Identity — Fabric SQL Access
 
 ```
-FastAPI container (Azure Container Apps)
+FastAPI container (Render / any Docker host)
     │
     ├─ DefaultAzureCredential.get_token(
     │      "https://database.windows.net/.default"
@@ -809,18 +809,17 @@ app/
 
 ## Deployment
 
-See [DEPLOYMENT.md](./DEPLOYMENT.md) for the full Azure Container Apps deployment guide.
+See [DEPLOYMENT.md](./DEPLOYMENT.md) for the deployment guide and [deploy-vercel-render-neon.md](./docs/guides/deploy-vercel-render-neon.md) for the full walkthrough.
 
 ### Summary
 
 | Concern | Approach |
 |---|---|
-| Container builds | Docker multi-stage (Python 3.11-slim + ODBC 18 for API; Node 20 Alpine for web) |
-| Image registry | Azure Container Registry (ACR) — no admin credentials |
-| Image pull auth | User-Assigned Managed Identity with AcrPull role |
-| Fabric SQL auth | Managed Identity via `DefaultAzureCredential` — no passwords |
-| CI/CD auth | OIDC Workload Identity Federation — no GitHub secrets |
+| Frontend hosting | Vercel — auto-deploy from `dev` branch |
+| API hosting | Render — Docker via Blueprint (`render.yaml`) |
+| Database | Neon (serverless Postgres) — metadata + data sources |
+| Auth | NextAuth (GitHub / Google / Microsoft Entra ID) |
+| API auth | Proxy secret (`LENS_PROXY_SECRET`) — Vercel injects `X-User-*` headers |
 | API runtime | Gunicorn + Uvicorn workers (4 workers × 8 threads) |
-| Scaling | Azure Container Apps — min 1 replica, auto-scale under load |
-| Cold starts | Connection pool warmup at startup; 5-min heartbeat to keep Fabric serverless warm |
+| Cold starts | Connection pool warmup at startup; 5-min heartbeat |
 | First run | Setup wizard at `/api/v1/setup/*` — disabled once configured |
