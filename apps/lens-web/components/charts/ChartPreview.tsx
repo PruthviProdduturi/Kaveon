@@ -410,12 +410,19 @@ const TableRenderer: React.FC<TableRendererProps> = ({ rows, columns, isPivot, a
   );
 };
 
-// Module-level GeoJSON cache so we only fetch once per page load
-let worldGeoJsonCache: any = null;
-let worldGeoJsonFetching: Promise<any> | null = null;
+// Module-level GeoJSON cache (per region) so we only fetch once per page load
+const geoCache: Record<string, any> = {};
+const geoFetching: Record<string, Promise<any>> = {};
 
-// Vivid "turbo"-style heat ramp so choropleths read as colourful, not all-blue.
-const MAP_DEFAULT_COLORS = ["#3b82f6", "#22d3ee", "#10b981", "#facc15", "#f97316", "#ef4444"];
+// Region config: which GeoJSON + ECharts map name + how to normalise the join key.
+const MAP_REGIONS: Record<string, { url: string; mapName: string; normalize: (s: string) => string }> = {
+  world: { url: "/geo/world.json", mapName: "world", normalize: (s) => normaliseCountryName(s) },
+  usa:   { url: "/geo/usa.json",   mapName: "USA",   normalize: (s) => s.trim() },
+};
+
+// Elegant single-family sequential (light sky → deep ocean blue). Tasteful and
+// truthful for tiered choropleths — not a loud rainbow.
+const MAP_DEFAULT_COLORS = ["#eff6ff", "#bfdbfe", "#7dd3fc", "#38bdf8", "#0ea5e9", "#0369a1"];
 
 const WorldMapRenderer: React.FC<{
   rows: (string | number | null)[][];
@@ -428,15 +435,18 @@ const WorldMapRenderer: React.FC<{
   const eRef = React.useRef<any>(null);
 
   const ctOpts = advancedOptions?.chartTypeOptions || {};
-  const isGlobe = ctOpts.mapStyle === "globe";
+  const region = ctOpts.mapRegion === "usa" ? "usa" : "world";
+  const REGION = MAP_REGIONS[region];
+  // Globe only makes sense for the world map.
+  const isGlobe = ctOpts.mapStyle === "globe" && region === "world";
 
   React.useEffect(() => {
     setReady(false);
     const load = async () => {
       try {
-        if (!worldGeoJsonCache) {
-          if (!worldGeoJsonFetching) {
-            worldGeoJsonFetching = fetch("/geo/world.json")
+        if (!geoCache[region]) {
+          if (!geoFetching[region]) {
+            geoFetching[region] = fetch(REGION.url)
               .then(r => r.json())
               .then(data => {
                 // echarts-gl 2.0.9 has several null-safety bugs in its mesh builder:
@@ -455,7 +465,7 @@ const WorldMapRenderer: React.FC<{
                 const isValidMultiPolygon = (coords: any) =>
                   Array.isArray(coords) && coords.length > 0 && coords.every(isValidPolygon);
 
-                worldGeoJsonCache = {
+                geoCache[region] = {
                   ...data,
                   features: (data.features ?? []).filter((f: any) => {
                     const g = f?.geometry;
@@ -465,23 +475,23 @@ const WorldMapRenderer: React.FC<{
                     return false;
                   }),
                 };
-                return worldGeoJsonCache;
+                return geoCache[region];
               });
           }
-          await worldGeoJsonFetching;
+          await geoFetching[region];
         }
         if (!isGlobe) {
           // Flat map: register map on the main echarts instance
           const echarts = await import("echarts");
-          echarts.registerMap("world", worldGeoJsonCache);
+          echarts.registerMap(REGION.mapName, geoCache[region]);
         }
         setReady(true);
       } catch (e) {
-        setError("Failed to load world map data");
+        setError("Failed to load map data");
       }
     };
     load();
-  }, [isGlobe]);
+  }, [isGlobe, region]);
 
   const option = React.useMemo(() => {
     if (!ready || !rows.length || columns.length < 2) return null;
@@ -505,7 +515,7 @@ const WorldMapRenderer: React.FC<{
     if (nameIdx < 0 || valIdx < 0) return null;
 
     const data = rows
-      .map(r => ({ name: normaliseCountryName(String(r[nameIdx] ?? "")), value: Number(r[valIdx] ?? 0) }))
+      .map(r => ({ name: REGION.normalize(String(r[nameIdx] ?? "")), value: Number(r[valIdx] ?? 0) }))
       .filter(d => d.name && !isNaN(d.value));
 
     const values = data.map(d => d.value);
@@ -550,8 +560,8 @@ const WorldMapRenderer: React.FC<{
       };
     }).reverse(); // largest tier on top of the legend
 
-    // Data labels for the top ~12 countries only (labelling all ~196 is noise).
-    const topN = ctOpts.mapLabelTopN ?? 12;
+    // Data labels for the top few regions only (labelling all is noise / collisions).
+    const topN = ctOpts.mapLabelTopN ?? 8;
     const labelThreshold = [...values].sort((a, b) => b - a)[Math.min(topN - 1, values.length - 1)] ?? Infinity;
     const dataLabel = {
       show: true,
@@ -651,10 +661,10 @@ const WorldMapRenderer: React.FC<{
       visualMap: { ...visualMap, left: 8, bottom: 14, itemWidth: 11, itemHeight: 90 },
       series: [{
         type: "map",
-        map: "world",
+        map: REGION.mapName,
         roam: showRoam,
         layoutCenter: ["50%", "52%"],
-        layoutSize: "155%",
+        layoutSize: region === "usa" ? "115%" : "155%",
         aspectScale: 0.9,
         data,
         select: { itemStyle: { areaColor: "#f59e0b" } },
@@ -679,7 +689,7 @@ const WorldMapRenderer: React.FC<{
         <WorldMapGlobe
           rows={rows}
           columns={columns}
-          geoJson={worldGeoJsonCache}
+          geoJson={geoCache["world"]}
           advancedOptions={advancedOptions}
         />
       </div>
