@@ -639,10 +639,31 @@ const ChartTypeOptions: React.FC<ChartTypeOptionsProps> = ({ chartType, advanced
               <option value="t">Trillions (T)</option>
             </select>
           </div>
+          <div className="chart-builder-field-group" style={{ marginBottom: 10 }}>
+            <label className="chart-builder-label" htmlFor="map-region">Region</label>
+            <select id="map-region" className="chart-builder-select" value={ctOpts.mapRegion || "world"} onChange={(e) => set("mapRegion", e.target.value)}>
+              <option value="world">World</option>
+              <option value="usa">United States (states)</option>
+            </select>
+          </div>
           {(ctOpts.mapStyle || "flat") === "flat" && (
             <CheckRow id="map-roam" label="Enable zoom / pan" checked={ctOpts.mapRoam !== false} onChange={(v) => set("mapRoam", v)} />
           )}
-          <CheckRow id="map-labels" label="Show country labels" checked={ctOpts.mapShowLabels === true} onChange={(v) => set("mapShowLabels", v)} />
+          <CheckRow id="map-labels" label="Show all region labels" checked={ctOpts.mapShowLabels === true} onChange={(v) => set("mapShowLabels", v)} />
+          {ctOpts.mapShowLabels !== true && (
+            <div className="chart-builder-field-group" style={{ marginBottom: 10 }}>
+              <label className="chart-builder-label">Label density — top {ctOpts.mapLabelTopN ?? 8} (auto-expands on zoom)</label>
+              <input type="range" min={0} max={30} step={1} value={ctOpts.mapLabelTopN ?? 8}
+                onChange={(e) => set("mapLabelTopN", Number(e.target.value))} style={{ width: "100%" }} />
+            </div>
+          )}
+          {(ctOpts.mapStyle || "flat") === "flat" && (
+            <div className="chart-builder-field-group" style={{ marginBottom: 4 }}>
+              <label className="chart-builder-label">Default zoom — {ctOpts.mapZoom || 1}× (saved with the chart)</label>
+              <input type="range" min={1} max={8} step={0.5} value={ctOpts.mapZoom || 1}
+                onChange={(e) => set("mapZoom", Number(e.target.value))} style={{ width: "100%" }} />
+            </div>
+          )}
         </>
       )}
 
