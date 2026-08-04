@@ -40,6 +40,7 @@ const DashboardsPage: React.FC = () => {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
 
   useEffect(() => {
     const saved = typeof window !== "undefined" ? window.localStorage.getItem("lens_dash_view") : null;
@@ -194,8 +195,8 @@ const DashboardsPage: React.FC = () => {
                 className="card"
                 onClick={() => { window.location.href = `/dashboards/${d.id}/view`; }}
                 style={{ padding: 0, overflow: "hidden", cursor: "pointer", display: "flex", flexDirection: "column", transition: "box-shadow 0.15s, transform 0.15s" }}
-                onMouseOver={e => { e.currentTarget.style.boxShadow = "0 8px 24px rgba(15,23,42,0.12)"; e.currentTarget.style.transform = "translateY(-2px)"; }}
-                onMouseOut={e => { e.currentTarget.style.boxShadow = ""; e.currentTarget.style.transform = ""; }}
+                onMouseEnter={e => { e.currentTarget.style.boxShadow = "0 8px 24px rgba(15,23,42,0.12)"; e.currentTarget.style.transform = "translateY(-2px)"; setHoveredId(d.id); }}
+                onMouseLeave={e => { e.currentTarget.style.boxShadow = ""; e.currentTarget.style.transform = ""; setHoveredId(null); }}
               >
                 {/* Full-dashboard snapshot if captured, else a live hero-chart preview */}
                 <div style={{ height: 156, borderBottom: "1px solid #eef2f7", position: "relative", background: "#f8fafc" }}>
@@ -203,6 +204,24 @@ const DashboardsPage: React.FC = () => {
                     <img src={d.thumbnail} alt={d.name} style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top" }} />
                   ) : (
                     <DashboardThumbnail chartId={hero} />
+                  )}
+                  {/* Regenerate thumbnail (opens the dashboard, which re-snapshots it) */}
+                  {hoveredId === d.id && (
+                    <button
+                      type="button"
+                      title="Regenerate thumbnail (opens & re-captures the dashboard)"
+                      onClick={e => { e.stopPropagation(); window.location.href = `/dashboards/${d.id}/view?recapture=1`; }}
+                      style={{
+                        position: "absolute", top: 8, left: 8, zIndex: 2,
+                        display: "flex", alignItems: "center", gap: 5,
+                        padding: "4px 9px", fontSize: 11, fontWeight: 600,
+                        background: "rgba(255,255,255,0.94)", color: "#334155",
+                        border: "1px solid #e2e8f0", borderRadius: 6, cursor: "pointer",
+                        boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+                      }}
+                    >
+                      <i className="fas fa-rotate" style={{ fontSize: 10 }} /> Regenerate
+                    </button>
                   )}
                   <span style={{
                     position: "absolute", top: 8, right: 8,
