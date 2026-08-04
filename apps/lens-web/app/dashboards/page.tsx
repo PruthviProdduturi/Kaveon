@@ -9,6 +9,7 @@ import { ConfirmModal } from "../../components/ConfirmModal";
 import { ListPageShell } from "../../components/ListPageShell";
 import { Pagination } from "../../components/Pagination";
 import { relativeTime } from "../../utils/relativeTime";
+import DashboardThumbnail from "../../components/dashboards/DashboardThumbnail";
 
 interface DashboardSummary {
   id: string;
@@ -22,6 +23,7 @@ interface DashboardSummary {
   favorite?: boolean;
   is_published?: boolean;
   is_archived?: boolean;
+  charts?: string;
 }
 
 const PAGE_SIZE = 20;
@@ -159,61 +161,58 @@ const DashboardsPage: React.FC = () => {
         onSearch={handleSearch}
         resultCount={search ? filtered.length : undefined}
       >
-        <div className="card">
-          <div className="results-table-container">
-            <table className="results-table">
-              <thead>
-                <tr>
-                  <th><span className="column-header-label">Name</span></th>
-                  <th><span className="column-header-label">Owner</span></th>
-                  <th><span className="column-header-label">Modified by</span></th>
-                  <th><span className="column-header-label">Last modified</span></th>
-                  <th><span className="column-header-label">Status</span></th>
-                  <th><span className="column-header-label">Actions</span></th>
-                </tr>
-              </thead>
-              <tbody>
-                {paged.map(d => (
-                  <tr key={d.id} onClick={() => { window.location.href = `/dashboards/${d.id}/view`; }} style={{ cursor: "pointer" }}>
-                    <td>
-                      <strong>{d.name}</strong>
-                      {d.description && <div className="muted" style={{ marginTop: 4, fontSize: 13 }}>{d.description}</div>}
-                    </td>
-                    <td className="muted" style={{ fontSize: 13 }}>{d.owner || d.created_by || "—"}</td>
-                    <td className="muted" style={{ fontSize: 13 }}>{d.modified_by || d.owner || d.created_by || "—"}</td>
-                    <td className="muted" style={{ fontSize: 13 }}>{formatDateTime(d.updated_at || d.created_at)}</td>
-                    <td>
-                      <span style={{
-                        padding: "0.2rem 0.6rem", borderRadius: 6, fontSize: "0.75rem", fontWeight: 600,
-                        background: d.is_archived ? "#f3f4f6" : d.is_published ? "#d1fae5" : "#eff6ff",
-                        color: d.is_archived ? "#6b7280" : d.is_published ? "#065f46" : "#1d4ed8",
-                      }}>
-                        {d.is_archived ? "Archived" : d.is_published ? "Published" : "Draft"}
-                      </span>
-                    </td>
-                    <td className="actions-cell">
-                      <div className="row-actions">
-                        <button type="button" className="action-icon-btn" title={d.favorite ? "Unfavorite" : "Favorite"}
-                          onClick={e => { e.stopPropagation(); toggleFavorite(d.id); }}>
-                          <i className={d.favorite ? "fas fa-star" : "far fa-star"} style={d.favorite ? { color: "#f5c518" } : {}} />
-                        </button>
-                        <button type="button" className="action-icon-btn" title="Edit dashboard"
-                          onClick={e => { e.stopPropagation(); window.location.href = `/dashboards/${d.id}/edit`; }}>
-                          <i className="fas fa-edit" />
-                        </button>
-                        <button type="button" className="action-icon-btn" title="Delete dashboard"
-                          onClick={e => { e.stopPropagation(); setConfirmDelete(d); }} disabled={deletingId === d.id}>
-                          <i className={deletingId === d.id ? "fas fa-spinner fa-spin" : "fas fa-trash"} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <Pagination total={filtered.length} page={page} pageSize={PAGE_SIZE} onChange={setPage} />
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
+          {paged.map(d => {
+            const hero = (() => { try { return JSON.parse(d.charts || "[]")[0] ?? null; } catch { return null; } })();
+            return (
+              <div
+                key={d.id}
+                className="card"
+                onClick={() => { window.location.href = `/dashboards/${d.id}/view`; }}
+                style={{ padding: 0, overflow: "hidden", cursor: "pointer", display: "flex", flexDirection: "column", transition: "box-shadow 0.15s, transform 0.15s" }}
+                onMouseOver={e => { e.currentTarget.style.boxShadow = "0 8px 24px rgba(15,23,42,0.12)"; e.currentTarget.style.transform = "translateY(-2px)"; }}
+                onMouseOut={e => { e.currentTarget.style.boxShadow = ""; e.currentTarget.style.transform = ""; }}
+              >
+                {/* Live hero-chart thumbnail */}
+                <div style={{ height: 156, borderBottom: "1px solid #eef2f7", position: "relative" }}>
+                  <DashboardThumbnail chartId={hero} />
+                  <span style={{
+                    position: "absolute", top: 8, right: 8,
+                    padding: "0.15rem 0.5rem", borderRadius: 6, fontSize: "0.7rem", fontWeight: 600,
+                    background: d.is_archived ? "#f3f4f6" : d.is_published ? "#d1fae5" : "#eff6ff",
+                    color: d.is_archived ? "#6b7280" : d.is_published ? "#065f46" : "#1d4ed8",
+                  }}>
+                    {d.is_archived ? "Archived" : d.is_published ? "Published" : "Draft"}
+                  </span>
+                </div>
+                <div style={{ padding: "12px 14px", flex: 1, display: "flex", flexDirection: "column", gap: 5, minWidth: 0 }}>
+                  <strong style={{ fontSize: 14, color: "#0f172a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{d.name}</strong>
+                  {d.description && (
+                    <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.4, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{d.description}</div>
+                  )}
+                  <div style={{ marginTop: "auto", display: "flex", alignItems: "center", justifyContent: "space-between", paddingTop: 6 }}>
+                    <span className="muted" style={{ fontSize: 12 }}>{formatDateTime(d.updated_at || d.created_at)}</span>
+                    <div className="row-actions" style={{ display: "flex", gap: 2 }}>
+                      <button type="button" className="action-icon-btn" title={d.favorite ? "Unfavorite" : "Favorite"}
+                        onClick={e => { e.stopPropagation(); toggleFavorite(d.id); }}>
+                        <i className={d.favorite ? "fas fa-star" : "far fa-star"} style={d.favorite ? { color: "#f5c518" } : {}} />
+                      </button>
+                      <button type="button" className="action-icon-btn" title="Edit dashboard"
+                        onClick={e => { e.stopPropagation(); window.location.href = `/dashboards/${d.id}/edit`; }}>
+                        <i className="fas fa-edit" />
+                      </button>
+                      <button type="button" className="action-icon-btn" title="Delete dashboard"
+                        onClick={e => { e.stopPropagation(); setConfirmDelete(d); }} disabled={deletingId === d.id}>
+                        <i className={deletingId === d.id ? "fas fa-spinner fa-spin" : "fas fa-trash"} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
+        <Pagination total={filtered.length} page={page} pageSize={PAGE_SIZE} onChange={setPage} />
       </ListPageShell>
 
       <ConfirmModal
