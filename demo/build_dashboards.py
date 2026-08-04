@@ -36,7 +36,7 @@ cur = conn.cursor()
 # ── Colour palettes ──────────────────────────────────────────────────────────
 PALETTE = ["#6366f1", "#ec4899", "#14b8a6", "#f59e0b", "#8b5cf6", "#06b6d4",
            "#ef4444", "#10b981", "#f97316", "#3b82f6", "#a855f7", "#84cc16"]
-MAP_SCALE = ["#3b82f6", "#22d3ee", "#10b981", "#facc15", "#f97316", "#ef4444"]  # vivid turbo heat
+MAP_SCALE = ["#eff6ff", "#bfdbfe", "#7dd3fc", "#38bdf8", "#0ea5e9", "#0369a1"]  # elegant blue sequential
 
 
 def _viz(color=None, **cto):
@@ -147,6 +147,12 @@ def _date_filter(dataset_id):
             "datasetId": dataset_id, "filterType": "date_range"}
 
 
+def _state_filter(dataset_id):
+    return {"id": "flt-state", "column": "covid_us_state_latest.state", "label": "State",
+            "operator": "=", "value": "", "appliesTo": "all", "enabled": False,
+            "datasetId": dataset_id, "filterType": "value"}
+
+
 def dash(name, description, items, filters=None):
     """items: flat list of chart/text tiles with x/y/w/h."""
     all_ids = [it["chartId"] for it in items if it.get("chartId")]
@@ -201,7 +207,35 @@ def main():
     outcome = dataset("COVID-19 Case Outcomes", "covid_case_outcome", [
         ("outcome", "varchar", True, False), ("cases", "bigint", False, True), ("ord", "int", False, True),
     ])
-    print(f"datasets: daily={daily} country={country} summary={summary} outcome={outcome}")
+
+    # ── US state-level datasets (loaded by demo/load_covid_us.py) ────────────────
+    us_daily = dataset("COVID-19 US Daily", "covid_us_daily", [
+        ("state", "varchar", True, False), ("dt", "date", True, False),
+        ("new_confirmed", "bigint", False, True), ("new_deaths", "bigint", False, True),
+        ("confirmed", "bigint", False, True), ("deaths", "bigint", False, True),
+    ], date_col="dt")
+    us_state = dataset("COVID-19 US by State", "covid_us_state_latest", [
+        ("state", "varchar", True, False),
+        ("confirmed", "bigint", False, True), ("deaths", "bigint", False, True),
+        ("population", "bigint", False, True),
+        ("pct_affected", "double precision", False, True), ("cfr", "double precision", False, True),
+    ])
+    cur.execute("DROP TABLE IF EXISTS covid_us_summary")
+    cur.execute("""
+        CREATE TABLE covid_us_summary AS
+        SELECT SUM(population)::bigint AS total_population, SUM(confirmed)::bigint AS total_confirmed,
+               SUM(deaths)::bigint AS total_deaths,
+               ROUND(SUM(deaths)::numeric / NULLIF(SUM(confirmed),0) * 100, 2) AS cfr_pct,
+               ROUND(SUM(confirmed)::numeric / NULLIF(SUM(population),0) * 100, 2) AS pct_affected_pct
+        FROM covid_us_state_latest
+    """)
+    us_summary = dataset("COVID-19 US Summary", "covid_us_summary", [
+        ("total_population", "bigint", False, True), ("total_confirmed", "bigint", False, True),
+        ("total_deaths", "bigint", False, True), ("cfr_pct", "double precision", False, True),
+        ("pct_affected_pct", "double precision", False, True),
+    ])
+    print(f"datasets: daily={daily} country={country} summary={summary} outcome={outcome} "
+          f"us_daily={us_daily} us_state={us_state} us_summary={us_summary}")
 
     agg = "aggregate"
     i = {}
@@ -288,6 +322,57 @@ def main():
          "query_mode": agg, "row_limit": 250},
         desc="Full per-country breakdown — searchable and sortable.")
 
+    # ── US state-level charts ────────────────────────────────────────────────────
+    print("US charts:")
+    i["us_kpi_pop"] = chart("US Population", us_summary, "big_number",
+        {"metrics": [M("total_population", "SUM", "People")], "query_mode": agg},
+        desc="Combined population of the 50 states + DC.", viz=_viz(**KPI_BIG))
+    i["us_kpi_cases"] = chart("US Confirmed Cases", us_summary, "big_number",
+        {"metrics": [M("total_confirmed", "SUM", "Cases")], "query_mode": agg},
+        desc="Cumulative confirmed cases across the US.", viz=_viz(**KPI_BIG))
+    i["us_kpi_deaths"] = chart("US Deaths", us_summary, "big_number",
+        {"metrics": [M("total_deaths", "SUM", "Deaths")], "query_mode": agg},
+        desc="Cumulative confirmed deaths across the US.", viz=_viz(**KPI_BIG))
+    i["us_kpi_cfr"] = chart("US Case Fatality Rate", us_summary, "big_number",
+        {"metrics": [M("cfr_pct", "SUM", "CFR")], "query_mode": agg},
+        desc="US deaths ÷ confirmed cases.", viz=_viz(**KPI_PCT))
+    i["us_map"] = chart("Confirmed Cases by State", us_state, "world_map",
+        {"metrics": [M("confirmed", "SUM", "Cases")], "groupby": ["state"],
+         "sort_by": {"column": "confirmed", "direction": "desc"}, "query_mode": agg, "row_limit": 60},
+        desc="US choropleth of cumulative cases. Click a state to cross-filter.",
+        viz=_viz(MAP_SCALE, mapRegion="usa", mapNumberFormat="m"))
+    i["us_top_cases"] = chart("Top 15 States by Cases", us_state, "bar_horizontal",
+        {"metrics": [M("confirmed", "SUM", "Cases")], "groupby": ["state"],
+         "sort_by": {"column": "confirmed", "direction": "desc"}, "query_mode": agg, "row_limit": 15},
+        desc="States with the most cumulative cases.", viz=_viz(["#0ea5e9"]))
+    i["us_top_deaths"] = chart("Top 15 States by Deaths", us_state, "bar_horizontal",
+        {"metrics": [M("deaths", "SUM", "Deaths")], "groupby": ["state"],
+         "sort_by": {"column": "deaths", "direction": "desc"}, "query_mode": agg, "row_limit": 15},
+        desc="States with the most cumulative deaths.", viz=_viz(["#f97316"]))
+    i["us_pct"] = chart("% Population Affected — Top 15 States", us_state, "bar_horizontal",
+        {"metrics": [M("pct_affected", "AVG", "Pct Affected")], "groupby": ["state"],
+         "sort_by": {"column": "pct_affected", "direction": "desc"}, "query_mode": agg, "row_limit": 15},
+        desc="Cases as a share of state population.", viz=_viz(["#f59e0b"]))
+    i["us_cfr"] = chart("Case Fatality Rate — Top 15 States", us_state, "bar_horizontal",
+        {"metrics": [M("cfr", "AVG", "CFR")], "groupby": ["state"],
+         "sort_by": {"column": "cfr", "direction": "desc"}, "query_mode": agg, "row_limit": 15},
+        desc="Deaths ÷ cases by state.", viz=_viz(["#ec4899"]))
+    i["us_trend"] = chart("US New Cases (weekly)", us_daily, "time_series_area",
+        {"metrics": [M("new_confirmed", "SUM", "New Cases")], "time_column": "dt", "time_grain": "week",
+         "time_range": "all_time", "query_mode": agg, "row_limit": 5000},
+        desc="Weekly new confirmed cases across the US.", viz=_viz(["#0ea5e9"]))
+    i["us_deaths_trend"] = chart("US New Deaths (weekly)", us_daily, "time_series_area",
+        {"metrics": [M("new_deaths", "SUM", "New Deaths")], "time_column": "dt", "time_grain": "week",
+         "time_range": "all_time", "query_mode": agg, "row_limit": 5000},
+        desc="Weekly new confirmed deaths across the US.", viz=_viz(["#ef4444"]))
+    i["us_table"] = chart("State Detail", us_state, "table",
+        {"metrics": [M("population", "SUM", "Population"), M("confirmed", "SUM", "Cases"),
+                     M("deaths", "SUM", "Deaths"), M("pct_affected", "AVG", "Pct Affected"),
+                     M("cfr", "AVG", "CFR")],
+         "groupby": ["state"], "sort_by": {"column": "confirmed", "direction": "desc"},
+         "query_mode": agg, "row_limit": 60},
+        desc="Every state — population, cases, deaths, per-capita and CFR.")
+
     if any(v is None for v in i.values()):
         print("!! some charts failed:", [k for k, v in i.items() if v is None]); return
 
@@ -318,6 +403,21 @@ def main():
             C(i["detail"], 0, 11, 12, 10),
         ], cf)
 
+    # ── United States deep-dive dashboard ────────────────────────────────────────
+    usf = [_state_filter(us_state), _date_filter(us_daily)]
+    id_us = dash("COVID-19 · United States",
+        "US state-level cases, deaths, per-capita spread and trends — live from Neon.", [
+            T("The pandemic across the **United States**, by state. "
+              "**Click a state on the map** to cross-filter, or pick one in the **Filters** bar.", 0, 0, 12, 2),
+            C(i["us_kpi_pop"], 0, 2, 3, 5), C(i["us_kpi_cases"], 3, 2, 3, 5),
+            C(i["us_kpi_deaths"], 6, 2, 3, 5), C(i["us_kpi_cfr"], 9, 2, 3, 5),
+            C(i["us_map"], 0, 7, 8, 13, exempt=True),
+            C(i["us_top_cases"], 8, 7, 4, 13, exempt=True),
+            C(i["us_trend"], 0, 20, 6, 8), C(i["us_deaths_trend"], 6, 20, 6, 8),
+            C(i["us_pct"], 0, 28, 6, 9, exempt=True), C(i["us_cfr"], 6, 28, 6, 9, exempt=True),
+            C(i["us_table"], 0, 37, 12, 10),
+        ], usf)
+
     base = "/dashboards"
     dash("COVID-19 Global Overview",
         "Global KPIs, world map and links to the trend, ranking and impact deep-dives — live from Neon.", [
@@ -330,7 +430,8 @@ def main():
             T("## 🔎 Dive deeper\n"
               f"- 📈 **[Trends Over Time]({base}/{id_trends}/view)** — weekly waves, cumulative growth, the US curve\n"
               f"- 🏆 **[Country Rankings]({base}/{id_rank}/view)** — who was hit hardest in absolute terms\n"
-              f"- 🧭 **[Impact & Comparisons]({base}/{id_impact}/view)** — per-capita spread & case-fatality rates",
+              f"- 🧭 **[Impact & Comparisons]({base}/{id_impact}/view)** — per-capita spread & case-fatality rates\n"
+              f"- 🇺🇸 **[United States]({base}/{id_us}/view)** — state-by-state map, rankings & trends",
               8, 14, 4, 6, size=14),
             T("---\n*Data: Johns Hopkins CSSE (cases/deaths) + JHU population lookup. "
               "CFR = deaths ÷ confirmed and is sensitive to testing coverage. Demo snapshot.*",
