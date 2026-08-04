@@ -39,9 +39,11 @@ interface ChartHydratorProps {
   /** Cross-filter extras: applied at query time only, NOT merged into context filter state.
    *  Change in this prop triggers a re-run with these as extra filters. */
   crossFilterExtra?: any[];
+  /** Dashboard colour theme — when set, overrides each chart's own colour palette. */
+  paletteOverride?: string[] | null;
 }
 
-const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = [], crossFilterExtra = [] }) => {
+const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = [], crossFilterExtra = [], paletteOverride = null }) => {
   const {
     setChartId,
     setSelectedDatasetId,
@@ -143,6 +145,10 @@ const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = 
       if (typeof qc.rolling_calc === "string" && qc.rolling_calc !== "none") {
         (mergedAdv as any).rollingCalc = qc.rolling_calc;
         if (qc.rolling_window) (mergedAdv as any).rollingWindow = qc.rolling_window;
+      }
+      // Dashboard colour theme overrides the chart's own palette (map scales excepted).
+      if (paletteOverride && paletteOverride.length && chart.chart_type !== "world_map") {
+        (mergedAdv as any).color = paletteOverride;
       }
       setAdvancedOptions(mergedAdv);
 

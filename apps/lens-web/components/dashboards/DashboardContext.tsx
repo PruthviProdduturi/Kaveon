@@ -26,6 +26,7 @@ import {
   MIN_COMPONENT_DIMENSIONS as MIN_DIMS,
   MAX_COMPONENT_DIMENSIONS as MAX_DIMS,
   GRID_COLUMNS,
+  DASHBOARD_THEMES,
 } from '../../types/dashboard';
 
 /** Distribute GRID_COLUMNS units evenly across n children */
@@ -96,6 +97,11 @@ interface DashboardContextState {
   removeItemFromContainer: (containerId: string, itemId: string) => void;
   moveItemToContainer: (itemId: string, targetContainerId: string, position?: { x: number; y: number }) => void;
   moveItemToRoot: (itemId: string) => void;
+
+  // Colour theme
+  theme: string;
+  setTheme: (theme: string) => void;
+  themePalette: string[] | null;
 
   // Actions - Filter management
   setDashboardFilters: (filters: DashboardFilter[]) => void;
@@ -190,6 +196,14 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
   // Filter state
   const [dashboardFilters, setDashboardFilters] = useState<DashboardFilter[]>(initialConfig?.filters || []);
   const [filterLogic, setFilterLogic] = useState<FilterLogic>(initialConfig?.filterLogic || 'AND');
+
+  // Colour theme (recolours all charts). '' / 'default' = each chart keeps its own colours.
+  const [theme, setThemeState] = useState<string>(initialConfig?.theme || 'default');
+  const themePalette: string[] | null = (DASHBOARD_THEMES[theme]?.colors?.length ? DASHBOARD_THEMES[theme].colors : null);
+  const setTheme = useCallback((t: string) => {
+    setThemeState(t);
+    setHasUnsavedChanges(true);
+  }, []);
 
   // Chart config cache for parallel loading
   const [chartConfigCache, setChartConfigCache] = useState<Map<number, any>>(new Map());
@@ -873,6 +887,7 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
         id: dashboardId || undefined,
         name,
         description,
+        theme,
         layout,
         filters: dashboardFilters,
         filterLogic,
@@ -890,7 +905,7 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
     } finally {
       setIsSaving(false);
     }
-  }, [dashboardId, name, description, layout, dashboardFilters, filterLogic, onSave]);
+  }, [dashboardId, name, description, theme, layout, dashboardFilters, filterLogic, onSave]);
 
   /**
    * Load a dashboard configuration
@@ -901,6 +916,7 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
     setDashboardId(config.id || null);
     setName(config.name);
     setDescription(config.description || '');
+    setThemeState(config.theme || 'default');
     setLayout(Array.isArray(config.layout) ? config.layout : []);
     setDashboardFilters(config.filters);
     setFilterLogic(config.filterLogic);
@@ -1076,6 +1092,11 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
     removeItemFromContainer,
     moveItemToContainer,
     moveItemToRoot,
+
+    // Colour theme
+    theme,
+    setTheme,
+    themePalette,
 
     // Actions - Filter management
     setDashboardFilters,

@@ -40,6 +40,7 @@ const DashboardEditPage: React.FC = () => {
           id: dashboard.id,
           name: dashboard.name,
           description: dashboard.description || "",
+          theme: dashboard.theme || "default",
           layout: (() => { const p = JSON.parse(dashboard.layout || "[]"); return Array.isArray(p) ? p : []; })(),
           filters: JSON.parse(dashboard.filters || "[]"),
           filterLogic: "AND",
@@ -70,6 +71,7 @@ const DashboardEditPage: React.FC = () => {
         const payload = {
           name: config.name,
           description: config.description || "",
+          theme: config.theme || "default",
           layout: config.layout,
           charts: config.chartIds || [],
           filters: config.filters || [],
