@@ -23,6 +23,7 @@ def _adapt(row: dict) -> dict:
         "name": row.get("name"),
         "description": row.get("description"),
         "theme": row.get("theme"),
+        "thumbnail": row.get("thumbnail"),
         "layout": layout,
         "charts": row.get("charts") or "[]",
         "filters": row.get("filters") or "[]",
@@ -51,7 +52,7 @@ def list_dashboards(user_email: str, role: str = "Viewer") -> List[dict]:
     vis = _vis_clause(1, 0)
     result = db.query(f"""
         SELECT d.id, d.name, d.slug, d.description, d.layout, d.charts, d.filters,
-               d.theme, d.tags, d.is_published, d.is_archived, d.visibility,
+               d.theme, d.tags, d.thumbnail, d.is_published, d.is_archived, d.visibility,
                d.created_by, d.modified_by, d.created_at, d.modified_at,
                CASE WHEN f.id IS NOT NULL THEN 1 ELSE 0 END as favorite
         FROM dbo.dashboards d
@@ -138,6 +139,8 @@ def update_dashboard(dashboard_id: str, data: dict) -> Optional[dict]:
         updates.append(f"description = @param{i}"); params.append(data["description"]); i += 1
     if "theme" in data:
         updates.append(f"theme = @param{i}"); params.append(data["theme"]); i += 1
+    if "thumbnail" in data:
+        updates.append(f"thumbnail = @param{i}"); params.append(data["thumbnail"]); i += 1
 
     def _to_str(v):
         return v if isinstance(v, str) else json.dumps(v)

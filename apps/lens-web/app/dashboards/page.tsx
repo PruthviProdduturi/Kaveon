@@ -24,6 +24,7 @@ interface DashboardSummary {
   is_published?: boolean;
   is_archived?: boolean;
   charts?: string;
+  thumbnail?: string | null;
 }
 
 const PAGE_SIZE = 20;
@@ -38,6 +39,13 @@ const DashboardsPage: React.FC = () => {
   const [confirmDelete, setConfirmDelete] = useState<DashboardSummary | null>(null);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+
+  useEffect(() => {
+    const saved = typeof window !== "undefined" ? window.localStorage.getItem("lens_dash_view") : null;
+    if (saved === "grid" || saved === "list") setViewMode(saved);
+  }, []);
+  const changeView = (m: "grid" | "list") => { setViewMode(m); try { window.localStorage.setItem("lens_dash_view", m); } catch {} };
 
   const loadDashboards = async () => {
     setIsLoading(true);
@@ -140,9 +148,24 @@ const DashboardsPage: React.FC = () => {
           ...(publishedCount > 0 ? [{ label: `${publishedCount} Published`, icon: "fa-globe", bg: "#d1fae5", border: "#6ee7b7", color: "#065f46" }] : []),
         ] : []}
         action={
-          <Button onClick={() => { window.location.href = "/dashboards/new"; }}>
-            <i className="fas fa-plus" /> New dashboard
-          </Button>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ display: "flex", border: "1px solid #e2e8f0", borderRadius: 8, overflow: "hidden" }}>
+              {(["grid", "list"] as const).map(m => (
+                <button key={m} type="button" onClick={() => changeView(m)}
+                  title={m === "grid" ? "Thumbnail view" : "List view"}
+                  style={{
+                    width: 34, height: 34, border: "none", cursor: "pointer",
+                    background: viewMode === m ? "#eff6ff" : "#fff",
+                    color: viewMode === m ? "#2563eb" : "#94a3b8",
+                  }}>
+                  <i className={m === "grid" ? "fas fa-table-cells-large" : "fas fa-list"} />
+                </button>
+              ))}
+            </div>
+            <Button onClick={() => { window.location.href = "/dashboards/new"; }}>
+              <i className="fas fa-plus" /> New dashboard
+            </Button>
+          </div>
         }
         loading={isLoading}
         loadingMessage="Loading dashboards"
@@ -161,6 +184,7 @@ const DashboardsPage: React.FC = () => {
         onSearch={handleSearch}
         resultCount={search ? filtered.length : undefined}
       >
+        {viewMode === "grid" ? (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
           {paged.map(d => {
             const hero = (() => { try { return JSON.parse(d.charts || "[]")[0] ?? null; } catch { return null; } })();
@@ -173,9 +197,13 @@ const DashboardsPage: React.FC = () => {
                 onMouseOver={e => { e.currentTarget.style.boxShadow = "0 8px 24px rgba(15,23,42,0.12)"; e.currentTarget.style.transform = "translateY(-2px)"; }}
                 onMouseOut={e => { e.currentTarget.style.boxShadow = ""; e.currentTarget.style.transform = ""; }}
               >
-                {/* Live hero-chart thumbnail */}
-                <div style={{ height: 156, borderBottom: "1px solid #eef2f7", position: "relative" }}>
-                  <DashboardThumbnail chartId={hero} />
+                {/* Full-dashboard snapshot if captured, else a live hero-chart preview */}
+                <div style={{ height: 156, borderBottom: "1px solid #eef2f7", position: "relative", background: "#f8fafc" }}>
+                  {d.thumbnail ? (
+                    <img src={d.thumbnail} alt={d.name} style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top" }} />
+                  ) : (
+                    <DashboardThumbnail chartId={hero} />
+                  )}
                   <span style={{
                     position: "absolute", top: 8, right: 8,
                     padding: "0.15rem 0.5rem", borderRadius: 6, fontSize: "0.7rem", fontWeight: 600,
@@ -212,6 +240,60 @@ const DashboardsPage: React.FC = () => {
             );
           })}
         </div>
+        ) : (
+          <div className="card">
+            <div className="results-table-container">
+              <table className="results-table">
+                <thead>
+                  <tr>
+                    <th><span className="column-header-label">Name</span></th>
+                    <th><span className="column-header-label">Owner</span></th>
+                    <th><span className="column-header-label">Last modified</span></th>
+                    <th><span className="column-header-label">Status</span></th>
+                    <th><span className="column-header-label">Actions</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paged.map(d => (
+                    <tr key={d.id} onClick={() => { window.location.href = `/dashboards/${d.id}/view`; }} style={{ cursor: "pointer" }}>
+                      <td>
+                        <strong>{d.name}</strong>
+                        {d.description && <div className="muted" style={{ marginTop: 4, fontSize: 13 }}>{d.description}</div>}
+                      </td>
+                      <td className="muted" style={{ fontSize: 13 }}>{d.owner || d.created_by || "—"}</td>
+                      <td className="muted" style={{ fontSize: 13 }}>{formatDateTime(d.updated_at || d.created_at)}</td>
+                      <td>
+                        <span style={{
+                          padding: "0.2rem 0.6rem", borderRadius: 6, fontSize: "0.75rem", fontWeight: 600,
+                          background: d.is_archived ? "#f3f4f6" : d.is_published ? "#d1fae5" : "#eff6ff",
+                          color: d.is_archived ? "#6b7280" : d.is_published ? "#065f46" : "#1d4ed8",
+                        }}>
+                          {d.is_archived ? "Archived" : d.is_published ? "Published" : "Draft"}
+                        </span>
+                      </td>
+                      <td className="actions-cell">
+                        <div className="row-actions">
+                          <button type="button" className="action-icon-btn" title={d.favorite ? "Unfavorite" : "Favorite"}
+                            onClick={e => { e.stopPropagation(); toggleFavorite(d.id); }}>
+                            <i className={d.favorite ? "fas fa-star" : "far fa-star"} style={d.favorite ? { color: "#f5c518" } : {}} />
+                          </button>
+                          <button type="button" className="action-icon-btn" title="Edit dashboard"
+                            onClick={e => { e.stopPropagation(); window.location.href = `/dashboards/${d.id}/edit`; }}>
+                            <i className="fas fa-edit" />
+                          </button>
+                          <button type="button" className="action-icon-btn" title="Delete dashboard"
+                            onClick={e => { e.stopPropagation(); setConfirmDelete(d); }} disabled={deletingId === d.id}>
+                            <i className={deletingId === d.id ? "fas fa-spinner fa-spin" : "fas fa-trash"} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
         <Pagination total={filtered.length} page={page} pageSize={PAGE_SIZE} onChange={setPage} />
       </ListPageShell>
 

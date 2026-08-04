@@ -8,6 +8,7 @@ import DashboardFilterBarReadOnly from "../../../../components/dashboards/Dashbo
 import { LoadingOverlay } from "../../../../components/LoadingOverlay";
 import { msalFetch } from "../../../../utils/msalFetch";
 import { API_BASE } from "../../../../config";
+import { toJpeg } from "html-to-image";
 
 export const dynamic = 'force-dynamic';
 export const dynamicParams = true;
@@ -34,6 +35,33 @@ const DashboardViewContent: React.FC<{
   const { preloadAllCharts, isPreloading, dashboardFilters, triggerGlobalRefresh } = useDashboard();
   const hasPreloadedRef = useRef(false);
   const [chartsReady, setChartsReady] = useState(false);
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const capturedRef = useRef(false);
+  const viewParams = useParams();
+  const dashId = viewParams?.id as string | undefined;
+
+  // Capture a real full-dashboard thumbnail a few seconds after it renders, then
+  // save it so the dashboards list can show an actual preview (not a placeholder).
+  useEffect(() => {
+    if (!chartsReady || capturedRef.current || !dashId || !canvasRef.current) return;
+    capturedRef.current = true;
+    const t = setTimeout(async () => {
+      try {
+        const node = canvasRef.current;
+        if (!node) return;
+        const dataUrl = await toJpeg(node, {
+          quality: 0.55, pixelRatio: 0.4, backgroundColor: "#f8fafc", cacheBust: true,
+        });
+        if (!dataUrl || dataUrl.length > 3_500_000) return;   // guard oversized
+        await msalFetch(`${API_BASE}/api/v1/dashboards/${dashId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ thumbnail: dataUrl }),
+        });
+      } catch { /* thumbnail is best-effort */ }
+    }, 3500);
+    return () => clearTimeout(t);
+  }, [chartsReady, dashId]);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [refreshInterval, setRefreshInterval] = useState(0);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
@@ -209,7 +237,9 @@ const DashboardViewContent: React.FC<{
             <span>Loading dashboard…</span>
           </div>
         ) : (
-          <DashboardCanvas />
+          <div ref={canvasRef}>
+            <DashboardCanvas />
+          </div>
         )}
       </div>
     </div>
