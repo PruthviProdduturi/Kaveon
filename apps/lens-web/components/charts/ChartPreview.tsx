@@ -537,10 +537,21 @@ const WorldMapRenderer: React.FC<{
     const hiV = positive.length ? Math.max(...positive) : 1;
     const loV = positive.length ? Math.min(...positive) : 1;
     let edges: number[] = [];
-    const startExp = Math.max(0, Math.floor(Math.log10(Math.max(loV, 1))));
-    const endExp = Math.ceil(Math.log10(Math.max(hiV, 10)));
-    for (let e = startExp; e <= endExp; e++) edges.push(Math.pow(10, e));
-    while (edges.length > 7) edges = edges.filter((_, idx) => idx % 2 === 0 || idx === edges.length - 1);
+    if (hiV <= 1000) {
+      // Small-range metric (rates, %, per-capita) — linear tiers read far better
+      // than log decades (which would collapse 0–90% into 1–2 buckets).
+      const n = 5;
+      const round = (v: number) => (hiV >= 20 ? Math.round(v) : Math.round(v * 10) / 10);
+      for (let k = 0; k <= n; k++) edges.push(round(loV + (hiV - loV) * (k / n)));
+      edges = Array.from(new Set(edges));
+    } else {
+      // Heavily-skewed counts — log-decade tiers (…,100K–1M,1M–10M,10M+): each order
+      // of magnitude gets its own hue, colourful *and* truthful.
+      const startExp = Math.max(0, Math.floor(Math.log10(Math.max(loV, 1))));
+      const endExp = Math.ceil(Math.log10(Math.max(hiV, 10)));
+      for (let e = startExp; e <= endExp; e++) edges.push(Math.pow(10, e));
+      while (edges.length > 7) edges = edges.filter((_, idx) => idx % 2 === 0 || idx === edges.length - 1);
+    }
     const nPieces = Math.max(1, edges.length - 1);
     const sampleColor = (k: number) => {
       const scheme = colorScheme.length >= 2 ? colorScheme : MAP_DEFAULT_COLORS;

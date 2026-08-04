@@ -353,6 +353,11 @@ def main():
         {"metrics": [M("cfr", "AVG", "CFR")], "groupby": ["country"],
          "sort_by": {"column": "cfr", "direction": "desc"}, "query_mode": agg, "row_limit": 15},
         desc="Deaths ÷ cases by country. Highest ratios track fragile health systems.", viz=_viz(["#ec4899"]))
+    i["impact_map"] = chart("Population Affected by Country (%)", country, "world_map",
+        {"metrics": [M("pct_affected", "AVG", "% Affected")], "groupby": ["country"],
+         "sort_by": {"column": "pct_affected", "direction": "desc"}, "query_mode": agg, "row_limit": 250},
+        desc="Confirmed cases as a share of each country's population — the per-capita spread. Click a country to cross-filter.",
+        viz=_viz(MAP_SCALE))
     i["detail"] = chart("Country Detail", country, "table",
         {"metrics": [M("population", "SUM", "Population"), M("confirmed", "SUM", "Cases"),
                      M("deaths", "SUM", "Deaths"), M("pct_affected", "AVG", "Pct Affected"),
@@ -510,16 +515,17 @@ def main():
         "Top countries by cases and deaths, plus the global deaths share.", [
             T("Who was hit hardest in **absolute** terms. "
               "These rankings stay global on purpose (they ignore the country filter).", 0, 0, 12, 2),
-            C(i["top_cases"], 0, 2, 6, 9), C(i["top_deaths"], 6, 2, 6, 9),
-            C(i["share"], 0, 11, 12, 9, exempt=True),
+            C(i["top_cases"], 0, 2, 6, 11), C(i["top_deaths"], 6, 2, 6, 11),
+            C(i["share"], 0, 13, 12, 9, exempt=True),
         ], cf)
 
     id_impact = dash("COVID-19 · Impact & Comparisons",
         "Per-capita spread, case-fatality rates and the full country table.", [
             T("Normalised views — cases **per capita** and **case-fatality rate** — "
-              "reveal a very different picture than raw totals.", 0, 0, 12, 2),
-            C(i["pct_aff"], 0, 2, 6, 9, exempt=True), C(i["cfr_rank"], 6, 2, 6, 9, exempt=True),
-            C(i["detail"], 0, 11, 12, 10),
+              "reveal a very different picture than raw totals. The map shows **who was hit hardest relative to population**.", 0, 0, 12, 2),
+            C(i["impact_map"], 0, 2, 12, 12, exempt=True),
+            C(i["pct_aff"], 0, 14, 6, 11, exempt=True), C(i["cfr_rank"], 6, 14, 6, 11, exempt=True),
+            C(i["detail"], 0, 25, 12, 10),
         ], cf)
 
     # ── United States deep-dive dashboard ────────────────────────────────────────
@@ -533,8 +539,8 @@ def main():
             C(i["us_map"], 0, 7, 8, 13, exempt=True),
             C(i["us_top_cases"], 8, 7, 4, 13, exempt=True),
             C(i["us_trend"], 0, 20, 6, 8), C(i["us_deaths_trend"], 6, 20, 6, 8),
-            C(i["us_pct"], 0, 28, 6, 9, exempt=True), C(i["us_cfr"], 6, 28, 6, 9, exempt=True),
-            C(i["us_table"], 0, 37, 12, 10),
+            C(i["us_pct"], 0, 28, 6, 11, exempt=True), C(i["us_cfr"], 6, 28, 6, 11, exempt=True),
+            C(i["us_table"], 0, 39, 12, 10),
         ], usf)
 
     # ── NYC Yellow Taxi dashboard ────────────────────────────────────────────────
