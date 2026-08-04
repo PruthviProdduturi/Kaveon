@@ -418,6 +418,7 @@ const geoFetching: Record<string, Promise<any>> = {};
 const MAP_REGIONS: Record<string, { url: string; mapName: string; normalize: (s: string) => string }> = {
   world: { url: "/geo/world.json", mapName: "world", normalize: (s) => normaliseCountryName(s) },
   usa:   { url: "/geo/usa.json",   mapName: "USA",   normalize: (s) => s.trim() },
+  nyc:   { url: "/geo/nyc.json",   mapName: "NYC",   normalize: (s) => s.trim() },
 };
 
 // Elegant single-family sequential (light sky → deep ocean blue). Tasteful and
@@ -439,7 +440,7 @@ const WorldMapRenderer: React.FC<{
   // zooms the map in/out. Seeded from a saved zoom if present.
   const [dynZoom, setDynZoom] = React.useState<number>(Number(ctOpts.mapZoom) || 1);
   const roamTimer = React.useRef<any>(null);
-  const region = ctOpts.mapRegion === "usa" ? "usa" : "world";
+  const region = ["usa", "nyc"].includes(ctOpts.mapRegion) ? ctOpts.mapRegion : "world";
   const REGION = MAP_REGIONS[region];
   // Globe only makes sense for the world map.
   const isGlobe = ctOpts.mapStyle === "globe" && region === "world";
@@ -673,7 +674,7 @@ const WorldMapRenderer: React.FC<{
         ...(ctOpts.mapCenter ? { center: ctOpts.mapCenter } : {}),
         scaleLimit: { min: 1, max: 12 },
         layoutCenter: ["50%", "52%"],
-        layoutSize: region === "usa" ? "148%" : "155%",
+        layoutSize: region === "usa" ? "148%" : region === "nyc" ? "132%" : "155%",
         aspectScale: 0.9,
         data,
         select: { itemStyle: { areaColor: "#f59e0b" } },

@@ -644,6 +644,7 @@ const ChartTypeOptions: React.FC<ChartTypeOptionsProps> = ({ chartType, advanced
             <select id="map-region" className="chart-builder-select" value={ctOpts.mapRegion || "world"} onChange={(e) => set("mapRegion", e.target.value)}>
               <option value="world">World</option>
               <option value="usa">United States (states)</option>
+              <option value="nyc">New York City (boroughs)</option>
             </select>
           </div>
           {(ctOpts.mapStyle || "flat") === "flat" && (
