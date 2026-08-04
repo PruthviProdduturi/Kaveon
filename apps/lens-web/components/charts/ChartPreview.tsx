@@ -435,6 +435,10 @@ const WorldMapRenderer: React.FC<{
   const eRef = React.useRef<any>(null);
 
   const ctOpts = advancedOptions?.chartTypeOptions || {};
+  // Live zoom level — drives how many region labels we auto-reveal as the user
+  // zooms the map in/out. Seeded from a saved zoom if present.
+  const [dynZoom, setDynZoom] = React.useState<number>(Number(ctOpts.mapZoom) || 1);
+  const roamTimer = React.useRef<any>(null);
   const region = ctOpts.mapRegion === "usa" ? "usa" : "world";
   const REGION = MAP_REGIONS[region];
   // Globe only makes sense for the world map.
@@ -560,9 +564,11 @@ const WorldMapRenderer: React.FC<{
       };
     }).reverse(); // largest tier on top of the legend
 
-    // Data labels for the top few regions only (labelling all is noise / collisions).
-    const topN = ctOpts.mapLabelTopN ?? 8;
-    const labelThreshold = [...values].sort((a, b) => b - a)[Math.min(topN - 1, values.length - 1)] ?? Infinity;
+    // Data labels: base count (density slider) auto-expands as the user zooms in
+    // — zoom 1 shows the top few; zooming reveals progressively more regions.
+    const baseTopN = ctOpts.mapLabelTopN ?? 8;
+    const effTopN = Math.round(baseTopN * Math.min(6, Math.max(1, dynZoom)));
+    const labelThreshold = [...values].sort((a, b) => b - a)[Math.min(effTopN - 1, values.length - 1)] ?? Infinity;
     const dataLabel = {
       show: true,
       fontSize: 9,
@@ -663,6 +669,9 @@ const WorldMapRenderer: React.FC<{
         type: "map",
         map: REGION.mapName,
         roam: showRoam,
+        zoom: dynZoom,                       // preserve the roamed zoom across re-renders
+        ...(ctOpts.mapCenter ? { center: ctOpts.mapCenter } : {}),
+        scaleLimit: { min: 1, max: 12 },
         layoutCenter: ["50%", "52%"],
         layoutSize: region === "usa" ? "148%" : "155%",
         aspectScale: 0.9,
@@ -674,7 +683,7 @@ const WorldMapRenderer: React.FC<{
         label: showLabels ? { show: true, fontSize: 10, color: "#1e293b" } : dataLabel,
       }],
     };
-  }, [ready, rows, columns, advancedOptions, isGlobe]);
+  }, [ready, rows, columns, advancedOptions, isGlobe, dynZoom]);
 
   if (error) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#ef4444", fontSize: 13 }}>{error}</div>;
   if (!ready) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#94a3b8", fontSize: 13 }}>Loading map…</div>;
@@ -707,12 +716,25 @@ const WorldMapRenderer: React.FC<{
         option={option}
         style={{ width: "100%", height: "100%", cursor: onCrossFilter ? "pointer" : undefined }}
         onChartReady={(instance: any) => { eRef.current = instance; }}
-        onEvents={onCrossFilter ? {
-          click: (params: any) => {
-            const val = params?.name || (Array.isArray(params?.value) ? String(params.value[0]) : "");
-            if (val) onCrossFilter(String(val));
+        onEvents={{
+          ...(onCrossFilter ? {
+            click: (params: any) => {
+              const val = params?.name || (Array.isArray(params?.value) ? String(params.value[0]) : "");
+              if (val) onCrossFilter(String(val));
+            },
+          } : {}),
+          // Auto-reveal more labels as the user zooms in (debounced).
+          georoam: () => {
+            const inst = eRef.current;
+            if (!inst) return;
+            clearTimeout(roamTimer.current);
+            roamTimer.current = setTimeout(() => {
+              const s = inst.getOption()?.series?.[0];
+              const z = Number(s?.zoom) || 1;
+              setDynZoom((prev: number) => (Math.abs(prev - z) > 0.05 ? z : prev));
+            }, 160);
           },
-        } : undefined}
+        }}
       />
     </div>
   );
