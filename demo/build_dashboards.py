@@ -153,6 +153,12 @@ def _state_filter(dataset_id):
             "datasetId": dataset_id, "filterType": "value"}
 
 
+def _boro_filter(dataset_id):
+    return {"id": "flt-boro", "column": "borough", "label": "Borough",
+            "operator": "=", "value": "", "appliesTo": "all", "enabled": False,
+            "datasetId": dataset_id, "filterType": "value"}
+
+
 def dash(name, description, items, filters=None):
     """items: flat list of chart/text tiles with x/y/w/h."""
     all_ids = [it["chartId"] for it in items if it.get("chartId")]
@@ -234,8 +240,32 @@ def main():
         ("total_deaths", "bigint", False, True), ("cfr_pct", "double precision", False, True),
         ("pct_affected_pct", "double precision", False, True),
     ])
+
+    # ── NYC Yellow Taxi datasets (loaded by demo/load_nyc_taxi.py) ────────────────
+    nyc_sum = dataset("NYC Taxi Summary", "nyc_taxi_summary", [
+        ("total_trips", "bigint", False, True), ("total_revenue", "double precision", False, True),
+        ("avg_fare", "double precision", False, True), ("avg_distance", "double precision", False, True),
+        ("avg_tip", "double precision", False, True),
+    ])
+    nyc_boro = dataset("NYC Taxi by Borough", "nyc_taxi_borough", [
+        ("borough", "varchar", True, False), ("trips", "bigint", False, True),
+        ("revenue", "double precision", False, True), ("avg_fare", "double precision", False, True),
+        ("avg_distance", "double precision", False, True),
+    ])
+    nyc_zone = dataset("NYC Taxi by Zone", "nyc_taxi_zone", [
+        ("zone", "varchar", True, False), ("borough", "varchar", True, False),
+        ("trips", "bigint", False, True), ("revenue", "double precision", False, True),
+        ("avg_fare", "double precision", False, True), ("avg_distance", "double precision", False, True),
+    ])
+    nyc_hour = dataset("NYC Taxi by Hour", "nyc_taxi_hourly", [
+        ("hour", "int", True, False), ("trips", "bigint", False, True), ("avg_fare", "double precision", False, True),
+    ])
+    nyc_day = dataset("NYC Taxi Daily", "nyc_taxi_daily", [
+        ("dt", "date", True, False), ("trips", "bigint", False, True), ("revenue", "double precision", False, True),
+    ], date_col="dt")
     print(f"datasets: daily={daily} country={country} summary={summary} outcome={outcome} "
-          f"us_daily={us_daily} us_state={us_state} us_summary={us_summary}")
+          f"us_daily={us_daily} us_state={us_state} us_summary={us_summary} "
+          f"nyc={nyc_sum}/{nyc_boro}/{nyc_zone}/{nyc_hour}/{nyc_day}")
 
     agg = "aggregate"
     i = {}
@@ -373,6 +403,51 @@ def main():
          "query_mode": agg, "row_limit": 60},
         desc="Every state — population, cases, deaths, per-capita and CFR.")
 
+    # ── NYC Yellow Taxi charts (Jan 2023) ────────────────────────────────────────
+    print("NYC charts:")
+    USD = dict(numberFormat="auto", prefix="$")
+    USD2 = dict(numberFormat="fixed", decimalPlaces=2, prefix="$")
+    MI = dict(numberFormat="fixed", decimalPlaces=2, suffix=" mi")
+    i["nyc_kpi_trips"] = chart("Total Trips", nyc_sum, "big_number",
+        {"metrics": [M("total_trips", "SUM", "Trips")], "query_mode": agg},
+        desc="Yellow-taxi trips in Jan 2023.", viz=_viz(**KPI_BIG))
+    i["nyc_kpi_rev"] = chart("Total Revenue", nyc_sum, "big_number",
+        {"metrics": [M("total_revenue", "SUM", "Revenue")], "query_mode": agg},
+        desc="Total fare revenue (incl. tips/tolls).", viz=_viz(**USD))
+    i["nyc_kpi_fare"] = chart("Avg Fare", nyc_sum, "big_number",
+        {"metrics": [M("avg_fare", "SUM", "Avg Fare")], "query_mode": agg},
+        desc="Average base fare per trip.", viz=_viz(**USD2))
+    i["nyc_kpi_dist"] = chart("Avg Trip Distance", nyc_sum, "big_number",
+        {"metrics": [M("avg_distance", "SUM", "Avg Distance")], "query_mode": agg},
+        desc="Average trip distance.", viz=_viz(**MI))
+    i["nyc_map"] = chart("Taxi Trips by Borough", nyc_boro, "world_map",
+        {"metrics": [M("trips", "SUM", "Trips")], "groupby": ["borough"],
+         "sort_by": {"column": "trips", "direction": "desc"}, "query_mode": agg, "row_limit": 10},
+        desc="Pickups by NYC borough. Click a borough to cross-filter.",
+        viz=_viz(MAP_SCALE, mapRegion="nyc", mapNumberFormat="m"))
+    i["nyc_top_zones"] = chart("Top 15 Pickup Zones", nyc_zone, "bar_horizontal",
+        {"metrics": [M("trips", "SUM", "Trips")], "groupby": ["zone"],
+         "sort_by": {"column": "trips", "direction": "desc"}, "query_mode": agg, "row_limit": 15},
+        desc="Busiest yellow-taxi pickup zones.", viz=_viz(["#f59e0b"]))
+    i["nyc_hourly"] = chart("Trips by Hour of Day", nyc_hour, "bar_vertical",
+        {"metrics": [M("trips", "SUM", "Trips")], "groupby": ["hour"],
+         "sort_by": {"column": "hour", "direction": "asc"}, "query_mode": agg, "row_limit": 24},
+        desc="When New Yorkers ride — pickups by hour (0–23).", viz=_viz(["#6366f1"]))
+    i["nyc_daily"] = chart("Daily Trips (Jan 2023)", nyc_day, "time_series_area",
+        {"metrics": [M("trips", "SUM", "Trips")], "time_column": "dt", "time_grain": "day",
+         "time_range": "all_time", "query_mode": agg, "row_limit": 5000},
+        desc="Daily trip volume across the month (weekday/weekend rhythm).", viz=_viz(["#0ea5e9"]))
+    i["nyc_boro_donut"] = chart("Trip Share by Borough", nyc_boro, "donut",
+        {"metrics": [M("trips", "SUM", "Trips")], "groupby": ["borough"],
+         "sort_by": {"column": "trips", "direction": "desc"}, "query_mode": agg, "row_limit": 8},
+        desc="Share of pickups by borough.", viz=_viz(PALETTE))
+    i["nyc_table"] = chart("Zone Detail", nyc_zone, "table",
+        {"metrics": [M("trips", "SUM", "Trips"), M("revenue", "SUM", "Revenue"),
+                     M("avg_fare", "AVG", "Avg Fare"), M("avg_distance", "AVG", "Avg Distance")],
+         "groupby": ["zone", "borough"], "sort_by": {"column": "trips", "direction": "desc"},
+         "query_mode": agg, "row_limit": 300},
+        desc="Every pickup zone — trips, revenue, avg fare and distance.")
+
     if any(v is None for v in i.values()):
         print("!! some charts failed:", [k for k, v in i.items() if v is None]); return
 
@@ -418,6 +493,19 @@ def main():
             C(i["us_table"], 0, 37, 12, 10),
         ], usf)
 
+    # ── NYC Yellow Taxi dashboard ────────────────────────────────────────────────
+    nycf = [_boro_filter(nyc_boro)]
+    id_nyc = dash("NYC Yellow Taxi · Jan 2023",
+        "3M NYC yellow-taxi trips — by borough, zone, hour and day — live from Neon.", [
+            T("**New York City yellow-taxi** rides, January 2023 (NYC TLC). "
+              "**Click a borough on the map** to cross-filter zones, hours and trends.", 0, 0, 12, 2),
+            C(i["nyc_kpi_trips"], 0, 2, 3, 5), C(i["nyc_kpi_rev"], 3, 2, 3, 5),
+            C(i["nyc_kpi_fare"], 6, 2, 3, 5), C(i["nyc_kpi_dist"], 9, 2, 3, 5),
+            C(i["nyc_map"], 0, 7, 8, 12, exempt=True), C(i["nyc_top_zones"], 8, 7, 4, 12),
+            C(i["nyc_hourly"], 0, 19, 6, 8), C(i["nyc_daily"], 6, 19, 6, 8),
+            C(i["nyc_boro_donut"], 0, 27, 4, 9, exempt=True), C(i["nyc_table"], 4, 27, 8, 9),
+        ], nycf)
+
     base = "/dashboards"
     dash("COVID-19 Global Overview",
         "Global KPIs, world map and links to the trend, ranking and impact deep-dives — live from Neon.", [
@@ -431,8 +519,9 @@ def main():
               f"- 📈 **[Trends Over Time]({base}/{id_trends}/view)** — weekly waves, cumulative growth, the US curve\n"
               f"- 🏆 **[Country Rankings]({base}/{id_rank}/view)** — who was hit hardest in absolute terms\n"
               f"- 🧭 **[Impact & Comparisons]({base}/{id_impact}/view)** — per-capita spread & case-fatality rates\n"
-              f"- 🇺🇸 **[United States]({base}/{id_us}/view)** — state-by-state map, rankings & trends",
-              8, 14, 4, 6, size=14),
+              f"- 🇺🇸 **[United States]({base}/{id_us}/view)** — state-by-state map, rankings & trends\n"
+              f"- 🚕 **[NYC Yellow Taxi]({base}/{id_nyc}/view)** — 3M rides by borough, zone, hour & day",
+              8, 14, 4, 7, size=14),
             T("---\n*Data: Johns Hopkins CSSE (cases/deaths) + JHU population lookup. "
               "CFR = deaths ÷ confirmed and is sensitive to testing coverage. Demo snapshot.*",
               0, 20, 12, 2, size=12, color="#94a3b8"),
