@@ -26,13 +26,12 @@ NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "n
 def list_databases(response: Response, user: str = Depends(require_auth)):
     response.headers.update(NO_CACHE)
     try:
-        sql = """
-            SELECT database_name as [database], name as display_name, 0 as table_count
-            FROM data_sources WHERE is_active = 1 ORDER BY name
-        """
-        result = pool.execute_query(sql, settings.METADATA_DATABASE)
-        databases = result.get("rows_objects") or []
-        return {"success": True, "databases": databases}
+        # Via the metadata adapter so is_active = 1 → TRUE on Postgres.
+        result = meta_db.query(
+            "SELECT database_name as [database], name as display_name, 0 as table_count "
+            "FROM data_sources WHERE is_active = 1 ORDER BY name"
+        )
+        return {"success": True, "databases": result.get("rows") or []}
     except Exception:
         return {"success": True, "databases": []}
 
@@ -71,23 +70,29 @@ def delete_saved_query(query_id: str, user: str = Depends(require_auth)):
         raise HTTPException(status_code=404, detail="Saved query not found")
 
 
+def _resolve_db(database: str | None) -> str:
+    """Fall back to the metadata database (where the demo data lives) when the
+    UI hasn't selected a data source yet — avoids a hard 'database required' fail."""
+    return database or settings.METADATA_DATABASE
+
+
 @router.get("/lab/tables")
-def list_tables(response: Response, database: str = Query(...), user: str = Depends(require_auth)):
+def list_tables(response: Response, database: str = Query(default=None), user: str = Depends(require_auth)):
     response.headers.update(NO_CACHE)
-    tables = pool.get_tables(database)
+    tables = pool.get_tables(_resolve_db(database))
     return {"success": True, "tables": tables}
 
 
 @router.get("/lab/tables/{table_id}/columns")
-def get_table_columns(table_id: str, database: str = Query(...), user: str = Depends(require_auth)):
-    columns = pool.get_table_columns(table_id, database)
+def get_table_columns(table_id: str, database: str = Query(default=None), user: str = Depends(require_auth)):
+    columns = pool.get_table_columns(table_id, _resolve_db(database))
     return columns
 
 
 @router.get("/lab/schema/{schema}/{table_name}")
-def get_schema(schema: str, table_name: str, database: str = Query(...), user: str = Depends(require_auth)):
+def get_schema(schema: str, table_name: str, database: str = Query(default=None), user: str = Depends(require_auth)):
     table_id = f"{schema}.{table_name}"
-    columns = pool.get_table_columns(table_id, database)
+    columns = pool.get_table_columns(table_id, _resolve_db(database))
     return {"success": True, "schema": {"columns": columns}}
 
 
@@ -95,7 +100,7 @@ def get_schema(schema: str, table_name: str, database: str = Query(...), user: s
 def execute_sql(data: LabExecuteBody, response: Response, ctx=Depends(require_min_role("Analyst"))):
     user = ctx.email
     sql_execute_limiter.check(user)
-    result = pool.execute_query(data.sql, data.database)
+    result = pool.execute_query(data.sql, _resolve_db(data.database))
     return {"columns": result.get("columns", []), "rows": result.get("rows", []),
             "rowCount": result.get("row_count", 0)}
 
@@ -106,7 +111,7 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
     sql_execute_limiter.check(user)
     user_id = user
     sql = data.query
-    database = data.database
+    database = _resolve_db(data.database)
     dataset_id = data.datasetId
     run_context = data.runContext
     tables_used = data.tablesUsed
