@@ -8,17 +8,17 @@
 
 <br>
 
-[![CI](https://github.com/PruthviProdduturi/Lens/actions/workflows/ci.yml/badge.svg)](https://github.com/PruthviProdduturi/Lens/actions/workflows/ci.yml) [![Live Demo](https://img.shields.io/badge/Live-lens--analytics.vercel.app-0e7490?style=flat&logo=vercel&logoColor=white)](https://lens-analytics.vercel.app)
+[![CI](https://github.com/PruthviProdduturi/Lens/actions/workflows/ci.yml/badge.svg)](https://github.com/PruthviProdduturi/Lens/actions/workflows/ci.yml) [![Live Demo](https://img.shields.io/badge/Live-lens--analytics.vercel.app-d4a017?style=flat&logo=vercel&logoColor=white)](https://lens-analytics.vercel.app)
 
 <br>
 
-[![Next.js](https://img.shields.io/badge/Next.js-15-0e7490?style=for-the-badge&logo=next.js&logoColor=white)](https://nextjs.org/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-0e7490?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Python](https://img.shields.io/badge/Python-3.11+-0e7490?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-0e7490?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![Auth](https://img.shields.io/badge/Auth-Local%20%7C%20Azure%20AD%20%7C%20Google-0e7490?style=for-the-badge&logo=microsoftazure&logoColor=white)](https://azure.microsoft.com/en-us/products/active-directory)
-[![Microsoft Fabric](https://img.shields.io/badge/Microsoft_Fabric-SQL-0e7490?style=for-the-badge&logo=microsoft&logoColor=white)](https://learn.microsoft.com/en-us/fabric/)
-[![License](https://img.shields.io/badge/License-MIT-0e7490?style=for-the-badge)](./LICENSE)
+[![Next.js](https://img.shields.io/badge/Next.js-15-d4a017?style=for-the-badge&logo=next.js&logoColor=white)](https://nextjs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-d4a017?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Python](https://img.shields.io/badge/Python-3.11+-d4a017?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-d4a017?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Auth](https://img.shields.io/badge/Auth-Local%20%7C%20Azure%20AD%20%7C%20Google-d4a017?style=for-the-badge&logo=microsoftazure&logoColor=white)](https://azure.microsoft.com/en-us/products/active-directory)
+[![Microsoft Fabric](https://img.shields.io/badge/Microsoft_Fabric-SQL-d4a017?style=for-the-badge&logo=microsoft&logoColor=white)](https://learn.microsoft.com/en-us/fabric/)
+[![License](https://img.shields.io/badge/License-MIT-d4a017?style=for-the-badge)](./LICENSE)
 
 <br>
 
