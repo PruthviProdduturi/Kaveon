@@ -1,677 +1,755 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React from "react";
 import Link from "next/link";
-import { LensLogo, LensMark } from "../../components/LensLogo";
+import { LensLogo } from "../../components/LensLogo";
 
-// ── Lens landing — dark/light, dense, polished ─────────────────────────────────
+// ─── Constants ───────────────────────────────────────────────────────────────
 
 const CYAN = "#46c7d9";
-const CYAN_LIGHT = "#7be0ef";
-const CYAN_DARK = "#2aa6bb";
 
-interface Theme {
-  bg: string; bg2: string; surface: string; surfaceBorder: string;
-  text: string; textMuted: string; textFaint: string;
-  navBg: string; navBorder: string;
-  cardBg: string; cardBorder: string;
-  tableBg: string; tableRowHover: string;
-  shotBg: string; shotBorder: string; shotSurface: string; shotSurfaceBorder: string;
-  shotText: string; shotTextMuted: string;
-}
+// ─── Layout primitives ───────────────────────────────────────────────────────
 
-const DARK: Theme = {
-  bg: "#0a101e", bg2: "#0e1c33", surface: "#101d33", surfaceBorder: "rgba(255,255,255,0.08)",
-  text: "#f4f8fc", textMuted: "#a9bace", textFaint: "#6b7d94",
-  navBg: "rgba(10,16,30,0.82)", navBorder: "rgba(255,255,255,0.08)",
-  cardBg: "linear-gradient(180deg, #101d33, #0c1524)", cardBorder: "rgba(255,255,255,0.07)",
-  tableBg: "#0b1524", tableRowHover: "rgba(70,199,217,0.05)",
-  shotBg: "linear-gradient(180deg, #101d33, #0b1526)", shotBorder: "rgba(124,224,239,0.18)",
-  shotSurface: "rgba(255,255,255,0.025)", shotSurfaceBorder: "rgba(255,255,255,0.06)",
-  shotText: CYAN_LIGHT, shotTextMuted: "#8496ad",
-};
-const LIGHT: Theme = {
-  bg: "#ffffff", bg2: "#f8fafc", surface: "#f1f5f9", surfaceBorder: "#e2e8f0",
-  text: "#0f172a", textMuted: "#475569", textFaint: "#94a3b8",
-  navBg: "rgba(255,255,255,0.88)", navBorder: "#e2e8f0",
-  cardBg: "#ffffff", cardBorder: "#e2e8f0",
-  tableBg: "#ffffff", tableRowHover: "rgba(70,199,217,0.06)",
-  shotBg: "linear-gradient(180deg, #f8fafc, #f1f5f9)", shotBorder: "#d1d9e6",
-  shotSurface: "#ffffff", shotSurfaceBorder: "#e2e8f0",
-  shotText: CYAN_DARK, shotTextMuted: "#64748b",
-};
-
-// ── Theme toggle button ──────────────────────────────────────────────────────
-function ThemeToggle({ dark, onToggle }: { dark: boolean; onToggle: () => void }) {
+function Section({
+  id,
+  children,
+  bg = "#fff",
+  style,
+}: {
+  id?: string;
+  children: React.ReactNode;
+  bg?: string;
+  style?: React.CSSProperties;
+}) {
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
+    <section
+      id={id}
       style={{
-        background: "none", border: "none", cursor: "pointer", padding: 4,
-        color: dark ? "#a9bace" : "#64748b", fontSize: 16, display: "flex",
-        alignItems: "center", justifyContent: "center", width: 32, height: 32,
-        borderRadius: 8, transition: "background 0.2s",
+        background: bg,
+        padding: "52px 0",
+        ...style,
       }}
-      onMouseEnter={e => (e.currentTarget.style.background = dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)")}
-      onMouseLeave={e => (e.currentTarget.style.background = "none")}
     >
-      {dark ? (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
-        </svg>
-      ) : (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-        </svg>
-      )}
-    </button>
-  );
-}
-
-// ── Nav ──────────────────────────────────────────────────────────────────────
-function Nav({ t, dark, onToggle }: { t: Theme; dark: boolean; onToggle: () => void }) {
-  return (
-    <nav style={{
-      position: "sticky", top: 0, zIndex: 50,
-      display: "flex", alignItems: "center", justifyContent: "space-between",
-      padding: "10px 28px", background: t.navBg,
-      backdropFilter: "blur(14px)", borderBottom: `1px solid ${t.navBorder}`,
-      transition: "background 0.3s, border-color 0.3s",
-    }}>
-      <LensLogo size={30} />
-      <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
-        {["Architecture", "Features", "Journeys", "Databases", "Compare", "Security"].map(s => (
-          <a key={s} href={`#${s.toLowerCase()}`} style={{ color: t.textMuted, textDecoration: "none", fontSize: 13, fontWeight: 500, transition: "color 0.2s" }}>{s}</a>
-        ))}
-        <ThemeToggle dark={dark} onToggle={onToggle} />
-        <Link href="/login" style={{
-          padding: "7px 16px", borderRadius: 8,
-          background: `linear-gradient(135deg, ${CYAN_LIGHT}, ${CYAN})`,
-          color: "#0a101e", fontWeight: 700, fontSize: 13, textDecoration: "none",
-        }}>Sign in</Link>
-      </div>
-    </nav>
-  );
-}
-
-// ── Product shot — realistic dashboard mockup ────────────────────────────────
-function ProductShot({ t }: { t: Theme }) {
-  const linePoints = [
-    [0,72],[25,68],[50,60],[75,55],[100,58],[125,42],[150,38],[175,44],[200,30],
-    [225,26],[250,32],[275,20],[300,24],[325,16],[350,12],[375,18],[400,14],
-  ];
-  const linePath = linePoints.map((p, i) => `${i === 0 ? "M" : "L"}${p[0]},${p[1]}`).join(" ");
-  const areaPath = linePath + " L400,80 L0,80 Z";
-
-  const bars = [
-    { label: "US", h: 92 }, { label: "IN", h: 78 }, { label: "BR", h: 65 },
-    { label: "FR", h: 52 }, { label: "DE", h: 48 }, { label: "UK", h: 44 },
-    { label: "RU", h: 40 }, { label: "TR", h: 34 },
-  ];
-
-  const donutSegments = [
-    { pct: 35, color: CYAN_LIGHT }, { pct: 25, color: CYAN },
-    { pct: 20, color: CYAN_DARK }, { pct: 12, color: "#1d8a9e" },
-    { pct: 8, color: "#156a7a" },
-  ];
-  let donutOffset = 0;
-
-  const kpiStyle: React.CSSProperties = {
-    background: t.shotSurface, border: `1px solid ${t.shotSurfaceBorder}`,
-    borderRadius: 10, padding: "10px 12px", transition: "background 0.3s, border-color 0.3s",
-  };
-  const chartCard: React.CSSProperties = {
-    ...kpiStyle, padding: "12px 14px",
-  };
-  const chartLabel: React.CSSProperties = { fontSize: 11, color: t.shotTextMuted, fontWeight: 600 };
-  const badge: React.CSSProperties = {
-    fontSize: 9, color: t.textFaint, padding: "2px 6px", borderRadius: 4,
-    background: t === DARK ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.04)",
-  };
-
-  return (
-    <div style={{
-      borderRadius: 14, background: t.shotBg,
-      border: `1px solid ${t.shotBorder}`,
-      boxShadow: t === DARK
-        ? "0 32px 80px rgba(0,0,0,0.5), 0 0 40px rgba(70,199,217,0.08)"
-        : "0 24px 60px rgba(0,0,0,0.1), 0 0 0 1px rgba(0,0,0,0.03)",
-      padding: 14, display: "grid", gap: 10,
-      gridTemplateColumns: "1fr 1fr 1fr",
-      transition: "background 0.3s, border-color 0.3s, box-shadow 0.3s",
-    }}>
-      {/* KPIs */}
-      {([
-        ["676.6M", "Total Cases", "+2.1%"],
-        ["6.9M", "Total Deaths", "-0.4%"],
-        ["13.5B", "Doses Given", "+1.8%"],
-        ["201", "Countries", ""],
-        ["4.2%", "Fatality Rate", "-0.2%"],
-        ["68.3%", "Vaccinated", "+0.6%"],
-      ] as const).map(([v, l, d]) => (
-        <div key={l} style={kpiStyle}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-            <span style={{ fontSize: 18, fontWeight: 800, color: t.shotText }}>{v}</span>
-            {d && <span style={{ fontSize: 10, color: d.startsWith("-") ? "#e05252" : "#4ade80", fontWeight: 600 }}>{d}</span>}
-          </div>
-          <div style={{ fontSize: 10, color: t.textFaint, marginTop: 2 }}>{l}</div>
-        </div>
-      ))}
-
-      {/* Line chart */}
-      <div style={{ ...chartCard, gridColumn: "1 / 3" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-          <span style={chartLabel}>New Cases Over Time</span>
-          <span style={badge}>Monthly</span>
-        </div>
-        <svg viewBox="0 0 400 85" width="100%" height="100" preserveAspectRatio="none" style={{ display: "block" }}>
-          <defs>
-            <linearGradient id="aGr" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={CYAN} stopOpacity="0.3" />
-              <stop offset="100%" stopColor={CYAN} stopOpacity="0" />
-            </linearGradient>
-          </defs>
-          {[20, 40, 60].map(y => <line key={y} x1="0" y1={y} x2="400" y2={y} stroke={t === DARK ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.06)"} strokeWidth="0.5" />)}
-          <path d={areaPath} fill="url(#aGr)" />
-          <path d={linePath} fill="none" stroke={t.shotText} strokeWidth="2" strokeLinejoin="round" />
-          {linePoints.filter((_, i) => i % 3 === 0).map((p, i) => (
-            <circle key={i} cx={p[0]} cy={p[1]} r="2.5" fill={t.shotText} stroke={t === DARK ? "#0a101e" : "#fff"} strokeWidth="1" />
-          ))}
-        </svg>
-      </div>
-
-      {/* Donut */}
-      <div style={{ ...chartCard, display: "flex", flexDirection: "column", alignItems: "center" }}>
-        <span style={{ ...chartLabel, alignSelf: "flex-start", marginBottom: 6 }}>By Region</span>
-        <svg viewBox="0 0 100 100" width="90" height="90">
-          {donutSegments.map((s) => {
-            const circ = Math.PI * 70;
-            const dash = (s.pct / 100) * circ;
-            const gap = circ - dash;
-            const off = donutOffset;
-            donutOffset += dash;
-            return <circle key={s.color} cx="50" cy="50" r="35" fill="none" stroke={s.color} strokeWidth="10" strokeDasharray={`${dash} ${gap}`} strokeDashoffset={-off} transform="rotate(-90 50 50)" />;
-          })}
-          <text x="50" y="50" textAnchor="middle" dominantBaseline="middle" fill={t.text} fontSize="12" fontWeight="800">201</text>
-          <text x="50" y="62" textAnchor="middle" fill={t.textFaint} fontSize="6">countries</text>
-        </svg>
-      </div>
-
-      {/* Bar chart */}
-      <div style={{ ...chartCard, gridColumn: "1 / 3" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <span style={chartLabel}>Top Countries by Cases</span>
-          <span style={badge}>Cumulative</span>
-        </div>
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 80 }}>
-          {bars.map((b) => (
-            <div key={b.label} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
-              <div style={{
-                width: "100%", height: `${b.h}%`, borderRadius: "4px 4px 0 0",
-                background: `linear-gradient(180deg, ${CYAN_LIGHT}, ${CYAN})`,
-                opacity: 0.5 + (b.h / 200),
-              }} />
-              <span style={{ fontSize: 8, color: t.textFaint }}>{b.label}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Severity bars */}
-      <div style={chartCard}>
-        <span style={{ ...chartLabel, display: "block", marginBottom: 6 }}>Severity Index</span>
-        {([["Americas", 0.85], ["Europe", 0.72], ["SE Asia", 0.58], ["E. Med", 0.45], ["Africa", 0.28], ["W. Pac", 0.22]] as const).map(([region, val]) => (
-          <div key={region} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
-            <span style={{ fontSize: 9, color: t.shotTextMuted, width: 48, flexShrink: 0 }}>{region}</span>
-            <div style={{ flex: 1, height: 6, borderRadius: 3, background: t === DARK ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.06)", overflow: "hidden" }}>
-              <div style={{
-                width: `${val * 100}%`, height: "100%", borderRadius: 3,
-                background: `linear-gradient(90deg, ${CYAN}, ${val > 0.6 ? "#e05252" : CYAN_LIGHT})`,
-              }} />
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ── Hero ──────────────────────────────────────────────────────────────────────
-function Hero({ t }: { t: Theme }) {
-  return (
-    <header style={{
-      position: "relative", overflow: "hidden",
-      background: t === DARK
-        ? `radial-gradient(1100px 520px at 50% -5%, #103240 0%, ${t.bg} 55%)`
-        : `radial-gradient(1100px 520px at 50% -5%, #e0f4f8 0%, ${t.bg} 55%)`,
-      padding: "44px 24px 48px",
-      transition: "background 0.3s",
-    }}>
-      <div style={{ maxWidth: 1080, margin: "0 auto", textAlign: "center" }}>
-        <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
-          <div style={{ display: "inline-flex", filter: t === DARK ? "drop-shadow(0 0 28px rgba(70,199,217,0.4))" : "drop-shadow(0 0 20px rgba(70,199,217,0.2))" }}>
-            <LensMark size={56} />
-          </div>
-        </div>
-        <div style={{
-          display: "inline-flex", alignItems: "center", gap: 8, padding: "4px 12px",
-          borderRadius: 999,
-          border: t === DARK ? "1px solid rgba(124,224,239,0.3)" : "1px solid rgba(42,166,187,0.25)",
-          background: t === DARK ? "rgba(124,224,239,0.08)" : "rgba(42,166,187,0.06)",
-          color: t === DARK ? CYAN_LIGHT : CYAN_DARK, fontSize: 11.5, fontWeight: 600, marginBottom: 16,
-        }}>
-          ✦ AI-native · Self-hosted · Open source
-        </div>
-        <h1 style={{
-          fontSize: "clamp(36px, 6vw, 64px)", fontWeight: 850, lineHeight: 1.05, letterSpacing: "-0.02em",
-          margin: 0, color: t.text, transition: "color 0.3s",
-        }}>
-          See the pattern.
-        </h1>
-        <p style={{
-          fontSize: "clamp(14px, 2vw, 18px)", color: t.textMuted, maxWidth: 580,
-          margin: "14px auto 0", lineHeight: 1.5, transition: "color 0.3s",
-        }}>
-          The analytics platform for <strong style={{ color: t.text }}>Microsoft Fabric</strong> and{" "}
-          <strong style={{ color: t.text }}>Trino</strong>.
-          Query live data, build 20+ chart types, assemble dashboards, and ask questions in plain English.
-        </p>
-        <style>{`@keyframes ctaPulse { 0%, 100% { box-shadow: 0 8px 24px rgba(70,199,217,0.3); } 50% { box-shadow: 0 8px 36px rgba(70,199,217,0.5), 0 0 16px rgba(70,199,217,0.2); } }`}</style>
-        <div style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 22, flexWrap: "wrap" }}>
-          <Link href="/" style={{
-            padding: "13px 32px", borderRadius: 10, fontSize: 15, fontWeight: 700, textDecoration: "none",
-            background: `linear-gradient(135deg, ${CYAN_LIGHT}, ${CYAN})`, color: "#0a101e",
-            animation: "ctaPulse 2.5s ease-in-out infinite",
-          }}>Get started →</Link>
-          <a href="https://github.com/PruthviProdduturi/Lens" target="_blank" rel="noreferrer" style={{
-            padding: "13px 24px", borderRadius: 10, fontSize: 15, fontWeight: 700, textDecoration: "none",
-            background: t === DARK ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)",
-            color: t === DARK ? "#e6eef7" : "#1e293b",
-            border: `1px solid ${t.surfaceBorder}`,
-          }}>GitHub ▸</a>
-        </div>
-        <div style={{ marginTop: 32, maxWidth: 940, marginInline: "auto" }}>
-          <ProductShot t={t} />
-        </div>
-      </div>
-    </header>
-  );
-}
-
-// ── Architecture ────────────────────────────────────────────────────────────
-interface ArchBoxProps {
-  t: Theme;
-  label: string;
-  sub: string;
-  icon: string;
-  accent?: boolean;
-}
-
-function ArchBox({ t, label, sub, icon, accent }: ArchBoxProps) {
-  return (
-    <div style={{
-      background: t.cardBg,
-      border: `1px solid ${accent ? (t === DARK ? "rgba(124,224,239,0.3)" : "rgba(42,166,187,0.3)") : t.cardBorder}`,
-      borderRadius: 12, padding: "16px 18px", minWidth: 180, flex: 1,
-      transition: "background 0.3s, border-color 0.3s",
-    }}>
-      <div style={{
-        width: 32, height: 32, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center",
-        background: accent
-          ? (t === DARK ? "rgba(70,199,217,0.15)" : "rgba(70,199,217,0.1)")
-          : (t === DARK ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.04)"),
-        border: accent
-          ? (t === DARK ? "1px solid rgba(70,199,217,0.3)" : "1px solid rgba(70,199,217,0.25)")
-          : `1px solid ${t.surfaceBorder}`,
-        marginBottom: 8,
-      }}>
-        <i className={`fas ${icon}`} style={{ color: accent ? (t === DARK ? CYAN_LIGHT : CYAN_DARK) : t.textMuted, fontSize: 13 }} />
-      </div>
-      <div style={{ fontSize: 14, fontWeight: 700, color: t.text, transition: "color 0.3s" }}>{label}</div>
-      <div style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.4, marginTop: 3, transition: "color 0.3s" }}>{sub}</div>
-    </div>
-  );
-}
-
-function ArchArrow({ t, vertical }: { t: Theme; vertical?: boolean }) {
-  return (
-    <div style={{
-      display: "flex", alignItems: "center", justifyContent: "center",
-      color: t === DARK ? CYAN_LIGHT : CYAN_DARK, fontSize: 18, fontWeight: 700,
-      padding: vertical ? "4px 0" : "0 4px",
-      transform: vertical ? "rotate(90deg)" : undefined,
-    }}>
-      →
-    </div>
-  );
-}
-
-function Architecture({ t }: { t: Theme }) {
-  const connectorStyle: React.CSSProperties = {
-    display: "flex", alignItems: "center", justifyContent: "center",
-    height: 2,
-    background: t === DARK ? "rgba(70,199,217,0.2)" : "rgba(70,199,217,0.15)",
-    position: "relative", margin: "6px 0",
-  };
-
-  return (
-    <section id="architecture" style={{ background: t.bg2, padding: "48px 24px", transition: "background 0.3s" }}>
-      <div style={{ maxWidth: 1120, margin: "0 auto" }}>
-        <h2 style={{ textAlign: "center", fontSize: 28, fontWeight: 800, color: t.text, margin: 0, transition: "color 0.3s" }}>
-          How it works
-        </h2>
-        <p style={{ textAlign: "center", color: t.textMuted, fontSize: 14, marginTop: 8, marginBottom: 32, transition: "color 0.3s" }}>
-          Two processes, zero vendor lock-in, your infrastructure.
-        </p>
-
-        {/* Tier 1: Browser */}
-        <div style={{ display: "flex", justifyContent: "center", marginBottom: 0 }}>
-          <ArchBox t={t} label="Browser" sub="Any modern browser" icon="fa-globe" />
-        </div>
-
-        <div style={connectorStyle}>
-          <span style={{
-            position: "absolute", fontSize: 9, fontWeight: 600, padding: "1px 8px", borderRadius: 4,
-            background: t === DARK ? "rgba(70,199,217,0.12)" : "rgba(70,199,217,0.08)",
-            color: t === DARK ? CYAN_LIGHT : CYAN_DARK,
-          }}>HTTPS</span>
-        </div>
-
-        {/* Tier 2: Frontend */}
-        <div style={{ display: "flex", justifyContent: "center", marginBottom: 0 }}>
-          <ArchBox t={t} accent label="lens-web" sub="Next.js 15, React 19, ECharts, Monaco Editor" icon="fa-layer-group" />
-        </div>
-
-        <div style={connectorStyle}>
-          <span style={{
-            position: "absolute", fontSize: 9, fontWeight: 600, padding: "1px 8px", borderRadius: 4,
-            background: t === DARK ? "rgba(70,199,217,0.12)" : "rgba(70,199,217,0.08)",
-            color: t === DARK ? CYAN_LIGHT : CYAN_DARK,
-          }}>REST / JWT</span>
-        </div>
-
-        {/* Tier 3: API */}
-        <div style={{ display: "flex", justifyContent: "center", marginBottom: 0 }}>
-          <ArchBox t={t} accent label="lens-api" sub="FastAPI, Python 3.11, async drivers" icon="fa-server" />
-        </div>
-
-        <div style={connectorStyle}>
-          <span style={{
-            position: "absolute", fontSize: 9, fontWeight: 600, padding: "1px 8px", borderRadius: 4,
-            background: t === DARK ? "rgba(70,199,217,0.12)" : "rgba(70,199,217,0.08)",
-            color: t === DARK ? CYAN_LIGHT : CYAN_DARK,
-          }}>SQL / ODBC</span>
-        </div>
-
-        {/* Tier 4: Data layer */}
-        <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
-          <ArchBox t={t} label="Metadata DB" sub="App data, users, dashboards, saved queries" icon="fa-gear" />
-          <ArchBox t={t} label="Fabric SQL" sub="Microsoft Fabric lakehouse endpoints" icon="fa-database" />
-          <ArchBox t={t} label="Azure SQL" sub="Azure SQL Database or Managed Instance" icon="fa-database" />
-          <ArchBox t={t} label="PostgreSQL" sub="PostgreSQL 12+" icon="fa-database" />
-          <ArchBox t={t} label="MySQL" sub="MySQL 8+ / MariaDB" icon="fa-database" />
-        </div>
-
-        {/* AI note */}
-        <div style={{
-          marginTop: 20, padding: "12px 16px", borderRadius: 10,
-          background: t === DARK ? "rgba(70,199,217,0.06)" : "rgba(70,199,217,0.04)",
-          border: `1px solid ${t === DARK ? "rgba(70,199,217,0.15)" : "rgba(70,199,217,0.12)"}`,
-          display: "flex", alignItems: "center", gap: 10,
-        }}>
-          <i className="fas fa-wand-magic-sparkles" style={{ color: t === DARK ? CYAN_LIGHT : CYAN_DARK, fontSize: 14 }} />
-          <span style={{ fontSize: 12.5, color: t.textMuted, lineHeight: 1.5 }}>
-            <strong style={{ color: t.text }}>AI providers</strong> — the API proxies natural-language queries to
-            Anthropic Claude, OpenAI GPT, or GitHub Models. Bring your own key; no data leaves your network except the prompt.
-          </span>
-        </div>
+      <div style={{ maxWidth: 1400, margin: "0 auto", padding: "0 1.5rem" }}>
+        {children}
       </div>
     </section>
   );
 }
 
-// ── Features ─────────────────────────────────────────────────────────────────
+function SectionLabel({
+  text,
+  color = CYAN,
+  light = false,
+}: {
+  text: string;
+  color?: string;
+  light?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        display: "inline-block",
+        padding: "4px 14px",
+        borderRadius: 20,
+        background: light ? "rgba(255,255,255,0.15)" : `${color}18`,
+        border: `1px solid ${light ? "rgba(255,255,255,0.25)" : `${color}30`}`,
+        fontSize: 11,
+        fontWeight: 700,
+        letterSpacing: "0.09em",
+        textTransform: "uppercase",
+        color: light ? "#e8f0fb" : color,
+        marginBottom: 10,
+      }}
+    >
+      {text}
+    </div>
+  );
+}
+
+function SectionHeading({
+  children,
+  center = false,
+  light = false,
+}: {
+  children: React.ReactNode;
+  center?: boolean;
+  light?: boolean;
+}) {
+  return (
+    <h2
+      style={{
+        fontSize: "clamp(1.6rem, 3vw, 2.25rem)",
+        fontWeight: 800,
+        color: light ? "#fff" : "#0f172a",
+        lineHeight: 1.2,
+        letterSpacing: "-0.02em",
+        textAlign: center ? "center" : undefined,
+        marginBottom: 8,
+      }}
+    >
+      {children}
+    </h2>
+  );
+}
+
+function SectionSub({
+  children,
+  center = false,
+  light = false,
+}: {
+  children: React.ReactNode;
+  center?: boolean;
+  light?: boolean;
+}) {
+  return (
+    <p
+      style={{
+        fontSize: "1rem",
+        color: light ? "rgba(255,255,255,0.75)" : "#475569",
+        lineHeight: 1.75,
+        maxWidth: center ? 560 : 640,
+        margin: center ? "0 auto" : undefined,
+        marginBottom: 0,
+      }}
+    >
+      {children}
+    </p>
+  );
+}
+
+function FeatureCard({
+  icon,
+  color,
+  title,
+  body,
+}: {
+  icon: string;
+  color: string;
+  title: string;
+  body: string;
+}) {
+  return (
+    <div
+      style={{
+        background: "rgba(255,255,255,0.85)",
+        backdropFilter: "blur(10px)",
+        border: "1px solid rgba(30,58,95,0.08)",
+        borderRadius: 12,
+        padding: "1.375rem 1.25rem",
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+        transition: "box-shadow 0.2s",
+        boxShadow: "0 2px 12px rgba(30,58,95,0.05)",
+      }}
+    >
+      <div
+        style={{
+          width: 40,
+          height: 40,
+          borderRadius: 10,
+          background: `${color}18`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexShrink: 0,
+        }}
+      >
+        <i className={`fas ${icon}`} style={{ color, fontSize: 17 }} aria-hidden="true" />
+      </div>
+      <div>
+        <div
+          style={{
+            fontSize: 14,
+            fontWeight: 700,
+            color: "#0f172a",
+            marginBottom: 4,
+          }}
+        >
+          {title}
+        </div>
+        <div style={{ fontSize: 13.5, color: "#64748b", lineHeight: 1.65 }}>
+          {body}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StepCard({
+  number,
+  title,
+  code,
+}: {
+  number: number;
+  title: string;
+  code: string;
+}) {
+  return (
+    <div
+      style={{
+        background: "rgba(255,255,255,0.1)",
+        backdropFilter: "blur(10px)",
+        border: "1px solid rgba(255,255,255,0.18)",
+        borderRadius: 12,
+        padding: "1.5rem",
+        flex: 1,
+        minWidth: 0,
+      }}
+    >
+      <div
+        style={{
+          width: 32,
+          height: 32,
+          borderRadius: "50%",
+          background: "rgba(255,255,255,0.2)",
+          color: "#fff",
+          fontWeight: 800,
+          fontSize: 15,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          marginBottom: 12,
+          flexShrink: 0,
+        }}
+      >
+        {number}
+      </div>
+      <div
+        style={{
+          fontSize: 15,
+          fontWeight: 700,
+          color: "#fff",
+          marginBottom: 10,
+        }}
+      >
+        {title}
+      </div>
+      <pre
+        style={{
+          background: "rgba(0,0,0,0.35)",
+          borderRadius: 8,
+          padding: "0.75rem 1rem",
+          fontSize: 12,
+          fontFamily: "'Cascadia Code', 'Fira Code', Consolas, monospace",
+          color: "#86efac",
+          overflowX: "auto",
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-all",
+          margin: 0,
+          lineHeight: 1.6,
+        }}
+      >
+        {code}
+      </pre>
+    </div>
+  );
+}
+
+// ─── Data ────────────────────────────────────────────────────────────────────
+
 const FEATURES = [
-  { icon: "fa-flask", title: "SQL Lab", body: "Monaco editor, multi-tab, query history, async execution, result caching." },
-  { icon: "fa-wand-magic-sparkles", title: "AI, built in", body: "Natural-language → SQL. Anthropic, OpenAI, or GitHub Models — your keys." },
-  { icon: "fa-chart-column", title: "20+ chart types", body: "Lines, bars, pies, heatmaps, treemaps, 3D WebGL globe, cross-filtering." },
-  { icon: "fa-table-columns", title: "Dashboards", body: "Drag-and-drop, rows, tabs, text, shared filters that slice every tile." },
-  { icon: "fa-database", title: "Multi-source", body: "Fabric SQL, Azure SQL, PostgreSQL, MySQL — Trino & StarRocks coming." },
-  { icon: "fa-shield-halved", title: "Enterprise auth", body: "GitHub, Google, Microsoft sign-in with 4-tier RBAC and per-object visibility." },
+  { icon: "fa-flask", color: CYAN, title: "SQL Lab", body: "Monaco editor with multi-tab, query history, async execution, and result caching. Write SQL against any connected source." },
+  { icon: "fa-wand-magic-sparkles", color: "#8b5cf6", title: "AI, built in", body: "Natural-language to SQL via Anthropic Claude, OpenAI GPT, or GitHub Models. Bring your own key; no data leaves your network except the prompt." },
+  { icon: "fa-chart-column", color: "#f59e0b", title: "20+ chart types", body: "Lines, bars, pies, heatmaps, treemaps, scatter plots, 3D WebGL globe, and cross-filtering between charts." },
+  { icon: "fa-table-columns", color: "#059669", title: "Dashboards", body: "Drag-and-drop grid layout with rows, tabs, text blocks, and shared filters that slice every chart at once." },
+  { icon: "fa-database", color: "#0078d4", title: "Multi-source", body: "Microsoft Fabric, Azure SQL, PostgreSQL, MySQL live today. Trino, StarRocks, Snowflake, and BigQuery on the roadmap." },
+  { icon: "fa-shield-halved", color: "#dc2626", title: "Enterprise auth", body: "GitHub, Google, and Microsoft sign-in with 4-tier RBAC and per-object visibility controls." },
 ];
 
-function Features({ t }: { t: Theme }) {
-  return (
-    <section id="features" style={{ background: t.bg, padding: "48px 24px", transition: "background 0.3s" }}>
-      <div style={{ maxWidth: 1120, margin: "0 auto" }}>
-        <h2 style={{ textAlign: "center", fontSize: 28, fontWeight: 800, color: t.text, margin: 0, transition: "color 0.3s" }}>
-          Everything to explore, visualise, and share
-        </h2>
-        <p style={{ textAlign: "center", color: t.textMuted, fontSize: 14, marginTop: 8, transition: "color 0.3s" }}>
-          A modern command centre for your data — not a dashboard bolted onto a warehouse.
-        </p>
-        <div style={{
-          display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-          gap: 12, marginTop: 28,
-        }}>
-          {FEATURES.map((f) => (
-            <div key={f.title} style={{
-              background: t.cardBg, border: `1px solid ${t.cardBorder}`,
-              borderRadius: 12, padding: "18px 18px", transition: "background 0.3s, border-color 0.3s",
-            }}>
-              <div style={{
-                width: 36, height: 36, borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center",
-                background: t === DARK ? "rgba(70,199,217,0.12)" : "rgba(70,199,217,0.08)",
-                border: t === DARK ? "1px solid rgba(70,199,217,0.25)" : "1px solid rgba(70,199,217,0.2)",
-                marginBottom: 10,
-              }}>
-                <i className={`fas ${f.icon}`} style={{ color: t === DARK ? CYAN_LIGHT : CYAN_DARK, fontSize: 15 }} />
-              </div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: t.text, transition: "color 0.3s" }}>{f.title}</div>
-              <div style={{ fontSize: 13, color: t.textMuted, lineHeight: 1.5, marginTop: 4, transition: "color 0.3s" }}>{f.body}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-// ── User Journeys ───────────────────────────────────────────────────────────
 const JOURNEYS = [
   {
-    num: 1,
-    title: "Run a SQL Query",
-    icon: "fa-flask",
+    num: 1, title: "Run a SQL Query", color: CYAN,
+    desc: "From SQL Lab to paginated results in seconds.",
     steps: [
-      "Open SQL Lab from the sidebar",
-      "Select a data source from the dropdown",
-      "Write or paste your query in Monaco",
-      "Hit Run — results stream into a paginated table",
+      { text: "Open SQL Lab from the sidebar" },
+      { text: "Select a data source from the dropdown" },
+      { text: "Write or paste your query in Monaco" },
+      { text: "Hit Run — results stream into a paginated table" },
     ],
-    code: `SELECT country, SUM(cases) AS total_cases
-FROM covid_data
-WHERE date >= '2024-01-01'
-GROUP BY country
-ORDER BY total_cases DESC
-LIMIT 10;`,
   },
   {
-    num: 2,
-    title: "Build a Chart",
-    icon: "fa-chart-column",
+    num: 2, title: "Build a Chart", color: "#f59e0b",
+    desc: "Pick a dataset, choose a chart type, drag metrics and dimensions, save.",
     steps: [
-      "Pick a dataset or save a query result as one",
-      "Choose a chart type — bar, line, pie, heatmap, globe...",
-      "Drag metrics and dimensions into the configuration panel",
-      "Customise colors, labels, and axes — then save",
+      { text: "Pick a dataset or save a query result as one" },
+      { text: "Choose a chart type — bar, line, pie, heatmap, globe..." },
+      { text: "Drag metrics and dimensions into the configuration panel" },
+      { text: "Customize colors, labels, and axes — then save" },
     ],
-    code: `{
-  "chart_type": "bar",
-  "dataset": "covid_data",
-  "metrics": ["SUM(cases)"],
-  "dimensions": ["country"],
-  "filters": [{ "col": "date", "op": ">=", "val": "2024-01-01" }],
-  "limit": 10
-}`,
   },
   {
-    num: 3,
-    title: "Ask AI a Question",
-    icon: "fa-wand-magic-sparkles",
+    num: 3, title: "Ask AI a Question", color: "#8b5cf6",
+    desc: "Type a plain-English question, get SQL, review, and execute.",
     steps: [
-      "Click the AI icon in SQL Lab",
-      "Type a question in plain English",
-      "The AI generates a SQL query against your schema",
-      "Review, edit if needed, and execute",
+      { text: "Click the AI icon in SQL Lab" },
+      { text: "Type a question in plain English" },
+      { text: "The AI generates a SQL query against your schema" },
+      { text: "Review, edit if needed, and execute" },
     ],
-    code: `User:  "Which 5 countries had the highest vaccination
-        rate in Q1 2024?"
-
-AI →   SELECT country,
-         ROUND(100.0 * vaccinated / population, 1) AS vax_rate
-       FROM covid_data
-       WHERE date BETWEEN '2024-01-01' AND '2024-03-31'
-       GROUP BY country, population
-       ORDER BY vax_rate DESC
-       LIMIT 5;`,
   },
   {
-    num: 4,
-    title: "Build a Dashboard",
-    icon: "fa-table-columns",
+    num: 4, title: "Build a Dashboard", color: "#059669",
+    desc: "Assemble charts into a shareable dashboard with shared filters.",
     steps: [
-      "Create a new dashboard from the Dashboards page",
-      "Drag saved charts onto a flexible grid layout",
-      "Add shared filters that slice every chart at once",
-      "Publish and share the URL with your team",
+      { text: "Create a new dashboard from the Dashboards page" },
+      { text: "Drag saved charts onto a flexible grid layout" },
+      { text: "Add shared filters that slice every chart at once" },
+      { text: "Publish and share the URL with your team" },
     ],
-    code: `Dashboard: "Global Health Overview"
-├── Row 1: KPI tiles (cases, deaths, vaccinations)
-├── Row 2: Line chart (trend) + Bar chart (by country)
-├── Row 3: Donut (by region) + Heatmap (severity)
-└── Filters: date_range, country, region`,
   },
 ];
 
-function Journeys({ t }: { t: Theme }) {
-  const codeBlockStyle: React.CSSProperties = {
-    background: t === DARK ? "rgba(0,0,0,0.4)" : "rgba(0,0,0,0.03)",
-    border: `1px solid ${t === DARK ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.08)"}`,
-    borderRadius: 8, padding: "12px 14px", fontSize: 12, fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-    color: t === DARK ? CYAN_LIGHT : "#1e293b", lineHeight: 1.6, overflowX: "auto" as const,
-    whiteSpace: "pre" as const, transition: "background 0.3s, border-color 0.3s, color 0.3s",
-  };
+const DBS = [
+  { name: "Microsoft Fabric", icon: "fa-database", status: "live" as const },
+  { name: "Azure SQL", icon: "fa-database", status: "live" as const },
+  { name: "PostgreSQL", icon: "fa-database", status: "live" as const },
+  { name: "MySQL", icon: "fa-database", status: "live" as const },
+  { name: "Trino", icon: "fa-table-columns", status: "soon" as const },
+  { name: "StarRocks", icon: "fa-bolt", status: "soon" as const },
+  { name: "Snowflake", icon: "fa-snowflake", status: "planned" as const },
+  { name: "BigQuery", icon: "fa-cloud", status: "planned" as const },
+];
 
+const COMPARE_ROWS: [string, boolean | "~", boolean | "~", boolean | "~", boolean | "~"][] = [
+  ["Modern, fast UI", true, "~", true, "~"],
+  ["AI natural-language to SQL", true, false, true, false],
+  ["Built-in SQL Lab", true, "~", false, true],
+  ["Self-hosted + open source (MIT)", true, true, false, true],
+  ["20+ chart types incl. 3D globe", true, "~", true, "~"],
+  ["Microsoft Fabric-native", true, "~", true, false],
+];
+
+const ROLES = [
+  {
+    role: "Viewer", color: "#94a3b8", icon: "fa-eye",
+    perms: ["View published dashboards", "View published charts", "Browse datasets (read-only)", "Export chart data"],
+  },
+  {
+    role: "Analyst", color: "#60a5fa", icon: "fa-flask",
+    perms: ["Everything in Viewer", "SQL Lab — write and execute queries", "Create and save charts", "Create datasets from queries"],
+  },
+  {
+    role: "Editor", color: "#fbbf24", icon: "fa-pen-to-square",
+    perms: ["Everything in Analyst", "Publish dashboards", "Manage dataset definitions", "Edit shared filters and layouts"],
+  },
+  {
+    role: "Admin", color: "#f87171", icon: "fa-shield-halved",
+    perms: ["Full platform access", "Add/remove data sources", "Manage users and roles", "Auth config, system settings"],
+  },
+];
+
+// ─── About page ──────────────────────────────────────────────────────────────
+
+export default function AboutPage() {
   return (
-    <section id="journeys" style={{ background: t.bg2, padding: "48px 24px", transition: "background 0.3s" }}>
-      <div style={{ maxWidth: 1120, margin: "0 auto" }}>
-        <h2 style={{ textAlign: "center", fontSize: 28, fontWeight: 800, color: t.text, margin: 0, transition: "color 0.3s" }}>
-          End-to-end journeys
-        </h2>
-        <p style={{ textAlign: "center", color: t.textMuted, fontSize: 14, marginTop: 8, marginBottom: 32, transition: "color 0.3s" }}>
-          From raw SQL to published dashboards — four flows, four minutes.
-        </p>
+    <div style={{ minHeight: "100%" }}>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(480px, 1fr))", gap: 16 }}>
-          {JOURNEYS.map((j) => (
-            <div key={j.num} style={{
-              background: t.cardBg, border: `1px solid ${t.cardBorder}`,
-              borderRadius: 14, padding: "20px 22px", transition: "background 0.3s, border-color 0.3s",
-            }}>
-              {/* Header */}
-              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
-                <div style={{
-                  width: 36, height: 36, borderRadius: 999, display: "flex", alignItems: "center", justifyContent: "center",
-                  background: `linear-gradient(135deg, ${CYAN_LIGHT}, ${CYAN})`,
-                  color: "#0a101e", fontWeight: 800, fontSize: 15,
-                }}>
-                  {j.num}
-                </div>
-                <div>
-                  <div style={{ fontSize: 16, fontWeight: 700, color: t.text, transition: "color 0.3s" }}>{j.title}</div>
-                  <div style={{ fontSize: 11, color: t.textFaint }}><i className={`fas ${j.icon}`} style={{ marginRight: 4 }} />Step-by-step</div>
+      {/* ── Sticky section nav ──────────────────────────────────────────────── */}
+      <nav
+        aria-label="Page sections"
+        style={{
+          position: "sticky",
+          top: 0,
+          zIndex: 50,
+          background: "#fff",
+          borderBottom: "1px solid rgba(30,58,95,0.08)",
+          padding: "0 1.5rem",
+          display: "flex",
+          justifyContent: "center",
+          gap: 4,
+          overflowX: "auto",
+        }}
+      >
+        {[
+          { href: "#architecture", label: "Architecture" },
+          { href: "#features", label: "Features" },
+          { href: "#journeys", label: "Journeys" },
+          { href: "#databases", label: "Databases" },
+          { href: "#compare", label: "Compare" },
+          { href: "#security", label: "Security" },
+          { href: "#start", label: "Get Started" },
+        ].map(({ href, label }) => (
+          <a
+            key={href}
+            href={href}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              padding: "10px 14px",
+              fontSize: 13,
+              fontWeight: 500,
+              color: "#64748b",
+              textDecoration: "none",
+              whiteSpace: "nowrap",
+              borderBottom: "2px solid transparent",
+              transition: "color 0.15s, border-color 0.15s",
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLAnchorElement).style.color = CYAN;
+              (e.currentTarget as HTMLAnchorElement).style.borderBottomColor = CYAN;
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLAnchorElement).style.color = "#64748b";
+              (e.currentTarget as HTMLAnchorElement).style.borderBottomColor = "transparent";
+            }}
+          >
+            {label}
+          </a>
+        ))}
+      </nav>
+
+      {/* ── Hero ────────────────────────────────────────────────────────────── */}
+      <section
+        style={{
+          background: `linear-gradient(135deg, ${CYAN} 0%, #0f1e2e 100%)`,
+          padding: "56px 1.5rem 48px",
+          textAlign: "center",
+        }}
+      >
+        <div style={{ maxWidth: 760, margin: "0 auto" }}>
+          <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}>
+            <LensLogo size={80} animate="none" />
+          </div>
+          <h1
+            style={{
+              fontSize: "clamp(1.1rem, 3vw, 1.5rem)",
+              fontWeight: 700,
+              color: "rgba(255,255,255,0.92)",
+              marginBottom: 4,
+              letterSpacing: "-0.01em",
+            }}
+          >
+            The Analytics Platform
+          </h1>
+          <p
+            style={{
+              fontSize: "1rem",
+              color: "rgba(255,255,255,0.65)",
+              marginBottom: 24,
+              lineHeight: 1.5,
+            }}
+          >
+            See the pattern. Query live data, build charts, assemble dashboards.
+          </p>
+          <div
+            style={{
+              display: "flex",
+              gap: 12,
+              justifyContent: "center",
+              flexWrap: "wrap",
+            }}
+          >
+            <Link
+              href="/"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "12px 24px",
+                borderRadius: 8,
+                background: "#fff",
+                color: CYAN,
+                fontWeight: 700,
+                fontSize: 14.5,
+                textDecoration: "none",
+                transition: "opacity 0.15s",
+              }}
+              onMouseEnter={(e) => ((e.currentTarget as HTMLAnchorElement).style.opacity = "0.9")}
+              onMouseLeave={(e) => ((e.currentTarget as HTMLAnchorElement).style.opacity = "1")}
+            >
+              <i className="fas fa-rocket" aria-hidden="true" />
+              Get Started
+            </Link>
+            <a
+              href="https://github.com/PruthviProdduturi/Lens"
+              target="_blank"
+              rel="noreferrer"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "12px 24px",
+                borderRadius: 8,
+                background: "rgba(255,255,255,0.12)",
+                border: "1.5px solid rgba(255,255,255,0.3)",
+                color: "#fff",
+                fontWeight: 700,
+                fontSize: 14.5,
+                textDecoration: "none",
+                transition: "background 0.15s",
+              }}
+              onMouseEnter={(e) => ((e.currentTarget as HTMLAnchorElement).style.background = "rgba(255,255,255,0.2)")}
+              onMouseLeave={(e) => ((e.currentTarget as HTMLAnchorElement).style.background = "rgba(255,255,255,0.12)")}
+            >
+              <i className="fab fa-github" aria-hidden="true" />
+              View on GitHub
+            </a>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Architecture ────────────────────────────────────────────────────── */}
+      <Section
+        id="architecture"
+        bg="linear-gradient(135deg, #f8faff 0%, #eef2f7 100%)"
+      >
+        <div style={{ textAlign: "center", marginBottom: 28 }}>
+          <SectionLabel text="Architecture" color={CYAN} />
+          <SectionHeading center>Platform Architecture</SectionHeading>
+          <SectionSub center>
+            Two processes, zero vendor lock-in, your infrastructure. A Next.js frontend talks to a FastAPI backend over REST/JWT.
+          </SectionSub>
+        </div>
+
+        {/* Architecture diagram */}
+        <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 14, overflow: "hidden", marginBottom: 28, boxShadow: "0 4px 24px rgba(15,23,42,0.07)" }}>
+          <div style={{ padding: 22 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+
+              {/* Tier: Browser */}
+              <div style={{ display: "flex", justifyContent: "center" }}>
+                <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "7px 9px", display: "flex", alignItems: "center", gap: 8, boxShadow: "0 1px 2px rgba(0,0,0,.05)", minWidth: 220 }}>
+                  <div style={{ width: 26, height: 26, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, background: "#64748b15" }}>
+                    <i className="fas fa-globe" style={{ color: "#64748b", fontSize: 11 }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#1e293b" }}>Browser</div>
+                    <div style={{ fontSize: 9, color: "#94a3b8", fontFamily: "monospace", marginTop: 1 }}>Any modern browser</div>
+                  </div>
                 </div>
               </div>
 
-              {/* Steps */}
-              <div style={{ marginBottom: 14 }}>
-                {j.steps.map((step, i) => (
-                  <div key={i} style={{
-                    display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 6,
-                  }}>
-                    <span style={{
-                      width: 18, height: 18, borderRadius: 999, fontSize: 10, fontWeight: 700,
-                      display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-                      background: t === DARK ? "rgba(70,199,217,0.12)" : "rgba(70,199,217,0.08)",
-                      color: t === DARK ? CYAN_LIGHT : CYAN_DARK,
-                      border: `1px solid ${t === DARK ? "rgba(70,199,217,0.25)" : "rgba(70,199,217,0.2)"}`,
-                      marginTop: 1,
-                    }}>
-                      {i + 1}
-                    </span>
-                    <span style={{ fontSize: 13, color: t.textMuted, lineHeight: 1.45 }}>{step}</span>
+              {/* Connector */}
+              <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 6 }}>
+                <svg width="44" height="28" viewBox="0 0 44 28" style={{ transform: "rotate(90deg)" }}>
+                  <line x1="2" y1="14" x2="34" y2="14" stroke="#94a3b8" strokeWidth="1.5" strokeDasharray="3,2" />
+                  <polygon points="30,10 42,14 30,18" fill="#94a3b8" />
+                </svg>
+                <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: `${CYAN}12`, color: CYAN, fontFamily: "monospace" }}>HTTPS</span>
+              </div>
+
+              {/* Tier: lens-web */}
+              <div style={{ display: "flex", justifyContent: "center" }}>
+                <div style={{ background: "#fff", border: `2px solid ${CYAN}40`, borderTop: `4px solid ${CYAN}`, borderRadius: 8, padding: "7px 9px", display: "flex", alignItems: "center", gap: 8, boxShadow: "0 1px 2px rgba(0,0,0,.05)", minWidth: 340 }}>
+                  <div style={{ width: 26, height: 26, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, background: `${CYAN}15` }}>
+                    <i className="fas fa-layer-group" style={{ color: CYAN, fontSize: 11 }} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#1e293b" }}>lens-web</div>
+                    <div style={{ fontSize: 9, color: "#94a3b8", fontFamily: "monospace", marginTop: 1 }}>Next.js 15 · React 19 · ECharts · Monaco</div>
+                  </div>
+                  <span style={{ fontSize: 8, fontWeight: 700, padding: "2px 5px", borderRadius: 4, background: "#dcfce7", color: "#15803d" }}>:3000</span>
+                </div>
+              </div>
+
+              {/* Connector */}
+              <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 6 }}>
+                <svg width="44" height="28" viewBox="0 0 44 28" style={{ transform: "rotate(90deg)" }}>
+                  <line x1="2" y1="14" x2="34" y2="14" stroke="#94a3b8" strokeWidth="1.5" strokeDasharray="3,2" />
+                  <polygon points="30,10 42,14 30,18" fill="#94a3b8" />
+                </svg>
+                <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: `${CYAN}12`, color: CYAN, fontFamily: "monospace" }}>REST / JWT</span>
+              </div>
+
+              {/* Tier: lens-api */}
+              <div style={{ display: "flex", justifyContent: "center" }}>
+                <div style={{ background: "#fff", border: `2px solid ${CYAN}40`, borderTop: `4px solid ${CYAN}`, borderRadius: 8, padding: "7px 9px", display: "flex", alignItems: "center", gap: 8, boxShadow: "0 1px 2px rgba(0,0,0,.05)", minWidth: 340 }}>
+                  <div style={{ width: 26, height: 26, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, background: `${CYAN}15` }}>
+                    <i className="fas fa-server" style={{ color: CYAN, fontSize: 11 }} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#1e293b" }}>lens-api</div>
+                    <div style={{ fontSize: 9, color: "#94a3b8", fontFamily: "monospace", marginTop: 1 }}>FastAPI · Python 3.11 · async drivers</div>
+                  </div>
+                  <span style={{ fontSize: 8, fontWeight: 700, padding: "2px 5px", borderRadius: 4, background: "#dcfce7", color: "#15803d" }}>:8000</span>
+                </div>
+              </div>
+
+              {/* Connector */}
+              <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 6 }}>
+                <svg width="44" height="28" viewBox="0 0 44 28" style={{ transform: "rotate(90deg)" }}>
+                  <line x1="2" y1="14" x2="34" y2="14" stroke="#94a3b8" strokeWidth="1.5" strokeDasharray="3,2" />
+                  <polygon points="30,10 42,14 30,18" fill="#94a3b8" />
+                </svg>
+                <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: `${CYAN}12`, color: CYAN, fontFamily: "monospace" }}>SQL / ODBC</span>
+              </div>
+
+              {/* Tier: Data Sources */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8 }}>
+                {[
+                  { name: "Metadata DB", meta: "App data, users, dashboards", icon: "fa-gear", color: "#64748b" },
+                  { name: "Fabric SQL", meta: "Lakehouse endpoints", icon: "fa-database", color: "#0078d4" },
+                  { name: "Azure SQL", meta: "Database or Managed Instance", icon: "fa-database", color: "#0078d4" },
+                  { name: "PostgreSQL", meta: "PostgreSQL 12+", icon: "fa-database", color: "#336791" },
+                  { name: "MySQL", meta: "MySQL 8+ / MariaDB", icon: "fa-database", color: "#00758f" },
+                ].map(s => (
+                  <div key={s.name} style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "7px 9px", display: "flex", alignItems: "center", gap: 8, boxShadow: "0 1px 2px rgba(0,0,0,.05)" }}>
+                    <div style={{ width: 26, height: 26, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, background: `${s.color}15` }}>
+                      <i className={`fas ${s.icon}`} style={{ color: s.color, fontSize: 11 }} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: "#1e293b" }}>{s.name}</div>
+                      <div style={{ fontSize: 9, color: "#94a3b8", fontFamily: "monospace", marginTop: 1 }}>{s.meta}</div>
+                    </div>
                   </div>
                 ))}
               </div>
+            </div>
+          </div>
+        </div>
 
-              {/* Code block */}
-              <div style={codeBlockStyle}>{j.code}</div>
+        {/* AI providers note */}
+        <div style={{
+          padding: "12px 18px",
+          background: "rgba(30,58,95,0.04)",
+          borderRadius: 10,
+          border: "1px solid rgba(30,58,95,0.08)",
+          display: "flex",
+          gap: 10,
+          alignItems: "flex-start",
+        }}>
+          <i className="fas fa-wand-magic-sparkles" style={{ color: CYAN, fontSize: 13, flexShrink: 0, marginTop: 1 }} />
+          <span style={{ fontSize: 13, color: "#475569", lineHeight: 1.6 }}>
+            <strong>AI providers</strong> — the API proxies natural-language queries to
+            Anthropic Claude, OpenAI GPT, or GitHub Models. Bring your own key; no data leaves your network except the prompt.
+          </span>
+        </div>
+      </Section>
+
+      {/* ── Features ────────────────────────────────────────────────────────── */}
+      <Section
+        id="features"
+        bg="linear-gradient(135deg, #f0f6ff 0%, #eef2f7 100%)"
+      >
+        <div style={{ textAlign: "center", marginBottom: 28 }}>
+          <SectionLabel text="Capabilities" color={CYAN} />
+          <SectionHeading center>Everything to explore, visualize, and share</SectionHeading>
+          <SectionSub center>
+            A modern command center for your data — not a dashboard bolted onto a warehouse.
+          </SectionSub>
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
+            gap: 16,
+          }}
+        >
+          {FEATURES.map((f) => (
+            <FeatureCard
+              key={f.title}
+              icon={f.icon}
+              color={f.color}
+              title={f.title}
+              body={f.body}
+            />
+          ))}
+        </div>
+      </Section>
+
+      {/* ── User Journeys ───────────────────────────────────────────────────── */}
+      <Section id="journeys" bg="#fff">
+        <div style={{ marginBottom: 40 }}>
+          <SectionLabel text="User Journeys" color={CYAN} />
+          <SectionHeading>End-to-end flows</SectionHeading>
+          <SectionSub>From raw SQL to published dashboards — four flows, four minutes.</SectionSub>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(480px, 1fr))", gap: 18 }}>
+          {JOURNEYS.map((flow) => (
+            <div key={flow.num} style={{ border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+              <div style={{
+                padding: "12px 16px", borderBottom: "1px solid #e2e8f0",
+                background: `${flow.color}08`, display: "flex", alignItems: "flex-start", gap: 10,
+              }}>
+                <div style={{
+                  width: 26, height: 26, borderRadius: "50%", background: flow.color,
+                  color: "#fff", fontWeight: 800, fontSize: 12,
+                  display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1,
+                }}>
+                  {flow.num}
+                </div>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: flow.color }}>{flow.title}</div>
+                  <div style={{ fontSize: 11, color: "#64748b", marginTop: 3 }}>{flow.desc}</div>
+                </div>
+              </div>
+              <div style={{ padding: 16, flex: 1 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                  {flow.steps.map((step, i) => (
+                    <div key={i} style={{ display: "flex", gap: 11, alignItems: "flex-start", position: "relative", marginTop: i > 0 ? 8 : 0 }}>
+                      {i < flow.steps.length - 1 && (
+                        <div style={{ position: "absolute", left: 13, top: 28, bottom: -4, width: 2, background: "#e2e8f0" }} />
+                      )}
+                      <div style={{
+                        width: 26, height: 26, borderRadius: "50%", border: `2px solid ${flow.color}`,
+                        background: "#fff", display: "flex", alignItems: "center", justifyContent: "center",
+                        fontSize: 10, fontWeight: 700, color: flow.color, flexShrink: 0, zIndex: 1,
+                      }}>
+                        {i + 1}
+                      </div>
+                      <div style={{ paddingBottom: 4, flex: 1 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: "#0f172a" }}>{step.text}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           ))}
         </div>
-      </div>
-    </section>
-  );
-}
+      </Section>
 
-// ── Database logos ────────────────────────────────────────────────────────────
-const DBS = [
-  { name: "Microsoft Fabric", status: "live" },
-  { name: "Azure SQL", status: "live" },
-  { name: "PostgreSQL", status: "live" },
-  { name: "MySQL", status: "live" },
-  { name: "Trino", status: "soon" },
-  { name: "StarRocks", status: "soon" },
-  { name: "Snowflake", status: "planned" },
-  { name: "BigQuery", status: "planned" },
-];
+      {/* ── Databases ───────────────────────────────────────────────────────── */}
+      <Section id="databases" bg="#f8fafc">
+        <div style={{ textAlign: "center", marginBottom: 28 }}>
+          <SectionLabel text="Connectors" color={CYAN} />
+          <SectionHeading center>Connect to anything</SectionHeading>
+          <SectionSub center>
+            One platform, every database. More connectors shipping fast.
+          </SectionSub>
+        </div>
 
-function Databases({ t }: { t: Theme }) {
-  return (
-    <section id="databases" style={{ background: t.bg, padding: "48px 24px", transition: "background 0.3s" }}>
-      <div style={{ maxWidth: 900, margin: "0 auto" }}>
-        <h2 style={{ textAlign: "center", fontSize: 28, fontWeight: 800, color: t.text, margin: 0, transition: "color 0.3s" }}>
-          Connect to anything
-        </h2>
-        <p style={{ textAlign: "center", color: t.textMuted, fontSize: 14, marginTop: 8, marginBottom: 28, transition: "color 0.3s" }}>
-          One platform, every database. More connectors shipping fast.
-        </p>
         <div style={{
-          display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-          gap: 10,
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+          gap: 12,
+          maxWidth: 960,
+          margin: "0 auto",
         }}>
           {DBS.map((db) => (
             <div key={db.name} style={{
-              display: "flex", alignItems: "center", gap: 10,
-              padding: "12px 14px", borderRadius: 10,
-              background: t === DARK ? "rgba(255,255,255,0.03)" : "#ffffff",
-              border: `1px solid ${t.cardBorder}`,
-              transition: "background 0.3s, border-color 0.3s",
+              background: "rgba(255,255,255,0.85)",
+              backdropFilter: "blur(10px)",
+              border: "1px solid rgba(30,58,95,0.08)",
+              borderRadius: 12,
+              padding: "14px 16px",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              boxShadow: "0 2px 12px rgba(30,58,95,0.05)",
             }}>
-              <i className="fas fa-database" style={{ color: db.status === "live" ? CYAN : t.textFaint, fontSize: 14 }} />
-              <span style={{ fontSize: 13, fontWeight: 600, color: t.text, flex: 1, transition: "color 0.3s" }}>{db.name}</span>
+              <div style={{
+                width: 36, height: 36, borderRadius: 9,
+                background: db.status === "live" ? `${CYAN}18` : "#f1f5f918",
+                display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+              }}>
+                <i className={`fas ${db.icon}`} style={{ color: db.status === "live" ? CYAN : "#94a3b8", fontSize: 15 }} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>{db.name}</div>
+              </div>
               <span style={{
-                fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 6, textTransform: "uppercase",
+                fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 6, textTransform: "uppercase",
                 ...(db.status === "live" ? {
-                  color: "#4ade80", background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.2)",
+                  color: "#15803d", background: "#dcfce7", border: "1px solid #bbf7d0",
                 } : db.status === "soon" ? {
-                  color: "#fbbf24", background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.2)",
+                  color: "#92400e", background: "#fef3c7", border: "1px solid #fde68a",
                 } : {
-                  color: t.textFaint, background: t === DARK ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.03)",
-                  border: `1px solid ${t.surfaceBorder}`,
+                  color: "#64748b", background: "#f1f5f9", border: "1px solid #e2e8f0",
                 }),
               }}>
                 {db.status === "live" ? "Live" : db.status === "soon" ? "Soon" : "Planned"}
@@ -679,150 +757,90 @@ function Databases({ t }: { t: Theme }) {
             </div>
           ))}
         </div>
-      </div>
-    </section>
-  );
-}
+      </Section>
 
-// ── Compare ──────────────────────────────────────────────────────────────────
-const ROWS: [string, boolean | "~", boolean | "~", boolean | "~", boolean | "~"][] = [
-  ["Modern, fast UI", true, "~", true, "~"],
-  ["AI natural-language → SQL", true, false, true, false],
-  ["Built-in SQL Lab", true, "~", false, true],
-  ["Self-hosted + open source (MIT)", true, true, false, true],
-  ["20+ chart types incl. 3D globe", true, "~", true, "~"],
-  ["Microsoft Fabric-native", true, "~", true, false],
-];
-
-function Cell({ v, t }: { v: boolean | "~"; t: Theme }) {
-  if (v === "~") return <span style={{ color: "#c79a3a" }}>~</span>;
-  return v
-    ? <i className="fas fa-check" style={{ color: CYAN }} />
-    : <i className="fas fa-minus" style={{ color: t.textFaint }} />;
-}
-
-function Compare({ t }: { t: Theme }) {
-  const th: React.CSSProperties = { padding: "10px 10px", fontSize: 12.5, color: t.textMuted, fontWeight: 700, textAlign: "center", transition: "color 0.3s" };
-  const td: React.CSSProperties = { padding: "9px 10px", textAlign: "center", borderTop: `1px solid ${t.surfaceBorder}`, transition: "border-color 0.3s" };
-  return (
-    <section id="compare" style={{ background: t.bg2, padding: "48px 24px", transition: "background 0.3s" }}>
-      <div style={{ maxWidth: 860, margin: "0 auto" }}>
-        <h2 style={{ textAlign: "center", fontSize: 28, fontWeight: 800, color: t.text, margin: 0, transition: "color 0.3s" }}>
-          How Lens compares
-        </h2>
-        <p style={{ textAlign: "center", color: t.textMuted, fontSize: 14, marginTop: 8, marginBottom: 24, transition: "color 0.3s" }}>
-          An honest look next to Superset, Power BI, and Redash.
-        </p>
-        <div style={{ overflowX: "auto", borderRadius: 12, border: `1px solid ${t.cardBorder}`, background: t.tableBg, transition: "background 0.3s, border-color 0.3s" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 600 }}>
-            <thead>
-              <tr style={{ background: t === DARK ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.02)" }}>
-                <th style={{ ...th, textAlign: "left", paddingLeft: 16 }}>Capability</th>
-                <th style={{ ...th, color: t === DARK ? CYAN_LIGHT : CYAN_DARK }}>Lens</th>
-                <th style={th}>Superset</th>
-                <th style={th}>Power BI</th>
-                <th style={th}>Redash</th>
-              </tr>
-            </thead>
-            <tbody>
-              {ROWS.map((r) => (
-                <tr key={r[0]}>
-                  <td style={{ ...td, textAlign: "left", paddingLeft: 16, color: t.text, fontSize: 13, fontWeight: 600 }}>{r[0]}</td>
-                  <td style={{ ...td, background: t.tableRowHover }}><Cell v={r[1]} t={t} /></td>
-                  <td style={td}><Cell v={r[2]} t={t} /></td>
-                  <td style={td}><Cell v={r[3]} t={t} /></td>
-                  <td style={td}><Cell v={r[4]} t={t} /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {/* ── Compare ─────────────────────────────────────────────────────────── */}
+      <Section id="compare" bg="#fff">
+        <div style={{ textAlign: "center", marginBottom: 28 }}>
+          <SectionLabel text="Compare" color={CYAN} />
+          <SectionHeading center>How Lens compares</SectionHeading>
+          <SectionSub center>
+            An honest look next to Superset, Power BI, and Redash.
+          </SectionSub>
         </div>
-      </div>
-    </section>
-  );
-}
 
-// ── RBAC & Security ─────────────────────────────────────────────────────────
-const ROLES = [
-  {
-    role: "Viewer",
-    color: "#94a3b8",
-    icon: "fa-eye",
-    perms: ["View published dashboards", "View published charts", "Browse datasets (read-only)", "Export chart data"],
-  },
-  {
-    role: "Analyst",
-    color: "#60a5fa",
-    icon: "fa-flask",
-    perms: ["Everything in Viewer", "SQL Lab — write and execute queries", "Create and save charts", "Create datasets from queries"],
-  },
-  {
-    role: "Editor",
-    color: "#fbbf24",
-    icon: "fa-pen-to-square",
-    perms: ["Everything in Analyst", "Publish dashboards", "Manage dataset definitions", "Edit shared filters and layouts"],
-  },
-  {
-    role: "Admin",
-    color: "#f87171",
-    icon: "fa-shield-halved",
-    perms: ["Full platform access", "Add/remove data sources", "Manage users and roles", "Auth config, system settings"],
-  },
-];
+        <div style={{ overflowX: "auto", maxWidth: 900, margin: "0 auto" }}>
+          <div style={{ borderRadius: 12, border: "1px solid #e2e8f0", background: "#fff", overflow: "hidden" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 600 }}>
+              <thead>
+                <tr style={{ background: "#f8fafc" }}>
+                  <th style={{ padding: "10px 16px", fontSize: 12.5, color: "#475569", fontWeight: 700, textAlign: "left" }}>Capability</th>
+                  <th style={{ padding: "10px 10px", fontSize: 12.5, color: CYAN, fontWeight: 700, textAlign: "center" }}>Lens</th>
+                  <th style={{ padding: "10px 10px", fontSize: 12.5, color: "#475569", fontWeight: 700, textAlign: "center" }}>Superset</th>
+                  <th style={{ padding: "10px 10px", fontSize: 12.5, color: "#475569", fontWeight: 700, textAlign: "center" }}>Power BI</th>
+                  <th style={{ padding: "10px 10px", fontSize: 12.5, color: "#475569", fontWeight: 700, textAlign: "center" }}>Redash</th>
+                </tr>
+              </thead>
+              <tbody>
+                {COMPARE_ROWS.map((r) => (
+                  <tr key={r[0]}>
+                    <td style={{ padding: "9px 16px", borderTop: "1px solid #f1f5f9", color: "#0f172a", fontSize: 13, fontWeight: 600 }}>{r[0]}</td>
+                    {[r[1], r[2], r[3], r[4]].map((v, i) => (
+                      <td key={i} style={{ padding: "9px 10px", textAlign: "center", borderTop: "1px solid #f1f5f9", background: i === 0 ? `${CYAN}06` : undefined }}>
+                        {v === "~"
+                          ? <span style={{ color: "#c79a3a" }}>~</span>
+                          : v
+                            ? <i className="fas fa-check" style={{ color: CYAN }} />
+                            : <i className="fas fa-minus" style={{ color: "#cbd5e1" }} />
+                        }
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </Section>
 
-function Security({ t }: { t: Theme }) {
-  return (
-    <section id="security" style={{ background: t.bg, padding: "48px 24px", transition: "background 0.3s" }}>
-      <div style={{ maxWidth: 1120, margin: "0 auto" }}>
-        <h2 style={{ textAlign: "center", fontSize: 28, fontWeight: 800, color: t.text, margin: 0, transition: "color 0.3s" }}>
-          RBAC & Security
-        </h2>
-        <p style={{ textAlign: "center", color: t.textMuted, fontSize: 14, marginTop: 8, marginBottom: 32, transition: "color 0.3s" }}>
-          Four roles, principle of least privilege, enforced at the API layer.
-        </p>
+      {/* ── RBAC & Security ─────────────────────────────────────────────────── */}
+      <Section id="security" bg="linear-gradient(135deg, #f0f6ff 0%, #eef2f7 100%)">
+        <div style={{ marginBottom: 40 }}>
+          <SectionLabel text="RBAC & Security" color={CYAN} />
+          <SectionHeading>Four roles, least privilege</SectionHeading>
+          <SectionSub>
+            Every permission is enforced at the API layer. Four tiers from read-only viewers to full platform admins.
+          </SectionSub>
+        </div>
 
-        <div style={{
-          display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
-          gap: 12,
-        }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 14 }}>
           {ROLES.map((r) => (
-            <div key={r.role} style={{
-              background: t.cardBg, border: `1px solid ${t.cardBorder}`,
-              borderRadius: 14, padding: "20px 20px", transition: "background 0.3s, border-color 0.3s",
-              position: "relative", overflow: "hidden",
-            }}>
-              {/* Top accent bar */}
+            <div key={r.role} style={{ background: "#fff", border: "1px solid #e2e8f0", borderTop: `4px solid ${r.color}`, borderRadius: 10, overflow: "hidden" }}>
               <div style={{
-                position: "absolute", top: 0, left: 0, right: 0, height: 3,
-                background: r.color,
-              }} />
-
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, marginTop: 2 }}>
-                <div style={{
-                  width: 36, height: 36, borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center",
-                  background: `${r.color}18`, border: `1px solid ${r.color}40`,
-                }}>
+                padding: "12px 16px", borderBottom: "1px solid #e2e8f0",
+                display: "flex", alignItems: "center", gap: 10,
+              }}>
+                <div style={{ width: 32, height: 32, borderRadius: 8, background: `${r.color}18`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                   <i className={`fas ${r.icon}`} style={{ color: r.color, fontSize: 14 }} />
                 </div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: t.text, transition: "color 0.3s" }}>{r.role}</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>{r.role}</div>
               </div>
-
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {r.perms.map((p, i) => (
-                  <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 7 }}>
-                    <i className="fas fa-check" style={{ color: r.color, fontSize: 10, marginTop: 3, flexShrink: 0 }} />
-                    <span style={{ fontSize: 12.5, color: t.textMuted, lineHeight: 1.4 }}>{p}</span>
-                  </div>
-                ))}
+              <div style={{ padding: "12px 16px" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {r.perms.map((p, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 7 }}>
+                      <i className="fas fa-check" style={{ color: r.color, fontSize: 10, marginTop: 3, flexShrink: 0 }} />
+                      <span style={{ fontSize: 12.5, color: "#64748b", lineHeight: 1.4 }}>{p}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           ))}
         </div>
 
         {/* Security notes */}
-        <div style={{
-          marginTop: 20, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 10,
-        }}>
+        <div style={{ marginTop: 24, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>
           {[
             { icon: "fa-lock", label: "OAuth 2.0 / OIDC", desc: "GitHub, Google, Microsoft identity providers" },
             { icon: "fa-key", label: "JWT sessions", desc: "Short-lived tokens, refresh rotation, no server-side state" },
@@ -830,31 +848,48 @@ function Security({ t }: { t: Theme }) {
             { icon: "fa-server", label: "Self-hosted", desc: "Your infrastructure, your network, your rules" },
           ].map((n) => (
             <div key={n.label} style={{
-              display: "flex", alignItems: "center", gap: 10,
-              padding: "12px 14px", borderRadius: 10,
-              background: t === DARK ? "rgba(255,255,255,0.03)" : "#ffffff",
-              border: `1px solid ${t.cardBorder}`,
-              transition: "background 0.3s, border-color 0.3s",
+              padding: "12px 18px",
+              background: "rgba(30,58,95,0.04)",
+              borderRadius: 10,
+              border: "1px solid rgba(30,58,95,0.08)",
+              display: "flex",
+              gap: 10,
+              alignItems: "center",
             }}>
-              <i className={`fas ${n.icon}`} style={{ color: t === DARK ? CYAN_LIGHT : CYAN_DARK, fontSize: 13, width: 16, textAlign: "center" }} />
+              <i className={`fas ${n.icon}`} style={{ color: CYAN, fontSize: 13, width: 16, textAlign: "center", flexShrink: 0 }} />
               <div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: t.text }}>{n.label}</div>
-                <div style={{ fontSize: 11, color: t.textMuted, marginTop: 1 }}>{n.desc}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a" }}>{n.label}</div>
+                <div style={{ fontSize: 11, color: "#64748b", marginTop: 1 }}>{n.desc}</div>
               </div>
             </div>
           ))}
         </div>
-      </div>
-    </section>
-  );
-}
+      </Section>
 
-// ── Get Started ─────────────────────────────────────────────────────────────
-const SETUP_STEPS = [
-  {
-    num: 1,
-    title: "Clone & install",
-    code: `git clone https://github.com/PruthviProdduturi/Lens.git
+      {/* ── Get Started ─────────────────────────────────────────────────────── */}
+      <section
+        id="start"
+        style={{
+          background: `linear-gradient(135deg, ${CYAN} 0%, #0f1e2e 100%)`,
+          padding: "80px 1.5rem",
+        }}
+      >
+        <div style={{ maxWidth: 1400, margin: "0 auto" }}>
+          <div style={{ textAlign: "center", marginBottom: 28 }}>
+            <SectionLabel text="Get Started" color={CYAN} light />
+            <SectionHeading center light>
+              Get started in minutes
+            </SectionHeading>
+            <SectionSub center light>
+              Three steps. No Docker required. No vendor accounts.
+            </SectionSub>
+          </div>
+
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+            <StepCard
+              number={1}
+              title="Clone & install"
+              code={`git clone https://github.com/PruthviProdduturi/Lens.git
 cd Lens
 
 # API
@@ -865,132 +900,43 @@ cp .env.example .env          # fill in DB + AI keys
 
 # Web
 cd ../lens-web
-npm install`,
-  },
-  {
-    num: 2,
-    title: "Start the API + web",
-    code: `# Terminal 1 — API (port 8000)
+npm install`}
+            />
+            <StepCard
+              number={2}
+              title="Start the API + web"
+              code={`# Terminal 1 — API (port 8000)
 cd apps/lens-api
 uvicorn main:app --reload
 
 # Terminal 2 — Web (port 3000)
 cd apps/lens-web
-npm run dev`,
-  },
-  {
-    num: 3,
-    title: "Sign in and explore",
-    code: `# Open your browser
+npm run dev`}
+            />
+            <StepCard
+              number={3}
+              title="Sign in and explore"
+              code={`# Open your browser
 http://localhost:3000
 
 # Sign in with GitHub, Google, or Microsoft
-# Add a data source under Settings → Databases
-# Run your first query in SQL Lab`,
-  },
-];
-
-function GetStarted({ t }: { t: Theme }) {
-  const codeBlockStyle: React.CSSProperties = {
-    background: t === DARK ? "rgba(0,0,0,0.4)" : "rgba(0,0,0,0.03)",
-    border: `1px solid ${t === DARK ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.08)"}`,
-    borderRadius: 8, padding: "14px 16px", fontSize: 12, fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-    color: t === DARK ? CYAN_LIGHT : "#1e293b", lineHeight: 1.6, overflowX: "auto" as const,
-    whiteSpace: "pre" as const, transition: "background 0.3s, border-color 0.3s, color 0.3s",
-  };
-
-  return (
-    <section id="get-started" style={{
-      background: t === DARK
-        ? `radial-gradient(700px 350px at 50% 120%, #10404f, ${t.bg})`
-        : `radial-gradient(700px 350px at 50% 120%, #e0f4f8, ${t.bg})`,
-      padding: "48px 24px 24px", transition: "background 0.3s",
-    }}>
-      <div style={{ maxWidth: 860, margin: "0 auto" }}>
-        <h2 style={{ textAlign: "center", fontSize: 32, fontWeight: 850, color: t.text, margin: 0, letterSpacing: "-0.02em", transition: "color 0.3s" }}>
-          Get started in minutes
-        </h2>
-        <p style={{ textAlign: "center", color: t.textMuted, fontSize: 15, marginTop: 8, marginBottom: 32, transition: "color 0.3s" }}>
-          Three steps. No Docker required. No vendor accounts.
-        </p>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          {SETUP_STEPS.map((s) => (
-            <div key={s.num} style={{
-              background: t.cardBg, border: `1px solid ${t.cardBorder}`,
-              borderRadius: 14, padding: "20px 22px", transition: "background 0.3s, border-color 0.3s",
-            }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
-                <div style={{
-                  width: 32, height: 32, borderRadius: 999, display: "flex", alignItems: "center", justifyContent: "center",
-                  background: `linear-gradient(135deg, ${CYAN_LIGHT}, ${CYAN})`,
-                  color: "#0a101e", fontWeight: 800, fontSize: 14,
-                }}>
-                  {s.num}
-                </div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: t.text, transition: "color 0.3s" }}>{s.title}</div>
-              </div>
-              <div style={codeBlockStyle}>{s.code}</div>
-            </div>
-          ))}
+# Add a data source under Settings > Databases
+# Run your first query in SQL Lab`}
+            />
+          </div>
         </div>
+      </section>
 
-        {/* CTA buttons */}
-        <div style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 28, flexWrap: "wrap" }}>
-          <Link href="/login" style={{
-            padding: "11px 28px", borderRadius: 10, fontSize: 14, fontWeight: 700, textDecoration: "none",
-            background: `linear-gradient(135deg, ${CYAN_LIGHT}, ${CYAN})`, color: "#0a101e",
-            boxShadow: "0 8px 24px rgba(70,199,217,0.3)",
-          }}>Get started free</Link>
-          <a href="https://github.com/PruthviProdduturi/Lens" target="_blank" rel="noreferrer" style={{
-            padding: "11px 24px", borderRadius: 10, fontSize: 14, fontWeight: 700, textDecoration: "none",
-            background: t === DARK ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)",
-            color: t === DARK ? "#e6eef7" : "#1e293b",
-            border: `1px solid ${t.surfaceBorder}`,
-          }}>View on GitHub</a>
-        </div>
-
-        {/* Footer */}
-        <div style={{ marginTop: 32, textAlign: "center", color: t.textFaint, fontSize: 12, transition: "color 0.3s", paddingBottom: 16 }}>
-          © {new Date().getFullYear()} Lens — a Kaveon platform module. See the pattern.
-        </div>
-      </div>
-    </section>
-  );
-}
-
-// ── Page ─────────────────────────────────────────────────────────────────────
-export default function AboutPage() {
-  const [dark, setDark] = useState(false);
-  const t = dark ? DARK : LIGHT;
-
-  // Persist preference
-  useEffect(() => {
-    const saved = localStorage.getItem("lens-about-theme");
-    if (saved === "dark") setDark(true);
-  }, []);
-  const toggle = useCallback(() => {
-    setDark(prev => {
-      localStorage.setItem("lens-about-theme", prev ? "light" : "dark");
-      return !prev;
-    });
-  }, []);
-
-  return (
-    <div style={{
-      background: t.bg, minHeight: "100vh",
-      fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif",
-      transition: "background 0.3s",
-    }}>
-      <Nav t={t} dark={dark} onToggle={toggle} />
-      <Hero t={t} />
-      <Architecture t={t} />
-      <Features t={t} />
-      <Journeys t={t} />
-      <Databases t={t} />
-      <Compare t={t} />
-      <Security t={t} />
-      <GetStarted t={t} />
+      {/* ── Footer ──────────────────────────────────────────────────────────── */}
+      <footer style={{
+        background: "#0f172a",
+        padding: "20px 1.5rem",
+        textAlign: "center",
+        color: "#64748b",
+        fontSize: 12,
+      }}>
+        &copy; {new Date().getFullYear()} Lens — a Kaveon platform module
+      </footer>
     </div>
   );
 }
