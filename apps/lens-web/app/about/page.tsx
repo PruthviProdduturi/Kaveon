@@ -278,14 +278,15 @@ function Hero({ t }: { t: Theme }) {
           <strong style={{ color: t.text }}>Trino</strong>.
           Query live data, build 20+ chart types, assemble dashboards, and ask questions in plain English.
         </p>
+        <style>{`@keyframes ctaPulse { 0%, 100% { box-shadow: 0 8px 24px rgba(70,199,217,0.3); } 50% { box-shadow: 0 8px 36px rgba(70,199,217,0.5), 0 0 16px rgba(70,199,217,0.2); } }`}</style>
         <div style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 22, flexWrap: "wrap" }}>
-          <Link href="/login" style={{
-            padding: "11px 26px", borderRadius: 10, fontSize: 14, fontWeight: 700, textDecoration: "none",
+          <Link href="/" style={{
+            padding: "13px 32px", borderRadius: 10, fontSize: 15, fontWeight: 700, textDecoration: "none",
             background: `linear-gradient(135deg, ${CYAN_LIGHT}, ${CYAN})`, color: "#0a101e",
-            boxShadow: "0 8px 24px rgba(70,199,217,0.3)",
-          }}>Get started</Link>
+            animation: "ctaPulse 2.5s ease-in-out infinite",
+          }}>Get started →</Link>
           <a href="https://github.com/PruthviProdduturi/Lens" target="_blank" rel="noreferrer" style={{
-            padding: "11px 24px", borderRadius: 10, fontSize: 14, fontWeight: 700, textDecoration: "none",
+            padding: "13px 24px", borderRadius: 10, fontSize: 15, fontWeight: 700, textDecoration: "none",
             background: t === DARK ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)",
             color: t === DARK ? "#e6eef7" : "#1e293b",
             border: `1px solid ${t.surfaceBorder}`,
@@ -498,13 +499,13 @@ function CTA({ t }: { t: Theme }) {
 
 // ── Page ─────────────────────────────────────────────────────────────────────
 export default function AboutPage() {
-  const [dark, setDark] = useState(true);
+  const [dark, setDark] = useState(false);
   const t = dark ? DARK : LIGHT;
 
   // Persist preference
   useEffect(() => {
     const saved = localStorage.getItem("lens-about-theme");
-    if (saved === "light") setDark(false);
+    if (saved === "dark") setDark(true);
   }, []);
   const toggle = useCallback(() => {
     setDark(prev => {
