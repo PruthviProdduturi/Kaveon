@@ -146,15 +146,14 @@ export function LensLogo({ size = 48, animate = "none", onClick, className = "" 
           filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.08));
         }
         .lens-logo:hover:not(.anim-revolve) {
-          transform: translateY(-2px);
           filter: drop-shadow(0 6px 12px rgba(var(--lens-primary-rgb), 0.19));
         }
-        /* Hover tightens the iris a touch — the aperture "focusing". */
+        /* Hover spins the aperture blades — like Forge's crosshair */
         .lens-aperture .lens-blades {
-          transition: transform 320ms cubic-bezier(0.2, 0, 0, 1);
+          transition: transform 420ms cubic-bezier(0.5, 0, 0.2, 1);
         }
         .lens-logo:hover .lens-blades {
-          transform: rotate(-14deg);
+          transform: rotate(360deg);
         }
         @keyframes lens-iris {
           0%, 100% { transform: rotate(0deg) scale(1); }
