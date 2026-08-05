@@ -66,7 +66,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       const isLoggedIn = !!session?.user;
       const isPublic = nextUrl.pathname === "/login" || nextUrl.pathname === "/about";
       if (isPublic) return true;
-      if (!isLoggedIn) return Response.redirect(new URL("/login", nextUrl));
+      if (!isLoggedIn) return Response.redirect(new URL("/about", nextUrl));
       return true;
     },
   },
