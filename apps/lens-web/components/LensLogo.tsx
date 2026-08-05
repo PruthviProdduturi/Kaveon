@@ -100,11 +100,11 @@ export function LensLogo({ size = 48, animate = "none", onClick, className = "" 
           <path d="M 0 0 L 6 0 L 6 3.5 L 0 3.5 Z" fill="currentColor" opacity="0.18" />
         </svg>
 
-        {/* ── ⊙ — hexagonal crosshair (same as Forge's O) ────────────────── */}
+        {/* ── ⊙ — hexagonal crosshair (replaces E, tighter than Forge's O) ── */}
         <svg
           className="lens-aperture"
-          width={capH}
-          height={capH}
+          width={capH * 0.85}
+          height={capH * 0.85}
           viewBox="0 0 22 22"
           fill="none"
           aria-hidden="true"
