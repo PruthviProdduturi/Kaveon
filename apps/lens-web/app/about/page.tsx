@@ -3,10 +3,7 @@
 import React from "react";
 import Link from "next/link";
 import { LensLogo } from "../../components/LensLogo";
-
-// ─── Constants ───────────────────────────────────────────────────────────────
-
-const CYAN = "#46c7d9";
+import { useTheme } from "../../contexts/ThemeContext";
 
 // ─── Layout primitives ───────────────────────────────────────────────────────
 
@@ -343,6 +340,9 @@ const ROLES = [
 // ─── About page ──────────────────────────────────────────────────────────────
 
 export default function AboutPage() {
+  const { primaryColor } = useTheme();
+  const CYAN = primaryColor;
+
   return (
     <div style={{ minHeight: "100%" }}>
 
