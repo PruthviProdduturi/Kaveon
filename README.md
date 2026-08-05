@@ -20,7 +20,6 @@
 [![Microsoft Fabric](https://img.shields.io/badge/Microsoft_Fabric-SQL-1e293b?style=for-the-badge&logo=microsoft&logoColor=white)](https://learn.microsoft.com/en-us/fabric/)
 [![License](https://img.shields.io/badge/License-MIT-1e293b?style=for-the-badge)](./LICENSE)
 
-<br>
 
 [**Quick Start**](#-quick-start) · [**Architecture**](#-architecture) · [**Features**](#-features) · [**Setup Guide**](#-step-by-step-setup) · [**API Reference**](#-api-reference) · [**Troubleshooting**](#-troubleshooting)
 
