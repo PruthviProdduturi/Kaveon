@@ -17,11 +17,11 @@ function apertureSvg(px: number): string {
   })
   const opening = L.map((b, i) => `${i === 0 ? 'M' : 'L'} ${b.ix.toFixed(2)} ${b.iy.toFixed(2)}`).join(' ') + ' Z'
   const lines = L.map(b =>
-    `<line x1="${b.ix.toFixed(2)}" y1="${b.iy.toFixed(2)}" x2="${b.ox.toFixed(2)}" y2="${b.oy.toFixed(2)}" stroke="#5cd0e0" stroke-width="1.5" stroke-linecap="round"/>`
+    `<line x1="${b.ix.toFixed(2)}" y1="${b.iy.toFixed(2)}" x2="${b.ox.toFixed(2)}" y2="${b.oy.toFixed(2)}" stroke="#0078D4" stroke-width="1.5" stroke-linecap="round"/>`
   ).join('')
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="${px}" viewBox="0 0 24 24" fill="none">` +
-    `<circle cx="12" cy="12" r="10.6" stroke="#5cd0e0" stroke-width="1.4" fill="none"/>` +
-    `<path d="${opening}" fill="#5cd0e0" fill-opacity="0.15"/>${lines}</svg>`
+    `<circle cx="12" cy="12" r="10.6" stroke="#0078D4" stroke-width="1.4" fill="none"/>` +
+    `<path d="${opening}" fill="#0078D4" fill-opacity="0.15"/>${lines}</svg>`
 }
 
 export default function AppleIcon() {
@@ -31,7 +31,7 @@ export default function AppleIcon() {
       <div style={{
         width: '100%', height: '100%', display: 'flex',
         alignItems: 'center', justifyContent: 'center',
-        background: 'radial-gradient(circle at 50% 35%, #0e2a33 0%, #0a101e 100%)',
+        background: 'white',
       }}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img width={120} height={120} src={uri} alt="Lens" />
