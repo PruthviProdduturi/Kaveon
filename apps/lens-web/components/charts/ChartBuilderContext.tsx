@@ -2881,88 +2881,19 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
 
       let executeJson: any;
 
-      if (isDashboard) {
-        // Async execution path for dashboard charts: submit job, poll until done.
-        cancelQueryRef.current = false;
-        const startRes = await msalFetch(`${API_BASE}/api/v1/sql/execute-async`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(executeBody),
-        });
-        if (!startRes.ok) {
-          const text = await startRes.text();
-          throw new Error(`Failed to start async query: ${startRes.status} ${text}`);
-        }
-        const { job_id } = await startRes.json();
-        activeJobIdRef.current = job_id;
-
-        // Poll until the job completes, times out, or is cancelled.
-        // Max 30s total, exponential backoff (600ms → 1s → 1.5s → 2s cap).
-        const POLL_TIMEOUT_MS = 30_000;
-        const pollStart = Date.now();
-        let pollDelay = 600;
-        let pollRetries = 0;
-        const MAX_POLL_RETRIES = 3;
-
-        while (true) {
-          if (cancelQueryRef.current) {
-            msalFetch(`${API_BASE}/api/v1/sql/async/${job_id}`, { method: "DELETE" }).catch(() => {});
-            activeJobIdRef.current = null;
-            isQueryRunningRef.current = false;
-            releaseSlot();
-            setSqlPreview((prev) => ({ ...prev, isRunning: false, error: null }));
-            return;
-          }
-
-          if (Date.now() - pollStart > POLL_TIMEOUT_MS) {
-            activeJobIdRef.current = null;
-            throw new Error("Query timed out — the backend may be warming up. Try refreshing.");
-          }
-
-          await new Promise((r) => setTimeout(r, pollDelay));
-          pollDelay = Math.min(pollDelay * 1.5, 2000); // backoff: 600 → 900 → 1350 → 2000 cap
-
-          const pollRes = await msalFetch(`${API_BASE}/api/v1/sql/async/${job_id}`);
-
-          if (pollRes.status === 404) {
-            activeJobIdRef.current = null;
-            throw new Error("Query expired — the backend restarted. Try refreshing the page.");
-          }
-
-          if (!pollRes.ok) {
-            pollRetries++;
-            if (pollRetries >= MAX_POLL_RETRIES) {
-              activeJobIdRef.current = null;
-              throw new Error(`Poll failed after ${MAX_POLL_RETRIES} retries (HTTP ${pollRes.status})`);
-            }
-            continue; // retry
-          }
-
-          pollRetries = 0; // reset on success
-          const job = await pollRes.json();
-          if (job.status === "success") {
-            executeJson = { columns: job.columns, rows: job.rows, duration_ms: job.duration_ms };
-            activeJobIdRef.current = null;
-            break;
-          } else if (job.status === "error") {
-            activeJobIdRef.current = null;
-            throw new Error(job.error || "Query failed");
-          }
-          // else still "running" — continue polling
-        }
-      } else {
-        // Synchronous path for chart builder
-        const executeRes = await msalFetch(`${API_BASE}/api/v1/sql/execute`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(executeBody),
-        });
-        if (!executeRes.ok) {
-          const text = await executeRes.text();
-          throw new Error(`Failed to execute SQL: ${executeRes.status} ${text}`);
-        }
-        executeJson = await executeRes.json();
+      // Synchronous execution for all charts (dashboard + builder).
+      // The global semaphore (max 3 concurrent) prevents backend overload.
+      // Async polling was unreliable on Render free tier (job store clears on restart → 404 loops).
+      const executeRes = await msalFetch(`${API_BASE}/api/v1/sql/execute`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(executeBody),
+      });
+      if (!executeRes.ok) {
+        const text = await executeRes.text();
+        throw new Error(`Query execution failed: ${executeRes.status} ${text}`);
       }
+      executeJson = await executeRes.json();
 
       const totalDurationMs = performance.now() - start;
       const fabricDurationMs =
