@@ -2896,10 +2896,16 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         const { job_id } = await startRes.json();
         activeJobIdRef.current = job_id;
 
-        // Poll until the job completes or is cancelled
+        // Poll until the job completes, times out, or is cancelled.
+        // Max 30s total, exponential backoff (600ms → 1s → 1.5s → 2s cap).
+        const POLL_TIMEOUT_MS = 30_000;
+        const pollStart = Date.now();
+        let pollDelay = 600;
+        let pollRetries = 0;
+        const MAX_POLL_RETRIES = 3;
+
         while (true) {
           if (cancelQueryRef.current) {
-            // Fire-and-forget cleanup on the server
             msalFetch(`${API_BASE}/api/v1/sql/async/${job_id}`, { method: "DELETE" }).catch(() => {});
             activeJobIdRef.current = null;
             isQueryRunningRef.current = false;
@@ -2907,9 +2913,32 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
             setSqlPreview((prev) => ({ ...prev, isRunning: false, error: null }));
             return;
           }
-          await new Promise((r) => setTimeout(r, 600));
+
+          if (Date.now() - pollStart > POLL_TIMEOUT_MS) {
+            activeJobIdRef.current = null;
+            throw new Error("Query timed out — the backend may be warming up. Try refreshing.");
+          }
+
+          await new Promise((r) => setTimeout(r, pollDelay));
+          pollDelay = Math.min(pollDelay * 1.5, 2000); // backoff: 600 → 900 → 1350 → 2000 cap
+
           const pollRes = await msalFetch(`${API_BASE}/api/v1/sql/async/${job_id}`);
-          if (!pollRes.ok) throw new Error("Failed to poll query status");
+
+          if (pollRes.status === 404) {
+            activeJobIdRef.current = null;
+            throw new Error("Query expired — the backend restarted. Try refreshing the page.");
+          }
+
+          if (!pollRes.ok) {
+            pollRetries++;
+            if (pollRetries >= MAX_POLL_RETRIES) {
+              activeJobIdRef.current = null;
+              throw new Error(`Poll failed after ${MAX_POLL_RETRIES} retries (HTTP ${pollRes.status})`);
+            }
+            continue; // retry
+          }
+
+          pollRetries = 0; // reset on success
           const job = await pollRes.json();
           if (job.status === "success") {
             executeJson = { columns: job.columns, rows: job.rows, duration_ms: job.duration_ms };
