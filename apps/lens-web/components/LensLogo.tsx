@@ -63,7 +63,7 @@ export function LensLogo({ size = 48, animate = "none", onClick, className = "" 
 
   const letterStyle: React.CSSProperties = {
     fontSize,
-    fontWeight: 800,
+    fontWeight: 700,
     fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif",
     letterSpacing: capH * 0.02,
     lineHeight: 1,
