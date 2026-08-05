@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-/* Lens Brand Colors - Default Grey Theme */
+/* Kaveon Brand Colors - Default Grey Theme */
 :root {
   --lens-primary: #8f9192;
   --lens-secondary: #a9acad;
@@ -64,7 +64,7 @@
   animation: pulse-glow 2s ease-in-out infinite;
 }
 
-/* Lens Logo Animation */
+/* Kaveon Logo Animation */
 .lens-logo {
   background: linear-gradient(135deg, var(--lens-primary), var(--lens-secondary));
   background-clip: text;

@@ -1,9 +1,9 @@
-"""Apply the Lens Postgres schema to the target DB ($NEON_URL)."""
+"""Apply the Kaveon Postgres schema to the target DB ($NEON_URL)."""
 import os
 import psycopg2
 
 URL = os.environ["NEON_URL"]
-SCHEMA = os.path.join(os.path.dirname(__file__), "..", "apps", "lens-api", "schema_postgresql.sql")
+SCHEMA = os.path.join(os.path.dirname(__file__), "..", "apps", "kaveon-api", "schema_postgresql.sql")
 
 
 def main():

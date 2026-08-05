@@ -29,30 +29,30 @@ jobs:
         run: pnpm install --no-frozen-lockfile
 
       - name: Type check — shared types
-        run: pnpm --filter @lens/types type-check
+        run: pnpm --filter @kaveon/types type-check
 
       # Soft gate: the codebase predates a committed ESLint config, so lint
       # runs and reports but does not block (same policy as Forge's mypy step).
       - name: Lint (ESLint)
         continue-on-error: true
-        run: pnpm --filter lens-web lint
+        run: pnpm --filter kaveon-web lint
 
       # Soft gate: reports pre-existing type debt without blocking. Production
       # builds are unblocked via next.config.ts (ignoreBuildErrors). Flip this
       # to a hard gate once the errors are burned down.
       - name: Type check (tsc)
         continue-on-error: true
-        run: pnpm --filter lens-web type-check
+        run: pnpm --filter kaveon-web type-check
 
       - name: Build
-        run: pnpm --filter lens-web build
+        run: pnpm --filter kaveon-web build
 
   api:
     name: API — syntax & tests
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: apps/lens-api
+        working-directory: apps/kaveon-api
     steps:
       - uses: actions/checkout@v4
 
@@ -60,7 +60,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: apps/lens-api/requirements.txt
+          cache-dependency-path: apps/kaveon-api/requirements.txt
 
       - name: Install system deps (ODBC headers for pyodbc)
         run: sudo apt-get update && sudo apt-get install -y unixodbc-dev

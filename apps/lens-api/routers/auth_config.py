@@ -106,7 +106,7 @@ def admin_setup_app_roles(
     ctx: UserContext = Depends(require_min_role("Admin")),
 ):
     """
-    Create the 4 Lens App Roles in the Azure AD App Registration using a
+    Create the 4 Kaveon App Roles in the Azure AD App Registration using a
     delegated Graph API token acquired by the frontend via MSAL popup.
     Idempotent — roles that already exist are skipped.
     Returns 403 with a clear message if the user lacks owner/write permission.

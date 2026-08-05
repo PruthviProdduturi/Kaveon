@@ -2,12 +2,12 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { signIn } from "next-auth/react";
-import { LensLogo } from "./LensLogo";
-import { LensLoading } from "./LensLoading";
+import { KaveonLogo } from "./KaveonLogo";
+import { KaveonLoading } from "./KaveonLoading";
 import { APP_TAGLINE } from "../constants/branding";
 
 /**
- * AuthScreen — Lens sign-in. OAuth only (GitHub, Google, Microsoft) via NextAuth.
+ * AuthScreen — Kaveon sign-in. OAuth only (GitHub, Google, Microsoft) via NextAuth.
  * No local username/password, no external gateway.
  */
 export function AuthScreen() {
@@ -31,10 +31,10 @@ export function AuthScreen() {
 		setToast(provider === "google" ? "Google" : "Microsoft");
 	};
 
-	// While redirecting to the identity provider, reuse the branded Lens loader
+	// While redirecting to the identity provider, reuse the branded Kaveon loader
 	// (aperture + rings) rather than a generic spinner.
 	if (loading) {
-		return <LensLoading message="Signing in" />;
+		return <KaveonLoading message="Signing in" />;
 	}
 
 	const btnBase: React.CSSProperties = {
@@ -77,7 +77,7 @@ export function AuthScreen() {
 			>
 				{/* Logo already includes the LENS wordmark — no separate heading. */}
 				<div style={{ display: "flex", justifyContent: "center", marginBottom: 8 }}>
-					<LensLogo size={44} />
+					<KaveonLogo size={44} />
 				</div>
 				<p style={{ fontSize: 13, color: "#7dd3e0", margin: "0 0 26px" }}>{APP_TAGLINE}</p>
 
@@ -124,7 +124,7 @@ export function AuthScreen() {
 				</button>
 
 				<p style={{ fontSize: 11.5, color: "#5b6b86", marginTop: 22 }}>
-					© {new Date().getFullYear()} Lens — a Kaveon platform module
+					© {new Date().getFullYear()} Kaveon — a Kaveon platform module
 				</p>
 			</div>
 

@@ -1633,7 +1633,7 @@ return;
     <>
       {!isAuthenticated && (
         <p className="muted" style={{ margin: "1.5rem" }}>
-          Sign in and connect to Lens to use SQL Lab.
+          Sign in and connect to Kaveon to use SQL Lab.
         </p>
       )}
 
@@ -2551,7 +2551,7 @@ return;
                   <div className="save-query-modal-body">
                     {typeof sessionStorage !== "undefined" && sessionStorage.getItem("lens_setup_ok") !== "1" ? (
                       <p style={{ marginBottom: 8 }}>
-                        Lens needs a metadata database to load data sources.{" "}
+                        Kaveon needs a metadata database to load data sources.{" "}
                         <a href="/settings/system" style={{ color: "#2563eb", textDecoration: "underline" }}>
                           Go to System Settings
                         </a>{" "}
@@ -2697,7 +2697,7 @@ return;
             </div>
             <div className="save-query-modal-body">
               <p style={{ fontSize: "0.85rem", color: "#374151", marginBottom: 12 }}>
-                Lens will create a virtual dataset from your SQL query, then open the chart builder.
+                Kaveon will create a virtual dataset from your SQL query, then open the chart builder.
               </p>
               <p style={{ fontSize: "0.8rem", fontWeight: 600, marginBottom: 8 }}>Choose chart type:</p>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>

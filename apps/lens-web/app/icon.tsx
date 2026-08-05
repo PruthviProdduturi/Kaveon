@@ -4,7 +4,7 @@ export const runtime = 'edge'
 export const size = { width: 32, height: 32 }
 export const contentType = 'image/png'
 
-// Six-blade Lens aperture (matches components/LensLogo.tsx), cyan on dark.
+// Six-blade Kaveon aperture (matches components/KaveonLogo.tsx), cyan on dark.
 function apertureSvg(px: number): string {
   const BLADES = 6, CX = 12, CY = 12, RO = 10.2, RI = 3.9
   const TW = (42 * Math.PI) / 180
@@ -34,7 +34,7 @@ export default function Icon() {
         background: 'transparent',
       }}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img width={32} height={32} src={uri} alt="Lens" />
+        <img width={32} height={32} src={uri} alt="Kaveon" />
       </div>
     ),
     { ...size }

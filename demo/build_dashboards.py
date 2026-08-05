@@ -11,9 +11,9 @@ Design goals (presentation-grade, "show it to Elon"):
     a global Country filter; and charts where a filter is meaningless (share /
     rankings) are marked exempt so they never collapse to a single 100% bar.
 
-Every chart's SQL is verified via the running lens-api before it is persisted.
+Every chart's SQL is verified via the running kaveon-api before it is persisted.
 
-Env: NEON_URL, LENS_PROXY_SECRET (defaults to the local dev secret).
+Env: NEON_URL, KAVEON_PROXY_SECRET (defaults to the local dev secret).
 """
 import os
 import re
@@ -25,7 +25,7 @@ import psycopg2
 NEON = os.environ["NEON_URL"]
 API = "http://localhost:8080"
 EMAIL = "pruthvi.prodduturi@gmail.com"
-SECRET = os.environ.get("LENS_PROXY_SECRET", "dev-only-proxy-secret-change-me-fedcba9876543210")
+SECRET = os.environ.get("KAVEON_PROXY_SECRET", "dev-only-proxy-secret-change-me-fedcba9876543210")
 H = {"x-user-email": EMAIL, "x-user-role": "Admin", "x-user-roles": "Admin",
      "x-proxy-secret": SECRET, "content-type": "application/json"}
 

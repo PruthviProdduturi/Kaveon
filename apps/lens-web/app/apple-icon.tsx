@@ -4,7 +4,7 @@ export const runtime = 'edge'
 export const size = { width: 180, height: 180 }
 export const contentType = 'image/png'
 
-// Six-blade Lens aperture (matches components/LensLogo.tsx).
+// Six-blade Kaveon aperture (matches components/KaveonLogo.tsx).
 function apertureSvg(px: number): string {
   const BLADES = 6, CX = 12, CY = 12, RO = 10.2, RI = 3.9
   const TW = (42 * Math.PI) / 180
@@ -34,7 +34,7 @@ export default function AppleIcon() {
         background: 'white',
       }}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img width={120} height={120} src={uri} alt="Lens" />
+        <img width={120} height={120} src={uri} alt="Kaveon" />
       </div>
     ),
     { ...size }

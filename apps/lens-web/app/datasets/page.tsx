@@ -131,7 +131,7 @@ export default function DatasetsPage() {
       error={error}
       empty={!loading && !error && datasets.length === 0}
       emptyTitle="Register your first dataset"
-      emptyBody="A dataset is a table, view or query that Lens can chart and explore. Connect one to unlock charts and dashboards."
+      emptyBody="A dataset is a table, view or query that Kaveon can chart and explore. Connect one to unlock charts and dashboards."
       emptySteps={[
         { icon: "fa-plug", title: "Connect a source", desc: "Postgres, MySQL, Fabric or Azure SQL — add a data source." },
         { icon: "fa-table", title: "Choose a table", desc: "Pick a table or view, or paste a SQL query as the source." },

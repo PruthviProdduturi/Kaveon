@@ -48,7 +48,7 @@ def require_min_role(min_role: str):
                 status_code=403,
                 detail={
                     "code": "no_role",
-                    "message": "You have not been assigned a role in Lens. Contact your administrator to be assigned a role.",
+                    "message": "You have not been assigned a role in Kaveon. Contact your administrator to be assigned a role.",
                 },
             )
         if _level(ctx.role) < _level(min_role):

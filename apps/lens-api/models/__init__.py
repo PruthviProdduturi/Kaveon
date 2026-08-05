@@ -1,1 +1,1 @@
-"""Pydantic request/response models for Lens API."""
+"""Pydantic request/response models for Kaveon API."""

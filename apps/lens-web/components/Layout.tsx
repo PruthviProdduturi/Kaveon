@@ -1,7 +1,7 @@
 "use client";
 
 import { APP_DISPLAY_NAME, APP_LOGO_URL } from "../constants/branding";
-import { LensLogo } from "./LensLogo";
+import { KaveonLogo } from "./KaveonLogo";
 import { SettingsModal } from "./SettingsModal";
 
 import Link from "next/link";
@@ -75,7 +75,7 @@ export function Layout({ children }: LayoutProps) {
         <div className="header-left">
           {/* Logo */}
           <div className="header-logo-area" onClick={handleLogoClick}>
-            <LensLogo size={36} animate={isRevolving ? "revolve" : "none"} />
+            <KaveonLogo size={36} animate={isRevolving ? "revolve" : "none"} />
           </div>
 
           {/* Separator */}
@@ -129,7 +129,7 @@ export function Layout({ children }: LayoutProps) {
         {/* ── Right: actions + user ── */}
         <div className="header-right">
           {/* About / Help */}
-          <Link href="/about" className="header-icon-btn" title="About Lens — features, API reference, docs">
+          <Link href="/about" className="header-icon-btn" title="About Kaveon — features, API reference, docs">
             <i className="fas fa-circle-question" />
           </Link>
 

@@ -23,8 +23,8 @@ body:
     attributes:
       label: Component
       options:
-        - Web (lens-web)
-        - API (lens-api)
+        - Web (kaveon-web)
+        - API (kaveon-api)
         - SQL Lab
         - Chart Builder
         - Dashboards

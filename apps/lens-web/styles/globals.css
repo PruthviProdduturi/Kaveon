@@ -7,7 +7,7 @@
   --lens-secondary: #0ea5e9;
   --lens-light: #ecfeff;
   --lens-accent: #eef3fb;
-  /* RGB component vars — used for rgba() in LensLoading without hydration mismatch.
+  /* RGB component vars — used for rgba() in KaveonLoading without hydration mismatch.
      Defaults match the Microsoft blue theme; overridden by layout.tsx inline script
      when the user has a saved theme color in localStorage. */
   --lens-primary-rgb: 0, 120, 212;

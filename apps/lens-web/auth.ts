@@ -1,10 +1,10 @@
 /**
- * NextAuth (Auth.js v5) — the independent sign-in for Lens.
+ * NextAuth (Auth.js v5) — the independent sign-in for Kaveon.
  *
  * Same model as Forge's portal: OAuth only, no local username/password. Each
  * provider lights up automatically when its client id/secret are present in the
  * environment. Everything runs inside the Next.js app — no external gateway — so
- * Lens clones-and-runs and deploys standalone (Vercel / Container Apps).
+ * Kaveon clones-and-runs and deploys standalone (Vercel / Container Apps).
  *
  * Providers: GitHub, Google, Microsoft Entra ID (work/school/personal).
  *
@@ -50,7 +50,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     signIn: "/login",
   },
   callbacks: {
-    // Attach a Lens role to the session token so the app can gate on it.
+    // Attach a Kaveon role to the session token so the app can gate on it.
     jwt({ token }) {
       token.role = roleFor(token.email as string | undefined);
       return token;

@@ -1,8 +1,8 @@
-# Security Policy — Lens
+# Security Policy — Kaveon
 
 ## Overview
 
-Lens is an internal enterprise data exploration platform built on top of Microsoft Fabric.
+Kaveon is an internal enterprise data exploration platform built on top of Microsoft Fabric.
 It is intended for use by authenticated Azure AD users within the organization and is
 **not** designed to be exposed to the public internet.
 
@@ -33,7 +33,7 @@ Browser (MSAL)
     │
     │  Authorization: Bearer <Azure AD access token (RS256 signed)>
     ▼
-FastAPI (lens-api)
+FastAPI (kaveon-api)
     │
     ├─ middleware/auth.py — get_current_user()
     │     When AZURE_CLIENT_ID + AZURE_TENANT_ID are set (production):
@@ -136,7 +136,7 @@ Filter operators (e.g., `=`, `<`, `LIKE`) are validated against a strict allowli
 
 ## Reporting Security Issues
 
-If you discover a security vulnerability in Lens, report it to the owning team via
+If you discover a security vulnerability in Kaveon, report it to the owning team via
 the internal security disclosure channel. Do not file public GitHub issues for
 security-sensitive findings.
 

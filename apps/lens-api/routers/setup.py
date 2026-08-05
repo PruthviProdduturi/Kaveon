@@ -277,7 +277,7 @@ def setup_initialize(data: SetupConnectionBody):
 
     threading.Thread(target=_restart, daemon=True).start()
 
-    return {"success": True, "message": "Metadata database initialised successfully. Lens API is restarting…"}
+    return {"success": True, "message": "Metadata database initialised successfully. Kaveon API is restarting…"}
 
 
 # ── Admin — view / reconfigure metadata server ────────────────────────────────
@@ -388,7 +388,7 @@ def admin_update_metadata(data: SetupConnectionBody, ctx=Depends(require_min_rol
         _os._exit(0)
 
     threading.Thread(target=_restart, daemon=True).start()
-    return {"success": True, "message": "Metadata database updated. Lens API is restarting…"}
+    return {"success": True, "message": "Metadata database updated. Kaveon API is restarting…"}
 
 
 # ── Start Fresh ───────────────────────────────────────────────────────────────
@@ -396,7 +396,7 @@ def admin_update_metadata(data: SetupConnectionBody, ctx=Depends(require_min_rol
 @router.post("/admin/reset")
 def admin_start_fresh(ctx=Depends(require_min_role("Admin"))):
     """
-    Reset Lens to a fresh state: clears the metadata database configuration
+    Reset Kaveon to a fresh state: clears the metadata database configuration
     and auth config, then restarts the API so the setup wizard is shown again.
 
     Only available when the metadata DB was configured via the UI (not via
@@ -408,7 +408,7 @@ def admin_start_fresh(ctx=Depends(require_min_role("Admin"))):
             detail={
                 "code": "deployment_configured",
                 "message": (
-                    "Start Fresh is only available when Lens was configured "
+                    "Start Fresh is only available when Kaveon was configured "
                     "through the UI. This instance appears to be configured via "
                     "deployment environment variables."
                 ),
@@ -448,4 +448,4 @@ def admin_start_fresh(ctx=Depends(require_min_role("Admin"))):
         _os._exit(0)
 
     threading.Thread(target=_restart, daemon=True).start()
-    return {"success": True, "message": "Configuration cleared. Lens is restarting…"}
+    return {"success": True, "message": "Configuration cleared. Kaveon is restarting…"}

@@ -1,7 +1,7 @@
 import { API_BASE } from "../config";
 
 /**
- * Authenticated fetch to lens-api — routed through the same-origin NextAuth proxy
+ * Authenticated fetch to kaveon-api — routed through the same-origin NextAuth proxy
  * (/api/lens/...). The proxy reads the NextAuth session server-side and injects
  * the trusted X-User-* identity headers, so the browser never handles tokens and
  * cannot spoof identity. The session cookie travels via credentials: "include".

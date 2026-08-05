@@ -58,7 +58,7 @@ const AUTH_PROVIDERS: Array<{
   key: AuthProvider; label: string; description: string;
   color: string; bg: string; border: string; beta?: boolean;
 }> = [
-  { key: "local",    label: "Local Login",        description: "Username & password stored in the Lens database", color: "#0f172a", bg: "#f8fafc", border: "#e2e8f0" },
+  { key: "local",    label: "Local Login",        description: "Username & password stored in the Kaveon database", color: "#0f172a", bg: "#f8fafc", border: "#e2e8f0" },
   { key: "azure_ad", label: "Microsoft Azure AD", description: "Single sign-on via Microsoft Entra ID",            color: "#0078d4", bg: "#eff6ff", border: "#bfdbfe" },
   { key: "google",   label: "Google OAuth2",       description: "Sign in with Google accounts",                    color: "#ea4335", bg: "#fff1f0", border: "#fecaca", beta: true },
 ];
@@ -161,7 +161,7 @@ export default function SystemSettingsPage() {
             <CardHeader
               icon="fa-lock"
               title="Authentication"
-              subtitle="Controls how users sign in to Lens"
+              subtitle="Controls how users sign in to Kaveon"
               status={authConfigured ? "active" : "warning"}
               primaryColor={primaryColor}
               action={
@@ -203,7 +203,7 @@ export default function SystemSettingsPage() {
                   <FieldPair label="Client ID" value={maskId(authConfig.google_client_id)} />
                 )}
                 {authConfig?.provider === "local" && (
-                  <span style={{ fontSize: 12.5, color: "#64748b" }}>Users sign in with a username and password managed in Lens.</span>
+                  <span style={{ fontSize: 12.5, color: "#64748b" }}>Users sign in with a username and password managed in Kaveon.</span>
                 )}
               </div>
             </div>
@@ -243,7 +243,7 @@ export default function SystemSettingsPage() {
               </div>
               <div>
                 <div style={{ fontSize: 13.5, fontWeight: 700, color: "#92400e", marginBottom: 2 }}>No database connected</div>
-                <div style={{ fontSize: 12.5, color: "#b45309" }}>Lens cannot store any data until a metadata database is configured.</div>
+                <div style={{ fontSize: 12.5, color: "#b45309" }}>Kaveon cannot store any data until a metadata database is configured.</div>
               </div>
             </div>
           ) : (
@@ -611,7 +611,7 @@ function ResetModal({ gradientColors, onClose }: { gradientColors: { light: stri
                 <div>
                   <h2 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 700, color: "#0f172a" }}>Reset complete</h2>
                   <p style={{ margin: "4px 0 0", fontSize: 13, color: "#64748b", lineHeight: 1.5 }}>
-                    Configuration has been cleared. Restart the API, then open Lens in a new tab to run the setup wizard.
+                    Configuration has been cleared. Restart the API, then open Kaveon in a new tab to run the setup wizard.
                   </p>
                 </div>
               </div>
@@ -637,7 +637,7 @@ function ResetModal({ gradientColors, onClose }: { gradientColors: { light: stri
                 <div>
                   <h2 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 700, color: "#0f172a" }}>Reset System?</h2>
                   <p style={{ margin: "4px 0 0", fontSize: 13, color: "#64748b", lineHeight: 1.5 }}>
-                    This will clear the metadata database configuration and authentication settings. Lens will restart and show the setup wizard.
+                    This will clear the metadata database configuration and authentication settings. Kaveon will restart and show the setup wizard.
                   </p>
                 </div>
               </div>
@@ -783,7 +783,7 @@ function EditAuthModal({ current, gradientColors, onClose, onSuccess }: {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "1.25rem 1.5rem", borderBottom: "1px solid #f1f5f9", flexShrink: 0 }}>
           <div>
             <h2 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 700, color: "#0f172a" }}>Edit Authentication</h2>
-            <p style={{ margin: "2px 0 0", fontSize: 12, color: "#64748b" }}>Choose how users sign in to Lens.</p>
+            <p style={{ margin: "2px 0 0", fontSize: 12, color: "#64748b" }}>Choose how users sign in to Kaveon.</p>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: "1.1rem", cursor: "pointer", color: "#94a3b8", width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 6 }}>
             <i className="fas fa-times" />
@@ -842,7 +842,7 @@ function EditAuthModal({ current, gradientColors, onClose, onSuccess }: {
                   App Roles
                 </div>
                 <p style={{ margin: "0 0 10px", fontSize: 11.5, color: "#64748b", lineHeight: 1.55 }}>
-                  Lens requires <strong>Viewer, Analyst, Editor</strong> and <strong>Admin</strong> App Roles in your Azure AD App Registration. If you are a <strong>Global Admin</strong> in this tenant, click below to create them automatically — otherwise copy the manifest and add them manually.
+                  Kaveon requires <strong>Viewer, Analyst, Editor</strong> and <strong>Admin</strong> App Roles in your Azure AD App Registration. If you are a <strong>Global Admin</strong> in this tenant, click below to create them automatically — otherwise copy the manifest and add them manually.
                 </p>
 
                 {/* Auto-setup button — only shown when tenant + client are filled */}
@@ -1203,7 +1203,7 @@ function EditMetadataModal({ current, onClose, onSuccess }: {
                   {errors.connection_string && <p style={{ margin: "2px 0 6px", fontSize: 11.5, color: "#ef4444" }}>{errors.connection_string}</p>}
                   <p style={DM.hint}>Fabric workspace → SQL Database → Connection strings → ODBC. Leave blank to reuse the saved endpoint.</p>
                   <label style={DM.label} htmlFor="meta-db-fabric">Database Name</label>
-                  <input id="meta-db-fabric" style={DM.input(!!errors.database)} type="text" value={form.database} onChange={e => setField("database", e.target.value)} placeholder="Lens" autoComplete="off" />
+                  <input id="meta-db-fabric" style={DM.input(!!errors.database)} type="text" value={form.database} onChange={e => setField("database", e.target.value)} placeholder="Kaveon" autoComplete="off" />
                   <p style={DM.hint}>Leave blank to use the database parsed from the connection string.</p>
                 </>
               )}
@@ -1232,7 +1232,7 @@ function EditMetadataModal({ current, onClose, onSuccess }: {
                   {errors.host && <p style={{ margin: "2px 0 6px", fontSize: 11.5, color: "#ef4444" }}>{errors.host}</p>}
                   <p style={DM.hint}>Hostname or IP address of your database server.</p>
                   <label style={DM.label} htmlFor="meta-db-pg">Database Name *</label>
-                  <input id="meta-db-pg" style={DM.input(!!errors.database)} type="text" value={form.database} onChange={e => setField("database", e.target.value)} placeholder="lens" autoComplete="off" />
+                  <input id="meta-db-pg" style={DM.input(!!errors.database)} type="text" value={form.database} onChange={e => setField("database", e.target.value)} placeholder="kaveon" autoComplete="off" />
                   {errors.database && <p style={{ margin: "2px 0 6px", fontSize: 11.5, color: "#ef4444" }}>{errors.database}</p>}
                   <p style={{ ...DM.hint, color: "#4ade80", marginBottom: 4 }}>
                     <i className="fas fa-shield-check" style={{ marginRight: 6 }} />Connects via Azure AD Managed Identity — no credentials required.
@@ -1242,7 +1242,7 @@ function EditMetadataModal({ current, onClose, onSuccess }: {
 
               <div style={{ background: "rgba(245,158,11,0.07)", border: "1px solid rgba(245,158,11,0.25)", borderRadius: 8, padding: "10px 14px", fontSize: 12, color: "#fcd34d", display: "flex", gap: 8, marginBottom: 16, marginTop: 4 }}>
                 <i className="fas fa-triangle-exclamation" style={{ marginTop: 1, flexShrink: 0 }} />
-                Saving will restart the Lens API. Existing data is preserved.
+                Saving will restart the Kaveon API. Existing data is preserved.
               </div>
             </>
           )}

@@ -1,11 +1,11 @@
 /**
- * lens-api proxy — the trusted identity layer (Forge's proxy model).
+ * kaveon-api proxy — the trusted identity layer (Forge's proxy model).
  *
  * The browser calls this same-origin route (NextAuth session cookie travels
  * automatically). Here, server-side, we read the session with auth() and forward
- * the request to lens-api with X-User-* identity headers, stamped with
- * X-Proxy-Secret. lens-api trusts those headers only when the secret matches, so
- * the browser can never spoof an identity by hitting lens-api directly.
+ * the request to kaveon-api with X-User-* identity headers, stamped with
+ * X-Proxy-Secret. kaveon-api trusts those headers only when the secret matches, so
+ * the browser can never spoof an identity by hitting kaveon-api directly.
  *
  * Client calls:  /api/lens/api/v1/...   →  {API_URL}/api/v1/...
  */
@@ -14,7 +14,7 @@ import { NextRequest } from "next/server";
 import { auth } from "../../../../auth";
 
 const API_BASE = (process.env.API_URL || "http://localhost:8080").replace(/\/+$/, "");
-const PROXY_SECRET = process.env.LENS_PROXY_SECRET || "";
+const PROXY_SECRET = process.env.KAVEON_PROXY_SECRET || "";
 
 async function handler(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
 	const session = await auth();

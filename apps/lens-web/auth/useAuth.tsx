@@ -1,7 +1,7 @@
 /**
  * Authentication — NextAuth session (OAuth only: GitHub, Google, Microsoft).
  *
- * Lens is self-contained: sign-in runs inside the Next.js app via NextAuth
+ * Kaveon is self-contained: sign-in runs inside the Next.js app via NextAuth
  * (see ../auth.ts). This hook exposes the session to the rest of the app in the
  * same shape components already expect. No local passwords, no external gateway.
  */

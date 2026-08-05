@@ -6,7 +6,7 @@ import { useAuth } from "../auth/useAuth";
 import { AuthScreen } from "./AuthScreen";
 import { Layout } from "./Layout";
 import { LoadingOverlay } from "./LoadingOverlay";
-import { LensLogo } from "./LensLogo";
+import { KaveonLogo } from "./KaveonLogo";
 import { msalFetch } from "../utils/msalFetch";
 import { API_BASE } from "../config";
 
@@ -51,13 +51,13 @@ function SetupRedirectOverlay({ onDismiss }: { onDismiss: () => void }) {
         </button>
 
         <div style={{ display: "flex", justifyContent: "center", marginBottom: 4 }}>
-          <LensLogo size={48} animate="pulse" />
+          <KaveonLogo size={48} animate="pulse" />
         </div>
         <h2 style={{ fontSize: 21, fontWeight: 700, color: "#f1f5f9", margin: "16px 0 8px" }}>
           Setup Required
         </h2>
         <p style={{ fontSize: 13.5, color: "#94a3b8", lineHeight: 1.65, marginBottom: 28 }}>
-          Lens needs a metadata database to store your data. Configure it in System Settings to get started.
+          Kaveon needs a metadata database to store your data. Configure it in System Settings to get started.
         </p>
         <a
           href="/settings/system"
@@ -97,7 +97,7 @@ function NoAccessScreen({ onLogout }: { onLogout: () => void }) {
         </div>
         <h2 style={{ fontSize: 20, fontWeight: 700, color: "#0f172a", margin: "0 0 10px" }}>No Access</h2>
         <p style={{ fontSize: 14, color: "#64748b", lineHeight: 1.6, margin: "0 0 28px" }}>
-          You don&apos;t have a role assigned in Lens. Contact your administrator and ask them to assign you a role via Azure AD → Enterprise Applications → Lens → Users and groups.
+          You don&apos;t have a role assigned in Kaveon. Contact your administrator and ask them to assign you a role via Azure AD → Enterprise Applications → Lens → Users and groups.
         </p>
         <button
           onClick={onLogout}

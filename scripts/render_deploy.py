@@ -1,8 +1,8 @@
-"""Render API helper — create/deploy lens-api (Docker) from the public repo.
+"""Render API helper — create/deploy kaveon-api (Docker) from the public repo.
 
-Reads RENDER_KEY, NEON_URL, LENS_PROXY_SECRET from env. No secrets stored here.
+Reads RENDER_KEY, NEON_URL, KAVEON_PROXY_SECRET from env. No secrets stored here.
 Usage:
-  python render_deploy.py create     # create the lens-api web service
+  python render_deploy.py create     # create the kaveon-api web service
   python render_deploy.py status     # show service + latest deploy state
 """
 import os
@@ -14,8 +14,8 @@ from urllib.parse import urlparse, unquote, parse_qs
 KEY = os.environ["RENDER_KEY"]
 API = "https://api.render.com/v1"
 H = {"Authorization": f"Bearer {KEY}", "Accept": "application/json", "Content-Type": "application/json"}
-REPO = "https://github.com/PruthviProdduturi/Lens"
-NAME = "lens-api"
+REPO = "https://github.com/PruthviProdduturi/Kaveon"
+NAME = "kaveon-api"
 
 
 def neon_parts():
@@ -56,7 +56,7 @@ def create():
         {"key": "METADATA_USER", "value": n["user"]},
         {"key": "METADATA_PASSWORD", "value": n["password"]},
         {"key": "METADATA_SSLMODE", "value": n["sslmode"]},
-        {"key": "LENS_PROXY_SECRET", "value": os.environ["LENS_PROXY_SECRET"]},
+        {"key": "KAVEON_PROXY_SECRET", "value": os.environ["KAVEON_PROXY_SECRET"]},
         {"key": "WEB_URL", "value": os.environ.get("WEB_URL", "https://lens.vercel.app")},
     ]
     body = {
@@ -72,7 +72,7 @@ def create():
             "region": "oregon",
             "healthCheckPath": "/api/health",
             "envSpecificDetails": {
-                "dockerfilePath": "./apps/lens-api/Dockerfile",
+                "dockerfilePath": "./apps/kaveon-api/Dockerfile",
                 "dockerContext": ".",
             },
         },
@@ -92,7 +92,7 @@ def create():
 def status():
     svc = find_service()
     if not svc:
-        print("no lens-api service")
+        print("no kaveon-api service")
         return
     print("id:", svc["id"], "| suspended:", svc.get("suspended"))
     print("url:", svc.get("serviceDetails", {}).get("url"))

@@ -39,21 +39,21 @@ _AAD_CONFIGURED = bool(settings.AZURE_CLIENT_ID and settings.AZURE_TENANT_ID)
 
 
 # ── Proxy-injected identity (NextAuth flow, à la Forge) ───────────────────────
-# The lens-web Next.js proxy verifies the NextAuth session server-side and
+# The kaveon-web Next.js proxy verifies the NextAuth session server-side and
 # forwards X-User-Email / X-User-Name / X-User-Role / X-User-Roles, stamped with
 # X-Proxy-Secret. We trust those headers ONLY when the secret matches — so a
-# browser hitting the API directly cannot spoof an identity. A LENS_DEV_USER_EMAIL
+# browser hitting the API directly cannot spoof an identity. A KAVEON_DEV_USER_EMAIL
 # env bypasses auth entirely for local dev (never set in production).
 
 def _proxy_identity(request: Request) -> Optional[tuple[str, str, list[str], str]]:
     """Return (email, role, roles, name) from trusted proxy headers, or None."""
     # Local dev bypass — no proxy, no secret.
-    dev_email = settings.LENS_DEV_USER_EMAIL
+    dev_email = settings.KAVEON_DEV_USER_EMAIL
     if dev_email and "@" in dev_email:
-        role = settings.LENS_DEV_USER_ROLE or "Admin"
-        return (dev_email.lower(), role, [role], settings.LENS_DEV_USER_NAME or "Dev User")
+        role = settings.KAVEON_DEV_USER_ROLE or "Admin"
+        return (dev_email.lower(), role, [role], settings.KAVEON_DEV_USER_NAME or "Dev User")
 
-    secret = settings.LENS_PROXY_SECRET
+    secret = settings.KAVEON_PROXY_SECRET
     if secret and request.headers.get("x-proxy-secret", "") == secret:
         email = request.headers.get("x-user-email", "")
         if email and "@" in email:

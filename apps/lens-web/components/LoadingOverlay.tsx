@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { LensLoading } from "./LensLoading";
+import { KaveonLoading } from "./KaveonLoading";
 
 export function LoadingOverlay() {
   const [isVisible, setIsVisible] = useState(true);
@@ -18,7 +18,7 @@ export function LoadingOverlay() {
         transition: 'opacity 0.3s ease-in-out',
       }}
     >
-      <LensLoading fullScreen={true} />
+      <KaveonLoading fullScreen={true} />
     </div>
   );
 }

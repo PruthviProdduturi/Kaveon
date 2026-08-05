@@ -1,5 +1,5 @@
 """
-Lens API — FastAPI entry point.
+Kaveon API — FastAPI entry point.
 Replaces the Node.js/Express API + Python Flask proxy with a single service.
 """
 
@@ -86,7 +86,7 @@ async def lifespan(app: FastAPI):
 # ── App ───────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
-    title="Lens API",
+    title="Kaveon API",
     version="2.0.0",
     default_response_class=LargeIntResponse,
     lifespan=lifespan,
@@ -166,7 +166,7 @@ app.include_router(ai.router,               prefix="/api/v1")
 @app.get("/")
 def root():
     return {
-        "name": "Lens v2 API",
+        "name": "Kaveon API",
         "version": "2.0.0",
         "status": "running",
         "endpoints": {
@@ -191,7 +191,7 @@ def not_found(path: str):
 if __name__ == "__main__":
     import uvicorn
     print("=" * 44)
-    print("Lens API")
+    print("Kaveon API")
     print("=" * 44)
     print(f"Server: http://localhost:{settings.API_PORT}")
     print(f"Health: http://localhost:{settings.API_PORT}/api/health")
