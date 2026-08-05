@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { signIn } from "next-auth/react";
 import { LensLogo } from "./LensLogo";
 import { LensLoading } from "./LensLoading";
@@ -12,10 +12,23 @@ import { APP_TAGLINE } from "../constants/branding";
  */
 export function AuthScreen() {
 	const [loading, setLoading] = useState<string | null>(null);
+	const [toast, setToast] = useState<string | null>(null);
+
+	const dismissToast = useCallback(() => setToast(null), []);
+
+	useEffect(() => {
+		if (!toast) return;
+		const t = setTimeout(dismissToast, 5000);
+		return () => clearTimeout(t);
+	}, [toast, dismissToast]);
 
 	const start = (provider: string) => {
 		setLoading(provider);
 		signIn(provider, { callbackUrl: "/" });
+	};
+
+	const showComingSoon = (provider: string) => {
+		setToast(provider === "google" ? "Google" : "Microsoft");
 	};
 
 	// While redirecting to the identity provider, reuse the branded Lens loader
@@ -83,8 +96,8 @@ export function AuthScreen() {
 				{/* Google */}
 				<button
 					type="button"
-					onClick={() => start("google")}
-					style={{ ...btnBase, background: "#fff", color: "#3c4043", border: "1px solid #dadce0" }}
+					onClick={() => showComingSoon("google")}
+					style={{ ...btnBase, background: "#fff", color: "#3c4043", border: "1px solid #dadce0", opacity: toast ? 0.5 : 1, cursor: toast ? "not-allowed" : "pointer" }}
 				>
 					<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
 						<path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4" />
@@ -98,8 +111,8 @@ export function AuthScreen() {
 				{/* Microsoft */}
 				<button
 					type="button"
-					onClick={() => start("microsoft-entra-id")}
-					style={{ ...btnBase, background: "#fff", color: "#3c4043", border: "1px solid #dadce0" }}
+					onClick={() => showComingSoon("microsoft")}
+					style={{ ...btnBase, background: "#fff", color: "#3c4043", border: "1px solid #dadce0", opacity: toast ? 0.5 : 1, cursor: toast ? "not-allowed" : "pointer" }}
 				>
 					<svg width="16" height="16" viewBox="0 0 21 21" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
 						<rect x="1" y="1" width="9" height="9" fill="#f25022" />
@@ -114,6 +127,52 @@ export function AuthScreen() {
 					© {new Date().getFullYear()} Lens — a Kaveon platform module
 				</p>
 			</div>
+
+			{/* Coming-soon toast */}
+			{toast && (
+				<div
+					style={{
+						position: "fixed",
+						bottom: 32,
+						left: "50%",
+						transform: "translateX(-50%)",
+						maxWidth: 420,
+						width: "calc(100% - 40px)",
+						background: "#111a2e",
+						border: "1px solid #22304d",
+						borderLeft: "4px solid #46c7d9",
+						borderRadius: 12,
+						padding: "18px 20px",
+						boxShadow: "0 16px 48px rgba(0,0,0,0.5)",
+						animation: "toastSlideUp 0.3s ease-out",
+						zIndex: 100,
+					}}
+				>
+					<style>{`@keyframes toastSlideUp { from { opacity: 0; transform: translateX(-50%) translateY(20px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }`}</style>
+					<div style={{ fontSize: 14, fontWeight: 700, color: "#eaf1f8", marginBottom: 6 }}>
+						We&rsquo;re flattered you trust us with your {toast} account, but&hellip;
+					</div>
+					<div style={{ fontSize: 13, color: "#93a5bd", lineHeight: 1.5, marginBottom: 14 }}>
+						This provider isn&rsquo;t wired up yet. GitHub login works great though — and hey, your code lives there anyway.
+					</div>
+					<button
+						type="button"
+						onClick={() => { setToast(null); start("github"); }}
+						style={{
+							padding: "8px 18px",
+							borderRadius: 8,
+							background: "#24292e",
+							color: "#fff",
+							border: "none",
+							fontSize: 13,
+							fontWeight: 600,
+							cursor: "pointer",
+						}}
+					>
+						Sign in with GitHub
+					</button>
+				</div>
+			)}
 		</div>
 	);
 }
