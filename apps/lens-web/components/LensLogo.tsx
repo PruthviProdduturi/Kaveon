@@ -105,9 +105,9 @@ export function LensLogo({ size = 48, animate = "none", onClick, className = "" 
 
         {/* ── Chamfered L + ENS wordmark ─────────────────────────────────── */}
         <svg
-          width={capH * 0.5}
+          width={capH * 0.66}
           height={capH}
-          viewBox="0 0 14 28"
+          viewBox="0 0 18 28"
           fill="none"
           aria-hidden="true"
         >
@@ -118,10 +118,10 @@ export function LensLogo({ size = 48, animate = "none", onClick, className = "" 
             </linearGradient>
           </defs>
           <path
-            d="M 0 0 L 6 0 L 6 21 L 12 21 L 14 23.5 L 14 28 L 0 28 Z"
+            d="M 0 0 L 7 0 L 7 21 L 16 21 L 18 23.5 L 18 28 L 0 28 Z"
             fill={`url(#${gradId})`}
           />
-          <path d="M 0 0 L 6 0 L 6 3.5 L 0 3.5 Z" fill="currentColor" opacity="0.18" />
+          <path d="M 0 0 L 7 0 L 7 3.5 L 0 3.5 Z" fill="currentColor" opacity="0.18" />
         </svg>
         <span
           style={{
