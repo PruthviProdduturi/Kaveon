@@ -56,19 +56,9 @@ export function LensLogo({ size = 48, animate = "none", onClick, className = "" 
     onClick?.();
   }, [spinning, onClick]);
 
-  // Match text cap-height to the aperture height (Inter cap-height ≈ 0.728em).
-  const markH = size * 0.86;
-  const capH = size * 0.6;
+  // capH is the visual reference height — matches Forge exactly.
+  const capH     = size * 0.62;
   const fontSize = capH / 0.728;
-
-  const letterStyle: React.CSSProperties = {
-    fontSize,
-    fontWeight: 700,
-    fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif",
-    letterSpacing: capH * 0.02,
-    lineHeight: 1,
-    color: "currentColor",
-  };
 
   return (
     <div
@@ -82,94 +72,71 @@ export function LensLogo({ size = 48, animate = "none", onClick, className = "" 
         height: size,
         display: "inline-flex",
         alignItems: "center",
-        gap: markH * 0.1,
+        gap: 0,
         userSelect: "none",
         color: "var(--lens-primary, #46c7d9)",
       }}
     >
-      {/* ── Chamfered L glyph (matches Forge's chamfered F) ─────────────── */}
-      <svg
-        width={capH * 0.65}
-        height={capH}
-        viewBox="0 0 14 28"
-        fill="none"
-        aria-hidden="true"
-        style={{ flex: "0 0 auto" }}
-      >
-        <defs>
-          <linearGradient id={`${gradId}-l`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="currentColor" stopOpacity="1" />
-            <stop offset="100%" stopColor="currentColor" stopOpacity="0.65" />
-          </linearGradient>
-        </defs>
-        {/* Bold L with 45° chamfer on bottom-right bar end */}
-        <path
-          d="M 0 0 L 6 0 L 6 21 L 12 21 L 14 23.5 L 14 28 L 0 28 Z"
-          fill={`url(#${gradId}-l)`}
-        />
-        {/* Top-face highlight */}
-        <path d="M 0 0 L 6 0 L 6 3.5 L 0 3.5 Z" fill="currentColor" opacity="0.18" />
-      </svg>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: capH * 0.12 }}>
 
-      {/* ── Aperture mark (replaces E in L·E·NS) ─────────────────────────── */}
-      <svg
-        className="lens-aperture"
-        width={capH}
-        height={capH}
-        viewBox="0 0 24 24"
-        fill="none"
-        aria-hidden="true"
-        style={{ flex: "0 0 auto", overflow: "visible" }}
-      >
-        <defs>
-          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="currentColor" stopOpacity="1" />
-            <stop offset="100%" stopColor="currentColor" stopOpacity="0.62" />
-          </linearGradient>
-        </defs>
-
-        {/* Barrel ring */}
-        <circle cx={CX} cy={CY} r={10.6} fill="none" stroke={`url(#${gradId})`} strokeWidth={1.5} />
-
-        {/* Blades + hexagonal opening */}
-        <g className="lens-blades" style={{ transformOrigin: "12px 12px" }}>
-          <path d={OPENING} fill="currentColor" opacity={0.1} />
-          {BLADE_LINES.map((b, i) => (
-            <line
-              key={i}
-              x1={b.ix.toFixed(2)}
-              y1={b.iy.toFixed(2)}
-              x2={b.ox.toFixed(2)}
-              y2={b.oy.toFixed(2)}
-              stroke={`url(#${gradId})`}
-              strokeWidth={1.6}
-              strokeLinecap="round"
-            />
-          ))}
-          <line
-            x1={BLADE_LINES[1].ix.toFixed(2)}
-            y1={BLADE_LINES[1].iy.toFixed(2)}
-            x2={BLADE_LINES[1].ox.toFixed(2)}
-            y2={BLADE_LINES[1].oy.toFixed(2)}
-            stroke="currentColor"
-            strokeWidth={1.6}
-            strokeLinecap="round"
-            opacity={0.25}
+        {/* ── L — chamfered letterform (matches Forge's chamfered F) ─────── */}
+        <svg
+          width={capH * 0.5}
+          height={capH}
+          viewBox="0 0 14 28"
+          fill="none"
+          aria-hidden="true"
+        >
+          <defs>
+            <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="currentColor" stopOpacity="1" />
+              <stop offset="100%" stopColor="currentColor" stopOpacity="0.65" />
+            </linearGradient>
+          </defs>
+          <path
+            d="M 0 0 L 6 0 L 6 21 L 12 21 L 14 23.5 L 14 28 L 0 28 Z"
+            fill={`url(#${gradId})`}
           />
-        </g>
-      </svg>
+          <path d="M 0 0 L 6 0 L 6 3.5 L 0 3.5 Z" fill="currentColor" opacity="0.18" />
+        </svg>
 
-      {/* ── NS — slightly smaller, balanced visual weight (matches Forge RGE) */}
-      <span
-        style={{
-          fontSize: fontSize * 0.88,
-          fontWeight: 700,
-          fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif",
-          color: "currentColor",
-          lineHeight: 1,
-        }}
-      >
-        NS
+        {/* ── ⊙ — hexagonal crosshair (same as Forge's O) ────────────────── */}
+        <svg
+          className="lens-aperture"
+          width={capH}
+          height={capH}
+          viewBox="0 0 22 22"
+          fill="none"
+          aria-hidden="true"
+        >
+          <circle cx="11" cy="11" r="9.5" stroke="currentColor" strokeWidth="1.9" />
+          <g className="lens-blades" style={{ transformOrigin: "11px 11px" }}>
+            <path
+              d="M 13.35 7.62 L 9.42 6.78 L 6.52 10.07 L 7.93 14.88 L 11.86 15.72 L 14.76 12.43 Z"
+              opacity="0.12" fill="currentColor"
+            />
+            <line x1="13.35" y1="7.62" x2="11" y2="1.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+            <line x1="9.42" y1="6.78" x2="3" y2="5.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+            <line x1="6.52" y1="10.07" x2="3" y2="16.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+            <line x1="7.93" y1="14.88" x2="11" y2="20.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+            <line x1="11.86" y1="15.72" x2="19" y2="16.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+            <line x1="14.76" y1="12.43" x2="19" y2="5.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+          </g>
+        </svg>
+
+        {/* ── NS — slightly smaller, balanced visual weight (matches Forge RGE) */}
+        <span
+          style={{
+            fontSize: fontSize * 0.88,
+            fontWeight: 700,
+            fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif",
+            color: "currentColor",
+            lineHeight: 1,
+          }}
+        >
+          NS
+        </span>
+
       </span>
 
       <style jsx>{`
