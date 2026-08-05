@@ -412,7 +412,7 @@ export default function AboutPage() {
       >
         <div style={{ maxWidth: 760, margin: "0 auto" }}>
           <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}>
-            <LensLogo size={80} animate="none" />
+            <span style={{ color: "#fff" }}><LensLogo size={80} animate="none" /></span>
           </div>
           <h1
             style={{
