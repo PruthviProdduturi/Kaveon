@@ -5,16 +5,26 @@
       <stop offset="1" stop-color="#b8860b"/>
     </linearGradient>
   </defs>
-  <!-- Aperture mark: six blades around an open centre (Lens focuses; it has no pupil) -->
-  <circle cx="32.0" cy="36.0" r="26.5" fill="none" stroke="url(#g)" stroke-width="3.4"/>
-  <path d="M 38.52 28.75 L 28.99 26.73 L 22.46 33.97 L 25.48 43.25 L 35.01 45.27 L 41.54 38.03 Z" fill="#d4a017" opacity="0.12"/>
-    <line x1="38.52" y1="28.75" x2="32.00" y2="10.50" stroke="url(#g)" stroke-width="3.6" stroke-linecap="round"/>
-    <line x1="28.99" y1="26.73" x2="9.92" y2="23.25" stroke="url(#g)" stroke-width="3.6" stroke-linecap="round"/>
-    <line x1="22.46" y1="33.97" x2="9.92" y2="48.75" stroke="url(#g)" stroke-width="3.6" stroke-linecap="round"/>
-    <line x1="25.48" y1="43.25" x2="32.00" y2="61.50" stroke="url(#g)" stroke-width="3.6" stroke-linecap="round"/>
-    <line x1="35.01" y1="45.27" x2="54.08" y2="48.75" stroke="url(#g)" stroke-width="3.6" stroke-linecap="round"/>
-    <line x1="41.54" y1="38.03" x2="54.08" y2="23.25" stroke="url(#g)" stroke-width="3.6" stroke-linecap="round"/>
-  <line x1="28.99" y1="26.73" x2="9.92" y2="23.25" stroke="#f0d980" stroke-width="3.6" stroke-linecap="round" opacity="0.55"/>
-  <!-- Wordmark, tight to the mark -->
-  <text x="63" y="49" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-weight="800" font-size="42" letter-spacing="0.5" fill="url(#g)">LENS</text>
+
+  <!-- Chamfered L glyph (matches Forge's chamfered F) -->
+  <path d="M 10 8 L 22 8 L 22 50 L 38 50 L 42 55 L 42 64 L 10 64 Z" fill="url(#g)"/>
+  <!-- Top-face highlight -->
+  <path d="M 10 8 L 22 8 L 22 15 L 10 15 Z" fill="#d4a017" opacity="0.18"/>
+
+  <!-- Aperture mark: six blades around an open centre -->
+  <g transform="translate(56, 10)">
+    <circle cx="26" cy="26" r="22.1" fill="none" stroke="url(#g)" stroke-width="2.8"/>
+    <path d="M 31.88 20.75 L 23.97 19.12 L 18.69 24.96 L 21.13 32.25 L 29.04 33.87 L 34.32 28.03 Z" fill="#d4a017" opacity="0.12"/>
+    <line x1="31.88" y1="20.75" x2="26.00" y2="5.00" stroke="url(#g)" stroke-width="2.9" stroke-linecap="round"/>
+    <line x1="23.97" y1="19.12" x2="8.58" y2="16.25" stroke="url(#g)" stroke-width="2.9" stroke-linecap="round"/>
+    <line x1="18.69" y1="24.96" x2="8.58" y2="35.75" stroke="url(#g)" stroke-width="2.9" stroke-linecap="round"/>
+    <line x1="21.13" y1="32.25" x2="26.00" y2="47.00" stroke="url(#g)" stroke-width="2.9" stroke-linecap="round"/>
+    <line x1="29.04" y1="33.87" x2="43.42" y2="35.75" stroke="url(#g)" stroke-width="2.9" stroke-linecap="round"/>
+    <line x1="34.32" y1="28.03" x2="43.42" y2="16.25" stroke="url(#g)" stroke-width="2.9" stroke-linecap="round"/>
+    <!-- Light-catch blade -->
+    <line x1="23.97" y1="19.12" x2="8.58" y2="16.25" stroke="#f0d980" stroke-width="2.9" stroke-linecap="round" opacity="0.55"/>
+  </g>
+
+  <!-- NS wordmark (slightly smaller, matches Forge RGE) -->
+  <text x="114" y="49" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-weight="700" font-size="38" letter-spacing="0.5" fill="url(#g)">NS</text>
 </svg>
