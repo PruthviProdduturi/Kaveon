@@ -1,8 +1,8 @@
-# Lens Architecture
+# Kaveon Architecture
 
-**See the pattern.**
+**Talk to your data.**
 
-> Comprehensive technical architecture documentation for the Lens platform
+> Comprehensive technical architecture documentation for the Kaveon platform
 
 ---
 
@@ -32,7 +32,7 @@
 
 ## System Overview
 
-Lens is a modern data exploration platform built with a clean, two-tier service architecture. The system consists of two main services:
+Kaveon is a modern data exploration platform built with a clean, two-tier service architecture. The system consists of two main services:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -61,7 +61,7 @@ Lens is a modern data exploration platform built with a clean, two-tier service 
 ┌─────────────────────────────────────────────────────────────┐
 │                Microsoft Fabric SQL Endpoints                │
 │  ┌──────────────────────────────────────────────────────┐   │
-│  │  Metadata Database (Lens tables)                    │   │
+│  │  Metadata Database (Kaveon tables)                    │   │
 │  │  - stores: datasets, charts, dashboards, etc.        │   │
 │  │  - stores: data_sources table (warehouse configs)    │   │
 │  └──────────────────────────────────────────────────────┘   │
@@ -84,15 +84,15 @@ Python is the only runtime with a mature ODBC driver (`pyodbc`) that supports Az
 
 ### Single Root `.env` File Pattern
 
-Lens uses a **centralized configuration approach** with a single `.env` file at the repository root. Both services load their configuration from this shared file.
+Kaveon uses a **centralized configuration approach** with a single `.env` file at the repository root. Both services load their configuration from this shared file.
 
 ```
-Lens/
+Kaveon/
 ├── .env                           ← Single configuration file
 ├── apps/
-│   ├── lens-api/
+│   ├── kaveon-api/
 │   │   └── config.py              → Loads ../../.env via python-dotenv
-│   └── lens-web/
+│   └── kaveon-web/
 │       └── next.config.ts         → Reads NEXT_PUBLIC_* env vars at build time
 ```
 
@@ -201,7 +201,7 @@ Browser Request
 └─────────────────────────────────────────────────────────┘
      │
      ▼
-Lens FastAPI (Bearer token authenticated)
+Kaveon FastAPI (Bearer token authenticated)
 ```
 
 ---
@@ -307,7 +307,7 @@ JWT verified → email + jwt_roles extracted
     ▼
 users_svc.resolve_role(email, jwt_roles)
     │
-    ├─ 1. JWT claim: if roles[] in token contains Lens.Viewer/Analyst/Editor/Admin
+    ├─ 1. JWT claim: if roles[] in token contains Kaveon.Viewer/Analyst/Editor/Admin
     │        → use highest matching role
     │
     ├─ 2. azure_ad / google with no JWT role → None (403 NoAccess)
@@ -410,7 +410,7 @@ CORSMiddleware(
 
 ## Database Schema
 
-The metadata database stores all Lens application state. Schema is in `apps/lens-api/schema.sql`.
+The metadata database stores all Kaveon application state. Schema is in `apps/kaveon-api/schema.sql`.
 
 | Table | Key Columns | Purpose |
 |---|---|---|
@@ -444,7 +444,7 @@ Datasets are the core abstraction. They define:
 
 #### Role-Playing Dimensions
 
-A "role-playing dimension" is when two different foreign keys in the fact table both reference the same dimension table (e.g., `order_date_key` and `ship_date_key` both reference `dim_date`). Lens handles this via `COALESCE` in JOIN conditions:
+A "role-playing dimension" is when two different foreign keys in the fact table both reference the same dimension table (e.g., `order_date_key` and `ship_date_key` both reference `dim_date`). Kaveon handles this via `COALESCE` in JOIN conditions:
 
 ```sql
 LEFT JOIN [dim_date] AS [dim_date_1]
@@ -647,7 +647,7 @@ data_sources table
 
 ## Caching Strategy
 
-Lens intentionally avoids server-side caching of query results — all data is fetched live from Fabric SQL on every request. This ensures users always see the most current data.
+Kaveon intentionally avoids server-side caching of query results — all data is fetched live from Fabric SQL on every request. This ensures users always see the most current data.
 
 What IS cached:
 - **JWKS public keys**: `PyJWKClient(cache_keys=True)` — avoids repeated HTTPS calls to Azure AD
@@ -763,7 +763,7 @@ conn.execute_query("SELECT * FROM table WHERE id = ?", [record_id])
 
 ### Next.js App Router
 
-Lens uses the **Next.js 15 App Router** with all interactive pages rendered client-side (no SSR data fetching — all data comes from the authenticated API).
+Kaveon uses the **Next.js 15 App Router** with all interactive pages rendered client-side (no SSR data fetching — all data comes from the authenticated API).
 
 ```
 app/
@@ -819,7 +819,7 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for the deployment guide and [deploy-vercel
 | API hosting | Render — Docker via Blueprint (`render.yaml`) |
 | Database | Neon (serverless Postgres) — metadata + data sources |
 | Auth | NextAuth (GitHub / Google / Microsoft Entra ID) |
-| API auth | Proxy secret (`LENS_PROXY_SECRET`) — Vercel injects `X-User-*` headers |
+| API auth | Proxy secret (`KAVEON_PROXY_SECRET`) — Vercel injects `X-User-*` headers |
 | API runtime | Gunicorn + Uvicorn workers (4 workers × 8 threads) |
 | Cold starts | Connection pool warmup at startup; 5-min heartbeat |
 | First run | Setup wizard at `/api/v1/setup/*` — disabled once configured |

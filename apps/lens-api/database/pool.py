@@ -1,5 +1,5 @@
 """
-Lens database connection pool.
+Kaveon database connection pool.
 
 Direct port of the Flask proxy's FabricSQLConnection + ConnectionPool classes.
 All DB calls now live in-process — no HTTP hop to a sidecar.
@@ -919,17 +919,17 @@ def _write_probe_statements(db_type: str) -> List[str]:
     """
     if db_type in ("fabric_sql", "azure_sql"):
         return [
-            "CREATE TABLE #_lens_probe (id INT)",
-            "DROP TABLE #_lens_probe",
+            "CREATE TABLE #_kaveon_probe (id INT)",
+            "DROP TABLE #_kaveon_probe",
         ]
     if db_type == "postgresql":
         return [
-            "CREATE TEMP TABLE _lens_probe (id INT) ON COMMIT DROP",
+            "CREATE TEMP TABLE _kaveon_probe (id INT) ON COMMIT DROP",
         ]
     # mysql — session-scoped temporary table, auto-dropped on disconnect
     return [
-        "CREATE TEMPORARY TABLE _lens_probe (id INT)",
-        "DROP TEMPORARY TABLE _lens_probe",
+        "CREATE TEMPORARY TABLE _kaveon_probe (id INT)",
+        "DROP TEMPORARY TABLE _kaveon_probe",
     ]
 
 

@@ -1,6 +1,6 @@
 """Align the Neon `charts` table with the service layer (demo-scoped).
 
-Lens is MSSQL/Fabric-first; the shipped schema_postgresql.sql `charts` table was
+Kaveon is MSSQL/Fabric-first; the shipped schema_postgresql.sql `charts` table was
 out of sync with services/charts.py (which uses query_config/viz_config + auto id).
 This recreates it to match so charts persist on the Neon demo DB. Safe: no charts
 exist yet.

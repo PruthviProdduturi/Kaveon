@@ -1,14 +1,14 @@
 <div align="center">
 
-<img src="docs/reference/lens-logo.svg?v=11" alt="Lens" width="260" />
+<img src="docs/reference/kaveon-logo.svg?v=11" alt="Kaveon" width="260" />
 
-### **See the pattern.**
+### **Talk to your data.**
 
 *Built for Advanced Analytics. Multi-Provider Auth. Open Source.*
 
 <br>
 
-[![CI](https://github.com/PruthviProdduturi/Lens/actions/workflows/ci.yml/badge.svg)](https://github.com/PruthviProdduturi/Lens/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Live Demo](https://img.shields.io/badge/Live-Demo-d4a017?style=flat)](https://lens-analytics.vercel.app)
+[![CI](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/ci.yml/badge.svg)](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Live Demo](https://img.shields.io/badge/Live-Demo-d4a017?style=flat)](https://lens-analytics.vercel.app)
 
 <br>
 
@@ -27,13 +27,13 @@
 
 ---
 
-## 🌟 What is Lens?
+## 🌟 What is Kaveon?
 
-Lens is a **self-hosted enterprise analytics platform** built for teams running on **Microsoft Fabric SQL**, Azure SQL, PostgreSQL, MySQL, Trino, and StarRocks. Think of it as your team's private data command centre — where everyone queries live data, builds charts, assembles dashboards, and uses AI to accelerate analysis — secured through **your choice of authentication provider**.
+Kaveon is a **self-hosted enterprise analytics platform** built for teams running on **Microsoft Fabric SQL**, Azure SQL, PostgreSQL, MySQL, Trino, and StarRocks. Think of it as your team's private data command centre — where everyone queries live data, builds charts, assembles dashboards, and uses AI to accelerate analysis — secured through **your choice of authentication provider**.
 
 Everything is configurable from the UI. No config file changes, no restarts needed for auth setup. First-run deploys with **local login out of the box** — switch to Azure AD or Google OAuth any time from Settings.
 
-> *Lens sits between your team and your data — making it fast to explore, easy to visualise, and safe to share.*
+> *Kaveon sits between your team and your data — making it fast to explore, easy to visualise, and safe to share.*
 
 ---
 
@@ -132,7 +132,7 @@ Everything is configurable from the UI. No config file changes, no restarts need
 - **Authentication:** switch provider (Local / Azure AD / Google) and configure credentials — all from the UI, no `.env` changes
 - **Local Users:** create, deactivate, and reset passwords for local-auth users from the admin panel
 - **User Management:** assign / revoke roles per user; Azure AD App Roles always take precedence
-- **Metadata Server:** view and reconfigure the Lens metadata database from the UI — supports all six DB types, live connection test, in-place API restart
+- **Metadata Server:** view and reconfigure the Kaveon metadata database from the UI — supports all six DB types, live connection test, in-place API restart
 - **Data Sources:** full CRUD with connection testing
 - **AI Providers:** manage global and personal API keys
 
@@ -164,15 +164,15 @@ Everything is configurable from the UI. No config file changes, no restarts need
 
 ## 🏛️ Architecture
 
-Lens is a **monorepo** with two services:
+Kaveon is a **monorepo** with two services:
 
-<p align="center"><img src="docs/reference/lens-architecture.svg" alt="Lens architecture: browser to lens-web (Next.js) to lens-api (FastAPI) to the metadata DB and your data sources" width="820"></p>
+<p align="center"><img src="docs/reference/lens-architecture.svg" alt="Kaveon architecture: browser to kaveon-web (Next.js) to kaveon-api (FastAPI) to the metadata DB and your data sources" width="820"></p>
 
 ### Two databases
 
 | Database | Purpose | Configured via |
 |---|---|---|
-| **Metadata DB** | Stores Lens app data: datasets, charts, dashboards, query history, themes, roles | Setup wizard or **Settings → Metadata Server** (admin) |
+| **Metadata DB** | Stores Kaveon app data: datasets, charts, dashboards, query history, themes, roles | Setup wizard or **Settings → Metadata Server** (admin) |
 | **Your Data Sources** | Your actual warehouses, lakehouses, databases | UI at `/data-sources` |
 
 ---
@@ -203,9 +203,9 @@ odbcinst -q -d -n "ODBC Driver 18 for SQL Server"
 
 ## 🔑 Azure AD App Registration
 
-> **Optional** — Lens defaults to local login. Configure Azure AD only if your team uses Microsoft Entra ID. Skip this section to use local auth.
+> **Optional** — Kaveon defaults to local login. Configure Azure AD only if your team uses Microsoft Entra ID. Skip this section to use local auth.
 
-Lens supports Azure AD as an optional authentication provider. This is a **one-time setup** by your Azure admin.
+Kaveon supports Azure AD as an optional authentication provider. This is a **one-time setup** by your Azure admin.
 
 <details>
 <summary><strong>Click to expand — App Registration steps</strong></summary>
@@ -215,7 +215,7 @@ Lens supports Azure AD as an optional authentication provider. This is a **one-t
 1. Go to [portal.azure.com](https://portal.azure.com) → **Microsoft Entra ID** → **App registrations** → **New registration**
 
 2. Fill in:
-   - **Name:** `Lens`
+   - **Name:** `Kaveon`
    - **Supported account types:** `Accounts in this organizational directory only`
    - **Redirect URI:** `Single-page application (SPA)` → `http://localhost:3000`
 
@@ -233,10 +233,10 @@ Lens supports Azure AD as an optional authentication provider. This is a **one-t
 
    | Display name | Value | Description |
    |---|---|---|
-   | Lens Viewer | `Lens.Viewer` | Read-only access to published dashboards and charts |
-   | Lens Analyst | `Lens.Analyst` | Run ad-hoc SQL, build charts and datasets |
-   | Lens Editor | `Lens.Editor` | All Analyst permissions + publish content |
-   | Lens Admin | `Lens.Admin` | Full access including user management, data source and metadata server configuration |
+   | Kaveon Viewer | `Kaveon.Viewer` | Read-only access to published dashboards and charts |
+   | Kaveon Analyst | `Kaveon.Analyst` | Run ad-hoc SQL, build charts and datasets |
+   | Kaveon Editor | `Kaveon.Editor` | All Analyst permissions + publish content |
+   | Kaveon Admin | `Kaveon.Admin` | Full access including user management, data source and metadata server configuration |
 
    > Any authenticated user without an assigned role defaults to **Viewer** automatically.
 
@@ -249,7 +249,7 @@ Lens supports Azure AD as an optional authentication provider. This is a **one-t
 ```bash
 # 1. Clone
 git clone <your-repo-url>
-cd Lens
+cd Kaveon
 
 # 2. Install Node.js dependencies (frontend only)
 pnpm install
@@ -259,7 +259,7 @@ cp .env.example .env
 # → Edit .env if using Azure AD; leave AZURE_* blank for local login
 
 # 4. Set up Python API
-cd apps/lens-api
+cd apps/kaveon-api
 python -m venv venv
 venv\Scripts\activate        # Windows
 # source venv/bin/activate   # macOS / Linux
@@ -267,8 +267,8 @@ pip install -r requirements.txt
 cd ../..
 
 # 5. Start both services — two terminals
-python apps/lens-api/main.py    # Terminal 1 (API)
-pnpm --filter lens-web dev      # Terminal 2 (Web)
+python apps/kaveon-api/main.py    # Terminal 1 (API)
+pnpm --filter kaveon-web dev      # Terminal 2 (Web)
 ```
 
 Open **http://localhost:3000**. Sign in with **username `admin`, password `admin`** (local login). You will be prompted to change the password on first login. ✓
@@ -283,7 +283,7 @@ Open **http://localhost:3000**. Sign in with **username `admin`, password `admin
 
 ```bash
 git clone <your-github-repo-url>
-cd Lens
+cd Kaveon
 ```
 
 ### 2 · Install Node.js Dependencies
@@ -294,7 +294,7 @@ pnpm install
 
 ### 3 · Configure Environment Variables
 
-Lens uses a **single `.env` file at the repository root**. Both services read from it.
+Kaveon uses a **single `.env` file at the repository root**. Both services read from it.
 
 ```bash
 cp .env.example .env
@@ -325,7 +325,7 @@ WEB_URL=http://localhost:3000
 ### 4 · Set Up the Python API
 
 ```bash
-cd apps/lens-api
+cd apps/kaveon-api
 
 # Create virtual environment
 python -m venv venv
@@ -352,7 +352,7 @@ cd ../..
 
 1. Open **Azure Data Studio** (or your DB client)
 2. Connect to your metadata database
-3. Open `apps/lens-api/schema.sql`
+3. Open `apps/kaveon-api/schema.sql`
 4. Run the file
 
 **Tables created:**
@@ -376,13 +376,13 @@ cd ../..
 
 **Terminal 1 — API (Python/FastAPI)**
 ```bash
-cd apps/lens-api
+cd apps/kaveon-api
 venv\Scripts\activate   # Windows  |  source venv/bin/activate  (macOS/Linux)
 python main.py
 ```
 ```
 ============================================
-Lens API
+Kaveon API
 ============================================
 Server: http://localhost:8080
 Health: http://localhost:8080/api/health
@@ -393,7 +393,7 @@ Docs:   http://localhost:8080/docs
 
 **Terminal 2 — Web (Next.js)**
 ```bash
-pnpm --filter lens-web dev
+pnpm --filter kaveon-web dev
 ```
 ```
 ▲ Next.js 15.x.x
@@ -407,7 +407,7 @@ pnpm --filter lens-web dev
 |---|---|---|
 | API | http://localhost:8080/api/health | `{"status": "ok"}` |
 | API Docs | http://localhost:8080/docs | Swagger UI |
-| Web | http://localhost:3000 | Lens login page |
+| Web | http://localhost:3000 | Kaveon login page |
 
 ---
 
@@ -561,14 +561,14 @@ The FastAPI backend auto-generates Swagger UI at `http://localhost:8080/docs`. K
 ## 📁 Project Structure
 
 ```
-Lens/
+Kaveon/
 ├── .env.example                    ← Copy to .env and fill in your values
 ├── .env                            ← Your local config (gitignored)
 ├── pnpm-workspace.yaml             ← pnpm monorepo workspace config
 │
 ├── apps/
 │   │
-│   ├── lens-web/                  ← Next.js 15 frontend (TypeScript)
+│   ├── kaveon-web/                  ← Next.js 15 frontend (TypeScript)
 │   │   ├── app/                    ← App Router pages
 │   │   │   ├── about/              ← Feature showcase + API reference page
 │   │   │   ├── ai/                 ← AI assistant (NL → SQL, chat)
@@ -595,7 +595,7 @@ Lens/
 │   │   ├── hooks/                  ← useRole, useTheme, etc.
 │   │   └── utils/                  ← MSAL fetch, colour utilities
 │   │
-│   └── lens-api/                  ← Python/FastAPI REST API
+│   └── kaveon-api/                  ← Python/FastAPI REST API
 │       ├── main.py                 ← FastAPI entry point + router registration
 │       ├── config.py               ← Pydantic settings (reads root .env)
 │       ├── requirements.txt        ← Python dependencies
@@ -677,7 +677,7 @@ Run from the **repository root**:
 | `pnpm check-types` | TypeScript type checking |
 | `pnpm clean` | Delete all build artifacts |
 
-**Python API** (from `apps/lens-api/`):
+**Python API** (from `apps/kaveon-api/`):
 
 | Command | Description |
 |---|---|
@@ -737,7 +737,7 @@ Run from the **repository root**:
 <details>
 <summary><strong>🔴 Cannot connect to metadata database</strong></summary>
 
-- Check **Settings → Metadata Server** in the Lens UI (Admin) — use the built-in connection tester
+- Check **Settings → Metadata Server** in the Kaveon UI (Admin) — use the built-in connection tester
 - Confirm your Azure AD account (or Managed Identity in production) has `db_datareader` + `db_datawriter` + `db_ddladmin` on the metadata database
 - Test the connection directly in Azure Data Studio to rule out network issues
 
@@ -746,14 +746,14 @@ Run from the **repository root**:
 <details>
 <summary><strong>🔴 Queries time out on first run</strong></summary>
 
-Fabric serverless endpoints have a cold start (~10s on first connection). Lens warms the connection pool at API startup. Wait a few seconds after seeing `[API] Connection pool warmup started.` in the API logs before running your first query.
+Fabric serverless endpoints have a cold start (~10s on first connection). Kaveon warms the connection pool at API startup. Wait a few seconds after seeing `[API] Connection pool warmup started.` in the API logs before running your first query.
 
 </details>
 
 <details>
 <summary><strong>🔴 AI chat returns "No AI provider configured"</strong></summary>
 
-- Go to **Settings (⚙) → AI Providers** in the Lens header
+- Go to **Settings (⚙) → AI Providers** in the Kaveon header
 - Add a global key (Admin) or a personal key (any user)
 - Supported: Anthropic (Claude), OpenAI (GPT-4o), GitHub Models
 
@@ -768,10 +768,10 @@ rm -rf node_modules apps/*/node_modules packages/*/node_modules
 pnpm install
 
 # Clear Next.js cache
-rm -rf apps/lens-web/.next
+rm -rf apps/kaveon-web/.next
 
 # Reinstall Python dependencies
-cd apps/lens-api && pip install -r requirements.txt
+cd apps/kaveon-api && pip install -r requirements.txt
 
 # Re-check types
 pnpm check-types
@@ -801,7 +801,7 @@ Or change `API_PORT` in `.env` and restart.
 
 ## 🧰 Tech Stack
 
-### Frontend — `lens-web`
+### Frontend — `kaveon-web`
 
 | Technology | Version | Role |
 |---|---|---|
@@ -815,7 +815,7 @@ Or change `API_PORT` in `.env` and restart.
 | [react-grid-layout](https://github.com/react-grid-layout/react-grid-layout) | 2.x | Drag-and-drop dashboard builder |
 | [react-colorful](https://omgovich.github.io/react-colorful/) | 5.x | Colour picker for user themes |
 
-### Backend — `lens-api`
+### Backend — `kaveon-api`
 
 | Technology | Version | Role |
 |---|---|---|
@@ -836,6 +836,6 @@ Or change `API_PORT` in `.env` and restart.
 
 **Built for Advanced Analytics. Multi-Provider Auth. Open Source.**
 
-*Lens — See the pattern.*
+*Kaveon — Talk to your data.*
 
 </div>

@@ -175,7 +175,7 @@ const DashboardsPage: React.FC = () => {
         emptyTitle="Build your first dashboard"
         emptyBody="Dashboards bring your charts together into a single, interactive view — with filters, cross-filtering and live data. Here's how to get there."
         emptySteps={[
-          { icon: "fa-database", title: "Connect a dataset", desc: "Point Lens at a table or query — Postgres, MySQL, Fabric and more." },
+          { icon: "fa-database", title: "Connect a dataset", desc: "Point Kaveon at a table or query — Postgres, MySQL, Fabric and more." },
           { icon: "fa-chart-column", title: "Create charts", desc: "Explore your data and save KPIs, time-series, maps and tables." },
           { icon: "fa-tachometer-alt", title: "Assemble the dashboard", desc: "Drag charts onto a grid, add filters, and publish to share." },
         ]}

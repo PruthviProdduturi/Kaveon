@@ -1,9 +1,9 @@
-"""One-off: rotate the Neon DB password + LENS_PROXY_SECRET and propagate them.
+"""One-off: rotate the Neon DB password + KAVEON_PROXY_SECRET and propagate them.
 
 Rotates:
   • Neon owner password  — via ALTER ROLE (owner can change its own password),
     then updates local .env METADATA_PASSWORD + Render service env.
-  • LENS_PROXY_SECRET     — fresh value on local .env + Render env + Vercel env.
+  • KAVEON_PROXY_SECRET     — fresh value on local .env + Render env + Vercel env.
 
 Reads current DB parts from .env; reads RENDER_KEY / VERCEL_TOKEN from env.
 No secrets are printed or stored in this file. After running, redeploy Render +
@@ -92,14 +92,14 @@ def main():
 
     # 2) Propagate to Render service env.
     print("render METADATA_PASSWORD:", render_set("METADATA_PASSWORD", new_pw))
-    print("render LENS_PROXY_SECRET:", render_set("LENS_PROXY_SECRET", new_proxy))
+    print("render KAVEON_PROXY_SECRET:", render_set("KAVEON_PROXY_SECRET", new_proxy))
 
     # 3) Propagate proxy secret to Vercel env.
-    print("vercel LENS_PROXY_SECRET:", vercel_set("LENS_PROXY_SECRET", new_proxy))
+    print("vercel KAVEON_PROXY_SECRET:", vercel_set("KAVEON_PROXY_SECRET", new_proxy))
 
     # 4) Update local .env last (so failures above don't strand the running API).
-    set_env_lines({"METADATA_PASSWORD": new_pw, "LENS_PROXY_SECRET": new_proxy})
-    print("local .env: updated METADATA_PASSWORD + LENS_PROXY_SECRET")
+    set_env_lines({"METADATA_PASSWORD": new_pw, "KAVEON_PROXY_SECRET": new_proxy})
+    print("local .env: updated METADATA_PASSWORD + KAVEON_PROXY_SECRET")
     print("DONE — now redeploy Render + Vercel and restart the local API.")
 
 

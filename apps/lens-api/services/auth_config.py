@@ -29,7 +29,7 @@ ENV_PATH = _REPO_ROOT.parent.parent / ".env"
 # ── Fernet key derivation ──────────────────────────────────────────────────────
 
 def _fernet_key() -> bytes:
-    secret = settings.AI_ENCRYPTION_SECRET or "lens-default-encryption-secret"
+    secret = settings.AI_ENCRYPTION_SECRET or "kaveon-default-encryption-secret"
     return base64.urlsafe_b64encode(hashlib.sha256(secret.encode()).digest())
 
 
@@ -138,7 +138,7 @@ def upsert_config(data: dict) -> dict:
     return get_config()
 
 
-LENS_APP_ROLES = [
+KAVEON_APP_ROLES = [
     {
         "id": "7f6e4b2a-1c3d-4e5f-8a9b-0d1e2f3c4b5a",
         "displayName": "Viewer",
@@ -176,7 +176,7 @@ LENS_APP_ROLES = [
 
 def setup_azure_app_roles(graph_token: str, client_id: str, tenant_id: str) -> dict:
     """
-    Create the 4 Lens App Roles in the Azure AD App Registration using a
+    Create the 4 Kaveon App Roles in the Azure AD App Registration using a
     delegated Microsoft Graph token supplied by the caller.
 
     The token must have Application.ReadWrite.OwnedBy (or .All) scope.
@@ -226,12 +226,12 @@ def setup_azure_app_roles(graph_token: str, client_id: str, tenant_id: str) -> d
     existing_ids   = {r["id"]    for r in existing_roles}
     existing_vals  = {r["value"] for r in existing_roles}
 
-    # ── 2. Merge: keep existing, append only missing Lens roles ──────────────
+    # ── 2. Merge: keep existing, append only missing Kaveon roles ──────────────
     created: list[str] = []
     skipped: list[str] = []
     merged = list(existing_roles)
 
-    for role in LENS_APP_ROLES:
+    for role in KAVEON_APP_ROLES:
         if role["id"] in existing_ids or role["value"] in existing_vals:
             skipped.append(role["value"])
         else:
@@ -243,7 +243,7 @@ def setup_azure_app_roles(graph_token: str, client_id: str, tenant_id: str) -> d
             "success": True,
             "created": [],
             "skipped": skipped,
-            "message": "All Lens App Roles already exist in the App Registration.",
+            "message": "All Kaveon App Roles already exist in the App Registration.",
         }
 
     # ── 3. PATCH the app registration ─────────────────────────────────────────

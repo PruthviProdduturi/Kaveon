@@ -1,7 +1,7 @@
-# Deploy Lens — Vercel + Render + Neon (all free, open-source data)
+# Deploy Kaveon — Vercel + Render + Neon (all free, open-source data)
 
 > **This is a demo / showcase deployment** — a zero-cost, fully-open-source way to
-> show off what Lens can do (multi-provider sign-in, semantic datasets, 20+ chart
+> show off what Kaveon can do (multi-provider sign-in, semantic datasets, 20+ chart
 > types, dashboards, SQL Lab) end-to-end against a real database. It is **not** a
 > hardened production setup: it uses free tiers (cold starts), a single shared
 > Postgres for both app metadata and demo data, and dev-grade secrets. For
@@ -10,16 +10,16 @@
 The fully-working, all-open-source cloud stack:
 
 ```
-Browser ──► Vercel (lens-web, NextAuth: GitHub/Google/Microsoft)
+Browser ──► Vercel (kaveon-web, NextAuth: GitHub/Google/Microsoft)
                │  same-origin /api/lens proxy (injects X-User-* + secret)
                ▼
-            Render (lens-api, FastAPI Docker)
+            Render (kaveon-api, FastAPI Docker)
                │  psycopg2 (user/password + SSL)
                ▼
             Neon (Postgres — metadata + your data)  ← open source, free tier
 ```
 
-Vercel can't run `lens-api` (persistent process) so it lives on **Render**; the
+Vercel can't run `kaveon-api` (persistent process) so it lives on **Render**; the
 DB is **Neon** (serverless Postgres). All three have free tiers.
 
 ---
@@ -29,24 +29,24 @@ DB is **Neon** (serverless Postgres). All three have free tiers.
 1. Create a project at **https://neon.tech** → note the connection details:
    `host` (`<id>.neon.tech`), `database` (e.g. `lens`), `role` (user), `password`.
 2. Apply the schema — open the Neon **SQL Editor** (or `psql`) and run the
-   contents of [`apps/lens-api/schema_postgresql.sql`](../../apps/lens-api/schema_postgresql.sql).
+   contents of [`apps/kaveon-api/schema_postgresql.sql`](../../apps/kaveon-api/schema_postgresql.sql).
    This creates the `datasets`, `charts`, `dashboards`, … tables.
 3. (Optional, for charts) load some data — create a table and insert rows, or
    import a sample CSV via the Neon console. You'll register this same Neon DB as
-   a **data source** in Lens once you're signed in.
+   a **data source** in Kaveon once you're signed in.
 
 > Neon requires TLS — `METADATA_SSLMODE=require` (already the default).
 
 ## 2 · Render — the API
 
 1. **https://render.com** → **New → Blueprint** → connect this repo. Render reads
-   [`render.yaml`](../../render.yaml) and provisions `lens-api` from its Dockerfile.
+   [`render.yaml`](../../render.yaml) and provisions `kaveon-api` from its Dockerfile.
 2. When prompted, fill the secrets:
    - `METADATA_HOST`, `METADATA_DATABASE`, `METADATA_USER`, `METADATA_PASSWORD` → your Neon values
-   - `LENS_PROXY_SECRET` → generate one: `openssl rand -hex 24` (you'll reuse it on Vercel)
+   - `KAVEON_PROXY_SECRET` → generate one: `openssl rand -hex 24` (you'll reuse it on Vercel)
    - `WEB_URL` → leave a placeholder for now (set to your Vercel URL in step 4)
-3. Deploy. Note the service URL, e.g. `https://lens-api.onrender.com`.
-   Check `https://lens-api.onrender.com/api/health` → `{"status":"ok"}` once Neon is reachable.
+3. Deploy. Note the service URL, e.g. `https://kaveon-api.onrender.com`.
+   Check `https://kaveon-api.onrender.com/api/health` → `{"status":"ok"}` once Neon is reachable.
 
 > Free tier sleeps after ~15 min idle; first request cold-starts (~50s). The
 > connection-pool warmup + heartbeat smooth this once awake.
@@ -54,13 +54,13 @@ DB is **Neon** (serverless Postgres). All three have free tiers.
 ## 3 · Vercel — the frontend
 
 1. **https://vercel.com** → **New Project** → import this repo.
-2. **Root Directory:** `apps/lens-web` (Vercel auto-detects the pnpm workspace).
+2. **Root Directory:** `apps/kaveon-web` (Vercel auto-detects the pnpm workspace).
 3. **Environment Variables:**
 
    | Variable | Value |
    |---|---|
-   | `API_URL` | your Render URL, e.g. `https://lens-api.onrender.com` |
-   | `LENS_PROXY_SECRET` | **same** value you set on Render |
+   | `API_URL` | your Render URL, e.g. `https://kaveon-api.onrender.com` |
+   | `KAVEON_PROXY_SECRET` | **same** value you set on Render |
    | `AUTH_SECRET` | `openssl rand -base64 32` |
    | `AUTH_URL` | your Vercel URL, e.g. `https://lens.vercel.app` |
    | `AUTH_ADMIN_EMAILS` | your email (gets Admin) |
@@ -83,7 +83,7 @@ DB is **Neon** (serverless Postgres). All three have free tiers.
    - **Type:** `PostgreSQL`
    - **Connection string:** your full Neon URL, e.g.
      `postgresql://user:password@ep-xxx.neon.tech/lens?sslmode=require`
-   - **Database name:** the Neon database (e.g. `lens`) — this is how Lens keys the source
+   - **Database name:** the Neon database (e.g. `lens`) — this is how Kaveon keys the source
    - **Region:** `WW`
 3. **SQL Lab** → pick the source → `SELECT * FROM <your_table> LIMIT 10` to confirm it queries Neon.
 4. **Datasets → + New Dataset** → pick the source + table, set a dimension and a metric.
@@ -91,7 +91,7 @@ DB is **Neon** (serverless Postgres). All three have free tiers.
    query runs against Neon and renders.
 6. **Dashboards → + New Dashboard** → drop the chart in. Everything persists in Neon.
 
-> Lens generates chart SQL in T-SQL and translates the common idioms (identifier
+> Kaveon generates chart SQL in T-SQL and translates the common idioms (identifier
 > quoting, `TOP`→`LIMIT`, `GETDATE`→`NOW`, `ISNULL`→`COALESCE`) to Postgres at
 > execution — so standard aggregation charts work on Neon out of the box.
 
@@ -99,14 +99,14 @@ DB is **Neon** (serverless Postgres). All three have free tiers.
 
 ### How auth flows in production
 
-The browser only ever talks to Vercel. `lens-web`'s `/api/lens/*` route reads the
+The browser only ever talks to Vercel. `kaveon-web`'s `/api/lens/*` route reads the
 NextAuth session **server-side** and forwards `X-User-*` to Render, stamped with
-`LENS_PROXY_SECRET`. `lens-api` trusts those headers only when the secret matches,
+`KAVEON_PROXY_SECRET`. `kaveon-api` trusts those headers only when the secret matches,
 so nothing is spoofable and no token is handled in the browser. (Same contract as
 Forge's proxy — see [`docs/guides/vercel-deployment.md`](vercel-deployment.md).)
 
 ### Notes / limits (demo scope)
-- **PostgreSQL/MySQL data sources are supported** — Lens builds a native pool from
+- **PostgreSQL/MySQL data sources are supported** — Kaveon builds a native pool from
   the source's connection string and translates generated T-SQL to the dialect at
   run time. Register the source with a full connection URL (credentials included).
 - **Dialect caveat:** simple aggregation charts (GROUP BY dimension, SUM/COUNT/AVG)

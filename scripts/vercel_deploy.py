@@ -1,4 +1,4 @@
-"""Vercel API helper for Lens — inspect Forge's project and create/deploy Lens.
+"""Vercel API helper for Kaveon — inspect Forge's project and create/deploy Lens.
 
 Reads VERCEL_TOKEN from env. No secrets are stored in this file.
 Usage:
@@ -15,8 +15,8 @@ import requests
 TOKEN = os.environ["VERCEL_TOKEN"]
 API = "https://api.vercel.com"
 H = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
-REPO = "PruthviProdduturi/Lens"
-PROJECT = "lens"
+REPO = "PruthviProdduturi/Kaveon"
+PROJECT = "kaveon"
 
 
 def _get(path, **kw):
@@ -31,7 +31,7 @@ def inspect():
     r = _get("/v9/projects?limit=100")
     r.raise_for_status()
     for p in r.json().get("projects", []):
-        if p["name"] in ("forge", "lens", "forge-portal"):
+        if p["name"] in ("forge", "kaveon", "forge-portal"):
             print(f"--- {p['name']} ---")
             for k in ("id", "framework", "rootDirectory", "buildCommand",
                       "installCommand", "outputDirectory", "devCommand", "nodeVersion"):
@@ -44,7 +44,7 @@ def create():
     body = {
         "name": PROJECT,
         "framework": "nextjs",
-        "rootDirectory": "apps/lens-web",
+        "rootDirectory": "apps/kaveon-web",
         "gitRepository": {"type": "github", "repo": REPO},
     }
     r = _post("/v11/projects", body)
@@ -129,7 +129,7 @@ def pick_domain():
 
 def create_bare():
     """Create the project with no git link (token-only path)."""
-    body = {"name": PROJECT, "framework": "nextjs", "rootDirectory": "apps/lens-web"}
+    body = {"name": PROJECT, "framework": "nextjs", "rootDirectory": "apps/kaveon-web"}
     r = _post("/v11/projects", body)
     if r.status_code == 409:
         print("project already exists")
@@ -159,7 +159,7 @@ def deploy_files():
         "name": PROJECT,
         "files": files_meta,
         "target": "production",
-        "projectSettings": {"framework": "nextjs", "rootDirectory": "apps/lens-web"},
+        "projectSettings": {"framework": "nextjs", "rootDirectory": "apps/kaveon-web"},
     }
     r = _post("/v13/deployments?skipAutoDetectionConfirmation=1", body)
     print("deploy:", r.status_code)

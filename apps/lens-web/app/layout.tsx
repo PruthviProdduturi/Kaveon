@@ -5,8 +5,8 @@ import { Providers } from "./providers";
 import { ClientLayout } from "../components/ClientLayout";
 
 export const metadata: Metadata = {
-  title: "Lens",
-  description: "Lens — self-hosted analytics & BI. Explore data, build charts and dashboards, and use AI to see the pattern, over Microsoft Fabric SQL and more.",
+  title: "Kaveon",
+  description: "Kaveon — self-hosted analytics & BI. Explore data, build charts and dashboards, and use AI to see the pattern, over Microsoft Fabric SQL and more.",
 };
 
 export default function RootLayout({
@@ -89,7 +89,7 @@ export default function RootLayout({
                     document.documentElement.style.setProperty('--lens-accent', lighter);
                     document.documentElement.style.setProperty('--lens-dark', dark);
                     document.documentElement.style.setProperty('--lens-light', lighter);
-                    // RGB component vars for rgba() usage in LensLoading (no hydration mismatch)
+                    // RGB component vars for rgba() usage in KaveonLoading (no hydration mismatch)
                     document.documentElement.style.setProperty('--lens-primary-rgb', hexToRgbStr(savedColor));
                     document.documentElement.style.setProperty('--lens-secondary-rgb', hexToRgbStr(light));
                     document.documentElement.style.setProperty('--lens-accent-rgb', hexToRgbStr(lighter));

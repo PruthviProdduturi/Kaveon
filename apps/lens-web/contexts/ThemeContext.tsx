@@ -79,7 +79,7 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     document.documentElement.style.setProperty('--theme-light', gradients.light);
     document.documentElement.style.setProperty('--theme-dark', gradients.dark);
 
-    // Update Lens brand colors to match user's theme
+    // Update Kaveon brand colors to match user's theme
     document.documentElement.style.setProperty('--lens-primary', primaryColor);
     document.documentElement.style.setProperty('--lens-secondary', gradients.light);
     document.documentElement.style.setProperty('--lens-accent', gradients.lighter);

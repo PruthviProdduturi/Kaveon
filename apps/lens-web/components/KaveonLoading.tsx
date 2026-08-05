@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 
 /**
- * LensLoading — full-screen branded loading screen.
+ * KaveonLoading — full-screen branded loading screen.
  *
  * Colors are driven entirely by CSS custom properties (--lens-primary, etc.)
  * which are set synchronously by the inline script in layout.tsx before React
@@ -12,15 +12,15 @@ import React, { useState, useEffect } from 'react';
  *   - Theme color flash (CSS vars already reflect the user's saved theme)
  */
 
-interface LensLoadingProps {
+interface KaveonLoadingProps {
   message?: string;
   fullScreen?: boolean;
 }
 
-export function LensLoading({
+export function KaveonLoading({
   message = 'Loading',
   fullScreen = true
-}: LensLoadingProps) {
+}: KaveonLoadingProps) {
   const [dots, setDots] = useState('');
 
   useEffect(() => {
@@ -416,4 +416,4 @@ export function LensLoading({
   );
 }
 
-export default LensLoading;
+export default KaveonLoading;

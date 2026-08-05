@@ -2,7 +2,7 @@
 
 import React from "react";
 import Link from "next/link";
-import { LensLogo } from "../../components/LensLogo";
+import { KaveonLogo } from "../../components/KaveonLogo";
 import { useTheme } from "../../contexts/ThemeContext";
 
 const CYAN = "#0078D4"; // Default Microsoft blue — matches Forge
@@ -419,7 +419,7 @@ export default function AboutPage() {
       >
         <div style={{ maxWidth: 760, margin: "0 auto" }}>
           <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}>
-            <span style={{ color: "#fff" }}><LensLogo size={80} animate="none" /></span>
+            <span style={{ color: "#fff" }}><KaveonLogo size={80} animate="none" /></span>
           </div>
           <h1
             style={{
@@ -440,7 +440,7 @@ export default function AboutPage() {
               lineHeight: 1.5,
             }}
           >
-            See the pattern. Query live data, build charts, assemble dashboards.
+            Talk to your data. Query live data, build charts, assemble dashboards.
           </p>
           <div
             style={{
@@ -472,7 +472,7 @@ export default function AboutPage() {
               Get Started
             </Link>
             <a
-              href="https://github.com/PruthviProdduturi/Lens"
+              href="https://github.com/PruthviProdduturi/Kaveon"
               target="_blank"
               rel="noreferrer"
               style={{
@@ -539,14 +539,14 @@ export default function AboutPage() {
                 <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: `${CYAN}12`, color: CYAN, fontFamily: "monospace" }}>HTTPS</span>
               </div>
 
-              {/* Tier: lens-web */}
+              {/* Tier: kaveon-web */}
               <div style={{ display: "flex", justifyContent: "center" }}>
                 <div style={{ background: "#fff", border: `2px solid ${CYAN}40`, borderTop: `4px solid ${CYAN}`, borderRadius: 8, padding: "7px 9px", display: "flex", alignItems: "center", gap: 8, boxShadow: "0 1px 2px rgba(0,0,0,.05)", minWidth: 340 }}>
                   <div style={{ width: 26, height: 26, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, background: `${CYAN}15` }}>
                     <i className="fas fa-layer-group" style={{ color: CYAN, fontSize: 11 }} />
                   </div>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: "#1e293b" }}>lens-web</div>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#1e293b" }}>kaveon-web</div>
                     <div style={{ fontSize: 9, color: "#94a3b8", fontFamily: "monospace", marginTop: 1 }}>Next.js 15 · React 19 · ECharts · Monaco</div>
                   </div>
                   <span style={{ fontSize: 8, fontWeight: 700, padding: "2px 5px", borderRadius: 4, background: "#dcfce7", color: "#15803d" }}>:3000</span>
@@ -562,14 +562,14 @@ export default function AboutPage() {
                 <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: `${CYAN}12`, color: CYAN, fontFamily: "monospace" }}>REST / JWT</span>
               </div>
 
-              {/* Tier: lens-api */}
+              {/* Tier: kaveon-api */}
               <div style={{ display: "flex", justifyContent: "center" }}>
                 <div style={{ background: "#fff", border: `2px solid ${CYAN}40`, borderTop: `4px solid ${CYAN}`, borderRadius: 8, padding: "7px 9px", display: "flex", alignItems: "center", gap: 8, boxShadow: "0 1px 2px rgba(0,0,0,.05)", minWidth: 340 }}>
                   <div style={{ width: 26, height: 26, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, background: `${CYAN}15` }}>
                     <i className="fas fa-server" style={{ color: CYAN, fontSize: 11 }} />
                   </div>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: "#1e293b" }}>lens-api</div>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#1e293b" }}>kaveon-api</div>
                     <div style={{ fontSize: 9, color: "#94a3b8", fontFamily: "monospace", marginTop: 1 }}>FastAPI · Python 3.11 · async drivers</div>
                   </div>
                   <span style={{ fontSize: 8, fontWeight: 700, padding: "2px 5px", borderRadius: 4, background: "#dcfce7", color: "#15803d" }}>:8000</span>
@@ -772,7 +772,7 @@ export default function AboutPage() {
       <Section id="compare" bg="#fff">
         <div style={{ textAlign: "center", marginBottom: 28 }}>
           <SectionLabel text="Compare" color={CYAN} />
-          <SectionHeading center>How Lens compares</SectionHeading>
+          <SectionHeading center>How Kaveon compares</SectionHeading>
           <SectionSub center>
             An honest look next to Superset, Power BI, and Redash.
           </SectionSub>
@@ -784,7 +784,7 @@ export default function AboutPage() {
               <thead>
                 <tr style={{ background: "#f8fafc" }}>
                   <th style={{ padding: "10px 16px", fontSize: 12.5, color: "#475569", fontWeight: 700, textAlign: "left" }}>Capability</th>
-                  <th style={{ padding: "10px 10px", fontSize: 12.5, color: CYAN, fontWeight: 700, textAlign: "center" }}>Lens</th>
+                  <th style={{ padding: "10px 10px", fontSize: 12.5, color: CYAN, fontWeight: 700, textAlign: "center" }}>Kaveon</th>
                   <th style={{ padding: "10px 10px", fontSize: 12.5, color: "#475569", fontWeight: 700, textAlign: "center" }}>Superset</th>
                   <th style={{ padding: "10px 10px", fontSize: 12.5, color: "#475569", fontWeight: 700, textAlign: "center" }}>Power BI</th>
                   <th style={{ padding: "10px 10px", fontSize: 12.5, color: "#475569", fontWeight: 700, textAlign: "center" }}>Redash</th>
@@ -898,28 +898,28 @@ export default function AboutPage() {
             <StepCard
               number={1}
               title="Clone & install"
-              code={`git clone https://github.com/PruthviProdduturi/Lens.git
-cd Lens
+              code={`git clone https://github.com/PruthviProdduturi/Kaveon.git
+cd Kaveon
 
 # API
-cd apps/lens-api
+cd apps/kaveon-api
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env          # fill in DB + AI keys
 
 # Web
-cd ../lens-web
+cd ../kaveon-web
 npm install`}
             />
             <StepCard
               number={2}
               title="Start the API + web"
               code={`# Terminal 1 — API (port 8000)
-cd apps/lens-api
+cd apps/kaveon-api
 uvicorn main:app --reload
 
 # Terminal 2 — Web (port 3000)
-cd apps/lens-web
+cd apps/kaveon-web
 npm run dev`}
             />
             <StepCard
@@ -944,7 +944,7 @@ http://localhost:3000
         color: "#64748b",
         fontSize: 12,
       }}>
-        &copy; {new Date().getFullYear()} Lens — a Kaveon platform module
+        &copy; {new Date().getFullYear()} Kaveon — a Kaveon platform module
       </footer>
     </div>
   );

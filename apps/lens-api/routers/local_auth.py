@@ -45,7 +45,7 @@ def _issue_jwt(email: str, name: str, roles: list[str]) -> str:
         "preferred_username": email,
         "name": name,
         "roles": roles,
-        "iss": "lens",
+        "iss": "kaveon",
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(hours=_TOKEN_TTL_HOURS)).timestamp()),
     }

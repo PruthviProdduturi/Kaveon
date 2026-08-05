@@ -4,7 +4,7 @@ import { formatDatasetDate, formatSavedQueryDate } from "../utils/date";
 import { useEffect, useRef, useState } from "react";
 
 import { API_BASE } from "../config";
-import { LensLoading } from "../components/LensLoading";
+import { KaveonLoading } from "../components/KaveonLoading";
 import { msalFetch } from "../utils/msalFetch";
 import { useAuth } from "../auth/useAuth";
 import { useSetup } from "../components/ClientLayout";
@@ -224,7 +224,7 @@ export default function Home() {
       .then(r => r.ok ? r.json() : null)
       .catch(() => null);
 
-    // All Lens metadata (dashboards, charts, datasets, favorites, queries)
+    // All Kaveon metadata (dashboards, charts, datasets, favorites, queries)
     const summaryPromise = msalFetch(`${API_BASE}/api/v1/metadata/summary`, { headers: hdrs })
       .then(r => r.ok ? r.json() : { dashboards: [], charts: [], datasets: [], favorites: [], savedQueries: [] })
       .catch(() => ({ dashboards: [], charts: [], datasets: [], favorites: [], savedQueries: [] }));

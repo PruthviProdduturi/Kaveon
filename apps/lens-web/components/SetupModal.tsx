@@ -3,14 +3,14 @@
 /**
  * Setup Modal
  *
- * Guides the user through connecting a metadata database to Lens.
+ * Guides the user through connecting a metadata database to Kaveon.
  * Supports: Microsoft Fabric SQL, Azure SQL, PostgreSQL, MySQL.
  */
 
 import React, { useState, useEffect } from "react";
 import { msalFetch } from "../utils/msalFetch";
 import { API_BASE } from "../config";
-import { LensLogo } from "./LensLogo";
+import { KaveonLogo } from "./KaveonLogo";
 import { SETUP_DB_ICONS } from "./DataSourceIcons";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -140,7 +140,7 @@ const DB_TYPES: Record<DbType, DbTypeConfig> = {
     endpointLabel: "Server Name",
     endpointPlaceholder: "my-server.database.windows.net",
     endpointHint: "Found in Azure Portal → SQL Server → Server name.",
-    dbHint: "The Azure SQL database that will store Lens metadata.",
+    dbHint: "The Azure SQL database that will store Kaveon metadata.",
   },
   postgresql: {
     label: "PostgreSQL",
@@ -510,7 +510,7 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
                 />
                 <p style={S.hint}>
                   Copy from Fabric workspace → SQL Database → Connection strings → ODBC.
-                  Lens extracts the server and database automatically.
+                  Kaveon extracts the server and database automatically.
                 </p>
               </>
             )}
@@ -577,7 +577,7 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
                   id="setup-db"
                   style={S.input(hasError)}
                   type="text"
-                  placeholder="lens"
+                  placeholder="kaveon"
                   value={database}
                   onChange={(e) => { clearValidation(); setDatabase(e.target.value); }}
                   autoComplete="off"
@@ -594,7 +594,7 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
                   fontSize: 12, color: "#86efac", display: "flex", gap: 8, alignItems: "flex-start",
                 }}>
                   <i className="fas fa-shield-check" style={{ marginTop: 1, flexShrink: 0 }} />
-                  <span>If this database already has Lens data, <strong>nothing will be deleted</strong> — tables are only created if they don&apos;t already exist.</span>
+                  <span>If this database already has Kaveon data, <strong>nothing will be deleted</strong> — tables are only created if they don&apos;t already exist.</span>
                 </div>
                 <button style={S.btnPrimary()} onClick={() => handleInitialize()}>
                   <i className="fas fa-magic" style={{ marginRight: 8 }} />Initialize Database
@@ -659,7 +659,7 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
   return (
     <div style={S.overlay}>
       <div style={S.card}>
-        <div style={S.logoRow}><LensLogo size={48} animate="pulse" /></div>
+        <div style={S.logoRow}><KaveonLogo size={48} animate="pulse" /></div>
 
         {(phase === "not_configured" || phase === "enter_connection" || phase === "testing") && (
           <ConnectionForm cancelTo={phase === "enter_connection" && initialPhase !== "not_configured" ? initialPhase : undefined} />
@@ -667,12 +667,12 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
 
         {phase === "connection_failed" && (
           <ErrorState errType="connection_failed" title="Cannot Connect"
-            description="Lens cannot reach the configured metadata database. Check your connection details and retry." />
+            description="Kaveon cannot reach the configured metadata database. Check your connection details and retry." />
         )}
 
         {phase === "access_denied" && (
           <ErrorState errType="access_denied" title="Access Denied"
-            description="Lens reached the host but authentication failed. Verify credentials or Azure AD role assignments." />
+            description="Kaveon reached the host but authentication failed. Verify credentials or Azure AD role assignments." />
         )}
 
         {phase === "db_not_found" && (
@@ -685,7 +685,7 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
             <StepBar step={3} testOk phase="schema_missing" />
             <h2 style={S.heading}>Initialize Database</h2>
             <p style={S.sub}>
-              Connected successfully. Click below to create the Lens tables in this database.
+              Connected successfully. Click below to create the Kaveon tables in this database.
             </p>
             <div style={{
               background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.2)",
@@ -694,7 +694,7 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
             }}>
               <i className="fas fa-shield-check" style={{ marginTop: 1, flexShrink: 0 }} />
               <span>
-                If this database already has Lens data, <strong>nothing will be deleted</strong> — tables are only created if they don&apos;t already exist.
+                If this database already has Kaveon data, <strong>nothing will be deleted</strong> — tables are only created if they don&apos;t already exist.
               </span>
             </div>
             <div style={S.infoBox}>
@@ -725,7 +725,7 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
         {phase === "initializing" && (
           <>
             <StepBar step={3} testOk={false} phase="initializing" />
-            <h2 style={S.heading}>Setting Up Lens…</h2>
+            <h2 style={S.heading}>Setting Up Kaveon…</h2>
             <p style={S.sub}>Creating tables in your metadata database. This usually takes a few seconds.</p>
             <div style={{ textAlign: "center", padding: "28px 0", color: "#6366f1", fontSize: 38 }}>
               <i className="fas fa-spinner fa-spin" />
@@ -739,7 +739,7 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
               <i className="fas fa-check-circle" style={{ marginRight: 10 }} />All Set!
             </h2>
             <p style={S.sub}>
-              Metadata database initialised. Lens is restarting — the page will reload automatically.
+              Metadata database initialised. Kaveon is restarting — the page will reload automatically.
             </p>
 
             {/* Next steps */}

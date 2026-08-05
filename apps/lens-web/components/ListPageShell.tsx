@@ -2,7 +2,7 @@
 
 import React, { ReactNode } from "react";
 import { useTheme } from "../contexts/ThemeContext";
-import { LensLoading } from "./LensLoading";
+import { KaveonLoading } from "./KaveonLoading";
 
 export interface ListPill {
   label: string;
@@ -21,7 +21,7 @@ interface ListPageShellProps {
   pills?: ListPill[];
   /** Primary action button (New …) */
   action?: ReactNode;
-  /** Loading state — shows LensLoading spinner */
+  /** Loading state — shows KaveonLoading spinner */
   loading?: boolean;
   loadingMessage?: string;
   /** Error message — shows error card */
@@ -166,7 +166,7 @@ export function ListPageShell({
       )}
 
       {/* ── Loading ── */}
-      {loading && <LensLoading message={loadingMessage} />}
+      {loading && <KaveonLoading message={loadingMessage} />}
 
       {/* ── Error ── */}
       {!loading && error && (() => {
@@ -193,7 +193,7 @@ export function ListPageShell({
               </div>
               <h2 style={titleStyle}>Connect a metadata database</h2>
               <p style={bodyStyle}>
-                Lens stores your dashboards, charts and datasets in a metadata database.
+                Kaveon stores your dashboards, charts and datasets in a metadata database.
                 Configure one to get started — it takes about a minute.
               </p>
               <a

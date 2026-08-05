@@ -1,6 +1,6 @@
-# Lens — Deployment Guide
+# Kaveon — Deployment Guide
 
-> **Stack:** Vercel (lens-web) + Render (lens-api) + Neon (Postgres)
+> **Stack:** Vercel (kaveon-web) + Render (kaveon-api) + Neon (Postgres)
 > **Live:** [lens-analytics.vercel.app](https://lens-analytics.vercel.app)
 
 ---
@@ -8,10 +8,10 @@
 ## Architecture
 
 ```
-Browser ──► Vercel (lens-web, NextAuth: GitHub/Google/Microsoft)
+Browser ──► Vercel (kaveon-web, NextAuth: GitHub/Google/Microsoft)
                │  same-origin /api/lens proxy (injects X-User-* + secret)
                ▼
-            Render (lens-api, FastAPI Docker)
+            Render (kaveon-api, FastAPI Docker)
                │  psycopg2 (user/password + SSL)
                ▼
             Neon (Postgres — metadata + your data)
@@ -24,14 +24,14 @@ Vercel hosts the Next.js frontend. Render hosts the FastAPI backend (persistent 
 See **[docs/guides/deploy-vercel-render-neon.md](docs/guides/deploy-vercel-render-neon.md)** for the complete step-by-step setup guide covering:
 
 1. **Neon** — create the database, apply the schema
-2. **Render** — deploy lens-api via Blueprint (`render.yaml`)
-3. **Vercel** — deploy lens-web, configure NextAuth providers + env vars
+2. **Render** — deploy kaveon-api via Blueprint (`render.yaml`)
+3. **Vercel** — deploy kaveon-web, configure NextAuth providers + env vars
 4. **Wire together** — back-fill CORS, callback URLs, secrets
 5. **Verify** — sign in, add a data source, build a chart
 
 ## Auth Flow
 
-The browser only talks to Vercel. `lens-web`'s `/api/lens/*` route reads the NextAuth session server-side and forwards `X-User-*` headers to Render, stamped with `LENS_PROXY_SECRET`. `lens-api` trusts those headers only when the secret matches. No token is handled in the browser.
+The browser only talks to Vercel. `kaveon-web`'s `/api/lens/*` route reads the NextAuth session server-side and forwards `X-User-*` headers to Render, stamped with `KAVEON_PROXY_SECRET`. `kaveon-api` trusts those headers only when the secret matches. No token is handled in the browser.
 
 ## Scope
 
@@ -39,4 +39,4 @@ This is a **demo/showcase deployment** — zero-cost, all open source. Not harde
 
 ---
 
-*See also: [ARCHITECTURE.md](ARCHITECTURE.md) · [render.yaml](render.yaml) · [vercel.json](apps/lens-web/vercel.json)*
+*See also: [ARCHITECTURE.md](ARCHITECTURE.md) · [render.yaml](render.yaml) · [vercel.json](apps/kaveon-web/vercel.json)*

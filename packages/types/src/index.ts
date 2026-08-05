@@ -1,5 +1,5 @@
 // ============================================
-// Shared TypeScript Types for Lens v2
+// Shared TypeScript Types for Kaveon v2
 // ============================================
 
 // Core Entities

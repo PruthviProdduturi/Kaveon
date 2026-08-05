@@ -1,6 +1,6 @@
-# Contributing to Lens
+# Contributing to Kaveon
 
-Thanks for your interest in contributing to Lens — the Analyze module of the Kaveon suite. This guide will get you set up.
+Thanks for your interest in contributing to Kaveon — the Analyze module of the Kaveon suite. This guide will get you set up.
 
 ## Prerequisites
 
@@ -17,20 +17,20 @@ Thanks for your interest in contributing to Lens — the Analyze module of the K
 pnpm install
 
 # Run locally (override to :3002 when running the whole Kaveon suite)
-pnpm --filter lens-web dev
+pnpm --filter kaveon-web dev
 
 # Lint & type check
-pnpm --filter lens-web lint
-pnpm --filter lens-web type-check
+pnpm --filter kaveon-web lint
+pnpm --filter kaveon-web type-check
 
 # Build
-pnpm --filter lens-web build
+pnpm --filter kaveon-web build
 ```
 
 ### API (FastAPI)
 
 ```bash
-cd apps/lens-api
+cd apps/kaveon-api
 python -m venv venv
 venv\Scripts\activate        # Windows
 # source venv/bin/activate   # macOS / Linux
@@ -89,7 +89,7 @@ Body should explain **why**, not what. The diff shows what. **Never add `Co-Auth
 
 ## What to Contribute
 
-Check [open issues](https://github.com/PruthviProdduturi/Lens/issues) for things to work on. Good first issues are labeled `good first issue`.
+Check [open issues](https://github.com/PruthviProdduturi/Kaveon/issues) for things to work on. Good first issues are labeled `good first issue`.
 
 ### Areas that need help
 

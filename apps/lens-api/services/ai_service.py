@@ -317,7 +317,7 @@ async def _call_openai_compat(api_key: str, model: str, system: str, messages: l
 
 # ── Main chat function ────────────────────────────────────────────────────────
 
-_SYSTEM_BASE = """You are an AI data assistant built into Lens, a modern analytics platform.
+_SYSTEM_BASE = """You are an AI data assistant built into Kaveon, a modern analytics platform.
 You help users write SQL queries, explore datasets, explain query results, suggest chart types, and design dashboards.
 
 Database dialect: Microsoft Fabric SQL / T-SQL. Use T-SQL syntax in all generated queries.

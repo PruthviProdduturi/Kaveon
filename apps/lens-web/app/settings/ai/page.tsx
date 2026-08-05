@@ -151,7 +151,7 @@ export default function AISettingsPage() {
     <ListPageShell
       icon="fa-magic"
       title="AI Providers"
-      subtitle="Configure AI API keys to power the Lens AI Assistant."
+      subtitle="Configure AI API keys to power the Kaveon AI Assistant."
       pills={!loading && !error ? [
         { label: `${providers.length} Global Key${providers.length !== 1 ? "s" : ""}`, icon: "fa-shield-alt" },
         { label: `${userKeys.length} Personal Key${userKeys.length !== 1 ? "s" : ""}`, icon: "fa-user", bg: "#f5f3ff", border: "#c4b5fd", color: "#7c3aed" },

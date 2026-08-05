@@ -17,7 +17,7 @@ def get_me(ctx: UserContext = Depends(require_user_context)):
             status_code=403,
             detail={
                 "code": "no_role",
-                "message": "You have not been assigned a role in Lens. Contact your administrator to be assigned a role.",
+                "message": "You have not been assigned a role in Kaveon. Contact your administrator to be assigned a role.",
             },
         )
     return {

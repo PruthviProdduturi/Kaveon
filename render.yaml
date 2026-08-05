@@ -1,18 +1,18 @@
-# Render Blueprint — deploys lens-api (FastAPI) from its Dockerfile.
+# Render Blueprint — deploys kaveon-api (FastAPI) from its Dockerfile.
 #
 # Use: https://render.com → New → Blueprint → connect this repo. Render reads
 # this file and prompts for the `sync: false` secrets (Neon connection + the
-# shared proxy secret) at create time. lens-web is deployed separately on Vercel.
+# shared proxy secret) at create time. kaveon-web is deployed separately on Vercel.
 #
 # See docs/guides/deploy-vercel-render-neon.md for the full walkthrough.
 services:
   - type: web
-    name: lens-api
+    name: kaveon-api
     runtime: docker
-    repo: https://github.com/PruthviProdduturi/Lens
+    repo: https://github.com/PruthviProdduturi/Kaveon
     branch: dev
-    dockerfilePath: apps/lens-api/Dockerfile
-    dockerContext: .            # repo root — the Dockerfile COPYs apps/lens-api/
+    dockerfilePath: apps/kaveon-api/Dockerfile
+    dockerContext: .            # repo root — the Dockerfile COPYs apps/kaveon-api/
     plan: free
     healthCheckPath: /api/health
     autoDeploy: true
@@ -34,8 +34,8 @@ services:
         sync: false             # Neon password
       - key: METADATA_SSLMODE
         value: require
-      # ── Identity bridge — must equal Vercel's LENS_PROXY_SECRET ─────────────
-      - key: LENS_PROXY_SECRET
+      # ── Identity bridge — must equal Vercel's KAVEON_PROXY_SECRET ─────────────
+      - key: KAVEON_PROXY_SECRET
         sync: false
       # ── CORS allow-origin (your Vercel URL, https://…) ─────────────────────
       - key: WEB_URL

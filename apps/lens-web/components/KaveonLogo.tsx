@@ -3,19 +3,19 @@
 import React, { useCallback, useId, useState } from "react";
 
 /**
- * LensLogo — part of the shared Kaveon letterform kit.
+ * KaveonLogo — part of the shared Kaveon letterform kit.
  *
  * Mark  — a six-blade APERTURE. Where Kaveon's crosshair-O (⊙) has a pupil at its
- *         centre — the guardian that *watches* — Lens has an open centre: the aperture
+ *         centre — the guardian that *watches* — Kaveon has an open centre: the aperture
  *         you look *through* to bring the governed data into focus. Same circular
  *         family, opposite centre. Top-lit gradient, matching the Forge F.
  * Word   — "LENS" in Inter 800, same face/cap-height as the Forge wordmark.
  *
- * Colour comes from the Lens theme CSS vars (set synchronously in layout.tsx before
+ * Colour comes from the Kaveon theme CSS vars (set synchronously in layout.tsx before
  * hydration), so there's no flash and no hydration mismatch.
  */
 
-interface LensLogoProps {
+interface KaveonLogoProps {
   size?: number;
   /** "iris" gently tightens/opens the blades; "revolve" spins the aperture once. */
   animate?: "iris" | "revolve" | "none";
@@ -43,7 +43,7 @@ const BLADE_LINES = Array.from({ length: BLADES }, (_, k) => {
 // The inner heels, connected, form the hexagonal opening.
 const OPENING = BLADE_LINES.map((b, i) => `${i === 0 ? "M" : "L"} ${b.ix.toFixed(2)} ${b.iy.toFixed(2)}`).join(" ") + " Z";
 
-export function LensLogo({ size = 48, animate = "none", onClick, className = "" }: LensLogoProps) {
+export function KaveonLogo({ size = 48, animate = "none", onClick, className = "" }: KaveonLogoProps) {
   const uid = useId();
   const gradId = `lens-ap-grad-${uid.replace(/:/g, "")}`;
   const [spinning, setSpinning] = useState(false);
@@ -173,8 +173,8 @@ export function LensLogo({ size = 48, animate = "none", onClick, className = "" 
   );
 }
 
-/** LensMark — the aperture alone (no wordmark). For nav-collapsed, favicons, avatars. */
-export function LensMark({ size = 24, className = "" }: { size?: number; className?: string }) {
+/** KaveonMark — the aperture alone (no wordmark). For nav-collapsed, favicons, avatars. */
+export function KaveonMark({ size = 24, className = "" }: { size?: number; className?: string }) {
   const uid = useId();
   const gradId = `lens-mark-grad-${uid.replace(/:/g, "")}`;
   return (
@@ -212,4 +212,4 @@ export function LensMark({ size = 24, className = "" }: { size?: number; classNa
   );
 }
 
-export default LensLogo;
+export default KaveonLogo;
