@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 72" fill="none" role="img" aria-label="Lens">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 210 72" fill="none" role="img" aria-label="Lens">
   <defs>
     <linearGradient id="g" gradientUnits="userSpaceOnUse" x1="0" y1="8" x2="0" y2="64">
       <stop offset="0" stop-color="#e8c547"/>
@@ -6,22 +6,22 @@
     </linearGradient>
   </defs>
 
-  <!-- Chamfered L -->
-  <path d="M 8 8 L 20 8 L 20 50 L 36 50 L 40 55 L 40 64 L 8 64 Z" fill="url(#g)"/>
-  <path d="M 8 8 L 20 8 L 20 15 L 8 15 Z" fill="#d4a017" opacity="0.18"/>
-
-  <!-- Crosshair ⊙ replacing E — tighter, reads as E not O -->
-  <g transform="translate(46, 14)">
-    <circle cx="18" cy="18" r="15.5" fill="none" stroke="url(#g)" stroke-width="2.6"/>
-    <path d="M 21.6 12.4 L 15.3 11.0 L 10.6 16.3 L 12.9 24.1 L 19.2 25.5 L 23.9 20.2 Z" fill="url(#g)" opacity="0.12"/>
-    <line x1="21.6" y1="12.4" x2="18" y2="2.5" stroke="url(#g)" stroke-width="2.4" stroke-linecap="round"/>
-    <line x1="15.3" y1="11.0" x2="5" y2="9" stroke="url(#g)" stroke-width="2.4" stroke-linecap="round"/>
-    <line x1="10.6" y1="16.3" x2="5" y2="27" stroke="url(#g)" stroke-width="2.4" stroke-linecap="round"/>
-    <line x1="12.9" y1="24.1" x2="18" y2="33.5" stroke="url(#g)" stroke-width="2.4" stroke-linecap="round"/>
-    <line x1="19.2" y1="25.5" x2="31" y2="27" stroke="url(#g)" stroke-width="2.4" stroke-linecap="round"/>
-    <line x1="23.9" y1="20.2" x2="31" y2="9" stroke="url(#g)" stroke-width="2.4" stroke-linecap="round"/>
+  <!-- Hexagonal crosshair ⊙ mark -->
+  <g transform="translate(6, 10)">
+    <circle cx="22" cy="22" r="19" fill="none" stroke="url(#g)" stroke-width="3.2"/>
+    <path d="M 26.7 15.24 L 18.84 13.56 L 13.04 20.14 L 15.86 29.76 L 23.72 31.44 L 29.52 24.86 Z" fill="url(#g)" opacity="0.12"/>
+    <line x1="26.7" y1="15.24" x2="22" y2="3" stroke="url(#g)" stroke-width="2.8" stroke-linecap="round"/>
+    <line x1="18.84" y1="13.56" x2="6" y2="11" stroke="url(#g)" stroke-width="2.8" stroke-linecap="round"/>
+    <line x1="13.04" y1="20.14" x2="6" y2="33" stroke="url(#g)" stroke-width="2.8" stroke-linecap="round"/>
+    <line x1="15.86" y1="29.76" x2="22" y2="41" stroke="url(#g)" stroke-width="2.8" stroke-linecap="round"/>
+    <line x1="23.72" y1="31.44" x2="38" y2="33" stroke="url(#g)" stroke-width="2.8" stroke-linecap="round"/>
+    <line x1="29.52" y1="24.86" x2="38" y2="11" stroke="url(#g)" stroke-width="2.8" stroke-linecap="round"/>
   </g>
 
-  <!-- NS wordmark -->
-  <text x="88" y="51" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-weight="700" font-size="38" letter-spacing="1" fill="url(#g)">NS</text>
+  <!-- Chamfered L -->
+  <path d="M 58 8 L 70 8 L 70 50 L 86 50 L 90 55 L 90 64 L 58 64 Z" fill="url(#g)"/>
+  <path d="M 58 8 L 70 8 L 70 15 L 58 15 Z" fill="#d4a017" opacity="0.18"/>
+
+  <!-- ENS wordmark -->
+  <text x="98" y="51" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-weight="700" font-size="38" letter-spacing="1" fill="url(#g)">ENS</text>
 </svg>

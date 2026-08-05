@@ -79,32 +79,11 @@ export function LensLogo({ size = 48, animate = "none", onClick, className = "" 
     >
       <span style={{ display: "inline-flex", alignItems: "center", gap: capH * 0.12 }}>
 
-        {/* ── L — chamfered letterform (matches Forge's chamfered F) ─────── */}
-        <svg
-          width={capH * 0.5}
-          height={capH}
-          viewBox="0 0 14 28"
-          fill="none"
-          aria-hidden="true"
-        >
-          <defs>
-            <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="currentColor" stopOpacity="1" />
-              <stop offset="100%" stopColor="currentColor" stopOpacity="0.65" />
-            </linearGradient>
-          </defs>
-          <path
-            d="M 0 0 L 6 0 L 6 21 L 12 21 L 14 23.5 L 14 28 L 0 28 Z"
-            fill={`url(#${gradId})`}
-          />
-          <path d="M 0 0 L 6 0 L 6 3.5 L 0 3.5 Z" fill="currentColor" opacity="0.18" />
-        </svg>
-
-        {/* ── ⊙ — hexagonal crosshair (replaces E, tighter than Forge's O) ── */}
+        {/* ── ⊙ — hexagonal crosshair mark ────────────────────────────── */}
         <svg
           className="lens-aperture"
-          width={capH * 0.85}
-          height={capH * 0.85}
+          width={capH}
+          height={capH}
           viewBox="0 0 22 22"
           fill="none"
           aria-hidden="true"
@@ -124,7 +103,26 @@ export function LensLogo({ size = 48, animate = "none", onClick, className = "" 
           </g>
         </svg>
 
-        {/* ── NS — slightly smaller, balanced visual weight (matches Forge RGE) */}
+        {/* ── Chamfered L + ENS wordmark ─────────────────────────────────── */}
+        <svg
+          width={capH * 0.5}
+          height={capH}
+          viewBox="0 0 14 28"
+          fill="none"
+          aria-hidden="true"
+        >
+          <defs>
+            <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="currentColor" stopOpacity="1" />
+              <stop offset="100%" stopColor="currentColor" stopOpacity="0.65" />
+            </linearGradient>
+          </defs>
+          <path
+            d="M 0 0 L 6 0 L 6 21 L 12 21 L 14 23.5 L 14 28 L 0 28 Z"
+            fill={`url(#${gradId})`}
+          />
+          <path d="M 0 0 L 6 0 L 6 3.5 L 0 3.5 Z" fill="currentColor" opacity="0.18" />
+        </svg>
         <span
           style={{
             fontSize: fontSize * 0.88,
@@ -134,7 +132,7 @@ export function LensLogo({ size = 48, animate = "none", onClick, className = "" 
             lineHeight: 1,
           }}
         >
-          NS
+          ENS
         </span>
 
       </span>
