@@ -49,6 +49,7 @@ export function Layout({ children }: LayoutProps) {
   const isChartsPage = pathname?.startsWith("/charts") || false;
   const isDashboardsPage = pathname?.startsWith("/dashboards") || false;
   const isDatasetsPage = pathname?.startsWith("/datasets") || false;
+  const isAboutPage = pathname === "/about";
   const isWidePage = isSqlActivityPage || isChartBuildPage || isChartsPage || isDashboardsPage || isDatasetsPage;
   const isHomePage = pathname === "/";
 
@@ -214,7 +215,8 @@ export function Layout({ children }: LayoutProps) {
 
       <main
         className={
-          isLabPage ? "main-lab"
+          isAboutPage ? "main-about"
+          : isLabPage ? "main-lab"
           : isWidePage ? "main-wide"
           : isHomePage ? "main-home"
           : undefined
