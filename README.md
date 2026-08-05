@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/reference/lens-logo.svg" alt="Lens" width="260" />
+<img src="docs/reference/lens-logo.svg?v=2" alt="Lens" width="260" />
 
 ### **See the pattern.**
 
