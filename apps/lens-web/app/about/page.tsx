@@ -5,6 +5,8 @@ import Link from "next/link";
 import { LensLogo } from "../../components/LensLogo";
 import { useTheme } from "../../contexts/ThemeContext";
 
+const CYAN = "#0078D4"; // Default Microsoft blue — matches Forge
+
 // ─── Layout primitives ───────────────────────────────────────────────────────
 
 function Section({
@@ -341,7 +343,7 @@ const ROLES = [
 
 export default function AboutPage() {
   const { primaryColor } = useTheme();
-  const CYAN = primaryColor;
+  const color = primaryColor; // theme-aware accent for hero + nav
 
   return (
     <div style={{ minHeight: "100%" }}>
@@ -387,8 +389,8 @@ export default function AboutPage() {
               transition: "color 0.15s, border-color 0.15s",
             }}
             onMouseEnter={(e) => {
-              (e.currentTarget as HTMLAnchorElement).style.color = CYAN;
-              (e.currentTarget as HTMLAnchorElement).style.borderBottomColor = CYAN;
+              (e.currentTarget as HTMLAnchorElement).style.color = color;
+              (e.currentTarget as HTMLAnchorElement).style.borderBottomColor = color;
             }}
             onMouseLeave={(e) => {
               (e.currentTarget as HTMLAnchorElement).style.color = "#64748b";
@@ -403,7 +405,7 @@ export default function AboutPage() {
       {/* ── Hero ────────────────────────────────────────────────────────────── */}
       <section
         style={{
-          background: `linear-gradient(135deg, ${CYAN} 0%, #0f1e2e 100%)`,
+          background: `linear-gradient(135deg, ${color} 0%, #0f1e2e 100%)`,
           padding: "56px 1.5rem 48px",
           textAlign: "center",
         }}
@@ -870,7 +872,7 @@ export default function AboutPage() {
       <section
         id="start"
         style={{
-          background: `linear-gradient(135deg, ${CYAN} 0%, #0f1e2e 100%)`,
+          background: `linear-gradient(135deg, ${color} 0%, #0f1e2e 100%)`,
           padding: "80px 1.5rem",
         }}
       >
