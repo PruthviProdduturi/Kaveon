@@ -355,7 +355,7 @@ export default function AboutPage() {
           position: "sticky",
           top: 0,
           zIndex: 50,
-          background: "#fff",
+          background: "var(--lens-light, #ecfeff)",
           borderBottom: "1px solid rgba(30,58,95,0.08)",
           padding: "0 1.5rem",
           display: "flex",
