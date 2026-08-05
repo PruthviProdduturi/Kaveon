@@ -842,7 +842,7 @@ export default function AboutPage() {
         </div>
 
         {/* Security notes */}
-        <div style={{ marginTop: 24, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>
+        <div style={{ marginTop: 24, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
           {[
             { icon: "fa-lock", label: "OAuth 2.0 / OIDC", desc: "GitHub, Google, Microsoft identity providers" },
             { icon: "fa-key", label: "JWT sessions", desc: "Short-lived tokens, refresh rotation, no server-side state" },
