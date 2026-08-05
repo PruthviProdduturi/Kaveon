@@ -815,7 +815,7 @@ export default function AboutPage() {
           </SectionSub>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 14 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, maxWidth: 1100, margin: "0 auto" }}>
           {ROLES.map((r) => (
             <div key={r.role} style={{ background: "#fff", border: "1px solid #e2e8f0", borderTop: `4px solid ${r.color}`, borderRadius: 10, overflow: "hidden" }}>
               <div style={{
