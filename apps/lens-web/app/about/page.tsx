@@ -20,7 +20,7 @@ function Nav() {
       padding: "10px 28px", background: "rgba(10,16,30,0.82)",
       backdropFilter: "blur(12px)", borderBottom: "1px solid rgba(255,255,255,0.08)",
     }}>
-      <LensLogo size={24} />
+      <LensLogo size={30} />
       <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
         <a href="#features" style={{ color: "#c7d2e0", textDecoration: "none", fontSize: 13, fontWeight: 500 }}>Features</a>
         <a href="#compare" style={{ color: "#c7d2e0", textDecoration: "none", fontSize: 13, fontWeight: 500 }}>Compare</a>
