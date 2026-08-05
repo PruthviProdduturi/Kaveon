@@ -77,7 +77,7 @@ export function LensLogo({ size = 48, animate = "none", onClick, className = "" 
         color: "var(--lens-primary, #46c7d9)",
       }}
     >
-      <span style={{ display: "inline-flex", alignItems: "center", gap: capH * 0.12 }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: capH * 0.04 }}>
 
         {/* ── ⊙ — hexagonal crosshair mark ────────────────────────────── */}
         <svg
@@ -87,6 +87,7 @@ export function LensLogo({ size = 48, animate = "none", onClick, className = "" 
           viewBox="0 0 22 22"
           fill="none"
           aria-hidden="true"
+          style={{ marginRight: capH * 0.06 }}
         >
           <circle cx="11" cy="11" r="9.5" stroke="currentColor" strokeWidth="1.9" />
           <g className="lens-blades" style={{ transformOrigin: "11px 11px" }}>
@@ -105,9 +106,10 @@ export function LensLogo({ size = 48, animate = "none", onClick, className = "" 
 
         {/* ── Chamfered L + ENS wordmark ─────────────────────────────────── */}
         <svg
-          width={capH * 0.66}
-          height={capH}
+          width={capH * 0.58}
+          height={capH * 0.88}
           viewBox="0 0 18 28"
+          style={{ position: "relative", top: 1 }}
           fill="none"
           aria-hidden="true"
         >
@@ -128,8 +130,10 @@ export function LensLogo({ size = 48, animate = "none", onClick, className = "" 
             fontSize: fontSize * 0.88,
             fontWeight: 700,
             fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif",
+            letterSpacing: "0em",
             color: "currentColor",
             lineHeight: 1,
+            whiteSpace: "nowrap",
           }}
         >
           ENS
