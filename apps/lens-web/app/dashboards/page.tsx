@@ -39,7 +39,7 @@ const DashboardsPage: React.FC = () => {
   const [confirmDelete, setConfirmDelete] = useState<DashboardSummary | null>(null);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [viewMode, setViewMode] = useState<"grid" | "list">("list");
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
   useEffect(() => {
