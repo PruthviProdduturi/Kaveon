@@ -25,7 +25,7 @@ function apertureSvg(px: number): string {
 }
 
 export default function Icon() {
-  const uri = 'data:image/svg+xml;utf8,' + encodeURIComponent(apertureSvg(24))
+  const uri = 'data:image/svg+xml;utf8,' + encodeURIComponent(apertureSvg(32))
   return new ImageResponse(
     (
       <div style={{
@@ -34,7 +34,7 @@ export default function Icon() {
         background: 'transparent',
       }}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img width={24} height={24} src={uri} alt="Lens" />
+        <img width={32} height={32} src={uri} alt="Lens" />
       </div>
     ),
     { ...size }
