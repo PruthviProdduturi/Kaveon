@@ -87,11 +87,35 @@ export function LensLogo({ size = 48, animate = "none", onClick, className = "" 
         color: "var(--lens-primary, #46c7d9)",
       }}
     >
-      {/* ── Aperture mark ─────────────────────────────────────────────────── */}
+      {/* ── Chamfered L glyph (matches Forge's chamfered F) ─────────────── */}
+      <svg
+        width={capH * 0.65}
+        height={capH}
+        viewBox="0 0 14 28"
+        fill="none"
+        aria-hidden="true"
+        style={{ flex: "0 0 auto" }}
+      >
+        <defs>
+          <linearGradient id={`${gradId}-l`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="currentColor" stopOpacity="1" />
+            <stop offset="100%" stopColor="currentColor" stopOpacity="0.65" />
+          </linearGradient>
+        </defs>
+        {/* Bold L with 45° chamfer on bottom-right bar end */}
+        <path
+          d="M 0 0 L 6 0 L 6 21 L 12 21 L 14 23.5 L 14 28 L 0 28 Z"
+          fill={`url(#${gradId}-l)`}
+        />
+        {/* Top-face highlight */}
+        <path d="M 0 0 L 6 0 L 6 3.5 L 0 3.5 Z" fill="currentColor" opacity="0.18" />
+      </svg>
+
+      {/* ── Aperture mark (replaces E in L·E·NS) ─────────────────────────── */}
       <svg
         className="lens-aperture"
-        width={markH}
-        height={markH}
+        width={capH}
+        height={capH}
         viewBox="0 0 24 24"
         fill="none"
         aria-hidden="true"
@@ -107,7 +131,7 @@ export function LensLogo({ size = 48, animate = "none", onClick, className = "" 
         {/* Barrel ring */}
         <circle cx={CX} cy={CY} r={10.6} fill="none" stroke={`url(#${gradId})`} strokeWidth={1.5} />
 
-        {/* Blades + hexagonal opening — this group is what animates */}
+        {/* Blades + hexagonal opening */}
         <g className="lens-blades" style={{ transformOrigin: "12px 12px" }}>
           <path d={OPENING} fill="currentColor" opacity={0.1} />
           {BLADE_LINES.map((b, i) => (
@@ -122,7 +146,6 @@ export function LensLogo({ size = 48, animate = "none", onClick, className = "" 
               strokeLinecap="round"
             />
           ))}
-          {/* Top-left blade catches the light */}
           <line
             x1={BLADE_LINES[1].ix.toFixed(2)}
             y1={BLADE_LINES[1].iy.toFixed(2)}
@@ -136,8 +159,18 @@ export function LensLogo({ size = 48, animate = "none", onClick, className = "" 
         </g>
       </svg>
 
-      {/* ── Wordmark ──────────────────────────────────────────────────────── */}
-      <span style={letterStyle}>LENS</span>
+      {/* ── NS — slightly smaller, balanced visual weight (matches Forge RGE) */}
+      <span
+        style={{
+          fontSize: fontSize * 0.88,
+          fontWeight: 700,
+          fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif",
+          color: "currentColor",
+          lineHeight: 1,
+        }}
+      >
+        NS
+      </span>
 
       <style jsx>{`
         .lens-logo {
