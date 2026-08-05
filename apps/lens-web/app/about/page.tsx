@@ -345,6 +345,13 @@ export default function AboutPage() {
   const { primaryColor } = useTheme();
   const color = primaryColor; // theme-aware accent for hero + nav
 
+  // Warm up the Render backend as soon as the about page loads.
+  // Free tier sleeps after 15min idle — this ping wakes it so dashboards
+  // load instantly when the user navigates there.
+  React.useEffect(() => {
+    fetch("/api/lens/api/health").catch(() => {});
+  }, []);
+
   return (
     <div style={{ minHeight: "100%" }}>
 
