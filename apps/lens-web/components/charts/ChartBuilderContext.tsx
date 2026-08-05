@@ -6,6 +6,7 @@ import { msalFetch } from "../../utils/msalFetch";
 import { useAuth } from "../../auth/useAuth";
 import { useRouter } from "next/navigation";
 import { getRegisteredPlugins, getPlugin } from "./chartPluginRegistry";
+import { acquireQuerySlot } from "../../utils/querySemaphore";
 
 // Default advanced chart options for merging with loaded config
 export const DEFAULT_ADVANCED_OPTIONS = {
@@ -2819,6 +2820,8 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     isQueryRunningRef.current = true;
     setSqlPreview((prev) => ({ ...prev, isRunning: true, error: null }));
 
+    // Acquire a slot from the global semaphore — limits concurrent dashboard queries
+    const releaseSlot = await acquireQuerySlot();
     const start = performance.now();
 
     try {
@@ -2900,6 +2903,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
             msalFetch(`${API_BASE}/api/v1/sql/async/${job_id}`, { method: "DELETE" }).catch(() => {});
             activeJobIdRef.current = null;
             isQueryRunningRef.current = false;
+            releaseSlot();
             setSqlPreview((prev) => ({ ...prev, isRunning: false, error: null }));
             return;
           }
@@ -3346,12 +3350,14 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         savedSql: sqlPreview.savedSql,
       });
       isQueryRunningRef.current = false;
+      releaseSlot();
       // Query history is written server-side by /api/v1/sql/execute with full
       // context (source, chart_id, dataset_id, tables_used). No secondary
       // record-query call needed.
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Unknown error";
       isQueryRunningRef.current = false;
+      releaseSlot();
       setSqlPreview((prev) => ({ ...prev, isRunning: false, error: message }));
     }
   };
