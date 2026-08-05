@@ -9,8 +9,8 @@
   <line x1="49.15" y1="70.24" x2="59" y2="97.78" stroke="url(#c)" stroke-width="6.04" stroke-linecap="round"/>
   <line x1="63.55" y1="73.30" x2="92.32" y2="78.54" stroke="url(#c)" stroke-width="6.04" stroke-linecap="round"/>
   <line x1="73.40" y1="62.36" x2="92.32" y2="40.06" stroke="url(#c)" stroke-width="6.04" stroke-linecap="round"/>
-  <!-- Chamfered L — widened to 18-unit viewBox matching Forge's F -->
-  <g transform="translate(110,20) scale(2.8071)"><path d="M 0 0 L 7 0 L 7 21 L 16 21 L 18 23.5 L 18 28 L 0 28 Z" fill="url(#c)"/><path d="M 0 0 L 7 0 L 7 3.5 L 0 3.5 Z" fill="#d4a017" opacity="0.18"/></g>
-  <!-- ENS — same font-size/weight as Forge's RGE -->
-  <text x="160" y="98.6" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="800" font-size="108" letter-spacing="-3" fill="url(#c)">ENS</text>
+  <!-- Chamfered L — scaled to 0.88 of cap-height, nudged down 2px to match text baseline -->
+  <g transform="translate(114,24) scale(2.47)"><path d="M 0 0 L 7 0 L 7 21 L 16 21 L 18 23.5 L 18 28 L 0 28 Z" fill="url(#c)"/><path d="M 0 0 L 7 0 L 7 3.5 L 0 3.5 Z" fill="#d4a017" opacity="0.18"/></g>
+  <!-- ENS — weight 700, tight letter-spacing, matched to L height -->
+  <text x="164" y="96" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="700" font-size="95" letter-spacing="0" fill="url(#c)">ENS</text>
 </svg>
