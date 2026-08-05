@@ -493,9 +493,8 @@ export default function Home() {
 
   const hasRecentUserActivity = recentUserActivityItems.length > 0;
 
-  if (isAuthenticated && isPageLoading) {
-    return <LensLoading />;
-  }
+  // Show the page immediately with placeholder data — don't block on API cold starts.
+  // Data fills in as it arrives from the backend.
 
   return (
     <>
