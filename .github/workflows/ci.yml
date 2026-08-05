@@ -96,7 +96,10 @@ jobs:
     name: Deploy to Vercel
     runs-on: ubuntu-latest
     needs: [web]
-    if: false  # disabled — Lens deploys via Vercel Git integration; CI deploy has pnpm+Node compat issue
+    if: github.ref == 'refs/heads/dev' && github.event_name == 'push'
+    defaults:
+      run:
+        working-directory: apps/lens-web
     steps:
       - uses: actions/checkout@v4
 
