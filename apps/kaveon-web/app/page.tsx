@@ -387,30 +387,6 @@ export default function Home() {
             <h1 style={{ margin: 0, fontSize: 28, fontWeight: 600, color: "var(--text-primary)", textAlign: "center" }}>{heroText}</h1>
             {metaLine && <p style={{ margin: 0, fontSize: 13, color: "var(--text-muted)", textAlign: "center" }}>{metaLine}</p>}
 
-            {/* Dataset picker — compact inline */}
-            {hasData && datasets.length > 0 && (
-              <select
-                value={selectedDataset ?? ""}
-                onChange={e => {
-                  const id = e.target.value ? Number(e.target.value) : null;
-                  setSelectedDataset(id);
-                  if (id) {
-                    const ds = datasets.find(d => d.id === id);
-                    const src = sources.find(s => s.database_name === ds?.database_name);
-                    if (src) setSelectedSource(src);
-                  }
-                }}
-                style={{
-                  padding: "6px 12px", borderRadius: 8, border: "1px solid var(--border)",
-                  background: "var(--bg-surface)", color: "var(--text-secondary)", fontSize: 12,
-                  cursor: "pointer", outline: "none",
-                }}
-              >
-                <option value="">Select a dataset...</option>
-                {datasets.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-              </select>
-            )}
-
             {/* Input */}
             <div style={{ width: "100%", maxWidth: 640, display: "flex", alignItems: "center", background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "10px 12px", boxShadow: "var(--shadow-md)" }}>
               <input ref={inputRef} type="text" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={handleKey} placeholder={placeholder}
@@ -444,26 +420,6 @@ export default function Home() {
           <div style={{ padding: "12px 24px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12, background: "var(--bg-surface)", flexShrink: 0 }}>
             <KaveonMark size={24} useDirectColor />
             <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)", flex: 1 }}>Chat</span>
-
-            {/* Dataset picker */}
-            {datasets.length > 0 && (
-              <select
-                value={selectedDataset ?? ""}
-                onChange={e => {
-                  const id = e.target.value ? Number(e.target.value) : null;
-                  setSelectedDataset(id);
-                  if (id) {
-                    const ds = datasets.find(d => d.id === id);
-                    const src = sources.find(s => s.database_name === ds?.database_name);
-                    if (src) setSelectedSource(src);
-                  }
-                }}
-                style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-surface)", color: "var(--text-secondary)", fontSize: 12, cursor: "pointer" }}
-              >
-                <option value="">No dataset</option>
-                {datasets.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-              </select>
-            )}
 
             <button onClick={() => {
               // Save old conversation to recents
