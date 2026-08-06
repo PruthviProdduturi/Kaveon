@@ -176,7 +176,9 @@ export default function Home() {
   }, [messages]);
 
   // Cache all dataset schemas for auto-matching
-  const [allSchemas, setAllSchemas] = useState<{ id: number; name: string; sourceId?: number; sourceName?: string; schema: DatasetSchema }[]>([]);
+  type SchemaEntry = { id: number; name: string; sourceId?: number; sourceName?: string; schema: DatasetSchema };
+  const [allSchemas, setAllSchemas] = useState<SchemaEntry[]>([]);
+  const allSchemasRef = useRef<SchemaEntry[]>([]);
 
   useEffect(() => {
     if (datasets.length === 0) return;
@@ -204,8 +206,9 @@ export default function Home() {
         } catch { return null; }
       })
     ).then(results => {
-      const valid = results.filter(Boolean) as any[];
+      const valid = results.filter(Boolean) as SchemaEntry[];
       console.log("[Kaveon] All schemas loaded:", valid.length, valid.map(s => ({ name: s.name, cols: s.schema.columns.length })));
+      allSchemasRef.current = valid;
       setAllSchemas(valid);
     });
   }, [datasets, sources]);
@@ -217,7 +220,9 @@ export default function Home() {
     const words = lower.split(/\s+/).filter(w => w.length >= 3);
     let best: { schema: DatasetSchema; sourceId?: number; sourceName?: string; confidence: number; name: string; parsed: any } | null = null;
 
-    for (const ds of allSchemas) {
+    const schemas = allSchemasRef.current;
+    console.log("[Kaveon NL→SQL] Searching", schemas.length, "schemas for:", text);
+    for (const ds of schemas) {
       // Score: how well does this dataset match the query?
       let score = 0;
 
@@ -327,10 +332,11 @@ export default function Home() {
       }
 
       // Parser couldn't handle it — show helpful suggestions
-      const availableDatasets = allSchemas.map(s => s.name).join(", ");
+      const schemasNow = allSchemasRef.current;
+      const availableDatasets = schemasNow.map(s => s.name).join(", ");
       setMessages(prev => [...prev.slice(0, -1), {
         role: "assistant",
-        content: allSchemas.length === 0
+        content: schemasNow.length === 0
           ? "No datasets found. Create a dataset in the Workspace first, then come back and ask me about your data."
           : `I couldn't match that to your data. You have these datasets: **${availableDatasets}**\n\nTry something specific like:\n• "Show [metric] by [column]"\n• "Top 10 [column] by [metric]"\n• "Total [metric]"\n• "Trend of [metric] over time"`,
       }]);
