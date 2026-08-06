@@ -262,17 +262,10 @@ export default function Home() {
     return best;
   }
 
-  async function sendMessage(text: string) {
-    if (!text.trim() || sending) return;
+  const canSend = schemasReady && !sending && !isEmpty;
 
-    // Wait for schemas if not ready yet
-    if (!schemasReady && allSchemasRef.current.length === 0) {
-      // Try waiting up to 3 seconds for schemas to load
-      for (let i = 0; i < 30; i++) {
-        await new Promise(r => setTimeout(r, 100));
-        if (allSchemasRef.current.length > 0) break;
-      }
-    }
+  async function sendMessage(text: string) {
+    if (!text.trim() || !canSend) return;
     const userMsg: Message = { role: "user", content: text.trim() };
     const loadingMsg: Message = { role: "assistant", content: "", loading: true };
     setMessages(prev => [...prev, userMsg, loadingMsg]);
@@ -416,7 +409,7 @@ export default function Home() {
             <div style={{ width: "100%", maxWidth: 640, display: "flex", alignItems: "center", background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "10px 12px", boxShadow: "var(--shadow-md)" }}>
               <input ref={inputRef} type="text" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={handleKey} placeholder={placeholder}
                 style={{ flex: 1, border: "none", outline: "none", background: "transparent", color: "var(--text-primary)", fontSize: 14, lineHeight: 1.5 }} />
-              <button onClick={submit} disabled={!query.trim()} style={{ flexShrink: 0, width: 30, height: 30, borderRadius: 8, border: "none", background: query.trim() ? "var(--accent)" : "var(--bg-hover)", color: query.trim() ? "#fff" : "var(--text-faint)", cursor: query.trim() ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, transition: "background 0.15s" }}>
+              <button onClick={submit} disabled={!query.trim() || !canSend} style={{ flexShrink: 0, width: 30, height: 30, borderRadius: 8, border: "none", background: query.trim() && canSend ? "var(--accent)" : "var(--bg-hover)", color: query.trim() && canSend ? "#fff" : "var(--text-faint)", cursor: query.trim() && canSend ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, transition: "background 0.15s" }}>
                 ↑
               </button>
             </div>
@@ -428,7 +421,7 @@ export default function Home() {
                     <a key={s.label} href={s.href} style={{ padding: "6px 14px", borderRadius: 999, border: "1px solid var(--border)", background: "var(--bg-surface)", color: "var(--text-secondary)", fontSize: 13, textDecoration: "none", boxShadow: "var(--shadow-sm)" }}>{s.label}</a>
                   ))
                 : DEFAULT_SUGGESTIONS.map(s => (
-                    <button key={s} onClick={() => { setQuery(s); setTimeout(() => void sendMessage(s), 50); }}
+                    <button key={s} onClick={() => { if (canSend) { setQuery(s); setTimeout(() => void sendMessage(s), 50); } }}
                       style={{ padding: "6px 14px", borderRadius: 999, border: "1px solid var(--border)", background: "var(--bg-surface)", color: "var(--text-secondary)", fontSize: 13, cursor: "pointer", boxShadow: "var(--shadow-sm)" }}>
                       {s}
                     </button>
@@ -515,7 +508,7 @@ export default function Home() {
             <div style={{ maxWidth: 700, margin: "0 auto", display: "flex", alignItems: "center", gap: 0, background: "var(--bg-primary)", border: "1px solid var(--border)", borderRadius: 12, padding: "8px 12px" }}>
               <input ref={inputRef} type="text" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={handleKey} placeholder="Ask a follow-up..."
                 style={{ flex: 1, border: "none", outline: "none", background: "transparent", color: "var(--text-primary)", fontSize: 14 }} />
-              <button onClick={submit} disabled={!query.trim() || sending} style={{ width: 28, height: 28, borderRadius: 7, border: "none", background: query.trim() ? "var(--accent)" : "var(--bg-hover)", color: query.trim() ? "#fff" : "var(--text-faint)", cursor: query.trim() ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>
+              <button onClick={submit} disabled={!query.trim() || !canSend} style={{ width: 28, height: 28, borderRadius: 7, border: "none", background: query.trim() && canSend ? "var(--accent)" : "var(--bg-hover)", color: query.trim() && canSend ? "#fff" : "var(--text-faint)", cursor: query.trim() && canSend ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>
                 ↑
               </button>
             </div>
