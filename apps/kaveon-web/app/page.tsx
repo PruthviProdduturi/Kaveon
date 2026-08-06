@@ -77,7 +77,8 @@ export default function HomePage() {
         ]);
 
         const summary: MetadataSummary = summaryRes.ok ? await summaryRes.json() : { dataset_count: 0 };
-        const list: DataSourceItem[] = listRes.ok ? await listRes.json() : [];
+        const listRaw = listRes.ok ? await listRes.json() : [];
+        const list: DataSourceItem[] = Array.isArray(listRaw) ? listRaw : (listRaw.dataSources || listRaw.data_sources || listRaw.sources || []);
         const active: ActiveSourceItem = activeRes.ok ? await activeRes.json() : {};
 
         const tableCount =
