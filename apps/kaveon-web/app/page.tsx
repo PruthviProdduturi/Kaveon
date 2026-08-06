@@ -78,6 +78,7 @@ export default function Home() {
   const [selectedDataset, setSelectedDataset] = useState<number | null>(null);
   const [selectedSource, setSelectedSource] = useState<SourceOption | null>(null);
   const [datasetSchema, setDatasetSchema] = useState<DatasetSchema | null>(null);
+  const [schemasReady, setSchemasReady] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const { addRecent } = useRecents();
@@ -210,6 +211,7 @@ export default function Home() {
       console.log("[Kaveon] All schemas loaded:", valid.length, valid.map(s => ({ name: s.name, cols: s.schema.columns.length })));
       allSchemasRef.current = valid;
       setAllSchemas(valid);
+      setSchemasReady(true);
     });
   }, [datasets, sources]);
 
@@ -262,6 +264,15 @@ export default function Home() {
 
   async function sendMessage(text: string) {
     if (!text.trim() || sending) return;
+
+    // Wait for schemas if not ready yet
+    if (!schemasReady && allSchemasRef.current.length === 0) {
+      // Try waiting up to 3 seconds for schemas to load
+      for (let i = 0; i < 30; i++) {
+        await new Promise(r => setTimeout(r, 100));
+        if (allSchemasRef.current.length > 0) break;
+      }
+    }
     const userMsg: Message = { role: "user", content: text.trim() };
     const loadingMsg: Message = { role: "assistant", content: "", loading: true };
     setMessages(prev => [...prev, userMsg, loadingMsg]);
@@ -362,7 +373,9 @@ export default function Home() {
   // ── Render ───────────────────────────────────────────────────────────────────
 
   const heroText = isEmpty ? "Connect your first data source." : "Your data has answers.";
-  const placeholder = isEmpty ? "Set up a connection to get started..." : "Ask anything about your data…";
+  const placeholder = isEmpty ? "Set up a connection to get started..."
+    : !schemasReady ? "Loading your data context…"
+    : "Ask anything about your data…";
   const metaLine = data && !isEmpty
     ? `${data.sourceCount} source${data.sourceCount !== 1 ? "s" : ""} · ${data.tableCount} table${data.tableCount !== 1 ? "s" : ""} · ${data.datasetCount} dataset${data.datasetCount !== 1 ? "s" : ""}`
     : null;
