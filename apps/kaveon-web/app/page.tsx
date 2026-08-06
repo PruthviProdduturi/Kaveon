@@ -263,7 +263,29 @@ export default function Home() {
       const schema = match?.schema || datasetSchema;
       const srcId = match?.sourceId || selectedSource?.id;
       const srcDb = match?.sourceName || selectedSource?.database_name;
-      const parsed = match?.parsed || (schema ? nlToSql(text.trim(), schema) : null);
+      let parsed = match?.parsed || (schema ? nlToSql(text.trim(), schema) : null);
+
+      // Debug: log what we found
+      if (match) console.log("[Kaveon NL→SQL] Best match:", match.name, "score:", match.confidence, "parsed:", !!parsed, "columns:", match.schema.columns.map(c => c.name));
+
+      // Fallback: if we matched a dataset by name but parser returned null,
+      // build a simple SELECT query showing the data
+      if (schema && !parsed && match && match.confidence >= 0.3) {
+        const numCols = schema.columns.filter(c => c.type === "number").slice(0, 2);
+        const strCols = schema.columns.filter(c => c.type === "string").slice(0, 1);
+        const dateCols = schema.columns.filter(c => c.type === "date").slice(0, 1);
+        const selectCols = [...strCols, ...dateCols, ...numCols].map(c => c.name);
+        if (selectCols.length > 0) {
+          parsed = {
+            sql: `SELECT ${selectCols.join(", ")} FROM ${schema.tableName} LIMIT 50`,
+            chartType: "table" as const,
+            xAxis: strCols[0]?.name || null,
+            yAxis: numCols[0]?.name || null,
+            title: `Data from ${match.name}`,
+            confidence: 0.3,
+          };
+        }
+      }
 
       if (schema && parsed) {
           const execRes = await msalFetch("/api/v1/sql/execute", {
