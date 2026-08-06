@@ -119,7 +119,7 @@ export default function DatasetsPage() {
       pills={!loading && !error ? [
         { label: `${datasets.length} Total`, icon: "fa-database" },
         ...(myCount > 0 ? [{ label: `${myCount} Mine`, icon: "fa-user" }] : []),
-        ...(othersCount > 0 ? [{ label: `${othersCount} Others`, icon: "fa-users", bg: "#f1f5f9", border: "#e2e8f0", color: "#64748b" }] : []),
+        ...(othersCount > 0 ? [{ label: `${othersCount} Others`, icon: "fa-users", bg: "var(--bg-hover)", border: "var(--border)", color: "var(--text-muted)" }] : []),
       ] : []}
       action={
         <Button onClick={() => void router.push("/datasets/new")}>

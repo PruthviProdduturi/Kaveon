@@ -775,15 +775,15 @@ export default function DatasetDetailPage() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div style={{ flex: 1 }}>
             {dataset && (
-              <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", color: "#9ca3af", marginBottom: 6, fontWeight: 600 }}>
+              <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)", marginBottom: 6, fontWeight: 600 }}>
                 Dataset
               </div>
             )}
             {!isEditingName ? (
               <h1
-                style={{ fontSize: 28, fontWeight: 600, color: "#111827", margin: 0, lineHeight: 1.2, cursor: "pointer", borderRadius: 6, padding: "4px 8px", border: "2px solid transparent", transition: "background 0.15s", display: "inline-block" }}
+                style={{ fontSize: 28, fontWeight: 600, color: "var(--text-primary)", margin: 0, lineHeight: 1.2, cursor: "pointer", borderRadius: 6, padding: "4px 8px", border: "2px solid transparent", transition: "background 0.15s", display: "inline-block" }}
                 onClick={startEditingName}
-                onMouseOver={e => { e.currentTarget.style.background = "#f1f5f9"; }}
+                onMouseOver={e => { e.currentTarget.style.background = "var(--bg-hover)"; }}
                 onMouseOut={e => { e.currentTarget.style.background = "transparent"; }}
                 title="Click to rename"
               >
@@ -798,16 +798,16 @@ export default function DatasetDetailPage() {
                 onBlur={commitRename}
                 onKeyDown={e => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") setIsEditingName(false); }}
                 style={{
-                  fontSize: 28, fontWeight: 600, color: "#111827",
+                  fontSize: 28, fontWeight: 600, color: "var(--text-primary)",
                   padding: "4px 8px", margin: 0,
-                  border: "2px solid #2563eb", borderRadius: 6,
-                  outline: "none", background: "#fff",
+                  border: "2px solid var(--accent)", borderRadius: 6,
+                  outline: "none", background: "var(--bg-surface)",
                   fontFamily: "inherit", minWidth: 260,
                 }}
               />
             )}
             {dataset?.description && (
-              <p style={{ fontSize: 14, color: "#6b7280", margin: "6px 0 0 0", lineHeight: 1.4, maxWidth: 600 }}>
+              <p style={{ fontSize: 14, color: "var(--text-muted)", margin: "6px 0 0 0", lineHeight: 1.4, maxWidth: 600 }}>
                 {dataset.description}
               </p>
             )}
@@ -888,54 +888,54 @@ export default function DatasetDetailPage() {
             <div className="card" style={{ padding: 16 }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-                  <span style={{ color: "#9ca3af", fontSize: 13, minWidth: 100 }}>Database</span>
-                  <span style={{ fontWeight: 500, fontSize: 14, color: "#111827" }}>{dataset.database_name || "(default)"}</span>
+                  <span style={{ color: "var(--text-muted)", fontSize: 13, minWidth: 100 }}>Database</span>
+                  <span style={{ fontWeight: 500, fontSize: 14, color: "var(--text-primary)" }}>{dataset.database_name || "(default)"}</span>
                 </div>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-                  <span style={{ color: "#9ca3af", fontSize: 13, minWidth: 100 }}>Schema</span>
-                  <span style={{ fontWeight: 500, fontSize: 14, color: "#111827" }}>{dataset.schema_name || "(default)"}</span>
+                  <span style={{ color: "var(--text-muted)", fontSize: 13, minWidth: 100 }}>Schema</span>
+                  <span style={{ fontWeight: 500, fontSize: 14, color: "var(--text-primary)" }}>{dataset.schema_name || "(default)"}</span>
                 </div>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-                  <span style={{ color: "#9ca3af", fontSize: 13, minWidth: 100 }}>Table</span>
-                  <span style={{ fontWeight: 500, fontSize: 14, color: "#111827" }}>
-                    {dataset.table_name || (dataset.sql_text ? <em style={{ color: "#6b7280" }}>Virtual (SQL)</em> : "(none)")}
+                  <span style={{ color: "var(--text-muted)", fontSize: 13, minWidth: 100 }}>Table</span>
+                  <span style={{ fontWeight: 500, fontSize: 14, color: "var(--text-primary)" }}>
+                    {dataset.table_name || (dataset.sql_text ? <em style={{ color: "var(--text-muted)" }}>Virtual (SQL)</em> : "(none)")}
                   </span>
                 </div>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-                  <span style={{ color: "#9ca3af", fontSize: 13, minWidth: 100 }}>Date column</span>
-                  <span style={{ fontWeight: 500, fontSize: 14, color: "#111827" }}>{dataset.date_column || "(none)"}</span>
+                  <span style={{ color: "var(--text-muted)", fontSize: 13, minWidth: 100 }}>Date column</span>
+                  <span style={{ fontWeight: 500, fontSize: 14, color: "var(--text-primary)" }}>{dataset.date_column || "(none)"}</span>
                 </div>
               </div>
             </div>
 
             {/* Metrics */}
             <div className="card" style={{ padding: 16 }}>
-              <h3 style={{ fontSize: 15, fontWeight: 700, color: "#111827", margin: "0 0 12px 0", letterSpacing: "-0.01em" }}>
-                Metrics {dataset.metrics && dataset.metrics.length > 0 && <span style={{ color: "#9ca3af", fontWeight: 500, fontSize: 14 }}>({dataset.metrics.length})</span>}
+              <h3 style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)", margin: "0 0 12px 0", letterSpacing: "-0.01em" }}>
+                Metrics {dataset.metrics && dataset.metrics.length > 0 && <span style={{ color: "var(--text-muted)", fontWeight: 500, fontSize: 14 }}>({dataset.metrics.length})</span>}
               </h3>
               {dataset.metrics && dataset.metrics.length > 0 ? (
                 <div style={{ overflowY: "auto", maxHeight: 320 }}>
                   <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
                     <thead>
-                      <tr style={{ borderBottom: "1px solid #e5e7eb" }}>
-                        <th align="left" style={{ padding: "0 12px 8px 0", color: "#9ca3af", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Name</th>
-                        <th align="left" style={{ padding: "0 12px 8px 0", color: "#9ca3af", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Type</th>
-                        <th align="left" style={{ padding: "0 0 8px 0", color: "#9ca3af", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Expression</th>
+                      <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                        <th align="left" style={{ padding: "0 12px 8px 0", color: "var(--text-muted)", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Name</th>
+                        <th align="left" style={{ padding: "0 12px 8px 0", color: "var(--text-muted)", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Type</th>
+                        <th align="left" style={{ padding: "0 0 8px 0", color: "var(--text-muted)", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Expression</th>
                       </tr>
                     </thead>
                     <tbody>
                       {dataset.metrics.map((m, idx) => (
-                        <tr key={`${m.name}-${idx}`} style={{ borderBottom: idx < dataset.metrics!.length - 1 ? "1px solid #f3f4f6" : "none" }}>
+                        <tr key={`${m.name}-${idx}`} style={{ borderBottom: idx < dataset.metrics!.length - 1 ? "1px solid var(--border)" : "none" }}>
                           <td style={{ padding: "10px 12px 10px 0", fontWeight: 500, fontSize: 13, verticalAlign: "top" }}>{m.name}</td>
-                          <td style={{ padding: "10px 12px 10px 0", fontSize: 11, color: "#10b981", fontWeight: 600, textTransform: "uppercase", verticalAlign: "top" }}>{m.metric_type}</td>
-                          <td style={{ padding: "10px 0", fontFamily: "monospace", fontSize: 12, color: "#6b7280", verticalAlign: "top" }}>{m.expression}</td>
+                          <td style={{ padding: "10px 12px 10px 0", fontSize: 11, color: "var(--success)", fontWeight: 600, textTransform: "uppercase", verticalAlign: "top" }}>{m.metric_type}</td>
+                          <td style={{ padding: "10px 0", fontFamily: "monospace", fontSize: 12, color: "var(--text-muted)", verticalAlign: "top" }}>{m.expression}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
               ) : (
-                <p style={{ margin: 0, fontSize: 13, color: "#9ca3af" }}>No metrics defined</p>
+                <p style={{ margin: 0, fontSize: 13, color: "var(--text-muted)" }}>No metrics defined</p>
               )}
             </div>
           </div>
@@ -951,48 +951,48 @@ export default function DatasetDetailPage() {
               justifyContent: "space-between",
               fontWeight: 700,
               fontSize: 15,
-              color: "#111827",
+              color: "var(--text-primary)",
               userSelect: "none",
               letterSpacing: "-0.01em"
             }}>
-              <span>Schema & Dimensions <span style={{ color: "#9ca3af", fontWeight: 500, fontSize: 14 }}>({schemaColumns?.length || 0} columns, {dataset.dimensions?.length || 0} joins)</span></span>
-              <i className="fas fa-chevron-down" style={{ fontSize: 12, color: "#9ca3af", transition: "transform 0.2s" }}></i>
+              <span>Schema & Dimensions <span style={{ color: "var(--text-muted)", fontWeight: 500, fontSize: 14 }}>({schemaColumns?.length || 0} columns, {dataset.dimensions?.length || 0} joins)</span></span>
+              <i className="fas fa-chevron-down" style={{ fontSize: 12, color: "var(--text-muted)", transition: "transform 0.2s" }}></i>
             </summary>
 
-            <div style={{ borderTop: "1px solid #e5e7eb", padding: 16 }}>
+            <div style={{ borderTop: "1px solid var(--border)", padding: 16 }}>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
                 {/* Schema */}
                 <div>
-                  <h4 style={{ fontSize: 13, fontWeight: 600, color: "#6b7280", margin: "0 0 10px 0", textTransform: "uppercase", letterSpacing: "0.05em" }}>Schema</h4>
+                  <h4 style={{ fontSize: 13, fontWeight: 600, color: "var(--text-muted)", margin: "0 0 10px 0", textTransform: "uppercase", letterSpacing: "0.05em" }}>Schema</h4>
                   {schemaColumns && schemaColumns.length > 0 ? (
                     <div style={{ overflowY: "auto", maxHeight: 320 }}>
                       <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
                         <thead>
-                          <tr style={{ borderBottom: "1px solid #e5e7eb" }}>
-                            <th align="left" style={{ padding: "0 12px 8px 0", color: "#9ca3af", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Column</th>
-                            <th align="left" style={{ padding: "0 12px 8px 0", color: "#9ca3af", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Type</th>
-                            <th align="left" style={{ padding: "0 0 8px 0", color: "#9ca3af", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Role</th>
+                          <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                            <th align="left" style={{ padding: "0 12px 8px 0", color: "var(--text-muted)", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Column</th>
+                            <th align="left" style={{ padding: "0 12px 8px 0", color: "var(--text-muted)", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Type</th>
+                            <th align="left" style={{ padding: "0 0 8px 0", color: "var(--text-muted)", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Role</th>
                           </tr>
                         </thead>
                         <tbody>
                           {schemaColumns.map((col, idx) => {
                             const label = col.semantic_type && col.semantic_type.toLowerCase() !== "time" ? col.semantic_type : col.column_name;
                             let role = "";
-                            let roleColor = "#6b7280";
+                            let roleColor = "var(--text-muted)";
                             if (col.is_dimension) {
                               role = "Dimension";
-                              roleColor = "#3b82f6";
+                              roleColor = "var(--accent)";
                             } else if (col.is_metric) {
                               role = "Metric";
-                              roleColor = "#10b981";
+                              roleColor = "var(--success)";
                             } else if ((col.semantic_type || "").toLowerCase() === "time") {
                               role = "Time";
                               roleColor = "#8b5cf6";
                             }
                             return (
-                              <tr key={`${col.column_name}-${idx}`} style={{ borderBottom: idx < schemaColumns.length - 1 ? "1px solid #f3f4f6" : "none" }}>
+                              <tr key={`${col.column_name}-${idx}`} style={{ borderBottom: idx < schemaColumns.length - 1 ? "1px solid var(--border)" : "none" }}>
                                 <td style={{ padding: "10px 12px 10px 0", fontWeight: 500, fontSize: 13, verticalAlign: "top" }}>{label}</td>
-                                <td style={{ padding: "10px 12px 10px 0", fontSize: 12, color: "#6b7280", verticalAlign: "top" }}>{col.data_type}</td>
+                                <td style={{ padding: "10px 12px 10px 0", fontSize: 12, color: "var(--text-muted)", verticalAlign: "top" }}>{col.data_type}</td>
                                 <td style={{ padding: "10px 0", fontSize: 11, fontWeight: 600, color: roleColor, textTransform: "uppercase", verticalAlign: "top" }}>{role}</td>
                               </tr>
                             );
@@ -1001,20 +1001,20 @@ export default function DatasetDetailPage() {
                       </table>
                     </div>
                   ) : (
-                    <p style={{ margin: 0, fontSize: 13, color: "#9ca3af" }}>No columns</p>
+                    <p style={{ margin: 0, fontSize: 13, color: "var(--text-muted)" }}>No columns</p>
                   )}
                 </div>
 
                 {/* Dimensions */}
                 <div>
-                  <h4 style={{ fontSize: 13, fontWeight: 600, color: "#6b7280", margin: "0 0 10px 0", textTransform: "uppercase", letterSpacing: "0.05em" }}>Dimensions</h4>
+                  <h4 style={{ fontSize: 13, fontWeight: 600, color: "var(--text-muted)", margin: "0 0 10px 0", textTransform: "uppercase", letterSpacing: "0.05em" }}>Dimensions</h4>
                   {dataset.dimensions && dataset.dimensions.length > 0 ? (
                     <div style={{ overflowY: "auto", maxHeight: 320 }}>
                       <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
                         <thead>
-                          <tr style={{ borderBottom: "1px solid #e5e7eb" }}>
-                            <th align="left" style={{ padding: "0 12px 8px 0", color: "#9ca3af", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Table</th>
-                            <th align="left" style={{ padding: "0 0 8px 0", color: "#9ca3af", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Join</th>
+                          <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                            <th align="left" style={{ padding: "0 12px 8px 0", color: "var(--text-muted)", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Table</th>
+                            <th align="left" style={{ padding: "0 0 8px 0", color: "var(--text-muted)", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Join</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1026,9 +1026,9 @@ export default function DatasetDetailPage() {
                               joinDisplay = `${parsed.factTable}.${parsed.factKey} = ${parsed.dimTable}.${parsed.dimKey}`;
                             }
                             return (
-                              <tr key={`${dim.dimension_table}-${idx}`} style={{ borderBottom: idx < (dataset.dimensions?.length ?? 0) - 1 ? "1px solid #f3f4f6" : "none" }}>
+                              <tr key={`${dim.dimension_table}-${idx}`} style={{ borderBottom: idx < (dataset.dimensions?.length ?? 0) - 1 ? "1px solid var(--border)" : "none" }}>
                                 <td style={{ padding: "10px 12px 10px 0", fontWeight: 500, fontSize: 13, verticalAlign: "top" }}>{tableDisplay}</td>
-                                <td style={{ padding: "10px 0", fontSize: 12, fontFamily: "monospace", color: "#6b7280", verticalAlign: "top" }} title={dim.join_condition}>{joinDisplay}</td>
+                                <td style={{ padding: "10px 0", fontSize: 12, fontFamily: "monospace", color: "var(--text-muted)", verticalAlign: "top" }} title={dim.join_condition}>{joinDisplay}</td>
                               </tr>
                             );
                           })}
@@ -1036,7 +1036,7 @@ export default function DatasetDetailPage() {
                       </table>
                     </div>
                   ) : (
-                    <p style={{ margin: 0, fontSize: 13, color: "#9ca3af" }}>No dimensions</p>
+                    <p style={{ margin: 0, fontSize: 13, color: "var(--text-muted)" }}>No dimensions</p>
                   )}
                 </div>
               </div>
@@ -1045,8 +1045,8 @@ export default function DatasetDetailPage() {
 
           {/* Data Preview */}
           <div className="card" style={{ padding: 16 }}>
-            <h3 style={{ fontSize: 15, fontWeight: 700, color: "#111827", margin: "0 0 12px 0", letterSpacing: "-0.01em" }}>
-              Data Preview <span style={{ color: "#9ca3af", fontWeight: 500, fontSize: 14 }}>(top 100 rows)</span>
+            <h3 style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)", margin: "0 0 12px 0", letterSpacing: "-0.01em" }}>
+              Data Preview <span style={{ color: "var(--text-muted)", fontWeight: 500, fontSize: 14 }}>(top 100 rows)</span>
             </h3>
             {isLoadingPreview && <p className="muted">Loading preview…</p>}
             {previewError && !isLoadingPreview && (

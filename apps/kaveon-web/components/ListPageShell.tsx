@@ -65,10 +65,10 @@ export function ListPageShell({
         flexWrap: "wrap", gap: "1rem",
         marginBottom: "1.25rem",
         padding: "1.25rem 1.5rem",
-        background: "white",
+        background: "var(--bg-surface)",
         borderRadius: 12,
-        border: "1px solid #e5e7eb",
-        boxShadow: "0 1px 4px rgba(15,23,42,0.06)",
+        border: "1px solid var(--border)",
+        boxShadow: "var(--shadow-sm)",
       }}>
         {/* Left: icon + title + pills */}
         <div style={{ display: "flex", alignItems: "center", gap: "1.25rem", flexWrap: "wrap", flex: 1, minWidth: 0 }}>
@@ -81,8 +81,8 @@ export function ListPageShell({
             <i className={`fas ${icon}`} style={{ color: "white", fontSize: 20 }} />
           </div>
           <div style={{ minWidth: 0 }}>
-            <h1 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 700, color: "#0f172a" }}>{title}</h1>
-            <p style={{ margin: "3px 0 0", fontSize: "0.85rem", color: "#64748b", lineHeight: 1.4 }}>{subtitle}</p>
+            <h1 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 700, color: "var(--text-primary)" }}>{title}</h1>
+            <p style={{ margin: "3px 0 0", fontSize: "0.85rem", color: "var(--text-muted)", lineHeight: 1.4 }}>{subtitle}</p>
           </div>
           {pills && pills.length > 0 && (
             <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
@@ -112,7 +112,7 @@ export function ListPageShell({
         <div style={{ position: "relative", marginBottom: "1rem" }}>
           <i className="fas fa-search" style={{
             position: "absolute", left: "0.85rem", top: "50%", transform: "translateY(-50%)",
-            color: "#94a3b8", fontSize: 13, pointerEvents: "none",
+            color: "var(--text-muted)", fontSize: 13, pointerEvents: "none",
           }} />
           <input
             type="text"
@@ -122,10 +122,10 @@ export function ListPageShell({
             style={{
               width: "100%", boxSizing: "border-box",
               padding: "0.625rem 2.5rem 0.625rem 2.25rem",
-              borderRadius: 8, border: "1px solid #e2e8f0",
-              fontSize: "0.875rem", background: "white",
-              color: "#0f172a", outline: "none",
-              boxShadow: "0 1px 3px rgba(15,23,42,0.05)",
+              borderRadius: 8, border: "1px solid var(--border)",
+              fontSize: "0.875rem", background: "var(--bg-surface)",
+              color: "var(--text-primary)", outline: "none",
+              boxShadow: "var(--shadow-sm)",
               transition: "border-color 0.15s, box-shadow 0.15s",
             }}
             onFocus={e => {
@@ -133,8 +133,8 @@ export function ListPageShell({
               e.currentTarget.style.boxShadow = `0 0 0 3px ${primaryColor}18`;
             }}
             onBlur={e => {
-              e.currentTarget.style.borderColor = "#e2e8f0";
-              e.currentTarget.style.boxShadow = "0 1px 3px rgba(15,23,42,0.05)";
+              e.currentTarget.style.borderColor = "var(--border)";
+              e.currentTarget.style.boxShadow = "var(--shadow-sm)";
             }}
           />
           {search && (
@@ -142,7 +142,7 @@ export function ListPageShell({
               {resultCount !== undefined && (
                 <span style={{
                   position: "absolute", right: "2.25rem", top: "50%", transform: "translateY(-50%)",
-                  fontSize: 11, color: "#94a3b8", pointerEvents: "none",
+                  fontSize: 11, color: "var(--text-muted)", pointerEvents: "none",
                 }}>
                   {resultCount} result{resultCount !== 1 ? "s" : ""}
                 </span>
@@ -153,7 +153,7 @@ export function ListPageShell({
                 style={{
                   position: "absolute", right: "0.65rem", top: "50%", transform: "translateY(-50%)",
                   background: "none", border: "none", cursor: "pointer",
-                  color: "#94a3b8", padding: "4px 6px", borderRadius: 4,
+                  color: "var(--text-muted)", padding: "4px 6px", borderRadius: 4,
                   fontSize: 12, lineHeight: 1,
                 }}
                 aria-label="Clear search"
@@ -174,8 +174,8 @@ export function ListPageShell({
           ? sessionStorage.getItem("lens_setup_ok") === "1"
           : true;
         const panel: React.CSSProperties = {
-          background: "white", borderRadius: 16, border: "1px solid #e5e7eb",
-          boxShadow: "0 1px 4px rgba(15,23,42,0.06)",
+          background: "var(--bg-surface)", borderRadius: 16, border: "1px solid var(--border)",
+          boxShadow: "var(--shadow-sm)",
           padding: "3.5rem 2rem", textAlign: "center",
           display: "flex", flexDirection: "column", alignItems: "center",
         };
@@ -183,8 +183,8 @@ export function ListPageShell({
           width: 68, height: 68, borderRadius: 18, marginBottom: 18,
           background: bg, display: "flex", alignItems: "center", justifyContent: "center",
         });
-        const titleStyle: React.CSSProperties = { margin: 0, fontSize: "1.35rem", fontWeight: 800, color: "#0f172a", letterSpacing: "-0.4px" };
-        const bodyStyle: React.CSSProperties = { margin: "8px 0 0", fontSize: "0.95rem", color: "#64748b", maxWidth: 460, lineHeight: 1.55 };
+        const titleStyle: React.CSSProperties = { margin: 0, fontSize: "1.35rem", fontWeight: 800, color: "var(--text-primary)", letterSpacing: "-0.4px" };
+        const bodyStyle: React.CSSProperties = { margin: "8px 0 0", fontSize: "0.95rem", color: "var(--text-muted)", maxWidth: 460, lineHeight: 1.55 };
         if (!metadataReady) {
           return (
             <div style={panel}>
@@ -214,7 +214,7 @@ export function ListPageShell({
         return (
           <div style={panel}>
             <div style={iconWrap("#fef2f2")}>
-              <i className="fas fa-exclamation-triangle" style={{ color: "#dc2626", fontSize: 28 }} />
+              <i className="fas fa-exclamation-triangle" style={{ color: "var(--error)", fontSize: 28 }} />
             </div>
             <h2 style={titleStyle}>Something went wrong</h2>
             <p style={bodyStyle}>{error}</p>
@@ -225,8 +225,8 @@ export function ListPageShell({
       {/* ── Empty state — centered, systematic onboarding ── */}
       {!loading && !error && empty && (
         <div style={{
-          background: "white", borderRadius: 16, border: "1px solid #e5e7eb",
-          boxShadow: "0 1px 4px rgba(15,23,42,0.06)",
+          background: "var(--bg-surface)", borderRadius: 16, border: "1px solid var(--border)",
+          boxShadow: "var(--shadow-sm)",
           padding: "3.5rem 2rem", textAlign: "center",
           display: "flex", flexDirection: "column", alignItems: "center",
         }}>
@@ -238,11 +238,11 @@ export function ListPageShell({
           }}>
             <i className={`fas ${emptyIcon ?? icon}`} style={{ color: "white", fontSize: 28 }} />
           </div>
-          <h2 style={{ margin: 0, fontSize: "1.35rem", fontWeight: 800, color: "#0f172a", letterSpacing: "-0.4px" }}>
+          <h2 style={{ margin: 0, fontSize: "1.35rem", fontWeight: 800, color: "var(--text-primary)", letterSpacing: "-0.4px" }}>
             {emptyTitle ?? `No ${title.toLowerCase()} yet`}
           </h2>
           {emptyBody && (
-            <p style={{ margin: "8px 0 0", fontSize: "0.95rem", color: "#64748b", maxWidth: 460, lineHeight: 1.55 }}>
+            <p style={{ margin: "8px 0 0", fontSize: "0.95rem", color: "var(--text-muted)", maxWidth: 460, lineHeight: 1.55 }}>
               {emptyBody}
             </p>
           )}
@@ -257,7 +257,7 @@ export function ListPageShell({
                 <React.Fragment key={i}>
                   <div style={{
                     flex: "1 1 200px", maxWidth: 230, minWidth: 180,
-                    background: "#f8fafc", border: "1px solid #eef2f7",
+                    background: "var(--bg-primary)", border: "1px solid var(--border)",
                     borderRadius: 12, padding: "18px 16px", textAlign: "left",
                     display: "flex", flexDirection: "column", gap: 8, position: "relative",
                   }}>
@@ -273,17 +273,17 @@ export function ListPageShell({
                         <i className={`fas ${step.icon}`} />
                       </span>
                       <span style={{
-                        fontSize: 11, fontWeight: 700, color: "#94a3b8",
+                        fontSize: 11, fontWeight: 700, color: "var(--text-muted)",
                         textTransform: "uppercase", letterSpacing: "0.6px",
                       }}>Step {i + 1}</span>
                     </div>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>{step.title}</div>
-                    <div style={{ fontSize: 12.5, color: "#64748b", lineHeight: 1.5 }}>{step.desc}</div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text-primary)" }}>{step.title}</div>
+                    <div style={{ fontSize: 12.5, color: "var(--text-muted)", lineHeight: 1.5 }}>{step.desc}</div>
                   </div>
                   {i < emptySteps.length - 1 && (
                     <div style={{
                       display: "flex", alignItems: "center", justifyContent: "center",
-                      padding: "0 6px", color: "#cbd5e1", fontSize: 14,
+                      padding: "0 6px", color: "var(--border)", fontSize: 14,
                     }}>
                       <i className="fas fa-chevron-right" />
                     </div>
