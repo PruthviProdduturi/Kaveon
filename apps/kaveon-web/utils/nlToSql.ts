@@ -64,6 +64,18 @@ function fuzzyMatch(needle: string, haystack: string): boolean {
   // Check if needle is a prefix/suffix match (at least 3 chars)
   if (n.length >= 3 && (h.startsWith(n) || h.endsWith(n))) return true;
   if (h.length >= 3 && (n.startsWith(h) || n.endsWith(h))) return true;
+  // Check individual words overlap — "confirmed cases" matches "confirmed"
+  const nWords = n.split(/\s+/);
+  const hWords = h.split(/\s+/);
+  for (const nw of nWords) {
+    if (nw.length < 3) continue;
+    for (const hw of hWords) {
+      if (hw.length < 3) continue;
+      if (hw.includes(nw) || nw.includes(hw)) return true;
+    }
+    // Also check against the full haystack
+    if (h.includes(nw)) return true;
+  }
   return false;
 }
 

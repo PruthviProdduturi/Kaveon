@@ -8,6 +8,7 @@ import { KaveonMark } from "../components/KaveonMark";
 import { nlToSql, DatasetSchema } from "../utils/nlToSql";
 import { InlineChart } from "../components/chat/InlineChart";
 import { API_BASE } from "../config";
+import { useRecents } from "../hooks/useRecents";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -79,6 +80,7 @@ export default function Home() {
   const [datasetSchema, setDatasetSchema] = useState<DatasetSchema | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const { addRecent } = useRecents();
 
   const email = account?.email ?? "";
   const hasData = data !== null && data.sourceCount > 0;
@@ -239,7 +241,7 @@ export default function Home() {
 
       if (schema) {
         const parsed = nlToSql(text.trim(), schema);
-        if (parsed && parsed.confidence >= 0.3) {
+        if (parsed && parsed.confidence >= 0.2) {
           const execRes = await msalFetch(`${API_BASE}/api/v1/sql/execute`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -418,7 +420,15 @@ export default function Home() {
               </select>
             )}
 
-            <button onClick={() => setMessages([])} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid var(--border)", background: "transparent", color: "var(--text-muted)", fontSize: 12, cursor: "pointer" }}>
+            <button onClick={() => {
+              // Save old conversation to recents
+              if (messages.length > 0) {
+                const firstUserMsg = messages.find(m => m.role === "user");
+                const label = firstUserMsg?.content.slice(0, 50) || "Chat";
+                addRecent({ id: `chat-${Date.now()}`, label, href: "/", type: "chat" });
+              }
+              setMessages([]);
+            }} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid var(--border)", background: "transparent", color: "var(--text-muted)", fontSize: 12, cursor: "pointer" }}>
               New chat
             </button>
           </div>
