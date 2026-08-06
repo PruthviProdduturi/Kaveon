@@ -21,7 +21,7 @@ export async function msalFetch(input: RequestInfo, init: RequestInit = {}): Pro
 	// Route /api/... calls through the proxy; leave anything else untouched.
 	const target =
 		typeof input === "string" && path.startsWith("/api")
-			? `/api/lens${path}`
+			? `/api/kaveon${path}`
 			: input;
 
 	return fetch(target, { ...init, credentials: "include" });
