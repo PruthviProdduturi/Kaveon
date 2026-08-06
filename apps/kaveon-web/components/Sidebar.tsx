@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef, useCallback, ReactNode } from "reac
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { KaveonMark, KaveonWordmark } from "./KaveonMark";
+import { TabBar } from "./TabBar";
 import { useAuth } from "../auth/useAuth";
 import { useTheme } from "../contexts/ThemeContext";
 import { useRole } from "../hooks/useRole";
@@ -564,8 +565,13 @@ export function Sidebar({ children }: SidebarProps) {
         marginLeft: width,
         transition: `margin-left ${TRANSITION}`,
         minWidth: 0,
+        display: "flex",
+        flexDirection: "column",
       }}>
-        {children}
+        <TabBar />
+        <div style={{ flex: 1, overflow: "auto" }}>
+          {children}
+        </div>
       </div>
     </div>
   );
