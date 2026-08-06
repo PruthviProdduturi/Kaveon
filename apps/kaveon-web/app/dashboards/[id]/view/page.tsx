@@ -7,6 +7,7 @@ import DashboardCanvas from "../../../../components/dashboards/DashboardCanvas";
 import DashboardFilterBarReadOnly from "../../../../components/dashboards/DashboardFilterBarReadOnly";
 import { LoadingOverlay } from "../../../../components/LoadingOverlay";
 import { msalFetch } from "../../../../utils/msalFetch";
+import { useRecents } from "../../../../hooks/useRecents";
 import { API_BASE } from "../../../../config";
 import { toJpeg } from "html-to-image";
 
@@ -257,6 +258,7 @@ const DashboardViewPage: React.FC = () => {
   const [isAnimating, setIsAnimating] = useState(false);
   const [isPublished, setIsPublished] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const { addRecent } = useRecents();
 
   useEffect(() => {
     if (!id) return;
@@ -278,6 +280,7 @@ const DashboardViewPage: React.FC = () => {
         });
         setIsPublished(d.is_published || false);
         setIsFavorite(d.is_favorite || false);
+        addRecent({ id: `dashboard-${d.id}`, label: d.name || "Untitled Dashboard", href: `/dashboards/${d.id}/view`, type: "dashboard" });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load dashboard");
       } finally {
