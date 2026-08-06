@@ -573,10 +573,10 @@ const LabQueriesPage: React.FC = () => {
         flexWrap: "wrap", gap: "1rem",
         marginBottom: "1.25rem",
         padding: "1.25rem 1.5rem",
-        background: "white",
+        background: "var(--bg-surface)",
         borderRadius: 12,
-        border: "1px solid #e5e7eb",
-        boxShadow: "0 1px 4px rgba(15,23,42,0.06)",
+        border: "1px solid var(--border)",
+        boxShadow: "var(--shadow-sm)",
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: "1.25rem", flexWrap: "wrap", flex: 1, minWidth: 0 }}>
           <div style={{
@@ -588,8 +588,8 @@ const LabQueriesPage: React.FC = () => {
             <i className="fas fa-bookmark" style={{ color: "white", fontSize: 20 }} />
           </div>
           <div style={{ minWidth: 0 }}>
-            <h1 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 700, color: "#0f172a" }}>Query Activity</h1>
-            <p style={{ margin: "3px 0 0", fontSize: "0.85rem", color: "#64748b", lineHeight: 1.4 }}>
+            <h1 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 700, color: "var(--text-primary)" }}>Query Activity</h1>
+            <p style={{ margin: "3px 0 0", fontSize: "0.85rem", color: "var(--text-muted)", lineHeight: 1.4 }}>
               Your saved SQL queries and execution history.
             </p>
           </div>
@@ -610,8 +610,8 @@ const LabQueriesPage: React.FC = () => {
                 <span style={{
                   display: "inline-flex", alignItems: "center", gap: "0.35rem",
                   padding: "0.3rem 0.75rem", borderRadius: 20,
-                  background: "#eff6ff", border: "1px solid #bfdbfe",
-                  fontSize: 12, fontWeight: 600, color: "#1d4ed8", whiteSpace: "nowrap",
+                  background: "rgba(var(--accent-rgb), 0.08)", border: "1px solid rgba(var(--accent-rgb), 0.25)",
+                  fontSize: 12, fontWeight: 600, color: "var(--accent)", whiteSpace: "nowrap",
                 }}>
                   <i className="fas fa-history" style={{ fontSize: 10 }} />
                   {history.length} Total Runs
@@ -621,8 +621,8 @@ const LabQueriesPage: React.FC = () => {
                 <span style={{
                   display: "inline-flex", alignItems: "center", gap: "0.35rem",
                   padding: "0.3rem 0.75rem", borderRadius: 20,
-                  background: "#f1f5f9", border: "1px solid #e2e8f0",
-                  fontSize: 12, fontWeight: 600, color: "#64748b", whiteSpace: "nowrap",
+                  background: "var(--bg-hover)", border: "1px solid var(--border)",
+                  fontSize: 12, fontWeight: 600, color: "var(--text-muted)", whiteSpace: "nowrap",
                 }}>
                   <i className="fas fa-user" style={{ fontSize: 10 }} />
                   {history.filter(h => h.executed_by === userEmail).length} My Runs
@@ -661,7 +661,7 @@ const LabQueriesPage: React.FC = () => {
               {isLoadingSaved && <LoadingOverlay />}
               {!isLoadingSaved && errorSaved && (
                 typeof sessionStorage !== "undefined" && sessionStorage.getItem("lens_setup_ok") !== "1"
-                  ? <p className="muted">Metadata database not configured. <a href="/settings/system" style={{ color: "#2563eb" }}>Go to System Settings</a> to set it up.</p>
+                  ? <p className="muted">Metadata database not configured. <a href="/settings/system" style={{ color: "var(--accent)" }}>Go to System Settings</a> to set it up.</p>
                   : <p className="muted">{errorSaved}</p>
               )}
               {!isLoadingSaved && !errorSaved && sortedSavedQueries.length === 0 && (
@@ -793,7 +793,7 @@ const LabQueriesPage: React.FC = () => {
               {isLoadingHistory && <LoadingOverlay />}
               {!isLoadingHistory && errorHistory && (
                 typeof sessionStorage !== "undefined" && sessionStorage.getItem("lens_setup_ok") !== "1"
-                  ? <p className="muted">Metadata database not configured. <a href="/settings/system" style={{ color: "#2563eb" }}>Go to System Settings</a> to set it up.</p>
+                  ? <p className="muted">Metadata database not configured. <a href="/settings/system" style={{ color: "var(--accent)" }}>Go to System Settings</a> to set it up.</p>
                   : <p className="muted">{errorHistory}</p>
               )}
               {!isLoadingHistory && !errorHistory && history.length === 0 && (

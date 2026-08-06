@@ -1867,7 +1867,7 @@ return;
                                       >
                                         {col.name}
                                       </span>
-                                      <span className="column-type" style={{ color: '#888', fontSize: '12px' }}>{col.dataType}</span>
+                                      <span className="column-type" style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{col.dataType}</span>
                                     </div>
                                   ))}
                                 </>
@@ -1882,16 +1882,16 @@ return;
                 ))}
             </div>
             {/* Query History Panel */}
-            <div style={{ borderTop: "1px solid #e1e5e9", flexShrink: 0 }}>
+            <div style={{ borderTop: "1px solid var(--border)", flexShrink: 0 }}>
               <div
-                style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.5rem 0.75rem", cursor: "pointer", fontSize: "0.78rem", fontWeight: 600, color: "#374151", userSelect: "none" }}
+                style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.5rem 0.75rem", cursor: "pointer", fontSize: "0.78rem", fontWeight: 600, color: "var(--text-secondary)", userSelect: "none" }}
                 onClick={() => setIsHistoryPanelOpen((p) => !p)}
               >
                 <span><i className="fas fa-history" style={{ marginRight: 6 }} />Query History</span>
-                <i className={`fas fa-chevron-${isHistoryPanelOpen ? "up" : "down"}`} style={{ fontSize: "0.7rem", color: "#9ca3af" }} />
+                <i className={`fas fa-chevron-${isHistoryPanelOpen ? "up" : "down"}`} style={{ fontSize: "0.7rem", color: "var(--text-muted)" }} />
               </div>
               {isHistoryPanelOpen && (
-                <div style={{ maxHeight: 220, overflowY: "auto", borderTop: "1px solid #f1f5f9" }}>
+                <div style={{ maxHeight: 220, overflowY: "auto", borderTop: "1px solid var(--border)" }}>
                   <div style={{ padding: "0.5rem" }}>
                     <div className="sidebar-search-wrap">
                       <i className="fas fa-search sidebar-search-icon" />
@@ -1912,8 +1912,8 @@ return;
                     .map((h) => (
                       <div
                         key={h.id}
-                        style={{ padding: "0.4rem 0.75rem", cursor: "pointer", borderBottom: "1px solid #f1f5f9", fontSize: "0.75rem" }}
-                        onMouseEnter={(e) => (e.currentTarget.style.background = "#f0f7ff")}
+                        style={{ padding: "0.4rem 0.75rem", cursor: "pointer", borderBottom: "1px solid var(--border)", fontSize: "0.75rem" }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
                         onMouseLeave={(e) => (e.currentTarget.style.background = "")}
                         onClick={() => {
                           const newId = `hist${Date.now()}`;
@@ -1921,10 +1921,10 @@ return;
                           setActiveQueryId(newId);
                         }}
                       >
-                        <div style={{ fontFamily: "monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: "#1e293b" }}>
+                        <div style={{ fontFamily: "monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: "var(--text-primary)" }}>
                           {h.sql_text?.slice(0, 80)}{(h.sql_text?.length ?? 0) > 80 ? "…" : ""}
                         </div>
-                        <div style={{ color: "#9ca3af", fontSize: "0.7rem", marginTop: 2 }}>
+                        <div style={{ color: "var(--text-muted)", fontSize: "0.7rem", marginTop: 2 }}>
                           {h.started_at?.slice(0, 10)} · {(h.row_count ?? 0).toLocaleString()} rows
                           {h.duration_ms != null && ` · ${h.duration_ms}ms`}
                         </div>
@@ -1932,7 +1932,7 @@ return;
                     ))
                   }
                   {!isLoadingHistory && queryHistory.length === 0 && (
-                    <div style={{ padding: "0.5rem 0.75rem", fontSize: "0.75rem", color: "#9ca3af" }}>No history yet.</div>
+                    <div style={{ padding: "0.5rem 0.75rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>No history yet.</div>
                   )}
                 </div>
               )}
@@ -1943,7 +1943,7 @@ return;
           <div
             style={{ width: 5, cursor: "col-resize", flexShrink: 0, background: "transparent", zIndex: 10 }}
             onMouseDown={handleSidebarResizeMouseDown}
-            onMouseEnter={(e) => (e.currentTarget.style.background = "#e2e8f0")}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--border)")}
             onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
           />
 
@@ -1970,7 +1970,7 @@ return;
                           if (e.key === "Escape") setRenamingTabId(null);
                         }}
                         onClick={(e) => e.stopPropagation()}
-                        style={{ width: 90, padding: "0 4px", fontSize: "0.8rem", border: "1px solid #2563eb", borderRadius: 3 }}
+                        style={{ width: 90, padding: "0 4px", fontSize: "0.8rem", border: "1px solid var(--accent)", borderRadius: 3 }}
                       />
                     ) : (
                       <span
@@ -2132,7 +2132,7 @@ return;
                   <button
                     type="button"
                     className="template-btn"
-                    style={{ padding: "0.35rem 0.7rem", fontSize: "0.8rem", color: "#b91c1c" }}
+                    style={{ padding: "0.35rem 0.7rem", fontSize: "0.8rem", color: "var(--error)" }}
                     onClick={cancelQuery}
                     title="Cancel running query"
                   >
@@ -2153,8 +2153,8 @@ return;
                 </select>
 
                 {/* ── Templates group (centre) ── */}
-                <span style={{ width: 1, background: "#e2e8f0", alignSelf: "stretch", margin: "4px 4px" }} />
-                <span style={{ fontSize: "0.72rem", color: "#94a3b8", whiteSpace: "nowrap" }}>Templates</span>
+                <span style={{ width: 1, background: "var(--border)", alignSelf: "stretch", margin: "4px 4px" }} />
+                <span style={{ fontSize: "0.72rem", color: "var(--text-muted)", whiteSpace: "nowrap" }}>Templates</span>
                 <button type="button" className="template-btn" style={{ fontSize: "0.78rem" }} onClick={() => applyTemplate("sample")} title="SELECT TOP 100 * template">Sample</button>
                 <button type="button" className="template-btn" style={{ fontSize: "0.78rem" }} onClick={() => applyTemplate("rowcount")} title="COUNT(*) template">Count</button>
                 <button type="button" className="template-btn" style={{ fontSize: "0.78rem" }} onClick={() => applyTemplate("schema")} title="Schema info template">Schema</button>
@@ -2164,7 +2164,7 @@ return;
                 <button
                   type="button"
                   className="template-btn"
-                  style={{ fontSize: "0.78rem", color: "#6b7280" }}
+                  style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}
                   onClick={() => void estimateRowCount()}
                   disabled={isExecuting || isEstimating || !currentDatabase}
                   title="Estimate row count"
@@ -2175,7 +2175,7 @@ return;
                     ? <><i className="fas fa-calculator" /> ~{estimatedRows.toLocaleString()}</>
                     : <><i className="fas fa-calculator" /> Estimate</>}
                 </button>
-                <span style={{ width: 1, background: "#e2e8f0", alignSelf: "stretch", margin: "4px 2px" }} />
+                <span style={{ width: 1, background: "var(--border)", alignSelf: "stretch", margin: "4px 2px" }} />
                 <button
                   type="button"
                   className="format-btn"
@@ -2194,7 +2194,7 @@ return;
                 >
                   <i className="fas fa-save" /> Save
                 </button>
-                <span style={{ width: 1, background: "#e2e8f0", alignSelf: "stretch", margin: "4px 2px" }} />
+                <span style={{ width: 1, background: "var(--border)", alignSelf: "stretch", margin: "4px 2px" }} />
                 <button
                   type="button"
                   className="template-btn"
@@ -2202,7 +2202,7 @@ return;
                   title="Generate SQL with AI"
                   style={{
                     fontSize: "0.78rem",
-                    color: showAiBar ? "#7c3aed" : "#6b7280",
+                    color: showAiBar ? "#7c3aed" : "var(--text-secondary)",
                     background: showAiBar ? "#f5f3ff" : undefined,
                     borderColor: showAiBar ? "#ddd6fe" : undefined,
                     fontWeight: showAiBar ? 600 : undefined,
@@ -2217,8 +2217,8 @@ return;
                 <div style={{
                   display: "flex", alignItems: "center", gap: 6,
                   padding: "0.45rem 0.75rem",
-                  background: "#faf5ff",
-                  borderTop: "1px solid #ede9fe",
+                  background: "var(--bg-elevated)",
+                  borderTop: "1px solid var(--border)",
                   flexShrink: 0,
                 }}>
                   <i className="fas fa-magic" style={{ color: "#7c3aed", fontSize: 12, flexShrink: 0 }} />
@@ -2230,9 +2230,9 @@ return;
                     onKeyDown={e => { if (e.key === "Enter") void generateSqlWithAi(); }}
                     placeholder="Describe the query you need… e.g. top 10 customers by revenue last month"
                     style={{
-                      flex: 1, border: "1px solid #ddd6fe", borderRadius: 7,
+                      flex: 1, border: "1px solid var(--border)", borderRadius: 7,
                       padding: "0.3rem 0.65rem", fontSize: "0.8rem",
-                      color: "#1e293b", background: "white", outline: "none",
+                      color: "var(--text-primary)", background: "var(--bg-surface)", outline: "none",
                       minWidth: 0,
                     }}
                     onFocus={e => { e.currentTarget.style.borderColor = "#7c3aed"; e.currentTarget.style.boxShadow = "0 0 0 2px #ede9fe"; }}
@@ -2252,11 +2252,11 @@ return;
                   >
                     {aiGenerating ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Generating…</> : <>Generate SQL</>}
                   </button>
-                  {aiError && <span style={{ fontSize: "0.75rem", color: "#b91c1c", flexShrink: 0 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 3 }} />{aiError}</span>}
+                  {aiError && <span style={{ fontSize: "0.75rem", color: "var(--error)", flexShrink: 0 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 3 }} />{aiError}</span>}
                   <button
                     type="button"
                     onClick={() => { setShowAiBar(false); setAiPrompt(""); setAiError(null); }}
-                    style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: "0.2rem", fontSize: 14, flexShrink: 0 }}
+                    style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", padding: "0.2rem", fontSize: 14, flexShrink: 0 }}
                     title="Close"
                   >
                     <i className="fas fa-times" />
@@ -2269,7 +2269,7 @@ return;
             <div
               style={{ height: 5, cursor: "row-resize", flexShrink: 0, background: "transparent" }}
               onMouseDown={handlePanelResizeMouseDown}
-              onMouseEnter={(e) => (e.currentTarget.style.background = "#e2e8f0")}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "var(--border)")}
               onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
             />
 
@@ -2286,7 +2286,7 @@ return;
                       placeholder="Filter rows…"
                       value={resultFilter}
                       onChange={(e) => { setResultFilter(e.target.value); setCurrentPage(0); }}
-                      style={{ padding: "0.2rem 0.5rem", fontSize: "0.75rem", border: "1px solid #d1d5db", borderRadius: 4, width: 130 }}
+                      style={{ padding: "0.2rem 0.5rem", fontSize: "0.75rem", border: "1px solid var(--border)", borderRadius: 4, width: 130 }}
                     />
                   )}
                   <span id="resultStats" className="result-stats">
@@ -2315,31 +2315,31 @@ return;
                       </button>
 
                       {/* View controls */}
-                      <span style={{ width: 1, background: "#e2e8f0", alignSelf: "stretch", margin: "4px 2px" }} />
+                      <span style={{ width: 1, background: "var(--border)", alignSelf: "stretch", margin: "4px 2px" }} />
                       <div style={{ position: "relative" }}>
                         <button type="button" className="template-btn" style={{ padding: "0.25rem 0.6rem", fontSize: "0.75rem" }} onClick={() => setIsColumnPickerOpen((p) => !p)} title="Show/hide columns">
                           <i className="fas fa-columns" /> Columns
                           {hiddenColumns.size > 0 && (
-                            <span style={{ marginLeft: 4, background: "var(--lens-primary,#0078D4)", color: "#fff", borderRadius: 9, padding: "0 5px", fontSize: "0.7rem" }}>{hiddenColumns.size}</span>
+                            <span style={{ marginLeft: 4, background: "var(--accent)", color: "#fff", borderRadius: 9, padding: "0 5px", fontSize: "0.7rem" }}>{hiddenColumns.size}</span>
                           )}
                         </button>
                         {isColumnPickerOpen && (
                           <>
                             <div style={{ position: "fixed", inset: 0, zIndex: 199 }} onClick={() => setIsColumnPickerOpen(false)} />
-                            <div style={{ position: "absolute", top: "110%", right: 0, zIndex: 200, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, boxShadow: "0 4px 12px rgba(15,23,42,0.12)", minWidth: 180, maxHeight: 280, overflowY: "auto", padding: "0.4rem 0" }}>
-                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.3rem 0.75rem", borderBottom: "1px solid #f1f5f9", marginBottom: "0.25rem" }}>
-                                <span style={{ fontSize: "0.7rem", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Columns</span>
+                            <div style={{ position: "absolute", top: "110%", right: 0, zIndex: 200, background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 8, boxShadow: "var(--shadow-md)", minWidth: 180, maxHeight: 280, overflowY: "auto", padding: "0.4rem 0" }}>
+                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.3rem 0.75rem", borderBottom: "1px solid var(--border)", marginBottom: "0.25rem" }}>
+                                <span style={{ fontSize: "0.7rem", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Columns</span>
                                 <div style={{ display: "flex", gap: 6 }}>
-                                  <button type="button" style={{ fontSize: "0.7rem", color: "var(--lens-primary,#0078D4)", background: "none", border: "none", cursor: "pointer", padding: 0 }} onClick={() => setHiddenColumns(new Set())}>All</button>
-                                  <button type="button" style={{ fontSize: "0.7rem", color: "#6b7280", background: "none", border: "none", cursor: "pointer", padding: 0 }} onClick={() => setHiddenColumns(new Set(results.columns.map((_, i) => i)))}>None</button>
+                                  <button type="button" style={{ fontSize: "0.7rem", color: "var(--accent)", background: "none", border: "none", cursor: "pointer", padding: 0 }} onClick={() => setHiddenColumns(new Set())}>All</button>
+                                  <button type="button" style={{ fontSize: "0.7rem", color: "var(--text-secondary)", background: "none", border: "none", cursor: "pointer", padding: 0 }} onClick={() => setHiddenColumns(new Set(results.columns.map((_, i) => i)))}>None</button>
                                 </div>
                               </div>
                               {results.columns.map((col, idx) => (
-                                <label key={idx} style={{ display: "flex", alignItems: "center", gap: 8, padding: "0.3rem 0.75rem", cursor: "pointer", fontSize: "0.8rem", color: "#1e293b" }}
-                                  onMouseEnter={(e) => (e.currentTarget.style.background = "#f8fafc")}
+                                <label key={idx} style={{ display: "flex", alignItems: "center", gap: 8, padding: "0.3rem 0.75rem", cursor: "pointer", fontSize: "0.8rem", color: "var(--text-primary)" }}
+                                  onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
                                   onMouseLeave={(e) => (e.currentTarget.style.background = "")}
                                 >
-                                  <input type="checkbox" checked={!hiddenColumns.has(idx)} onChange={() => setHiddenColumns((prev) => { const next = new Set(prev); next.has(idx) ? next.delete(idx) : next.add(idx); return next; })} style={{ accentColor: "var(--lens-primary,#0078D4)" }} />
+                                  <input type="checkbox" checked={!hiddenColumns.has(idx)} onChange={() => setHiddenColumns((prev) => { const next = new Set(prev); next.has(idx) ? next.delete(idx) : next.add(idx); return next; })} style={{ accentColor: "var(--accent)" }} />
                                   {col}
                                 </label>
                               ))}
@@ -2357,7 +2357,7 @@ return;
 
                   {/* Clear — always last */}
                   {(results || multiResults || resultError) && !isExecuting && !isResultsFullscreen && (
-                    <button type="button" className="template-btn" style={{ padding: "0.25rem 0.5rem", fontSize: "0.75rem", color: "#6b7280" }} onClick={() => { setResults(null); setMultiResults(null); setResultError(null); setResultFilter(""); }} title="Clear results">
+                    <button type="button" className="template-btn" style={{ padding: "0.25rem 0.5rem", fontSize: "0.75rem", color: "var(--text-secondary)" }} onClick={() => { setResults(null); setMultiResults(null); setResultError(null); setResultFilter(""); }} title="Clear results">
                       <i className="fas fa-times" />
                     </button>
                   )}
@@ -2369,18 +2369,18 @@ return;
                 {multiResults && !isExecuting && (
                   <div>
                     {multiResults.map((item, idx) => (
-                      <div key={idx} style={{ marginBottom: "1rem", border: "1px solid #e1e5e9", borderRadius: 4 }}>
-                        <div style={{ padding: "0.4rem 0.8rem", background: "#f8fafc", borderBottom: "1px solid #e1e5e9", fontSize: "0.75rem", fontFamily: "monospace", color: "#374151" }}>
+                      <div key={idx} style={{ marginBottom: "1rem", border: "1px solid var(--border)", borderRadius: 4 }}>
+                        <div style={{ padding: "0.4rem 0.8rem", background: "var(--bg-primary)", borderBottom: "1px solid var(--border)", fontSize: "0.75rem", fontFamily: "monospace", color: "var(--text-secondary)" }}>
                           Statement {idx + 1}: {item.sql.length > 100 ? `${item.sql.slice(0, 100)}…` : item.sql}
                         </div>
                         {item.error ? (
-                          <div style={{ padding: "0.8rem", color: "#b91c1c", fontSize: "0.85rem" }}>
+                          <div style={{ padding: "0.8rem", color: "var(--error)", fontSize: "0.85rem" }}>
                             <i className="fas fa-exclamation-triangle" style={{ marginRight: "0.4rem" }} />
                             {item.error}
                           </div>
                         ) : item.result ? (
                           <div>
-                            <div style={{ padding: "0.3rem 0.8rem", fontSize: "0.75rem", color: "#6b7280" }}>
+                            <div style={{ padding: "0.3rem 0.8rem", fontSize: "0.75rem", color: "var(--text-secondary)" }}>
                               {(item.result.rowCount ?? item.result.rows.length).toLocaleString()} rows
                               {item.result.executionTime != null && ` · ${formatExecutionTime(item.result.executionTime)}`}
                             </div>
@@ -2419,7 +2419,7 @@ return;
                 )}
 
                 {!multiResults && resultError && (
-                  <div className="empty-state" style={{ color: "#b91c1c" }}>
+                  <div className="empty-state" style={{ color: "var(--error)" }}>
                     <i className="fas fa-exclamation-triangle" />
                     <h3>Error</h3>
                     <p>{resultError}</p>
@@ -2427,7 +2427,7 @@ return;
                 )}
 
                 {!multiResults && results && !resultError && filteredRows.length > PAGE_SIZE && (
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.3rem 0.75rem", borderBottom: "1px solid #e1e5e9", fontSize: "0.75rem", color: "#6b7280" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.3rem 0.75rem", borderBottom: "1px solid var(--border)", fontSize: "0.75rem", color: "var(--text-secondary)" }}>
                     <button
                       type="button"
                       className="template-btn"
@@ -2511,7 +2511,7 @@ return;
                                   onClick={() => copyCell(isNull ? "NULL" : stringValue)}
                                 >
                                   {isNull
-                                    ? <span style={{ color: "#9ca3af", fontStyle: "italic", fontSize: "0.85em" }}>NULL</span>
+                                    ? <span style={{ color: "var(--text-muted)", fontStyle: "italic", fontSize: "0.85em" }}>NULL</span>
                                     : stringValue}
                                 </td>
                               );
@@ -2552,7 +2552,7 @@ return;
                     {typeof sessionStorage !== "undefined" && sessionStorage.getItem("lens_setup_ok") !== "1" ? (
                       <p style={{ marginBottom: 8 }}>
                         Kaveon needs a metadata database to load data sources.{" "}
-                        <a href="/settings/system" style={{ color: "#2563eb", textDecoration: "underline" }}>
+                        <a href="/settings/system" style={{ color: "var(--accent)", textDecoration: "underline" }}>
                           Go to System Settings
                         </a>{" "}
                         to configure it.
@@ -2563,7 +2563,7 @@ return;
                           We couldn&apos;t connect to the primary database for Lab.
                         </p>
                         <p className="save-query-modal-error">{loadError}</p>
-                        <p style={{ fontSize: "0.8rem", color: "#6b7280", marginTop: 8 }}>
+                        <p style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginTop: 8 }}>
                           You can try again from the header refresh button or adjust the
                           data source connection settings.
                         </p>
@@ -2696,7 +2696,7 @@ return;
               </button>
             </div>
             <div className="save-query-modal-body">
-              <p style={{ fontSize: "0.85rem", color: "#374151", marginBottom: 12 }}>
+              <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)", marginBottom: 12 }}>
                 Kaveon will create a virtual dataset from your SQL query, then open the chart builder.
               </p>
               <p style={{ fontSize: "0.8rem", fontWeight: 600, marginBottom: 8 }}>Choose chart type:</p>
@@ -2722,13 +2722,13 @@ return;
                 ))}
               </div>
               {isCreatingChart && (
-                <p style={{ marginTop: 12, fontSize: "0.85rem", color: "#2563eb" }}>
+                <p style={{ marginTop: 12, fontSize: "0.85rem", color: "var(--accent)" }}>
                   <i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />
                   Creating dataset and chart…
                 </p>
               )}
               {visualizeError && (
-                <p style={{ marginTop: 10, fontSize: "0.85rem", color: "#b91c1c" }}>
+                <p style={{ marginTop: 10, fontSize: "0.85rem", color: "var(--error)" }}>
                   <i className="fas fa-exclamation-triangle" style={{ marginRight: 6 }} />
                   {visualizeError}
                 </p>
@@ -2740,7 +2740,7 @@ return;
 
       {/* ── Copy-cell toast ── */}
       {copiedCell && (
-        <div style={{ position: "fixed", bottom: 24, right: 24, background: "#1f2937", color: "#fff", padding: "0.4rem 0.9rem", borderRadius: 6, fontSize: "0.8rem", zIndex: 9999, pointerEvents: "none" }}>
+        <div style={{ position: "fixed", bottom: 24, right: 24, background: "var(--text-primary)", color: "var(--bg-primary)", padding: "0.4rem 0.9rem", borderRadius: 6, fontSize: "0.8rem", zIndex: 9999, pointerEvents: "none" }}>
           <i className="fas fa-check" style={{ marginRight: 6 }} />Copied
         </div>
       )}
