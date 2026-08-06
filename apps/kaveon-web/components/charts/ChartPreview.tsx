@@ -1,6 +1,8 @@
 import React, { useRef, useCallback, useEffect } from "react";
 import dynamic from "next/dynamic";
 import { useChartBuilder } from "./ChartBuilderContext";
+import { useTheme } from "../../contexts/ThemeContext";
+import { applyChartTheme } from "../../utils/echartsTheme";
 import { getPlugin } from "./chartPluginRegistry";
 import { normaliseCountryName } from "../../utils/countryAliases";
 
@@ -761,6 +763,8 @@ interface ChartPreviewProps {
 
 const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterExports }) => {
   const { selectedTemplate, selectedDatasetId, previewOptions, sqlPreview, description, chartType, advancedOptions, cancelRunningQuery, runContext } = useChartBuilder();
+  const { theme: appTheme } = useTheme();
+  const isDark = appTheme === "dark";
   const echartsInstanceRef = useRef<any>(null);
 
   // ── Download helpers ─────────────────────────────────────────────────────────
@@ -1231,7 +1235,7 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
           })()
         ) : hasOption && !sqlPreview.isRunning ? (
           <ReactECharts
-            option={chartOptions}
+            option={applyChartTheme(chartOptions, isDark)}
             style={{ width: "100%", height: "100%", cursor: onCrossFilter ? 'pointer' : undefined }}
             key={
               // Force re-render when xAxis date format changes
