@@ -79,7 +79,7 @@ const ChartDetailBuilderView: React.FC<ChartDetailBuilderViewProps> = ({
                 className="page-header-title"
                 style={{ margin: 0, cursor: "pointer", borderRadius: 6, padding: "4px 8px", border: "2px solid transparent", transition: "background 0.15s" }}
                 onClick={() => setIsEditingName(true)}
-                onMouseOver={e => { e.currentTarget.style.background = "#f1f5f9"; }}
+                onMouseOver={e => { e.currentTarget.style.background = "var(--bg-hover)"; }}
                 onMouseOut={e => { e.currentTarget.style.background = "transparent"; }}
                 title="Click to rename"
               >
@@ -95,10 +95,10 @@ const ChartDetailBuilderView: React.FC<ChartDetailBuilderViewProps> = ({
                 onKeyDown={e => { if (e.key === "Enter" || e.key === "Escape") setIsEditingName(false); }}
                 placeholder="Chart name"
                 style={{
-                  fontSize: 18, fontWeight: 600, color: "#1e293b",
+                  fontSize: 18, fontWeight: 600, color: "var(--text-primary)",
                   padding: "4px 8px", margin: 0,
-                  border: "2px solid #2563eb", borderRadius: 6,
-                  outline: "none", background: "#fff",
+                  border: "2px solid var(--accent)", borderRadius: 6,
+                  outline: "none", background: "var(--bg-surface)",
                   fontFamily: "inherit", minWidth: 200,
                 }}
               />
@@ -126,7 +126,7 @@ const ChartDetailBuilderView: React.FC<ChartDetailBuilderViewProps> = ({
             }}
             onMouseOver={(e) => {
               if (!isAnimating) {
-                e.currentTarget.style.background = isFavorite ? '#FEF3C7' : '#F3F4F6';
+                e.currentTarget.style.background = isFavorite ? 'color-mix(in srgb, #F59E0B 15%, var(--bg-surface))' : 'var(--bg-hover)';
                 e.currentTarget.style.transform = 'scale(1.05)';
               }
             }}
@@ -142,7 +142,7 @@ const ChartDetailBuilderView: React.FC<ChartDetailBuilderViewProps> = ({
               aria-hidden="true"
               style={{
                 fontSize: '20px',
-                color: isFavorite ? '#F59E0B' : '#9CA3AF',
+                color: isFavorite ? '#F59E0B' : 'var(--text-muted)',
                 transition: 'all 0.2s ease',
                 filter: isFavorite ? 'drop-shadow(0 2px 4px rgba(245, 158, 11, 0.3))' : 'none',
                 transform: isAnimating && isFavorite ? 'scale(1.3)' : 'scale(1)',

@@ -122,12 +122,12 @@ const ChartNewPage: React.FC = () => {
   return (
     <div className="page-shell page-shell-wide" style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
       {/* ── Page header ──────────────────────────────────────────────────── */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0 14px', borderBottom: '1px solid #f1f5f9', marginBottom: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0 14px', borderBottom: '1px solid var(--border)', marginBottom: 14 }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#0f172a', fontFamily: 'Inter, -apple-system, sans-serif', letterSpacing: '-0.02em', lineHeight: 1.2 }}>
+          <h1 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'Inter, -apple-system, sans-serif', letterSpacing: '-0.02em', lineHeight: 1.2 }}>
             New chart
           </h1>
-          <p style={{ margin: 0, color: '#94a3b8', fontSize: 12, fontFamily: 'Inter, -apple-system, sans-serif' }}>
+          <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: 12, fontFamily: 'Inter, -apple-system, sans-serif' }}>
             {labSql ? 'Choose a dataset matching your Lab query, then pick a chart type.' : 'Select a dataset and chart type to get started.'}
           </p>
         </div>
@@ -135,19 +135,19 @@ const ChartNewPage: React.FC = () => {
         {/* Action area in header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           {createError && (
-            <span style={{ color: '#b91c1c', fontSize: 12, fontFamily: 'Inter, -apple-system, sans-serif' }}>{createError}</span>
+            <span style={{ color: 'var(--error)', fontSize: 12, fontFamily: 'Inter, -apple-system, sans-serif' }}>{createError}</span>
           )}
           {/* Selection pills */}
           {(selectedDataset || selectedTemplate) && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px', background: 'var(--bg-primary)', borderRadius: 8, border: '1px solid var(--border)' }}>
               {selectedDataset && (
-                <span style={{ fontSize: 12, color: '#1e293b', fontFamily: 'Inter, -apple-system, sans-serif', fontWeight: 500 }}>
-                  <i className="fas fa-table" style={{ color: '#2563eb', marginRight: 5, fontSize: 10 }} />
+                <span style={{ fontSize: 12, color: 'var(--text-primary)', fontFamily: 'Inter, -apple-system, sans-serif', fontWeight: 500 }}>
+                  <i className="fas fa-table" style={{ color: 'var(--accent)', marginRight: 5, fontSize: 10 }} />
                   {selectedDataset.name.length > 22 ? selectedDataset.name.slice(0, 22) + '…' : selectedDataset.name}
                 </span>
               )}
               {selectedDataset && selectedTemplate && (
-                <svg viewBox="0 0 16 16" width="10" height="10" fill="none" stroke="#cbd5e1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg viewBox="0 0 16 16" width="10" height="10" fill="none" stroke="var(--border)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="5,3 11,8 5,13" />
                 </svg>
               )}
@@ -174,18 +174,18 @@ const ChartNewPage: React.FC = () => {
 
       {/* Lab SQL banner */}
       {labSql && (
-        <div style={{ marginBottom: 12, padding: '10px 14px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, fontSize: 12, fontFamily: 'Inter, -apple-system, sans-serif' }}>
-          <span style={{ fontWeight: 600, color: '#1d4ed8' }}>
+        <div style={{ marginBottom: 12, padding: '10px 14px', background: 'color-mix(in srgb, var(--accent) 8%, var(--bg-surface))', border: '1px solid color-mix(in srgb, var(--accent) 30%, var(--border))', borderRadius: 8, fontSize: 12, fontFamily: 'Inter, -apple-system, sans-serif' }}>
+          <span style={{ fontWeight: 600, color: 'var(--accent)' }}>
             <i className="fas fa-flask" style={{ marginRight: 6 }} />From SQL Lab —&nbsp;
           </span>
-          <code style={{ color: '#374151', wordBreak: 'break-all' }}>
+          <code style={{ color: 'var(--text-secondary)', wordBreak: 'break-all' }}>
             {labSql.length > 200 ? `${labSql.slice(0, 200)}…` : labSql}
           </code>
         </div>
       )}
 
       {!isAuthenticated && (
-        <p style={{ color: '#64748b', fontFamily: 'Inter, -apple-system, sans-serif' }}>Sign in to create charts.</p>
+        <p style={{ color: 'var(--text-muted)', fontFamily: 'Inter, -apple-system, sans-serif' }}>Sign in to create charts.</p>
       )}
 
       {isAuthenticated && datasetsError && (
@@ -202,15 +202,15 @@ const ChartNewPage: React.FC = () => {
           <div style={{ width: 272, flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
             <div className="card" style={{ padding: 0, overflow: 'hidden', flex: 1, display: 'flex', flexDirection: 'column' }}>
               {/* Header */}
-              <div style={{ padding: '12px 14px 10px', borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+              <div style={{ padding: '12px 14px 10px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
                 <span style={{
                   width: 18, height: 18, borderRadius: '50%',
-                  background: '#0f172a', color: '#fff',
+                  background: 'var(--text-primary)', color: 'var(--bg-surface)',
                   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                   fontSize: 10, fontWeight: 700, letterSpacing: 0, flexShrink: 0,
                   fontFamily: 'Inter, -apple-system, sans-serif',
                 }}>1</span>
-                <span style={{ fontWeight: 600, fontSize: 12.5, color: '#0f172a', fontFamily: 'Inter, -apple-system, sans-serif', flex: 1 }}>
+                <span style={{ fontWeight: 600, fontSize: 12.5, color: 'var(--text-primary)', fontFamily: 'Inter, -apple-system, sans-serif', flex: 1 }}>
                   Dataset
                 </span>
                 <button
@@ -218,7 +218,7 @@ const ChartNewPage: React.FC = () => {
                   onClick={() => router.push('/datasets/new')}
                   style={{
                     background: 'none', border: 'none', cursor: 'pointer',
-                    color: '#0078d4', fontSize: 11, fontWeight: 500,
+                    color: 'var(--accent)', fontSize: 11, fontWeight: 500,
                     fontFamily: 'Inter, -apple-system, sans-serif',
                     display: 'flex', alignItems: 'center', gap: 3, padding: 0,
                   }}
@@ -228,9 +228,9 @@ const ChartNewPage: React.FC = () => {
               </div>
 
               {/* Search */}
-              <div style={{ padding: '8px 10px', borderBottom: '1px solid #f1f5f9', flexShrink: 0 }}>
+              <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
                 <div style={{ position: 'relative' }}>
-                  <i className="fas fa-search" style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', fontSize: 10, pointerEvents: 'none' }} />
+                  <i className="fas fa-search" style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: 10, pointerEvents: 'none' }} />
                   <input
                     type="text"
                     placeholder="Search datasets..."
@@ -239,8 +239,8 @@ const ChartNewPage: React.FC = () => {
                     style={{
                       width: '100%', boxSizing: 'border-box',
                       paddingLeft: 26, paddingRight: 8, paddingTop: 5, paddingBottom: 5,
-                      border: '1.5px solid #e2e8f0', borderRadius: 6,
-                      fontSize: 12, color: '#1e293b', background: '#f8fafc',
+                      border: '1.5px solid var(--border)', borderRadius: 6,
+                      fontSize: 12, color: 'var(--text-primary)', background: 'var(--bg-primary)',
                       outline: 'none', fontFamily: 'Inter, -apple-system, sans-serif',
                     }}
                   />
@@ -250,12 +250,12 @@ const ChartNewPage: React.FC = () => {
               {/* Scrollable dataset list */}
               <div style={{ flex: 1, overflowY: 'auto', padding: '5px 7px' }}>
                 {datasets.length === 0 && (
-                  <div style={{ padding: '24px 8px', textAlign: 'center', color: '#94a3b8', fontSize: 12, fontFamily: 'Inter, -apple-system, sans-serif' }}>
+                  <div style={{ padding: '24px 8px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 12, fontFamily: 'Inter, -apple-system, sans-serif' }}>
                     No datasets available yet.
                   </div>
                 )}
                 {filteredDatasets.length === 0 && datasets.length > 0 && (
-                  <div style={{ padding: '16px 8px', textAlign: 'center', color: '#94a3b8', fontSize: 12, fontFamily: 'Inter, -apple-system, sans-serif' }}>
+                  <div style={{ padding: '16px 8px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 12, fontFamily: 'Inter, -apple-system, sans-serif' }}>
                     No datasets match.
                   </div>
                 )}
@@ -269,35 +269,35 @@ const ChartNewPage: React.FC = () => {
                       style={{
                         width: '100%', textAlign: 'left',
                         padding: '8px 9px', borderRadius: 7, marginBottom: 2,
-                        border: isSelected ? '1.5px solid #bfdbfe' : '1.5px solid transparent',
-                        background: isSelected ? '#eff6ff' : 'transparent',
+                        border: isSelected ? '1.5px solid var(--accent)' : '1.5px solid transparent',
+                        background: isSelected ? 'color-mix(in srgb, var(--accent) 8%, transparent)' : 'transparent',
                         cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
                         transition: 'background 0.1s',
                         fontFamily: 'Inter, -apple-system, sans-serif',
                       }}
-                      onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLButtonElement).style.background = '#f8fafc'; }}
+                      onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-hover)'; }}
                       onMouseLeave={e => { if (!isSelected) (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
                     >
                       <div style={{
                         width: 28, height: 28, borderRadius: 6, flexShrink: 0,
-                        background: isSelected ? '#dbeafe' : '#f1f5f9',
+                        background: isSelected ? 'color-mix(in srgb, var(--accent) 15%, transparent)' : 'var(--bg-hover)',
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                       }}>
-                        <i className="fas fa-table" style={{ fontSize: 11, color: isSelected ? '#2563eb' : '#94a3b8' }} />
+                        <i className="fas fa-table" style={{ fontSize: 11, color: isSelected ? 'var(--accent)' : 'var(--text-muted)' }} />
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 12, fontWeight: isSelected ? 600 : 500, color: isSelected ? '#1d4ed8' : '#1e293b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        <div style={{ fontSize: 12, fontWeight: isSelected ? 600 : 500, color: isSelected ? 'var(--accent)' : 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                           {ds.name}
                         </div>
                         {ds.description && (
-                          <div style={{ fontSize: 11, color: '#94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: 1 }}>
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: 1 }}>
                             {ds.description}
                           </div>
                         )}
                       </div>
                       {isSelected && (
-                        <div style={{ width: 15, height: 15, borderRadius: '50%', background: '#2563eb', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                          <svg viewBox="0 0 10 10" width="8" height="8"><polyline points="1.5,5 4,7.5 8.5,2.5" fill="none" stroke="white" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                        <div style={{ width: 15, height: 15, borderRadius: '50%', background: 'var(--accent)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          <svg viewBox="0 0 10 10" width="8" height="8"><polyline points="1.5,5 4,7.5 8.5,2.5" fill="none" stroke="var(--bg-surface)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
                         </div>
                       )}
                     </button>
@@ -311,19 +311,19 @@ const ChartNewPage: React.FC = () => {
           <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
             <div className="card" style={{ padding: 0, overflow: 'hidden', flex: 1, display: 'flex', flexDirection: 'column' }}>
               {/* Header row: label + search */}
-              <div style={{ padding: '12px 14px 10px', borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+              <div style={{ padding: '12px 14px 10px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
                 <span style={{
                   width: 18, height: 18, borderRadius: '50%',
-                  background: '#0f172a', color: '#fff',
+                  background: 'var(--text-primary)', color: 'var(--bg-surface)',
                   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                   fontSize: 10, fontWeight: 700, letterSpacing: 0, flexShrink: 0,
                   fontFamily: 'Inter, -apple-system, sans-serif',
                 }}>2</span>
-                <span style={{ fontWeight: 600, fontSize: 12.5, color: '#0f172a', fontFamily: 'Inter, -apple-system, sans-serif' }}>
+                <span style={{ fontWeight: 600, fontSize: 12.5, color: 'var(--text-primary)', fontFamily: 'Inter, -apple-system, sans-serif' }}>
                   Chart type
                 </span>
                 <div style={{ marginLeft: 'auto', position: 'relative' }}>
-                  <i className="fas fa-search" style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', fontSize: 10, pointerEvents: 'none' }} />
+                  <i className="fas fa-search" style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: 10, pointerEvents: 'none' }} />
                   <input
                     type="text"
                     placeholder="Search chart types..."
@@ -331,8 +331,8 @@ const ChartNewPage: React.FC = () => {
                     onChange={e => setChartSearch(e.target.value)}
                     style={{
                       paddingLeft: 26, paddingRight: 8, paddingTop: 5, paddingBottom: 5,
-                      border: '1.5px solid #e2e8f0', borderRadius: 6, width: 170,
-                      fontSize: 12, color: '#1e293b', background: '#f8fafc',
+                      border: '1.5px solid var(--border)', borderRadius: 6, width: 170,
+                      fontSize: 12, color: 'var(--text-primary)', background: 'var(--bg-primary)',
                       outline: 'none', fontFamily: 'Inter, -apple-system, sans-serif',
                     }}
                   />
@@ -343,10 +343,10 @@ const ChartNewPage: React.FC = () => {
               <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
 
                 {/* ── Category sidebar ──────────────────────────────────── */}
-                <div style={{ width: 118, flexShrink: 0, borderRight: '1px solid #f1f5f9', overflowY: 'auto', padding: '6px 0' }}>
+                <div style={{ width: 118, flexShrink: 0, borderRight: '1px solid var(--border)', overflowY: 'auto', padding: '6px 0' }}>
                   {[{ id: null as string | null, label: 'All', iconClass: 'fas fa-th-large' }, ...categories].map(cat => {
                     const active = activeCategory === (cat.id ?? null);
-                    const color = cat.id ? (CATEGORY_COLOR[cat.id] ?? DEFAULT_COLOR) : '#334155';
+                    const color = cat.id ? (CATEGORY_COLOR[cat.id] ?? DEFAULT_COLOR) : 'var(--text-secondary)';
                     return (
                       <button
                         key={cat.id ?? 'all'}
@@ -366,14 +366,14 @@ const ChartNewPage: React.FC = () => {
                       >
                         <span style={{
                           width: 22, height: 22, borderRadius: 6, flexShrink: 0,
-                          background: active ? `${color}20` : '#f1f5f9',
+                          background: active ? `${color}20` : 'var(--bg-hover)',
                           display: 'flex', alignItems: 'center', justifyContent: 'center',
                         }}>
-                          <i className={(cat as any).iconClass || 'fas fa-shapes'} style={{ fontSize: 9.5, color: active ? color : '#94a3b8' }} />
+                          <i className={(cat as any).iconClass || 'fas fa-shapes'} style={{ fontSize: 9.5, color: active ? color : 'var(--text-muted)' }} />
                         </span>
                         <span style={{
                           fontSize: 11.5, fontWeight: active ? 600 : 400,
-                          color: active ? color : '#475569',
+                          color: active ? color : 'var(--text-secondary)',
                           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                         }}>
                           {cat.label}
@@ -386,7 +386,7 @@ const ChartNewPage: React.FC = () => {
                 {/* ── Scrollable chart grid ─────────────────────────────── */}
                 <div style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>
                   {visibleTemplates.length === 0 ? (
-                    <div style={{ padding: '30px 0', textAlign: 'center', color: '#94a3b8', fontSize: 12, fontFamily: 'Inter, -apple-system, sans-serif' }}>
+                    <div style={{ padding: '30px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: 12, fontFamily: 'Inter, -apple-system, sans-serif' }}>
                       No chart types match this search.
                     </div>
                   ) : (
@@ -409,8 +409,8 @@ const ChartNewPage: React.FC = () => {
                               justifyContent: 'center', gap: 10,
                               padding: '18px 8px 14px',
                               borderRadius: 12, cursor: 'pointer',
-                              border: isSelected ? `2px solid ${color}` : '1.5px solid #e2e8f0',
-                              background: isSelected ? `${color}0e` : '#fafafa',
+                              border: isSelected ? `2px solid ${color}` : '1.5px solid var(--border)',
+                              background: isSelected ? `${color}0e` : 'var(--bg-elevated)',
                               boxShadow: isSelected ? `0 0 0 3px ${color}20` : 'none',
                               transition: 'all 0.12s ease',
                               position: 'relative',
@@ -421,14 +421,14 @@ const ChartNewPage: React.FC = () => {
                                 const el = e.currentTarget as HTMLButtonElement;
                                 el.style.borderColor = color;
                                 el.style.background = `${color}08`;
-                                el.style.boxShadow = '0 2px 10px rgba(0,0,0,0.08)';
+                                el.style.boxShadow = 'var(--shadow-sm)';
                               }
                             }}
                             onMouseLeave={e => {
                               if (!isSelected) {
                                 const el = e.currentTarget as HTMLButtonElement;
-                                el.style.borderColor = '#e2e8f0';
-                                el.style.background = '#fafafa';
+                                el.style.borderColor = 'var(--border)';
+                                el.style.background = 'var(--bg-elevated)';
                                 el.style.boxShadow = 'none';
                               }
                             }}
@@ -446,7 +446,7 @@ const ChartNewPage: React.FC = () => {
                             {/* Name */}
                             <span style={{
                               fontSize: 11.5, fontWeight: isSelected ? 600 : 500,
-                              color: isSelected ? color : '#374151',
+                              color: isSelected ? color : 'var(--text-secondary)',
                               textAlign: 'center', lineHeight: 1.35,
                               letterSpacing: '-0.01em',
                             }}>
