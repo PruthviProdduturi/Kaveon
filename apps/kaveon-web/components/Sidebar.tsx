@@ -632,7 +632,11 @@ export function Sidebar({ children }: SidebarProps) {
                       <span
                         data-close
                         role="button"
-                        onClick={(e) => { e.stopPropagation(); removeRecent(item.id); }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeRecent(item.id);
+                          if (pathname === item.href) router.push("/");
+                        }}
                         style={{
                           display: "none",
                           alignItems: "center",
