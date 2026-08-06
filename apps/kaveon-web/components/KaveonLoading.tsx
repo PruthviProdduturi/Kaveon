@@ -26,7 +26,7 @@ export function KaveonLoading({ message = "Loading" }: KaveonLoadingProps) {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: "#09090b",
+        background: "var(--bg-primary)",
         zIndex: 9999,
       }}
     >
@@ -47,7 +47,7 @@ export function KaveonLoading({ message = "Loading" }: KaveonLoadingProps) {
             fontSize: 13,
             fontWeight: 400,
             letterSpacing: "0.1em",
-            color: "#475569",
+            color: "var(--text-muted)",
             textTransform: "uppercase",
             minWidth: 120,
             textAlign: "center",
@@ -61,7 +61,7 @@ export function KaveonLoading({ message = "Loading" }: KaveonLoadingProps) {
           style={{
             width: 180,
             height: 2,
-            background: "rgba(255,255,255,0.04)",
+            background: "var(--border)",
             borderRadius: 1,
             overflow: "hidden",
           }}
