@@ -7,6 +7,7 @@ import { KaveonMark, KaveonWordmark } from "./KaveonMark";
 import { TabBar } from "./TabBar";
 import { useAuth } from "../auth/useAuth";
 import { useTheme } from "../contexts/ThemeContext";
+import { useTabContext } from "../contexts/TabContext";
 import { useRole } from "../hooks/useRole";
 
 const SIDEBAR_COLLAPSED_KEY = "kaveon-sidebar-collapsed";
@@ -316,6 +317,7 @@ function UserMenu({
 export function Sidebar({ children }: SidebarProps) {
   const { account, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
+  const { openTab } = useTabContext();
   const router = useRouter();
   const { isAdmin } = useRole();
   const pathname = usePathname();
@@ -504,6 +506,11 @@ export function Sidebar({ children }: SidebarProps) {
               <Link
                 key={item.href}
                 href={item.href}
+                onClick={() => {
+                  if (item.href !== "/") {
+                    openTab({ label: item.label, href: item.href, type: "page" });
+                  }
+                }}
                 title={collapsed ? item.label : undefined}
                 style={{
                   display: "flex",
