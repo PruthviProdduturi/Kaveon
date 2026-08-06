@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback, ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { KaveonMark, KaveonWordmark } from "./KaveonMark";
+import { KaveonMark } from "./KaveonMark";
 import { useAuth } from "../auth/useAuth";
 import { useTheme } from "../contexts/ThemeContext";
 import { useRole } from "../hooks/useRole";
