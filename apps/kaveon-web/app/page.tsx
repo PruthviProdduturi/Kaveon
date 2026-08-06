@@ -369,23 +369,6 @@ export default function HomePage() {
         )}
       </div>
 
-      {/* Keyboard hints */}
-      <div
-        style={{
-          position: "absolute",
-          bottom: "1.25rem",
-          left: "50%",
-          transform: "translateX(-50%)",
-          display: "flex",
-          gap: "1.5rem",
-          fontSize: "12px",
-          color: "var(--text-faint)",
-          whiteSpace: "nowrap",
-        }}
-      >
-        <span>⌘K search</span>
-        <span>⌘J SQL Lab</span>
-      </div>
     </div>
   );
 }
