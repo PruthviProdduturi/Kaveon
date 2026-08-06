@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useState, useEffect, ReactNode } from "react";
+import React, { useState, useEffect, useRef, useCallback, ReactNode } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { KaveonMark, KaveonWordmark } from "./KaveonMark";
 import { useAuth } from "../auth/useAuth";
 import { useTheme } from "../contexts/ThemeContext";
@@ -135,9 +135,183 @@ interface SidebarProps {
   children: ReactNode;
 }
 
+/* ─── User Menu Popup ─── */
+function UserMenu({
+  account,
+  collapsed,
+  theme,
+  toggleTheme,
+  logout,
+  router,
+  isAdmin,
+}: {
+  account: { name?: string; email?: string } | null;
+  collapsed: boolean;
+  theme: string;
+  toggleTheme: () => void;
+  logout: () => Promise<void>;
+  router: ReturnType<typeof useRouter>;
+  isAdmin: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
+  const menuItem = (label: string, onClick: () => void, icon?: ReactNode, danger?: boolean) => (
+    <button
+      type="button"
+      key={label}
+      onClick={() => { onClick(); setOpen(false); }}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        width: "100%",
+        padding: "9px 14px",
+        border: "none",
+        background: "transparent",
+        color: danger ? "var(--error)" : "var(--text-secondary)",
+        fontSize: 13,
+        cursor: "pointer",
+        borderRadius: 6,
+        textAlign: "left",
+        transition: "background 0.1s",
+      }}
+      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
+      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+    >
+      {icon && <span style={{ display: "flex", alignItems: "center", flexShrink: 0, opacity: 0.7 }}>{icon}</span>}
+      {label}
+    </button>
+  );
+
+  return (
+    <div ref={menuRef} style={{ borderTop: "1px solid var(--border)", padding: collapsed ? "10px 0" : "10px 8px", flexShrink: 0, position: "relative" }}>
+      {/* Popup menu */}
+      {open && !collapsed && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: "100%",
+            left: 8,
+            right: 8,
+            marginBottom: 6,
+            background: "var(--bg-surface)",
+            border: "1px solid var(--border)",
+            borderRadius: 10,
+            padding: "6px",
+            boxShadow: "var(--shadow-lg)",
+            zIndex: 200,
+          }}
+        >
+          {/* Appearance */}
+          {menuItem(
+            theme === "dark" ? "Light mode" : "Dark mode",
+            toggleTheme,
+            theme === "dark" ? <SunIcon /> : <MoonIcon />,
+          )}
+
+          <div style={{ height: 1, background: "var(--border)", margin: "4px 8px" }} />
+
+          {/* Data Sources */}
+          {menuItem("Data Sources", () => router.push("/data-sources"),
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+          )}
+
+          {/* Configurations (admin only) */}
+          {isAdmin && menuItem("Configurations", () => router.push("/settings/system"),
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          )}
+
+          {/* Learn More */}
+          {menuItem("Learn More", () => router.push("/about"),
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+          )}
+
+          <div style={{ height: 1, background: "var(--border)", margin: "4px 8px" }} />
+
+          {/* Sign Out */}
+          {menuItem("Sign Out", logout,
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>,
+            true,
+          )}
+        </div>
+      )}
+
+      {/* User card — clickable */}
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          padding: collapsed ? "6px 0" : "8px 10px",
+          justifyContent: collapsed ? "center" : "flex-start",
+          width: "100%",
+          border: "none",
+          background: open ? "var(--bg-hover)" : "transparent",
+          borderRadius: 8,
+          cursor: "pointer",
+          transition: "background 0.1s",
+        }}
+        title={collapsed ? (account?.name ?? "User") : undefined}
+      >
+        <div
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: "50%",
+            background: "linear-gradient(135deg, #6db3ed 0%, #4A9EE8 50%, #2d7dd2 100%)",
+            color: "white",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 12,
+            fontWeight: 700,
+            letterSpacing: "0.5px",
+            flexShrink: 0,
+            boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
+          }}
+        >
+          {getInitials(account?.name)}
+        </div>
+        {!collapsed && (
+          <div style={{ overflow: "hidden", flex: 1, textAlign: "left" }}>
+            <div style={{
+              fontSize: 13,
+              fontWeight: 600,
+              color: "var(--text-primary)",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}>
+              {account?.name ?? "User"}
+            </div>
+          </div>
+        )}
+        {!collapsed && (
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+            <path d="M7 15l5 5 5-5"/><path d="M7 9l5-5 5 5"/>
+          </svg>
+        )}
+      </button>
+    </div>
+  );
+}
+
 export function Sidebar({ children }: SidebarProps) {
-  const { account } = useAuth();
+  const { account, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
+  const router = useRouter();
   const { isAdmin } = useRole();
   const pathname = usePathname();
 
@@ -172,17 +346,6 @@ export function Sidebar({ children }: SidebarProps) {
       label: "SQL Lab",
       href: "/lab",
       icon: <SqlLabIcon />,
-    },
-    {
-      label: "Data Sources",
-      href: "/data-sources",
-      icon: <DataSourcesIcon />,
-    },
-    {
-      label: "Settings",
-      href: "/settings/system",
-      icon: <SettingsIcon />,
-      adminOnly: true,
     },
   ];
 
@@ -364,101 +527,16 @@ export function Sidebar({ children }: SidebarProps) {
         {/* Pinned + Recent (placeholder) */}
         <div style={{ flex: 1 }} />
 
-        {/* Footer */}
-        <div style={{
-          borderTop: "1px solid var(--border)",
-          padding: collapsed ? "12px 0" : "12px",
-          display: "flex",
-          flexDirection: "column",
-          gap: 8,
-          flexShrink: 0,
-        }}>
-          {/* Theme toggle */}
-          <button
-            type="button"
-            onClick={toggleTheme}
-            title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-            aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              padding: collapsed ? "8px 0" : "8px 10px",
-              justifyContent: collapsed ? "center" : "flex-start",
-              borderRadius: 7,
-              border: "none",
-              background: "transparent",
-              cursor: "pointer",
-              color: "var(--text-secondary)",
-              fontSize: 13.5,
-              width: "100%",
-              transition: `background ${TRANSITION}, color ${TRANSITION}`,
-            }}
-          >
-            <span style={{ flexShrink: 0, display: "flex", alignItems: "center" }}>
-              {theme === "dark" ? <SunIcon /> : <MoonIcon />}
-            </span>
-            {!collapsed && (
-              <span style={{ whiteSpace: "nowrap" }}>
-                {theme === "dark" ? "Light mode" : "Dark mode"}
-              </span>
-            )}
-          </button>
-
-          {/* User avatar */}
-          <div style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            padding: collapsed ? "6px 0" : "6px 10px",
-            justifyContent: collapsed ? "center" : "flex-start",
-            overflow: "hidden",
-          }}>
-            <div
-              title={collapsed ? (account?.name ?? "User") : undefined}
-              style={{
-                width: 32,
-                height: 32,
-                borderRadius: "50%",
-                background: "linear-gradient(135deg, #6db3ed 0%, #4A9EE8 50%, #2d7dd2 100%)",
-                color: "white",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 12,
-                fontWeight: 700,
-                letterSpacing: "0.5px",
-                flexShrink: 0,
-                boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
-              }}
-            >
-              {getInitials(account?.name)}
-            </div>
-            {!collapsed && (
-              <div style={{ overflow: "hidden", flex: 1 }}>
-                <div style={{
-                  fontSize: 13,
-                  fontWeight: 600,
-                  color: "var(--text-primary)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}>
-                  {account?.name ?? "User"}
-                </div>
-                <div style={{
-                  fontSize: 11,
-                  color: "var(--text-muted)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}>
-                  {account?.email ?? ""}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+        {/* Footer — User card */}
+        <UserMenu
+          account={account}
+          collapsed={collapsed}
+          theme={theme}
+          toggleTheme={toggleTheme}
+          logout={logout}
+          router={router}
+          isAdmin={isAdmin}
+        />
       </aside>
 
       {/* Main content */}
