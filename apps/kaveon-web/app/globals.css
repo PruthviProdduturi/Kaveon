@@ -1,88 +1,108 @@
 @import "tailwindcss";
 
-/* Kaveon Brand Colors - Default Grey Theme */
+/* ─── Kaveon Design Tokens ─── */
 :root {
-  --lens-primary: #8f9192;
-  --lens-secondary: #a9acad;
-  --lens-accent: #c3c6c7;
-  --lens-dark: #6d7071;
-  --lens-light: #d7d9da;
+  --accent: #4A9EE8;
+  --accent-dark: #2d7dd2;
+  --accent-rgb: 74, 158, 232;
+
+  --bg-primary: #fafafa;
+  --bg-surface: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-hover: #f4f5f7;
+
+  --border: #eaecf0;
+  --border-hover: rgba(74, 158, 232, 0.4);
+
+  --text-primary: #1a1a2e;
+  --text-secondary: #5a6577;
+  --text-muted: #94a3b8;
+  --text-faint: #c0c8d0;
+
+  --success: #10b981;
+  --warning: #f59e0b;
+  --error: #ef4444;
 }
 
-/* Custom animations */
+[data-theme="dark"] {
+  --bg-primary: #09090b;
+  --bg-surface: #0c0c0f;
+  --bg-elevated: #111827;
+  --bg-hover: rgba(255, 255, 255, 0.04);
+
+  --border: rgba(255, 255, 255, 0.06);
+  --border-hover: rgba(74, 158, 232, 0.3);
+
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-muted: #475569;
+  --text-faint: #334155;
+}
+
+/* ─── Legacy compat — other components still reference these ─── */
+:root {
+  --lens-primary: #4A9EE8;
+  --lens-secondary: #6db3ed;
+  --lens-accent: #90c7f2;
+  --lens-dark: #2d7dd2;
+  --lens-light: #b3dbf7;
+  --lens-primary-rgb: 74, 158, 232;
+  --lens-secondary-rgb: 109, 179, 237;
+  --lens-accent-rgb: 144, 199, 242;
+  --lens-dark-rgb: 45, 125, 210;
+  --theme-primary: #4A9EE8;
+  --theme-light: #6db3ed;
+  --theme-dark: #2d7dd2;
+}
+
+/* ─── Animations ─── */
 @keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes slideIn {
-  from {
-    opacity: 0;
-    transform: translateX(-20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
+  from { opacity: 0; transform: translateX(-20px); }
+  to { opacity: 1; transform: translateX(0); }
 }
 
 @keyframes pulse-glow {
-  0%, 100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.8;
-    transform: scale(1.05);
-  }
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.8; transform: scale(1.05); }
 }
 
-@keyframes wave {
-  0%, 100% {
-    transform: translateX(-50%);
-  }
-  50% {
-    transform: translateX(50%);
-  }
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }
 
-.animate-fade-in {
-  animation: fadeIn 0.6s ease-out;
+@keyframes kaveon-breathe {
+  0%, 100% { filter: drop-shadow(0 0 0px rgba(74, 158, 232, 0)); }
+  50% { filter: drop-shadow(0 0 8px rgba(74, 158, 232, 0.35)); }
 }
 
-.animate-slide-in {
-  animation: slideIn 0.5s ease-out;
+@keyframes pulse-ring {
+  0% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.8); }
 }
 
-.animate-pulse-glow {
-  animation: pulse-glow 2s ease-in-out infinite;
-}
+.animate-fade-in { animation: fadeIn 0.6s ease-out; }
+.animate-slide-in { animation: slideIn 0.5s ease-out; }
+.animate-pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
 
-/* Kaveon Logo Animation */
+/* ─── Utility classes ─── */
 .lens-logo {
-  background: linear-gradient(135deg, var(--lens-primary), var(--lens-secondary));
-  background-clip: text;
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: pulse-glow 3s ease-in-out infinite;
+  color: var(--accent);
 }
 
-/* Gradient backgrounds */
 .bg-lens-gradient {
-  background: linear-gradient(135deg, var(--lens-primary), var(--lens-secondary));
+  background: linear-gradient(135deg, var(--accent), var(--accent-dark));
 }
 
 .bg-lens-gradient-radial {
-  background: radial-gradient(circle at center, var(--lens-primary), var(--lens-dark));
+  background: radial-gradient(circle at center, var(--accent), var(--accent-dark));
 }
 
-/* Glass morphism effect */
 .glass {
   background: rgba(255, 255, 255, 0.1);
   backdrop-filter: blur(10px);
@@ -90,9 +110,8 @@
   border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
-/* Button styles */
 .btn-primary {
-  background: linear-gradient(135deg, var(--lens-primary), var(--lens-secondary));
+  background: linear-gradient(135deg, var(--accent), var(--accent-dark));
   color: white;
   padding: 0.75rem 1.5rem;
   border-radius: 0.5rem;
@@ -101,27 +120,17 @@
   border: none;
   cursor: pointer;
 }
-
 .btn-primary:hover {
   transform: translateY(-2px);
-  box-shadow: 0 8px 16px rgba(0, 102, 204, 0.3);
+  box-shadow: 0 8px 16px rgba(var(--accent-rgb), 0.3);
 }
+.btn-primary:active { transform: translateY(0); }
 
-.btn-primary:active {
-  transform: translateY(0);
-}
-
-/* Loading spinner */
 .spinner {
-  border: 3px solid rgba(0, 102, 204, 0.1);
-  border-top: 3px solid var(--lens-primary);
+  border: 3px solid rgba(var(--accent-rgb), 0.1);
+  border-top: 3px solid var(--accent);
   border-radius: 50%;
   width: 40px;
   height: 40px;
   animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
 }
