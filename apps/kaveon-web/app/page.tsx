@@ -296,7 +296,6 @@ export default function Home() {
             }]);
             return;
           }
-        }
       }
 
       // Parser couldn't handle it — show helpful suggestions
