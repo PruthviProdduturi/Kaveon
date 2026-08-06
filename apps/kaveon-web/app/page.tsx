@@ -528,18 +528,25 @@ export default function Home() {
                       ))}
                       <style>{`@keyframes bounce { 0%,80%,100% { transform:translateY(0) } 40% { transform:translateY(-6px) } }`}</style>
                     </div>
-                  ) : m.chart ? (
-                    <InlineChart
-                      rows={m.chart.rows}
-                      columns={m.chart.columns}
-                      chartType={m.chart.chartType}
-                      xAxis={m.chart.xAxis}
-                      yAxis={m.chart.yAxis}
-                      title={m.chart.title}
-                      sql={m.chart.sql}
-                    />
                   ) : (
-                    <span style={{ whiteSpace: "pre-wrap" }}>{m.content}</span>
+                    <>
+                      {m.content && (
+                        <div style={{ padding: m.chart ? "12px 16px 8px" : 0, whiteSpace: "pre-wrap", lineHeight: 1.6 }}
+                          dangerouslySetInnerHTML={{ __html: m.content.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>") }}
+                        />
+                      )}
+                      {m.chart && (
+                        <InlineChart
+                          rows={m.chart.rows}
+                          columns={m.chart.columns}
+                          chartType={m.chart.chartType}
+                          xAxis={m.chart.xAxis}
+                          yAxis={m.chart.yAxis}
+                          title={m.chart.title}
+                          sql={m.chart.sql}
+                        />
+                      )}
+                    </>
                   )}
                 </div>
               </div>
