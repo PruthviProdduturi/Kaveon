@@ -183,10 +183,10 @@ export default function WorkspacePage() {
             type="button"
             onClick={() => switchTab(t.key)}
             style={{
-              padding: "10px 18px",
-              fontSize: 13,
-              fontWeight: activeTab === t.key ? 600 : 400,
-              color: activeTab === t.key ? "var(--accent)" : "var(--text-muted)",
+              padding: "12px 20px",
+              fontSize: 14,
+              fontWeight: activeTab === t.key ? 600 : 450,
+              color: activeTab === t.key ? "var(--accent)" : "var(--text-secondary)",
               background: "none",
               border: "none",
               borderBottom: activeTab === t.key ? "2px solid var(--accent)" : "2px solid transparent",
@@ -195,10 +195,10 @@ export default function WorkspacePage() {
               transition: "all 0.15s",
               display: "flex",
               alignItems: "center",
-              gap: 6,
+              gap: 7,
             }}
           >
-            <span style={{ fontSize: 12 }}>{t.icon}</span>
+            <span style={{ fontSize: 14 }}>{t.icon}</span>
             {t.label}
           </button>
         ))}

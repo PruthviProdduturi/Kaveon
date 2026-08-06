@@ -231,10 +231,10 @@ const DashboardViewContent: React.FC<{
       {/* Canvas — rendered only after all chart configs are preloaded so each
           chart mounts once with its config already in cache and runs exactly
           one query instead of flashing through multiple loading states. */}
-      <div style={{ flex: 1, overflow: 'auto', padding: '16px 24px', background: 'var(--bg-primary)' }}>
+      <div style={{ flex: 1, overflow: 'auto', padding: '24px 32px', background: 'var(--bg-primary)' }}>
         {!chartsReady ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 60, gap: 12, color: '#94a3b8', fontSize: 13 }}>
-            <i className="fas fa-spinner fa-spin" style={{ fontSize: 22 }} />
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 60, gap: 12, color: 'var(--text-muted)', fontSize: 13 }}>
+            <i className="fas fa-spinner fa-spin" style={{ fontSize: 22, color: 'var(--accent)' }} />
             <span>Loading dashboard…</span>
           </div>
         ) : (

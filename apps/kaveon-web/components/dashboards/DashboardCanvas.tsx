@@ -98,8 +98,8 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
           breakpoints={{ lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 }}
           cols={{ lg: 12, md: 12, sm: 6, xs: 2, xxs: 1 }}
           rowHeight={30}
-          margin={[16, 16]}
-          containerPadding={[0, 0]}
+          margin={[20, 20]}
+          containerPadding={[4, 4]}
           compactType="vertical"
           dragConfig={{ enabled: isEditMode, cancel: 'button, a, input, select, textarea, .chart-actions-overlay, .no-drag' }}
           resizeConfig={{ enabled: isEditMode, handles: ['se', 'e', 's'] }}
