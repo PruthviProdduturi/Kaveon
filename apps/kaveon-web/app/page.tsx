@@ -34,10 +34,10 @@ interface PageData {
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const DEFAULT_SUGGESTIONS = [
-  "What were total sales last month?",
-  "Show revenue trend by quarter",
-  "Top 10 customers by revenue",
-  "Compare this month vs last month",
+  "Show total confirmed cases by country",
+  "Top 10 countries by total deaths",
+  "NYC taxi trips by borough",
+  "Trend of new cases over time",
 ];
 
 const EMPTY_SUGGESTIONS = [
