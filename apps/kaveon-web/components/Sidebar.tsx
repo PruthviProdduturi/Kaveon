@@ -201,6 +201,7 @@ export function Sidebar({ children }: SidebarProps) {
     maxWidth: width,
     background: "var(--bg-surface)",
     borderRight: "1px solid var(--border)",
+    boxShadow: "var(--shadow-lg)",
     display: "flex",
     flexDirection: "column",
     transition: `width ${TRANSITION}, min-width ${TRANSITION}, max-width ${TRANSITION}`,

@@ -232,6 +232,7 @@ export default function HomePage() {
             borderRadius: "14px",
             padding: "10px 12px",
             marginTop: metaLine ? "0.5rem" : "1rem",
+            boxShadow: "var(--shadow-md)",
           }}
         >
           <input
@@ -301,6 +302,7 @@ export default function HomePage() {
                     cursor: "pointer",
                     textDecoration: "none",
                     whiteSpace: "nowrap",
+                    boxShadow: "var(--shadow-sm)",
                     transition: "background 0.12s, color 0.12s",
                   }}
                   onMouseEnter={(e) => {
@@ -329,6 +331,7 @@ export default function HomePage() {
                     cursor: "pointer",
                     whiteSpace: "nowrap",
                     transition: "background 0.12s, color 0.12s",
+                    boxShadow: "var(--shadow-sm)",
                   }}
                   onMouseEnter={(e) => {
                     (e.currentTarget as HTMLButtonElement).style.background = "var(--bg-hover)";
