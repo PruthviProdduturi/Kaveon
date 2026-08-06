@@ -11,6 +11,7 @@ export interface RecentItem {
 }
 
 const STORAGE_KEY = "kaveon-recents";
+const SYNC_EVENT = "kaveon-recents-updated";
 const MAX_RECENTS = 12;
 
 function loadRecents(): RecentItem[] {
@@ -23,44 +24,44 @@ function loadRecents(): RecentItem[] {
   }
 }
 
-function saveRecents(items: RecentItem[]) {
+function saveAndNotify(items: RecentItem[]) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+    // Dispatch custom event for same-tab sync (StorageEvent only fires cross-tab)
+    window.dispatchEvent(new CustomEvent(SYNC_EVENT));
   } catch {}
 }
 
 export function useRecents() {
   const [recents, setRecents] = useState<RecentItem[]>(loadRecents);
 
-  // Sync across tabs
+  // Listen for updates from other hook instances (same tab) and other tabs
   useEffect(() => {
-    const handler = (e: StorageEvent) => {
-      if (e.key === STORAGE_KEY) setRecents(loadRecents());
+    const reload = () => setRecents(loadRecents());
+    window.addEventListener(SYNC_EVENT, reload);
+    window.addEventListener("storage", (e) => {
+      if (e.key === STORAGE_KEY) reload();
+    });
+    return () => {
+      window.removeEventListener(SYNC_EVENT, reload);
     };
-    window.addEventListener("storage", handler);
-    return () => window.removeEventListener("storage", handler);
   }, []);
 
   const addRecent = useCallback((item: Omit<RecentItem, "timestamp">) => {
-    setRecents((prev) => {
-      const filtered = prev.filter((r) => r.id !== item.id);
-      const next = [{ ...item, timestamp: Date.now() }, ...filtered].slice(0, MAX_RECENTS);
-      saveRecents(next);
-      return next;
-    });
+    const current = loadRecents();
+    const filtered = current.filter((r) => r.id !== item.id);
+    const next = [{ ...item, timestamp: Date.now() }, ...filtered].slice(0, MAX_RECENTS);
+    saveAndNotify(next);
   }, []);
 
   const removeRecent = useCallback((id: string) => {
-    setRecents((prev) => {
-      const next = prev.filter((r) => r.id !== id);
-      saveRecents(next);
-      return next;
-    });
+    const current = loadRecents();
+    const next = current.filter((r) => r.id !== id);
+    saveAndNotify(next);
   }, []);
 
   const clearRecents = useCallback(() => {
-    setRecents([]);
-    saveRecents([]);
+    saveAndNotify([]);
   }, []);
 
   return { recents, addRecent, removeRecent, clearRecents };
