@@ -6,7 +6,7 @@ export const contentType = 'image/png'
 
 // Guardian O — open blue arc, gap at bottom. Matches kaveon-icon.svg.
 function guardianOSvg(px: number): string {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="${px}" viewBox="0 0 512 512" fill="none">` +
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="${px}" viewBox="100 80 310 360" fill="none">` +
     `<path d="M 343.68 407.88 A 124 124 0 1 0 168.32 407.88" fill="none" stroke="#4A9EE8" stroke-width="52" stroke-linecap="butt"/>` +
     `</svg>`
 }
