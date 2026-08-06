@@ -25,11 +25,11 @@ RUN apt-get update \
 WORKDIR /app
 
 # Install Python dependencies
-COPY apps/lens-api/requirements.txt ./
+COPY apps/kaveon-api/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application source
-COPY apps/lens-api/ ./
+COPY apps/kaveon-api/ ./
 
 ENV ENV=production
 ENV PORT=8080
