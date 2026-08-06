@@ -146,24 +146,7 @@ export default function HomePage() {
         paddingBottom: "3rem",
       }}
     >
-      {/* Radial glow */}
-      <div
-        aria-hidden
-        style={{
-          position: "absolute",
-          top: "50%",
-          left: "50%",
-          transform: "translate(-50%, -50%)",
-          width: "700px",
-          height: "700px",
-          borderRadius: "50%",
-          background:
-            "radial-gradient(ellipse at center, rgba(var(--accent-rgb), 0.08) 0%, transparent 70%)",
-          pointerEvents: "none",
-        }}
-      />
-
-      {/* Watermark */}
+      {/* Guardian O watermark — large, faded arc behind content */}
       <div
         aria-hidden
         style={{
@@ -174,7 +157,7 @@ export default function HomePage() {
           pointerEvents: "none",
         }}
       >
-        <KaveonMark size={52} opacity={0.25} useDirectColor />
+        <KaveonMark size={280} opacity={0.04} useDirectColor />
       </div>
 
       {/* Center content */}
