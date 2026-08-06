@@ -149,3 +149,6 @@ CLAUDE.md
 .weblog.txt
 .api_err.log
 .superpowers/
+
+.vercel
+.env*
