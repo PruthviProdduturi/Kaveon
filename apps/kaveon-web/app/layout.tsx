@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "../styles/globals.css";
 import "../styles/dashboard.css";
+import "./globals.css";
 import { Providers } from "./providers";
 import { ClientLayout } from "../components/ClientLayout";
 
