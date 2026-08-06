@@ -148,3 +148,4 @@ CLAUDE.md
 # Local dev logs
 .weblog.txt
 .api_err.log
+.superpowers/
