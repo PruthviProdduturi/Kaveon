@@ -10,7 +10,7 @@
 import React, { useState, useEffect } from "react";
 import { msalFetch } from "../utils/msalFetch";
 import { API_BASE } from "../config";
-import { KaveonLogo } from "./KaveonLogo";
+import { KaveonMark } from "./KaveonMark";
 import { SETUP_DB_ICONS } from "./DataSourceIcons";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -659,7 +659,7 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
   return (
     <div style={S.overlay}>
       <div style={S.card}>
-        <div style={S.logoRow}><KaveonLogo size={48} animate="pulse" /></div>
+        <div style={S.logoRow}><KaveonMark size={48} useDirectColor /></div>
 
         {(phase === "not_configured" || phase === "enter_connection" || phase === "testing") && (
           <ConnectionForm cancelTo={phase === "enter_connection" && initialPhase !== "not_configured" ? initialPhase : undefined} />

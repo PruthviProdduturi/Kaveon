@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { signIn } from "next-auth/react";
-import { KaveonLogo } from "./KaveonLogo";
+import { KaveonMark } from "./KaveonMark";
 import { KaveonLoading } from "./KaveonLoading";
 import { APP_TAGLINE } from "../constants/branding";
 
@@ -77,7 +77,7 @@ export function AuthScreen() {
 			>
 				{/* Logo already includes the LENS wordmark — no separate heading. */}
 				<div style={{ display: "flex", justifyContent: "center", marginBottom: 8 }}>
-					<KaveonLogo size={44} />
+					<KaveonMark size={44} useDirectColor />
 				</div>
 				<p style={{ fontSize: 13, color: "#7dd3e0", margin: "0 0 26px" }}>{APP_TAGLINE}</p>
 

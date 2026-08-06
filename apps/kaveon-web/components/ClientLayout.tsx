@@ -6,7 +6,7 @@ import { useAuth } from "../auth/useAuth";
 import { AuthScreen } from "./AuthScreen";
 import { Layout } from "./Layout";
 import { LoadingOverlay } from "./LoadingOverlay";
-import { KaveonLogo } from "./KaveonLogo";
+import { KaveonMark } from "./KaveonMark";
 import { msalFetch } from "../utils/msalFetch";
 import { API_BASE } from "../config";
 
@@ -51,7 +51,7 @@ function SetupRedirectOverlay({ onDismiss }: { onDismiss: () => void }) {
         </button>
 
         <div style={{ display: "flex", justifyContent: "center", marginBottom: 4 }}>
-          <KaveonLogo size={48} animate="pulse" />
+          <KaveonMark size={48} useDirectColor />
         </div>
         <h2 style={{ fontSize: 21, fontWeight: 700, color: "#f1f5f9", margin: "16px 0 8px" }}>
           Setup Required
