@@ -307,9 +307,9 @@ export default function Home() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              sql: parsed.sql,
-              data_source_id: srcId,
-              database: srcDb,
+              sql_text: parsed.sql,
+              database: srcDb || "neondb",
+              source: "chat",
             }),
           });
 
