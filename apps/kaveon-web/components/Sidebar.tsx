@@ -7,6 +7,7 @@ import { KaveonMark, KaveonWordmark } from "./KaveonMark";
 import { useAuth } from "../auth/useAuth";
 import { useTheme } from "../contexts/ThemeContext";
 import { useRole } from "../hooks/useRole";
+import { useRecents, RecentItem } from "../hooks/useRecents";
 
 const SIDEBAR_COLLAPSED_KEY = "kaveon-sidebar-collapsed";
 const EXPANDED_WIDTH = 220;
@@ -315,6 +316,7 @@ function UserMenu({
 export function Sidebar({ children }: SidebarProps) {
   const { account, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
+  const { recents } = useRecents();
   const router = useRouter();
   const { isAdmin } = useRole();
   const pathname = usePathname();
@@ -575,28 +577,64 @@ export function Sidebar({ children }: SidebarProps) {
                 New chat
               </button>
 
-              {/* Section label */}
-              <div style={{
-                fontSize: 10,
-                fontWeight: 600,
-                letterSpacing: "1px",
-                textTransform: "uppercase",
-                color: "var(--text-faint)",
-                padding: "8px 10px 4px",
-                userSelect: "none",
-              }}>
-                Recent
-              </div>
-
-              {/* Placeholder — will be populated from chat history API */}
-              <div style={{
-                padding: "12px 10px",
-                fontSize: 12,
-                color: "var(--text-muted)",
-                fontStyle: "italic",
-              }}>
-                Your conversations will appear here
-              </div>
+              {/* Recent items */}
+              {recents.length > 0 && (
+                <>
+                  <div style={{
+                    fontSize: 10,
+                    fontWeight: 600,
+                    letterSpacing: "1px",
+                    textTransform: "uppercase",
+                    color: "var(--text-faint)",
+                    padding: "8px 10px 4px",
+                    userSelect: "none",
+                  }}>
+                    Recent
+                  </div>
+                  {recents.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => router.push(item.href)}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        width: "100%",
+                        padding: "7px 10px",
+                        border: "none",
+                        background: "transparent",
+                        color: "var(--text-secondary)",
+                        fontSize: 12.5,
+                        cursor: "pointer",
+                        borderRadius: 6,
+                        textAlign: "left",
+                        transition: "background 0.1s",
+                        overflow: "hidden",
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                    >
+                      <span style={{ fontSize: 11, opacity: 0.5, flexShrink: 0 }}>
+                        {item.type === "dashboard" ? "📊" : item.type === "chart" ? "📈" : item.type === "dataset" ? "🗂" : item.type === "query" ? "⌨️" : "💬"}
+                      </span>
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {item.label}
+                      </span>
+                    </button>
+                  ))}
+                </>
+              )}
+              {recents.length === 0 && (
+                <div style={{
+                  padding: "16px 10px",
+                  fontSize: 12,
+                  color: "var(--text-muted)",
+                  opacity: 0.6,
+                }}>
+                  Recent items will appear here
+                </div>
+              )}
             </>
           )}
         </div>
