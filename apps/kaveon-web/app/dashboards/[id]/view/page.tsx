@@ -99,22 +99,22 @@ const DashboardViewContent: React.FC<{
   const btnBase: React.CSSProperties = {
     display: 'flex', alignItems: 'center', gap: 6, height: 34,
     padding: '0 12px', borderRadius: 8, fontSize: 13, fontWeight: 500,
-    cursor: 'pointer', border: '1px solid #e2e8f0', background: 'white',
-    color: '#475569', transition: 'background 0.15s, border-color 0.15s, color 0.15s', whiteSpace: 'nowrap',
+    cursor: 'pointer', border: '1px solid var(--border)', background: 'var(--bg-surface)',
+    color: 'var(--text-secondary)', transition: 'background 0.15s, border-color 0.15s, color 0.15s', whiteSpace: 'nowrap',
   };
 
   return (
     <div className="page-shell page-shell-wide">
       {/* ── Elegant dashboard header ── */}
       <header style={{
-        background: 'white', borderBottom: '1px solid #e2e8f0',
+        background: 'var(--bg-surface)', borderBottom: '1px solid var(--border)',
         padding: '12px 24px', display: 'flex', alignItems: 'center',
         justifyContent: 'space-between', gap: 16, flexWrap: 'wrap',
       }}>
         {/* Left: title + badge */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <h1 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.2, letterSpacing: '-0.3px' }}>
+            <h1 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 800, color: 'var(--text-primary)', lineHeight: 1.2, letterSpacing: '-0.3px' }}>
               {initialConfig?.name || 'Dashboard'}
             </h1>
             <span style={{
@@ -127,7 +127,7 @@ const DashboardViewContent: React.FC<{
             </span>
           </div>
           {initialConfig?.description && (
-            <p style={{ margin: 0, fontSize: 12.5, color: '#64748b', lineHeight: 1.4, marginTop: 1 }}>
+            <p style={{ margin: 0, fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.4, marginTop: 1 }}>
               {initialConfig.description}
             </p>
           )}
@@ -137,7 +137,7 @@ const DashboardViewContent: React.FC<{
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
 
           {/* Refresh group */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '2px 4px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--bg-hover)', border: '1px solid var(--border)', borderRadius: 8, padding: '2px 4px' }}>
             <button onClick={handleManualRefresh} title="Refresh all charts" style={{ ...btnBase, border: 'none', background: 'transparent', padding: '0 8px' }}>
               <i className="fas fa-sync-alt" style={{ fontSize: 11 }} />
             </button>
@@ -168,7 +168,7 @@ const DashboardViewContent: React.FC<{
           {hasFilters && (
             <button onClick={() => setFiltersOpen((v) => !v)} style={{
               ...btnBase,
-              background: filtersOpen ? '#eff6ff' : 'white',
+              background: filtersOpen ? 'rgba(var(--accent-rgb), 0.06)' : 'var(--bg-surface)',
               borderColor: filtersOpen ? '#bfdbfe' : '#e2e8f0',
               color: filtersOpen ? '#2563eb' : '#475569',
             }}>
@@ -180,7 +180,7 @@ const DashboardViewContent: React.FC<{
           {/* Favorite */}
           <button type="button" onClick={onFavoriteClick} title={isFavorite ? 'Remove from favorites' : 'Add to favorites'} style={{
             ...btnBase, padding: '0 10px',
-            background: isFavorite ? '#fffbeb' : 'white',
+            background: isFavorite ? 'rgba(245, 158, 11, 0.08)' : 'var(--bg-surface)',
             borderColor: isFavorite ? '#fde68a' : '#e2e8f0',
             transform: isAnimating ? 'scale(0.88)' : 'scale(1)',
             transition: 'all 0.2s ease',
@@ -220,8 +220,8 @@ const DashboardViewContent: React.FC<{
       {/* Inline filter bar — shown only when toggled open */}
       {hasFilters && filtersOpen && (
         <div style={{
-          background: '#fff',
-          borderBottom: '1px solid #e2e8f0',
+          background: 'var(--bg-surface)',
+          borderBottom: '1px solid var(--border)',
           padding: '12px 24px',
         }}>
           <DashboardFilterBarReadOnly />
@@ -231,7 +231,7 @@ const DashboardViewContent: React.FC<{
       {/* Canvas — rendered only after all chart configs are preloaded so each
           chart mounts once with its config already in cache and runs exactly
           one query instead of flashing through multiple loading states. */}
-      <div style={{ flex: 1, overflow: 'auto', padding: '16px 24px', background: '#f8fafc' }}>
+      <div style={{ flex: 1, overflow: 'auto', padding: '16px 24px', background: 'var(--bg-primary)' }}>
         {!chartsReady ? (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 60, gap: 12, color: '#94a3b8', fontSize: 13 }}>
             <i className="fas fa-spinner fa-spin" style={{ fontSize: 22 }} />
