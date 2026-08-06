@@ -26,7 +26,7 @@ const TABS: { key: TabKey; label: string; endpoint: string; newRoute: string }[]
   { key: "dashboards", label: "Dashboards",    endpoint: "/api/v1/dashboards",    newRoute: "/dashboards/new" },
   { key: "charts",     label: "Charts",        endpoint: "/api/v1/charts",        newRoute: "/charts/new"     },
   { key: "datasets",   label: "Datasets",      endpoint: "/api/v1/datasets",      newRoute: "/datasets/new"   },
-  { key: "queries",    label: "Saved Queries", endpoint: "/api/v1/saved-queries", newRoute: "/lab"            },
+  { key: "queries",    label: "Saved Queries", endpoint: "/api/v1/lab/saved-queries", newRoute: "/lab"            },
 ];
 
 function itemNav(tab: TabKey, id: string | number): string {
