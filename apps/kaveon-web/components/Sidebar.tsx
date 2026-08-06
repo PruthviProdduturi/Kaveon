@@ -316,7 +316,7 @@ function UserMenu({
 export function Sidebar({ children }: SidebarProps) {
   const { account, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
-  const { recents } = useRecents();
+  const { recents, removeRecent } = useRecents();
   const router = useRouter();
   const { isAdmin } = useRole();
   const pathname = usePathname();
@@ -612,14 +612,41 @@ export function Sidebar({ children }: SidebarProps) {
                         transition: "background 0.1s",
                         overflow: "hidden",
                       }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = "var(--bg-hover)";
+                        const close = e.currentTarget.querySelector("[data-close]") as HTMLElement;
+                        if (close) close.style.display = "flex";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = "transparent";
+                        const close = e.currentTarget.querySelector("[data-close]") as HTMLElement;
+                        if (close) close.style.display = "none";
+                      }}
                     >
                       <span style={{ fontSize: 11, opacity: 0.5, flexShrink: 0 }}>
                         {item.type === "dashboard" ? "📊" : item.type === "chart" ? "📈" : item.type === "dataset" ? "🗂" : item.type === "query" ? "⌨️" : "💬"}
                       </span>
-                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
                         {item.label}
+                      </span>
+                      <span
+                        data-close
+                        role="button"
+                        onClick={(e) => { e.stopPropagation(); removeRecent(item.id); }}
+                        style={{
+                          display: "none",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          width: 16,
+                          height: 16,
+                          borderRadius: 4,
+                          fontSize: 12,
+                          color: "var(--text-faint)",
+                          flexShrink: 0,
+                          cursor: "pointer",
+                        }}
+                      >
+                        ×
                       </span>
                     </button>
                   ))}

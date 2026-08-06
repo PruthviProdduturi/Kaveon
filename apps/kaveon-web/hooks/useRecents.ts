@@ -50,10 +50,18 @@ export function useRecents() {
     });
   }, []);
 
+  const removeRecent = useCallback((id: string) => {
+    setRecents((prev) => {
+      const next = prev.filter((r) => r.id !== id);
+      saveRecents(next);
+      return next;
+    });
+  }, []);
+
   const clearRecents = useCallback(() => {
     setRecents([]);
     saveRecents([]);
   }, []);
 
-  return { recents, addRecent, clearRecents };
+  return { recents, addRecent, removeRecent, clearRecents };
 }
