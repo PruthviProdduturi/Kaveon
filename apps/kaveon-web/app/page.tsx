@@ -208,17 +208,41 @@ export default function Home() {
 
   function findBestSchema(text: string) {
     const lower = text.toLowerCase();
-    let best: { schema: DatasetSchema; sourceId?: number; sourceName?: string; confidence: number; name: string } | null = null;
+    const words = lower.split(/\s+/).filter(w => w.length >= 3);
+    let best: { schema: DatasetSchema; sourceId?: number; sourceName?: string; confidence: number; name: string; parsed: any } | null = null;
 
     for (const ds of allSchemas) {
-      // Check if query mentions dataset name or any column name
-      const nameMatch = ds.name.toLowerCase().split(/[\s_-]+/).some(w => lower.includes(w));
-      const colMatch = ds.schema.columns.some(c => lower.includes(c.name.toLowerCase().replace(/_/g, " ")));
-      const metricMatch = ds.schema.metrics.some(m => lower.includes(m.name.toLowerCase().replace(/_/g, " ")));
+      // Score: how well does this dataset match the query?
+      let score = 0;
 
+      // Dataset name overlap
+      const nameWords = ds.name.toLowerCase().split(/[\s_\-·:]+/).filter(w => w.length >= 3);
+      for (const nw of nameWords) {
+        if (words.some(w => w.includes(nw) || nw.includes(w))) score += 0.3;
+      }
+
+      // Column name overlap
+      for (const col of ds.schema.columns) {
+        const colWords = col.name.toLowerCase().replace(/_/g, " ").split(/\s+/).filter(w => w.length >= 3);
+        for (const cw of colWords) {
+          if (words.some(w => w.includes(cw) || cw.includes(w))) score += 0.2;
+        }
+      }
+
+      // Metric name overlap
+      for (const m of ds.schema.metrics) {
+        const mWords = m.name.toLowerCase().replace(/_/g, " ").split(/\s+/).filter(w => w.length >= 3);
+        for (const mw of mWords) {
+          if (words.some(w => w.includes(mw) || mw.includes(w))) score += 0.2;
+        }
+      }
+
+      // Try NL→SQL parser
       const parsed = nlToSql(text, ds.schema);
-      if (parsed && parsed.confidence > (best?.confidence ?? 0)) {
-        best = { schema: ds.schema, sourceId: ds.sourceId, sourceName: ds.sourceName, confidence: parsed.confidence + (nameMatch ? 0.2 : 0) + (colMatch ? 0.1 : 0) + (metricMatch ? 0.1 : 0), name: ds.name };
+      if (parsed) score += parsed.confidence;
+
+      if (score > (best?.confidence ?? 0)) {
+        best = { schema: ds.schema, sourceId: ds.sourceId, sourceName: ds.sourceName, confidence: score, name: ds.name, parsed };
       }
     }
 
@@ -239,10 +263,9 @@ export default function Home() {
       const schema = match?.schema || datasetSchema;
       const srcId = match?.sourceId || selectedSource?.id;
       const srcDb = match?.sourceName || selectedSource?.database_name;
+      const parsed = match?.parsed || (schema ? nlToSql(text.trim(), schema) : null);
 
-      if (schema) {
-        const parsed = nlToSql(text.trim(), schema);
-        if (parsed && parsed.confidence >= 0.2) {
+      if (schema && parsed) {
           const execRes = await msalFetch("/api/v1/sql/execute", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
