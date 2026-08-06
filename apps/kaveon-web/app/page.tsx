@@ -170,7 +170,57 @@ export default function Home() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // Cache all dataset schemas for auto-matching
+  const [allSchemas, setAllSchemas] = useState<{ id: number; name: string; sourceId?: number; sourceName?: string; schema: DatasetSchema }[]>([]);
+
+  useEffect(() => {
+    if (datasets.length === 0) return;
+    // Fetch schema for each dataset
+    Promise.all(
+      datasets.map(async (ds) => {
+        try {
+          const r = await msalFetch(`${API_BASE}/api/v1/datasets/${ds.id}`);
+          if (!r.ok) return null;
+          const d = await r.json();
+          const cols = (d.columns || []).map((c: any) => ({
+            name: c.column_name || c.name,
+            type: c.data_type?.includes("int") || c.data_type?.includes("float") || c.data_type?.includes("decimal") || c.data_type?.includes("numeric") ? "number"
+              : c.data_type?.includes("date") || c.data_type?.includes("time") ? "date" : "string",
+            description: c.description || "",
+          }));
+          const metrics = (d.metrics || []).map((m: any) => ({
+            name: m.name || m.metric_name,
+            expression: m.sql_expression || m.expression || `SUM(${m.name})`,
+            description: m.description || "",
+          }));
+          const table = d.fact_table ? (d.schema_name ? `${d.schema_name}.${d.fact_table}` : d.fact_table) : d.table_name || "data";
+          const src = sources.find(s => s.database_name === ds.database_name);
+          return { id: ds.id, name: ds.name, sourceId: src?.id, sourceName: src?.database_name, schema: { tableName: table, columns: cols, metrics } };
+        } catch { return null; }
+      })
+    ).then(results => setAllSchemas(results.filter(Boolean) as any[]));
+  }, [datasets, sources]);
+
   // ── Send message ─────────────────────────────────────────────────────────────
+
+  function findBestSchema(text: string) {
+    const lower = text.toLowerCase();
+    let best: { schema: DatasetSchema; sourceId?: number; sourceName?: string; confidence: number; name: string } | null = null;
+
+    for (const ds of allSchemas) {
+      // Check if query mentions dataset name or any column name
+      const nameMatch = ds.name.toLowerCase().split(/[\s_-]+/).some(w => lower.includes(w));
+      const colMatch = ds.schema.columns.some(c => lower.includes(c.name.toLowerCase().replace(/_/g, " ")));
+      const metricMatch = ds.schema.metrics.some(m => lower.includes(m.name.toLowerCase().replace(/_/g, " ")));
+
+      const parsed = nlToSql(text, ds.schema);
+      if (parsed && parsed.confidence > (best?.confidence ?? 0)) {
+        best = { schema: ds.schema, sourceId: ds.sourceId, sourceName: ds.sourceName, confidence: parsed.confidence + (nameMatch ? 0.2 : 0) + (colMatch ? 0.1 : 0) + (metricMatch ? 0.1 : 0), name: ds.name };
+      }
+    }
+
+    return best;
+  }
 
   async function sendMessage(text: string) {
     if (!text.trim() || sending) return;
@@ -181,17 +231,22 @@ export default function Home() {
     setSending(true);
 
     try {
-      // Try NL→SQL if we have schema
-      if (datasetSchema) {
-        const parsed = nlToSql(text.trim(), datasetSchema);
-        if (parsed && parsed.confidence >= 0.4) {
+      // Auto-find best matching dataset
+      const match = findBestSchema(text.trim());
+      const schema = match?.schema || datasetSchema;
+      const srcId = match?.sourceId || selectedSource?.id;
+      const srcDb = match?.sourceName || selectedSource?.database_name;
+
+      if (schema) {
+        const parsed = nlToSql(text.trim(), schema);
+        if (parsed && parsed.confidence >= 0.3) {
           const execRes = await msalFetch(`${API_BASE}/api/v1/sql/execute`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               sql: parsed.sql,
-              data_source_id: selectedSource?.id,
-              database: selectedSource?.database_name,
+              data_source_id: srcId,
+              database: srcDb,
             }),
           });
 
@@ -218,12 +273,13 @@ export default function Home() {
         }
       }
 
-      // No schema or parser couldn't handle it
+      // Parser couldn't handle it — show helpful suggestions
+      const availableDatasets = allSchemas.map(s => s.name).join(", ");
       setMessages(prev => [...prev.slice(0, -1), {
         role: "assistant",
-        content: !datasetSchema
-          ? "Select a **dataset** from the dropdown above so I can understand your data, then try asking something like \"show cases by country\" or \"top 10 by revenue\"."
-          : "I couldn't understand that query. Try:\n\n• \"Show [column] by [column]\"\n• \"Top 10 [column] by [metric]\"\n• \"Total [metric]\"\n• \"Trend of [metric] over time\"\n• \"Distribution of [column]\"",
+        content: allSchemas.length === 0
+          ? "No datasets found. Create a dataset in the Workspace first, then come back and ask me about your data."
+          : `I couldn't match that to your data. You have these datasets: **${availableDatasets}**\n\nTry something specific like:\n• "Show [metric] by [column]"\n• "Top 10 [column] by [metric]"\n• "Total [metric]"\n• "Trend of [metric] over time"`,
       }]);
     } catch (e) {
       setMessages(prev => [...prev.slice(0, -1), {
