@@ -99,7 +99,7 @@ export default function Home() {
           msalFetch("/api/v1/metadata/summary", { headers }),
           msalFetch("/api/v1/data-sources/list", { headers }),
           msalFetch("/api/v1/data-sources/active", { headers }),
-          msalFetch(`${API_BASE}/api/v1/datasets/summary`),
+          msalFetch("/api/v1/datasets"),
         ]);
 
         const summary = summaryRes.ok ? await summaryRes.json() : { dataset_count: 0 };
@@ -121,7 +121,8 @@ export default function Home() {
 
         if (dsRes.ok) {
           const dd = await dsRes.json();
-          const dsList = (dd.recent || []).map((ds: any) => ({
+          const rawDs = Array.isArray(dd) ? dd : (dd.recent || dd.datasets || []);
+          const dsList = rawDs.map((ds: any) => ({
             id: ds.id,
             name: ds.dataset_name || ds.name || `Dataset ${ds.id}`,
             database_name: ds.database_name,
@@ -146,7 +147,7 @@ export default function Home() {
   // Fetch dataset schema when selected
   useEffect(() => {
     if (!selectedDataset) { setDatasetSchema(null); return; }
-    msalFetch(`${API_BASE}/api/v1/datasets/${selectedDataset}`)
+    msalFetch(`/api/v1/datasets/${selectedDataset}`)
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         if (!d) { setDatasetSchema(null); return; }
@@ -181,7 +182,7 @@ export default function Home() {
     Promise.all(
       datasets.map(async (ds) => {
         try {
-          const r = await msalFetch(`${API_BASE}/api/v1/datasets/${ds.id}`);
+          const r = await msalFetch(`/api/v1/datasets/${ds.id}`);
           if (!r.ok) return null;
           const d = await r.json();
           const cols = (d.columns || []).map((c: any) => ({
@@ -242,7 +243,7 @@ export default function Home() {
       if (schema) {
         const parsed = nlToSql(text.trim(), schema);
         if (parsed && parsed.confidence >= 0.2) {
-          const execRes = await msalFetch(`${API_BASE}/api/v1/sql/execute`, {
+          const execRes = await msalFetch("/api/v1/sql/execute", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
