@@ -31,7 +31,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved === "dark" || saved === "light") return saved;
     }
-    return "light";
+    return "dark";
   });
 
   useEffect(() => {
