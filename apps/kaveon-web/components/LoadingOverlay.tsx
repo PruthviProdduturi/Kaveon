@@ -1,24 +1,37 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { KaveonLoading } from "./KaveonLoading";
+import { KaveonMark } from "./KaveonMark";
 
+/**
+ * LoadingOverlay — inline loading state.
+ * Renders inside the content area (sidebar stays visible).
+ * No longer a full-screen takeover.
+ */
 export function LoadingOverlay() {
-  const [isVisible, setIsVisible] = useState(true);
-
-  useEffect(() => {
-    // Ensure the loading overlay is fully visible before potentially unmounting
-    setIsVisible(true);
-  }, []);
-
   return (
     <div
       style={{
-        opacity: isVisible ? 1 : 0,
-        transition: 'opacity 0.3s ease-in-out',
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        minHeight: "60vh",
+        gap: 24,
       }}
     >
-      <KaveonLoading fullScreen={true} />
+      <div style={{ animation: "kaveon-breathe 3s ease-in-out infinite" }}>
+        <KaveonMark size={48} useDirectColor />
+      </div>
+      <p
+        style={{
+          fontSize: 13,
+          color: "var(--text-muted)",
+          letterSpacing: "0.1em",
+          textTransform: "uppercase",
+        }}
+      >
+        Loading...
+      </p>
     </div>
   );
 }
