@@ -93,7 +93,7 @@ export function AuthScreen() {
 				{/* Logo + wordmark */}
 				<div style={{ position: "relative", marginBottom: 48 }}>
 					{/* Full KAVEON wordmark SVG — white fill, blue Guardian O */}
-					<svg width="260" height="46" viewBox="60 50 1180 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+					<svg width="340" height="60" viewBox="60 50 1180 200" fill="none" xmlns="http://www.w3.org/2000/svg">
 						<g fill="#f0f0f2">
 							<rect x="90" y="70" width="20" height="165" />
 							<polygon points="108.73,161.20 215.73,86.39 204.27,70 97.27,144.80" />
