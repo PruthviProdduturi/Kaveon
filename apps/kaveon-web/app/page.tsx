@@ -121,12 +121,14 @@ export default function Home() {
 
         if (dsRes.ok) {
           const dd = await dsRes.json();
-          const rawDs = Array.isArray(dd) ? dd : (dd.recent || dd.datasets || []);
+          console.log("[Kaveon] /api/v1/datasets raw response:", dd);
+          const rawDs = Array.isArray(dd) ? dd : (dd.recent || dd.datasets || dd.result || []);
           const dsList = rawDs.map((ds: any) => ({
             id: ds.id,
             name: ds.dataset_name || ds.name || `Dataset ${ds.id}`,
             database_name: ds.database_name,
           }));
+          console.log("[Kaveon] Parsed datasets:", dsList.length, dsList.map((d: any) => d.name));
           setDatasets(dsList);
           // Auto-select first dataset
           if (dsList.length > 0 && !selectedDataset) {
@@ -201,7 +203,11 @@ export default function Home() {
           return { id: ds.id, name: ds.name, sourceId: src?.id, sourceName: src?.database_name, schema: { tableName: table, columns: cols, metrics } };
         } catch { return null; }
       })
-    ).then(results => setAllSchemas(results.filter(Boolean) as any[]));
+    ).then(results => {
+      const valid = results.filter(Boolean) as any[];
+      console.log("[Kaveon] All schemas loaded:", valid.length, valid.map(s => ({ name: s.name, cols: s.schema.columns.length })));
+      setAllSchemas(valid);
+    });
   }, [datasets, sources]);
 
   // ── Send message ─────────────────────────────────────────────────────────────
