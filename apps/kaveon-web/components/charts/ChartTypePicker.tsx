@@ -94,7 +94,7 @@ export const ChartIcon: React.FC<{ id: string; color: string; size?: number }> =
           <circle cx="14" cy="14" r="11" fill="none" stroke={color} strokeWidth="11" strokeDasharray="22 48" strokeDashoffset="0" opacity="0.85" />
           <circle cx="14" cy="14" r="11" fill="none" stroke={color} strokeWidth="11" strokeDasharray="14 56" strokeDashoffset="-22" opacity="0.5" />
           <circle cx="14" cy="14" r="11" fill="none" stroke={color} strokeWidth="11" strokeDasharray="12 58" strokeDashoffset="-36" opacity="0.3" />
-          <circle cx="14" cy="14" r="4" fill="white" />
+          <circle cx="14" cy="14" r="4" fill="var(--bg-surface)" />
         </svg>
       );
     case "donut":
@@ -174,7 +174,7 @@ export const ChartIcon: React.FC<{ id: string; color: string; size?: number }> =
           {[[5,6,10,16],[11,9,14,20],[17,4,12,19],[23,11,8,14]].map(([x, top, h, wh], i) => (
             <g key={i}>
               <line x1={x} y1={top} x2={x} y2={top + wh} stroke={color} strokeWidth="1.2" strokeOpacity="0.5" />
-              <rect x={x - 2.5} y={top + 4} width="5" height={h - 4} rx="1" fill={i % 2 === 0 ? color : "white"} stroke={color} strokeWidth="1.2" />
+              <rect x={x - 2.5} y={top + 4} width="5" height={h - 4} rx="1" fill={i % 2 === 0 ? color : "var(--bg-surface)"} stroke={color} strokeWidth="1.2" />
             </g>
           ))}
         </svg>
@@ -231,7 +231,7 @@ export const ChartIcon: React.FC<{ id: string; color: string; size?: number }> =
         <svg viewBox="0 0 28 28" style={s}>
           <rect x="2" y="10" width="5" height="8" rx="1.5" fill={color} fillOpacity="0.75" />
           <rect x="9" y="7" width="5" height="5" rx="1.5" fill={color} fillOpacity="0.85" />
-          <rect x="16" y="12" width="5" height="4" rx="1.5" fill="#ef4444" fillOpacity="0.75" />
+          <rect x="16" y="12" width="5" height="4" rx="1.5" fill="var(--error)" fillOpacity="0.75" />
           <rect x="23" y="8" width="3" height="8" rx="1.5" fill={color} fillOpacity="0.6" />
         </svg>
       );
@@ -404,7 +404,7 @@ const ChartTypePicker: React.FC = () => {
   );
 
   const selectedTemplate = templates.find(t => t.id === chartType);
-  const selectedColor = selectedTemplate ? (CATEGORY_COLOR[selectedTemplate.category] ?? DEFAULT_COLOR) : "#94a3b8";
+  const selectedColor = selectedTemplate ? (CATEGORY_COLOR[selectedTemplate.category] ?? DEFAULT_COLOR) : "var(--text-muted)";
 
   // When editing an existing chart, highlight its category tab
   useEffect(() => {
@@ -433,25 +433,25 @@ const ChartTypePicker: React.FC = () => {
           gap: 10,
           padding: "7px 10px",
           borderRadius: 7,
-          border: open ? `1.5px solid ${selectedColor}` : "1.5px solid #e2e8f0",
-          background: open ? `${selectedColor}08` : "#ffffff",
+          border: open ? `1.5px solid ${selectedColor}` : "1.5px solid var(--border)",
+          background: open ? `${selectedColor}08` : "var(--bg-surface)",
           cursor: "pointer",
           transition: "all 0.15s ease",
           textAlign: "left",
           boxShadow: open ? `0 0 0 3px ${selectedColor}15` : "none",
         }}
-        onMouseEnter={e => { if (!open) { (e.currentTarget as HTMLButtonElement).style.borderColor = "#94a3b8"; } }}
-        onMouseLeave={e => { if (!open) { (e.currentTarget as HTMLButtonElement).style.borderColor = "#e2e8f0"; } }}
+        onMouseEnter={e => { if (!open) { (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--text-muted)"; } }}
+        onMouseLeave={e => { if (!open) { (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--border)"; } }}
       >
         {/* Mini icon */}
         <div style={{
           width: 28, height: 28, borderRadius: 6, flexShrink: 0,
-          background: selectedTemplate ? `${selectedColor}15` : "#f1f5f9",
+          background: selectedTemplate ? `${selectedColor}15` : "var(--bg-hover)",
           display: "flex", alignItems: "center", justifyContent: "center",
         }}>
           {selectedTemplate
             ? <ChartIcon id={selectedTemplate.id} color={selectedColor} />
-            : <svg viewBox="0 0 28 28" width="16" height="16"><rect x="3" y="12" width="5" height="12" rx="1.5" fill="#94a3b8"/><rect x="11" y="7" width="5" height="17" rx="1.5" fill="#94a3b8" fillOpacity="0.6"/><rect x="19" y="15" width="5" height="9" rx="1.5" fill="#94a3b8" fillOpacity="0.4"/></svg>
+            : <svg viewBox="0 0 28 28" width="16" height="16"><rect x="3" y="12" width="5" height="12" rx="1.5" fill="var(--text-muted)"/><rect x="11" y="7" width="5" height="17" rx="1.5" fill="var(--text-muted)" fillOpacity="0.6"/><rect x="19" y="15" width="5" height="9" rx="1.5" fill="var(--text-muted)" fillOpacity="0.4"/></svg>
           }
         </div>
 
@@ -460,7 +460,7 @@ const ChartTypePicker: React.FC = () => {
           flex: 1,
           fontSize: 12.5,
           fontWeight: selectedTemplate ? 500 : 400,
-          color: selectedTemplate ? "#1e293b" : "#94a3b8",
+          color: selectedTemplate ? "var(--text-primary)" : "var(--text-muted)",
           fontFamily: "Inter, -apple-system, sans-serif",
         }}>
           {selectedTemplate?.name ?? "Select a chart type..."}
@@ -471,7 +471,7 @@ const ChartTypePicker: React.FC = () => {
           viewBox="0 0 16 16" width="14" height="14"
           style={{ flexShrink: 0, transition: "transform 0.2s", transform: open ? "rotate(180deg)" : "none" }}
         >
-          <polyline points="3,5 8,11 13,5" fill="none" stroke="#94a3b8" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <polyline points="3,5 8,11 13,5" fill="none" stroke="var(--text-muted)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
 
@@ -479,11 +479,11 @@ const ChartTypePicker: React.FC = () => {
       {open && (
         <div style={{
           marginTop: 6,
-          border: "1.5px solid #e2e8f0",
+          border: "1.5px solid var(--border)",
           borderRadius: 10,
-          background: "#ffffff",
+          background: "var(--bg-surface)",
           padding: "10px 10px 8px",
-          boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
+          boxShadow: "var(--shadow-md)",
         }}>
           {/* Category pill strip */}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 10 }}>
@@ -497,9 +497,9 @@ const ChartTypePicker: React.FC = () => {
                   style={{
                     display: "inline-flex", alignItems: "center",
                     padding: "3px 9px", borderRadius: 20,
-                    border: active ? `1.5px solid ${color}` : "1.5px solid #e2e8f0",
-                    background: active ? `${color}15` : "#f8fafc",
-                    color: active ? color : "#64748b",
+                    border: active ? `1.5px solid ${color}` : "1.5px solid var(--border)",
+                    background: active ? `${color}15` : "var(--bg-primary)",
+                    color: active ? color : "var(--text-muted)",
                     fontSize: 11, fontWeight: active ? 600 : 400,
                     fontFamily: "Inter, -apple-system, sans-serif",
                     cursor: "pointer", transition: "all 0.15s ease", whiteSpace: "nowrap",
@@ -536,8 +536,8 @@ const ChartTypePicker: React.FC = () => {
                 gap: 7,
                 padding: "10px 6px 9px",
                 borderRadius: 10,
-                border: selected ? `2px solid ${color}` : "1.5px solid #e2e8f0",
-                background: selected ? `${color}0d` : "#ffffff",
+                border: selected ? `2px solid ${color}` : "1.5px solid var(--border)",
+                background: selected ? `${color}0d` : "var(--bg-surface)",
                 cursor: "pointer",
                 transition: "all 0.15s ease",
                 boxShadow: selected ? `0 0 0 3px ${color}22` : "none",
@@ -548,13 +548,13 @@ const ChartTypePicker: React.FC = () => {
                 if (!selected) {
                   (e.currentTarget as HTMLButtonElement).style.borderColor = color;
                   (e.currentTarget as HTMLButtonElement).style.background = `${color}08`;
-                  (e.currentTarget as HTMLButtonElement).style.boxShadow = `0 2px 8px rgba(0,0,0,0.07)`;
+                  (e.currentTarget as HTMLButtonElement).style.boxShadow = `var(--shadow-sm)`;
                 }
               }}
               onMouseLeave={e => {
                 if (!selected) {
-                  (e.currentTarget as HTMLButtonElement).style.borderColor = "#e2e8f0";
-                  (e.currentTarget as HTMLButtonElement).style.background = "#ffffff";
+                  (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--border)";
+                  (e.currentTarget as HTMLButtonElement).style.background = "var(--bg-surface)";
                   (e.currentTarget as HTMLButtonElement).style.boxShadow = "none";
                 }
               }}
@@ -577,7 +577,7 @@ const ChartTypePicker: React.FC = () => {
               <span style={{
                 fontSize: 11,
                 fontWeight: selected ? 600 : 500,
-                color: selected ? color : "#374151",
+                color: selected ? color : "var(--text-secondary)",
                 textAlign: "center",
                 lineHeight: 1.3,
                 fontFamily: 'Inter, -apple-system, sans-serif',
@@ -601,7 +601,7 @@ const ChartTypePicker: React.FC = () => {
                   justifyContent: "center",
                 }}>
                   <svg viewBox="0 0 10 10" width="8" height="8">
-                    <polyline points="1.5,5 4,7.5 8.5,2.5" fill="none" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                    <polyline points="1.5,5 4,7.5 8.5,2.5" fill="none" stroke="var(--bg-surface)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
                 </div>
               )}

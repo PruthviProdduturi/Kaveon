@@ -9,11 +9,11 @@ import { MetricConfig, useChartBuilder, TimeRangePreset } from "./ChartBuilderCo
 const SectionLabel = ({ children }: { children: React.ReactNode }) => (
   <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "14px 0 10px" }}>
     <span style={{
-      fontSize: 10, fontWeight: 700, color: "#94a3b8",
+      fontSize: 10, fontWeight: 700, color: "var(--text-muted)",
       letterSpacing: "0.08em", textTransform: "uppercase",
       fontFamily: "Inter, -apple-system, sans-serif", whiteSpace: "nowrap",
     }}>{children}</span>
-    <div style={{ flex: 1, height: 1, background: "#f1f5f9" }} />
+    <div style={{ flex: 1, height: 1, background: "var(--border)" }} />
   </div>
 );
 
@@ -22,7 +22,7 @@ const FieldLabel = ({ htmlFor, children, badge }: { htmlFor?: string; children: 
     htmlFor={htmlFor}
     style={{
       display: "flex", alignItems: "center", gap: 5,
-      fontSize: 12, fontWeight: 500, color: "#475569", marginBottom: 5,
+      fontSize: 12, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 5,
       fontFamily: "Inter, -apple-system, sans-serif",
       textTransform: "none", letterSpacing: "normal",
     }}
@@ -30,8 +30,8 @@ const FieldLabel = ({ htmlFor, children, badge }: { htmlFor?: string; children: 
     {children}
     {badge && (
       <span style={{
-        fontSize: 10, fontWeight: 400, color: "#94a3b8",
-        background: "#f1f5f9", borderRadius: 4, padding: "1px 5px",
+        fontSize: 10, fontWeight: 400, color: "var(--text-muted)",
+        background: "var(--bg-hover)", borderRadius: 4, padding: "1px 5px",
         letterSpacing: "0.01em",
       }}>{badge}</span>
     )}
@@ -264,7 +264,7 @@ const ChartConfigPanel: React.FC = () => {
           <FieldLabel>Query mode</FieldLabel>
           <div style={{
             display: "flex",
-            background: "#f1f5f9",
+            background: "var(--bg-hover)",
             borderRadius: 8,
             padding: 3,
             gap: 2,
@@ -277,8 +277,8 @@ const ChartConfigPanel: React.FC = () => {
                 style={{
                   flex: 1, padding: "5px 0", fontSize: 12, borderRadius: 6,
                   cursor: "pointer", border: "none",
-                  background: queryMode === mode ? "#ffffff" : "transparent",
-                  color: queryMode === mode ? "#0078d4" : "#64748b",
+                  background: queryMode === mode ? "var(--bg-surface)" : "transparent",
+                  color: queryMode === mode ? "var(--accent)" : "var(--text-muted)",
                   fontWeight: queryMode === mode ? 600 : 400,
                   boxShadow: queryMode === mode ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
                   transition: "all 0.15s ease",
@@ -298,7 +298,7 @@ const ChartConfigPanel: React.FC = () => {
           <FieldLabel>{isBigNumber ? "Metric" : "Metrics"}</FieldLabel>
 
           {metrics.length === 0 && (
-            <div style={{ fontSize: 11.5, color: "#94a3b8", marginBottom: 4, fontStyle: "italic" }}>
+            <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginBottom: 4, fontStyle: "italic" }}>
               No metrics added yet.
             </div>
           )}
@@ -306,12 +306,12 @@ const ChartConfigPanel: React.FC = () => {
           {metrics.map((m) => (
             <div key={m.id} style={{
               display: "flex", gap: 0, marginBottom: 5, alignItems: "center",
-              background: "#f8fafc", border: "1.5px solid #e2e8f0",
+              background: "var(--bg-primary)", border: "1.5px solid var(--border)",
               borderRadius: 8, overflow: "hidden",
             }}>
               <select
                 className="chart-builder-select"
-                style={{ width: 100, flexShrink: 0, fontSize: 11.5, border: "none", background: "transparent", borderRadius: 0, boxShadow: "none", padding: "5px 8px", fontWeight: 500, color: "#7c3aed" }}
+                style={{ width: 100, flexShrink: 0, fontSize: 11.5, border: "none", background: "transparent", borderRadius: 0, boxShadow: "none", padding: "5px 8px", fontWeight: 500, color: "var(--accent)" }}
                 value={m.aggregate}
                 onChange={(e) => updateMetric(m.id, "aggregate", e.target.value)}
               >
@@ -319,7 +319,7 @@ const ChartConfigPanel: React.FC = () => {
                   <option key={a.value} value={a.value}>{a.label}</option>
                 ))}
               </select>
-              <div style={{ width: 1, alignSelf: "stretch", background: "#e2e8f0", flexShrink: 0 }} />
+              <div style={{ width: 1, alignSelf: "stretch", background: "var(--border)", flexShrink: 0 }} />
               <select
                 className="chart-builder-select"
                 style={{ flex: 1, fontSize: 11.5, border: "none", background: "transparent", borderRadius: 0, boxShadow: "none", padding: "5px 8px" }}
@@ -337,12 +337,12 @@ const ChartConfigPanel: React.FC = () => {
                   style={{
                     display: "flex", alignItems: "center", justifyContent: "center",
                     width: 28, alignSelf: "stretch", flexShrink: 0,
-                    background: "none", border: "none", borderLeft: "1.5px solid #e2e8f0",
-                    cursor: "pointer", color: "#94a3b8", fontSize: 15,
+                    background: "none", border: "none", borderLeft: "1.5px solid var(--border)",
+                    cursor: "pointer", color: "var(--text-muted)", fontSize: 15,
                     transition: "background 0.1s, color 0.1s",
                   }}
-                  onMouseEnter={e => { const b = e.currentTarget as HTMLButtonElement; b.style.background = "#fff0f0"; b.style.color = "#dc2626"; }}
-                  onMouseLeave={e => { const b = e.currentTarget as HTMLButtonElement; b.style.background = "none"; b.style.color = "#94a3b8"; }}
+                  onMouseEnter={e => { const b = e.currentTarget as HTMLButtonElement; b.style.background = "color-mix(in srgb, var(--error) 10%, transparent)"; b.style.color = "var(--error)"; }}
+                  onMouseLeave={e => { const b = e.currentTarget as HTMLButtonElement; b.style.background = "none"; b.style.color = "var(--text-muted)"; }}
                   title="Remove metric"
                 >×</button>
               )}
@@ -356,13 +356,13 @@ const ChartConfigPanel: React.FC = () => {
               style={{
                 display: "inline-flex", alignItems: "center", gap: 5,
                 marginTop: 2, padding: "4px 10px", borderRadius: 6,
-                border: "1.5px dashed #cbd5e1", background: "transparent",
-                color: "#64748b", fontSize: 11.5, cursor: "pointer",
+                border: "1.5px dashed var(--border)", background: "transparent",
+                color: "var(--text-muted)", fontSize: 11.5, cursor: "pointer",
                 fontFamily: "Inter, -apple-system, sans-serif",
                 transition: "all 0.15s",
               }}
-              onMouseEnter={e => { const b = e.currentTarget as HTMLButtonElement; b.style.borderColor = "#0078d4"; b.style.color = "#0078d4"; b.style.background = "#eff6ff"; }}
-              onMouseLeave={e => { const b = e.currentTarget as HTMLButtonElement; b.style.borderColor = "#cbd5e1"; b.style.color = "#64748b"; b.style.background = "transparent"; }}
+              onMouseEnter={e => { const b = e.currentTarget as HTMLButtonElement; b.style.borderColor = "var(--accent)"; b.style.color = "var(--accent)"; b.style.background = "color-mix(in srgb, var(--accent) 8%, transparent)"; }}
+              onMouseLeave={e => { const b = e.currentTarget as HTMLButtonElement; b.style.borderColor = "var(--border)"; b.style.color = "var(--text-muted)"; b.style.background = "transparent"; }}
             >
               <i className="fas fa-plus" style={{ fontSize: 9 }} /> Add metric
             </button>
@@ -393,8 +393,8 @@ const ChartConfigPanel: React.FC = () => {
                 return (
                   <span key={g} style={{
                     fontSize: 11.5, padding: "3px 8px 3px 10px", borderRadius: 6,
-                    background: "#f0f4ff", color: "#3b5bdb",
-                    border: "1.5px solid #c5d0fa",
+                    background: "color-mix(in srgb, var(--accent) 10%, var(--bg-surface))", color: "var(--accent)",
+                    border: "1.5px solid color-mix(in srgb, var(--accent) 30%, var(--border))",
                     display: "inline-flex", alignItems: "center", gap: 4,
                     fontFamily: "Inter, -apple-system, sans-serif", fontWeight: 500,
                   }}>
@@ -406,11 +406,11 @@ const ChartConfigPanel: React.FC = () => {
                         display: "flex", alignItems: "center", justifyContent: "center",
                         width: 14, height: 14, borderRadius: "50%",
                         border: "none", background: "transparent", cursor: "pointer",
-                        fontSize: 13, color: "#748ffc", lineHeight: 1, padding: 0,
+                        fontSize: 13, color: "var(--accent)", lineHeight: 1, padding: 0,
                         transition: "background 0.1s, color 0.1s",
                       }}
-                      onMouseEnter={e => { const b = e.currentTarget as HTMLButtonElement; b.style.background = "#dde4ff"; b.style.color = "#3b5bdb"; }}
-                      onMouseLeave={e => { const b = e.currentTarget as HTMLButtonElement; b.style.background = "transparent"; b.style.color = "#748ffc"; }}
+                      onMouseEnter={e => { const b = e.currentTarget as HTMLButtonElement; b.style.background = "color-mix(in srgb, var(--accent) 20%, transparent)"; b.style.color = "var(--accent)"; }}
+                      onMouseLeave={e => { const b = e.currentTarget as HTMLButtonElement; b.style.background = "transparent"; b.style.color = "var(--accent)"; }}
                     >×</button>
                   </span>
                 );
@@ -509,10 +509,10 @@ const ChartConfigPanel: React.FC = () => {
               }
             }}
           >
-            <span style={{ fontSize: 12.5, color: "#1e293b", fontFamily: "Inter, -apple-system, sans-serif" }}>
+            <span style={{ fontSize: 12.5, color: "var(--text-primary)", fontFamily: "Inter, -apple-system, sans-serif" }}>
               {currentTimeRangeLabel}
             </span>
-            <svg viewBox="0 0 16 16" width="14" height="14" style={{ flexShrink: 0, color: "#94a3b8" }}>
+            <svg viewBox="0 0 16 16" width="14" height="14" style={{ flexShrink: 0, color: "var(--text-muted)" }}>
               <polyline points="3,5 8,11 13,5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </div>
