@@ -9,8 +9,8 @@ import { useTheme } from "../contexts/ThemeContext";
 import { useRole } from "../hooks/useRole";
 
 const SIDEBAR_COLLAPSED_KEY = "kaveon-sidebar-collapsed";
-const EXPANDED_WIDTH = 260;
-const COLLAPSED_WIDTH = 64;
+const EXPANDED_WIDTH = 220;
+const COLLAPSED_WIDTH = 56;
 const TRANSITION = "250ms cubic-bezier(0.4, 0, 0.2, 1)";
 
 interface NavItem {
