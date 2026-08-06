@@ -56,7 +56,33 @@ export function KaveonLoading({ message = "Loading" }: KaveonLoadingProps) {
         >
           {message}{dots}
         </p>
+
+        <div
+          style={{
+            width: 180,
+            height: 2,
+            background: "rgba(255,255,255,0.04)",
+            borderRadius: 1,
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              width: "35%",
+              height: "100%",
+              background: "linear-gradient(90deg, transparent, #4A9EE8, transparent)",
+              animation: "loadSlide 1.8s ease-in-out infinite",
+            }}
+          />
+        </div>
       </div>
+
+      <style>{`
+        @keyframes loadSlide {
+          0% { transform: translateX(-300%); }
+          100% { transform: translateX(600%); }
+        }
+      `}</style>
     </div>
   );
 }
