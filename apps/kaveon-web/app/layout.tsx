@@ -7,7 +7,7 @@ import { ClientLayout } from "../components/ClientLayout";
 export const metadata: Metadata = {
   title: {
     default: "Kaveon",
-    template: "Kaveon — %s",
+    template: "%s — Kaveon",
   },
   description: "Kaveon — the intelligent data platform. Talk to your data.",
 };
