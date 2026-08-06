@@ -221,7 +221,7 @@ export default function DataSourcesPage() {
         pills={!loading && !error ? [
           { label: `${dataSources.length} Total`, icon: "fa-server" },
           ...(myCount > 0 ? [{ label: `${myCount} Mine`, icon: "fa-user" }] : []),
-          ...(othersCount > 0 ? [{ label: `${othersCount} Others`, icon: "fa-users", bg: "#f1f5f9", border: "#e2e8f0", color: "#64748b" }] : []),
+          ...(othersCount > 0 ? [{ label: `${othersCount} Others`, icon: "fa-users", bg: "var(--bg-hover)", border: "var(--border)", color: "var(--text-muted)" }] : []),
           ...(activeCount > 0 ? [{ label: `${activeCount} Active`, icon: "fa-check-circle", bg: "#d1fae5", border: "#6ee7b7", color: "#065f46" }] : []),
         ] : []}
         action={
@@ -269,18 +269,18 @@ export default function DataSourcesPage() {
                     <td className="muted" style={{ fontSize: 12, fontFamily: "monospace", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ds.connection_string}</td>
                     <td className="muted" style={{ fontSize: 13 }}>{ds.database_name || "—"}</td>
                     <td>
-                      <span style={{ padding: "0.2rem 0.5rem", borderRadius: 6, fontSize: "0.75rem", fontWeight: 600, background: ds.region === "WW" ? "#dbeafe" : "#fef3c7", color: ds.region === "WW" ? "#1e40af" : "#92400e" }}>
+                      <span style={{ padding: "0.2rem 0.5rem", borderRadius: 6, fontSize: "0.75rem", fontWeight: 600, background: ds.region === "WW" ? "rgba(59,130,246,0.12)" : "rgba(245,158,11,0.12)", color: ds.region === "WW" ? "var(--accent)" : "var(--warning, #92400e)" }}>
                         {ds.region}
                       </span>
                     </td>
                     <td>
-                      <span style={{ padding: "0.2rem 0.5rem", borderRadius: 6, fontSize: "0.75rem", fontWeight: 600, background: ds.is_active ? "#d1fae5" : "#f3f4f6", color: ds.is_active ? "#065f46" : "#6b7280" }}>
+                      <span style={{ padding: "0.2rem 0.5rem", borderRadius: 6, fontSize: "0.75rem", fontWeight: 600, background: ds.is_active ? "rgba(16,185,129,0.12)" : "var(--bg-hover)", color: ds.is_active ? "var(--success)" : "var(--text-muted)" }}>
                         {ds.is_active ? "Active" : "Inactive"}
                       </span>
                     </td>
                     <td className="muted" style={{ fontSize: 13 }}>
                       {tableCounts[ds.id] !== undefined ? (
-                        tableCounts[ds.id] !== null ? <span style={{ fontWeight: 600, color: "#059669" }}>{tableCounts[ds.id]} tables</span> : <span style={{ color: "#9ca3af" }}>—</span>
+                        tableCounts[ds.id] !== null ? <span style={{ fontWeight: 600, color: "var(--success)" }}>{tableCounts[ds.id]} tables</span> : <span style={{ color: "var(--text-muted)" }}>—</span>
                       ) : <i className="fas fa-spinner fa-spin" style={{ fontSize: 11, color: "var(--lens-primary)" }} />}
                     </td>
                     <td className="actions-cell">
@@ -388,9 +388,9 @@ function AddDataSourceModal({ dataSource, isCopying = false, onClose, onSuccess 
           top: '50%',
           left: '50%',
           transform: 'translate(-50%, -50%)',
-          background: 'white',
+          background: "var(--bg-surface)",
           borderRadius: '12px',
-          boxShadow: '0 20px 60px rgba(0, 0, 0, 0.3)',
+          boxShadow: "var(--shadow-lg)",
           zIndex: 1001,
           width: '90%',
           maxWidth: '600px',
@@ -406,7 +406,7 @@ function AddDataSourceModal({ dataSource, isCopying = false, onClose, onSuccess 
             justifyContent: 'space-between',
             alignItems: 'center',
             padding: '1.5rem',
-            borderBottom: '1px solid #e5e7eb',
+            borderBottom: "1px solid var(--border)",
           }}
         >
           <h2 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 600 }}>
@@ -419,7 +419,7 @@ function AddDataSourceModal({ dataSource, isCopying = false, onClose, onSuccess 
               border: 'none',
               fontSize: '1.5rem',
               cursor: 'pointer',
-              color: '#6b7280',
+              color: "var(--text-muted)",
               padding: '0.25rem',
               width: 32,
               height: 32,
@@ -441,9 +441,9 @@ function AddDataSourceModal({ dataSource, isCopying = false, onClose, onSuccess 
                   padding: '1rem',
                   borderRadius: '8px',
                   marginBottom: '1.5rem',
-                  background: '#fef2f2',
-                  color: '#991b1b',
-                  border: '1px solid #fecaca',
+                  background: "rgba(239,68,68,0.08)",
+                  color: "var(--error)",
+                  border: "1px solid rgba(239,68,68,0.3)",
                   display: 'flex',
                   alignItems: 'center',
                   gap: '0.75rem',
@@ -484,9 +484,9 @@ function AddDataSourceModal({ dataSource, isCopying = false, onClose, onSuccess 
                       style={{
                         display: "flex", alignItems: "center", gap: "0.5rem",
                         padding: "0.5rem 0.85rem", borderRadius: 9, cursor: "pointer",
-                        border: `2px solid ${selected ? meta.color : "#e2e8f0"}`,
-                        background: selected ? meta.bg : "white",
-                        color: selected ? meta.color : "#374151",
+                        border: `2px solid ${selected ? meta.color : "var(--border)"}`,
+                        background: selected ? meta.bg : "var(--bg-surface)",
+                        color: selected ? meta.color : "var(--text-secondary)",
                         fontWeight: selected ? 600 : 400,
                         fontSize: 13, transition: "all 0.15s",
                         boxShadow: selected ? `0 0 0 2px ${meta.color}20` : "none",
@@ -535,10 +535,10 @@ function AddDataSourceModal({ dataSource, isCopying = false, onClose, onSuccess 
                 <span>Region</span>
               </label>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                <span style={{ fontSize: 13, padding: "0.3rem 0.75rem", borderRadius: 7, background: "#dbeafe", color: "#1e40af", border: "1px solid #93c5fd", fontWeight: 600 }}>
+                <span style={{ fontSize: 13, padding: "0.3rem 0.75rem", borderRadius: 7, background: "rgba(59,130,246,0.12)", color: "var(--accent)", border: "1px solid rgba(59,130,246,0.3)", fontWeight: 600 }}>
                   WW — Worldwide
                 </span>
-                <span style={{ fontSize: 12, color: "#94a3b8" }}>EU coming soon</span>
+                <span style={{ fontSize: 12, color: "var(--text-muted)" }}>EU coming soon</span>
               </div>
             </div>
 
@@ -562,8 +562,8 @@ function AddDataSourceModal({ dataSource, isCopying = false, onClose, onSuccess 
               justifyContent: 'flex-end',
               gap: '0.75rem',
               padding: '1.5rem',
-              borderTop: '1px solid #e5e7eb',
-              background: '#f9fafb',
+              borderTop: "1px solid var(--border)",
+              background: "var(--bg-primary)",
             }}
           >
             <Button

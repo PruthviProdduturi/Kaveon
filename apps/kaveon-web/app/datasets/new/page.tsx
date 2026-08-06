@@ -1239,8 +1239,8 @@ export default function NewDatasetPage() {
             position: "sticky",
             top: 0,
             zIndex: 10,
-            background: "#ffffff",
-            borderBottom: "1px solid #e5e7eb",
+            background: "var(--bg-surface)",
+            borderBottom: "1px solid var(--border)",
             padding: "12px 24px",
             display: "flex",
             alignItems: "center",
@@ -1250,7 +1250,7 @@ export default function NewDatasetPage() {
               <h2 style={{
                 fontSize: "15px",
                 fontWeight: 600,
-                color: "#111827",
+                color: "var(--text-primary)",
                 margin: 0,
               }}>
                 {editingDatasetId ? "Edit dataset" : "New dataset"}
@@ -1258,7 +1258,7 @@ export default function NewDatasetPage() {
               {name && (
                 <span style={{
                   fontSize: "14px",
-                  color: "#6b7280",
+                  color: "var(--text-muted)",
                   fontWeight: 400,
                 }}>
                   · {name}
@@ -1276,22 +1276,22 @@ export default function NewDatasetPage() {
                   fontSize: "14px",
                   fontWeight: 500,
                   borderRadius: "6px",
-                  border: "1px solid #d1d5db",
-                  background: "#ffffff",
-                  color: "#374151",
+                  border: "1px solid var(--border)",
+                  background: "var(--bg-surface)",
+                  color: "var(--text-secondary)",
                   cursor: isSubmitting ? "not-allowed" : "pointer",
                   opacity: isSubmitting ? 0.5 : 1,
                   transition: "all 0.2s",
                 }}
                 onMouseEnter={(e) => {
                   if (!isSubmitting) {
-                    e.currentTarget.style.background = "#f9fafb";
-                    e.currentTarget.style.borderColor = "#9ca3af";
+                    e.currentTarget.style.background = "var(--bg-primary)";
+                    e.currentTarget.style.borderColor = "var(--text-muted)";
                   }
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "#ffffff";
-                  e.currentTarget.style.borderColor = "#d1d5db";
+                  e.currentTarget.style.background = "var(--bg-surface)";
+                  e.currentTarget.style.borderColor = "var(--border)";
                 }}
               >
                 Cancel
@@ -1307,8 +1307,8 @@ export default function NewDatasetPage() {
                   border: "none",
                   background: canSubmit
                     ? `linear-gradient(135deg, ${primaryColor} 0%, #0284c7 100%)`
-                    : "#e5e7eb",
-                  color: canSubmit ? "#ffffff" : "#9ca3af",
+                    : "var(--border)",
+                  color: canSubmit ? "#ffffff" : "var(--text-muted)",
                   cursor: canSubmit ? "pointer" : "not-allowed",
                   transition: "all 0.2s",
                   boxShadow: canSubmit ? "0 2px 4px rgba(0, 0, 0, 0.1)" : "none",
@@ -1339,7 +1339,7 @@ export default function NewDatasetPage() {
 
           {/* Form Content */}
           <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 24, minHeight: 360, padding: 24 }}>
-          <div style={{ borderRight: "1px solid #e5e7eb", paddingRight: 16 }}>
+          <div style={{ borderRight: "1px solid var(--border)", paddingRight: 16 }}>
             <div style={{ marginBottom: 16 }}>
               <DataSourceSelector
                 value={currentDataSourceId}
@@ -1954,7 +1954,7 @@ export default function NewDatasetPage() {
                   )}
 
                   {factColumnsError && (
-                    <div className="card" style={{ marginTop: 12, padding: 12, background: '#fff3cd', border: '1px solid #ffc107' }}>
+                    <div className="card" style={{ marginTop: 12, padding: 12, background: "var(--warning-bg, #fff3cd)", border: "1px solid var(--warning, #ffc107)" }}>
                       <p style={{ margin: 0, fontSize: 13, color: '#856404' }}>
                         <strong>Error loading table columns:</strong> {factColumnsError}
                       </p>
@@ -2004,7 +2004,7 @@ export default function NewDatasetPage() {
                                 marginTop: 2,
                                 fontSize: 13,
                                 fontWeight: dim.factKey ? 600 : 400,
-                                color: dim.factKey ? "#111827" : "#9ca3af",
+                                color: dim.factKey ? "var(--text-primary)" : "var(--text-muted)",
                               }}
                             >
                               {isLoadingFactColumns
@@ -2153,7 +2153,7 @@ export default function NewDatasetPage() {
                                   display: "flex",
                                   alignItems: "center",
                                   justifyContent: "space-between",
-                                  backgroundColor: "#ffffff",
+                                  backgroundColor: "var(--bg-surface)",
                                 }}
                                 onClick={() =>
                                   setOpenDimValueId((prev) => (prev === dim.id ? null : dim.id))
@@ -2177,8 +2177,8 @@ export default function NewDatasetPage() {
                                     maxHeight: 220,
                                     overflowY: "auto",
                                     padding: 8,
-                                    backgroundColor: "#ffffff",
-                                    boxShadow: "0 4px 8px rgba(0,0,0,0.08)",
+                                    backgroundColor: "var(--bg-surface)",
+                                    boxShadow: "var(--shadow-md)",
                                   }}
                                 >
                                   {dim.dimColumns.map((col) => (
@@ -2237,7 +2237,7 @@ export default function NewDatasetPage() {
                   {hasSemanticKeyIssues && (
                     <p
                       className="muted"
-                      style={{ marginTop: 8, fontSize: 12, color: "#b91c1c" }}
+                      style={{ marginTop: 8, fontSize: 12, color: "var(--error)" }}
                     >
                       For each dimension you include, choose both a fact key and a
                       dimension key.
@@ -2247,7 +2247,7 @@ export default function NewDatasetPage() {
               )}
 
               {submitError && (
-                <p className="page-empty-body" style={{ color: "#b91c1c", marginTop: 12 }}>
+                <p className="page-empty-body" style={{ color: "var(--error)", marginTop: 12 }}>
                   {submitError}
                 </p>
               )}
