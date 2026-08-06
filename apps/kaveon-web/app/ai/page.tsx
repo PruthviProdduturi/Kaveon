@@ -189,6 +189,9 @@ export default function AIPage() {
   const { isAuthenticated, account } = useAuth();
   const { primaryColor, gradientColors } = useTheme();
   const router = useRouter();
+  const searchParams = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
+  const initialQuery = searchParams.get("q") || "";
+  const autoSentRef = useRef(false);
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -261,6 +264,15 @@ export default function AIPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // Auto-send query from URL param (?q=...)
+  useEffect(() => {
+    if (initialQuery && !autoSentRef.current && isAuthenticated) {
+      autoSentRef.current = true;
+      // Small delay to let datasets load
+      setTimeout(() => void sendMessage(initialQuery), 500);
+    }
+  }, [initialQuery, isAuthenticated]);
+
   const sendMessage = async (text: string) => {
     if (!text.trim() || sending) return;
     const userMsg: Message = { role: "user", content: text.trim() };
@@ -317,6 +329,15 @@ export default function AIPage() {
           }
           // SQL execution failed — fall through to AI API
         }
+      }
+
+      // ── If no dataset selected, guide the user ──────────────────────
+      if (!datasetSchema) {
+        setMessages(prev => [...prev.slice(0, -1), {
+          role: "assistant",
+          content: "I need some context to help you. Select a **data source** and **dataset** from the dropdowns above, then ask me something like:\n\n• \"Show total cases by country\"\n• \"Top 10 regions by revenue\"\n• \"Trend of sales over time\"\n• \"Total population\"",
+        }]);
+        return;
       }
 
       // ── Fall back to AI API ────────────────────────────────────────────
