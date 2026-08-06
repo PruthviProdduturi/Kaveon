@@ -10,6 +10,11 @@ interface KaveonMarkProps {
   useDirectColor?: boolean;
 }
 
+/**
+ * KaveonMark — the Guardian O.
+ * Open blue halo with gap at the bottom.
+ * Geometry from the canonical kaveon-icon.svg (512×512 viewBox).
+ */
 export function KaveonMark({
   size = 28,
   className,
@@ -22,32 +27,20 @@ export function KaveonMark({
     <svg
       width={size}
       height={size}
-      viewBox="0 0 100 100"
+      viewBox="0 0 512 512"
       fill="none"
       className={className}
       role="img"
       aria-label="Kaveon"
       style={{ opacity }}
     >
-      {/* Open arc ~280° */}
       <path
-        d="M 30 72 A 34 34 0 1 1 42 80"
+        d="M 343.68 407.88 A 124 124 0 1 0 168.32 407.88"
         stroke={color}
-        strokeWidth="8"
+        strokeWidth="52"
         fill="none"
-        strokeLinecap="round"
+        strokeLinecap="butt"
       />
-      {/* Chat bubble tail */}
-      <path
-        d="M 30 72 L 24 84 L 42 80"
-        stroke={color}
-        strokeWidth="8"
-        fill="none"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      {/* Center dot */}
-      <circle cx="50" cy="48" r="7" fill={color} />
     </svg>
   );
 }
@@ -57,10 +50,12 @@ interface KaveonWordmarkProps {
   className?: string;
 }
 
-/** KaveonWordmark — "KAVE" + inline O-mark + "N". For sidebar expanded state. */
-export function KaveonWordmark({ height = 18, className }: KaveonWordmarkProps) {
-  const color = "var(--accent, #4A9EE8)";
-  const markSize = height;
+/**
+ * KaveonWordmark — the full KAVE[O]N wordmark rendered inline.
+ * KAVE and N in Inter 600, the O replaced by the Guardian O mark.
+ */
+export function KaveonWordmark({ height = 15, className }: KaveonWordmarkProps) {
+  const textColor = "var(--text-primary, #111318)";
 
   return (
     <span
@@ -68,7 +63,7 @@ export function KaveonWordmark({ height = 18, className }: KaveonWordmarkProps) 
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: height * 0.2,
+        gap: 0,
         height,
         lineHeight: 1,
       }}
@@ -76,26 +71,28 @@ export function KaveonWordmark({ height = 18, className }: KaveonWordmarkProps) 
       <span
         style={{
           fontSize: height,
-          fontWeight: 800,
+          fontWeight: 600,
           fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif",
-          letterSpacing: "-0.01em",
-          color,
+          letterSpacing: "2px",
+          color: textColor,
           lineHeight: 1,
           whiteSpace: "nowrap",
+          textTransform: "uppercase",
         }}
       >
         KAVE
       </span>
-      <KaveonMark size={markSize} useDirectColor={false} />
+      <KaveonMark size={height * 1.1} useDirectColor />
       <span
         style={{
           fontSize: height,
-          fontWeight: 800,
+          fontWeight: 600,
           fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif",
-          letterSpacing: "-0.01em",
-          color,
+          letterSpacing: "2px",
+          color: textColor,
           lineHeight: 1,
           whiteSpace: "nowrap",
+          textTransform: "uppercase",
         }}
       >
         N
@@ -103,3 +100,5 @@ export function KaveonWordmark({ height = 18, className }: KaveonWordmarkProps) 
     </span>
   );
 }
+
+export default KaveonMark;
