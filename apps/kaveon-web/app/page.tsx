@@ -108,11 +108,21 @@ export default function Home() {
         const list = Array.isArray(listRaw) ? listRaw : (listRaw.dataSources || listRaw.sources || []);
         const active = activeRes.ok ? await activeRes.json() : {};
 
-        const tableCount = typeof active.table_count === "number" ? active.table_count
-          : Array.isArray(active.tables) ? active.tables.length : 0;
+        let tableCount = 0;
+        if (typeof active.table_count === "number") {
+          tableCount = active.table_count;
+        } else if (Array.isArray(active.tables)) {
+          tableCount = active.tables.length;
+        } else if (Array.isArray(active)) {
+          tableCount = (active as any[]).reduce((sum: number, s: any) => sum + (typeof s.table_count === "number" ? s.table_count : 0), 0);
+        } else if (active.dataSources && Array.isArray(active.dataSources)) {
+          tableCount = active.dataSources.reduce((sum: number, s: any) => sum + (typeof s.table_count === "number" ? s.table_count : 0), 0);
+        }
+
+        const datasetCount = summary.dataset_count ?? summary.datasets_count ?? summary.datasetCount ?? 0;
 
         setData({
-          datasetCount: summary.dataset_count ?? 0,
+          datasetCount,
           sourceCount: list.length,
           tableCount,
           sourceNames: list.map((s: any) => s.database_name ?? s.name ?? "Unknown"),
@@ -122,14 +132,12 @@ export default function Home() {
 
         if (dsRes.ok) {
           const dd = await dsRes.json();
-          console.log("[Kaveon] /api/v1/datasets raw response:", dd);
           const rawDs = Array.isArray(dd) ? dd : (dd.recent || dd.datasets || dd.result || []);
           const dsList = rawDs.map((ds: any) => ({
             id: ds.id,
             name: ds.dataset_name || ds.name || `Dataset ${ds.id}`,
             database_name: ds.database_name,
           }));
-          console.log("[Kaveon] Parsed datasets:", dsList.length, dsList.map((d: any) => d.name));
           setDatasets(dsList);
           // Auto-select first dataset
           if (dsList.length > 0 && !selectedDataset) {
@@ -208,7 +216,6 @@ export default function Home() {
       })
     ).then(results => {
       const valid = results.filter(Boolean) as SchemaEntry[];
-      console.log("[Kaveon] All schemas loaded:", valid.length, valid.map(s => ({ name: s.name, cols: s.schema.columns.length })));
       allSchemasRef.current = valid;
       setAllSchemas(valid);
       setSchemasReady(true);
@@ -223,7 +230,6 @@ export default function Home() {
     let best: { schema: DatasetSchema; sourceId?: number; sourceName?: string; confidence: number; name: string; parsed: any } | null = null;
 
     const schemas = allSchemasRef.current;
-    console.log("[Kaveon NL→SQL] Searching", schemas.length, "schemas for:", text);
     for (const ds of schemas) {
       // Score: how well does this dataset match the query?
       let score = 0;
@@ -322,9 +328,6 @@ export default function Home() {
       const srcId = match?.sourceId || selectedSource?.id;
       const srcDb = match?.sourceName || selectedSource?.database_name;
       let parsed = match?.parsed || (schema ? nlToSql(text.trim(), schema) : null);
-
-      // Debug: log what we found
-      if (match) console.log("[Kaveon NL→SQL] Best match:", match.name, "score:", match.confidence, "parsed:", !!parsed, "columns:", match.schema.columns.map(c => c.name));
 
       // Fallback: if we matched a dataset by name but parser returned null,
       // build a simple SELECT query showing the data
@@ -512,8 +515,8 @@ export default function Home() {
 
                 {/* Bubble */}
                 <div style={{
-                  maxWidth: "75%",
-                  padding: m.chart ? "0" : "10px 14px",
+                  maxWidth: m.chart ? "90%" : "75%",
+                  padding: "10px 14px",
                   borderRadius: m.role === "user" ? "14px 4px 14px 14px" : "4px 14px 14px 14px",
                   background: m.role === "user" ? "var(--accent)" : "var(--bg-surface)",
                   color: m.role === "user" ? "#fff" : "var(--text-primary)",
@@ -531,7 +534,7 @@ export default function Home() {
                   ) : (
                     <>
                       {m.content && (
-                        <div style={{ padding: m.chart ? "12px 16px 8px" : 0, whiteSpace: "pre-wrap", lineHeight: 1.6 }}
+                        <div style={{ padding: m.chart ? "0 0 8px" : 0, whiteSpace: "pre-wrap", lineHeight: 1.6 }}
                           dangerouslySetInnerHTML={{ __html: m.content.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>") }}
                         />
                       )}
