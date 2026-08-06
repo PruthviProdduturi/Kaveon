@@ -6,11 +6,24 @@ import { msalFetch } from "../../utils/msalFetch";
 import { useAuth } from "../../auth/useAuth";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useRouter } from "next/navigation";
+import { nlToSql, DatasetSchema, NlToSqlResult } from "../../utils/nlToSql";
+import { InlineChart } from "../../components/chat/InlineChart";
+
+interface ChartData {
+  rows: (string | number | null)[][];
+  columns: string[];
+  chartType: "bar" | "line" | "pie" | "kpi" | "table";
+  xAxis: string | null;
+  yAxis: string | null;
+  title: string;
+  sql: string;
+}
 
 interface Message {
   role: "user" | "assistant";
   content: string;
   loading?: boolean;
+  chart?: ChartData;
 }
 
 interface SourceOption {
@@ -187,8 +200,36 @@ export default function AIPage() {
   const [showSqlContext, setShowSqlContext] = useState(false);
   const [sending, setSending] = useState(false);
   const [noKey, setNoKey] = useState(false);
+  const [datasetSchema, setDatasetSchema] = useState<DatasetSchema | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Fetch dataset schema when a dataset is selected (for NL→SQL parser)
+  useEffect(() => {
+    if (!selectedDataset) { setDatasetSchema(null); return; }
+    msalFetch(`${API_BASE}/api/v1/datasets/${selectedDataset}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d) { setDatasetSchema(null); return; }
+        const cols = (d.columns || []).map((c: any) => ({
+          name: c.column_name || c.name,
+          type: c.data_type?.includes("int") || c.data_type?.includes("float") || c.data_type?.includes("decimal") || c.data_type?.includes("numeric") || c.data_type?.includes("money") || c.data_type?.includes("real") ? "number"
+            : c.data_type?.includes("date") || c.data_type?.includes("time") ? "date"
+            : "string",
+          description: c.description || "",
+        }));
+        const metrics = (d.metrics || []).map((m: any) => ({
+          name: m.name || m.metric_name,
+          expression: m.sql_expression || m.expression || `SUM(${m.name})`,
+          description: m.description || "",
+        }));
+        const table = d.fact_table
+          ? (d.schema_name ? `${d.schema_name}.${d.fact_table}` : d.fact_table)
+          : d.table_name || "data";
+        setDatasetSchema({ tableName: table, columns: cols, metrics: metrics });
+      })
+      .catch(() => setDatasetSchema(null));
+  }, [selectedDataset]);
 
   // Load data sources + datasets for context pickers
   useEffect(() => {
@@ -230,6 +271,55 @@ export default function AIPage() {
     setNoKey(false);
 
     try {
+      // ── Try NL→SQL parser first (no API key needed) ────────────────────
+      if (datasetSchema) {
+        const parsed = nlToSql(text.trim(), datasetSchema);
+        if (parsed && parsed.confidence >= 0.5) {
+          // Execute the generated SQL
+          const sourceId = selectedSource?.id;
+          const execRes = await msalFetch(`${API_BASE}/api/v1/sql/execute`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sql: parsed.sql,
+              data_source_id: sourceId,
+              database: selectedSource?.database_name,
+            }),
+          });
+
+          if (execRes.ok) {
+            const execData = await execRes.json();
+            const rows = execData.rows || execData.data || [];
+            const columns = execData.columns || execData.column_names || [];
+
+            if (rows.length > 0) {
+              setMessages(prev => [...prev.slice(0, -1), {
+                role: "assistant",
+                content: `Here's what I found for "${text.trim()}"`,
+                chart: {
+                  rows,
+                  columns,
+                  chartType: parsed.chartType,
+                  xAxis: parsed.xAxis,
+                  yAxis: parsed.yAxis,
+                  title: parsed.title,
+                  sql: parsed.sql,
+                },
+              }]);
+              return;
+            }
+            // No rows — fall through to text response
+            setMessages(prev => [...prev.slice(0, -1), {
+              role: "assistant",
+              content: `I ran the query but it returned no results.\n\n\`\`\`sql\n${parsed.sql}\n\`\`\`\n\nTry rephrasing or check if the data exists.`,
+            }]);
+            return;
+          }
+          // SQL execution failed — fall through to AI API
+        }
+      }
+
+      // ── Fall back to AI API ────────────────────────────────────────────
       const history = [...messages, userMsg].map(m => ({ role: m.role, content: m.content }));
       const ctx: Record<string, unknown> = {};
       if (selectedSource) ctx.data_source_id = selectedSource.id;
@@ -243,8 +333,18 @@ export default function AIPage() {
       if (res.status === 400) {
         const d = await res.json();
         if (d?.detail?.code === "ai_error" || d?.detail?.code === "invalid_api_key") {
-          setNoKey(true);
-          setMessages(prev => prev.slice(0, -1)); // remove loading
+          // No API key — show a helpful message instead of an error
+          if (datasetSchema) {
+            setMessages(prev => [...prev.slice(0, -1), {
+              role: "assistant",
+              content: "I couldn't understand that query well enough to generate SQL automatically. Try something like:\n\n• \"Show [metric] by [column]\"\n• \"Top 10 [column] by [metric]\"\n• \"Total [metric]\"\n• \"Trend of [metric] over time\"",
+            }]);
+          } else {
+            setMessages(prev => [...prev.slice(0, -1), {
+              role: "assistant",
+              content: "Select a dataset above so I can understand your data schema, then ask me a question like \"show revenue by region\" or \"top 10 customers by sales\".",
+            }]);
+          }
           return;
         }
         throw new Error(d?.detail?.message || "Failed");
@@ -255,7 +355,7 @@ export default function AIPage() {
     } catch (e) {
       setMessages(prev => [...prev.slice(0, -1), {
         role: "assistant",
-        content: `⚠️ ${e instanceof Error ? e.message : "Something went wrong. Please try again."}`,
+        content: `Something went wrong. ${e instanceof Error ? e.message : "Please try again."}`,
       }]);
     } finally {
       setSending(false);
@@ -473,8 +573,8 @@ export default function AIPage() {
             <div style={{
               width: 32, height: 32, borderRadius: "50%", flexShrink: 0,
               display: "flex", alignItems: "center", justifyContent: "center",
-              background: m.role === "user" ? `linear-gradient(135deg, ${gradientColors.light}, ${gradientColors.dark})` : "#f1f5f9",
-              fontSize: 13, fontWeight: 600, color: m.role === "user" ? "white" : "#475569",
+              background: m.role === "user" ? `linear-gradient(135deg, ${gradientColors.light}, ${gradientColors.dark})` : "var(--bg-hover)",
+              fontSize: 13, fontWeight: 600, color: m.role === "user" ? "white" : "var(--text-secondary)",
             }}>
               {m.role === "user" ? (account?.name?.[0] ?? "U") : <i className="fas fa-magic" />}
             </div>
@@ -483,9 +583,9 @@ export default function AIPage() {
               maxWidth: "78%",
               padding: "0.75rem 1rem",
               borderRadius: m.role === "user" ? "14px 4px 14px 14px" : "4px 14px 14px 14px",
-              background: m.role === "user" ? `linear-gradient(135deg, ${gradientColors.light}, ${gradientColors.dark})` : "white",
-              color: m.role === "user" ? "white" : "#1e293b",
-              border: m.role === "user" ? "none" : "1px solid #e2e8f0",
+              background: m.role === "user" ? `linear-gradient(135deg, ${gradientColors.light}, ${gradientColors.dark})` : "var(--bg-surface)",
+              color: m.role === "user" ? "white" : "var(--text-primary)",
+              border: m.role === "user" ? "none" : "1px solid var(--border)",
               boxShadow: "0 1px 3px rgba(15,23,42,0.06)",
               fontSize: 14,
               lineHeight: 1.65,
@@ -494,7 +594,7 @@ export default function AIPage() {
                 <div style={{ display: "flex", gap: "0.3rem", alignItems: "center", padding: "0.2rem 0" }}>
                   {[0, 1, 2].map(d => (
                     <div key={d} style={{
-                      width: 6, height: 6, borderRadius: "50%", background: primaryColor,
+                      width: 6, height: 6, borderRadius: "50%", background: "var(--accent)",
                       animation: `bounce 1.2s ease-in-out ${d * 0.2}s infinite`,
                     }} />
                   ))}
@@ -503,7 +603,22 @@ export default function AIPage() {
               ) : m.role === "user" ? (
                 <span style={{ whiteSpace: "pre-wrap" }}>{m.content}</span>
               ) : (
-                renderMessage(m.content, primaryColor, handleCopySql, handleOpenLab, handleCreateChart)
+                <>
+                  {renderMessage(m.content, primaryColor, handleCopySql, handleOpenLab, handleCreateChart)}
+                  {m.chart && (
+                    <div style={{ marginTop: 12 }}>
+                      <InlineChart
+                        rows={m.chart.rows}
+                        columns={m.chart.columns}
+                        chartType={m.chart.chartType}
+                        xAxis={m.chart.xAxis}
+                        yAxis={m.chart.yAxis}
+                        title={m.chart.title}
+                        sql={m.chart.sql}
+                      />
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>
