@@ -264,6 +264,49 @@ export default function Home() {
 
   const canSend = schemasReady && !sending && !isEmpty;
 
+  function generateInsight(
+    rows: (string | number | null)[][],
+    columns: string[],
+    parsed: { chartType: string; xAxis: string | null; yAxis: string | null; title: string },
+    userQuery: string,
+  ): string {
+    const xIdx = parsed.xAxis ? columns.indexOf(parsed.xAxis) : 0;
+    const yIdx = parsed.yAxis ? columns.indexOf(parsed.yAxis) : (columns.length > 1 ? 1 : 0);
+
+    const fmt = (v: number): string => {
+      if (Math.abs(v) >= 1_000_000_000) return (v / 1_000_000_000).toFixed(1) + "B";
+      if (Math.abs(v) >= 1_000_000) return (v / 1_000_000).toFixed(1) + "M";
+      if (Math.abs(v) >= 1_000) return (v / 1_000).toFixed(1) + "K";
+      return v.toLocaleString();
+    };
+
+    // KPI — single value
+    if (parsed.chartType === "kpi" && rows.length === 1) {
+      const val = rows[0][0];
+      return `The total **${parsed.yAxis || columns[0]}** is **${fmt(Number(val))}**.`;
+    }
+
+    // Grouped data — show top 3 and total count
+    if (rows.length > 1 && xIdx >= 0 && yIdx >= 0) {
+      const sorted = [...rows].sort((a, b) => Number(b[yIdx] || 0) - Number(a[yIdx] || 0));
+      const top3 = sorted.slice(0, 3).map(r => `**${r[xIdx]}** (${fmt(Number(r[yIdx] || 0))})`);
+      const total = rows.length;
+      const yLabel = parsed.yAxis || columns[yIdx] || "value";
+
+      let insight = `Found **${total}** results for ${yLabel} by ${parsed.xAxis || columns[xIdx]}. `;
+      insight += `Top 3: ${top3.join(", ")}. `;
+
+      if (total > 10) {
+        insight += `\n\nWant me to show just the **top 10** or filter by a specific value?`;
+      }
+
+      return insight;
+    }
+
+    // Table / fallback
+    return `Here are **${rows.length}** results from your data. ${rows.length > 20 ? "Showing first 50 rows." : ""}`;
+  }
+
   async function sendMessage(text: string) {
     if (!text.trim() || !canSend) return;
     const userMsg: Message = { role: "user", content: text.trim() };
@@ -319,9 +362,10 @@ export default function Home() {
             const columns = execData.columns || execData.column_names || [];
 
             if (rows.length > 0) {
+              const summary = generateInsight(rows, columns, parsed, text.trim());
               setMessages(prev => [...prev.slice(0, -1), {
                 role: "assistant",
-                content: parsed.title,
+                content: summary,
                 chart: { rows, columns, chartType: parsed.chartType, xAxis: parsed.xAxis, yAxis: parsed.yAxis, title: parsed.title, sql: parsed.sql },
               }]);
               return;
