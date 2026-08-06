@@ -4,10 +4,8 @@ import React, { useState, useEffect, useRef, useCallback, ReactNode } from "reac
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { KaveonMark, KaveonWordmark } from "./KaveonMark";
-import { TabBar } from "./TabBar";
 import { useAuth } from "../auth/useAuth";
 import { useTheme } from "../contexts/ThemeContext";
-import { useTabContext } from "../contexts/TabContext";
 import { useRole } from "../hooks/useRole";
 
 const SIDEBAR_COLLAPSED_KEY = "kaveon-sidebar-collapsed";
@@ -317,7 +315,6 @@ function UserMenu({
 export function Sidebar({ children }: SidebarProps) {
   const { account, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
-  const { openTab } = useTabContext();
   const router = useRouter();
   const { isAdmin } = useRole();
   const pathname = usePathname();
@@ -506,11 +503,6 @@ export function Sidebar({ children }: SidebarProps) {
               <Link
                 key={item.href}
                 href={item.href}
-                onClick={() => {
-                  if (item.href !== "/") {
-                    openTab({ label: item.label, href: item.href, type: "page" });
-                  }
-                }}
                 title={collapsed ? item.label : undefined}
                 style={{
                   display: "flex",
@@ -551,8 +543,63 @@ export function Sidebar({ children }: SidebarProps) {
         {/* Divider */}
         <div style={{ height: 1, background: "var(--border)", margin: "8px 12px", flexShrink: 0 }} />
 
-        {/* Pinned + Recent (placeholder) */}
-        <div style={{ flex: 1 }} />
+        {/* Conversations + Pinned */}
+        <div style={{ flex: 1, overflow: "auto", padding: collapsed ? "0" : "0 8px" }}>
+          {!collapsed && (
+            <>
+              {/* New Chat button */}
+              <button
+                type="button"
+                onClick={() => router.push("/")}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  width: "100%",
+                  padding: "8px 10px",
+                  margin: "4px 0 8px",
+                  borderRadius: 7,
+                  border: "1px solid var(--border)",
+                  background: "transparent",
+                  color: "var(--text-secondary)",
+                  fontSize: 13,
+                  cursor: "pointer",
+                  transition: "background 0.1s",
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
+                New chat
+              </button>
+
+              {/* Section label */}
+              <div style={{
+                fontSize: 10,
+                fontWeight: 600,
+                letterSpacing: "1px",
+                textTransform: "uppercase",
+                color: "var(--text-faint)",
+                padding: "8px 10px 4px",
+                userSelect: "none",
+              }}>
+                Recent
+              </div>
+
+              {/* Placeholder — will be populated from chat history API */}
+              <div style={{
+                padding: "12px 10px",
+                fontSize: 12,
+                color: "var(--text-muted)",
+                fontStyle: "italic",
+              }}>
+                Your conversations will appear here
+              </div>
+            </>
+          )}
+        </div>
 
         {/* Footer — User card */}
         <UserMenu
@@ -572,13 +619,9 @@ export function Sidebar({ children }: SidebarProps) {
         marginLeft: width,
         transition: `margin-left ${TRANSITION}`,
         minWidth: 0,
-        display: "flex",
-        flexDirection: "column",
+        overflow: "auto",
       }}>
-        <TabBar />
-        <div style={{ flex: 1, overflow: "auto" }}>
-          {children}
-        </div>
+        {children}
       </div>
     </div>
   );

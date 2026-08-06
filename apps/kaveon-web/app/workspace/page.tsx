@@ -6,7 +6,6 @@ import { API_BASE } from "../../config";
 import { useAuth } from "../../auth/useAuth";
 import { useSetup } from "../../components/ClientLayout";
 import { msalFetch } from "../../utils/msalFetch";
-import { useTabContext } from "../../contexts/TabContext";
 
 type TabKey = "dashboards" | "charts" | "datasets" | "queries";
 
@@ -69,8 +68,6 @@ export default function WorkspacePage() {
   const searchParams = useSearchParams();
   const { isAuthenticated, account } = useAuth();
   const { isSetupOk } = useSetup();
-  const { openTab } = useTabContext();
-
   const rawTab = searchParams.get("tab") as TabKey | null;
   const activeTab: TabKey = TABS.some((t) => t.key === rawTab) ? rawTab! : "dashboards";
 
@@ -121,10 +118,7 @@ export default function WorkspacePage() {
   });
 
   const handleItemClick = (item: WorkspaceItem) => {
-    const href = itemNav(activeTab, item.id);
-    const label = item.name ?? item.title ?? "Untitled";
-    openTab({ label, href, type: TAB_TYPE_MAP[activeTab] });
-    router.push(href);
+    router.push(itemNav(activeTab, item.id));
   };
 
   return (
