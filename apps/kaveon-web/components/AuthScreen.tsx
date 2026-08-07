@@ -84,6 +84,7 @@ export function AuthScreen() {
 					justifyContent: "center",
 					alignItems: "flex-start",
 					padding: "0 80px",
+					paddingBottom: "6vh",
 					position: "relative",
 					overflow: "hidden",
 				}}
@@ -179,7 +180,7 @@ export function AuthScreen() {
 					justifyContent: "center",
 					alignItems: "center",
 					padding: "40px",
-					borderLeft: "1px solid rgba(255,255,255,0.06)",
+					borderLeft: "1px solid rgba(255,255,255,0.08)",
 					background: "#09090b",
 				}}
 			>
