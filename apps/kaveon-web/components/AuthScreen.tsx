@@ -8,7 +8,7 @@ import { KaveonLoading } from "./KaveonLoading";
 const PROMPTS = [
 	"What happened to revenue last quarter?",
 	"Show me customer churn by region.",
-	"Why did pipeline fail yesterday?",
+	"Did any of the pipelines fail yesterday?",
 	"Compare Q2 vs Q3 performance.",
 	"Which product has the highest margin?",
 	"Build me a dashboard for executive review.",
