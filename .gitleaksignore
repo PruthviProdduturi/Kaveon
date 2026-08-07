@@ -7,3 +7,12 @@
 #
 # Do NOT add real secrets here. Connection strings, JWT signing keys, and AI
 # provider keys are stored encrypted at rest (Fernet/AES) and never committed.
+
+# ── TEMPORARY known-exposure allowlist (NOT a false positive) ────────────────
+# The Neon DB password was hardcoded in an earlier commit of
+# scripts/migrate-neon-to-azure.py and is already public on origin/dev. The
+# script is now env-based (creds removed going forward). The app is migrating
+# off Neon onto Azure Postgres (kaveon-db); once cut over, the Neon project will
+# be deleted, making this credential dead. Allowlisted only so the pre-push hook
+# stops re-flagging immutable history. REMOVE Neon + this line after cutover.
+ce1bd5ac11b93ee280a94c303dc7c56d397aeb07:scripts/migrate-neon-to-azure.py:generic-api-key:22
