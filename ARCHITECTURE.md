@@ -37,46 +37,42 @@ Kaveon is a modern data exploration platform built with a clean, two-tier servic
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                         Browser                              │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │           Next.js 15 Frontend (Port 3000)            │   │
-│  │   - React 19 with App Router                         │   │
-│  │   - MSAL Authentication                              │   │
-│  │   - ECharts Visualization                            │   │
-│  │   - Monaco SQL Editor                                │   │
-│  └──────────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────────┐ │
+│  │        kaveon-web · Next.js 15 (Vercel)                  │ │
+│  │   - React 19, App Router, sidebar navigation             │ │
+│  │   - NextAuth (Auth.js v5) — GitHub / Microsoft Entra     │ │
+│  │   - NL→SQL engine (template-based, no LLM)               │ │
+│  │   - ECharts with dark mode, Monaco SQL Editor             │ │
+│  │   - Inline chart rendering in chat                        │ │
+│  └──────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
-                            ↓ HTTPS/REST (Bearer token)
+              ↓ /api/kaveon/* (proxy, X-User-* identity headers)
 ┌─────────────────────────────────────────────────────────────┐
-│            FastAPI Backend (Port 8080)                       │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  Routers → Services → Database Layer                 │   │
-│  │  - JWT RS256 signature verification (PyJWT + JWKS)   │   │
-│  │  - Semantic SQL generation (star-schema aware)       │   │
-│  │  - Dataset / chart / dashboard CRUD                  │   │
-│  │  - pyodbc connection pool (in-process, per database) │   │
-│  │  - Azure AD token injection (SQL_COPT_SS_ACCESS_TOKEN│   │
-│  └──────────────────────────────────────────────────────┘   │
+│       kaveon-api · FastAPI (Azure Container Apps)             │
+│  ┌──────────────────────────────────────────────────────────┐ │
+│  │  Routers → Services → Database Layer                     │ │
+│  │  - Proxy-injected identity (X-User-* + X-Proxy-Secret)   │ │
+│  │  - Semantic SQL generation (star-schema aware)            │ │
+│  │  - Dataset / chart / dashboard CRUD                       │ │
+│  │  - AI service (Claude/GPT fallback if keys configured)    │ │
+│  │  - psycopg2 (Postgres), pyodbc (Fabric/Azure SQL),       │ │
+│  │    pymysql (MySQL) connection pools                       │ │
+│  └──────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
-                            ↓ ODBC/TDS (TLS 1.2+)
+              ↓ SQL/ODBC (TLS)
 ┌─────────────────────────────────────────────────────────────┐
-│                Microsoft Fabric SQL Endpoints                │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  Metadata Database (Kaveon tables)                    │   │
-│  │  - stores: datasets, charts, dashboards, etc.        │   │
-│  │  - stores: data_sources table (warehouse configs)    │   │
-│  └──────────────────────────────────────────────────────┘   │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  Data Warehouses (User Data — Dynamic)               │   │
-│  │  - Configured via UI at /data-sources                │   │
-│  │  - Connection info retrieved from data_sources table │   │
-│  │  - API creates ODBC connections dynamically per DB   │   │
-│  └──────────────────────────────────────────────────────┘   │
+│                    Data Sources                               │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────────────┐ │
+│  │ Neon Postgres │ │ Azure SQL /  │ │ MySQL / StarRocks    │ │
+│  │ (metadata +   │ │ Fabric SQL   │ │                      │ │
+│  │  data tables) │ │              │ │                      │ │
+│  └──────────────┘ └──────────────┘ └──────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ### Why Python/FastAPI?
 
-Python is the only runtime with a mature ODBC driver (`pyodbc`) that supports Azure AD interactive token injection via `SQL_COPT_SS_ACCESS_TOKEN` — the mechanism required by Microsoft Fabric SQL. The former architecture used a Node.js/Express API proxying HTTP calls to a separate Python/Flask sidecar. Consolidating both tiers into a single Python/FastAPI process eliminates the inter-service HTTP hop, halves the container count, and simplifies the deployment surface.
+Python supports ODBC (`pyodbc`), native PostgreSQL (`psycopg2`), and MySQL (`pymysql`) drivers — covering every database Kaveon connects to. The single-process FastAPI architecture eliminates the inter-service HTTP hop from the former Node.js + Flask design.
 
 ---
 
