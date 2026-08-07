@@ -456,7 +456,7 @@ export default function Home() {
 
             {/* Greeting */}
             <h1 style={{ margin: 0, fontSize: 28, fontWeight: 600, color: "var(--text-primary)", textAlign: "center" }}>
-              {isEmpty ? heroText : `Good ${new Date().getHours() < 12 ? "morning" : new Date().getHours() < 17 ? "afternoon" : "evening"}, ${(account?.name ?? "").split(" ")[0] || "there"}`}
+              {isEmpty ? heroText : `Good ${new Date().getHours() < 12 ? "morning" : new Date().getHours() < 17 ? "afternoon" : "evening"}, ${account?.name || "there"}`}
             </h1>
             {metaLine && <p style={{ margin: 0, fontSize: 13, color: "var(--text-muted)", textAlign: "center" }}>{metaLine}</p>}
 
