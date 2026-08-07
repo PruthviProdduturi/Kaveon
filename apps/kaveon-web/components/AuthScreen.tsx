@@ -105,8 +105,8 @@ export function AuthScreen() {
 				/>
 
 				{/* Logo + wordmark */}
-				<div style={{ position: "relative", marginBottom: 40 }}>
-					<svg width="280" height="48" viewBox="60 50 1180 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+				<div style={{ position: "relative", marginBottom: 36 }}>
+					<svg width="280" height="72" viewBox="60 50 1180 290" fill="none" xmlns="http://www.w3.org/2000/svg">
 						<g fill="#e2e8f0">
 							<rect x="90" y="70" width="20" height="165" />
 							<polygon points="108.73,161.20 215.73,86.39 204.27,70 97.27,144.80" />
@@ -122,6 +122,7 @@ export function AuthScreen() {
 							<polygon points="1062.53,83.30 1197.53,235 1212.47,221.70 1077.47,70" />
 						</g>
 						<path d="M 966.25 215.29 A 72.5 72.5 0 1 0 893.75 215.29" fill="none" stroke="#4A9EE8" strokeWidth="20" strokeLinecap="butt" />
+						<text x="90" y="310" fontFamily="Inter, system-ui, sans-serif" fontSize="42" fontWeight="400" letterSpacing="1.2" fill="#475569">Talk to your data.</text>
 					</svg>
 				</div>
 
