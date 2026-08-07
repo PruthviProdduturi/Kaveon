@@ -472,12 +472,21 @@ export default function Home() {
             
 
             {/* Input */}
-            <div style={{ width: "100%", maxWidth: 640, display: "flex", alignItems: "center", background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "12px 14px", boxShadow: "var(--shadow-md)" }}>
-              <input ref={inputRef} type="text" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={handleKey} placeholder={placeholder}
-                style={{ flex: 1, border: "none", outline: "none", background: "transparent", color: "#f0f0f2", fontSize: 15, lineHeight: 1.5 }} />
-              <button onClick={submit} disabled={!query.trim() || !canSend} style={{ flexShrink: 0, width: 30, height: 30, borderRadius: 8, border: "none", background: query.trim() && canSend ? "var(--accent)" : "var(--bg-hover)", color: query.trim() && canSend ? "#fff" : "var(--text-faint)", cursor: query.trim() && canSend ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, transition: "background 0.15s" }}>
-                ↑
-              </button>
+            <div style={{ width: "100%", maxWidth: 640, background: "var(--bg-elevated)", border: "1px solid rgba(var(--accent-rgb), 0.15)", borderRadius: 16, padding: "16px", boxShadow: "0 0 0 1px rgba(var(--accent-rgb), 0.05), var(--shadow-md)", display: "flex", flexDirection: "column", gap: 10 }}>
+              <textarea
+                ref={inputRef as any}
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
+                placeholder={placeholder}
+                rows={2}
+                style={{ width: "100%", border: "none", outline: "none", background: "transparent", color: "#f0f0f2", fontSize: 15, lineHeight: 1.5, resize: "none", fontFamily: "inherit" }}
+              />
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <button onClick={submit} disabled={!query.trim() || !canSend} style={{ width: 32, height: 32, borderRadius: 8, border: "none", background: query.trim() && canSend ? "var(--accent)" : "var(--bg-hover)", color: query.trim() && canSend ? "#fff" : "var(--text-faint)", cursor: query.trim() && canSend ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, transition: "background 0.15s" }}>
+                  ↑
+                </button>
+              </div>
             </div>
 
             {/* Suggestions */}
