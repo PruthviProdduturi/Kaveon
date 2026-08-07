@@ -9,7 +9,8 @@ export const config = {
      * - _next/static, _next/image (Next.js internals)
      * - favicon.ico, icon, apple-icon (metadata routes)
      * - /login     (the sign-in page)
+     * - /docs      (public documentation — no login required)
      */
-    "/((?!api/auth|api|_next/static|_next/image|favicon.ico|icon|apple-icon|login).*)",
+    "/((?!api/auth|api|_next/static|_next/image|favicon.ico|icon|apple-icon|login|docs).*)",
   ],
 };

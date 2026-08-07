@@ -1,6 +1,7 @@
 "use client";
 
 import { ReactNode, useState, useEffect, useRef, createContext, useContext } from "react";
+import { usePathname } from "next/navigation";
 import { useAuth } from "../auth/useAuth";
 import { AuthScreen } from "./AuthScreen";
 import { Layout } from "./Layout";
@@ -50,6 +51,7 @@ function InlineLoading() {
 
 export function ClientLayout({ children }: ClientLayoutProps) {
   const { isAuthenticated, isConnecting, noAccess, logout } = useAuth();
+  const pathname = usePathname();
 
   const [isSetupOk, setIsSetupOk] = useState<boolean | null>(null);
   const checkedRef = useRef(false);
@@ -81,6 +83,9 @@ export function ClientLayout({ children }: ClientLayoutProps) {
       }
     })();
   }, [isAuthenticated]);
+
+  // Public documentation — render on its own (no app sidebar, no auth gate).
+  if (pathname === "/docs" || pathname?.startsWith("/docs/")) return <>{children}</>;
 
   // Not authenticated — show login page (no sidebar)
   if (!isAuthenticated && !isConnecting) return <AuthScreen />;
