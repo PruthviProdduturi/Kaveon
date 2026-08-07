@@ -450,13 +450,14 @@ export default function Home() {
             paddingBottom: "8vh",
           }}
         >
-          {/* Watermark */}
-          <div aria-hidden style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", pointerEvents: "none" }}>
-            <KaveonMark size={280} opacity={0.07} useDirectColor />
-          </div>
-
           <div style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: "1rem", width: "100%", maxWidth: 680, padding: "0 1.5rem" }}>
-            <h1 style={{ margin: 0, fontSize: 28, fontWeight: 600, color: "var(--text-primary)", textAlign: "center" }}>{heroText}</h1>
+            {/* Logo */}
+            <KaveonMark size={48} useDirectColor />
+
+            {/* Greeting */}
+            <h1 style={{ margin: 0, fontSize: 28, fontWeight: 600, color: "var(--text-primary)", textAlign: "center" }}>
+              {isEmpty ? heroText : `Good ${new Date().getHours() < 12 ? "morning" : new Date().getHours() < 17 ? "afternoon" : "evening"}, ${(account?.name ?? "").split(" ")[0] || "there"}`}
+            </h1>
             {metaLine && <p style={{ margin: 0, fontSize: 13, color: "var(--text-muted)", textAlign: "center" }}>{metaLine}</p>}
 
             {/* Input */}
