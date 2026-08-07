@@ -24,8 +24,12 @@ const adminEmails = (process.env.AUTH_ADMIN_EMAILS ?? "")
   .map((e) => e.trim().toLowerCase())
   .filter(Boolean);
 
-function roleFor(email?: string | null): "Admin" | "Viewer" {
-  return email && adminEmails.includes(email.toLowerCase()) ? "Admin" : "Viewer";
+const adminUsernames = ["pruthviprodduturi"];
+
+function roleFor(email?: string | null, username?: string | null): "Admin" | "Viewer" {
+  if (email && adminEmails.includes(email.toLowerCase())) return "Admin";
+  if (username && adminUsernames.includes(username.toLowerCase())) return "Admin";
+  return "Viewer";
 }
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
@@ -52,8 +56,9 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   },
   callbacks: {
     // Attach a Kaveon role to the session token so the app can gate on it.
-    jwt({ token }) {
-      token.role = roleFor(token.email as string | undefined);
+    jwt({ token, profile }) {
+      const username = (profile as { login?: string })?.login ?? (token.name as string | undefined);
+      token.role = roleFor(token.email as string | undefined, username);
       return token;
     },
     session({ session, token }) {
