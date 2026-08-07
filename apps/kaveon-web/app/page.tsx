@@ -465,7 +465,7 @@ export default function Home() {
         >
           <div style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: "1rem", width: "100%", maxWidth: 680, padding: "0 1.5rem" }}>
             {/* Greeting — with Guardian O inline like Claude's ✳ */}
-            <h1 style={{ margin: "0 0 8px", fontSize: 32, fontWeight: 500, color: "#f0f0f2", textAlign: "center", letterSpacing: "-0.5px", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+            <h1 style={{ margin: "0 0 8px", fontSize: 32, fontWeight: 500, color: "var(--text-primary)", textAlign: "center", letterSpacing: "-0.5px", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
               <KaveonMark size={46} useDirectColor />
               {isEmpty ? heroText : `${new Date().getHours() < 12 ? "Morning" : new Date().getHours() < 17 ? "Afternoon" : "Evening"}, ${(account?.name || "there").replace(/\w\S*/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase())}`}
             </h1>
