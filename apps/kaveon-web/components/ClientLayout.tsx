@@ -87,8 +87,8 @@ export function ClientLayout({ children }: ClientLayoutProps) {
   // Public documentation — render on its own (no app sidebar, no auth gate).
   if (pathname === "/docs" || pathname?.startsWith("/docs/")) return <>{children}</>;
 
-  // Still checking auth — show minimal loading, no sidebar
-  if (isConnecting) return <InlineLoading />;
+  // Still checking auth — render nothing (avoids white flash before login)
+  if (isConnecting) return null;
 
   // Not authenticated — show login page (no sidebar)
   if (!isAuthenticated) return <AuthScreen />;
