@@ -428,7 +428,7 @@ export default function Home() {
   const heroText = isEmpty ? "Connect your first data source" : "Your data has answers";
   const placeholder = isEmpty ? "Set up a connection to get started..."
     : !schemasReady ? "Loading your data context…"
-    : "Ask anything about your data…";
+    : "Talk to your data…";
 
   // Build meta line — only show positive counts
   let metaParts: string[] = [];
@@ -472,7 +472,7 @@ export default function Home() {
             
 
             {/* Input */}
-            <div style={{ width: "100%", maxWidth: 640, background: "var(--bg-elevated)", border: "1px solid rgba(var(--accent-rgb), 0.15)", borderRadius: 16, padding: "16px", boxShadow: "0 0 0 1px rgba(var(--accent-rgb), 0.05), var(--shadow-md)", display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ width: "100%", maxWidth: 640, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 16, padding: "16px", boxShadow: "0 0 0 1px rgba(var(--accent-rgb), 0.06), 0 4px 20px rgba(0,0,0,0.3)", display: "flex", flexDirection: "column", gap: 10 }}>
               <textarea
                 ref={inputRef as any}
                 value={query}
@@ -483,7 +483,7 @@ export default function Home() {
                 style={{ width: "100%", border: "none", outline: "none", background: "transparent", color: "#f0f0f2", fontSize: 15, lineHeight: 1.5, resize: "none", fontFamily: "inherit" }}
               />
               <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                <button onClick={submit} disabled={!query.trim() || !canSend} style={{ width: 32, height: 32, borderRadius: 8, border: "none", background: query.trim() && canSend ? "var(--accent)" : "var(--bg-hover)", color: query.trim() && canSend ? "#fff" : "var(--text-faint)", cursor: query.trim() && canSend ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, transition: "background 0.15s" }}>
+                <button onClick={submit} disabled={!query.trim() || !canSend} style={{ width: 34, height: 34, borderRadius: 10, border: "none", background: query.trim() && canSend ? "var(--accent)" : "rgba(255,255,255,0.08)", color: query.trim() && canSend ? "#fff" : "#64748b", cursor: query.trim() && canSend ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, transition: "all 0.15s" }}>
                   ↑
                 </button>
               </div>
