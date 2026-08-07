@@ -521,7 +521,7 @@ export function Sidebar({ children }: SidebarProps) {
                   background: active ? `rgba(var(--accent-rgb), 0.08)` : "transparent",
                   borderLeft: active ? "3px solid var(--accent)" : "3px solid transparent",
                   fontWeight: active ? 600 : 400,
-                  fontSize: 13.5,
+                  fontSize: 14.5,
                   marginBottom: 2,
                   transition: `background ${TRANSITION}, color ${TRANSITION}`,
                   overflow: "hidden",
