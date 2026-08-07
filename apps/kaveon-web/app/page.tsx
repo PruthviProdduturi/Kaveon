@@ -458,6 +458,7 @@ export default function Home() {
             <h1 style={{ margin: 0, fontSize: 28, fontWeight: 600, color: "var(--text-primary)", textAlign: "center" }}>
               {isEmpty ? heroText : `Good ${new Date().getHours() < 12 ? "morning" : new Date().getHours() < 17 ? "afternoon" : "evening"}, ${account?.name || "there"}`}
             </h1>
+            {!isEmpty && <p style={{ margin: 0, fontSize: 16, color: "var(--text-muted)", textAlign: "center", fontWeight: 400 }}>Your data has answers</p>}
             {metaLine && <p style={{ margin: 0, fontSize: 13, color: "var(--text-muted)", textAlign: "center" }}>{metaLine}</p>}
 
             {/* Input */}
