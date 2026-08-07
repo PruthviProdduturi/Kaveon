@@ -82,7 +82,7 @@ Sign-in is OAuth-only via NextAuth (Auth.js v5). Configure one or more OAuth pro
 <td width="50%">
 
 ### 📊 Chart Builder
-- 20+ chart types: bar, line, area, pie, scatter, heatmap, funnel, gauge, treemap, waterfall, calendar, world map globe (3D WebGL), and more
+- 37 chart types: bar, line, area, pie, scatter, heatmap, funnel, gauge, treemap, waterfall, calendar, world map globe (echarts-gl), and more
 - Drag-and-drop metric and dimension configuration
 - Smart JOIN generation from your semantic dataset definition
 - Live filter dropdowns sourced directly from your data
@@ -98,7 +98,7 @@ Sign-in is OAuth-only via NextAuth (Auth.js v5). Configure one or more OAuth pro
 - Automatic SQL generation with multi-table JOIN support
 - COALESCE-based role-playing dimension handling
 - Reusable across unlimited charts and dashboards
-- Visibility control: draft / internal / published
+- Visibility control: private / internal / published
 
 </td>
 <td width="50%">
