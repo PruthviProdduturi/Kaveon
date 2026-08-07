@@ -106,7 +106,7 @@ export function AuthScreen() {
 
 				{/* Logo + wordmark */}
 				<div style={{ position: "relative", marginBottom: 36 }}>
-					<svg width="280" height="72" viewBox="60 50 1180 290" fill="none" xmlns="http://www.w3.org/2000/svg">
+					<svg width="340" height="98" viewBox="60 50 1180 320" fill="none" xmlns="http://www.w3.org/2000/svg">
 						<g fill="#e2e8f0">
 							<rect x="90" y="70" width="20" height="165" />
 							<polygon points="108.73,161.20 215.73,86.39 204.27,70 97.27,144.80" />
@@ -122,7 +122,7 @@ export function AuthScreen() {
 							<polygon points="1062.53,83.30 1197.53,235 1212.47,221.70 1077.47,70" />
 						</g>
 						<path d="M 966.25 215.29 A 72.5 72.5 0 1 0 893.75 215.29" fill="none" stroke="#4A9EE8" strokeWidth="20" strokeLinecap="butt" />
-						<text x="90" y="310" fontFamily="Inter, system-ui, sans-serif" fontSize="42" fontWeight="400" letterSpacing="1.2" fill="#475569">Talk to your data.</text>
+						<text x="90" y="325" fontFamily="Inter, system-ui, sans-serif" fontSize="65" fontWeight="400" letterSpacing="1.5" fill="#536175">Talk to your data</text>
 					</svg>
 				</div>
 
@@ -144,8 +144,8 @@ export function AuthScreen() {
 					</p>
 					<p
 						style={{
-							fontSize: 14,
-							color: "#475569",
+							fontSize: 16,
+							color: "#536175",
 							marginTop: 16,
 							fontWeight: 400,
 							letterSpacing: "0.2px",
@@ -189,10 +189,10 @@ export function AuthScreen() {
 					{/* Header */}
 					<h2
 						style={{
-							fontSize: 20,
+							fontSize: 26,
 							fontWeight: 600,
 							color: "#f0f0f2",
-							marginBottom: 4,
+							marginBottom: 6,
 							letterSpacing: "-0.3px",
 						}}
 					>
@@ -200,12 +200,12 @@ export function AuthScreen() {
 					</h2>
 					<p
 						style={{
-							fontSize: 13,
+							fontSize: 15,
 							color: "#64748b",
-							marginBottom: 28,
+							marginBottom: 32,
 						}}
 					>
-						to continue to Kaveon
+						to talk to your data
 					</p>
 
 					{/* OAuth buttons — all same style */}
