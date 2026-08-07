@@ -503,6 +503,11 @@ export function Sidebar({ children }: SidebarProps) {
               <Link
                 key={item.href}
                 href={item.href}
+                onClick={() => {
+                  if (item.href === "/" && pathname === "/") {
+                    window.dispatchEvent(new CustomEvent("kaveon-new-chat"));
+                  }
+                }}
                 title={collapsed ? item.label : undefined}
                 style={{
                   display: "flex",
