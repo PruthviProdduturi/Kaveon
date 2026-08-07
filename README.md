@@ -7,7 +7,7 @@
 
 ### **Talk to your data.**
 
-*Query, explore, and visualize your data — with a plain-English front door. Self-hosted. Open source.*
+*A self-hosted, open-source analytics platform — query, visualize, and share your data, with natural-language querying built in.*
 
 <br>
 
