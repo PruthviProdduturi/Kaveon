@@ -254,7 +254,7 @@ export function AuthScreen() {
 						{/* Microsoft */}
 						<button
 							type="button"
-							onClick={() => showComingSoon("microsoft")}
+							onClick={() => start("microsoft-entra-id")}
 							style={{
 								width: "100%",
 								display: "flex",
