@@ -594,7 +594,7 @@ export function Sidebar({ children }: SidebarProps) {
                               const newName = prompt("Rename:", item.label);
                               if (newName) { removeRecent(item.id); addRecent({ ...item, id: item.id, label: newName, href: item.href, type: item.type }); }
                             }}] : []),
-                            { label: "Delete", icon: "🗑", action: () => { removeRecent(item.id); if (pathname === item.href) router.push("/"); } },
+                            { label: item.type === "chat" ? "Delete" : "Close", icon: item.type === "chat" ? "🗑" : "✕", action: () => { removeRecent(item.id); if (pathname === item.href) router.push("/"); } },
                           ];
                           options.forEach(opt => {
                             const btn = document.createElement("button");
