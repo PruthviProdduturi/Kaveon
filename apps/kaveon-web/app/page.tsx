@@ -412,13 +412,20 @@ export default function Home() {
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
-  const heroText = isEmpty ? "Connect your first data source." : "Your data has answers.";
+  const heroText = isEmpty ? "Connect your first data source" : "Your data has answers";
   const placeholder = isEmpty ? "Set up a connection to get started..."
     : !schemasReady ? "Loading your data context…"
     : "Ask anything about your data…";
-  const metaLine = data && !isEmpty
-    ? `${data.sourceCount} source${data.sourceCount !== 1 ? "s" : ""} · ${data.tableCount} table${data.tableCount !== 1 ? "s" : ""} · ${data.datasetCount} dataset${data.datasetCount !== 1 ? "s" : ""}`
-    : null;
+
+  // Build meta line — only show positive counts
+  let metaParts: string[] = [];
+  if (data && !isEmpty) {
+    if (data.sourceCount > 0) metaParts.push(`${data.sourceCount} source${data.sourceCount !== 1 ? "s" : ""}`);
+    if (data.tableCount > 0) metaParts.push(`${data.tableCount} table${data.tableCount !== 1 ? "s" : ""}`);
+    const dsCount = datasets.length || data.datasetCount;
+    if (dsCount > 0) metaParts.push(`${dsCount} dataset${dsCount !== 1 ? "s" : ""}`);
+  }
+  const metaLine = metaParts.length > 0 ? metaParts.join(" · ") : null;
 
   return (
     <div
@@ -440,12 +447,12 @@ export default function Home() {
             alignItems: "center",
             justifyContent: "center",
             position: "relative",
-            paddingBottom: "3rem",
+            paddingBottom: "8vh",
           }}
         >
           {/* Watermark */}
           <div aria-hidden style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", pointerEvents: "none" }}>
-            <KaveonMark size={280} opacity={0.04} useDirectColor />
+            <KaveonMark size={280} opacity={0.07} useDirectColor />
           </div>
 
           <div style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: "1rem", width: "100%", maxWidth: 680, padding: "0 1.5rem" }}>
@@ -469,7 +476,9 @@ export default function Home() {
                   ))
                 : DEFAULT_SUGGESTIONS.map(s => (
                     <button key={s} onClick={() => { if (canSend) { setQuery(s); setTimeout(() => void sendMessage(s), 50); } }}
-                      style={{ padding: "6px 14px", borderRadius: 999, border: "1px solid var(--border)", background: "var(--bg-surface)", color: "var(--text-secondary)", fontSize: 13, cursor: "pointer", boxShadow: "var(--shadow-sm)" }}>
+                      style={{ padding: "8px 16px", borderRadius: 999, border: "1px solid var(--border)", background: "var(--bg-surface)", color: "var(--text-secondary)", fontSize: 13, cursor: "pointer", boxShadow: "var(--shadow-md)", transition: "all 0.15s" }}
+                      onMouseEnter={(e) => { e.currentTarget.style.borderColor = "rgba(var(--accent-rgb), 0.3)"; e.currentTarget.style.color = "var(--text-primary)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.color = "var(--text-secondary)"; }}>
                       {s}
                     </button>
                   ))}

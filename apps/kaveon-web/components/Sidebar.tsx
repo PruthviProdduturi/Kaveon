@@ -299,7 +299,7 @@ function UserMenu({
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
             }}>
-              {account?.name ?? "User"}
+              {(account?.name ?? "User").split(" ")[0]}
             </div>
           </div>
         )}
@@ -341,7 +341,6 @@ export function Sidebar({ children }: SidebarProps) {
       href: "/",
       icon: <ChatIcon />,
       exact: true,
-      badge: <NewBadge />,
     },
     {
       label: "Workspace",
