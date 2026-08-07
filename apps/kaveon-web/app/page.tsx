@@ -83,6 +83,19 @@ export default function Home() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const { addRecent } = useRecents();
 
+  // Listen for "new-chat" event from sidebar nav
+  useEffect(() => {
+    const handler = () => {
+      if (messages.length > 0) {
+        const firstUserMsg = messages.find(m => m.role === "user");
+        if (firstUserMsg) addRecent({ id: `chat-${Date.now()}`, label: firstUserMsg.content.slice(0, 50), href: "/", type: "chat" });
+        setMessages([]);
+      }
+    };
+    window.addEventListener("kaveon-new-chat", handler);
+    return () => window.removeEventListener("kaveon-new-chat", handler);
+  }, [messages, addRecent]);
+
   const email = account?.email ?? "";
   const hasData = data !== null && data.sourceCount > 0;
   const isEmpty = data !== null && data.sourceCount === 0;
