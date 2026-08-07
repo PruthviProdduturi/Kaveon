@@ -464,15 +464,11 @@ export default function Home() {
           }}
         >
           <div style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: "1rem", width: "100%", maxWidth: 680, padding: "0 1.5rem" }}>
-            {/* Logo */}
-            <KaveonMark size={48} useDirectColor />
-
-            {/* Greeting */}
-            <h1 style={{ margin: 0, fontSize: 28, fontWeight: 600, color: "var(--text-primary)", textAlign: "center" }}>
-              {isEmpty ? heroText : `Good ${new Date().getHours() < 12 ? "morning" : new Date().getHours() < 17 ? "afternoon" : "evening"}, ${account?.name || "there"}`}
+            {/* Greeting — large, warm, like Claude */}
+            <h1 style={{ margin: 0, fontSize: 32, fontWeight: 400, color: "var(--text-primary)", textAlign: "center", letterSpacing: "-0.3px", fontFamily: "'Georgia', 'Times New Roman', serif" }}>
+              {isEmpty ? heroText : `${new Date().getHours() < 12 ? "Morning" : new Date().getHours() < 17 ? "Afternoon" : "Evening"}, ${(account?.name || "there").replace(/\w\S*/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase())}`}
             </h1>
-            {!isEmpty && <p style={{ margin: 0, fontSize: 16, color: "var(--text-muted)", textAlign: "center", fontWeight: 400 }}>Your data has answers</p>}
-            {metaLine && <p style={{ margin: 0, fontSize: 13, color: "var(--text-muted)", textAlign: "center" }}>{metaLine}</p>}
+            
 
             {/* Input */}
             <div style={{ width: "100%", maxWidth: 640, display: "flex", alignItems: "center", background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "10px 12px", boxShadow: "var(--shadow-md)" }}>
