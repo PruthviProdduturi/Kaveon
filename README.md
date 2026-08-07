@@ -36,7 +36,7 @@
 
 Kaveon is a **self-hosted, open-source analytics platform** that connects to **Microsoft Fabric SQL**, Azure SQL, PostgreSQL, MySQL, and StarRocks. Point it at your data to query live, build charts, assemble dashboards, and use AI to accelerate analysis — secured through **your choice of OAuth provider** and running entirely on infrastructure you control.
 
-Sign-in is OAuth-only via NextAuth (Auth.js v5). Configure one or more OAuth providers (GitHub, Google, Microsoft Entra) via env vars; a provider's button appears when its id/secret are set.
+Sign-in is OAuth-only via NextAuth (Auth.js v5). Configure one or more OAuth providers (GitHub, Microsoft Entra ID) via env vars; a provider's button appears when its id/secret are set.
 
 > *Kaveon makes your data fast to explore, easy to visualise, and simple to share — all from a stack you host yourself.*
 
