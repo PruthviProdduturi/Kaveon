@@ -1,8 +1,8 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/reference/kaveon-logo-dark.svg?v=14">
-  <img src="docs/reference/kaveon-logo.svg?v=14" alt="Kaveon — Talk to your data." width="320" />
+  <source media="(prefers-color-scheme: dark)" srcset="docs/reference/kaveon-logo-dark.svg?v=15">
+  <img src="docs/reference/kaveon-logo.svg?v=15" alt="Kaveon — Talk to your data." width="320" />
 </picture>
 
 ### **Talk to your data.**
