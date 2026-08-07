@@ -10,7 +10,7 @@ import { useRole } from "../hooks/useRole";
 import { useRecents, RecentItem } from "../hooks/useRecents";
 
 const SIDEBAR_COLLAPSED_KEY = "kaveon-sidebar-collapsed";
-const EXPANDED_WIDTH = 220;
+const EXPANDED_WIDTH = 250;
 const COLLAPSED_WIDTH = 56;
 const TRANSITION = "250ms cubic-bezier(0.4, 0, 0.2, 1)";
 
@@ -299,7 +299,7 @@ function UserMenu({
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
             }}>
-              {(account?.name ?? "User").split(" ")[0]}
+              {(account?.name ?? "User").replace(/\w\S*/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase())}
             </div>
           </div>
         )}
@@ -433,7 +433,7 @@ export function Sidebar({ children }: SidebarProps) {
               <KaveonMark size={26} />
             </div>
           ) : (
-            <svg width="140" height="24" viewBox="60 50 1180 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <svg width="160" height="28" viewBox="60 50 1180 200" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ shapeRendering: "geometricPrecision" }}>
               <g fill="var(--text-primary)">
                 <rect x="90" y="70" width="20" height="165" />
                 <polygon points="108.73,161.20 215.73,86.39 204.27,70 97.27,144.80" />
@@ -464,8 +464,8 @@ export function Sidebar({ children }: SidebarProps) {
           <div
             role="button"
             tabIndex={0}
-            title="Search everything"
-            aria-label="Search everything"
+            title="Search"
+            aria-label="Search"
             style={{
               display: "flex",
               alignItems: "center",
@@ -489,7 +489,7 @@ export function Sidebar({ children }: SidebarProps) {
               <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
             {!collapsed && (
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>Search everything...</span>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>Search</span>
             )}
           </div>
         </div>
@@ -555,17 +555,19 @@ export function Sidebar({ children }: SidebarProps) {
               {/* Recent items */}
               {recents.length > 0 && (
                 <>
-                  <div style={{
-                    fontSize: 10,
-                    fontWeight: 600,
-                    letterSpacing: "1px",
-                    textTransform: "uppercase",
-                    color: "var(--text-faint)",
-                    padding: "8px 10px 4px",
-                    userSelect: "none",
-                  }}>
-                    Recent
-                  </div>
+                  {recents.length >= 3 && (
+                    <div style={{
+                      fontSize: 10,
+                      fontWeight: 600,
+                      letterSpacing: "1px",
+                      textTransform: "uppercase",
+                      color: "var(--text-faint)",
+                      padding: "8px 10px 4px",
+                      userSelect: "none",
+                    }}>
+                      Recent
+                    </div>
+                  )}
                   {recents.map((item) => (
                     <button
                       key={item.id}
