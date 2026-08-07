@@ -272,15 +272,15 @@ function UserMenu({
       >
         <div
           style={{
-            width: 26,
-            height: 26,
+            width: 30,
+            height: 30,
             borderRadius: "50%",
             background: "linear-gradient(135deg, #6db3ed 0%, #4A9EE8 50%, #2d7dd2 100%)",
             color: "white",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            fontSize: 10,
+            fontSize: 13,
             fontWeight: 700,
             letterSpacing: "0.5px",
             flexShrink: 0,
