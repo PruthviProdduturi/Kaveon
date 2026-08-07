@@ -87,15 +87,16 @@ export function ClientLayout({ children }: ClientLayoutProps) {
   // Public documentation — render on its own (no app sidebar, no auth gate).
   if (pathname === "/docs" || pathname?.startsWith("/docs/")) return <>{children}</>;
 
-  // Not authenticated — show login page (no sidebar)
-  if (!isAuthenticated && !isConnecting) return <AuthScreen />;
+  // Still checking auth — show minimal loading, no sidebar
+  if (isConnecting) return <InlineLoading />;
 
-  // Always show sidebar layout — loading/content inside it
+  // Not authenticated — show login page (no sidebar)
+  if (!isAuthenticated) return <AuthScreen />;
+
+  // Authenticated — show sidebar layout
   return (
     <SetupContext.Provider value={{ isSetupOk }}>
-      <Layout>
-        {isConnecting ? <InlineLoading /> : children}
-      </Layout>
+      <Layout>{children}</Layout>
     </SetupContext.Provider>
   );
 }
