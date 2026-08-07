@@ -1,0 +1,4 @@
+FROM python:3.11-slim
+RUN pip install --no-cache-dir psycopg2-binary
+COPY scripts/migrate-neon-to-azure.py /migrate.py
+CMD ["python", "/migrate.py"]
