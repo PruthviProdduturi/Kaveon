@@ -210,4 +210,4 @@ Roles are assigned in `AUTH_ADMIN_EMAILS` at deploy time. Emails not in that lis
 
 The `connection_string` field (which may contain credentials for PostgreSQL/MySQL sources) is **never returned to the browser**. The list and detail endpoints omit it from all responses — only `id`, `name`, `type`, `database_name`, `region`, `description`, `created_by`, and timestamps are returned.
 
-For Fabric SQL and Azure SQL, no credentials are stored at all. Authentication uses `DefaultAzureCredential` from the Azure Identity SDK, which resolves to Managed Identity in production (Render) and developer credentials locally.
+For Fabric SQL and Azure SQL, no credentials are stored at all. Authentication uses `DefaultAzureCredential` from the Azure Identity SDK, which resolves to Managed Identity in production (Azure Container Apps) and developer credentials locally.

@@ -13,7 +13,7 @@
 
 <br>
 
-[![CI](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/ci.yml/badge.svg)](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/ci.yml) [![Deploy](https://img.shields.io/github/actions/workflow/status/PruthviProdduturi/Lens/ci.yml?branch=dev&label=Deploy&color=4A9EE8)](https://github.com/PruthviProdduturi/Lens/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Live Demo](https://img.shields.io/badge/Live-Demo-4A9EE8?style=flat)](https://kaveon.vercel.app)
+[![CI](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/ci.yml/badge.svg)](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/ci.yml) [![Deploy](https://img.shields.io/github/actions/workflow/status/PruthviProdduturi/Kaveon/ci.yml?branch=dev&label=Deploy&color=4A9EE8)](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Live Demo](https://img.shields.io/badge/Live-Demo-4A9EE8?style=flat)](https://kaveon.vercel.app)
 
 <br>
 
@@ -21,7 +21,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-1e293b?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Python](https://img.shields.io/badge/Python-3.11+-1e293b?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-1e293b?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![Auth](https://img.shields.io/badge/Auth-GitHub%20%7C%20Google%20%7C%20Microsoft%20Entra-1e293b?style=for-the-badge&logo=auth0&logoColor=white)](https://authjs.dev/)
+[![Auth](https://img.shields.io/badge/Auth-GitHub%20%7C%20Microsoft%20Entra-1e293b?style=for-the-badge&logo=auth0&logoColor=white)](https://authjs.dev/)
 [![Microsoft Fabric](https://img.shields.io/badge/Microsoft_Fabric-SQL-1e293b?style=for-the-badge&logo=microsoft&logoColor=white)](https://learn.microsoft.com/en-us/fabric/)
 
 <br>
@@ -49,7 +49,7 @@ Sign-in is OAuth-only via NextAuth (Auth.js v5). Configure one or more OAuth pro
 <td width="50%">
 
 ### 🔐 Security
-- **OAuth sign-in via NextAuth (Auth.js v5)** — GitHub, Google, Microsoft Entra ID; each provider activates when its id/secret env vars are set
+- **OAuth sign-in via NextAuth (Auth.js v5)** — GitHub (production), Microsoft Entra ID (local + production); each provider activates when its id/secret env vars are set
 - Admins are configured via `AUTH_ADMIN_EMAILS`; everyone else signs in as Viewer
 - NextAuth sessions signed with `AUTH_SECRET`; the web proxy forwards a trusted identity to the API, stamped with `KAVEON_PROXY_SECRET`
 - **Role-Based Access Control:** the API layer defines Viewer < Analyst < Editor < Admin
@@ -73,7 +73,8 @@ Sign-in is OAuth-only via NextAuth (Auth.js v5). Configure one or more OAuth pro
 <td width="50%">
 
 ### 🤖 AI Assistant
-- Natural language → SQL via `/ai` page with full conversation history
+- Natural language → SQL on the **homepage** — type a question, get a chart (no LLM required, template-based NL→SQL engine)
+- Full conversation history with inline chart rendering
 - Context-aware: pass current SQL + data source into every prompt
 - Multiple providers: Anthropic (Claude), OpenAI (GPT-4o), GitHub Models
 - Global keys (admin-managed) + personal keys (per-user override)
@@ -207,9 +208,9 @@ odbcinst -q -d -n "ODBC Driver 18 for SQL Server"
 
 Sign-in is OAuth-only via **NextAuth (Auth.js v5)**. Configure one or more providers by setting their env vars; a provider's sign-in button appears automatically when its id/secret are present.
 
-- **GitHub** — set `GITHUB_ID` / `GITHUB_SECRET`
-- **Google** — set `GOOGLE_ID` / `GOOGLE_SECRET`
-- **Microsoft Entra ID** — see below
+- **GitHub** — set `GITHUB_ID` / `GITHUB_SECRET` (production)
+- **Microsoft Entra ID** — see below (local + production)
+- **Google** — set `GOOGLE_ID` / `GOOGLE_SECRET` (not configured)
 
 Everyone signs in as **Viewer** by default; add an email to `AUTH_ADMIN_EMAILS` (comma-separated) to grant **Admin**. Also set `AUTH_SECRET` (`openssl rand -base64 32`).
 

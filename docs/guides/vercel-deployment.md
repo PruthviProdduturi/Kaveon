@@ -1,44 +1,45 @@
-# Deploying the Frontend to Vercel
+# Deploying kaveon-web to Vercel
 
-This guide covers deploying `kaveon-web` (the Next.js frontend) to Vercel for a public demo or staging environment. `kaveon-api` stays on Azure Container Apps (or any HTTPS host) — see [DEPLOYMENT.md](../../DEPLOYMENT.md) for the full two-service Azure deploy.
-
-> Unlike Forge's portal (which uses NextAuth on Vercel), Kaveon keeps its **native multi-provider auth** — Local / Azure AD (MSAL) / Google — handled by `kaveon-api`. Vercel hosts the frontend only; no NextAuth setup is required.
+`kaveon-web` (Next.js 15) deploys to Vercel. `kaveon-api` runs on Azure Container Apps — see [deploy-vercel-azure-neon.md](deploy-vercel-azure-neon.md) for the full two-service deploy.
 
 ## Prerequisites
 
-- [Vercel account](https://vercel.com) (sign up with GitHub)
-- Vercel CLI: `npm install -g vercel`
-- A reachable `kaveon-api` over HTTPS (Container Apps, or a tunnel for testing)
+- Vercel account linked to the `Kaveon` GitHub repo
+- A reachable `kaveon-api` over HTTPS (Azure Container Apps)
+- At least one OAuth provider configured (GitHub and/or Microsoft Entra ID)
 
-## 1. Create a Vercel Project
+## 1 · Link the project
 
 ```bash
 cd apps/kaveon-web
 vercel link --yes
 ```
 
-When prompted, select your Vercel team/account. This creates `.vercel/project.json` (gitignored).
+Set **Root Directory** to `apps/kaveon-web` — Vercel detects the pnpm workspace and installs from the repo root.
 
-## 2. Set Environment Variables
-
-All `NEXT_PUBLIC_*` variables are baked into the client bundle **at build time** — set them before deploying and re-deploy after any change.
+## 2 · Set environment variables
 
 ```bash
-# Required — point the frontend at your API
-vercel env add NEXT_PUBLIC_API_BASE_URL production   # https://<your-kaveon-api-fqdn>
-vercel env add NEXT_PUBLIC_API_URL production        # same value
+# Auth (required)
+vercel env add AUTH_SECRET production               # openssl rand -base64 32
+vercel env add AUTH_URL production                  # https://<your-project>.vercel.app
+vercel env add AUTH_ADMIN_EMAILS production         # comma-separated
 
-# Optional — only when using Azure AD (MSAL) sign-in
-vercel env add NEXT_PUBLIC_AZURE_CLIENT_ID production
-vercel env add NEXT_PUBLIC_AZURE_TENANT_ID production
-vercel env add NEXT_PUBLIC_AAD_REDIRECT_URI production   # https://<your-project>.vercel.app
+# OAuth providers (configure at least one)
+vercel env add GITHUB_ID production
+vercel env add GITHUB_SECRET production
+vercel env add AUTH_MICROSOFT_ENTRA_ID_ID production
+vercel env add AUTH_MICROSOFT_ENTRA_ID_SECRET production
+vercel env add AUTH_MICROSOFT_ENTRA_ID_ISSUER production  # https://login.microsoftonline.com/<tenant>/v2.0
+
+# API proxy (required)
+vercel env add API_URL production                   # https://kaveon-api.<env>.azurecontainerapps.io
+vercel env add KAVEON_PROXY_SECRET production       # must match kaveon-api
 ```
 
-Never commit secrets. Local login needs no env vars at all — the JWT signing key is auto-generated and stored encrypted in `auth_config`.
+## 3 · Deploy
 
-## 3. Deploy
-
-### Manual deploy
+### Manual
 
 ```bash
 cd apps/kaveon-web
@@ -47,37 +48,38 @@ vercel --prod
 
 ### Auto-deploy from GitHub
 
-1. Vercel dashboard → **Settings → Git → Connect Git Repository**
-2. Select the `Kaveon` repo
-3. Set **Root Directory** to `apps/kaveon-web` — Vercel detects the pnpm workspace and installs from the repo root automatically
-4. **Production Branch**: `dev`
+1. Vercel dashboard → **Settings → Git → Connect Git Repository** → select `Kaveon`
+2. **Root Directory:** `apps/kaveon-web`
+3. **Production Branch:** `dev`
 
-Every push to `dev` auto-deploys; pull requests get preview deployments.
+Every push to `dev` triggers a production deploy. Pull requests get preview deployments.
 
-Config lives in [`apps/kaveon-web/vercel.json`](../../apps/kaveon-web/vercel.json) (framework + security headers).
+Config: [`apps/kaveon-web/vercel.json`](../../apps/kaveon-web/vercel.json).
 
-## 4. Wire Up Auth Redirects & CORS
+## 4 · Wire up OAuth callbacks
 
-1. Add `https://<your-project>.vercel.app` as a **redirect URI** in the MSAL App Registration → **Authentication → Single-page application** (only if using Azure AD).
-2. Add the same URL to `kaveon-api`'s `WEB_URL` env var so CORS allows the origin.
-
-## 5. Disable Deployment Protection (public access)
-
-By default, Vercel team deployments require SSO to view.
-
-1. **Settings → Deployment Protection**
-2. Set Standard Protection to **Disabled** (or "Only Preview Deployments")
-
-## Architecture on Vercel
-
+**GitHub OAuth App:**
 ```
-Vercel (frontend only — kaveon-web)
-├── /                    — home / workspace (requires sign-in)
-├── /lab, /charts, …     — call kaveon-api over HTTPS (NEXT_PUBLIC_API_BASE_URL)
-└── auth                 — Local / Azure AD (MSAL) / Google, via kaveon-api
-
-kaveon-api (Azure Container Apps)  ← not on Vercel
-└── holds the pyodbc connection pool + 5-min heartbeat to Fabric SQL
+https://<your-project>.vercel.app/api/auth/callback/github
 ```
 
-> The API is **not** deployed to Vercel — serverless functions can't hold a persistent pyodbc connection pool, which Kaveon relies on for the warm-pool + heartbeat behaviour against Fabric serverless. Keep `kaveon-api` on Container Apps.
+**Microsoft Entra App Registration → Authentication → Web → Redirect URIs:**
+```
+https://<your-project>.vercel.app/api/auth/callback/microsoft-entra-id
+```
+
+## 5 · Wire up CORS on kaveon-api
+
+Set `WEB_URL` on the Container App to `https://<your-project>.vercel.app` and redeploy.
+
+## Architecture
+
+```
+Browser ──► Vercel (kaveon-web)
+               │  NextAuth session (server-side)
+               │  /api/kaveon/[...path] proxy → stamps X-User-* + KAVEON_PROXY_SECRET
+               ▼
+            Azure Container Apps (kaveon-api)
+```
+
+The API is not on Vercel. Serverless functions cannot hold a persistent pyodbc connection pool; the API needs a long-lived process for the warm-pool + heartbeat behaviour.
