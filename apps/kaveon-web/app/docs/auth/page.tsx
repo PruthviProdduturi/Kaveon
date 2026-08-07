@@ -28,7 +28,7 @@ export default function AuthDocs() {
       <p>Also required: <code>AUTH_SECRET</code> (session signing). The OAuth callback URL is <code>{"{origin}"}/api/auth/callback/{"{provider}"}</code> — register it on each provider app.</p>
       <Callout type="warn">
         Each provider&rsquo;s app must list your exact origins as redirect URIs (e.g. <code>https://kaveon.vercel.app/…</code>
-        and <code>http://localhost:3002/…</code>). A missing origin is the usual cause of a
+        and <code>http://localhost:3000/…</code>). A missing origin is the usual cause of a
         &ldquo;redirect_uri not associated&rdquo; error.
       </Callout>
 
@@ -47,6 +47,11 @@ export default function AuthDocs() {
         Admins are seeded from <code>AUTH_ADMIN_EMAILS</code> (comma-separated). Every state-changing endpoint is guarded by
         a <code>require_min_role(&quot;…&quot;)</code> dependency — a lower role gets <code>403 forbidden</code>.
       </p>
+      <Callout type="note">
+        The four-role ladder lives in the API&rsquo;s authorization layer (<code>Viewer / Analyst / Editor / Admin</code>).
+        The NextAuth sign-in itself resolves each user to just two of them: <strong>Admin</strong> when their email is
+        listed in <code>AUTH_ADMIN_EMAILS</code>, otherwise <strong>Viewer</strong>.
+      </Callout>
 
       <h2>Visibility</h2>
       <p>

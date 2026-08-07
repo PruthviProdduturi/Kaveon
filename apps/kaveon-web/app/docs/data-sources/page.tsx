@@ -19,7 +19,7 @@ export default function DataSourcesDocs() {
           <tr><td>Azure SQL</td><td><code>azure_sql</code></td><td>pyodbc · ODBC Driver 18</td></tr>
           <tr><td>PostgreSQL</td><td><code>postgresql</code></td><td>psycopg2</td></tr>
           <tr><td>MySQL</td><td><code>mysql</code></td><td>pymysql</td></tr>
-          <tr><td>StarRocks</td><td><code>StarRocks</code></td><td>pymysql (MySQL-compatible)</td></tr>
+          <tr><td>StarRocks</td><td>via <code>mysql</code></td><td>pymysql (MySQL protocol)</td></tr>
           <tr><td>Trino</td><td>coming soon</td><td>—</td></tr>
         </tbody>
       </table>
@@ -41,6 +41,8 @@ StarRocks    mysql://user:pass@host:9030/db`}</Code>
       <p>
         Fabric and Azure SQL carry <strong>no credentials in the string</strong> — auth is via Azure AD
         (<code>DefaultAzureCredential</code>). PostgreSQL enforces SSL by default (Neon/Supabase URLs work as-is).
+        StarRocks speaks the MySQL wire protocol, so it connects through the same <code>pymysql</code> path as MySQL
+        rather than a distinct driver.
       </p>
 
       <h2>Testing connections</h2>
@@ -51,7 +53,7 @@ StarRocks    mysql://user:pass@host:9030/db`}</Code>
           <tr><td>(none)</td><td>Connectivity and write access both succeeded</td></tr>
           <tr><td><code>access_denied</code></td><td>Connected, but the identity lacks permission</td></tr>
           <tr><td><code>db_not_found</code></td><td>Server reachable, database doesn&rsquo;t exist</td></tr>
-          <tr><td><code>timeout</code></td><td>No response within 60s</td></tr>
+          <tr><td><code>timeout</code></td><td>No response within 30s</td></tr>
           <tr><td><code>connection_failed</code></td><td>TCP couldn&rsquo;t connect — check host / firewall</td></tr>
         </tbody>
       </table>

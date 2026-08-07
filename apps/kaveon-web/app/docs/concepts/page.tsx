@@ -39,8 +39,13 @@ export default function ConceptsDocs() {
       <p>
         Two independent axes govern access. <strong>Roles</strong> — <code>Viewer → Analyst → Editor → Admin</code> — gate
         what you can <em>do</em> (run SQL, create content, publish, administer). <strong>Visibility</strong> —
-        <code> draft / internal / published</code> — gates who can <em>see</em> a given dataset, chart, or dashboard. Full
+        <code> private / internal / published</code> — gates who can <em>see</em> a given dataset, chart, or dashboard. Full
         model in <a href="/docs/auth">Auth &amp; RBAC</a>.
+      </p>
+      <p>
+        The full four-role ladder lives in the API&rsquo;s authorization layer. Through the NextAuth sign-in, a user
+        resolves to just two of those roles: <strong>Admin</strong> (email listed in <code>AUTH_ADMIN_EMAILS</code>) or
+        <strong> Viewer</strong>.
       </p>
 
       <h2>Ask, don&rsquo;t query</h2>

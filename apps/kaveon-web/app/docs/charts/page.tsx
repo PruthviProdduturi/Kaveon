@@ -15,7 +15,8 @@ export default function ChartsDocs() {
       <p>
         Kaveon ships <strong>37 chart types across 18 categories</strong>, powered by{" "}
         <a href="https://echarts.apache.org/" target="_blank" rel="noreferrer">Apache ECharts</a> via
-        <code>echarts-for-react</code> — except the world map, which uses a custom WebGL globe renderer.
+        <code>echarts-for-react</code> — including the world map, which is rendered via ECharts plus the
+        <code> echarts-gl</code> extension on the same ECharts instance.
       </p>
       <table>
         <thead><tr><th>Category</th><th>Types</th></tr></thead>
@@ -26,7 +27,7 @@ export default function ChartsDocs() {
           <tr><td><strong>Distribution</strong></td><td>Scatter, bubble, heatmap, calendar heatmap, boxplot</td></tr>
           <tr><td><strong>Hierarchy</strong></td><td>Treemap, sunburst, funnel, radar, gauge</td></tr>
           <tr><td><strong>Flow</strong></td><td>Sankey, parallel coordinates, theme river</td></tr>
-          <tr><td><strong>Map</strong></td><td>World map (WebGL globe)</td></tr>
+          <tr><td><strong>Map</strong></td><td>World map (echarts-gl globe)</td></tr>
           <tr><td><strong>Custom / Table</strong></td><td>Big number (+ trend), candlestick, pictorial bar, table, pivot table</td></tr>
         </tbody>
       </table>

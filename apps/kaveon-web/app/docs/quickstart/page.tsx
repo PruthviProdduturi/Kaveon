@@ -14,9 +14,10 @@ export default function Quickstart() {
       <h2>1 · Sign in</h2>
       <p>
         Open Kaveon and sign in. Authentication is provider-based (no local passwords by default) — GitHub, Google,
-        or Microsoft Entra ID light up automatically when their credentials are present. Your role
-        (<code>Viewer → Analyst → Editor → Admin</code>) is resolved on sign-in; admins are seeded from{" "}
-        <code>AUTH_ADMIN_EMAILS</code>.
+        or Microsoft Entra ID light up automatically when their credentials are present. The API&rsquo;s authorization
+        layer defines a four-role ladder (<code>Viewer → Analyst → Editor → Admin</code>), but the NextAuth sign-in
+        resolves you to <strong>Admin</strong> (if your email is in <code>AUTH_ADMIN_EMAILS</code>) or{" "}
+        <strong>Viewer</strong>.
       </p>
       <Callout type="note">
         Running it yourself? See <a href="/docs/auth">Auth &amp; RBAC</a> for wiring GitHub/Google/Microsoft and the
@@ -26,7 +27,7 @@ export default function Quickstart() {
       <h2>2 · Connect a data source</h2>
       <p>
         Go to <strong>Data Sources → + Add Data Source</strong>. Kaveon speaks to Microsoft Fabric SQL, Azure SQL,
-        PostgreSQL, MySQL, Trino, and StarRocks. Fill in the connection, click <strong>Test</strong>, and save — no
+        PostgreSQL, MySQL, and StarRocks. Fill in the connection, click <strong>Test</strong>, and save — no
         <code>.env</code> edits, no restart.
       </p>
       <Callout type="tip">

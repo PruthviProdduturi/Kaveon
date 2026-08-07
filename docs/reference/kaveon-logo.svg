@@ -1,16 +1,31 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 392 118" fill="none" role="img" aria-label="Lens">
-  <defs><linearGradient id="c" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e8c547"/><stop offset="1" stop-color="#b8860b"/></linearGradient></defs>
-  <!-- Crosshair ⊙ mark — same size/weight as Forge's O -->
-  <circle cx="59" cy="59.30" r="40.00" fill="none" stroke="url(#c)" stroke-width="5.68"/>
-  <path d="M 68.85 48.36 L 54.45 45.30 L 44.60 56.24 L 49.15 70.24 L 63.55 73.30 L 73.40 62.36 Z" opacity="0.12" fill="url(#c)"/>
-  <line x1="68.85" y1="48.36" x2="59" y2="20.82" stroke="url(#c)" stroke-width="6.04" stroke-linecap="round"/>
-  <line x1="54.45" y1="45.30" x2="25.67" y2="40.06" stroke="url(#c)" stroke-width="6.04" stroke-linecap="round"/>
-  <line x1="44.60" y1="56.24" x2="25.67" y2="78.54" stroke="url(#c)" stroke-width="6.04" stroke-linecap="round"/>
-  <line x1="49.15" y1="70.24" x2="59" y2="97.78" stroke="url(#c)" stroke-width="6.04" stroke-linecap="round"/>
-  <line x1="63.55" y1="73.30" x2="92.32" y2="78.54" stroke="url(#c)" stroke-width="6.04" stroke-linecap="round"/>
-  <line x1="73.40" y1="62.36" x2="92.32" y2="40.06" stroke="url(#c)" stroke-width="6.04" stroke-linecap="round"/>
-  <!-- Chamfered L — scaled to 0.88 of cap-height, nudged down 2px to match text baseline -->
-  <g transform="translate(114,24) scale(2.47)"><path d="M 0 0 L 7 0 L 7 21 L 16 21 L 18 23.5 L 18 28 L 0 28 Z" fill="url(#c)"/><path d="M 0 0 L 7 0 L 7 3.5 L 0 3.5 Z" fill="#d4a017" opacity="0.18"/></g>
-  <!-- ENS — weight 700, tight letter-spacing, matched to L height -->
-  <text x="164" y="96" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="700" font-size="95" letter-spacing="0" fill="url(#c)">ENS</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1305 355" role="img" aria-labelledby="title desc">
+  <title id="title">Kaveon primary wordmark</title>
+  <desc id="desc">Kaveon wordmark — crossbar-free A and the Guardian O — in brand blue.</desc>
+
+  <!-- KAVE + N — brand blue so it reads on light and dark backgrounds -->
+  <g fill="#4A9EE8">
+    <!-- K -->
+    <rect x="90" y="70" width="20" height="165" />
+    <polygon points="108.73,161.20 215.73,86.39 204.27,70 97.27,144.80" />
+    <polygon points="97.51,161.36 209.51,235 220.49,218.29 108.49,144.64" />
+    <!-- A without crossbar -->
+    <path d="M 260 235 L 330 70 L 350 70 L 420 235 L 397 235 L 340 104 L 283 235 Z" />
+    <!-- V -->
+    <path d="M 465 70 L 488 70 L 545 201 L 602 70 L 625 70 L 555 235 L 535 235 Z" />
+    <!-- E -->
+    <rect x="675" y="70" width="20" height="165" />
+    <rect x="675" y="70" width="130" height="20" />
+    <rect x="675" y="142.5" width="108" height="20" />
+    <rect x="675" y="215" width="130" height="20" />
+    <!-- N -->
+    <rect x="1060" y="70" width="20" height="165" />
+    <rect x="1195" y="70" width="20" height="165" />
+    <polygon points="1062.53,83.30 1197.53,235 1212.47,221.70 1077.47,70" />
+  </g>
+
+  <!-- Guardian O -->
+  <path d="M 966.25 215.29 A 72.5 72.5 0 1 0 893.75 215.29" fill="none" stroke="#4A9EE8" stroke-width="20" stroke-linecap="butt" />
+
+  <!-- Tagline -->
+  <text x="652.5" y="314" text-anchor="middle" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="38" font-weight="400" letter-spacing="1.2" fill="#7C8798">Talk to your data.</text>
 </svg>
