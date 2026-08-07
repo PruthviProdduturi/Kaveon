@@ -313,3 +313,21 @@ PRINT '        query_history, favorites, activity, data_sources,';
 PRINT '        user_themes, auth_config, local_users';
 PRINT '============================================================';
 GO
+
+-- ── User Recents ──────────────────────────────────────────────────────────────
+IF OBJECT_ID('user_recents', 'U') IS NULL
+BEGIN
+    CREATE TABLE user_recents (
+        id         INT           IDENTITY(1,1) PRIMARY KEY,
+        user_email NVARCHAR(255) NOT NULL,
+        item_id    NVARCHAR(255) NOT NULL,
+        label      NVARCHAR(500) NOT NULL,
+        href       NVARCHAR(1000) NOT NULL,
+        type       NVARCHAR(50)  NOT NULL,
+        created_at DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+        CONSTRAINT uq_user_recents_email_item UNIQUE (user_email, item_id)
+    );
+    CREATE INDEX idx_user_recents_email ON user_recents(user_email);
+    PRINT 'Table user_recents created';
+END
+GO

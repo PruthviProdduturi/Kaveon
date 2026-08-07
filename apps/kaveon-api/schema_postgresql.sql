@@ -231,3 +231,16 @@ CREATE TABLE IF NOT EXISTS local_users (
 );
 CREATE INDEX IF NOT EXISTS idx_local_users_username ON local_users(username);
 CREATE INDEX IF NOT EXISTS idx_local_users_email    ON local_users(email);
+
+-- ── User Recents ──────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS user_recents (
+    id         SERIAL        PRIMARY KEY,
+    user_email VARCHAR(255)  NOT NULL,
+    item_id    VARCHAR(255)  NOT NULL,
+    label      VARCHAR(500)  NOT NULL,
+    href       VARCHAR(1000) NOT NULL,
+    type       VARCHAR(50)   NOT NULL,
+    created_at TIMESTAMP     NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_user_recents_email_item UNIQUE (user_email, item_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_recents_email ON user_recents(user_email);

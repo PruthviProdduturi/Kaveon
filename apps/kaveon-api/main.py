@@ -34,6 +34,7 @@ from routers import (
     theme,
     setup,
     users,
+    user_recents,
 )
 
 
@@ -158,6 +159,7 @@ app.include_router(dashboards.router,       prefix="/api/v1")
 app.include_router(data_sources.router,     prefix="/api/v1")
 app.include_router(setup.router,            prefix="/api/v1")
 app.include_router(users.router,            prefix="/api/v1")
+app.include_router(user_recents.router,     prefix="/api/v1")
 app.include_router(ai.router,               prefix="/api/v1")
 
 
