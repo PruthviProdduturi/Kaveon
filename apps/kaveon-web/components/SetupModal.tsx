@@ -753,7 +753,7 @@ export function SetupModal({ data, onComplete }: SetupModalProps) {
               {[
                 { icon: "fa-key", label: "Configure authentication", sub: "Settings → Authentication — choose Local, Azure AD, or Google." },
                 { icon: "fa-database", label: "Add data sources", sub: "Settings → Data Sources — connect your warehouses." },
-                { icon: "fa-users", label: "Invite users", sub: "Settings → Users — assign roles to your team." },
+                { icon: "fa-users", label: "Manage users", sub: "Settings → Users — add accounts and assign roles." },
               ].map(({ icon, label, sub }) => (
                 <div key={label} style={{ display: "flex", gap: 10, marginBottom: 10 }}>
                   <div style={{

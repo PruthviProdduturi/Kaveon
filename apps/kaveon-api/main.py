@@ -20,7 +20,6 @@ from database.warmup import start_warmup_and_heartbeat
 from routers import (
     ai,
     auth,
-    auth_config,
     health,
     datasets,
     charts,
@@ -29,7 +28,6 @@ from routers import (
     data_sources,
     favorites,
     lab,
-    local_auth,
     sql,
     theme,
     setup,
@@ -67,17 +65,7 @@ async def lifespan(app: FastAPI):
         print("[API] Connection pool warmup started.")
     else:
         print("[API] No metadata database configured — starting in setup mode.")
-        print("[API] Setup wizard is available. Default login: admin / admin")
-
-    # Bootstrap local admin user (creates admin row + ensures Admin role).
-    # Skipped gracefully when no DB is configured — the hardcoded _BOOTSTRAP_HASH
-    # in services/local_auth.py handles the pre-DB admin/admin fallback instead.
-    if _db_configured:
-        try:
-            import services.local_auth as _local_auth_svc
-            _local_auth_svc.bootstrap_admin_if_needed()
-        except Exception as _e:
-            print(f"[API] bootstrap_admin_if_needed skipped (will retry on next restart): {_e}")
+        print("[API] Setup wizard is available.")
 
     yield
     # Shutdown: pools close via GC; nothing explicit needed
@@ -144,8 +132,6 @@ async def log_requests(request: Request, call_next):
 # ── Routers ───────────────────────────────────────────────────────────────────
 
 app.include_router(auth.router,             prefix="/api")
-app.include_router(auth_config.router,      prefix="/api")
-app.include_router(local_auth.router,       prefix="/api")
 app.include_router(health.router,           prefix="/api")
 app.include_router(metadata_summary.router, prefix="/api/v1")
 app.include_router(favorites.router,        prefix="/api/v1")
