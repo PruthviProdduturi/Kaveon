@@ -464,16 +464,17 @@ export default function Home() {
           }}
         >
           <div style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: "1rem", width: "100%", maxWidth: 680, padding: "0 1.5rem" }}>
-            {/* Greeting — large, warm, like Claude */}
-            <h1 style={{ margin: 0, fontSize: 32, fontWeight: 400, color: "var(--text-primary)", textAlign: "center", letterSpacing: "-0.3px", fontFamily: "'Georgia', 'Times New Roman', serif" }}>
+            {/* Greeting — with Guardian O inline like Claude's ✳ */}
+            <h1 style={{ margin: "0 0 8px", fontSize: 36, fontWeight: 400, color: "#f0f0f2", textAlign: "center", letterSpacing: "-0.5px", fontFamily: "'Georgia', 'Times New Roman', serif", display: "flex", alignItems: "center", justifyContent: "center", gap: 12 }}>
+              <KaveonMark size={36} useDirectColor />
               {isEmpty ? heroText : `${new Date().getHours() < 12 ? "Morning" : new Date().getHours() < 17 ? "Afternoon" : "Evening"}, ${(account?.name || "there").replace(/\w\S*/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase())}`}
             </h1>
             
 
             {/* Input */}
-            <div style={{ width: "100%", maxWidth: 640, display: "flex", alignItems: "center", background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "10px 12px", boxShadow: "var(--shadow-md)" }}>
+            <div style={{ width: "100%", maxWidth: 640, display: "flex", alignItems: "center", background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "12px 14px", boxShadow: "var(--shadow-md)" }}>
               <input ref={inputRef} type="text" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={handleKey} placeholder={placeholder}
-                style={{ flex: 1, border: "none", outline: "none", background: "transparent", color: "var(--text-primary)", fontSize: 14, lineHeight: 1.5 }} />
+                style={{ flex: 1, border: "none", outline: "none", background: "transparent", color: "#f0f0f2", fontSize: 15, lineHeight: 1.5 }} />
               <button onClick={submit} disabled={!query.trim() || !canSend} style={{ flexShrink: 0, width: 30, height: 30, borderRadius: 8, border: "none", background: query.trim() && canSend ? "var(--accent)" : "var(--bg-hover)", color: query.trim() && canSend ? "#fff" : "var(--text-faint)", cursor: query.trim() && canSend ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, transition: "background 0.15s" }}>
                 ↑
               </button>
@@ -487,9 +488,9 @@ export default function Home() {
                   ))
                 : DEFAULT_SUGGESTIONS.map(s => (
                     <button key={s} onClick={() => { if (canSend) { setQuery(s); setTimeout(() => void sendMessage(s), 50); } }}
-                      style={{ padding: "8px 16px", borderRadius: 999, border: "1px solid var(--border)", background: "var(--bg-surface)", color: "var(--text-secondary)", fontSize: 13, cursor: "pointer", boxShadow: "var(--shadow-md)", transition: "all 0.15s" }}
-                      onMouseEnter={(e) => { e.currentTarget.style.borderColor = "rgba(var(--accent-rgb), 0.3)"; e.currentTarget.style.color = "var(--text-primary)"; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.color = "var(--text-secondary)"; }}>
+                      style={{ padding: "9px 18px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.04)", color: "#b0b8c4", fontSize: 13.5, cursor: "pointer", boxShadow: "var(--shadow-md)", transition: "all 0.15s" }}
+                      onMouseEnter={(e) => { e.currentTarget.style.borderColor = "rgba(var(--accent-rgb), 0.3)"; e.currentTarget.style.color = "#e2e8f0"; e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; e.currentTarget.style.color = "#b0b8c4"; e.currentTarget.style.background = "rgba(255,255,255,0.04)"; }}>
                       {s}
                     </button>
                   ))}
