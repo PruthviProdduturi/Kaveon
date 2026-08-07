@@ -316,7 +316,7 @@ function UserMenu({
 export function Sidebar({ children }: SidebarProps) {
   const { account, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
-  const { recents, removeRecent } = useRecents();
+  const { recents, addRecent, removeRecent } = useRecents();
   const router = useRouter();
   const { isAdmin } = useRole();
   const pathname = usePathname();
@@ -583,23 +583,46 @@ export function Sidebar({ children }: SidebarProps) {
                         role="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          removeRecent(item.id);
-                          if (pathname === item.href) router.push("/");
+                          e.preventDefault();
+                          // Show context menu
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          const menu = document.createElement("div");
+                          menu.style.cssText = `position:fixed;top:${rect.bottom + 4}px;left:${rect.left - 100}px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;padding:4px;box-shadow:0 8px 24px rgba(0,0,0,0.3);z-index:999;min-width:120px;`;
+                          const options = [
+                            { label: "Pin", icon: "📌", action: () => {} },
+                            ...(item.type === "chat" ? [{ label: "Rename", icon: "✏️", action: () => {
+                              const newName = prompt("Rename:", item.label);
+                              if (newName) { removeRecent(item.id); addRecent({ ...item, id: item.id, label: newName, href: item.href, type: item.type }); }
+                            }}] : []),
+                            { label: "Delete", icon: "🗑", action: () => { removeRecent(item.id); if (pathname === item.href) router.push("/"); } },
+                          ];
+                          options.forEach(opt => {
+                            const btn = document.createElement("button");
+                            btn.style.cssText = `display:flex;align-items:center;gap:8px;width:100%;padding:8px 12px;border:none;background:transparent;color:var(--text-secondary);font-size:13px;cursor:pointer;border-radius:6px;text-align:left;`;
+                            btn.onmouseenter = () => btn.style.background = "var(--bg-hover)";
+                            btn.onmouseleave = () => btn.style.background = "transparent";
+                            btn.textContent = `${opt.icon}  ${opt.label}`;
+                            btn.onclick = () => { opt.action(); menu.remove(); };
+                            menu.appendChild(btn);
+                          });
+                          document.body.appendChild(menu);
+                          const dismiss = (ev: MouseEvent) => { if (!menu.contains(ev.target as Node)) { menu.remove(); document.removeEventListener("mousedown", dismiss); } };
+                          setTimeout(() => document.addEventListener("mousedown", dismiss), 0);
                         }}
                         style={{
                           display: "none",
                           alignItems: "center",
                           justifyContent: "center",
-                          width: 18,
-                          height: 18,
+                          width: 20,
+                          height: 20,
                           borderRadius: 4,
-                          fontSize: 14,
-                          color: "var(--text-secondary)",
+                          fontSize: 13,
+                          color: "var(--text-muted)",
                           flexShrink: 0,
                           cursor: "pointer",
                         }}
                       >
-                        ×
+                        ⋯
                       </span>
                     </button>
                   ))}
