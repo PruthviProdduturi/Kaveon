@@ -7,7 +7,7 @@
  * X-Proxy-Secret. kaveon-api trusts those headers only when the secret matches, so
  * the browser can never spoof an identity by hitting kaveon-api directly.
  *
- * Client calls:  /api/lens/api/v1/...   →  {API_URL}/api/v1/...
+ * Client calls:  /api/kaveon/api/v1/...   →  {API_URL}/api/v1/...
  */
 
 import { NextRequest } from "next/server";

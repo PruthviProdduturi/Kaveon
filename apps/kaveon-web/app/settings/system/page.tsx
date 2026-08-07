@@ -1216,7 +1216,7 @@ function EditMetadataModal({ current, onClose, onSuccess }: {
                   {errors.endpoint && <p style={{ margin: "2px 0 6px", fontSize: 11.5, color: "#ef4444" }}>{errors.endpoint}</p>}
                   <p style={DM.hint}>Azure Portal → SQL Server → Server name.</p>
                   <label style={DM.label} htmlFor="meta-db-az">Database Name *</label>
-                  <input id="meta-db-az" style={DM.input(!!errors.database)} type="text" value={form.database} onChange={e => setField("database", e.target.value)} placeholder="lens-metadata" autoComplete="off" />
+                  <input id="meta-db-az" style={DM.input(!!errors.database)} type="text" value={form.database} onChange={e => setField("database", e.target.value)} placeholder="kaveon-metadata" autoComplete="off" />
                   {errors.database && <p style={{ margin: "2px 0 6px", fontSize: 11.5, color: "#ef4444" }}>{errors.database}</p>}
                 </>
               )}

@@ -80,7 +80,7 @@ const PROVIDER_META: Record<string, {
     ],
   },
   github: {
-    label: "GitHub Models (Copilot)",
+    label: "GitHub Models",
     color: "#0f172a",
     bg: "#f8fafc",
     border: "#cbd5e1",
