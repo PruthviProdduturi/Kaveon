@@ -26,7 +26,7 @@ kaveon-web  (Next.js 15, Vercel)
   │
   │  stamps X-User-Email, X-User-Name, X-User-Role, X-Proxy-Secret
   ▼
-kaveon-api  (FastAPI, Render)
+kaveon-api  (FastAPI, Azure Container Apps)
   │
   ├── Neon Postgres  (metadata: users, datasets, charts, dashboards)
   └── Data Sources   (Microsoft Fabric SQL, Azure SQL, PostgreSQL, MySQL)
@@ -139,11 +139,11 @@ SQL generated in T-SQL dialect is translated for PostgreSQL/MySQL targets by `ad
 
 Configured in `auth.ts`. Providers activate via environment variables:
 
-| Env var prefix | Provider |
-|----------------|---------|
-| `GITHUB_ID` / `GITHUB_SECRET` | GitHub OAuth |
-| `GOOGLE_ID` / `GOOGLE_SECRET` | Google OAuth |
-| `AUTH_MICROSOFT_ENTRA_ID_ID` / `_SECRET` / `_ISSUER` | Microsoft Entra ID |
+| Env var prefix | Provider | Status |
+|----------------|---------|--------|
+| `GITHUB_ID` / `GITHUB_SECRET` | GitHub OAuth | Production |
+| `AUTH_MICROSOFT_ENTRA_ID_ID` / `_SECRET` / `_ISSUER` | Microsoft Entra ID | Local + Production |
+| `GOOGLE_ID` / `GOOGLE_SECRET` | Google OAuth | Not configured |
 
 All routes except `/login`, `/api/auth`, and Next.js internals are protected by the middleware in `middleware.ts`.
 
@@ -183,9 +183,10 @@ The metadata DB is configured via `METADATA_DATABASE`, `METADATA_ENDPOINT`/`META
 
 | Service | Platform | Config |
 |---------|----------|--------|
-| `kaveon-web` | Vercel | `apps/kaveon-web/vercel.json` |
-| `kaveon-api` | Render | `render.yaml` (repo root) |
+| `kaveon-web` | Vercel (kaveon.vercel.app) | `apps/kaveon-web/vercel.json` |
+| `kaveon-api` | Azure Container Apps (kaveon-api.calmbeach-fe7df67b.westus2.azurecontainerapps.io) | `infra/bicep/` |
 | Metadata DB | Neon Postgres | External managed service |
+| Container Registry | Azure Container Registry (kaveonacr.azurecr.io) | `infra/bicep/` |
 
 ### Key environment variables
 
@@ -194,14 +195,13 @@ The metadata DB is configured via `METADATA_DATABASE`, `METADATA_ENDPOINT`/`META
 ```
 AUTH_SECRET              # openssl rand -base64 32
 GITHUB_ID / GITHUB_SECRET
-GOOGLE_ID / GOOGLE_SECRET
 AUTH_MICROSOFT_ENTRA_ID_ID / _SECRET / _ISSUER
 AUTH_ADMIN_EMAILS        # comma-separated
 API_URL                  # kaveon-api public URL
 KAVEON_PROXY_SECRET      # shared secret with kaveon-api
 ```
 
-**kaveon-api (Render)**
+**kaveon-api (Azure Container Apps)**
 
 ```
 KAVEON_PROXY_SECRET
@@ -216,6 +216,22 @@ METADATA_DB_TYPE         # fabric_sql | azure_sql | postgresql | mysql
 DATAWAREHOUSE_ENDPOINT   # fallback for unregistered data sources
 REDIS_URL                # optional: enables Redis-backed rate limiting
 ```
+
+---
+
+## Azure Infrastructure
+
+IaC templates live in `infra/bicep/`. Modules cover:
+
+| Resource | Module |
+|----------|--------|
+| Azure Container Registry (`kaveonacr.azurecr.io`) | `infra/bicep/modules/acr.bicep` |
+| Azure Container Apps (kaveon-api) | `infra/bicep/modules/container-apps.bicep` |
+| Azure PostgreSQL Flexible Server | `infra/bicep/modules/postgresql.bicep` (migration target) |
+| Azure Key Vault | `infra/bicep/modules/keyvault.bicep` |
+| Log Analytics Workspace | `infra/bicep/modules/log-analytics.bicep` |
+
+Auth uses Azure App Registration (`Kaveon`) with Managed Identity on the Container App for passwordless access to Key Vault and Azure SQL.
 
 ---
 

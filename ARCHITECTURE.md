@@ -352,7 +352,7 @@ Each dataset, chart, and dashboard has a `visibility` column:
 ### Managed Identity — Fabric SQL Access
 
 ```
-FastAPI container (Render / any Docker host)
+FastAPI container (Azure Container Apps)
     │
     ├─ DefaultAzureCredential.get_token(
     │      "https://database.windows.net/.default"
@@ -816,9 +816,9 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for the deployment guide and [deploy-vercel
 | Concern | Approach |
 |---|---|
 | Frontend hosting | Vercel — auto-deploy from `dev` branch |
-| API hosting | Render — Docker via Blueprint (`render.yaml`) |
-| Database | Neon (serverless Postgres) — metadata + data sources |
-| Auth | NextAuth (GitHub / Google / Microsoft Entra ID) |
+| API hosting | Azure Container Apps — image from `kaveonacr.azurecr.io`, IaC in `infra/bicep/` |
+| Database | Neon (serverless Postgres) — metadata; Azure PostgreSQL Flexible (migration target) |
+| Auth | NextAuth (GitHub / Microsoft Entra ID) |
 | API auth | Proxy secret (`KAVEON_PROXY_SECRET`) — Vercel injects `X-User-*` headers |
 | API runtime | Gunicorn + Uvicorn workers (4 workers × 8 threads) |
 | Cold starts | Connection pool warmup at startup; 5-min heartbeat |
