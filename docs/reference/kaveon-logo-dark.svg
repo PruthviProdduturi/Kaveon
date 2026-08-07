@@ -1,7 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1305 355" role="img" aria-labelledby="title desc">
-  <title id="title">Kaveon primary wordmark (dark mode)</title>
-  <desc id="desc">Kaveon wordmark with light letters for dark backgrounds; crossbar-free A and blue Guardian O.</desc>
-
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 40 1305 225" role="img" aria-label="Kaveon">
   <!-- KAVE + N — light letters for dark backgrounds -->
   <g fill="#EAF0F7">
     <!-- K -->
@@ -25,7 +22,4 @@
 
   <!-- Guardian O -->
   <path d="M 966.25 215.29 A 72.5 72.5 0 1 0 893.75 215.29" fill="none" stroke="#4A9EE8" stroke-width="20" stroke-linecap="butt" />
-
-  <!-- Tagline -->
-  <text x="652.5" y="314" text-anchor="middle" font-family="Inter, 'Avenir Next', 'Helvetica Neue', Arial, sans-serif" font-size="38" font-weight="400" letter-spacing="1.2" fill="#8B94A1">Talk to your data.</text>
 </svg>

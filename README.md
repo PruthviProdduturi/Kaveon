@@ -1,11 +1,13 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/reference/kaveon-logo-dark.svg?v=13">
-  <img src="docs/reference/kaveon-logo.svg?v=13" alt="Kaveon — Talk to your data." width="320" />
+  <source media="(prefers-color-scheme: dark)" srcset="docs/reference/kaveon-logo-dark.svg?v=14">
+  <img src="docs/reference/kaveon-logo.svg?v=14" alt="Kaveon — Talk to your data." width="320" />
 </picture>
 
-*Built for Advanced Analytics. Multi-Provider Auth. Open Source.*
+### **Talk to your data.**
+
+*Query, explore, and visualize your data — with a plain-English front door. Self-hosted. Open source.*
 
 <br>
 
