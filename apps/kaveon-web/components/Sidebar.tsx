@@ -292,8 +292,8 @@ function UserMenu({
         {!collapsed && (
           <div style={{ overflow: "hidden", flex: 1, textAlign: "left" }}>
             <div style={{
-              fontSize: 13,
-              fontWeight: 600,
+              fontSize: 14,
+              fontWeight: 500,
               color: "var(--text-primary)",
               overflow: "hidden",
               textOverflow: "ellipsis",
