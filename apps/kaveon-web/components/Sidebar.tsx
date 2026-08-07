@@ -402,97 +402,59 @@ export function Sidebar({ children }: SidebarProps) {
       {/* Sidebar */}
       <aside style={sidebarStyle}>
 
-        {/* Collapse toggle */}
-        <button
-          type="button"
-          onClick={() => setCollapsed(v => !v)}
-          style={collapseButtonStyle}
-          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-        >
-          {collapsed ? <PanelLeftOpenIcon /> : <PanelLeftCloseIcon />}
-        </button>
-
-        {/* Brand area */}
+        {/* Brand bar — logo + search icon + collapse icon */}
         <div style={{
           display: "flex",
           alignItems: "center",
-          justifyContent: collapsed ? "center" : "flex-start",
-          padding: collapsed ? "16px 0" : "16px 20px",
-          borderBottom: "1px solid var(--border)",
-          minHeight: 60,
-          overflow: "hidden",
+          justifyContent: collapsed ? "center" : "space-between",
+          padding: collapsed ? "14px 0" : "14px 16px",
+          minHeight: 56,
           flexShrink: 0,
           transition: `padding ${TRANSITION}`,
         }}>
           {collapsed ? (
-            <div style={{
-              transform: "scale(1.15)",
-              animation: "kaveon-breathe 3s ease-in-out infinite",
-            }}>
-              <KaveonMark size={26} />
-            </div>
+            <button type="button" onClick={() => setCollapsed(false)} title="Expand sidebar" style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
+              <div style={{ transform: "scale(1.15)", animation: "kaveon-breathe 3s ease-in-out infinite" }}>
+                <KaveonMark size={26} />
+              </div>
+            </button>
           ) : (
-            <svg width="160" height="28" viewBox="60 50 1180 200" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ shapeRendering: "geometricPrecision" }}>
-              <g fill="var(--text-primary)">
-                <rect x="90" y="70" width="20" height="165" />
-                <polygon points="108.73,161.20 215.73,86.39 204.27,70 97.27,144.80" />
-                <polygon points="97.51,161.36 209.51,235 220.49,218.29 108.49,144.64" />
-                <path d="M 260 235 L 330 70 L 350 70 L 420 235 L 397 235 L 340 104 L 283 235 Z" />
-                <path d="M 465 70 L 488 70 L 545 201 L 602 70 L 625 70 L 555 235 L 535 235 Z" />
-                <rect x="675" y="70" width="20" height="165" />
-                <rect x="675" y="70" width="130" height="20" />
-                <rect x="675" y="142.5" width="108" height="20" />
-                <rect x="675" y="215" width="130" height="20" />
-                <rect x="1060" y="70" width="20" height="165" />
-                <rect x="1195" y="70" width="20" height="165" />
-                <polygon points="1062.53,83.30 1197.53,235 1212.47,221.70 1077.47,70" />
-              </g>
-              <path d="M 966.25 215.29 A 72.5 72.5 0 1 0 893.75 215.29" fill="none" stroke="#4A9EE8" strokeWidth="20" strokeLinecap="butt" />
-            </svg>
+            <>
+              <svg width="130" height="22" viewBox="60 50 1180 200" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ shapeRendering: "geometricPrecision", flexShrink: 0 }}>
+                <g fill="var(--text-primary)">
+                  <rect x="90" y="70" width="20" height="165" />
+                  <polygon points="108.73,161.20 215.73,86.39 204.27,70 97.27,144.80" />
+                  <polygon points="97.51,161.36 209.51,235 220.49,218.29 108.49,144.64" />
+                  <path d="M 260 235 L 330 70 L 350 70 L 420 235 L 397 235 L 340 104 L 283 235 Z" />
+                  <path d="M 465 70 L 488 70 L 545 201 L 602 70 L 625 70 L 555 235 L 535 235 Z" />
+                  <rect x="675" y="70" width="20" height="165" />
+                  <rect x="675" y="70" width="130" height="20" />
+                  <rect x="675" y="142.5" width="108" height="20" />
+                  <rect x="675" y="215" width="130" height="20" />
+                  <rect x="1060" y="70" width="20" height="165" />
+                  <rect x="1195" y="70" width="20" height="165" />
+                  <polygon points="1062.53,83.30 1197.53,235 1212.47,221.70 1077.47,70" />
+                </g>
+                <path d="M 966.25 215.29 A 72.5 72.5 0 1 0 893.75 215.29" fill="none" stroke="#4A9EE8" strokeWidth="20" strokeLinecap="butt" />
+              </svg>
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                {/* Search icon */}
+                <button type="button" title="Search" style={{ background: "none", border: "none", cursor: "pointer", padding: 6, borderRadius: 6, color: "var(--text-muted)", display: "flex", alignItems: "center", transition: "color 0.15s" }}
+                  onMouseEnter={e => e.currentTarget.style.color = "var(--text-primary)"}
+                  onMouseLeave={e => e.currentTarget.style.color = "var(--text-muted)"}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                </button>
+                {/* Collapse icon */}
+                <button type="button" onClick={() => setCollapsed(true)} title="Collapse sidebar" style={{ background: "none", border: "none", cursor: "pointer", padding: 6, borderRadius: 6, color: "var(--text-muted)", display: "flex", alignItems: "center", transition: "color 0.15s" }}
+                  onMouseEnter={e => e.currentTarget.style.color = "var(--text-primary)"}
+                  onMouseLeave={e => e.currentTarget.style.color = "var(--text-muted)"}>
+                  <PanelLeftCloseIcon />
+                </button>
+              </div>
+            </>
           )}
         </div>
 
-        {/* Search bar */}
-        <div style={{
-          padding: collapsed ? "12px 0" : "12px 12px",
-          flexShrink: 0,
-          display: "flex",
-          justifyContent: collapsed ? "center" : "stretch",
-          transition: `padding ${TRANSITION}`,
-        }}>
-          <div
-            role="button"
-            tabIndex={0}
-            title="Search"
-            aria-label="Search"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              padding: collapsed ? "8px" : "8px 12px",
-              borderRadius: 8,
-              background: "var(--bg-hover)",
-              border: "1px solid var(--border)",
-              cursor: "pointer",
-              color: "var(--text-muted)",
-              fontSize: 13,
-              width: collapsed ? 40 : "100%",
-              justifyContent: collapsed ? "center" : "flex-start",
-              transition: `width ${TRANSITION}, padding ${TRANSITION}`,
-              flexShrink: 0,
-              overflow: "hidden",
-              whiteSpace: "nowrap",
-            }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-              <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
-            {!collapsed && (
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>Search</span>
-            )}
-          </div>
-        </div>
 
         {/* Navigation */}
         <nav style={{ padding: "4px 8px", flexShrink: 0 }} aria-label="Main navigation">
@@ -600,7 +562,7 @@ export function Sidebar({ children }: SidebarProps) {
                         if (close) close.style.display = "none";
                       }}
                     >
-                      <span style={{ flexShrink: 0, display: "flex", alignItems: "center", color: "var(--text-muted)", opacity: 0.7 }}>
+                      <span style={{ flexShrink: 0, display: "flex", alignItems: "center", color: "var(--text-secondary)" }}>
                         {item.type === "chat" ? (
                           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
                         ) : item.type === "dashboard" ? (
