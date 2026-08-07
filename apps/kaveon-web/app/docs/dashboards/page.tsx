@@ -8,7 +8,7 @@ export default function DashboardsDocs() {
       <PageHeader
         eyebrow="Features"
         title="Dashboards"
-        lead="Dashboards arrange charts on a drag-and-drop canvas with cross-filtering, dashboard-level filters, auto-refresh, and dark mode. Save as a draft or publish to your whole team."
+        lead="Dashboards arrange charts on a drag-and-drop canvas with cross-filtering, dashboard-level filters, auto-refresh, and dark mode. Save as a draft or publish so every signed-in user can see it."
       />
 
       <h2>Creating a dashboard</h2>

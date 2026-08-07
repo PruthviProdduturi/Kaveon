@@ -13,8 +13,8 @@ export default function DocsIntro() {
 
       <h2>What Kaveon is</h2>
       <p>
-        Kaveon sits between your team and your data. Point it at a warehouse or database, and everyone
-        gets a private command centre: a full <strong>SQL Lab</strong>, a drag-and-drop <strong>chart builder</strong>,
+        Kaveon sits between you and your data. Point it at a warehouse or database and you
+        get a private analytics workspace: a full <strong>SQL Lab</strong>, a drag-and-drop <strong>chart builder</strong>,
         composable <strong>dashboards</strong>, reusable <strong>semantic datasets</strong>, and an{" "}
         <strong>AI layer</strong> that turns plain-English questions into charts. It is open source, MIT-licensed,
         and runs entirely on infrastructure you control.

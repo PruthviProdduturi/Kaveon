@@ -22,7 +22,7 @@
 | Area | Status |
 |------|--------|
 | Core analytics (datasets, charts, dashboards, SQL Lab) | ✅ Done |
-| Multi-provider auth + RBAC | ✅ Done |
+| OAuth auth (GitHub / Google / Microsoft Entra) + RBAC | ✅ Done |
 | Multi-source connectors | 🔄 In Progress |
 | AI assistant (NL→SQL) | ✅ Done |
 | CI/CD + repo standards | ✅ Done |
@@ -50,8 +50,8 @@
 
 | Item | Status | Notes |
 |------|--------|-------|
-| Multi-provider auth — Local / Azure AD / Google, runtime-switchable from UI | ✅ Done | |
-| JWT verification — RS256/JWKS (Azure AD, Google) + HS256 (local) | ✅ Done | |
+| OAuth sign-in — GitHub / Google / Microsoft Entra via NextAuth (Auth.js v5) | ✅ Done | |
+| Identity forwarded to the API via signed proxy headers (KAVEON_PROXY_SECRET) | ✅ Done | |
 | RBAC — Viewer < Analyst < Editor < Admin | ✅ Done | |
 | Content visibility — private / internal / published | ✅ Done | |
 | Secrets encrypted at rest (Fernet/AES) | ✅ Done | Connection strings still plaintext in `data_sources` — no vault yet |
