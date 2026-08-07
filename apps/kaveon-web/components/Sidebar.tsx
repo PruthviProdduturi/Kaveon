@@ -510,7 +510,7 @@ export function Sidebar({ children }: SidebarProps) {
         </nav>
 
         {/* Divider */}
-        <div style={{ height: 1, background: "var(--border)", margin: "8px 12px", flexShrink: 0 }} />
+        <div style={{ height: 1, background: "rgba(255,255,255,0.1)", margin: "8px 16px", flexShrink: 0 }} />
 
         {/* Conversations + Pinned */}
         <div style={{ flex: 1, overflow: "auto", padding: collapsed ? "0" : "0 8px" }}>
@@ -587,21 +587,21 @@ export function Sidebar({ children }: SidebarProps) {
                           // Show context menu
                           const rect = e.currentTarget.getBoundingClientRect();
                           const menu = document.createElement("div");
-                          menu.style.cssText = `position:fixed;top:${rect.bottom + 4}px;left:${rect.left - 100}px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;padding:4px;box-shadow:0 8px 24px rgba(0,0,0,0.3);z-index:999;min-width:120px;`;
+                          menu.style.cssText = `position:fixed;top:${rect.bottom + 4}px;left:${rect.left - 60}px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;padding:4px;box-shadow:0 8px 24px rgba(0,0,0,0.4);z-index:999;min-width:140px;`;
                           const options = [
-                            { label: "Pin", icon: "📌", action: () => {} },
-                            ...(item.type === "chat" ? [{ label: "Rename", icon: "✏️", action: () => {
+                            { label: "Pin", svg: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16h14v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>', action: () => {} },
+                            ...(item.type === "chat" ? [{ label: "Rename", svg: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>', action: () => {
                               const newName = prompt("Rename:", item.label);
                               if (newName) { removeRecent(item.id); addRecent({ ...item, id: item.id, label: newName, href: item.href, type: item.type }); }
                             }}] : []),
-                            { label: item.type === "chat" ? "Delete" : "Close", icon: item.type === "chat" ? "🗑" : "✕", action: () => { removeRecent(item.id); if (pathname === item.href) router.push("/"); } },
+                            { label: item.type === "chat" ? "Delete" : "Close", svg: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>', action: () => { removeRecent(item.id); if (pathname === item.href) router.push("/"); } },
                           ];
                           options.forEach(opt => {
                             const btn = document.createElement("button");
-                            btn.style.cssText = `display:flex;align-items:center;gap:8px;width:100%;padding:8px 12px;border:none;background:transparent;color:var(--text-secondary);font-size:13px;cursor:pointer;border-radius:6px;text-align:left;`;
+                            btn.style.cssText = `display:flex;align-items:center;gap:8px;width:100%;padding:8px 12px;border:none;background:transparent;color:var(--text-secondary);font-size:13px;cursor:pointer;border-radius:6px;text-align:left;font-family:inherit;`;
                             btn.onmouseenter = () => btn.style.background = "var(--bg-hover)";
                             btn.onmouseleave = () => btn.style.background = "transparent";
-                            btn.textContent = `${opt.icon}  ${opt.label}`;
+                            btn.innerHTML = `${opt.svg}<span>${opt.label}</span>`;
                             btn.onclick = () => { opt.action(); menu.remove(); };
                             menu.appendChild(btn);
                           });
