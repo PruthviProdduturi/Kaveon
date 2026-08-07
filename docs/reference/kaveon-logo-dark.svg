@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1305 355" role="img" aria-labelledby="title desc">
-  <title id="title">Kaveon optically aligned primary wordmark</title>
-  <desc id="desc">Fixed-vector Kaveon wordmark with a crossbar-free A and aligned Guardian O.</desc>
+  <title id="title">Kaveon primary wordmark (dark mode)</title>
+  <desc id="desc">Kaveon wordmark with light letters for dark backgrounds; crossbar-free A and blue Guardian O.</desc>
 
-  <!-- KAVE + N -->
-  <g fill="#111318">
+  <!-- KAVE + N — light letters for dark backgrounds -->
+  <g fill="#EAF0F7">
     <!-- K -->
     <rect x="90" y="70" width="20" height="165" />
     <polygon points="108.73,161.20 215.73,86.39 204.27,70 97.27,144.80" />
@@ -27,5 +27,5 @@
   <path d="M 966.25 215.29 A 72.5 72.5 0 1 0 893.75 215.29" fill="none" stroke="#4A9EE8" stroke-width="20" stroke-linecap="butt" />
 
   <!-- Tagline -->
-  <text x="652.5" y="314" text-anchor="middle" font-family="Inter, 'Avenir Next', 'Helvetica Neue', Arial, sans-serif" font-size="38" font-weight="400" letter-spacing="1.2" fill="#656B74">Talk to your data.</text>
+  <text x="652.5" y="314" text-anchor="middle" font-family="Inter, 'Avenir Next', 'Helvetica Neue', Arial, sans-serif" font-size="38" font-weight="400" letter-spacing="1.2" fill="#8B94A1">Talk to your data.</text>
 </svg>
