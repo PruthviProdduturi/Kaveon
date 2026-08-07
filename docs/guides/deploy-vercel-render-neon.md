@@ -11,7 +11,7 @@ The fully-working, all-open-source cloud stack:
 
 ```
 Browser ──► Vercel (kaveon-web, NextAuth: GitHub/Google/Microsoft)
-               │  same-origin /api/lens proxy (injects X-User-* + secret)
+               │  same-origin /api/kaveon proxy (injects X-User-* + secret)
                ▼
             Render (kaveon-api, FastAPI Docker)
                │  psycopg2 (user/password + SSL)
@@ -99,7 +99,7 @@ DB is **Neon** (serverless Postgres). All three have free tiers.
 
 ### How auth flows in production
 
-The browser only ever talks to Vercel. `kaveon-web`'s `/api/lens/*` route reads the
+The browser only ever talks to Vercel. `kaveon-web`'s `/api/kaveon/*` route reads the
 NextAuth session **server-side** and forwards `X-User-*` to Render, stamped with
 `KAVEON_PROXY_SECRET`. `kaveon-api` trusts those headers only when the secret matches,
 so nothing is spoofable and no token is handled in the browser. (Same contract as

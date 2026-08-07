@@ -23,7 +23,6 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-1e293b?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Auth](https://img.shields.io/badge/Auth-GitHub%20%7C%20Google%20%7C%20Microsoft%20Entra-1e293b?style=for-the-badge&logo=auth0&logoColor=white)](https://authjs.dev/)
 [![Microsoft Fabric](https://img.shields.io/badge/Microsoft_Fabric-SQL-1e293b?style=for-the-badge&logo=microsoft&logoColor=white)](https://learn.microsoft.com/en-us/fabric/)
-[![License](https://img.shields.io/badge/License-MIT-1e293b?style=for-the-badge)](./LICENSE)
 
 <br>
 
@@ -35,11 +34,11 @@
 
 ## 🌟 What is Kaveon?
 
-Kaveon is a **self-hosted analytics platform** built on **Microsoft Fabric SQL**, Azure SQL, PostgreSQL, MySQL, and StarRocks. Think of it as your own data command centre — query live data, build charts, assemble dashboards, and use AI to accelerate analysis — secured through **your choice of OAuth provider**.
+Kaveon is a **self-hosted, open-source analytics platform** that connects to **Microsoft Fabric SQL**, Azure SQL, PostgreSQL, MySQL, and StarRocks. Point it at your data to query live, build charts, assemble dashboards, and use AI to accelerate analysis — secured through **your choice of OAuth provider** and running entirely on infrastructure you control.
 
 Sign-in is OAuth-only via NextAuth (Auth.js v5). Configure one or more OAuth providers (GitHub, Google, Microsoft Entra) via env vars; a provider's button appears when its id/secret are set.
 
-> *Kaveon sits between your team and your data — making it fast to explore, easy to visualise, and safe to share.*
+> *Kaveon makes your data fast to explore, easy to visualise, and simple to share — all from a stack you host yourself.*
 
 ---
 
@@ -76,7 +75,7 @@ Sign-in is OAuth-only via NextAuth (Auth.js v5). Configure one or more OAuth pro
 ### 🤖 AI Assistant
 - Natural language → SQL via `/ai` page with full conversation history
 - Context-aware: pass current SQL + data source into every prompt
-- Multi-provider: Anthropic (Claude), OpenAI (GPT-4o), GitHub Models (Copilot)
+- Multiple providers: Anthropic (Claude), OpenAI (GPT-4o), GitHub Models
 - Global keys (admin-managed) + personal keys (per-user override)
 - Keys encrypted at rest with AES-256 before storage
 - Inline AI bar in SQL Lab for instant query generation
@@ -156,7 +155,7 @@ Sign-in is OAuth-only via NextAuth (Auth.js v5). Configure one or more OAuth pro
 ### ⚡ Performance
 - Connection pool warming at API startup — sub-second queries after cold start
 - Parallel metadata fetching on page load
-- 5-minute heartbeat keeps Fabric serverless connections alive
+- 5-minute heartbeat keeps pooled connections warm across every data source
 - All data is live — no stale cache, ever
 
 </td>
@@ -189,7 +188,7 @@ Kaveon is a **monorepo** with two services:
 | **Node.js** | 20.x+ | `node -v` | [nodejs.org](https://nodejs.org/) |
 | **pnpm** | 9.x+ | `pnpm -v` | `npm install -g pnpm` |
 | **Git** | Any | `git --version` | [git-scm.com](https://git-scm.com/) |
-| **Fabric SQL access** | — | — | Contact your Fabric workspace admin |
+| **A data source** | — | — | Any Postgres / MySQL / Fabric SQL / Azure SQL / StarRocks endpoint you can reach |
 
 #### Verify ODBC Driver 18
 

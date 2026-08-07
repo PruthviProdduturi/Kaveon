@@ -30,7 +30,7 @@ Navigate to **Data Sources** in the sidebar to manage your connections.
    - **Database name** — the logical database within the server
    - **Connection string** — the endpoint or URL (see format per type below)
    - **Region** — `WW` (worldwide) or `EU` (Europe) — used for data residency tracking
-   - **Description** — optional context for your team
+   - **Description** — optional context or notes
 3. Click **Test Connection** to verify connectivity.
 4. Click **Save**.
 
