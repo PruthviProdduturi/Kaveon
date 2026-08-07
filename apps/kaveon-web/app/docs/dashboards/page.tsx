@@ -37,7 +37,8 @@ export default function DashboardsDocs() {
       <h2>Canvas layout</h2>
       <p>
         The canvas uses <a href="https://github.com/react-grid-layout/react-grid-layout" target="_blank" rel="noreferrer">react-grid-layout v2</a>.
-        The grid is <strong>12 columns</strong> on desktop (6 tablet, 2 mobile, 1 small); the default tile is 6×4. Vertical
+        The grid is <strong>12 columns</strong> on desktop and tablet (12 lg/md), reflowing to 6 (small), 2 (mobile),
+        and 1 (extra-small); the default tile is 6×8. Vertical
         compaction pulls tiles up to fill gaps, and the layout reflows responsively at each breakpoint. Every tile stores
         its <code>x, y, w, h</code> in the dashboard JSON.
       </p>
@@ -66,7 +67,7 @@ export default function DashboardsDocs() {
         users with the right role; set the status back to draft to unpublish.
       </p>
       <p>
-        Each tile can auto-refresh on an interval — <strong>30s, 1m, 5m, 15m, 30m, or 1h</strong> — re-running its SQL
+        Each tile can auto-refresh on an interval — <strong>Off, 30s, 1m, 5m, 10m, or 30m</strong> — re-running its SQL
         against the live source and updating in place, no full reload. Auto-refresh pauses in edit mode so it doesn&rsquo;t
         disrupt dragging.
       </p>

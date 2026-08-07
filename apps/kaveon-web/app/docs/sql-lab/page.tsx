@@ -23,7 +23,7 @@ export default function SqlLabDocs() {
         <thead><tr><th>Action</th><th>Shortcut</th></tr></thead>
         <tbody>
           <tr><td>Run query</td><td><code>Ctrl/Cmd + Enter</code></td></tr>
-          <tr><td>Format SQL</td><td><code>Shift + Alt + F</code></td></tr>
+          <tr><td>Format SQL</td><td><code>Ctrl/Cmd + Shift + F</code></td></tr>
           <tr><td>Comment line</td><td><code>Ctrl/Cmd + /</code></td></tr>
           <tr><td>Find</td><td><code>Ctrl/Cmd + F</code></td></tr>
           <tr><td>Go to line</td><td><code>Ctrl/Cmd + G</code></td></tr>
@@ -56,19 +56,21 @@ export default function SqlLabDocs() {
       </p>
 
       <h2>Running queries</h2>
-      <p>Kaveon exposes two execution paths, chosen automatically by the Run button.</p>
+      <p>Kaveon exposes two execution endpoints. The Run button always uses the cancellable one.</p>
 
-      <h3>Synchronous execution</h3>
+      <h3>Cancellable execution (the Run button)</h3>
       <p>
-        <code>POST /api/v1/lab/execute</code> — for short queries expected to return within the HTTP timeout. It
-        returns columns, rows, and a row count in one response.
+        <code>POST /api/v1/lab/query</code> — used by the primary Run button for every query you execute. The backend
+        runs the query in an executor thread and polls for client disconnect every 500&nbsp;ms. If you close the tab or
+        navigate away, it sends a cancel signal to the database cursor (<code>cursor.cancel()</code>) and returns{" "}
+        <code>204 No Content</code>. Executed queries are also recorded in Query History.
       </p>
 
-      <h3>Cancellable async execution</h3>
+      <h3>Synchronous helper</h3>
       <p>
-        <code>POST /api/v1/lab/query</code> — used by the primary Run button. The backend runs the query in an executor
-        thread and polls for client disconnect every 500&nbsp;ms. If you close the tab or navigate away, it sends a
-        cancel signal to the database cursor (<code>cursor.cancel()</code>) and returns <code>204 No Content</code>.
+        <code>POST /api/v1/lab/execute</code> — a plain synchronous endpoint used internally for side queries such as
+        row-count estimates. It returns columns, rows, and a row count in one response and deliberately does{" "}
+        <em>not</em> write to Query History. It is not an auto-selected fast path for the Run button.
       </p>
       <Callout type="note">
         This is why abandoned queries don&rsquo;t pile up on your warehouse — Kaveon actively cancels the cursor when the
@@ -83,9 +85,13 @@ export default function SqlLabDocs() {
     [1001, 249.90, "West"],
     [1002, 88.00,  "East"]
   ],
-  "row_count": 2,
-  "duration_ms": 143
+  "rowCount": 2,
+  "executionTime": 0.143
 }`}</Code>
+      <p>
+        Fields are camelCase; <code>executionTime</code> is reported in <strong>seconds</strong> (the UI formats
+        sub-second timings as milliseconds).
+      </p>
 
       <h2>Saving &amp; history</h2>
       <p>

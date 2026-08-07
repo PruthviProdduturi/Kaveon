@@ -2,9 +2,17 @@
 
 ## Overview
 
-Kaveon is an internal enterprise data exploration platform built on top of Microsoft Fabric.
-It is intended for use by authenticated Azure AD users within the organization and is
-**not** designed to be exposed to the public internet.
+Kaveon is an **open-source, self-hosted analytics platform**. You run it on your own
+infrastructure and point it at your own databases; there's also a public demo at
+[kaveon.vercel.app](https://kaveon.vercel.app). It's built to be deployed however you
+like — a private internal tool *or* a public site — so the security model assumes an
+untrusted internet and defends accordingly.
+
+Sign-in is **OAuth only** (GitHub, Google, Microsoft Entra ID) via NextAuth (Auth.js v5).
+There are no local passwords. The browser only ever talks to the Next.js app; the FastAPI
+backend is never exposed directly, and it trusts identity only from the web app's signed
+proxy. Kaveon queries many databases — Microsoft Fabric SQL, Azure SQL, PostgreSQL, MySQL,
+and StarRocks — not just one.
 
 ---
 
@@ -12,58 +20,47 @@ It is intended for use by authenticated Azure AD users within the organization a
 
 | Asset | Threat | Mitigation |
 |-------|--------|-----------|
-| Microsoft Fabric SQL databases | Unauthorized data access | Azure AD JWT verification (RS256); per-user data scoping |
-| User query history | Privacy — cross-user data leak | Queries stored with `executed_by`; API filters by user |
-| API endpoints | CSRF on state-changing operations | Bearer token required on all endpoints via `require_auth` dependency |
-| SQL query generation | Identifier injection | `quote_identifier()` wraps all user-supplied identifiers in `[...]` with `]` escaped as `]]` |
-| Filter values | Operator injection | Operator values validated against a strict allowlist in `query_generator.py` |
-| User identity | Identity spoofing via header | `x-user-email` header is **rejected** when AAD is configured; only a valid signed Bearer JWT is accepted |
-| Internal errors | Information disclosure | Exception details are logged server-side only; clients always receive a generic error message |
-| Credential exposure | Connection string leak | `connection_string` column is excluded from all API responses via `_PUBLIC_FIELDS` constant |
-| Unauthenticated schema enumeration | Data discovery without auth | All lab, SQL, and data-source endpoints require `require_auth` dependency |
-| Content access | Unauthorized read of private/internal data | Visibility model (private/internal/published) enforced in all list/get service calls; `can_read()` helper in `middleware/permissions.py` |
-| Privilege escalation | Lower-role user performing Editor/Admin actions | `require_min_role()` dependency on all create/update/delete/admin endpoints; role resolved from JWT claim → DB → default Viewer |
+| Connected data sources | Unauthorized data access | Every API endpoint requires an authenticated user; per-user scoping on user-owned data |
+| User query history | Cross-user data leak | Records stored with `executed_by`; the API filters by the current user |
+| API endpoints | Direct/unauthenticated access | API accepts requests only from the web proxy, which stamps `X-User-*` headers signed with `KAVEON_PROXY_SECRET`; mismatched/missing secret ⇒ rejected |
+| Identity spoofing | Forged `X-User-*` headers | The API trusts `X-User-*` **only** when `KAVEON_PROXY_SECRET` matches; the browser never sends them directly |
+| SQL query generation | Identifier injection | `quote_identifier()` wraps every user-supplied identifier and escapes it |
+| Filter values | Operator injection | Filter operators validated against a strict allowlist in `query_generator.py` |
+| Internal errors | Information disclosure | Exception details are logged server-side only; clients receive a generic message |
+| Credential exposure | Connection-string leak | The `connection_string` column is excluded from every API response (`_PUBLIC_FIELDS`) |
+| Schema enumeration | Data discovery without auth | All lab, SQL, and data-source endpoints require authentication |
+| Content access | Reading others' private/internal content | Visibility model (`private` / `internal` / `published`) enforced in every list/get via `can_read()` in `middleware/permissions.py` |
+| Privilege escalation | Lower role performing Editor/Admin actions | `require_min_role()` on all create/update/delete/admin endpoints |
 
 ---
 
 ## Authentication Architecture
 
-```
-Browser (MSAL)
-    │
-    │  Authorization: Bearer <Azure AD access token (RS256 signed)>
-    ▼
-FastAPI (kaveon-api)
-    │
-    ├─ middleware/auth.py — get_current_user()
-    │     When AZURE_CLIENT_ID + AZURE_TENANT_ID are set (production):
-    │       Fetches Azure AD JWKS public keys (cached by PyJWKClient)
-    │       Verifies RS256 signature, expiry, and audience
-    │       Extracts email from preferred_username / email / upn claim
-    │
-    │     When AAD is NOT configured (first-run setup mode only):
-    │       Falls back to unverified JWT decode OR x-user-email header
-    │       This is intentional — no metadata DB exists yet in setup mode
-    │
-    ├─ require_auth dependency — applied to every protected endpoint
-    │     Returns 401 if no authenticated user is present
-    │     User email is the authoritative identity throughout all services
-    │
-    ├─ require_user_context(ctx) dependency
-    │     → Returns UserContext(email, role, jwt_roles) if present
-    │     → Raises HTTP 401 if None
-    │     → Role resolved by users_svc.resolve_role() (JWT only; None → 403 for oauth)
-    │
-    └─ require_min_role("Analyst") dependency factory (middleware/permissions.py)
-          → Calls require_user_context internally
-          → Returns UserContext if role level ≥ minimum
-          → Raises HTTP 403 with code "forbidden" if below minimum
+Auth runs entirely in the Next.js app (NextAuth); the API trusts a signed proxy header —
+the same pattern Forge uses. No tokens are handled in the browser.
 
-    └─ database/pool.py — FabricSQLConnection
-          Uses DefaultAzureCredential (Managed Identity in production)
-          Injects token via SQL_COPT_SS_ACCESS_TOKEN (no SQL username/password)
-          Connects directly to Microsoft Fabric SQL over ODBC/TLS
 ```
+Browser
+   │  OAuth sign-in (GitHub / Google / Microsoft Entra ID) via NextAuth (Auth.js v5)
+   │  session cookie, signed with AUTH_SECRET
+   ▼
+kaveon-web  (Next.js)
+   │  /api/kaveon/[...path] proxy — reads the session server-side and stamps:
+   │     X-User-Email · X-User-Name · X-User-Role · X-Proxy-Secret (= KAVEON_PROXY_SECRET)
+   ▼
+kaveon-api  (FastAPI, middleware/auth.py)
+   │  Trusts X-User-* ONLY when X-Proxy-Secret matches KAVEON_PROXY_SECRET
+   │  The email in the header is the authoritative identity for all services
+   │
+   └─ require_min_role("Analyst"|"Editor"|"Admin")  (middleware/permissions.py)
+         Grants/denies by role level; below minimum ⇒ 403 "forbidden"
+```
+
+The same `KAVEON_PROXY_SECRET` must be set on both `kaveon-web` and `kaveon-api`.
+
+> **Note:** the API retains a legacy Azure-AD/JWKS + `azure-identity` path used only when
+> connecting to **Microsoft Fabric / Azure SQL** data sources via managed identity. It is
+> not part of the sign-in flow, which is NextAuth OAuth end-to-end.
 
 ---
 
@@ -71,21 +68,22 @@ FastAPI (kaveon-api)
 
 ### Role-Based Access Control
 
-All authenticated users are assigned one of four roles from JWT claims only:
-1. Azure AD App Role claim (`roles[]` in the JWT) — highest matching role wins
-2. Azure AD/Google users with no App Role → **NoAccess** (403, sign-out screen shown)
-3. Local auth users with no JWT role → **Viewer** default (dev fallback)
+The API defines four roles, ordered `Viewer < Analyst < Editor < Admin`. Through the
+NextAuth sign-in, a user is **Admin** if their email is listed in `AUTH_ADMIN_EMAILS`,
+otherwise **Viewer**; the Analyst/Editor tiers exist in the API's authorization layer for
+finer-grained deployments.
 
 | Role | Can read | Can create | Can publish | Can manage users/sources |
 |---|---|---|---|---|
-| Viewer | Published content only | No | No | No |
+| Viewer | Published content | No | No | No |
 | Analyst | Internal + published | Yes (own content) | No | No |
 | Editor | Internal + published | Yes | Yes | No |
 | Admin | All | Yes | Yes | Yes |
 
 ### Content Visibility
 
-Every dataset, chart, and dashboard has a `visibility` field:
+Every dataset, chart, and dashboard has a `visibility` field, enforced by a SQL clause
+injected into every list/get query:
 
 | Value | Readable by |
 |---|---|
@@ -93,87 +91,79 @@ Every dataset, chart, and dashboard has a `visibility` field:
 | `internal` | Analyst, Editor, Admin |
 | `published` | All authenticated users (including Viewers) |
 
-Visibility is enforced in `services/datasets.py`, `services/charts.py`, and `services/dashboards.py` via a `_vis_clause()` SQL fragment injected into every list and get query.
-
 ### Other Scoped Resources
 
-- **Query History** — each record is scoped to `executed_by`. The workspace activity view aggregates all users' history; this is intentional for team visibility.
-- **Saved Queries** — scoped per user; list/read/update/delete require matching `user_id`.
-- **Favorites** — scoped per user.
-- **Data Sources** — Admin-only for create/update/delete; readable by all authenticated users. `connection_string` is never returned in any API response.
+- **Query History** — scoped to `executed_by`; the workspace activity view intentionally aggregates the team's history.
+- **Saved Queries / Favorites** — scoped per user.
+- **Data Sources** — Admin-only to create/update/delete; `connection_string` is never returned in any API response.
 
 ---
 
 ## SQL Safety
 
-All SQL sent to Microsoft Fabric is constructed using one of two safe patterns:
+All SQL sent to connected data sources uses one of two safe patterns:
 
-1. **Parameterized queries** — used by all service-layer database operations via `database/metadata.py` and `pool.execute_query()`. Parameters are passed as a separate list and bound by `pyodbc` using `?` or `@paramN` placeholders, never embedded as string literals.
+1. **Parameterized queries** — service-layer database operations bind values as parameters (`?` / `@paramN`), never as embedded string literals.
+2. **Quoted identifiers** — table/column/schema names in dynamic SQL pass through `quote_identifier()` in `services/query_generator.py`, which quotes each part and escapes the quote char.
 
-2. **Quoted identifiers** — table names, column names, and schema names used in dynamic SQL (e.g., distinct values query, chart preview query) are passed through `quote_identifier()` in `services/query_generator.py`, which wraps each part in `[...]` and escapes `]` as `]]`.
-
-Filter operators (e.g., `=`, `<`, `LIKE`) are validated against a strict allowlist in `services/query_generator.py` before being embedded in SQL.
+Filter operators (`=`, `<`, `LIKE`, …) are validated against a strict allowlist before being embedded. A 64 KB size limit is enforced on all SQL-execution endpoints.
 
 ---
 
-## Security Controls (S360 Compliance)
+## Security Controls
 
 | Control | Implementation |
 |---------|---------------|
-| **JWT signature verification** | RS256 via PyJWT + PyJWKClient; Azure AD JWKS endpoint; audience checked against `AZURE_CLIENT_ID` |
-| **Authentication required** | `require_auth` FastAPI dependency on every non-setup endpoint |
-| **Security headers** | `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Strict-Transport-Security`, `Referrer-Policy`, `X-Permitted-Cross-Domain-Policies` added by middleware in `main.py` |
-| **CORS hardening** | Explicit `allow_origins=[WEB_URL]`, explicit method list, explicit header list — no wildcards |
-| **Error message safety** | `generic_error_handler` never returns exception details to clients; full traceback to server logs only |
-| **Credential suppression** | `connection_string` excluded from all data-source SELECT queries via `_PUBLIC_FIELDS` constant |
-| **SQL injection** | Parameterized queries throughout; `quote_identifier()` for dynamic identifiers |
-| **Setup endpoint gating** | `POST /setup/test` and `POST /setup/initialize` return 403 once the app is configured |
-| **Query size limit** | 64 KB maximum enforced on all SQL execution endpoints |
-| **Role-based access control** | `require_min_role()` FastAPI dependency in `middleware/permissions.py`; role resolved from JWT → DB → default Viewer; applied on all create/update/admin endpoints |
-| **Content visibility enforcement** | `_vis_clause()` SQL fragment in all dataset/chart/dashboard service list/get calls; private/internal/published model |
+| **Proxy-authenticated API** | API trusts `X-User-*` only with a matching `KAVEON_PROXY_SECRET`; the browser never talks to the API directly |
+| **OAuth sessions** | NextAuth (Auth.js v5) sessions signed with `AUTH_SECRET`; providers activate only when their client id/secret are set |
+| **Authentication required** | Every non-setup endpoint requires an authenticated user |
+| **Security headers** | `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Strict-Transport-Security`, `Referrer-Policy` added by middleware |
+| **CORS hardening** | Explicit `allow_origins=[WEB_URL]`, explicit methods/headers — no wildcards |
+| **Error message safety** | Handlers never return exception details to clients; full tracebacks to server logs only |
+| **Credential suppression** | `connection_string` excluded from all data-source responses (`_PUBLIC_FIELDS`) |
+| **SQL injection** | Parameterized queries throughout; `quote_identifier()` for dynamic identifiers; operator allowlist |
+| **Setup endpoint gating** | Setup endpoints return 403 once the app is configured |
+| **Query size limit** | 64 KB max on SQL-execution endpoints |
+| **RBAC** | `require_min_role()` on all create/update/admin endpoints |
+| **Content visibility** | `private` / `internal` / `published` enforced in every list/get query |
 
 ---
 
 ## Reporting Security Issues
 
-If you discover a security vulnerability in Kaveon, report it to the owning team via
-the internal security disclosure channel. Do not file public GitHub issues for
-security-sensitive findings.
-
-Include:
-- Description of the vulnerability
-- Steps to reproduce
-- Affected component(s)
-- Potential impact
+Kaveon is a personal, open-source project. If you find a vulnerability, please **do not open
+a public GitHub issue**. Instead, open a private
+[GitHub Security Advisory](https://github.com/PruthviProdduturi/Kaveon/security/advisories/new)
+or email the maintainer. Include a description, steps to reproduce, the affected
+component(s), and the potential impact. Responsible disclosure is appreciated.
 
 ---
 
 ## Security Checklist for Contributors
 
-Before merging a PR that touches API routes or services, verify:
+Before merging a PR that touches API routes or services:
 
-- [ ] User identity is read from the `require_auth` dependency result (not from a client-supplied header)
-- [ ] All SQL identifiers (table names, column names) pass through `quote_identifier()`
-- [ ] All SQL values are bound as pyodbc parameters, not embedded as string literals
-- [ ] Filter operators are validated against the `SAFE_OPERATORS` allowlist in `query_generator.py`
-- [ ] State-changing frontend fetch calls use `msalFetch` (not bare `fetch`)
-- [ ] Error responses do not expose SQL error messages, stack traces, or internal state
-- [ ] New query execution endpoints enforce the 64 KB query size limit
-- [ ] New endpoints include `user: str = Depends(require_auth)` unless explicitly public
-- [ ] New create/update/delete endpoints use `require_min_role("Analyst")` or higher, not just `require_auth`
-- [ ] Visibility filtering (`_vis_clause`) is applied in any new list or get query for user-owned objects
-- [ ] New Admin-only endpoints use `require_min_role("Admin")` dependency
+- [ ] User identity comes from the proxy-authenticated context, never a raw client header
+- [ ] All SQL identifiers pass through `quote_identifier()`
+- [ ] All SQL values are bound as parameters, not embedded literals
+- [ ] Filter operators are validated against the allowlist in `query_generator.py`
+- [ ] Error responses don't expose SQL errors, stack traces, or internal state
+- [ ] SQL-execution endpoints enforce the 64 KB size limit
+- [ ] New endpoints require an authenticated user unless explicitly public
+- [ ] Create/update/delete endpoints use `require_min_role("Analyst")` or higher
+- [ ] Visibility filtering is applied to any new list/get of user-owned objects
+- [ ] Admin-only endpoints use `require_min_role("Admin")`
 
 ---
 
 ## Dependency Security
 
-Keep dependencies up to date. The critical security-relevant packages are:
+Keep security-relevant dependencies current:
 
 | Package | Purpose |
 |---------|---------|
-| `PyJWT` | JWT decoding and RS256 signature verification |
-| `cryptography` | RSA key operations (used by PyJWT for RS256) |
-| `azure-identity` | DefaultAzureCredential / Managed Identity for Fabric SQL |
-| `@azure/msal-browser` | Frontend MSAL authentication |
-| `pyodbc` | Parameterized SQL execution via ODBC Driver 18 |
+| `next-auth` (Auth.js v5) | OAuth sign-in (GitHub / Google / Microsoft Entra) |
+| `psycopg2-binary` / `PyMySQL` | Parameterized SQL for PostgreSQL / MySQL / StarRocks |
+| `pyodbc` | Parameterized SQL over ODBC Driver 18 (Fabric / Azure SQL) |
+| `azure-identity` | Managed-identity tokens for Fabric / Azure SQL sources (optional) |
+| `cryptography` | Encrypts stored secrets (e.g. AI provider keys) at rest |

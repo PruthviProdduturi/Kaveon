@@ -58,7 +58,7 @@ ORDER BY revenue DESC;`}</Code>
 
       <h2>Visibility</h2>
       <p>
-        Datasets — like charts and dashboards — carry a visibility level: <strong>draft</strong> (only you),
+        Datasets — like charts and dashboards — carry a visibility level: <strong>private</strong> (only you),
         <strong> internal</strong> (signed-in users), or <strong>published</strong>. Combined with the role model
         (see <a href="/docs/auth">Auth &amp; RBAC</a>), this controls who can discover and build on each dataset.
       </p>

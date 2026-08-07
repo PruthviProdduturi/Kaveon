@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/reference/kaveon-logo.svg?v=11" alt="Kaveon" width="260" />
+<img src="docs/reference/kaveon-logo.svg?v=12" alt="Kaveon" width="300" />
 
 ### **Talk to your data.**
 
@@ -8,7 +8,7 @@
 
 <br>
 
-[![CI](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/ci.yml/badge.svg)](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Live Demo](https://img.shields.io/badge/Live-Demo-d4a017?style=flat)](https://lens-analytics.vercel.app)
+[![CI](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/ci.yml/badge.svg)](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Live Demo](https://img.shields.io/badge/Live-Demo-4A9EE8?style=flat)](https://kaveon.vercel.app)
 
 <br>
 
@@ -16,7 +16,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-1e293b?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Python](https://img.shields.io/badge/Python-3.11+-1e293b?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-1e293b?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![Auth](https://img.shields.io/badge/Auth-Local%20%7C%20Azure%20AD%20%7C%20Google-1e293b?style=for-the-badge&logo=microsoftazure&logoColor=white)](https://azure.microsoft.com/en-us/products/active-directory)
+[![Auth](https://img.shields.io/badge/Auth-GitHub%20%7C%20Google%20%7C%20Microsoft%20Entra-1e293b?style=for-the-badge&logo=auth0&logoColor=white)](https://authjs.dev/)
 [![Microsoft Fabric](https://img.shields.io/badge/Microsoft_Fabric-SQL-1e293b?style=for-the-badge&logo=microsoft&logoColor=white)](https://learn.microsoft.com/en-us/fabric/)
 [![License](https://img.shields.io/badge/License-MIT-1e293b?style=for-the-badge)](./LICENSE)
 
@@ -29,9 +29,9 @@
 
 ## 🌟 What is Kaveon?
 
-Kaveon is a **self-hosted enterprise analytics platform** built for teams running on **Microsoft Fabric SQL**, Azure SQL, PostgreSQL, MySQL, Trino, and StarRocks. Think of it as your team's private data command centre — where everyone queries live data, builds charts, assembles dashboards, and uses AI to accelerate analysis — secured through **your choice of authentication provider**.
+Kaveon is a **self-hosted analytics platform** built on **Microsoft Fabric SQL**, Azure SQL, PostgreSQL, MySQL, and StarRocks. Think of it as your own data command centre — query live data, build charts, assemble dashboards, and use AI to accelerate analysis — secured through **your choice of OAuth provider**.
 
-Everything is configurable from the UI. No config file changes, no restarts needed for auth setup. First-run deploys with **local login out of the box** — switch to Azure AD or Google OAuth any time from Settings.
+Sign-in is OAuth-only via NextAuth (Auth.js v5). Configure one or more OAuth providers (GitHub, Google, Microsoft Entra) via env vars; a provider's button appears when its id/secret are set.
 
 > *Kaveon sits between your team and your data — making it fast to explore, easy to visualise, and safe to share.*
 
@@ -43,14 +43,13 @@ Everything is configurable from the UI. No config file changes, no restarts need
 <tr>
 <td width="50%">
 
-### 🔐 Enterprise Security
-- **Multi-provider authentication** — Local login, Azure AD / Entra ID, Google OAuth2
-- Provider switchable at runtime from **Settings → Authentication** (admin only) — no restart needed
-- **Default first-run credentials:** `admin` / `admin` (local provider, change on first login)
-- Full JWT verification: RS256 via JWKS (Azure AD & Google), HS256 (local)
-- **Role-Based Access Control:** 4 roles — Viewer, Analyst, Editor, Admin
+### 🔐 Security
+- **OAuth sign-in via NextAuth (Auth.js v5)** — GitHub, Google, Microsoft Entra ID; each provider activates when its id/secret env vars are set
+- Admins are configured via `AUTH_ADMIN_EMAILS`; everyone else signs in as Viewer
+- NextAuth sessions signed with `AUTH_SECRET`; the web proxy forwards a trusted identity to the API, stamped with `KAVEON_PROXY_SECRET`
+- **Role-Based Access Control:** the API layer defines Viewer < Analyst < Editor < Admin
 - Content visibility model: private / internal / published per dataset, chart, and dashboard
-- Secrets (Google client secret, JWT signing key) encrypted at rest with Fernet/AES
+- AI provider keys and stored secrets encrypted at rest with Fernet/AES
 - Security headers, hardened CORS, parameterised queries throughout
 
 </td>
@@ -120,8 +119,8 @@ Everything is configurable from the UI. No config file changes, no restarts need
 - **Azure SQL Database**
 - **PostgreSQL**
 - **MySQL / MariaDB**
-- **Trino** (coordinator URL + catalog)
-- **StarRocks** (FE host)
+- **StarRocks** (FE host — speaks the MySQL protocol)
+- **Trino** — *coming soon*
 - Register sources through the UI — no `.env` changes needed
 - Per-database connection pooling with startup warmup
 
@@ -129,10 +128,8 @@ Everything is configurable from the UI. No config file changes, no restarts need
 <td width="50%">
 
 ### 🛠️ Admin Controls
-- **Authentication:** switch provider (Local / Azure AD / Google) and configure credentials — all from the UI, no `.env` changes
-- **Local Users:** create, deactivate, and reset passwords for local-auth users from the admin panel
-- **User Management:** assign / revoke roles per user; Azure AD App Roles always take precedence
-- **Metadata Server:** view and reconfigure the Kaveon metadata database from the UI — supports all six DB types, live connection test, in-place API restart
+- **User Roles:** Admins are those whose email is listed in `AUTH_ADMIN_EMAILS`; everyone else signs in as Viewer
+- **Metadata Server:** view and reconfigure the Kaveon metadata database from the UI — supports all metadata DB types, live connection test, in-place API restart
 - **Data Sources:** full CRUD with connection testing
 - **AI Providers:** manage global and personal API keys
 
@@ -166,7 +163,7 @@ Everything is configurable from the UI. No config file changes, no restarts need
 
 Kaveon is a **monorepo** with two services:
 
-<p align="center"><img src="docs/reference/lens-architecture.svg" alt="Kaveon architecture: browser to kaveon-web (Next.js) to kaveon-api (FastAPI) to the metadata DB and your data sources" width="820"></p>
+<p align="center"><img src="docs/reference/kaveon-architecture.svg" alt="Kaveon architecture: browser to kaveon-web (Next.js) to kaveon-api (FastAPI) to the metadata DB and your data sources" width="820"></p>
 
 ### Two databases
 
@@ -197,15 +194,21 @@ Kaveon is a **monorepo** with two services:
 odbcinst -q -d -n "ODBC Driver 18 for SQL Server"
 ```
 
-> ⚠️ ODBC Driver 18 is required for Fabric SQL and Azure SQL. PostgreSQL, MySQL, Trino, and StarRocks use their own native drivers included in `requirements.txt`.
+> ⚠️ ODBC Driver 18 is required for Fabric SQL and Azure SQL. PostgreSQL uses `psycopg2`, and MySQL / StarRocks use `PyMySQL` (StarRocks speaks the MySQL protocol) — both included in `requirements.txt`. Trino is *coming soon* (no driver yet).
 
 ---
 
-## 🔑 Azure AD App Registration
+## 🔑 OAuth Providers
 
-> **Optional** — Kaveon defaults to local login. Configure Azure AD only if your team uses Microsoft Entra ID. Skip this section to use local auth.
+Sign-in is OAuth-only via **NextAuth (Auth.js v5)**. Configure one or more providers by setting their env vars; a provider's sign-in button appears automatically when its id/secret are present.
 
-Kaveon supports Azure AD as an optional authentication provider. This is a **one-time setup** by your Azure admin.
+- **GitHub** — set `GITHUB_ID` / `GITHUB_SECRET`
+- **Google** — set `GOOGLE_ID` / `GOOGLE_SECRET`
+- **Microsoft Entra ID** — see below
+
+Everyone signs in as **Viewer** by default; add an email to `AUTH_ADMIN_EMAILS` (comma-separated) to grant **Admin**. Also set `AUTH_SECRET` (`openssl rand -base64 32`).
+
+### Microsoft Entra ID (optional)
 
 <details>
 <summary><strong>Click to expand — App Registration steps</strong></summary>
@@ -216,29 +219,14 @@ Kaveon supports Azure AD as an optional authentication provider. This is a **one
 
 2. Fill in:
    - **Name:** `Kaveon`
-   - **Supported account types:** `Accounts in this organizational directory only`
-   - **Redirect URI:** `Single-page application (SPA)` → `http://localhost:3000`
+   - **Redirect URI:** select **Web**, then `http://localhost:3000/api/auth/callback/microsoft-entra-id` (add your production origin's callback URL too)
 
-3. Click **Register**. Note down:
-   - **Application (client) ID** → your `AZURE_CLIENT_ID`
-   - **Directory (tenant) ID** → your `AZURE_TENANT_ID`
+3. Click **Register**, then create a **client secret** under **Certificates & secrets**.
 
-4. **API permissions** → **Add a permission** → **Azure SQL Database** → **Delegated** → `user_impersonation` → **Add permissions**
-
-5. If you are an admin: **Grant admin consent for [your org]**
-
-6. **Expose an API** → **Add a scope** → accept the default App ID URI → add scope `access_as_user`
-
-7. **App roles** → **Create app role** → create all four roles below:
-
-   | Display name | Value | Description |
-   |---|---|---|
-   | Kaveon Viewer | `Kaveon.Viewer` | Read-only access to published dashboards and charts |
-   | Kaveon Analyst | `Kaveon.Analyst` | Run ad-hoc SQL, build charts and datasets |
-   | Kaveon Editor | `Kaveon.Editor` | All Analyst permissions + publish content |
-   | Kaveon Admin | `Kaveon.Admin` | Full access including user management, data source and metadata server configuration |
-
-   > Any authenticated user without an assigned role defaults to **Viewer** automatically.
+4. Set the env vars:
+   - `AUTH_MICROSOFT_ENTRA_ID_ID` → Application (client) ID
+   - `AUTH_MICROSOFT_ENTRA_ID_SECRET` → the client secret value
+   - `AUTH_MICROSOFT_ENTRA_ID_ISSUER` → e.g. `https://login.microsoftonline.com/<tenant-id>/v2.0`
 
 </details>
 
@@ -254,9 +242,9 @@ cd Kaveon
 # 2. Install Node.js dependencies (frontend only)
 pnpm install
 
-# 3. Configure environment (Azure AD optional — local login works with no config)
+# 3. Configure environment — set AUTH_SECRET + at least one OAuth provider
 cp .env.example .env
-# → Edit .env if using Azure AD; leave AZURE_* blank for local login
+# → Set AUTH_SECRET (openssl rand -base64 32) and e.g. GITHUB_ID / GITHUB_SECRET
 
 # 4. Set up Python API
 cd apps/kaveon-api
@@ -271,9 +259,9 @@ python apps/kaveon-api/main.py    # Terminal 1 (API)
 pnpm --filter kaveon-web dev      # Terminal 2 (Web)
 ```
 
-Open **http://localhost:3000**. Sign in with **username `admin`, password `admin`** (local login). You will be prompted to change the password on first login. ✓
+Open **http://localhost:3000** and sign in with GitHub (or another configured provider). ✓
 
-> To switch to Azure AD or Google OAuth, go to **Settings → Authentication** (Admin) after setting up your metadata database.
+> Try the hosted demo at **[kaveon.vercel.app](https://kaveon.vercel.app)**.
 
 ---
 
@@ -301,10 +289,22 @@ cp .env.example .env
 ```
 
 ```env
-# ── Azure AD ─────────────────────────────────────────────────────────────────
-# Shared by both the API (JWT verification) and the Next.js frontend (MSAL)
-AZURE_TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-AZURE_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+# ── Auth (NextAuth / Auth.js v5) ─────────────────────────────────────────────
+AUTH_SECRET=your-generated-secret        # openssl rand -base64 32
+AUTH_URL=http://localhost:3000
+AUTH_ADMIN_EMAILS=you@example.com         # comma-separated → Admin role
+
+# Configure at least one OAuth provider (button appears when id/secret are set):
+GITHUB_ID=
+GITHUB_SECRET=
+# GOOGLE_ID=
+# GOOGLE_SECRET=
+# AUTH_MICROSOFT_ENTRA_ID_ID=
+# AUTH_MICROSOFT_ENTRA_ID_SECRET=
+# AUTH_MICROSOFT_ENTRA_ID_ISSUER=
+
+# Shared secret the web proxy uses to stamp trusted identity headers to the API
+KAVEON_PROXY_SECRET=your-proxy-secret
 
 # ── Metadata Database (optional — setup wizard configures this on first login) ─
 # METADATA_DB_TYPE=fabric_sql
@@ -359,18 +359,20 @@ cd ../..
 
 | Table | Purpose |
 |---|---|
-| `datasets` | Semantic layer definitions — dimensions, metrics, filters |
+| `datasets` | Semantic layer definitions |
+| `dataset_dimensions` | Dimension tables + join keys for a dataset |
+| `dataset_columns` | Column metadata for a dataset |
+| `dataset_metrics` | Metric definitions for a dataset |
 | `charts` | Chart configurations (query + visualisation settings) |
 | `dashboards` | Dashboard layouts and filter settings |
 | `saved_queries` | User-saved SQL queries from SQL Lab |
 | `query_history` | Full audit log of every executed query |
+| `activity` | Workspace activity feed entries |
 | `favorites` | Per-user favourites for any object type |
 | `data_sources` | Registered data warehouses and databases |
 | `user_themes` | Per-user colour theme preferences |
-| `local_users` | Local-auth accounts with role column (dev/bootstrap only) |
-| `ai_providers` | Global AI provider API keys (admin-managed) |
-| `user_ai_keys` | Per-user AI provider keys (personal override) |
-| `auth_config` | Singleton row: active provider, Azure/Google fields, encrypted JWT secret |
+
+> The `ai_providers` and `user_ai_keys` tables are created at runtime by the AI service (not in `schema.sql`). The `local_users` and `auth_config` tables are **legacy** — they are not used by the NextAuth OAuth flow.
 
 ### 6 · Start Both Services
 
@@ -414,7 +416,7 @@ pnpm --filter kaveon-web dev
 ## 🎯 Your First 15 Minutes
 
 ```
-A  Sign in               →  admin / admin (local) — or Azure AD / Google if configured
+A  Sign in               →  click your OAuth provider (GitHub / Google / Microsoft Entra)
 B  Add a Data Source     →  /data-sources  →  + Add Data Source
 C  Verify in SQL Lab       →  /lab  →  pick database  →  run SELECT TOP 10 *
 D  Create a Dataset        →  /datasets  →  + New Dataset  →  set dimensions + metrics
@@ -441,7 +443,7 @@ G  Try AI in SQL Lab       →  /lab  →  click ✦ AI  →  describe what you 
 | **Data Sources** | `/data-sources` | All (Admin to edit) |
 | **AI Providers** | `/settings/ai` | All (Admin for global keys) |
 | **Metadata Server** | `/settings/metadata` | Admin |
-| **Authentication** | `/settings/auth` | Admin |
+| **System Settings** | `/settings/system` | Admin |
 | **About / Features** | `/about` | All |
 
 ---
@@ -450,20 +452,13 @@ G  Try AI in SQL Lab       →  /lab  →  click ✦ AI  →  describe what you 
 
 The FastAPI backend auto-generates Swagger UI at `http://localhost:8080/docs`. Key endpoint groups:
 
-### Authentication
+### Identity
+
+> Sign-in happens in the Next.js app via NextAuth (Auth.js v5) — there is **no login endpoint on the API**. The web proxy at `/api/kaveon/[...path]` verifies the NextAuth session server-side and forwards trusted `X-User-*` identity headers (stamped with `KAVEON_PROXY_SECRET`) to the API.
+
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
-| `GET` | `/api/auth/provider` | None | Returns the active auth provider (`local`, `azure_ad`, `google`) |
-| `POST` | `/api/auth/login` | None | Local login — body `{username, password}` → returns JWT |
-| `POST` | `/api/auth/change-password` | Bearer | Local auth password change |
-| `GET` | `/api/v1/auth/me` | Bearer | Returns the current user's email and resolved role |
-| `GET` | `/api/v1/auth/roles` | Bearer | Returns all valid roles |
-| `GET` | `/api/v1/admin/auth` | Admin | Get current auth provider config (secrets masked) |
-| `POST` | `/api/v1/admin/auth` | Admin | Update auth provider config |
-| `GET` | `/api/v1/admin/local-users` | Admin | List local users |
-| `POST` | `/api/v1/admin/local-users` | Admin | Create a local user |
-| `DELETE` | `/api/v1/admin/local-users/{id}` | Admin | Deactivate a local user |
-| `POST` | `/api/v1/admin/local-users/{id}/reset-password` | Admin | Reset a local user's password |
+| `GET` | `/api/v1/users/me` | User | Returns the current user's email and resolved role |
 
 ### Setup & Admin
 | Method | Endpoint | Auth | Description |
@@ -495,8 +490,6 @@ The FastAPI backend auto-generates Swagger UI at `http://localhost:8080/docs`. K
 | `POST` | `/api/v1/datasets` | Analyst+ | Create dataset |
 | `PUT` | `/api/v1/datasets/{id}` | Analyst+ | Update dataset |
 | `DELETE` | `/api/v1/datasets/{id}` | Editor+ | Delete dataset |
-| `POST` | `/api/v1/datasets/{id}/preview` | Analyst+ | Run dataset preview query |
-| `GET` | `/api/v1/datasets/{id}/columns` | Analyst+ | Get column list for a dataset |
 
 ### Charts
 | Method | Endpoint | Auth | Description |
@@ -506,7 +499,6 @@ The FastAPI backend auto-generates Swagger UI at `http://localhost:8080/docs`. K
 | `POST` | `/api/v1/charts` | Analyst+ | Create chart |
 | `PUT` | `/api/v1/charts/{id}` | Analyst+ | Update chart |
 | `DELETE` | `/api/v1/charts/{id}` | Editor+ | Delete chart |
-| `POST` | `/api/v1/charts/{id}/data` | User | Run chart query and return data |
 
 ### Dashboards
 | Method | Endpoint | Auth | Description |
@@ -520,13 +512,14 @@ The FastAPI backend auto-generates Swagger UI at `http://localhost:8080/docs`. K
 ### SQL Lab
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
-| `POST` | `/api/v1/lab/execute` | Analyst+ | Execute a SQL query, log to history |
-| `GET` | `/api/v1/lab/saved-queries` | Analyst+ | List saved queries |
-| `POST` | `/api/v1/lab/saved-queries` | Analyst+ | Save a query |
-| `DELETE` | `/api/v1/lab/saved-queries/{id}` | Analyst+ | Delete saved query |
-| `GET` | `/api/v1/lab/history` | Analyst+ | Full query history for current user |
-| `GET` | `/api/v1/sql/tables` | Analyst+ | List tables in a database |
-| `GET` | `/api/v1/sql/columns` | Analyst+ | List columns for a table |
+| `POST` | `/api/v1/lab/execute` | Analyst+ | Execute a SQL query |
+| `POST` | `/api/v1/sql/execute` | User* | Execute SQL + log to history (*Viewers limited to dashboard/filter context) |
+| `GET` | `/api/v1/lab/saved-queries` | User | List saved queries |
+| `POST` | `/api/v1/lab/saved-queries` | User | Save a query |
+| `DELETE` | `/api/v1/lab/saved-queries/{id}` | User | Delete saved query |
+| `GET` | `/api/v1/lab/query-history` | User | Full query history |
+| `GET` | `/api/v1/lab/tables` | User | List tables in a database |
+| `GET` | `/api/v1/lab/tables/{table_id}/columns` | User | List columns for a table |
 
 ### AI
 | Method | Endpoint | Auth | Description |
@@ -539,13 +532,6 @@ The FastAPI backend auto-generates Swagger UI at `http://localhost:8080/docs`. K
 | `PUT` | `/api/v1/ai/my-keys` | User | Set/update personal AI key |
 | `DELETE` | `/api/v1/ai/my-keys/{provider}` | User | Remove personal AI key |
 
-### Users (Admin)
-| Method | Endpoint | Auth | Description |
-|---|---|---|---|
-| `GET` | `/api/v1/users` | Admin | List all role assignments |
-| `PUT` | `/api/v1/users/{email}/role` | Admin | Assign or update a user role |
-| `DELETE` | `/api/v1/users/{email}/role` | Admin | Revoke a user role (falls back to Viewer) |
-
 ### Misc
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
@@ -553,8 +539,7 @@ The FastAPI backend auto-generates Swagger UI at `http://localhost:8080/docs`. K
 | `GET` | `/api/v1/favorites` | User | List all favourites for current user |
 | `GET` | `/api/v1/theme` | User | Get current user's theme |
 | `PUT` | `/api/v1/theme` | User | Update current user's theme |
-| `GET` | `/api/v1/metadata/summary` | User | Home page summary counts |
-| `GET` | `/api/v1/workspace/activity` | User | Recent activity feed |
+| `GET` | `/api/v1/metadata/summary` | User | Home page summary counts + recent activity |
 
 ---
 
@@ -580,20 +565,22 @@ Kaveon/
 │   │   │   ├── lab/                ← SQL Lab (Monaco editor + inline AI)
 │   │   │   ├── settings/
 │   │   │   │   ├── ai/             ← AI provider key management
-│   │   │   │   ├── users/          ← Admin: user role management
 │   │   │   │   ├── metadata/       ← Admin: metadata server configuration
-│   │   │   │   └── auth/           ← Admin: auth provider + local user management
+│   │   │   │   └── auth/           ← (legacy) auth settings page
 │   │   │   └── workspace-activity/ ← Activity feed
-│   │   ├── auth/                   ← Multi-provider auth hook (local / Azure AD / Google)
+│   │   ├── app/api/kaveon/[...path]/route.ts ← Proxy: verifies NextAuth session, stamps X-User-* headers to the API
+│   │   ├── auth.ts                 ← NextAuth (Auth.js v5) config — GitHub / Google / Microsoft Entra
+│   │   ├── middleware.ts           ← Route protection (redirects to /login)
+│   │   ├── auth/                   ← (legacy) MSAL auth hook — superseded by auth.ts
 │   │   ├── components/             ← Reusable React components
-│   │   │   ├── DataSourceIcons.tsx ← Brand SVG icons (Fabric, Azure, PG, MySQL, Trino, StarRocks)
-│   │   │   ├── ListPageShell.tsx   ← Standard admin page shell (header + loading/error/empty)
+│   │   │   ├── DataSourceIcons.tsx ← Brand SVG icons (Fabric, Azure, PG, MySQL, StarRocks)
+│   │   │   ├── ListPageShell.tsx   ← Standard page shell (header + loading/error/empty)
 │   │   │   ├── SetupModal.tsx      ← First-run metadata DB setup wizard
 │   │   │   ├── charts/             ← Chart builder components
 │   │   │   └── dashboards/         ← Dashboard canvas + item components
 │   │   ├── contexts/               ← Theme, auth context providers
 │   │   ├── hooks/                  ← useRole, useTheme, etc.
-│   │   └── utils/                  ← MSAL fetch, colour utilities
+│   │   └── utils/                  ← colour utilities, etc. (msalFetch.ts is legacy)
 │   │
 │   └── kaveon-api/                  ← Python/FastAPI REST API
 │       ├── main.py                 ← FastAPI entry point + router registration
@@ -603,36 +590,36 @@ Kaveon/
 │       ├── schema_postgresql.sql   ← PostgreSQL schema
 │       ├── schema_mysql.sql        ← MySQL schema
 │       ├── database/               ← Connection pool + metadata queries
-│       │   ├── pool.py             ← pyodbc pool with Azure AD token auth
+│       │   ├── pool.py             ← Connection pool (pyodbc / psycopg2 / PyMySQL)
 │       │   ├── metadata.py         ← Parameterised metadata DB helpers
 │       │   └── warmup.py           ← Startup warmup + 5-min heartbeat
 │       ├── middleware/
-│       │   ├── auth.py             ← JWT verification: RS256/JWKS (Azure AD, Google) + HS256 (local)
+│       │   ├── auth.py             ← Trusts proxy-stamped X-User-* headers (KAVEON_PROXY_SECRET); legacy JWT paths retained
 │       │   ├── permissions.py      ← RBAC dependency: resolves role, enforces minimum
 │       │   ├── rate_limit.py       ← Per-user in-memory rate limiter
 │       │   └── errors.py           ← Exception handlers (no detail leakage)
 │       ├── routers/                ← One file per domain
-│       │   ├── auth.py             ← /auth/me, /auth/roles
-│       │   ├── local_auth.py       ← /auth/login, /auth/change-password (local provider)
-│       │   ├── auth_config.py      ← /auth/provider (public) + /admin/auth + /admin/local-users
+│       │   ├── auth.py             ← /connect, /disconnect
+│       │   ├── local_auth.py       ← (legacy) local login endpoints
+│       │   ├── auth_config.py      ← (legacy) auth provider config
 │       │   ├── health.py           ← /health
 │       │   ├── setup.py            ← /setup/*, /admin/metadata/*
 │       │   ├── data_sources.py     ← /data-sources/*
 │       │   ├── datasets.py         ← /datasets/*
 │       │   ├── charts.py           ← /charts/*
 │       │   ├── dashboards.py       ← /dashboards/*
-│       │   ├── lab.py              ← /lab/* (SQL execute, saved queries, history)
-│       │   ├── sql.py              ← /sql/* (tables, columns)
+│       │   ├── lab.py              ← /lab/* (execute, saved queries, tables, history)
+│       │   ├── sql.py              ← /sql/* (generate, execute, cache)
 │       │   ├── ai.py               ← /ai/* (chat, providers, personal keys)
-│       │   ├── users.py            ← /users/* (role management)
+│       │   ├── users.py            ← /users/me
 │       │   ├── favorites.py        ← /favorites/*
 │       │   ├── theme.py            ← /theme
-│       │   └── metadata_summary.py ← /metadata/summary, /workspace/activity
+│       │   └── metadata_summary.py ← /metadata/summary
 │       └── services/               ← Business logic layer
 │           ├── query_generator.py  ← Star-schema SQL builder
 │           ├── ai_service.py       ← AI provider routing + key resolution
-│           ├── auth_config.py      ← Active provider cache, config upsert, secret encryption
-│           ├── local_auth.py       ← bcrypt password hashing, bootstrap admin/admin, user CRUD
+│           ├── auth_config.py      ← (legacy) provider cache + secret encryption
+│           ├── local_auth.py       ← (legacy) bcrypt password hashing, user CRUD
 │           └── ...
 │
 └── packages/
@@ -645,37 +632,45 @@ Kaveon/
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `AZURE_TENANT_ID` | ⬜ | — | Azure AD tenant ID — required only when using Azure AD provider |
-| `AZURE_CLIENT_ID` | ⬜ | — | App Registration client ID — required only when using Azure AD provider |
-| `AI_ENCRYPTION_SECRET` | ⬜ | auto-generated | Secret used to derive the Fernet key for encrypting AI keys and auth secrets at rest |
+| `AUTH_SECRET` | ✅ | — | NextAuth session signing secret (`openssl rand -base64 32`) |
+| `AUTH_URL` | ⬜ | — | Canonical app URL (set in production, e.g. `https://kaveon.vercel.app`) |
+| `AUTH_ADMIN_EMAILS` | ⬜ | — | Comma-separated emails granted the Admin role; everyone else is Viewer |
+| `GITHUB_ID` / `GITHUB_SECRET` | ⬜ | — | GitHub OAuth app — button appears when set |
+| `GOOGLE_ID` / `GOOGLE_SECRET` | ⬜ | — | Google OAuth app — button appears when set |
+| `AUTH_MICROSOFT_ENTRA_ID_ID` / `_SECRET` / `_ISSUER` | ⬜ | — | Microsoft Entra ID app — button appears when set |
+| `KAVEON_PROXY_SECRET` | ✅ | — | Shared secret the web proxy uses to stamp trusted identity headers to the API (must match on both) |
+| `AI_ENCRYPTION_SECRET` | ⬜ | auto-generated | Secret used to derive the Fernet key for encrypting AI provider keys at rest |
 | `METADATA_DB_TYPE` | ⬜ | `fabric_sql` | Metadata DB type: `fabric_sql`, `azure_sql`, `postgresql`, `mysql` |
 | `METADATA_ENDPOINT` | ⬜ | — | SQL endpoint for Fabric SQL or Azure SQL metadata database |
 | `METADATA_DATABASE` | ⬜ | — | Database name in the metadata endpoint |
 | `METADATA_HOST` | ⬜ | — | Host for PostgreSQL or MySQL metadata database |
 | `METADATA_PORT` | ⬜ | — | Port for PostgreSQL (`5432`) or MySQL (`3306`) |
+| `METADATA_USER` / `METADATA_PASSWORD` | ⬜ | — | Username/password for PostgreSQL / MySQL metadata DB (e.g. Neon, PlanetScale) |
+| `METADATA_SSLMODE` | ⬜ | `require` | PostgreSQL `sslmode` (Neon needs `require`) |
 | `API_PORT` | ⬜ | `8080` | Port for the FastAPI service |
-| `WEB_PORT` | ⬜ | `3000` | Port for the Next.js web app |
-| `API_URL` | ✅ | `http://localhost:8080` | Full URL of the API, used by the web app |
-| `WEB_URL` | ✅ | `http://localhost:3000` | Full URL of the web app, used for CORS |
+| `API_URL` | ⬜ | `http://localhost:8080` | Full URL of the API, used by the web proxy |
+| `WEB_URL` | ⬜ | `http://localhost:3000` | Full URL of the web app, used for CORS |
+| `NODE_ENV` | ⬜ | `development` | Runtime environment |
 
-> `METADATA_*` and `AZURE_*` variables are written automatically through the setup wizard and admin settings pages. You rarely need to set them manually.
+> `METADATA_*` variables are written automatically through the setup wizard and admin settings pages. You rarely need to set them manually.
 
 > Data warehouse endpoints are **never** configured here. Register them through the UI at `/data-sources`.
 
-> **Local auth requires no environment variables at all.** The JWT signing key is auto-generated on first run and stored encrypted in the `auth_config` table.
+> NextAuth requires `AUTH_SECRET`. Set at least one OAuth provider's id/secret so a sign-in button appears.
 
 ---
 
 ## 🛠️ Available Scripts
 
-Run from the **repository root**:
+Web scripts live in `apps/kaveon-web` — run them via `pnpm --filter kaveon-web <script>`:
 
 | Command | Description |
 |---|---|
-| `pnpm dev` | Start Next.js frontend in development mode |
-| `pnpm build` | Build the frontend for production |
-| `pnpm check-types` | TypeScript type checking |
-| `pnpm clean` | Delete all build artifacts |
+| `pnpm --filter kaveon-web dev` | Start the Next.js frontend in development mode |
+| `pnpm --filter kaveon-web build` | Build the frontend for production |
+| `pnpm --filter kaveon-web start` | Start the production build |
+| `pnpm --filter kaveon-web lint` | Run ESLint |
+| `pnpm --filter kaveon-web type-check` | TypeScript type checking |
 
 **Python API** (from `apps/kaveon-api/`):
 
@@ -689,21 +684,18 @@ Run from the **repository root**:
 ## 🔧 Troubleshooting
 
 <details>
-<summary><strong>🔴 Local login fails — "Invalid credentials"</strong></summary>
+<summary><strong>🔴 A provider's sign-in button is missing</strong></summary>
 
-- On first run, use **username: `admin`** / **password: `admin`**
-- If the metadata DB has not been configured yet, local auth uses an in-memory bootstrap check — you must sign in as admin to configure the metadata server first
-- After configuring the metadata DB, the `local_users` table is created and the admin account is seeded automatically on the next API start
-- If you reset the admin password via **Settings → Authentication → Local Users**, the new password takes effect immediately
+- A button only appears when that provider's id/secret are set in `.env` (e.g. `GITHUB_ID` / `GITHUB_SECRET`)
+- Restart the web app after editing `.env` — env vars are read at startup
 
 </details>
 
 <details>
-<summary><strong>🔴 Auth provider shows "azure_ad" but I only have local setup</strong></summary>
+<summary><strong>🔴 "redirect_uri is not associated with this application"</strong></summary>
 
-- Go to **Settings → Authentication** and confirm the active provider is set to **Local Login**
-- If you cannot log in at all (Azure AD misconfigured), temporarily set `AZURE_TENANT_ID=` and `AZURE_CLIENT_ID=` to empty in `.env` and restart — the API falls back to local
-- Clear `lens_auth_provider` from `localStorage` in DevTools → Application → Local Storage
+- Add the callback URL to the provider's app registration: `http://<origin>/api/auth/callback/<provider>` (e.g. `http://localhost:3000/api/auth/callback/github`, or `.../callback/microsoft-entra-id`)
+- Include both your local and production origins
 
 </details>
 
@@ -717,19 +709,10 @@ Run from the **repository root**:
 </details>
 
 <details>
-<summary><strong>🔴 Login redirects to error or blank screen</strong></summary>
-
-- Confirm `http://localhost:3000` is registered as a redirect URI in your App Registration under **Authentication → Single-page application**
-- Clear browser cookies and localStorage for `localhost:3000`
-- Double-check `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` in `.env`
-
-</details>
-
-<details>
 <summary><strong>🔴 API returns 401 Unauthorized</strong></summary>
 
-- Your Azure AD token may have expired — sign out and sign back in
-- If `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` are not set, the API falls back to unverified JWT decode (setup mode only)
+- Your NextAuth session may have expired — sign out and sign back in
+- Confirm `KAVEON_PROXY_SECRET` is set to the **same value** for both the web app and the API — the API only trusts proxy-stamped identity headers when the secret matches
 - If you changed `.env`, restart the API service (it does not hot-reload env vars)
 
 </details>
@@ -774,7 +757,7 @@ rm -rf apps/kaveon-web/.next
 cd apps/kaveon-api && pip install -r requirements.txt
 
 # Re-check types
-pnpm check-types
+pnpm --filter kaveon-web type-check
 ```
 
 </details>
@@ -808,7 +791,7 @@ Or change `API_PORT` in `.env` and restart.
 | [Next.js](https://nextjs.org/) | 15.x | React framework, App Router |
 | [React](https://react.dev/) | 19.x | UI component library |
 | [TypeScript](https://www.typescriptlang.org/) | 5.x | End-to-end type safety |
-| [@azure/msal-browser](https://github.com/AzureAD/microsoft-authentication-library-for-js) | 5.x | Azure AD authentication |
+| [next-auth (Auth.js v5)](https://authjs.dev/) | 5.x (beta) | OAuth sign-in (GitHub / Google / Microsoft Entra) |
 | [ECharts](https://echarts.apache.org/) | 5.x | Data visualisation (20+ chart types) |
 | [ECharts-GL](https://github.com/ecomfe/echarts-gl) | 2.x | 3D WebGL charts (world map globe) |
 | [Monaco Editor](https://microsoft.github.io/monaco-editor/) | 0.52.x | VS Code-grade SQL editor |

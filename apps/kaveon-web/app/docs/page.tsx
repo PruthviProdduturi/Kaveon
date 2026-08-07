@@ -48,7 +48,7 @@ export default function DocsIntro() {
           </tr>
           <tr>
             <td><strong>Data layer</strong></td>
-            <td>Postgres · Fabric SQL · Azure SQL · MySQL · Trino · StarRocks</td>
+            <td>Postgres · Fabric SQL · Azure SQL · MySQL · StarRocks</td>
             <td>A metadata database (Kaveon&rsquo;s own state) plus the data sources you register.</td>
           </tr>
         </tbody>

@@ -27,7 +27,7 @@ Dataset auto-detection      → score every loaded schema, pick the best
 nlToSql(query, schema)      → 7 ordered patterns, fuzzy column/metric resolution
       │
       ▼
-POST /api/v1/lab/query      → kaveon-api runs the SQL against the source
+POST /api/v1/sql/execute    → kaveon-api runs the SQL against the source
       │
       ▼
 InlineChart renders ECharts → chart type chosen from the result shape`}</Code>
@@ -38,12 +38,13 @@ InlineChart renders ECharts → chart type chosen from the result shape`}</Code>
         schema is scored against the text and the highest score wins (ties go to the first). The chosen dataset is
         shown in the UI so you can override it.
       </p>
-      <Code lang="text">{`score += 3   if dataset-name words appear in the query
-score += 1   for each column name that appears
-score += 2   for each metric name that appears`}</Code>
+      <Code lang="text">{`score += 0.3   per dataset-name word that appears in the query
+score += 0.2   per column name that appears
+score += 0.2   per metric name that appears
+score += confidence   from the NL→SQL parser for this schema`}</Code>
 
       <h2>Pattern matching</h2>
-      <p>The parser tries seven patterns in priority order and returns on the first match.</p>
+      <p>The parser tries seven patterns in this priority order and returns on the first match.</p>
 
       <h3>1 · Aggregate only</h3>
       <p>Triggers on <code>total, sum, count, average, avg, mean, min, max</code> with no grouping words.</p>
@@ -66,26 +67,30 @@ score += 2   for each metric name that appears`}</Code>
 →  SELECT date_col, SUM(metric) FROM ... GROUP BY date_col
    ORDER BY date_col LIMIT 1000                     (chart: line)`}</Code>
 
-      <h3>4 · Grouped by dimension</h3>
-      <p>Triggers on <code>by, per, for each, grouped by, group by</code>.</p>
-      <Code lang="text">{`"revenue by region"  ·  "orders per category"
-→  SELECT region, SUM(revenue) FROM ... GROUP BY region
-   ORDER BY SUM(revenue) DESC LIMIT 1000`}</Code>
-      <p>Chart type: <code>line</code> if the group column is a date, otherwise <code>bar</code>.</p>
-
-      <h3>5 · Compare X vs Y</h3>
+      <h3>4 · Compare X vs Y</h3>
       <p>Triggers on <code>compare … vs / versus / and / against …</code></p>
       <p>
         Extracts the two literal values, finds a string column to filter on and a metric. With a date column it renders
         a multi-series line; otherwise a grouped bar.
       </p>
 
-      <h3>6 · Distribution / breakdown</h3>
+      <h3>5 · Distribution / breakdown</h3>
       <p>Triggers on <code>distribution, breakdown, spread</code>.</p>
       <Code lang="text">{`"distribution of order status"  ·  "breakdown of regions"
 →  SELECT col, COUNT(*) AS count FROM ... GROUP BY col
    ORDER BY count DESC LIMIT 1000`}</Code>
-      <p>Chart type: <code>pie</code> when the column has fewer than 8 distinct values (estimated); otherwise <code>bar</code>.</p>
+      <p>
+        Chart type: always <code>bar</code>. (<code>pickChartType</code> supports a
+        &ldquo;pie under 8 distinct values&rdquo; rule, but the distribution pattern doesn&rsquo;t pass a group count,
+        so that branch is currently inactive.)
+      </p>
+
+      <h3>6 · Grouped by dimension</h3>
+      <p>Triggers on <code>by, per, for each, grouped by, group by</code>.</p>
+      <Code lang="text">{`"revenue by region"  ·  "orders per category"
+→  SELECT region, SUM(revenue) FROM ... GROUP BY region
+   ORDER BY SUM(revenue) DESC LIMIT 1000`}</Code>
+      <p>Chart type: <code>line</code> if the group column is a date, otherwise <code>bar</code>.</p>
 
       <h3>7 · Fallback word scan</h3>
       <p>When no pattern matches, the engine scans every word against columns and metrics and builds the best it can:</p>
@@ -107,9 +112,9 @@ score += 2   for each metric name that appears`}</Code>
       <h2>Automatic chart selection</h2>
       <p>
         The chart type is inferred from the query shape and result, not chosen by hand: <code>kpi</code> for single
-        values, <code>line</code> for time series, <code>pie</code> for small distributions, <code>bar</code> for
-        grouped comparisons, and <code>table</code> as a safe fallback. <code>InlineChart</code> renders it with ECharts
-        directly in the conversation.
+        values, <code>line</code> for time series, <code>bar</code> for grouped comparisons and distributions, and
+        <code>table</code> as a safe fallback. <code>InlineChart</code> renders it with ECharts directly in the
+        conversation.
       </p>
 
       <Pager prev={{ href: "/docs/sql-lab", title: "SQL Lab" }} />
