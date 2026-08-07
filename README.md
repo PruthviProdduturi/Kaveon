@@ -5,13 +5,15 @@
   <img src="docs/reference/kaveon-logo.svg?v=15" alt="Kaveon — Talk to your data." width="320" />
 </picture>
 
+<br>
+
 ### **Talk to your data.**
 
 *A self-hosted, open-source analytics platform — query, visualize, and share your data, with natural-language querying built in.*
 
 <br>
 
-[![CI](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/ci.yml/badge.svg)](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Live Demo](https://img.shields.io/badge/Live-Demo-4A9EE8?style=flat)](https://kaveon.vercel.app)
+[![CI](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/ci.yml/badge.svg)](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/ci.yml) [![Deploy](https://img.shields.io/github/actions/workflow/status/PruthviProdduturi/Lens/ci.yml?branch=dev&label=Deploy&color=4A9EE8)](https://github.com/PruthviProdduturi/Lens/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Live Demo](https://img.shields.io/badge/Live-Demo-4A9EE8?style=flat)](https://kaveon.vercel.app)
 
 <br>
 
@@ -23,6 +25,7 @@
 [![Microsoft Fabric](https://img.shields.io/badge/Microsoft_Fabric-SQL-1e293b?style=for-the-badge&logo=microsoft&logoColor=white)](https://learn.microsoft.com/en-us/fabric/)
 [![License](https://img.shields.io/badge/License-MIT-1e293b?style=for-the-badge)](./LICENSE)
 
+<br>
 
 [**Quick Start**](#-quick-start) · [**Architecture**](#-architecture) · [**Features**](#-features) · [**Setup Guide**](#-step-by-step-setup) · [**API Reference**](#-api-reference) · [**Troubleshooting**](#-troubleshooting)
 
