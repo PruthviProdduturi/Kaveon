@@ -72,7 +72,7 @@ export function AuthScreen() {
 				position: "fixed",
 				inset: 0,
 				display: "flex",
-				background: "#09090b",
+				background: "#171717",
 			}}
 		>
 			{/* ─── LEFT PANEL — Brand + rotating prompt ─── */}
@@ -182,7 +182,7 @@ export function AuthScreen() {
 					alignItems: "center",
 					padding: "40px",
 					borderLeft: "1px solid rgba(255,255,255,0.08)",
-					background: "#09090b",
+					background: "#171717",
 				}}
 			>
 				<div style={{ width: "100%", maxWidth: 320 }}>
@@ -313,7 +313,7 @@ export function AuthScreen() {
 							transform: "translate(-50%, -50%)",
 							maxWidth: 380,
 							width: "calc(100% - 40px)",
-							background: "#111318",
+							background: "#252525",
 							border: "1px solid rgba(255,255,255,0.08)",
 							borderRadius: 14,
 							padding: "32px 28px 24px",
@@ -336,7 +336,7 @@ export function AuthScreen() {
 									padding: "10px 20px",
 									borderRadius: 8,
 									background: "#f0f0f2",
-									color: "#09090b",
+									color: "#171717",
 									border: "none",
 									fontSize: 13,
 									fontWeight: 500,
