@@ -12,22 +12,26 @@ Usage:
     --command "python" "/app/scripts/migrate-neon-to-azure.py"
 """
 
+import os
 import psycopg2
 import sys
 
+# Credentials come from the environment / Key Vault — never hardcode them here.
+# Source these from `kaveon-kv` (neon-db-password, azure-db-password) before running,
+# e.g. as a Container App job with secretRefs, or locally via env vars.
 SRC = dict(
-    host="ep-bitter-unit-axqeutga-pooler.c-4.us-east-2.aws.neon.tech",
-    database="neondb",
-    user="neondb_owner",
-    password="0d7afc5ced30d03b4857c4926dc7f29da6b268279a345082",
+    host=os.environ["NEON_HOST"],
+    database=os.environ.get("NEON_DB", "neondb"),
+    user=os.environ.get("NEON_USER", "neondb_owner"),
+    password=os.environ["NEON_PASSWORD"],
     sslmode="require",
 )
 
 DST = dict(
-    host="kaveon-db.postgres.database.azure.com",
-    database="kaveon",
-    user="kaveon_admin",
-    password="Kav30n!Db2026#Secure",
+    host=os.environ.get("AZ_PG_HOST", "kaveon-db.postgres.database.azure.com"),
+    database=os.environ.get("AZ_PG_DB", "kaveon"),
+    user=os.environ.get("AZ_PG_USER", "kaveon_admin"),
+    password=os.environ["AZ_PG_PASSWORD"],
     sslmode="require",
 )
 
