@@ -52,7 +52,8 @@ export function AuthScreen() {
 		setToast(provider === "google" ? "Google" : "Microsoft");
 	};
 
-	if (loading) return <KaveonLoading message="Signing in" />;
+	// No custom loading screen — browser navigates to OAuth provider directly.
+	// The login page stays visible until the redirect happens.
 
 	return (
 		<div
