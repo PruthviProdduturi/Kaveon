@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { signIn } from "next-auth/react";
 import { KaveonMark } from "./KaveonMark";
-import { KaveonLoading } from "./KaveonLoading";
 
 const PROMPTS = [
 	"What happened to revenue last quarter?",
@@ -15,7 +14,6 @@ const PROMPTS = [
 ];
 
 export function AuthScreen() {
-	const [loading, setLoading] = useState<string | null>(null);
 	const [toast, setToast] = useState<string | null>(null);
 	const [promptIdx, setPromptIdx] = useState(0);
 
@@ -44,7 +42,6 @@ export function AuthScreen() {
 	}, [toast, dismissToast]);
 
 	const start = (provider: string) => {
-		setLoading(provider);
 		signIn(provider, { callbackUrl: "/" });
 	};
 
@@ -52,8 +49,22 @@ export function AuthScreen() {
 		setToast(provider === "google" ? "Google" : "Microsoft");
 	};
 
-	// No custom loading screen — browser navigates to OAuth provider directly.
-	// The login page stays visible until the redirect happens.
+	const btnBase: React.CSSProperties = {
+		width: "100%",
+		display: "flex",
+		alignItems: "center",
+		justifyContent: "center",
+		gap: 10,
+		padding: "13px 16px",
+		fontSize: 14,
+		fontWeight: 500,
+		borderRadius: 10,
+		cursor: "pointer",
+		transition: "all 0.2s",
+		border: "1px solid rgba(255,255,255,0.1)",
+		background: "transparent",
+		color: "#c8cdd3",
+	};
 
 	return (
 		<div
@@ -71,31 +82,31 @@ export function AuthScreen() {
 					display: "flex",
 					flexDirection: "column",
 					justifyContent: "center",
-					padding: "60px 80px",
+					alignItems: "flex-start",
+					padding: "0 80px",
 					position: "relative",
 					overflow: "hidden",
 				}}
 			>
-				{/* Background glow */}
+				{/* Background glow — centered on content */}
 				<div
 					style={{
 						position: "absolute",
-						top: "40%",
-						left: "30%",
+						top: "50%",
+						left: "35%",
 						transform: "translate(-50%, -50%)",
-						width: 800,
-						height: 600,
+						width: 700,
+						height: 500,
 						borderRadius: "50%",
-						background: "radial-gradient(ellipse, rgba(74, 158, 232, 0.07) 0%, transparent 70%)",
+						background: "radial-gradient(ellipse, rgba(74, 158, 232, 0.06) 0%, transparent 70%)",
 						pointerEvents: "none",
 					}}
 				/>
 
 				{/* Logo + wordmark */}
-				<div style={{ position: "relative", marginBottom: 48 }}>
-					{/* Full KAVEON wordmark SVG — white fill, blue Guardian O */}
-					<svg width="340" height="60" viewBox="60 50 1180 200" fill="none" xmlns="http://www.w3.org/2000/svg">
-						<g fill="#f0f0f2">
+				<div style={{ position: "relative", marginBottom: 40 }}>
+					<svg width="280" height="48" viewBox="60 50 1180 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+						<g fill="#e2e8f0">
 							<rect x="90" y="70" width="20" height="165" />
 							<polygon points="108.73,161.20 215.73,86.39 204.27,70 97.27,144.80" />
 							<polygon points="97.51,161.36 209.51,235 220.49,218.29 108.49,144.64" />
@@ -114,15 +125,15 @@ export function AuthScreen() {
 				</div>
 
 				{/* Big rotating prompt */}
-				<div style={{ position: "relative", maxWidth: 520 }}>
+				<div style={{ position: "relative", maxWidth: 480 }}>
 					<p
 						key={promptIdx}
 						style={{
-							fontSize: 38,
+							fontSize: 34,
 							fontWeight: 300,
 							color: "#e2e8f0",
-							lineHeight: 1.3,
-							letterSpacing: "-0.5px",
+							lineHeight: 1.35,
+							letterSpacing: "-0.3px",
 							margin: 0,
 							animation: "loginFade 0.6s ease-out",
 						}}
@@ -131,10 +142,11 @@ export function AuthScreen() {
 					</p>
 					<p
 						style={{
-							fontSize: 15,
+							fontSize: 14,
 							color: "#475569",
-							marginTop: 20,
+							marginTop: 16,
 							fontWeight: 400,
+							letterSpacing: "0.2px",
 						}}
 					>
 						Your data has answers. Just ask.
@@ -142,15 +154,15 @@ export function AuthScreen() {
 				</div>
 
 				{/* Prompt dots */}
-				<div style={{ display: "flex", gap: 6, marginTop: 32 }}>
+				<div style={{ display: "flex", gap: 6, marginTop: 28 }}>
 					{PROMPTS.map((_, i) => (
 						<div
 							key={i}
 							style={{
-								width: i === promptIdx ? 24 : 6,
+								width: i === promptIdx ? 20 : 6,
 								height: 6,
 								borderRadius: 3,
-								background: i === promptIdx ? "#4A9EE8" : "rgba(255,255,255,0.08)",
+								background: i === promptIdx ? "#4A9EE8" : "rgba(255,255,255,0.06)",
 								transition: "all 0.4s cubic-bezier(0.4, 0, 0.2, 1)",
 							}}
 						/>
@@ -158,62 +170,56 @@ export function AuthScreen() {
 				</div>
 			</div>
 
-			{/* ─── RIGHT PANEL — Sign-in card ─── */}
+			{/* ─── RIGHT PANEL — Sign-in ─── */}
 			<div
 				style={{
-					width: 440,
+					width: 420,
 					display: "flex",
 					flexDirection: "column",
 					justifyContent: "center",
 					alignItems: "center",
 					padding: "40px",
-					borderLeft: "1px solid rgba(255,255,255,0.04)",
-					background: "#0c0c0f",
+					borderLeft: "1px solid rgba(255,255,255,0.06)",
+					background: "#09090b",
 				}}
 			>
-				<div style={{ width: "100%", maxWidth: 340 }}>
+				<div style={{ width: "100%", maxWidth: 320 }}>
 					{/* Header */}
 					<h2
 						style={{
-							fontSize: 22,
+							fontSize: 20,
 							fontWeight: 600,
 							color: "#f0f0f2",
-							marginBottom: 6,
+							marginBottom: 4,
+							letterSpacing: "-0.3px",
 						}}
 					>
-						Welcome back
+						Sign in
 					</h2>
 					<p
 						style={{
-							fontSize: 14,
+							fontSize: 13,
 							color: "#64748b",
-							marginBottom: 32,
+							marginBottom: 28,
 						}}
 					>
-						Sign in to continue to Kaveon
+						to continue to Kaveon
 					</p>
 
-					{/* OAuth buttons */}
+					{/* OAuth buttons — all same style */}
 					<div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
 						{/* GitHub */}
 						<button
 							type="button"
 							onClick={() => start("github")}
-							style={{
-								width: "100%",
-								display: "flex",
-								alignItems: "center",
-								justifyContent: "center",
-								gap: 10,
-								padding: "12px 16px",
-								fontSize: 14,
-								fontWeight: 500,
-								borderRadius: 10,
-								cursor: "pointer",
-								background: "#f0f0f2",
-								color: "#09090b",
-								border: "none",
-								transition: "all 0.15s",
+							style={btnBase}
+							onMouseEnter={(e) => {
+								e.currentTarget.style.background = "rgba(255,255,255,0.06)";
+								e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)";
+							}}
+							onMouseLeave={(e) => {
+								e.currentTarget.style.background = "transparent";
+								e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)";
 							}}
 						>
 							<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -226,21 +232,14 @@ export function AuthScreen() {
 						<button
 							type="button"
 							onClick={() => showComingSoon("google")}
-							style={{
-								width: "100%",
-								display: "flex",
-								alignItems: "center",
-								justifyContent: "center",
-								gap: 10,
-								padding: "12px 16px",
-								fontSize: 14,
-								fontWeight: 500,
-								borderRadius: 10,
-								cursor: "pointer",
-								background: "transparent",
-								color: "#94a3b8",
-								border: "1px solid rgba(255,255,255,0.08)",
-								transition: "all 0.15s",
+							style={btnBase}
+							onMouseEnter={(e) => {
+								e.currentTarget.style.background = "rgba(255,255,255,0.06)";
+								e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)";
+							}}
+							onMouseLeave={(e) => {
+								e.currentTarget.style.background = "transparent";
+								e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)";
 							}}
 						>
 							<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
@@ -256,21 +255,14 @@ export function AuthScreen() {
 						<button
 							type="button"
 							onClick={() => start("microsoft-entra-id")}
-							style={{
-								width: "100%",
-								display: "flex",
-								alignItems: "center",
-								justifyContent: "center",
-								gap: 10,
-								padding: "12px 16px",
-								fontSize: 14,
-								fontWeight: 500,
-								borderRadius: 10,
-								cursor: "pointer",
-								background: "transparent",
-								color: "#94a3b8",
-								border: "1px solid rgba(255,255,255,0.08)",
-								transition: "all 0.15s",
+							style={btnBase}
+							onMouseEnter={(e) => {
+								e.currentTarget.style.background = "rgba(255,255,255,0.06)";
+								e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)";
+							}}
+							onMouseLeave={(e) => {
+								e.currentTarget.style.background = "transparent";
+								e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)";
 							}}
 						>
 							<svg width="16" height="16" viewBox="0 0 21 21" aria-hidden="true">
@@ -283,17 +275,14 @@ export function AuthScreen() {
 						</button>
 					</div>
 
-					{/* Divider */}
-					<div style={{ width: "100%", height: 1, background: "rgba(255,255,255,0.06)", margin: "28px 0 20px" }} />
-
 					{/* Footer */}
-					<p style={{ fontSize: 11, color: "#334155", textAlign: "center", letterSpacing: "0.3px" }}>
+					<p style={{ fontSize: 11, color: "#334155", textAlign: "center", marginTop: 32, letterSpacing: "0.3px" }}>
 						Open source · Self-hosted · MIT License
 					</p>
 				</div>
 			</div>
 
-			{/* Animation keyframe */}
+			{/* Keyframes */}
 			<style>{`
 				@keyframes loginFade {
 					from { opacity: 0; transform: translateY(8px); }
@@ -322,11 +311,11 @@ export function AuthScreen() {
 							transform: "translate(-50%, -50%)",
 							maxWidth: 380,
 							width: "calc(100% - 40px)",
-							background: "#0c0c0f",
-							border: "1px solid rgba(255,255,255,0.06)",
+							background: "#111318",
+							border: "1px solid rgba(255,255,255,0.08)",
 							borderRadius: 14,
 							padding: "32px 28px 24px",
-							boxShadow: "0 24px 64px rgba(0,0,0,0.4)",
+							boxShadow: "0 24px 64px rgba(0,0,0,0.5)",
 							zIndex: 100,
 							textAlign: "center",
 						}}
@@ -335,7 +324,7 @@ export function AuthScreen() {
 							{toast} sign-in coming soon
 						</div>
 						<div style={{ fontSize: 13, color: "#94a3b8", lineHeight: 1.6, marginBottom: 20 }}>
-							This provider isn&rsquo;t configured yet. GitHub sign-in is available now.
+							This provider isn&rsquo;t configured yet. GitHub and Microsoft sign-in are available now.
 						</div>
 						<div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
 							<button
