@@ -35,7 +35,7 @@ export function KaveonMark({
       style={{ opacity }}
     >
       <path
-        d="M 343.68 407.88 A 124 124 0 1 0 168.32 407.88"
+        d="M 318 363.39 A 124 124 0 1 0 194 363.39"
         stroke={color}
         strokeWidth="52"
         fill="none"
