@@ -56,7 +56,7 @@ export default function AboutPage() {
         borderBottom: "1px solid rgba(255,255,255,0.05)",
       }}>
         <a href="/about" style={{ display: "flex", alignItems: "center", textDecoration: "none" }}>
-          <svg width="120" height="20" viewBox="60 50 1180 200" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ shapeRendering: "geometricPrecision" }}>
+          <svg width="140" height="24" viewBox="60 50 1180 200" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ shapeRendering: "geometricPrecision" }}>
             <g fill="#e2e8f0">
               <rect x="90" y="70" width="20" height="165" />
               <polygon points="108.73,161.20 215.73,86.39 204.27,70 97.27,144.80" />
@@ -74,7 +74,7 @@ export default function AboutPage() {
             <path d="M 966.25 215.29 A 72.5 72.5 0 1 0 893.75 215.29" fill="none" stroke="#4A9EE8" strokeWidth="20" strokeLinecap="butt" />
           </svg>
         </a>
-        <div style={{ display: "flex", alignItems: "center", gap: 32 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 36 }}>
           <a href="#features" className="about-link" style={{ fontSize: 13, color: "#888", textDecoration: "none", transition: "color 0.2s" }}>Features</a>
           <a href="/docs" target="_blank" className="about-link" style={{ fontSize: 13, color: "#888", textDecoration: "none", transition: "color 0.2s" }}>Docs</a>
           <a href="https://github.com/PruthviProdduturi/Kaveon" target="_blank" rel="noopener noreferrer" className="about-link" style={{ fontSize: 13, color: "#888", textDecoration: "none", transition: "color 0.2s" }}>GitHub</a>
@@ -108,7 +108,7 @@ export default function AboutPage() {
             }}>We translate</span>
           </h1>
           <p style={{ fontSize: 18, color: "#777", maxWidth: 540, margin: "0 auto 28px", lineHeight: 1.7 }}>
-            Connect your databases. Ask questions in natural language. Get instant answers with interactive charts — powered by a deterministic engine, not an LLM.
+            Connect your databases. Ask anything. Get instant answers with interactive charts — powered by a deterministic engine, not an LLM.
           </p>
           <div style={{ display: "flex", gap: 14, justifyContent: "center" }}>
             <a href="/" className="about-btn" style={{ padding: "16px 40px", borderRadius: 12, background: "#4A9EE8", color: "#fff", fontSize: 16, fontWeight: 600, textDecoration: "none", boxShadow: "0 4px 24px rgba(74,158,232,0.3)", transition: "all 0.2s" }}>
