@@ -762,7 +762,7 @@ interface ChartPreviewProps {
 }
 
 const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterExports }) => {
-  const { selectedTemplate, selectedDatasetId, previewOptions, sqlPreview, description, chartType, advancedOptions, cancelRunningQuery, runContext } = useChartBuilder();
+  const { selectedTemplate, selectedDatasetId, previewOptions, sqlPreview, description, chartType, advancedOptions, cancelRunningQuery, runContext, runPreviewQuery } = useChartBuilder();
   const { theme: appTheme } = useTheme();
   const isDark = appTheme === "dark";
   const echartsInstanceRef = useRef<any>(null);
@@ -1281,6 +1281,24 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
                 Cancel
               </button>
             )}
+          </div>
+        ) : sqlPreview.error ? (
+          <div className="chart-preview-empty-state" style={{ padding: 16, textAlign: 'center' }}>
+            <i className="fas fa-triangle-exclamation" style={{ fontSize: 30, color: '#f59e0b', marginBottom: 10 }} />
+            <div className="chart-preview-empty-title" style={{ color: '#b45309' }}>Couldn&apos;t load this chart</div>
+            <div style={{ fontSize: 12, color: '#64748b', marginTop: 6, maxWidth: 360, wordBreak: 'break-word', lineHeight: 1.4 }}>
+              {String(sqlPreview.error)}
+            </div>
+            <button
+              onClick={() => { void runPreviewQuery(true); }}
+              style={{
+                marginTop: 12, padding: '5px 14px', background: 'transparent',
+                border: '1px solid #cbd5e1', borderRadius: 6, cursor: 'pointer',
+                fontSize: 12, color: '#475569',
+              }}
+            >
+              Retry
+            </button>
           </div>
         ) : (
           <div className="chart-preview-empty-state">
