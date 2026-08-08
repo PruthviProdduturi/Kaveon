@@ -761,7 +761,7 @@ def get_connection_pool(database: str) -> ConnectionPool:
             if ds_type in ("postgresql", "mysql"):
                 # Try connection_string first, then individual host/port/user/password fields
                 conn_str = ds.get("connection_string", "") if ds else ""
-                info = parse_db_url(conn_str) if conn_str else {"host": "", "port": None, "user": "", "password": "", "sslmode": "require"}
+                info = parse_db_url(conn_str) if conn_str else {"host": "", "port": None, "user": "", "password": "", "sslmode": "require", "database": ""}
                 host = info["host"] or (ds.get("host", "") if ds else "")
                 port = info["port"] or (ds.get("port") if ds else None) or (5432 if ds_type == "postgresql" else 3306)
                 user = info["user"] or (ds.get("username", "") if ds else "")
@@ -769,8 +769,13 @@ def get_connection_pool(database: str) -> ConnectionPool:
                 sslmode = info["sslmode"] or (ds.get("sslmode", "require") if ds else "require")
                 if not host:
                     raise ValueError(f"No host configured for {ds_type} data source: {database}")
+                # The physical DB to connect to comes from the connection string (or an
+                # explicit db field) — NOT from `database_name`, which is just the routing
+                # label datasets reference. Decoupling these lets a source be labelled
+                # "postgres"/"trino"/etc. independent of the actual db it points at.
+                phys_db = info.get("database") or (ds.get("database") if ds else None) or actual_db
                 pool = ConnectionPool(
-                    "", actual_db, pool_size=pool_size, db_type=ds_type,
+                    "", phys_db, pool_size=pool_size, db_type=ds_type,
                     host=host, port=int(port), user=user, password=password, sslmode=sslmode,
                 )
             else:
