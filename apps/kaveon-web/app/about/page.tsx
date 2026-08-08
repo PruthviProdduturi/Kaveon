@@ -134,7 +134,7 @@ export default function AboutPage() {
       {/* ─── Footer ─── */}
       <footer style={{ textAlign: "center", padding: "24px", borderTop: "1px solid var(--border)" }}>
         <p style={{ fontSize: 12, color: "var(--text-muted)" }}>
-          © {new Date().getFullYear()} Kaveon — Built by <a href="https://github.com/PruthviProdduturi" target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)", textDecoration: "none" }}>Pruthvi Prodduturi</a>
+          © {new Date().getFullYear()} Kaveon
         </p>
       </footer>
     </div>
