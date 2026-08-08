@@ -128,7 +128,7 @@ export default function AboutPage() {
             <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#ff5f57" }} />
             <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#febc2e" }} />
             <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#28c840" }} />
-            <span style={{ flex: 1, textAlign: "center", fontSize: 12, color: "#555" }}>kaveon.vercel.app</span>
+            <span style={{ flex: 1, textAlign: "center", fontSize: 12, color: "#777" }}>kaveon.vercel.app</span>
           </div>
           <div style={{ display: "flex" }}>
             {/* Mini sidebar */}
@@ -146,11 +146,11 @@ export default function AboutPage() {
               </div>
               <div style={{ height: 1, background: "rgba(255,255,255,0.06)", margin: "8px 0" }} />
               <div style={{ fontSize: 10, color: "#444", padding: "0 8px", marginBottom: 4 }}>RECENT</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", fontSize: 11, color: "#555" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", fontSize: 11, color: "#777" }}>
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
                 COVID by country
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", fontSize: 11, color: "#555" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", fontSize: 11, color: "#777" }}>
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
                 Revenue Dashboard
               </div>
@@ -172,7 +172,7 @@ export default function AboutPage() {
                     Found <strong style={{ color: "#fff" }}>195</strong> results. Top 3: <strong style={{ color: "#fff" }}>United States</strong> (103.8M), <strong style={{ color: "#fff" }}>India</strong> (45.0M), <strong style={{ color: "#fff" }}>France</strong> (39.9M).
                   </p>
                   <div style={{ background: "#252525", borderRadius: 10, padding: "14px 18px 10px", border: "1px solid rgba(255,255,255,0.05)" }}>
-                    <div style={{ fontSize: 11, color: "#555", marginBottom: 8, fontWeight: 500 }}>Confirmed Cases by Country</div>
+                    <div style={{ fontSize: 11, color: "#777", marginBottom: 8, fontWeight: 500 }}>Confirmed Cases by Country</div>
                     <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 80 }}>
                       {[{h:80,c:"#4A9EE8"},{h:35,c:"#10b981"},{h:31,c:"#f59e0b"},{h:27,c:"#ef4444"},{h:25,c:"#8b5cf6"},{h:20,c:"#ec4899"},{h:19,c:"#06b6d4"},{h:16,c:"#f97316"},{h:15,c:"#6366f1"},{h:13,c:"#14b8a6"}].map((b,i) => (
                         <div key={i} style={{ flex: 1, height: b.h, background: b.c, borderRadius: "2px 2px 0 0", opacity: 0.85 }} />
@@ -202,7 +202,7 @@ export default function AboutPage() {
                     Peak was <strong style={{ color: "#fff" }}>January 2022</strong> at <strong style={{ color: "#fff" }}>23.4M</strong> weekly cases.
                   </p>
                   <div style={{ background: "#252525", borderRadius: 10, padding: "14px 18px 10px", border: "1px solid rgba(255,255,255,0.05)" }}>
-                    <div style={{ fontSize: 11, color: "#555", marginBottom: 8, fontWeight: 500 }}>Global New Cases (Weekly)</div>
+                    <div style={{ fontSize: 11, color: "#777", marginBottom: 8, fontWeight: 500 }}>Global New Cases (Weekly)</div>
                     <svg width="100%" height="60" viewBox="0 0 400 60" preserveAspectRatio="none">
                       <defs>
                         <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
@@ -226,7 +226,7 @@ export default function AboutPage() {
       </div>
 
       {/* ─── How It Works — LIGHT section ─── */}
-      <section ref={r3} style={{ background: "#f5f5f7", padding: "100px 24px", color: "#111" }}>
+      <section ref={r3} style={{ background: "#131313", padding: "100px 24px", color: "#e2e8f0" }}>
         <div style={{ maxWidth: 1000, margin: "0 auto" }}>
           <h2 style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: "#4A9EE8", textAlign: "center", marginBottom: 48 }}>
             How it works
@@ -239,8 +239,8 @@ export default function AboutPage() {
             ].map((s) => (
               <div key={s.n} style={{ textAlign: "center" }}>
                 <div style={{ fontSize: 56, fontWeight: 800, color: s.color, opacity: 0.2, lineHeight: 1, marginBottom: 16 }}>{s.n}</div>
-                <h3 style={{ fontSize: 22, fontWeight: 600, marginBottom: 10, color: "#111" }}>{s.title}</h3>
-                <p style={{ fontSize: 14, color: "#666", lineHeight: 1.8 }}>{s.desc}</p>
+                <h3 style={{ fontSize: 22, fontWeight: 600, marginBottom: 10, color: "#e2e8f0" }}>{s.title}</h3>
+                <p style={{ fontSize: 14, color: "#777", lineHeight: 1.8 }}>{s.desc}</p>
               </div>
             ))}
           </div>
@@ -276,7 +276,7 @@ export default function AboutPage() {
                 { title: "US New Cases", color: "#06b6d4", bars: [12,20,35,50,65,40,30,25] },
               ].map(chart => (
                 <div key={chart.title} style={{ background: "#252525", borderRadius: 10, padding: "12px 14px 8px", border: "1px solid rgba(255,255,255,0.04)" }}>
-                  <div style={{ fontSize: 10, color: "#666", marginBottom: 8 }}>{chart.title}</div>
+                  <div style={{ fontSize: 10, color: "#777", marginBottom: 8 }}>{chart.title}</div>
                   <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 50 }}>
                     {chart.bars.map((h, i) => (
                       <div key={i} style={{ flex: 1, height: h, background: chart.color, borderRadius: "2px 2px 0 0", opacity: 0.7 }} />
@@ -290,13 +290,13 @@ export default function AboutPage() {
       </Section>
 
       {/* SQL Lab Showcase — LIGHT */}
-      <Section style={{ padding: "100px 24px", background: "#f5f5f7" }}>
+      <Section style={{ padding: "100px 24px", background: "#131313" }}>
         <div style={{ maxWidth: 1100, margin: "0 auto", display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 48, alignItems: "center" }}>
-          <div style={{ background: "#1e1e1e", borderRadius: 16, border: "1px solid rgba(0,0,0,0.1)", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.15)" }}>
+          <div style={{ background: "#1e1e1e", borderRadius: 16, border: "1px solid rgba(255,255,255,0.06)", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
             <div style={{ padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", gap: 12 }}>
               <span style={{ fontSize: 12, color: "#4A9EE8", borderBottom: "2px solid #4A9EE8", paddingBottom: 8 }}>Query 1</span>
-              <span style={{ fontSize: 12, color: "#555", paddingBottom: 8 }}>Query 2</span>
-              <span style={{ fontSize: 12, color: "#555", paddingBottom: 8 }}>+ New</span>
+              <span style={{ fontSize: 12, color: "#777", paddingBottom: 8 }}>Query 2</span>
+              <span style={{ fontSize: 12, color: "#777", paddingBottom: 8 }}>+ New</span>
             </div>
             <div style={{ padding: 16 }}>
               {/* Code block */}
@@ -318,7 +318,7 @@ export default function AboutPage() {
                 <span style={{ color: "#d19a66" }}>10</span>{";"}
               </div>
               {/* Results */}
-              <div style={{ fontSize: 10, color: "#555", marginBottom: 8 }}>195 rows · 42ms · cached</div>
+              <div style={{ fontSize: 10, color: "#777", marginBottom: 8 }}>195 rows · 42ms · cached</div>
               <div style={{ background: "#161616", borderRadius: 8, overflow: "hidden" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", fontSize: 10, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                   <div style={{ padding: "6px 12px", color: "#888", fontWeight: 600 }}>country</div>
@@ -335,8 +335,8 @@ export default function AboutPage() {
           </div>
           <div>
             <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "3px", color: "#8b5cf6", marginBottom: 16 }}>SQL Lab</div>
-            <h3 style={{ fontSize: 32, fontWeight: 600, lineHeight: 1.2, marginBottom: 16, letterSpacing: "-0.5px", color: "#111" }}>VS Code in your browser</h3>
-            <p style={{ fontSize: 15, color: "#555", lineHeight: 1.8, marginBottom: 24 }}>
+            <h3 style={{ fontSize: 32, fontWeight: 600, lineHeight: 1.2, marginBottom: 16, letterSpacing: "-0.5px", color: "#e2e8f0" }}>VS Code in your browser</h3>
+            <p style={{ fontSize: 15, color: "#777", lineHeight: 1.8, marginBottom: 24 }}>
               Monaco editor with full SQL autocomplete, syntax highlighting, multi-tab sessions, query history, and result caching. Write, run, and save queries against any connected database.
             </p>
             <a href="/" style={{ fontSize: 14, color: "#4A9EE8", textDecoration: "none" }}>Open SQL Lab →</a>
@@ -349,7 +349,7 @@ export default function AboutPage() {
         <h2 style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: "#4A9EE8", textAlign: "center", marginBottom: 12 }}>
           Everything you need
         </h2>
-        <p style={{ fontSize: 17, color: "#666", textAlign: "center", marginBottom: 48 }}>
+        <p style={{ fontSize: 17, color: "#777", textAlign: "center", marginBottom: 48 }}>
           One platform. Ask questions, build charts, create dashboards, write SQL.
         </p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gridAutoRows: "auto", gap: 12 }}>
@@ -397,13 +397,13 @@ export default function AboutPage() {
       </section>
 
       {/* ─── Tech — LIGHT ─── */}
-      <section ref={r5} style={{ textAlign: "center", padding: "80px 24px", background: "#f5f5f7" }}>
+      <section ref={r5} style={{ textAlign: "center", padding: "80px 24px", background: "#131313" }}>
         <h2 style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: "#4A9EE8", marginBottom: 32 }}>
           Built with
         </h2>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center", maxWidth: 650, margin: "0 auto" }}>
           {["Next.js 15", "React 19", "TypeScript", "FastAPI", "Python 3.11", "ECharts", "PostgreSQL", "Azure", "Vercel", "Bicep IaC"].map((t) => (
-            <span key={t} style={{ padding: "10px 22px", borderRadius: 999, border: "1px solid #ddd", fontSize: 14, color: "#555", background: "#fff" }}>{t}</span>
+            <span key={t} style={{ padding: "10px 22px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.08)", fontSize: 14, color: "#777", background: "rgba(255,255,255,0.04)" }}>{t}</span>
           ))}
         </div>
       </section>
@@ -416,7 +416,7 @@ export default function AboutPage() {
           <h2 style={{ fontSize: "clamp(28px, 4vw, 42px)", fontWeight: 600, letterSpacing: "-1px", margin: "20px 0 12px" }}>
             Ready to talk to your data?
           </h2>
-          <p style={{ fontSize: 15, color: "#555", marginBottom: 36 }}>Open source · Self-hosted · MIT License</p>
+          <p style={{ fontSize: 15, color: "#777", marginBottom: 36 }}>Open source · Self-hosted · MIT License</p>
           <a href="/" className="about-btn" style={{ display: "inline-block", padding: "16px 44px", borderRadius: 12, background: "#4A9EE8", color: "#fff", fontSize: 16, fontWeight: 600, textDecoration: "none", boxShadow: "0 4px 24px rgba(74,158,232,0.3)", transition: "all 0.2s" }}>
             Get Started
           </a>
