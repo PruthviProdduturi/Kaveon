@@ -95,7 +95,7 @@ export default function AboutPage() {
 
         <div ref={r1} style={{ position: "relative" }}>
           <div style={{ marginBottom: 32 }}>
-            <KaveonMark size={88} useDirectColor />
+            <KaveonMark size={100} useDirectColor />
           </div>
           <h1 style={{ fontSize: "clamp(40px, 6vw, 72px)", fontWeight: 700, letterSpacing: "-2px", lineHeight: 1.05, margin: "0 auto 24px", maxWidth: 800 }}>
             Your data speaks.{" "}
