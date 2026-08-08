@@ -94,13 +94,13 @@ const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
             zIndex: 20,
             width: 28, height: 28,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: open ? '#e0f2fe' : 'rgba(255,255,255,0.92)',
-            border: '1px solid #e2e8f0',
+            background: open ? 'rgba(var(--accent-rgb), 0.15)' : 'var(--bg-elevated)',
+            border: '1px solid var(--border)',
             borderRadius: 6,
             cursor: 'pointer',
             boxShadow: '0 1px 4px rgba(0,0,0,0.10)',
             fontSize: 14,
-            color: open ? '#0078d4' : '#475569',
+            color: open ? 'var(--accent)' : 'var(--text-muted)',
             pointerEvents: 'auto',
           }}
         >
@@ -116,9 +116,9 @@ const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
             top: 36, right: 6,
             zIndex: 100,
             background: '#fff',
-            border: '1px solid #e2e8f0',
+            border: '1px solid var(--border)',
             borderRadius: 8,
-            boxShadow: '0 8px 24px rgba(0,0,0,0.13)',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
             minWidth: 190,
             overflow: 'hidden',
             pointerEvents: 'auto',
@@ -126,7 +126,7 @@ const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
         >
           {menuItems.map((mi, i) => {
             if (mi === DIVIDER) {
-              return <div key={i} style={{ height: 1, background: '#f1f5f9', margin: '3px 0' }} />;
+              return <div key={i} style={{ height: 1, background: 'var(--border)', margin: '3px 0' }} />;
             }
             const item = mi as any;
             return (
@@ -141,14 +141,14 @@ const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
                   background: 'transparent',
                   border: 'none', cursor: item.disabled ? 'default' : 'pointer',
                   fontSize: 13,
-                  color: item.danger ? '#ef4444' : item.disabled ? '#cbd5e1' : '#1e293b',
+                  color: item.danger ? '#ef4444' : item.disabled ? 'var(--text-faint)' : 'var(--text-primary)',
                   textAlign: 'left',
                   whiteSpace: 'nowrap',
                 }}
-                onMouseOver={(e) => { if (!item.disabled) e.currentTarget.style.background = item.danger ? '#fef2f2' : '#f8fafc'; }}
+                onMouseOver={(e) => { if (!item.disabled) e.currentTarget.style.background = item.danger ? 'rgba(239,68,68,0.1)' : 'var(--bg-hover)'; }}
                 onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; }}
               >
-                <i className={item.icon} style={{ fontSize: 12, width: 14, textAlign: 'center', color: item.danger ? '#ef4444' : item.disabled ? '#cbd5e1' : '#64748b' }} />
+                <i className={item.icon} style={{ fontSize: 12, width: 14, textAlign: 'center', color: item.danger ? '#ef4444' : item.disabled ? 'var(--text-faint)' : 'var(--text-muted)' }} />
                 {item.label}
               </button>
             );
@@ -170,24 +170,24 @@ const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
           <div
             onClick={e => e.stopPropagation()}
             style={{
-              background: '#fff', borderRadius: 12,
+              background: 'var(--bg-surface)', borderRadius: 12,
               width: '90vw', height: '85vh',
               display: 'flex', flexDirection: 'column',
               overflow: 'hidden',
               boxShadow: '0 24px 64px rgba(0,0,0,0.25)',
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '10px 14px', borderBottom: '1px solid #f1f5f9' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
               <button
                 onClick={() => setFullScreen(false)}
-                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#64748b', fontSize: 18, padding: '0 4px' }}
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 18, padding: '0 4px' }}
               >
                 <i className="fas fa-times" />
               </button>
             </div>
             <div style={{ flex: 1, padding: 16, overflow: 'hidden', position: 'relative' }}>
               {/* Note: full-screen renders placeholder — actual chart content lives in the card */}
-              <div style={{ color: '#64748b', fontSize: 13, padding: 20, textAlign: 'center' }}>
+              <div style={{ color: 'var(--text-muted)', fontSize: 13, padding: 20, textAlign: 'center' }}>
                 Full-screen view — Chart #{chartId}
               </div>
             </div>
@@ -202,13 +202,13 @@ const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
           onClick={() => setShowQuery(false)}
           style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(15,23,42,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
         >
-          <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 12, width: '70vw', maxHeight: '70vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 64px rgba(0,0,0,0.2)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', borderBottom: '1px solid #f1f5f9' }}>
-              <span style={{ fontWeight: 700, fontSize: 14, color: '#0f172a' }}>View Query</span>
-              <button onClick={() => setShowQuery(false)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#64748b', fontSize: 16 }}><i className="fas fa-times" /></button>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg-surface)', borderRadius: 12, width: '70vw', maxHeight: '70vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 64px rgba(0,0,0,0.2)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', borderBottom: '1px solid var(--border)' }}>
+              <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>View Query</span>
+              <button onClick={() => setShowQuery(false)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 16 }}><i className="fas fa-times" /></button>
             </div>
             <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
-              <pre style={{ margin: 0, fontSize: 12, lineHeight: 1.6, color: '#1e293b', background: '#f8fafc', borderRadius: 6, padding: 16, border: '1px solid #e2e8f0', whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontFamily: 'ui-monospace, monospace' }}>
+              <pre style={{ margin: 0, fontSize: 12, lineHeight: 1.6, color: 'var(--text-primary)', background: 'var(--bg-elevated)', borderRadius: 6, padding: 16, border: '1px solid var(--border)', whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontFamily: 'ui-monospace, monospace' }}>
                 {queryText || 'No query available.'}
               </pre>
             </div>
@@ -223,33 +223,33 @@ const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
           onClick={() => setShowTable(false)}
           style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(15,23,42,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
         >
-          <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 12, width: '80vw', maxHeight: '75vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 64px rgba(0,0,0,0.2)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', borderBottom: '1px solid #f1f5f9' }}>
-              <span style={{ fontWeight: 700, fontSize: 14, color: '#0f172a' }}>View as Table</span>
-              <button onClick={() => setShowTable(false)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#64748b', fontSize: 16 }}><i className="fas fa-times" /></button>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg-surface)', borderRadius: 12, width: '80vw', maxHeight: '75vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 64px rgba(0,0,0,0.2)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', borderBottom: '1px solid var(--border)' }}>
+              <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>View as Table</span>
+              <button onClick={() => setShowTable(false)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 16 }}><i className="fas fa-times" /></button>
             </div>
             <div style={{ flex: 1, overflow: 'auto' }}>
               {sqlPreview?.dataColumns?.length ? (
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                   <thead>
-                    <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                    <tr style={{ background: 'var(--bg-elevated)', borderBottom: '2px solid var(--border)' }}>
                       {sqlPreview.dataColumns.map((col: string, i: number) => (
-                        <th key={i} style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 600, color: '#475569', whiteSpace: 'nowrap', borderRight: i < sqlPreview.dataColumns.length - 1 ? '1px solid #f1f5f9' : 'none' }}>{col}</th>
+                        <th key={i} style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 600, color: 'var(--text-secondary)', whiteSpace: 'nowrap', borderRight: i < sqlPreview.dataColumns.length - 1 ? '1px solid var(--border)' : 'none' }}>{col}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {(sqlPreview.dataRows || []).slice(0, 500).map((row: any[], ri: number) => (
-                      <tr key={ri} style={{ borderBottom: '1px solid #f8fafc', background: ri % 2 === 0 ? '#fff' : '#fafafa' }}>
+                      <tr key={ri} style={{ borderBottom: '1px solid var(--border)', background: ri % 2 === 0 ? 'var(--bg-surface)' : 'var(--bg-hover)' }}>
                         {row.map((cell: any, ci: number) => (
-                          <td key={ci} style={{ padding: '6px 12px', color: '#334155', borderRight: ci < row.length - 1 ? '1px solid #f1f5f9' : 'none' }}>{cell == null ? '—' : String(cell)}</td>
+                          <td key={ci} style={{ padding: '6px 12px', color: 'var(--text-primary)', borderRight: ci < row.length - 1 ? '1px solid var(--border)' : 'none' }}>{cell == null ? '—' : String(cell)}</td>
                         ))}
                       </tr>
                     ))}
                   </tbody>
                 </table>
               ) : (
-                <div style={{ padding: 24, color: '#94a3b8', textAlign: 'center', fontSize: 13 }}>No data available.</div>
+                <div style={{ padding: 24, color: 'var(--text-muted)', textAlign: 'center', fontSize: 13 }}>No data available.</div>
               )}
             </div>
           </div>
@@ -263,18 +263,18 @@ const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
           onClick={() => setConfirmRemove(false)}
           style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(15,23,42,0.45)', backdropFilter: 'blur(2px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
         >
-          <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 12, boxShadow: '0 20px 60px rgba(0,0,0,0.18)', padding: '28px 28px 24px', width: 380, maxWidth: 'calc(100vw - 32px)' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg-surface)', borderRadius: 12, boxShadow: '0 20px 60px rgba(0,0,0,0.4)', padding: '28px 28px 24px', width: 380, maxWidth: 'calc(100vw - 32px)' }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, marginBottom: 12 }}>
-              <div style={{ width: 38, height: 38, borderRadius: 10, flexShrink: 0, background: '#fef2f2', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div style={{ width: 38, height: 38, borderRadius: 10, flexShrink: 0, background: 'rgba(239,68,68,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <i className="fas fa-trash-alt" style={{ fontSize: 16, color: '#ef4444' }} />
               </div>
               <div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a', lineHeight: 1.3 }}>Remove chart</div>
-                <div style={{ fontSize: 13, color: '#64748b', marginTop: 4, lineHeight: 1.5 }}>This chart will be removed from the dashboard.</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.3 }}>Remove chart</div>
+                <div style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.5 }}>This chart will be removed from the dashboard.</div>
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 20 }}>
-              <button onClick={() => setConfirmRemove(false)} style={{ padding: '8px 18px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 7, cursor: 'pointer', fontSize: 13, fontWeight: 500, color: '#475569' }}>Cancel</button>
+              <button onClick={() => setConfirmRemove(false)} style={{ padding: '8px 18px', background: '#f8fafc', border: '1px solid var(--border)', borderRadius: 7, cursor: 'pointer', fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)' }}>Cancel</button>
               <button onClick={() => { setConfirmRemove(false); onRemove?.(); }} style={{ padding: '8px 18px', background: '#ef4444', border: 'none', borderRadius: 7, cursor: 'pointer', fontSize: 13, fontWeight: 600, color: '#fff' }}>Remove</button>
             </div>
           </div>
