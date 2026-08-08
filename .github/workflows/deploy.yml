@@ -4,16 +4,9 @@ on:
     branches: [dev]
 
 jobs:
-  deploy-web:
-    name: Deploy Web (Vercel)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Deploy to Vercel
-        run: npx vercel --prod --yes --token ${{ secrets.VERCEL_TOKEN }}
-        env:
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+  # Web deploys via Vercel CLI manually — not on every push.
+  # We hit the 100 deploys/day free tier limit. Deploy web with:
+  #   npx vercel --prod --yes
 
   deploy-api:
     name: Deploy API (Azure)
