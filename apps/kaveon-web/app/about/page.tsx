@@ -225,30 +225,32 @@ export default function AboutPage() {
         </div>
       </div>
 
-      {/* ─── How It Works ─── */}
-      <section ref={r3} style={{ maxWidth: 1000, margin: "0 auto", padding: "0 24px 120px" }}>
-        <h2 style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: "#4A9EE8", textAlign: "center", marginBottom: 48 }}>
-          How it works
-        </h2>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 1, background: "rgba(255,255,255,0.04)", borderRadius: 16, overflow: "hidden" }}>
-          {[
-            { n: "01", title: "You ask", desc: "Type a question in natural language. \"Show revenue by region.\" \"Top 10 customers.\" \"Trend over time.\"", color: "#4A9EE8" },
-            { n: "02", title: "We parse", desc: "A deterministic NL→SQL engine matches your words against schema metadata. No LLM. No API key. Instant.", color: "#8b5cf6" },
-            { n: "03", title: "Data answers", desc: "SQL executes, the right chart type is selected, and you see data with an intelligent summary.", color: "#10b981" },
-          ].map((s) => (
-            <div key={s.n} style={{ textAlign: "center", padding: "48px 32px", background: "#171717" }}>
-              <div style={{ fontSize: 56, fontWeight: 800, color: s.color, opacity: 0.15, lineHeight: 1, marginBottom: 16 }}>{s.n}</div>
-              <h3 style={{ fontSize: 22, fontWeight: 600, marginBottom: 10 }}>{s.title}</h3>
-              <p style={{ fontSize: 14, color: "#777", lineHeight: 1.8 }}>{s.desc}</p>
-            </div>
-          ))}
+      {/* ─── How It Works — LIGHT section ─── */}
+      <section ref={r3} style={{ background: "#f5f5f7", padding: "100px 24px", color: "#111" }}>
+        <div style={{ maxWidth: 1000, margin: "0 auto" }}>
+          <h2 style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: "#4A9EE8", textAlign: "center", marginBottom: 48 }}>
+            How it works
+          </h2>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 32 }}>
+            {[
+              { n: "01", title: "You ask", desc: "Type a question in natural language. \"Show revenue by region.\" \"Top 10 customers.\" \"Trend over time.\"", color: "#4A9EE8" },
+              { n: "02", title: "We parse", desc: "A deterministic NL→SQL engine matches your words against schema metadata. No LLM. No API key. Instant.", color: "#8b5cf6" },
+              { n: "03", title: "Data answers", desc: "SQL executes, the right chart type is selected, and you see data with an intelligent summary.", color: "#10b981" },
+            ].map((s) => (
+              <div key={s.n} style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 56, fontWeight: 800, color: s.color, opacity: 0.2, lineHeight: 1, marginBottom: 16 }}>{s.n}</div>
+                <h3 style={{ fontSize: 22, fontWeight: 600, marginBottom: 10, color: "#111" }}>{s.title}</h3>
+                <p style={{ fontSize: 14, color: "#666", lineHeight: 1.8 }}>{s.desc}</p>
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 
       {/* ─── Feature Showcases — fullscreen mockups ─── */}
 
-      {/* Dashboard Showcase */}
-      <Section style={{ padding: "0 24px 120px" }}>
+      {/* Dashboard Showcase — DARK */}
+      <Section style={{ padding: "100px 24px", background: "#171717" }}>
         <div style={{ maxWidth: 1100, margin: "0 auto", display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 48, alignItems: "center" }}>
           <div>
             <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "3px", color: "#f59e0b", marginBottom: 16 }}>Dashboards</div>
@@ -287,10 +289,10 @@ export default function AboutPage() {
         </div>
       </Section>
 
-      {/* SQL Lab Showcase */}
-      <Section style={{ padding: "0 24px 120px" }}>
+      {/* SQL Lab Showcase — LIGHT */}
+      <Section style={{ padding: "100px 24px", background: "#f5f5f7" }}>
         <div style={{ maxWidth: 1100, margin: "0 auto", display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 48, alignItems: "center" }}>
-          <div style={{ background: "#252525", borderRadius: 16, border: "1px solid rgba(255,255,255,0.06)", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+          <div style={{ background: "#1e1e1e", borderRadius: 16, border: "1px solid rgba(0,0,0,0.1)", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.15)" }}>
             <div style={{ padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", gap: 12 }}>
               <span style={{ fontSize: 12, color: "#4A9EE8", borderBottom: "2px solid #4A9EE8", paddingBottom: 8 }}>Query 1</span>
               <span style={{ fontSize: 12, color: "#555", paddingBottom: 8 }}>Query 2</span>
@@ -333,8 +335,8 @@ export default function AboutPage() {
           </div>
           <div>
             <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "3px", color: "#8b5cf6", marginBottom: 16 }}>SQL Lab</div>
-            <h3 style={{ fontSize: 32, fontWeight: 600, lineHeight: 1.2, marginBottom: 16, letterSpacing: "-0.5px" }}>VS Code in your browser</h3>
-            <p style={{ fontSize: 15, color: "#777", lineHeight: 1.8, marginBottom: 24 }}>
+            <h3 style={{ fontSize: 32, fontWeight: 600, lineHeight: 1.2, marginBottom: 16, letterSpacing: "-0.5px", color: "#111" }}>VS Code in your browser</h3>
+            <p style={{ fontSize: 15, color: "#555", lineHeight: 1.8, marginBottom: 24 }}>
               Monaco editor with full SQL autocomplete, syntax highlighting, multi-tab sessions, query history, and result caching. Write, run, and save queries against any connected database.
             </p>
             <a href="/" style={{ fontSize: 14, color: "#4A9EE8", textDecoration: "none" }}>Open SQL Lab →</a>
@@ -342,7 +344,8 @@ export default function AboutPage() {
         </div>
       </Section>
 
-      <section id="features" ref={r4} style={{ maxWidth: 1100, margin: "0 auto", padding: "0 24px 120px" }}>
+      <section id="features" ref={r4} style={{ padding: "100px 24px", background: "#171717" }}>
+        <div style={{ maxWidth: 1100, margin: "0 auto" }}>
         <h2 style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: "#4A9EE8", textAlign: "center", marginBottom: 12 }}>
           Everything you need
         </h2>
@@ -390,16 +393,17 @@ export default function AboutPage() {
             <p style={{ fontSize: 14, color: "#888", lineHeight: 1.8 }}>Your infrastructure, your data, your rules. OAuth, RBAC, encrypted secrets. MIT licensed.</p>
           </div>
         </div>
+        </div>
       </section>
 
-      {/* ─── Tech ─── */}
-      <section ref={r5} style={{ textAlign: "center", padding: "0 24px 120px" }}>
+      {/* ─── Tech — LIGHT ─── */}
+      <section ref={r5} style={{ textAlign: "center", padding: "80px 24px", background: "#f5f5f7" }}>
         <h2 style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: "#4A9EE8", marginBottom: 32 }}>
           Built with
         </h2>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center", maxWidth: 650, margin: "0 auto" }}>
           {["Next.js 15", "React 19", "TypeScript", "FastAPI", "Python 3.11", "ECharts", "PostgreSQL", "Azure", "Vercel", "Bicep IaC"].map((t) => (
-            <span key={t} style={{ padding: "10px 22px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.06)", fontSize: 14, color: "#777", background: "rgba(255,255,255,0.02)" }}>{t}</span>
+            <span key={t} style={{ padding: "10px 22px", borderRadius: 999, border: "1px solid #ddd", fontSize: 14, color: "#555", background: "#fff" }}>{t}</span>
           ))}
         </div>
       </section>
