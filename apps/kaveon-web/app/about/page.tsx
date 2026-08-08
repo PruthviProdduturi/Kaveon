@@ -35,7 +35,8 @@ export default function AboutPage() {
   const r6 = useFadeIn(0);
 
   return (
-    <div style={{ background: "#171717", color: "#f5f5f5", minHeight: "100vh", overflowX: "hidden" }}>
+    <div style={{ background: "#171717", color: "#f5f5f5", overflowX: "hidden" }}>
+      <style>{`html, body { height: auto !important; min-height: 0 !important; overflow: visible !important; background: #171717 !important; }`}</style>
 
       {/* ─── CSS ─── */}
       <style>{`
