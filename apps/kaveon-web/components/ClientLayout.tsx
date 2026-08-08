@@ -84,8 +84,8 @@ export function ClientLayout({ children }: ClientLayoutProps) {
     })();
   }, [isAuthenticated]);
 
-  // Public documentation — render on its own (no app sidebar, no auth gate).
-  if (pathname === "/docs" || pathname?.startsWith("/docs/")) return <>{children}</>;
+  // Public pages — render on their own (no app sidebar, no auth gate).
+  if (pathname === "/about" || pathname === "/docs" || pathname?.startsWith("/docs/")) return <>{children}</>;
 
   // Still checking auth — render nothing (avoids white flash before login)
   if (isConnecting) return null;
