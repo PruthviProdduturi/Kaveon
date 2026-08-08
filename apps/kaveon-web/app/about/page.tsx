@@ -97,7 +97,7 @@ export default function AboutPage() {
           <div style={{ marginBottom: 20 }}>
             <KaveonMark size={100} useDirectColor />
           </div>
-          <h1 style={{ fontSize: "clamp(40px, 6vw, 72px)", fontWeight: 700, letterSpacing: "-2px", lineHeight: 1.05, margin: "0 auto 24px", maxWidth: 800 }}>
+          <h1 style={{ fontSize: "clamp(40px, 6vw, 72px)", fontWeight: 700, letterSpacing: "-2px", lineHeight: 1.05, margin: "0 auto 16px", maxWidth: 800 }}>
             Your data speaks.{" "}
             <span style={{
               background: "linear-gradient(135deg, #4A9EE8, #8b5cf6, #4A9EE8)",
@@ -107,7 +107,7 @@ export default function AboutPage() {
               WebkitTextFillColor: "transparent",
             }}>We translate</span>
           </h1>
-          <p style={{ fontSize: 18, color: "#777", maxWidth: 540, margin: "0 auto 44px", lineHeight: 1.7 }}>
+          <p style={{ fontSize: 18, color: "#777", maxWidth: 540, margin: "0 auto 28px", lineHeight: 1.7 }}>
             Ask a question in plain English. Kaveon generates SQL, executes it, picks the right chart, and explains the answer. No API keys. No LLM costs.
           </p>
           <div style={{ display: "flex", gap: 14, justifyContent: "center" }}>
