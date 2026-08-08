@@ -89,38 +89,77 @@ export default function AboutPage() {
             <span style={{ flex: 1, textAlign: "center", fontSize: 12, color: "#666" }}>kaveon.vercel.app</span>
           </div>
           {/* Conversation */}
-          <div style={{ padding: "32px 28px" }}>
-            {/* User */}
-            <div style={{ display: "flex", gap: 12, marginBottom: 24, justifyContent: "flex-end" }}>
-              <div style={{ background: "#4A9EE8", color: "#fff", padding: "12px 18px", borderRadius: "16px 4px 16px 16px", fontSize: 15, maxWidth: "70%" }}>
+          <div style={{ padding: "28px" }}>
+            {/* User message 1 */}
+            <div style={{ display: "flex", gap: 10, marginBottom: 20, justifyContent: "flex-end" }}>
+              <div style={{ background: "#4A9EE8", color: "#fff", padding: "10px 16px", borderRadius: "14px 4px 14px 14px", fontSize: 14 }}>
                 Show confirmed cases by country
               </div>
+              <div style={{ width: 26, height: 26, borderRadius: "50%", background: "linear-gradient(135deg, #6db3ed, #2d7dd2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "#fff", flexShrink: 0 }}>P</div>
             </div>
-            {/* Assistant */}
-            <div style={{ display: "flex", gap: 12 }}>
-              <div style={{ width: 28, height: 28, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <KaveonMark size={22} useDirectColor />
+            {/* Kaveon response 1 */}
+            <div style={{ display: "flex", gap: 10, marginBottom: 24 }}>
+              <div style={{ width: 26, height: 26, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <KaveonMark size={20} useDirectColor />
               </div>
               <div style={{ flex: 1 }}>
-                <p style={{ fontSize: 14, color: "#ccc", lineHeight: 1.7, margin: "0 0 16px" }}>
-                  Found <strong style={{ color: "#fff" }}>195</strong> results. Top 3: <strong style={{ color: "#fff" }}>United States</strong> (103.8M), <strong style={{ color: "#fff" }}>India</strong> (45.0M), <strong style={{ color: "#fff" }}>France</strong> (39.9M).
+                <p style={{ fontSize: 13.5, color: "#bbb", lineHeight: 1.7, margin: "0 0 14px" }}>
+                  Found <strong style={{ color: "#fff" }}>195</strong> results for confirmed by country. Top 3: <strong style={{ color: "#fff" }}>United States</strong> (103.8M), <strong style={{ color: "#fff" }}>India</strong> (45.0M), <strong style={{ color: "#fff" }}>France</strong> (39.9M).
                 </p>
-                {/* Chart visualization */}
-                <div style={{ background: "#222", borderRadius: 12, padding: "20px 24px 16px", border: "1px solid rgba(255,255,255,0.06)" }}>
-                  <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 120 }}>
-                    {[100, 43, 38, 33, 31, 24, 23, 20, 18, 16].map((h, i) => (
-                      <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-                        <div style={{ width: "100%", height: `${h * 1.1}px`, background: i === 0 ? "#4A9EE8" : `rgba(74,158,232,${0.7 - i * 0.06})`, borderRadius: "3px 3px 0 0" }} />
-                      </div>
+                {/* Chart */}
+                <div style={{ background: "#1e1e1e", borderRadius: 12, padding: "16px 20px 12px", border: "1px solid rgba(255,255,255,0.06)" }}>
+                  <div style={{ fontSize: 12, color: "#666", marginBottom: 10, fontWeight: 500 }}>Confirmed Cases by Country</div>
+                  <div style={{ display: "flex", alignItems: "flex-end", gap: 5, height: 100 }}>
+                    {[
+                      { h: 100, c: "#4A9EE8" }, { h: 43, c: "#10b981" }, { h: 38, c: "#f59e0b" },
+                      { h: 33, c: "#ef4444" }, { h: 31, c: "#8b5cf6" }, { h: 24, c: "#ec4899" },
+                      { h: 23, c: "#06b6d4" }, { h: 20, c: "#f97316" }, { h: 18, c: "#6366f1" }, { h: 16, c: "#14b8a6" },
+                    ].map((b, i) => (
+                      <div key={i} style={{ flex: 1, height: `${b.h}px`, background: b.c, borderRadius: "3px 3px 0 0", opacity: 0.85 }} />
                     ))}
                   </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 10, color: "#555" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, fontSize: 9, color: "#555" }}>
                     <span>US</span><span>IN</span><span>FR</span><span>DE</span><span>BR</span><span>JP</span><span>KR</span><span>IT</span><span>UK</span><span>RU</span>
                   </div>
                 </div>
-                <p style={{ fontSize: 12, color: "#555", marginTop: 12 }}>
-                  Want me to show just the top 10 or filter by region?
+                <div style={{ fontSize: 12, color: "#444", marginTop: 10 }}>
+                  Want me to show just the <span style={{ color: "#4A9EE8" }}>top 10</span> or filter by <span style={{ color: "#4A9EE8" }}>region</span>?
+                </div>
+              </div>
+            </div>
+            {/* User message 2 */}
+            <div style={{ display: "flex", gap: 10, marginBottom: 20, justifyContent: "flex-end" }}>
+              <div style={{ background: "#4A9EE8", color: "#fff", padding: "10px 16px", borderRadius: "14px 4px 14px 14px", fontSize: 14 }}>
+                Trend of new cases over time
+              </div>
+              <div style={{ width: 26, height: 26, borderRadius: "50%", background: "linear-gradient(135deg, #6db3ed, #2d7dd2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "#fff", flexShrink: 0 }}>P</div>
+            </div>
+            {/* Kaveon response 2 */}
+            <div style={{ display: "flex", gap: 10 }}>
+              <div style={{ width: 26, height: 26, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <KaveonMark size={20} useDirectColor />
+              </div>
+              <div style={{ flex: 1 }}>
+                <p style={{ fontSize: 13.5, color: "#bbb", lineHeight: 1.7, margin: "0 0 14px" }}>
+                  Here&rsquo;s the global trend. Peak was in <strong style={{ color: "#fff" }}>January 2022</strong> at <strong style={{ color: "#fff" }}>23.4M</strong> weekly cases.
                 </p>
+                {/* Line chart */}
+                <div style={{ background: "#1e1e1e", borderRadius: 12, padding: "16px 20px 12px", border: "1px solid rgba(255,255,255,0.06)" }}>
+                  <div style={{ fontSize: 12, color: "#666", marginBottom: 10, fontWeight: 500 }}>Global New Cases (Weekly)</div>
+                  <svg width="100%" height="80" viewBox="0 0 400 80" preserveAspectRatio="none">
+                    <defs>
+                      <linearGradient id="lineGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#4A9EE8" stopOpacity="0.3" />
+                        <stop offset="100%" stopColor="#4A9EE8" stopOpacity="0" />
+                      </linearGradient>
+                    </defs>
+                    <path d="M0,75 C20,74 40,72 60,70 C80,68 100,65 120,55 C140,45 160,30 180,35 C200,40 220,50 240,20 C260,5 270,8 280,15 C300,25 320,35 340,40 C360,42 380,45 400,48" fill="url(#lineGrad)" stroke="none" />
+                    <path d="M0,75 C20,74 40,72 60,70 C80,68 100,65 120,55 C140,45 160,30 180,35 C200,40 220,50 240,20 C260,5 270,8 280,15 C300,25 320,35 340,40 C360,42 380,45 400,48" fill="none" stroke="#4A9EE8" strokeWidth="2" />
+                  </svg>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#555", marginTop: 4 }}>
+                    <span>2020</span><span>2021</span><span>2022</span><span>2023</span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
