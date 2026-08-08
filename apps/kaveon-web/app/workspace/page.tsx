@@ -2,7 +2,6 @@
 
 import React, { useEffect, useState, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { API_BASE } from "../../config";
 import { useAuth } from "../../auth/useAuth";
 import { useSetup } from "../../components/ClientLayout";
 import { msalFetch } from "../../utils/msalFetch";
@@ -101,7 +100,7 @@ export default function WorkspacePage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await msalFetch(`${API_BASE}${tab.endpoint}`);
+      const res = await msalFetch(tab.endpoint);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const arr: WorkspaceItem[] = Array.isArray(data) ? data : Array.isArray(data.result) ? data.result : Array.isArray(data.items) ? data.items : [];
