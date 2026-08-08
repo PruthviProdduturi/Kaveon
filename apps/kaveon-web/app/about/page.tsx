@@ -36,7 +36,7 @@ export default function AboutPage() {
 
   return (
     <div style={{ background: "#171717", color: "#f5f5f5", overflowX: "hidden" }}>
-      <style>{`html, body { height: auto !important; min-height: 0 !important; overflow: visible !important; background: #171717 !important; }`}</style>
+      <style>{`html, body { height: auto !important; min-height: 0 !important; overflow-x: hidden !important; overflow-y: auto !important; background: #171717 !important; } body > div { overflow: visible !important; } main { max-width: none !important; padding: 0 !important; }`}</style>
 
       {/* ─── CSS ─── */}
       <style>{`
