@@ -153,6 +153,7 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
         try:
             history_svc.create_history({
                 "sql_text": sql, "duration_ms": duration_ms,
+                "database_name": database,
                 "row_count": result.get("row_count", 0), "status": "success",
                 "dataset_id": int(dataset_id) if dataset_id else None,
                 "trigger_source": trigger_source,
@@ -175,6 +176,7 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
         try:
             history_svc.create_history({
                 "sql_text": sql, "duration_ms": duration_ms,
+                "database_name": database,
                 "row_count": 0, "status": "error",
                 "error_message": str(e),
                 "dataset_id": int(dataset_id) if dataset_id else None,
@@ -212,7 +214,8 @@ def switch_database(data: SwitchDatabaseBody, user: str = Depends(require_auth))
 @router.get("/lab/query-history")
 def get_query_history(response: Response, limit: int = Query(default=50), user: str = Depends(require_auth)):
     response.headers.update(NO_CACHE)
-    return history_svc.list_history("all", limit)
+    # Scope to the requesting user — never leak other users' SQL history.
+    return history_svc.list_history(user, limit)
 
 
 @router.delete("/lab/query-history")
@@ -269,6 +272,7 @@ def get_distinct_values(
         try:
             history_svc.create_history({
                 "sql_text": sql.strip(), "duration_ms": duration_ms,
+                "database_name": database,
                 "row_count": len(values), "status": "success",
                 "trigger_source": "dataset-filter-values",
                 "tables_used": json.dumps([f"{schema}.{table}"]),
@@ -286,6 +290,7 @@ def get_distinct_values(
         try:
             history_svc.create_history({
                 "sql_text": error_sql, "duration_ms": duration_ms,
+                "database_name": database,
                 "row_count": 0, "status": "error", "error_message": str(e),
                 "trigger_source": "dataset-filter-values",
                 "tables_used": json.dumps([f"{schema}.{table}"]),
