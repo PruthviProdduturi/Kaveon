@@ -21,6 +21,11 @@ function useFadeIn(delay = 0) {
   return ref;
 }
 
+function Section({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+  const ref = useFadeIn();
+  return <div ref={ref} style={style}>{children}</div>;
+}
+
 export default function AboutPage() {
   const r1 = useFadeIn(0);
   const r2 = useFadeIn(100);
