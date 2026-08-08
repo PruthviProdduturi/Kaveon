@@ -98,7 +98,7 @@ export default function AboutPage() {
             <KaveonMark size={100} useDirectColor />
           </div>
           <h1 style={{ fontSize: "clamp(36px, 5vw, 60px)", fontWeight: 700, letterSpacing: "-2px", lineHeight: 1.1, margin: "0 auto 16px", maxWidth: 900, whiteSpace: "nowrap" }}>
-            Talk to your
+            Talk to your{" "}
             <span style={{
               background: "linear-gradient(135deg, #4A9EE8, #8b5cf6, #4A9EE8)",
               backgroundSize: "200% 200%",
