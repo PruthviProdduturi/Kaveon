@@ -98,14 +98,14 @@ export default function AboutPage() {
             <KaveonMark size={100} useDirectColor />
           </div>
           <h1 style={{ fontSize: "clamp(36px, 5vw, 60px)", fontWeight: 700, letterSpacing: "-2px", lineHeight: 1.1, margin: "0 auto 16px", maxWidth: 900, whiteSpace: "nowrap" }}>
-            Your data speaks.{" "}
+            Talk to your
             <span style={{
               background: "linear-gradient(135deg, #4A9EE8, #8b5cf6, #4A9EE8)",
               backgroundSize: "200% 200%",
               animation: "gradientShift 4s ease infinite",
               WebkitBackgroundClip: "text",
               WebkitTextFillColor: "transparent",
-            }}>We translate</span>
+            }}>data</span>
           </h1>
           <p style={{ fontSize: 18, color: "#777", maxWidth: 540, margin: "0 auto 28px", lineHeight: 1.7 }}>
             Connect your databases. Ask anything. Get instant answers with interactive charts — powered by a deterministic engine, not an LLM.
