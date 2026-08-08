@@ -3,7 +3,6 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "../../auth/useAuth";
-import { useSetup } from "../../components/ClientLayout";
 import { msalFetch } from "../../utils/msalFetch";
 
 type TabKey = "dashboards" | "charts" | "datasets" | "queries";
@@ -74,7 +73,6 @@ export default function WorkspacePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { isAuthenticated, account } = useAuth();
-  const { isSetupOk } = useSetup();
 
   const rawTab = searchParams.get("tab") as TabKey | null;
   const activeTab: TabKey = TABS.some((t) => t.key === rawTab) ? rawTab! : "dashboards";
@@ -96,7 +94,7 @@ export default function WorkspacePage() {
   };
 
   const load = useCallback(async () => {
-    if (!isAuthenticated || isSetupOk !== true) return;
+    if (!isAuthenticated) return;
     setLoading(true);
     setError(null);
     try {
@@ -110,7 +108,7 @@ export default function WorkspacePage() {
     } finally {
       setLoading(false);
     }
-  }, [isAuthenticated, isSetupOk, tab.endpoint, tab.label]);
+  }, [isAuthenticated, tab.endpoint, tab.label]);
 
   useEffect(() => { void load(); }, [load]);
 
