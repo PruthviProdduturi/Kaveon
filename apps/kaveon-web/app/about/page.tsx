@@ -35,7 +35,7 @@ export default function AboutPage() {
   const r6 = useFadeIn(0);
 
   return (
-    <div style={{ background: "#111111", color: "#f5f5f5", minHeight: "100vh", overflowX: "hidden" }}>
+    <div style={{ background: "#171717", color: "#f5f5f5", minHeight: "100vh", overflowX: "hidden" }}>
 
       {/* ─── CSS ─── */}
       <style>{`
@@ -123,7 +123,7 @@ export default function AboutPage() {
 
       {/* ─── Product Demo ─── */}
       <div ref={r2} style={{ maxWidth: 920, margin: "0 auto", padding: "0 24px 100px" }}>
-        <div style={{ background: "linear-gradient(180deg, #141414, #1a1a1a)", borderRadius: 20, border: "1px solid rgba(255,255,255,0.08)", overflow: "hidden", boxShadow: "0 40px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.03)" }}>
+        <div style={{ background: "linear-gradient(180deg, #141414, #252525)", borderRadius: 20, border: "1px solid rgba(255,255,255,0.08)", overflow: "hidden", boxShadow: "0 40px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.03)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)" }}>
             <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#ff5f57" }} />
             <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#febc2e" }} />
@@ -171,7 +171,7 @@ export default function AboutPage() {
                   <p style={{ fontSize: 13, color: "#bbb", lineHeight: 1.7, margin: "0 0 12px" }}>
                     Found <strong style={{ color: "#fff" }}>195</strong> results. Top 3: <strong style={{ color: "#fff" }}>United States</strong> (103.8M), <strong style={{ color: "#fff" }}>India</strong> (45.0M), <strong style={{ color: "#fff" }}>France</strong> (39.9M).
                   </p>
-                  <div style={{ background: "#1e1e1e", borderRadius: 10, padding: "14px 18px 10px", border: "1px solid rgba(255,255,255,0.05)" }}>
+                  <div style={{ background: "#252525", borderRadius: 10, padding: "14px 18px 10px", border: "1px solid rgba(255,255,255,0.05)" }}>
                     <div style={{ fontSize: 11, color: "#555", marginBottom: 8, fontWeight: 500 }}>Confirmed Cases by Country</div>
                     <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 80 }}>
                       {[{h:80,c:"#4A9EE8"},{h:35,c:"#10b981"},{h:31,c:"#f59e0b"},{h:27,c:"#ef4444"},{h:25,c:"#8b5cf6"},{h:20,c:"#ec4899"},{h:19,c:"#06b6d4"},{h:16,c:"#f97316"},{h:15,c:"#6366f1"},{h:13,c:"#14b8a6"}].map((b,i) => (
@@ -201,7 +201,7 @@ export default function AboutPage() {
                   <p style={{ fontSize: 13, color: "#bbb", lineHeight: 1.7, margin: "0 0 12px" }}>
                     Peak was <strong style={{ color: "#fff" }}>January 2022</strong> at <strong style={{ color: "#fff" }}>23.4M</strong> weekly cases.
                   </p>
-                  <div style={{ background: "#1e1e1e", borderRadius: 10, padding: "14px 18px 10px", border: "1px solid rgba(255,255,255,0.05)" }}>
+                  <div style={{ background: "#252525", borderRadius: 10, padding: "14px 18px 10px", border: "1px solid rgba(255,255,255,0.05)" }}>
                     <div style={{ fontSize: 11, color: "#555", marginBottom: 8, fontWeight: 500 }}>Global New Cases (Weekly)</div>
                     <svg width="100%" height="60" viewBox="0 0 400 60" preserveAspectRatio="none">
                       <defs>
@@ -236,7 +236,7 @@ export default function AboutPage() {
             { n: "02", title: "We parse", desc: "A deterministic NL→SQL engine matches your words against schema metadata. No LLM. No API key. Instant.", color: "#8b5cf6" },
             { n: "03", title: "Data answers", desc: "SQL executes, the right chart type is selected, and you see data with an intelligent summary.", color: "#10b981" },
           ].map((s) => (
-            <div key={s.n} style={{ textAlign: "center", padding: "48px 32px", background: "#111111" }}>
+            <div key={s.n} style={{ textAlign: "center", padding: "48px 32px", background: "#171717" }}>
               <div style={{ fontSize: 56, fontWeight: 800, color: s.color, opacity: 0.15, lineHeight: 1, marginBottom: 16 }}>{s.n}</div>
               <h3 style={{ fontSize: 22, fontWeight: 600, marginBottom: 10 }}>{s.title}</h3>
               <p style={{ fontSize: 14, color: "#777", lineHeight: 1.8 }}>{s.desc}</p>
@@ -258,7 +258,7 @@ export default function AboutPage() {
             </p>
             <a href="/" style={{ fontSize: 14, color: "#4A9EE8", textDecoration: "none" }}>Try it →</a>
           </div>
-          <div style={{ background: "#1a1a1a", borderRadius: 16, border: "1px solid rgba(255,255,255,0.06)", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+          <div style={{ background: "#252525", borderRadius: 16, border: "1px solid rgba(255,255,255,0.06)", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
             <div style={{ padding: "12px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <span style={{ fontSize: 13, fontWeight: 600, color: "#ddd" }}>COVID-19 · Trends Over Time</span>
               <div style={{ display: "flex", gap: 6 }}>
@@ -273,7 +273,7 @@ export default function AboutPage() {
                 { title: "New Deaths", color: "#ef4444", bars: [15,25,40,60,45,30,20,15] },
                 { title: "US New Cases", color: "#06b6d4", bars: [12,20,35,50,65,40,30,25] },
               ].map(chart => (
-                <div key={chart.title} style={{ background: "#1a1a1a", borderRadius: 10, padding: "12px 14px 8px", border: "1px solid rgba(255,255,255,0.04)" }}>
+                <div key={chart.title} style={{ background: "#252525", borderRadius: 10, padding: "12px 14px 8px", border: "1px solid rgba(255,255,255,0.04)" }}>
                   <div style={{ fontSize: 10, color: "#666", marginBottom: 8 }}>{chart.title}</div>
                   <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 50 }}>
                     {chart.bars.map((h, i) => (
@@ -290,7 +290,7 @@ export default function AboutPage() {
       {/* SQL Lab Showcase */}
       <Section style={{ padding: "0 24px 120px" }}>
         <div style={{ maxWidth: 1100, margin: "0 auto", display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 48, alignItems: "center" }}>
-          <div style={{ background: "#1a1a1a", borderRadius: 16, border: "1px solid rgba(255,255,255,0.06)", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+          <div style={{ background: "#252525", borderRadius: 16, border: "1px solid rgba(255,255,255,0.06)", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
             <div style={{ padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", gap: 12 }}>
               <span style={{ fontSize: 12, color: "#4A9EE8", borderBottom: "2px solid #4A9EE8", paddingBottom: 8 }}>Query 1</span>
               <span style={{ fontSize: 12, color: "#555", paddingBottom: 8 }}>Query 2</span>
