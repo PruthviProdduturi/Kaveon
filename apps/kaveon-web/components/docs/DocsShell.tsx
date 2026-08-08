@@ -94,7 +94,7 @@ export function DocsShell({ children }: { children: React.ReactNode }) {
         <aside className="docs-sidebar">
           <Link href="/" className="docs-brand">
             <svg width="100" height="18" viewBox="60 50 1180 200" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ shapeRendering: "geometricPrecision" }}>
-              <g fill="currentColor">
+              <g fill="var(--text-primary, #e2e8f0)">
                 <rect x="90" y="70" width="20" height="165" />
                 <polygon points="108.73,161.20 215.73,86.39 204.27,70 97.27,144.80" />
                 <polygon points="97.51,161.36 209.51,235 220.49,218.29 108.49,144.64" />
