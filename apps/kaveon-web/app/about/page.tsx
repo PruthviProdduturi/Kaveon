@@ -51,7 +51,7 @@ export default function AboutPage() {
       </nav>
 
       {/* ─── Hero ─── */}
-      <section style={{ position: "relative", textAlign: "center", paddingTop: 180, paddingBottom: 120, overflow: "hidden" }}>
+      <section style={{ position: "relative", textAlign: "center", paddingTop: 120, paddingBottom: 80, overflow: "hidden" }}>
         {/* Gradient orbs */}
         <div style={{ position: "absolute", top: -200, left: "20%", width: 600, height: 600, borderRadius: "50%", background: "radial-gradient(circle, rgba(74,158,232,0.12) 0%, transparent 70%)", pointerEvents: "none" }} />
         <div style={{ position: "absolute", top: -100, right: "10%", width: 400, height: 400, borderRadius: "50%", background: "radial-gradient(circle, rgba(139,92,246,0.08) 0%, transparent 70%)", pointerEvents: "none" }} />
@@ -79,7 +79,7 @@ export default function AboutPage() {
       </section>
 
       {/* ─── Demo ─── */}
-      <Section style={{ maxWidth: 800, margin: "0 auto", padding: "0 24px 140px" }}>
+      <Section style={{ maxWidth: 800, margin: "0 auto", padding: "0 24px 80px" }}>
         <div style={{ background: "#1a1a1a", borderRadius: 20, border: "1px solid rgba(255,255,255,0.08)", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
           {/* Title bar */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "14px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
@@ -167,11 +167,11 @@ export default function AboutPage() {
       </Section>
 
       {/* ─── How It Works ─── */}
-      <Section style={{ maxWidth: 1000, margin: "0 auto", padding: "0 24px 140px" }}>
-        <h2 style={{ fontSize: 13, fontWeight: 600, textTransform: "uppercase", letterSpacing: "3px", color: "#4A9EE8", textAlign: "center", marginBottom: 60 }}>
+      <Section style={{ maxWidth: 1000, margin: "0 auto", padding: "0 24px 80px" }}>
+        <h2 style={{ fontSize: 13, fontWeight: 600, textTransform: "uppercase", letterSpacing: "3px", color: "#4A9EE8", textAlign: "center", marginBottom: 32 }}>
           How it works
         </h2>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 48 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 32 }}>
           {[
             { n: "01", title: "You ask", desc: "Type a question in natural language. \"Show revenue by region.\" \"Top 10 customers.\" \"Trend over time.\"" },
             { n: "02", title: "We parse", desc: "A deterministic NL→SQL engine matches your words against schema metadata. No LLM. No API key. Instant." },
@@ -187,11 +187,11 @@ export default function AboutPage() {
       </Section>
 
       {/* ─── Features ─── */}
-      <Section style={{ maxWidth: 1100, margin: "0 auto", padding: "0 24px 140px" }}>
+      <Section style={{ maxWidth: 1100, margin: "0 auto", padding: "0 24px 80px" }}>
         <h2 style={{ fontSize: 13, fontWeight: 600, textTransform: "uppercase", letterSpacing: "3px", color: "#4A9EE8", textAlign: "center", marginBottom: 16 }}>
           Everything you need
         </h2>
-        <p style={{ fontSize: 18, color: "#888", textAlign: "center", marginBottom: 60, maxWidth: 500, marginLeft: "auto", marginRight: "auto" }}>
+        <p style={{ fontSize: 18, color: "#888", textAlign: "center", marginBottom: 32, maxWidth: 500, marginLeft: "auto", marginRight: "auto" }}>
           One platform. Ask questions, build charts, create dashboards, write SQL.
         </p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
@@ -212,7 +212,7 @@ export default function AboutPage() {
       </Section>
 
       {/* ─── Tech ─── */}
-      <Section style={{ textAlign: "center", padding: "0 24px 140px" }}>
+      <Section style={{ textAlign: "center", padding: "0 24px 80px" }}>
         <h2 style={{ fontSize: 13, fontWeight: 600, textTransform: "uppercase", letterSpacing: "3px", color: "#4A9EE8", marginBottom: 32 }}>
           Built with
         </h2>
@@ -224,14 +224,14 @@ export default function AboutPage() {
       </Section>
 
       {/* ─── CTA ─── */}
-      <section style={{ textAlign: "center", padding: "100px 24px 120px", position: "relative" }}>
+      <section style={{ textAlign: "center", padding: "60px 24px 80px", position: "relative" }}>
         <div style={{ position: "absolute", bottom: 0, left: "50%", transform: "translateX(-50%)", width: 800, height: 400, borderRadius: "50%", background: "radial-gradient(circle, rgba(74,158,232,0.08) 0%, transparent 70%)", pointerEvents: "none" }} />
         <div style={{ position: "relative" }}>
           <KaveonMark size={48} useDirectColor />
-          <h2 style={{ fontSize: 40, fontWeight: 600, letterSpacing: "-1px", margin: "24px 0 16px" }}>
+          <h2 style={{ fontSize: 40, fontWeight: 600, letterSpacing: "-1px", margin: "20px 0 12px" }}>
             Ready to talk to your data?
           </h2>
-          <p style={{ fontSize: 16, color: "#666", marginBottom: 40 }}>Open source · Self-hosted · MIT License</p>
+          <p style={{ fontSize: 16, color: "#666", marginBottom: 32 }}>Open source · Self-hosted · MIT License</p>
           <a href="/" style={{ padding: "16px 40px", borderRadius: 12, background: "#4A9EE8", color: "#fff", fontSize: 16, fontWeight: 500, textDecoration: "none", boxShadow: "0 4px 20px rgba(74,158,232,0.3)" }}>
             Get Started
           </a>
