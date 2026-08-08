@@ -756,26 +756,34 @@ def get_connection_pool(database: str) -> ConnectionPool:
             ds = _resolve_data_source(database)
             ds_type = _map_ds_type(ds.get("type") if ds else None)
             pool_size = settings.MAX_POOL_SIZE_DATAWAREHOUSE
+            # Use the resolved database_name for the pool key (not the passed ID)
+            actual_db = (ds.get("database_name") if ds else None) or database
             if ds_type in ("postgresql", "mysql"):
-                # e.g. a registered Neon / Supabase / PlanetScale source. The
-                # connection URL (with credentials) lives in connection_string.
-                info = parse_db_url(ds.get("connection_string", "") if ds else "")
-                if not info["host"]:
-                    raise ValueError(f"Invalid {ds_type} connection string for data source: {database}")
+                # Try connection_string first, then individual host/port/user/password fields
+                conn_str = ds.get("connection_string", "") if ds else ""
+                info = parse_db_url(conn_str) if conn_str else {"host": "", "port": None, "user": "", "password": "", "sslmode": "require"}
+                host = info["host"] or (ds.get("host", "") if ds else "")
+                port = info["port"] or (ds.get("port") if ds else None) or (5432 if ds_type == "postgresql" else 3306)
+                user = info["user"] or (ds.get("username", "") if ds else "")
+                password = info["password"] or (ds.get("password", "") if ds else "")
+                sslmode = info["sslmode"] or (ds.get("sslmode", "require") if ds else "require")
+                if not host:
+                    raise ValueError(f"No host configured for {ds_type} data source: {database}")
                 pool = ConnectionPool(
-                    "", database, pool_size=pool_size, db_type=ds_type,
-                    host=info["host"],
-                    port=info["port"] or (5432 if ds_type == "postgresql" else 3306),
-                    user=info["user"], password=info["password"], sslmode=info["sslmode"],
+                    "", actual_db, pool_size=pool_size, db_type=ds_type,
+                    host=host, port=int(port), user=user, password=password, sslmode=sslmode,
                 )
             else:
                 # Fabric SQL / Azure SQL — connection_string is the ODBC endpoint.
                 endpoint = (ds.get("connection_string", "") if ds else "") or settings.DATAWAREHOUSE_ENDPOINT or ""
                 if not endpoint:
                     raise ValueError(f"No endpoint configured for database: {database}")
-                pool = ConnectionPool(endpoint, database, pool_size=pool_size)
+                pool = ConnectionPool(endpoint, actual_db, pool_size=pool_size)
 
+        # Store under both the passed key and the actual database name
         _pools[database] = pool
+        if actual_db != database:
+            _pools[actual_db] = pool
         return pool
 
 
@@ -795,13 +803,27 @@ def _resolve_data_source(database: str) -> Optional[Dict[str, Any]]:
     conn = None
     try:
         conn = meta_pool.get_connection()
+        # Try by database_name first, then by id (callers may pass either)
         result = conn.execute_query(
-            f"SELECT type, connection_string FROM data_sources "
+            f"SELECT type, connection_string, host, port, database_name, username, password, sslmode "
+            f"FROM data_sources "
             f"WHERE database_name = {ph} AND is_active = {active} ORDER BY id DESC",
             [database],
         )
         rows = result["rows_objects"]
-        return rows[0] if rows else None
+        if rows:
+            return rows[0]
+        # Fallback: try matching by id (e.g. "31" passed as database)
+        if database.isdigit():
+            result = conn.execute_query(
+                f"SELECT type, connection_string, host, port, database_name, username, password, sslmode "
+                f"FROM data_sources "
+                f"WHERE id = {ph} AND is_active = {active} ORDER BY id DESC",
+                [int(database)],
+            )
+            rows = result["rows_objects"]
+            return rows[0] if rows else None
+        return None
     except Exception as e:
         print(f"[Pool] Could not resolve data source {database}: {e}")
         return None
