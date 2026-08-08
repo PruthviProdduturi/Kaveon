@@ -397,14 +397,39 @@ export default function AboutPage() {
       </section>
 
       {/* ─── Tech — LIGHT ─── */}
-      <section ref={r5} style={{ textAlign: "center", padding: "80px 24px", background: "linear-gradient(180deg, #0f1520 0%, #121a28 50%, #0f1520 100%)" }}>
-        <h2 style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: "#4A9EE8", marginBottom: 32 }}>
-          Built with
-        </h2>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center", maxWidth: 650, margin: "0 auto" }}>
-          {["Next.js 15", "React 19", "TypeScript", "FastAPI", "Python 3.11", "ECharts", "PostgreSQL", "Azure", "Vercel", "Bicep IaC"].map((t) => (
-            <span key={t} style={{ padding: "10px 22px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.08)", fontSize: 14, color: "#777", background: "rgba(255,255,255,0.04)" }}>{t}</span>
-          ))}
+      <section ref={r5} style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0f1520 0%, #121a28 50%, #0f1520 100%)" }}>
+        <div style={{ maxWidth: 900, margin: "0 auto" }}>
+          <h2 style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: "#4A9EE8", textAlign: "center", marginBottom: 48 }}>
+            Built with
+          </h2>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
+            {[
+              { name: "Next.js", version: "15", color: "#fff" },
+              { name: "React", version: "19", color: "#61dafb" },
+              { name: "TypeScript", version: "5.x", color: "#3178c6" },
+              { name: "FastAPI", version: "0.115", color: "#009688" },
+              { name: "Python", version: "3.11", color: "#ffd43b" },
+              { name: "ECharts", version: "5.x", color: "#e43961" },
+              { name: "PostgreSQL", version: "16", color: "#336791" },
+              { name: "Azure", version: "Container Apps", color: "#0078d4" },
+              { name: "Vercel", version: "Edge", color: "#fff" },
+              { name: "Bicep", version: "IaC", color: "#f7a21b" },
+            ].map((t) => (
+              <div key={t.name} style={{
+                padding: "20px 16px",
+                borderRadius: 12,
+                background: "rgba(255,255,255,0.03)",
+                border: "1px solid rgba(255,255,255,0.06)",
+                textAlign: "center",
+                transition: "all 0.2s",
+              }}
+                className="about-card"
+              >
+                <div style={{ fontSize: 15, fontWeight: 600, color: t.color, marginBottom: 4 }}>{t.name}</div>
+                <div style={{ fontSize: 11, color: "#555" }}>{t.version}</div>
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 
