@@ -1,141 +1,215 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { KaveonMark } from "../../components/KaveonMark";
+
+/* ─── Fade-in on scroll observer ─── */
+function useFadeIn() {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.opacity = "0";
+    el.style.transform = "translateY(32px)";
+    el.style.transition = "opacity 0.7s ease-out, transform 0.7s ease-out";
+    const obs = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) { el.style.opacity = "1"; el.style.transform = "translateY(0)"; obs.disconnect(); } },
+      { threshold: 0.15 }
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
+  return ref;
+}
+
+function Section({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+  const ref = useFadeIn();
+  return <div ref={ref} style={style}>{children}</div>;
+}
 
 export default function AboutPage() {
   return (
-    <div style={{ background: "var(--bg-primary)", minHeight: "100vh", color: "var(--text-primary)" }}>
+    <div style={{ background: "#0f0f0f", color: "#ececec", minHeight: "100vh", overflowX: "hidden" }}>
+
+      {/* ─── Navigation ─── */}
+      <nav style={{
+        position: "fixed", top: 0, left: 0, right: 0, zIndex: 100,
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "16px 40px",
+        background: "rgba(15,15,15,0.8)", backdropFilter: "blur(12px)",
+        borderBottom: "1px solid rgba(255,255,255,0.06)",
+      }}>
+        <a href="/about" style={{ display: "flex", alignItems: "center", gap: 10, textDecoration: "none", color: "#ececec" }}>
+          <KaveonMark size={24} useDirectColor />
+          <span style={{ fontSize: 16, fontWeight: 600, letterSpacing: "1.5px", textTransform: "uppercase" }}>KAVEON</span>
+        </a>
+        <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
+          <a href="/docs" target="_blank" style={{ fontSize: 14, color: "#a0a0a0", textDecoration: "none" }}>Docs</a>
+          <a href="https://github.com/PruthviProdduturi/Kaveon" target="_blank" rel="noopener noreferrer" style={{ fontSize: 14, color: "#a0a0a0", textDecoration: "none" }}>GitHub</a>
+          <a href="/" style={{ fontSize: 14, color: "#fff", textDecoration: "none", padding: "8px 20px", borderRadius: 8, background: "#4A9EE8" }}>Launch App</a>
+        </div>
+      </nav>
 
       {/* ─── Hero ─── */}
-      <section style={{ textAlign: "center", padding: "120px 24px 80px", position: "relative", overflow: "hidden" }}>
-        {/* Background glow */}
-        <div style={{ position: "absolute", top: "30%", left: "50%", transform: "translate(-50%, -50%)", width: 800, height: 600, borderRadius: "50%", background: "radial-gradient(ellipse, rgba(74,158,232,0.06) 0%, transparent 70%)", pointerEvents: "none" }} />
+      <section style={{ position: "relative", textAlign: "center", paddingTop: 180, paddingBottom: 120, overflow: "hidden" }}>
+        {/* Gradient orbs */}
+        <div style={{ position: "absolute", top: -200, left: "20%", width: 600, height: 600, borderRadius: "50%", background: "radial-gradient(circle, rgba(74,158,232,0.12) 0%, transparent 70%)", pointerEvents: "none" }} />
+        <div style={{ position: "absolute", top: -100, right: "10%", width: 400, height: 400, borderRadius: "50%", background: "radial-gradient(circle, rgba(139,92,246,0.08) 0%, transparent 70%)", pointerEvents: "none" }} />
 
         <div style={{ position: "relative" }}>
-          <KaveonMark size={64} useDirectColor />
-          <h1 style={{ fontSize: 48, fontWeight: 600, margin: "24px 0 12px", letterSpacing: "-1px" }}>
-            Talk to your data
+          <div style={{ marginBottom: 32 }}>
+            <KaveonMark size={56} useDirectColor />
+          </div>
+          <h1 style={{ fontSize: 64, fontWeight: 600, letterSpacing: "-2px", lineHeight: 1.1, margin: "0 auto 20px", maxWidth: 700 }}>
+            Your data speaks.<br />
+            <span style={{ color: "#4A9EE8" }}>We translate.</span>
           </h1>
-          <p style={{ fontSize: 20, color: "var(--text-secondary)", maxWidth: 560, margin: "0 auto 40px", lineHeight: 1.6, fontWeight: 400 }}>
-            Ask a question. Get a chart. Kaveon connects to your databases, understands your schema, and answers instantly.
+          <p style={{ fontSize: 20, color: "#888", maxWidth: 520, margin: "0 auto 48px", lineHeight: 1.6 }}>
+            Ask a question in plain English. Kaveon generates SQL, executes it, picks the right chart, and explains the answer. No API keys. No LLM costs.
           </p>
-          <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
-            <a href="/" style={{ padding: "14px 32px", borderRadius: 10, background: "var(--accent)", color: "#fff", fontSize: 15, fontWeight: 500, textDecoration: "none", transition: "all 0.15s" }}>
-              Get Started
+          <div style={{ display: "flex", gap: 12, justifyContent: "center" }}>
+            <a href="/" style={{ padding: "16px 36px", borderRadius: 12, background: "#4A9EE8", color: "#fff", fontSize: 16, fontWeight: 500, textDecoration: "none", boxShadow: "0 4px 20px rgba(74,158,232,0.3)" }}>
+              Try Kaveon Free
             </a>
-            <a href="https://github.com/PruthviProdduturi/Kaveon" target="_blank" rel="noopener noreferrer" style={{ padding: "14px 32px", borderRadius: 10, background: "transparent", color: "var(--text-secondary)", fontSize: 15, fontWeight: 500, textDecoration: "none", border: "1px solid var(--border)", transition: "all 0.15s" }}>
-              View on GitHub
+            <a href="/docs" target="_blank" style={{ padding: "16px 36px", borderRadius: 12, background: "rgba(255,255,255,0.06)", color: "#ccc", fontSize: 16, fontWeight: 500, textDecoration: "none", border: "1px solid rgba(255,255,255,0.1)" }}>
+              Read the Docs
             </a>
           </div>
         </div>
       </section>
 
-      {/* ─── How It Works ─── */}
-      <section style={{ maxWidth: 900, margin: "0 auto", padding: "0 24px 100px" }}>
-        <h2 style={{ fontSize: 14, fontWeight: 600, textTransform: "uppercase", letterSpacing: "2px", color: "var(--accent)", textAlign: "center", marginBottom: 48 }}>
-          How it works
-        </h2>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 0, position: "relative" }}>
-          {[
-            { step: "01", title: "Ask", desc: "Type a question in plain English. \"Show revenue by region\" or \"Top 10 customers by sales.\"" },
-            { step: "02", title: "Understand", desc: "Kaveon scans your schema, matches columns and metrics, and generates SQL — no LLM, no API key." },
-            { step: "03", title: "Answer", desc: "SQL executes, the right chart type is picked automatically, and you see data with an intelligent summary." },
-          ].map((item, i) => (
-            <div key={item.step} style={{ padding: "0 28px", textAlign: "center", position: "relative" }}>
-              {i < 2 && <div style={{ position: "absolute", right: 0, top: "20%", height: "60%", width: 1, background: "var(--border)" }} />}
-              <div style={{ fontSize: 32, fontWeight: 700, color: "var(--accent)", marginBottom: 12, opacity: 0.4 }}>{item.step}</div>
-              <h3 style={{ fontSize: 20, fontWeight: 600, marginBottom: 8 }}>{item.title}</h3>
-              <p style={{ fontSize: 14, color: "var(--text-secondary)", lineHeight: 1.7 }}>{item.desc}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* ─── Demo Block ─── */}
-      <section style={{ maxWidth: 700, margin: "0 auto", padding: "0 24px 100px" }}>
-        <div style={{ background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 16, padding: "32px", overflow: "hidden" }}>
-          <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-            <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#ef4444" }} />
-            <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#f59e0b" }} />
-            <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#10b981" }} />
+      {/* ─── Demo ─── */}
+      <Section style={{ maxWidth: 800, margin: "0 auto", padding: "0 24px 140px" }}>
+        <div style={{ background: "#1a1a1a", borderRadius: 20, border: "1px solid rgba(255,255,255,0.08)", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
+          {/* Title bar */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "14px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+            <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#ff5f57" }} />
+            <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#febc2e" }} />
+            <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#28c840" }} />
+            <span style={{ flex: 1, textAlign: "center", fontSize: 12, color: "#666" }}>kaveon.vercel.app</span>
           </div>
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-              <div style={{ width: 24, height: 24, borderRadius: "50%", background: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#fff", fontWeight: 700 }}>P</div>
-              <span style={{ fontSize: 14, color: "var(--text-secondary)" }}>Show confirmed cases by country</span>
+          {/* Conversation */}
+          <div style={{ padding: "32px 28px" }}>
+            {/* User */}
+            <div style={{ display: "flex", gap: 12, marginBottom: 24, justifyContent: "flex-end" }}>
+              <div style={{ background: "#4A9EE8", color: "#fff", padding: "12px 18px", borderRadius: "16px 4px 16px 16px", fontSize: 15, maxWidth: "70%" }}>
+                Show confirmed cases by country
+              </div>
             </div>
-            <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
-              <div style={{ width: 24, height: 24, borderRadius: "50%", background: "var(--bg-hover)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "var(--text-secondary)" }}>K</div>
+            {/* Assistant */}
+            <div style={{ display: "flex", gap: 12 }}>
+              <div style={{ width: 28, height: 28, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <KaveonMark size={22} useDirectColor />
+              </div>
               <div style={{ flex: 1 }}>
-                <p style={{ fontSize: 14, color: "var(--text-primary)", lineHeight: 1.6, margin: "0 0 12px" }}>
-                  Found <strong>195</strong> results for confirmed by country. Top 3: <strong>United States</strong> (103.8M), <strong>India</strong> (45.0M), <strong>France</strong> (39.9M).
+                <p style={{ fontSize: 14, color: "#ccc", lineHeight: 1.7, margin: "0 0 16px" }}>
+                  Found <strong style={{ color: "#fff" }}>195</strong> results. Top 3: <strong style={{ color: "#fff" }}>United States</strong> (103.8M), <strong style={{ color: "#fff" }}>India</strong> (45.0M), <strong style={{ color: "#fff" }}>France</strong> (39.9M).
                 </p>
-                <div style={{ height: 140, background: "var(--bg-elevated)", borderRadius: 10, border: "1px solid var(--border)", display: "flex", alignItems: "flex-end", padding: "16px 20px", gap: 8 }}>
-                  {[103, 45, 39, 34, 32, 25, 24, 21].map((h, i) => (
-                    <div key={i} style={{ flex: 1, height: `${h * 1.1}px`, background: i === 0 ? "var(--accent)" : "rgba(var(--accent-rgb), 0.4)", borderRadius: "4px 4px 0 0", transition: "height 0.3s" }} />
-                  ))}
+                {/* Chart visualization */}
+                <div style={{ background: "#222", borderRadius: 12, padding: "20px 24px 16px", border: "1px solid rgba(255,255,255,0.06)" }}>
+                  <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 120 }}>
+                    {[100, 43, 38, 33, 31, 24, 23, 20, 18, 16].map((h, i) => (
+                      <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                        <div style={{ width: "100%", height: `${h * 1.1}px`, background: i === 0 ? "#4A9EE8" : `rgba(74,158,232,${0.7 - i * 0.06})`, borderRadius: "3px 3px 0 0" }} />
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 10, color: "#555" }}>
+                    <span>US</span><span>IN</span><span>FR</span><span>DE</span><span>BR</span><span>JP</span><span>KR</span><span>IT</span><span>UK</span><span>RU</span>
+                  </div>
                 </div>
+                <p style={{ fontSize: 12, color: "#555", marginTop: 12 }}>
+                  Want me to show just the top 10 or filter by region?
+                </p>
               </div>
             </div>
           </div>
         </div>
-      </section>
+      </Section>
 
-      {/* ─── Features ─── */}
-      <section style={{ maxWidth: 1000, margin: "0 auto", padding: "0 24px 100px" }}>
-        <h2 style={{ fontSize: 14, fontWeight: 600, textTransform: "uppercase", letterSpacing: "2px", color: "var(--accent)", textAlign: "center", marginBottom: 48 }}>
-          Built for data teams
+      {/* ─── How It Works ─── */}
+      <Section style={{ maxWidth: 1000, margin: "0 auto", padding: "0 24px 140px" }}>
+        <h2 style={{ fontSize: 13, fontWeight: 600, textTransform: "uppercase", letterSpacing: "3px", color: "#4A9EE8", textAlign: "center", marginBottom: 60 }}>
+          How it works
         </h2>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 48 }}>
           {[
-            { icon: <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>, title: "Conversational Querying", desc: "Type questions, get charts. No SQL required. The NL→SQL engine handles pattern matching, schema binding, and chart selection automatically." },
-            { icon: <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>, title: "37 Chart Types", desc: "Bar, line, pie, heatmap, treemap, scatter, funnel, gauge, waterfall, calendar, 3D globe. All interactive, all dark-mode aware." },
-            { icon: <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>, title: "SQL Lab", desc: "Monaco editor with autocomplete, multi-tab, query history, and caching. Inline AI bar for instant SQL generation." },
-            { icon: <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>, title: "Dashboards", desc: "Drag-and-drop canvas with cross-chart filtering, shared filters, auto-refresh, and one-click publishing." },
-            { icon: <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>, title: "Multi-Source", desc: "Microsoft Fabric, Azure SQL, PostgreSQL, MySQL, StarRocks. Connect them all, query across them from one place." },
-            { icon: <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>, title: "Self-Hosted & Secure", desc: "Your infrastructure, your data. OAuth sign-in, role-based access, encrypted secrets. MIT licensed." },
-          ].map((f) => (
-            <div key={f.title} style={{ padding: 28, borderRadius: 14, border: "1px solid var(--border)", background: "var(--bg-surface)" }}>
-              <div style={{ marginBottom: 16 }}>{f.icon}</div>
-              <h3 style={{ fontSize: 17, fontWeight: 600, marginBottom: 8 }}>{f.title}</h3>
-              <p style={{ fontSize: 14, color: "var(--text-secondary)", lineHeight: 1.7, margin: 0 }}>{f.desc}</p>
+            { n: "01", title: "You ask", desc: "Type a question in natural language. \"Show revenue by region.\" \"Top 10 customers.\" \"Trend over time.\"" },
+            { n: "02", title: "We parse", desc: "A deterministic NL→SQL engine matches your words against schema metadata. No LLM. No API key. Instant." },
+            { n: "03", title: "Data answers", desc: "SQL executes, the right chart type is selected automatically, and you see your answer with an intelligent summary." },
+          ].map((s) => (
+            <div key={s.n} style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 48, fontWeight: 700, color: "rgba(74,158,232,0.2)", lineHeight: 1, marginBottom: 16 }}>{s.n}</div>
+              <h3 style={{ fontSize: 22, fontWeight: 600, marginBottom: 10 }}>{s.title}</h3>
+              <p style={{ fontSize: 15, color: "#888", lineHeight: 1.7 }}>{s.desc}</p>
             </div>
           ))}
         </div>
-      </section>
+      </Section>
 
-      {/* ─── Tech Stack ─── */}
-      <section style={{ maxWidth: 700, margin: "0 auto", padding: "0 24px 100px", textAlign: "center" }}>
-        <h2 style={{ fontSize: 14, fontWeight: 600, textTransform: "uppercase", letterSpacing: "2px", color: "var(--accent)", marginBottom: 32 }}>
-          Tech Stack
+      {/* ─── Features ─── */}
+      <Section style={{ maxWidth: 1100, margin: "0 auto", padding: "0 24px 140px" }}>
+        <h2 style={{ fontSize: 13, fontWeight: 600, textTransform: "uppercase", letterSpacing: "3px", color: "#4A9EE8", textAlign: "center", marginBottom: 16 }}>
+          Everything you need
         </h2>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center" }}>
-          {["Next.js 15", "React 19", "TypeScript", "FastAPI", "Python 3.11", "ECharts", "Monaco Editor", "PostgreSQL", "Azure", "Vercel"].map((t) => (
-            <span key={t} style={{ padding: "8px 18px", borderRadius: 999, border: "1px solid var(--border)", fontSize: 13, color: "var(--text-secondary)", background: "var(--bg-surface)" }}>{t}</span>
+        <p style={{ fontSize: 18, color: "#888", textAlign: "center", marginBottom: 60, maxWidth: 500, marginLeft: "auto", marginRight: "auto" }}>
+          One platform. Ask questions, build charts, create dashboards, write SQL.
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
+          {[
+            { title: "Conversational Querying", desc: "Type questions, get charts. A template-based NL→SQL engine that works without an API key.", gradient: "linear-gradient(135deg, rgba(74,158,232,0.1) 0%, rgba(74,158,232,0.02) 100%)" },
+            { title: "37 Chart Types", desc: "Bar, line, pie, heatmap, treemap, scatter, funnel, gauge, waterfall, 3D globe. All interactive.", gradient: "linear-gradient(135deg, rgba(16,185,129,0.1) 0%, rgba(16,185,129,0.02) 100%)" },
+            { title: "SQL Lab", desc: "Monaco editor with autocomplete, multi-tab, query history, caching. VS Code in your browser.", gradient: "linear-gradient(135deg, rgba(139,92,246,0.1) 0%, rgba(139,92,246,0.02) 100%)" },
+            { title: "Dashboards", desc: "Drag-and-drop canvas, cross-chart filtering, shared filters, auto-refresh, one-click publishing.", gradient: "linear-gradient(135deg, rgba(245,158,11,0.1) 0%, rgba(245,158,11,0.02) 100%)" },
+            { title: "Multi-Source", desc: "Microsoft Fabric, Azure SQL, PostgreSQL, MySQL, StarRocks. Connect them all, query across them.", gradient: "linear-gradient(135deg, rgba(236,72,153,0.1) 0%, rgba(236,72,153,0.02) 100%)" },
+            { title: "Self-Hosted", desc: "Your infrastructure, your data, your rules. OAuth sign-in, RBAC, encrypted secrets. MIT licensed.", gradient: "linear-gradient(135deg, rgba(6,182,212,0.1) 0%, rgba(6,182,212,0.02) 100%)" },
+          ].map((f) => (
+            <div key={f.title} style={{ padding: 32, borderRadius: 16, background: f.gradient, border: "1px solid rgba(255,255,255,0.06)" }}>
+              <h3 style={{ fontSize: 18, fontWeight: 600, marginBottom: 10 }}>{f.title}</h3>
+              <p style={{ fontSize: 14, color: "#999", lineHeight: 1.7, margin: 0 }}>{f.desc}</p>
+            </div>
           ))}
         </div>
-      </section>
+      </Section>
 
-      {/* ─── Bottom CTA ─── */}
-      <section style={{ textAlign: "center", padding: "80px 24px", borderTop: "1px solid var(--border)" }}>
-        <KaveonMark size={40} useDirectColor />
-        <h2 style={{ fontSize: 28, fontWeight: 500, margin: "20px 0 12px" }}>Ready to talk to your data?</h2>
-        <p style={{ fontSize: 15, color: "var(--text-muted)", marginBottom: 32 }}>Open source · Self-hosted · MIT License</p>
-        <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
-          <a href="/" style={{ padding: "14px 32px", borderRadius: 10, background: "var(--accent)", color: "#fff", fontSize: 15, fontWeight: 500, textDecoration: "none" }}>
+      {/* ─── Tech ─── */}
+      <Section style={{ textAlign: "center", padding: "0 24px 140px" }}>
+        <h2 style={{ fontSize: 13, fontWeight: 600, textTransform: "uppercase", letterSpacing: "3px", color: "#4A9EE8", marginBottom: 32 }}>
+          Built with
+        </h2>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center", maxWidth: 600, margin: "0 auto" }}>
+          {["Next.js 15", "React 19", "TypeScript", "FastAPI", "Python", "ECharts", "PostgreSQL", "Azure", "Vercel"].map((t) => (
+            <span key={t} style={{ padding: "10px 20px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.08)", fontSize: 14, color: "#999", background: "rgba(255,255,255,0.03)" }}>{t}</span>
+          ))}
+        </div>
+      </Section>
+
+      {/* ─── CTA ─── */}
+      <section style={{ textAlign: "center", padding: "100px 24px 120px", position: "relative" }}>
+        <div style={{ position: "absolute", bottom: 0, left: "50%", transform: "translateX(-50%)", width: 800, height: 400, borderRadius: "50%", background: "radial-gradient(circle, rgba(74,158,232,0.08) 0%, transparent 70%)", pointerEvents: "none" }} />
+        <div style={{ position: "relative" }}>
+          <KaveonMark size={48} useDirectColor />
+          <h2 style={{ fontSize: 40, fontWeight: 600, letterSpacing: "-1px", margin: "24px 0 16px" }}>
+            Ready to talk to your data?
+          </h2>
+          <p style={{ fontSize: 16, color: "#666", marginBottom: 40 }}>Open source · Self-hosted · MIT License</p>
+          <a href="/" style={{ padding: "16px 40px", borderRadius: 12, background: "#4A9EE8", color: "#fff", fontSize: 16, fontWeight: 500, textDecoration: "none", boxShadow: "0 4px 20px rgba(74,158,232,0.3)" }}>
             Get Started
-          </a>
-          <a href="/docs" target="_blank" style={{ padding: "14px 32px", borderRadius: 10, border: "1px solid var(--border)", color: "var(--text-secondary)", fontSize: 15, fontWeight: 500, textDecoration: "none" }}>
-            Documentation
           </a>
         </div>
       </section>
 
       {/* ─── Footer ─── */}
-      <footer style={{ textAlign: "center", padding: "24px", borderTop: "1px solid var(--border)" }}>
-        <p style={{ fontSize: 12, color: "var(--text-muted)" }}>
-          © {new Date().getFullYear()} Kaveon
-        </p>
+      <footer style={{ borderTop: "1px solid rgba(255,255,255,0.06)", padding: "32px 40px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <KaveonMark size={18} useDirectColor />
+          <span style={{ fontSize: 13, color: "#555" }}>© {new Date().getFullYear()} Kaveon</span>
+        </div>
+        <div style={{ display: "flex", gap: 24 }}>
+          <a href="/docs" target="_blank" style={{ fontSize: 13, color: "#555", textDecoration: "none" }}>Documentation</a>
+          <a href="https://github.com/PruthviProdduturi/Kaveon" target="_blank" rel="noopener noreferrer" style={{ fontSize: 13, color: "#555", textDecoration: "none" }}>GitHub</a>
+          <a href="/" style={{ fontSize: 13, color: "#555", textDecoration: "none" }}>Launch App</a>
+        </div>
       </footer>
     </div>
   );
