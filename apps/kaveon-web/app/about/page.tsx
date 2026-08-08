@@ -83,7 +83,7 @@ export default function AboutPage() {
       </nav>
 
       {/* ─── Hero ─── */}
-      <section style={{ position: "relative", textAlign: "center", paddingTop: 160, paddingBottom: 100, overflow: "hidden" }}>
+      <section style={{ position: "relative", textAlign: "center", paddingTop: 80, paddingBottom: 48, overflow: "hidden" }}>
         {/* Mesh gradient background */}
         <div style={{
           position: "absolute", inset: 0, opacity: 0.6,
@@ -97,7 +97,7 @@ export default function AboutPage() {
           <div style={{ marginBottom: 20 }}>
             <KaveonMark size={100} useDirectColor />
           </div>
-          <h1 style={{ fontSize: "clamp(40px, 6vw, 72px)", fontWeight: 700, letterSpacing: "-2px", lineHeight: 1.05, margin: "0 auto 16px", maxWidth: 800 }}>
+          <h1 style={{ fontSize: "clamp(36px, 5vw, 60px)", fontWeight: 700, letterSpacing: "-2px", lineHeight: 1.1, margin: "0 auto 16px", maxWidth: 900, whiteSpace: "nowrap" }}>
             Your data speaks.{" "}
             <span style={{
               background: "linear-gradient(135deg, #4A9EE8, #8b5cf6, #4A9EE8)",
