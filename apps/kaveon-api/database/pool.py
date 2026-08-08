@@ -810,7 +810,7 @@ def _resolve_data_source(database: str) -> Optional[Dict[str, Any]]:
         conn = meta_pool.get_connection()
         # Try by database_name first, then by id (callers may pass either)
         result = conn.execute_query(
-            f"SELECT type, connection_string, host, port, database_name, username, password, sslmode "
+            f"SELECT type, connection_string, database_name "
             f"FROM data_sources "
             f"WHERE database_name = {ph} AND is_active = {active} ORDER BY id DESC",
             [database],
@@ -821,7 +821,7 @@ def _resolve_data_source(database: str) -> Optional[Dict[str, Any]]:
         # Fallback: try matching by id (e.g. "31" passed as database)
         if database.isdigit():
             result = conn.execute_query(
-                f"SELECT type, connection_string, host, port, database_name, username, password, sslmode "
+                f"SELECT type, connection_string, database_name "
                 f"FROM data_sources "
                 f"WHERE id = {ph} AND is_active = {active} ORDER BY id DESC",
                 [int(database)],
