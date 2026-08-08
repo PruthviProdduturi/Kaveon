@@ -512,23 +512,6 @@ export default function Home() {
       {/* Conversation view — appears after first message */}
       {inConversation && (
         <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
-          {/* Conversation header */}
-          <div style={{ padding: "12px 24px", display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-            <KaveonMark size={24} useDirectColor />
-            <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)", flex: 1 }}>Chat</span>
-
-            <button onClick={() => {
-              // Save old conversation to recents
-              if (messages.length > 0) {
-                const firstUserMsg = messages.find(m => m.role === "user");
-                const label = firstUserMsg?.content.slice(0, 50) || "Chat";
-                addRecent({ id: `chat-${Date.now()}`, label, href: "/", type: "chat" });
-              }
-              setMessages([]);
-            }} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid var(--border)", background: "transparent", color: "var(--text-muted)", fontSize: 12, cursor: "pointer" }}>
-              New chat
-            </button>
-          </div>
 
           {/* Messages */}
           <div style={{ flex: 1, overflow: "auto", padding: "20px 24px", display: "flex", flexDirection: "column", gap: 16 }}>
