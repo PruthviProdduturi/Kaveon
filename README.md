@@ -5,7 +5,11 @@
   <img src="docs/reference/kaveon-logo.svg?v=16" alt="Kaveon — Talk to your data." width="380" />
 </picture>
 
-<br><br>
+<br>
+
+### Talk to your data.
+
+<br>
 
 Ask a question. Get a chart.
 
@@ -13,6 +17,7 @@ Kaveon connects to your databases, understands your schema, and answers data que
 
 <br>
 
+[![Deploy](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/deploy.yml/badge.svg)](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/deploy.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Live Demo](https://img.shields.io/badge/Live-kaveon.vercel.app-4A9EE8?style=flat)](https://kaveon.vercel.app)
 
