@@ -513,7 +513,7 @@ export default function Home() {
       {inConversation && (
         <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
           {/* Conversation header */}
-          <div style={{ padding: "12px 24px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12, background: "var(--bg-surface)", flexShrink: 0 }}>
+          <div style={{ padding: "12px 24px", display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
             <KaveonMark size={24} useDirectColor />
             <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)", flex: 1 }}>Chat</span>
 
@@ -589,7 +589,7 @@ export default function Home() {
           </div>
 
           {/* Input bar (bottom) — matches homepage textarea */}
-          <div style={{ padding: "16px 24px", borderTop: "1px solid var(--border)", background: "var(--bg-primary)", flexShrink: 0 }}>
+          <div style={{ padding: "16px 24px", flexShrink: 0 }}>
             <div style={{ maxWidth: 700, margin: "0 auto", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 16, padding: "16px", boxShadow: "0 0 0 1px rgba(var(--accent-rgb), 0.06), 0 4px 20px rgba(0,0,0,0.3)", display: "flex", flexDirection: "column", gap: 10 }}>
               <textarea
                 ref={inputRef as any}
