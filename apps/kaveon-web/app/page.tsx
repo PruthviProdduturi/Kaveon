@@ -588,14 +588,23 @@ export default function Home() {
             <div ref={bottomRef} />
           </div>
 
-          {/* Input bar (bottom) */}
-          <div style={{ padding: "12px 24px", borderTop: "1px solid var(--border)", background: "var(--bg-surface)", flexShrink: 0 }}>
-            <div style={{ maxWidth: 700, margin: "0 auto", display: "flex", alignItems: "center", gap: 0, background: "var(--bg-primary)", border: "1px solid var(--border)", borderRadius: 12, padding: "8px 12px" }}>
-              <input ref={inputRef} type="text" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={handleKey} placeholder="Ask anything..."
-                style={{ flex: 1, border: "none", outline: "none", background: "transparent", color: "var(--text-primary)", fontSize: 14 }} />
-              <button onClick={submit} disabled={!query.trim() || !canSend} style={{ width: 28, height: 28, borderRadius: 7, border: "none", background: query.trim() && canSend ? "var(--accent)" : "var(--bg-hover)", color: query.trim() && canSend ? "#fff" : "var(--text-faint)", cursor: query.trim() && canSend ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>
-                ↑
-              </button>
+          {/* Input bar (bottom) — matches homepage textarea */}
+          <div style={{ padding: "16px 24px", borderTop: "1px solid var(--border)", background: "var(--bg-primary)", flexShrink: 0 }}>
+            <div style={{ maxWidth: 700, margin: "0 auto", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 16, padding: "16px", boxShadow: "0 0 0 1px rgba(var(--accent-rgb), 0.06), 0 4px 20px rgba(0,0,0,0.3)", display: "flex", flexDirection: "column", gap: 10 }}>
+              <textarea
+                ref={inputRef as any}
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
+                placeholder="Ask anything..."
+                rows={2}
+                style={{ width: "100%", border: "none", outline: "none", background: "transparent", color: "#f0f0f2", fontSize: 15, lineHeight: 1.5, resize: "none", fontFamily: "inherit" }}
+              />
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <button onClick={submit} disabled={!query.trim() || !canSend} style={{ width: 34, height: 34, borderRadius: 10, border: "none", background: query.trim() && canSend ? "var(--accent)" : "rgba(255,255,255,0.08)", color: query.trim() && canSend ? "#fff" : "#64748b", cursor: query.trim() && canSend ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, transition: "all 0.15s" }}>
+                  ↑
+                </button>
+              </div>
             </div>
           </div>
         </div>
