@@ -378,6 +378,7 @@ export default function Home() {
             const columns = execData.columns || execData.column_names || [];
 
             if (rows.length > 0) {
+              console.log("[DEBUG] Chart data:", { columns, xAxis: parsed.xAxis, yAxis: parsed.yAxis, chartType: parsed.chartType, rowSample: rows[0], rowCount: rows.length });
               const summary = generateInsight(rows, columns, parsed, text.trim());
               setMessages(prev => [...prev.slice(0, -1), {
                 role: "assistant",
@@ -590,7 +591,7 @@ export default function Home() {
           {/* Input bar (bottom) */}
           <div style={{ padding: "12px 24px", borderTop: "1px solid var(--border)", background: "var(--bg-surface)", flexShrink: 0 }}>
             <div style={{ maxWidth: 700, margin: "0 auto", display: "flex", alignItems: "center", gap: 0, background: "var(--bg-primary)", border: "1px solid var(--border)", borderRadius: 12, padding: "8px 12px" }}>
-              <input ref={inputRef} type="text" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={handleKey} placeholder="Ask a follow-up..."
+              <input ref={inputRef} type="text" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={handleKey} placeholder="Ask anything..."
                 style={{ flex: 1, border: "none", outline: "none", background: "transparent", color: "var(--text-primary)", fontSize: 14 }} />
               <button onClick={submit} disabled={!query.trim() || !canSend} style={{ width: 28, height: 28, borderRadius: 7, border: "none", background: query.trim() && canSend ? "var(--accent)" : "var(--bg-hover)", color: query.trim() && canSend ? "#fff" : "var(--text-faint)", cursor: query.trim() && canSend ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>
                 ↑
