@@ -108,7 +108,7 @@ export default function AboutPage() {
             }}>We translate</span>
           </h1>
           <p style={{ fontSize: 18, color: "#777", maxWidth: 540, margin: "0 auto 28px", lineHeight: 1.7 }}>
-            Ask a question in plain English. Kaveon generates SQL, executes it, picks the right chart, and explains the answer. No API keys. No LLM costs.
+            Connect your databases. Ask questions in natural language. Get instant answers with interactive charts — powered by a deterministic engine, not an LLM.
           </p>
           <div style={{ display: "flex", gap: 14, justifyContent: "center" }}>
             <a href="/" className="about-btn" style={{ padding: "16px 40px", borderRadius: 12, background: "#4A9EE8", color: "#fff", fontSize: 16, fontWeight: 600, textDecoration: "none", boxShadow: "0 4px 24px rgba(74,158,232,0.3)", transition: "all 0.2s" }}>
