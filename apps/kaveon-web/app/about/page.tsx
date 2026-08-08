@@ -105,7 +105,7 @@ export default function AboutPage() {
               animation: "gradientShift 4s ease infinite",
               WebkitBackgroundClip: "text",
               WebkitTextFillColor: "transparent",
-            }}>We translate.</span>
+            }}>We translate</span>
           </h1>
           <p style={{ fontSize: 18, color: "#777", maxWidth: 540, margin: "0 auto 44px", lineHeight: 1.7 }}>
             Ask a question in plain English. Kaveon generates SQL, executes it, picks the right chart, and explains the answer. No API keys. No LLM costs.
@@ -122,7 +122,7 @@ export default function AboutPage() {
       </section>
 
       {/* ─── Product Demo ─── */}
-      <div ref={r2} style={{ maxWidth: 820, margin: "0 auto", padding: "0 24px 120px" }}>
+      <div ref={r2} style={{ maxWidth: 920, margin: "0 auto", padding: "0 24px 100px" }}>
         <div style={{ background: "linear-gradient(180deg, #141414, #1a1a1a)", borderRadius: 20, border: "1px solid rgba(255,255,255,0.08)", overflow: "hidden", boxShadow: "0 40px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.03)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)" }}>
             <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#ff5f57" }} />
