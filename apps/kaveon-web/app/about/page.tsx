@@ -226,7 +226,7 @@ export default function AboutPage() {
       </div>
 
       {/* ─── How It Works — LIGHT section ─── */}
-      <section ref={r3} style={{ background: "linear-gradient(180deg, #0c1929 0%, #111827 50%, #0f172a 100%)", padding: "100px 24px", color: "#e2e8f0" }}>
+      <section ref={r3} style={{ background: "linear-gradient(180deg, #0f1520 0%, #121a28 50%, #0f1520 100%)", padding: "100px 24px", color: "#e2e8f0" }}>
         <div style={{ maxWidth: 1000, margin: "0 auto" }}>
           <h2 style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: "#4A9EE8", textAlign: "center", marginBottom: 48 }}>
             How it works
@@ -250,7 +250,7 @@ export default function AboutPage() {
       {/* ─── Feature Showcases — fullscreen mockups ─── */}
 
       {/* Dashboard Showcase — DARK */}
-      <Section style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0d1117 0%, #161b22 50%, #0d1117 100%)" }}>
+      <Section style={{ padding: "100px 24px", background: "#171717" }}>
         <div style={{ maxWidth: 1100, margin: "0 auto", display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 48, alignItems: "center" }}>
           <div>
             <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "3px", color: "#f59e0b", marginBottom: 16 }}>Dashboards</div>
@@ -290,7 +290,7 @@ export default function AboutPage() {
       </Section>
 
       {/* SQL Lab Showcase — LIGHT */}
-      <Section style={{ padding: "100px 24px", background: "linear-gradient(180deg, #1a0f2e 0%, #160d27 50%, #120a20 100%)" }}>
+      <Section style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0f1520 0%, #121a28 50%, #0f1520 100%)" }}>
         <div style={{ maxWidth: 1100, margin: "0 auto", display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 48, alignItems: "center" }}>
           <div style={{ background: "#1e1e1e", borderRadius: 16, border: "1px solid rgba(255,255,255,0.06)", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
             <div style={{ padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", gap: 12 }}>
@@ -344,7 +344,7 @@ export default function AboutPage() {
         </div>
       </Section>
 
-      <section id="features" ref={r4} style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0d1117 0%, #161b22 50%, #0d1117 100%)" }}>
+      <section id="features" ref={r4} style={{ padding: "100px 24px", background: "#171717" }}>
         <div style={{ maxWidth: 1100, margin: "0 auto" }}>
         <h2 style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: "#4A9EE8", textAlign: "center", marginBottom: 12 }}>
           Everything you need
@@ -397,7 +397,7 @@ export default function AboutPage() {
       </section>
 
       {/* ─── Tech — LIGHT ─── */}
-      <section ref={r5} style={{ textAlign: "center", padding: "80px 24px", background: "linear-gradient(180deg, #0a1a1a 0%, #0f1f1f 50%, #0a1616 100%)" }}>
+      <section ref={r5} style={{ textAlign: "center", padding: "80px 24px", background: "linear-gradient(180deg, #0f1520 0%, #121a28 50%, #0f1520 100%)" }}>
         <h2 style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: "#4A9EE8", marginBottom: 32 }}>
           Built with
         </h2>
