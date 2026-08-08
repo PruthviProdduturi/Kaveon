@@ -94,8 +94,8 @@ export default function AboutPage() {
         <div style={{ position: "absolute", top: 200, right: "10%", width: 200, height: 200, borderRadius: "50%", background: "radial-gradient(circle, rgba(139,92,246,0.06) 0%, transparent 70%)", animation: "float 10s ease-in-out infinite 2s", pointerEvents: "none" }} />
 
         <div ref={r1} style={{ position: "relative" }}>
-          <div style={{ marginBottom: 20 }}>
-            <KaveonMark size={100} useDirectColor />
+          <div style={{ marginBottom: 12 }}>
+            <KaveonMark size={200} useDirectColor />
           </div>
           <h1 style={{ fontSize: "clamp(36px, 5vw, 60px)", fontWeight: 700, letterSpacing: "-2px", lineHeight: 1.1, margin: "0 auto 16px", maxWidth: 900, whiteSpace: "nowrap" }}>
             Talk to your{" "}
