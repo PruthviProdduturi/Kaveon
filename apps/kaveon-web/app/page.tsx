@@ -514,7 +514,7 @@ export default function Home() {
         <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
 
           {/* Messages */}
-          <div style={{ flex: 1, overflow: "auto", padding: "20px 24px", display: "flex", flexDirection: "column", gap: 16 }}>
+          <div style={{ flex: 1, overflow: "auto", padding: "32px 24px", display: "flex", flexDirection: "column", gap: 16 }}>
             {messages.map((m, i) => (
               <div key={i} style={{ display: "flex", flexDirection: m.role === "user" ? "row-reverse" : "row", gap: 10, alignItems: "flex-start" }}>
                 {/* Avatar */}
