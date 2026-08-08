@@ -1,25 +1,58 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="55 40 1195 225" role="img" aria-label="Kaveon">
-  <!-- KAVE + N -->
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 1305 390"
+     role="img"
+     aria-labelledby="title desc">
+
+  <title id="title">Kaveon primary logo</title>
+  <desc id="desc">
+    Polished Kaveon logo with crossbar-free A, Guardian O, and the tagline:
+    Talk to your data.
+  </desc>
+
+  <!-- Wordmark -->
   <g fill="#111318">
+
     <!-- K -->
-    <rect x="90" y="70" width="20" height="165" />
-    <polygon points="108.73,161.20 215.73,86.39 204.27,70 97.27,144.80" />
-    <polygon points="97.51,161.36 209.51,235 220.49,218.29 108.49,144.64" />
-    <!-- A without crossbar -->
-    <path d="M 260 235 L 330 70 L 350 70 L 420 235 L 397 235 L 340 104 L 283 235 Z" />
+    <rect x="90" y="70" width="20" height="165"/>
+    <polygon points="108.73,161.20 215.73,86.39 204.27,70 97.27,144.80"/>
+    <polygon points="97.51,161.36 209.51,235 220.49,218.29 108.49,144.64"/>
+
+    <!-- A (no crossbar) -->
+    <path d="M260 235 L330 70 L350 70 L420 235 L397 235 L340 104 L283 235 Z"/>
+
     <!-- V -->
-    <path d="M 465 70 L 488 70 L 545 201 L 602 70 L 625 70 L 555 235 L 535 235 Z" />
+    <path d="M465 70 L488 70 L545 201 L602 70 L625 70 L555 235 L535 235 Z"/>
+
     <!-- E -->
-    <rect x="675" y="70" width="20" height="165" />
-    <rect x="675" y="70" width="130" height="20" />
-    <rect x="675" y="142.5" width="108" height="20" />
-    <rect x="675" y="215" width="130" height="20" />
+    <rect x="675" y="70" width="20" height="165"/>
+    <rect x="675" y="70" width="130" height="20"/>
+    <rect x="675" y="142.5" width="108" height="20"/>
+    <rect x="675" y="215" width="130" height="20"/>
+
     <!-- N -->
-    <rect x="1060" y="70" width="20" height="165" />
-    <rect x="1195" y="70" width="20" height="165" />
-    <polygon points="1062.53,83.30 1197.53,235 1212.47,221.70 1077.47,70" />
+    <rect x="1060" y="70" width="20" height="165"/>
+    <rect x="1195" y="70" width="20" height="165"/>
+    <polygon points="1062.53,83.30 1197.53,235 1212.47,221.70 1077.47,70"/>
+
   </g>
 
   <!-- Guardian O -->
-  <path d="M 966.25 215.29 A 72.5 72.5 0 1 0 893.75 215.29" fill="none" stroke="#4A9EE8" stroke-width="20" stroke-linecap="butt" />
+  <path d="M966.25 215.29 A72.5 72.5 0 1 0 893.75 215.29"
+        fill="none"
+        stroke="#4A9EE8"
+        stroke-width="20"
+        stroke-linecap="butt"/>
+
+  <!-- Tagline -->
+  <text x="652.5"
+        y="340"
+        text-anchor="middle"
+        font-family="Inter, Avenir Next, Helvetica Neue, Arial, sans-serif"
+        font-size="46"
+        font-weight="400"
+        letter-spacing="0.8"
+        fill="#656B74">
+    Talk to your data.
+  </text>
+
 </svg>
