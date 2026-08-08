@@ -449,3 +449,20 @@ def admin_start_fresh(ctx=Depends(require_min_role("Admin"))):
 
     threading.Thread(target=_restart, daemon=True).start()
     return {"success": True, "message": "Configuration cleared. Kaveon is restarting…"}
+
+
+@router.post("/admin/fix-datasource-refs")
+def fix_datasource_refs(ctx=Depends(require_min_role("Admin"))):
+    """One-time fix: update dataset database_name from 'neondb' to 'kaveon' after migration."""
+    meta_db = pool._live_meta_db()
+    p = pool.get_connection_pool(meta_db)
+    conn = p.get_connection()
+    try:
+        result = conn.execute_query(
+            "UPDATE datasets SET database_name = %s WHERE database_name = %s",
+            ["kaveon", "neondb"],
+        )
+        count = result.get("row_count", 0)
+        return {"status": "ok", "updated": count}
+    finally:
+        p.return_connection(conn)
