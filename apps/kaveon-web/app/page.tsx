@@ -467,7 +467,7 @@ export default function Home() {
           <div style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: "1rem", width: "100%", maxWidth: 680, padding: "0 1.5rem" }}>
             {/* Greeting — with Guardian O inline like Claude's ✳ */}
             <h1 style={{ margin: "0 0 8px", fontSize: 32, fontWeight: 500, color: "var(--text-primary)", textAlign: "center", letterSpacing: "-0.5px", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-              <KaveonMark size={46} useDirectColor />
+              <KaveonMark size={52} useDirectColor />
               {isEmpty ? heroText : `${new Date().getHours() < 12 ? "Morning" : new Date().getHours() < 17 ? "Afternoon" : "Evening"}, ${(account?.name || "there").replace(/\w\S*/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase())}`}
             </h1>
             
@@ -589,6 +589,7 @@ export default function Home() {
                 </button>
               </div>
             </div>
+            <p style={{ textAlign: "center", fontSize: 11, color: "#444", margin: "6px 0 0" }}>Kaveon generates SQL from your questions. Always verify queries before running in production.</p>
           </div>
         </div>
       )}
