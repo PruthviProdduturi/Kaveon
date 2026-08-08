@@ -89,9 +89,8 @@ export default function AboutPage() {
         <div style={{ position: "absolute", top: 200, right: "10%", width: 200, height: 200, borderRadius: "50%", background: "radial-gradient(circle, rgba(139,92,246,0.06) 0%, transparent 70%)", animation: "float 10s ease-in-out infinite 2s", pointerEvents: "none" }} />
 
         <div ref={r1} style={{ position: "relative" }}>
-          <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 16px", borderRadius: 999, background: "rgba(74,158,232,0.1)", border: "1px solid rgba(74,158,232,0.2)", marginBottom: 32, fontSize: 13, color: "#4A9EE8" }}>
-            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#4A9EE8", animation: "pulse 2s ease-in-out infinite" }} />
-            Open Source · MIT Licensed
+          <div style={{ marginBottom: 32 }}>
+            <KaveonMark size={72} useDirectColor />
           </div>
           <h1 style={{ fontSize: "clamp(40px, 6vw, 72px)", fontWeight: 700, letterSpacing: "-2px", lineHeight: 1.05, margin: "0 auto 24px", maxWidth: 800 }}>
             Your data speaks.{" "}
@@ -242,6 +241,103 @@ export default function AboutPage() {
       </section>
 
       {/* ─── Features (Bento Grid) ─── */}
+      {/* ─── Feature Showcases — fullscreen mockups ─── */}
+
+      {/* Dashboard Showcase */}
+      <Section style={{ padding: "0 24px 120px" }}>
+        <div style={{ maxWidth: 1100, margin: "0 auto", display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 48, alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "3px", color: "#f59e0b", marginBottom: 16 }}>Dashboards</div>
+            <h3 style={{ fontSize: 32, fontWeight: 600, lineHeight: 1.2, marginBottom: 16, letterSpacing: "-0.5px" }}>Build dashboards that tell stories</h3>
+            <p style={{ fontSize: 15, color: "#777", lineHeight: 1.8, marginBottom: 24 }}>
+              Drag-and-drop canvas with resizable tiles, cross-chart filtering, shared filter bar, and auto-refresh. Every chart renders in parallel for instant load.
+            </p>
+            <a href="/" style={{ fontSize: 14, color: "#4A9EE8", textDecoration: "none" }}>Try it →</a>
+          </div>
+          <div style={{ background: "#141414", borderRadius: 16, border: "1px solid rgba(255,255,255,0.06)", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+            <div style={{ padding: "12px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "#ddd" }}>COVID-19 · Trends Over Time</span>
+              <div style={{ display: "flex", gap: 6 }}>
+                <span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 4, background: "rgba(16,185,129,0.15)", color: "#10b981" }}>Published</span>
+                <span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 4, background: "rgba(74,158,232,0.15)", color: "#4A9EE8" }}>Edit</span>
+              </div>
+            </div>
+            <div style={{ padding: 16, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              {[
+                { title: "Global New Cases", color: "#4A9EE8", bars: [20,35,45,70,55,40,30,25] },
+                { title: "Cumulative Cases", color: "#8b5cf6", bars: [10,15,22,30,42,55,65,75] },
+                { title: "New Deaths", color: "#ef4444", bars: [15,25,40,60,45,30,20,15] },
+                { title: "US New Cases", color: "#06b6d4", bars: [12,20,35,50,65,40,30,25] },
+              ].map(chart => (
+                <div key={chart.title} style={{ background: "#1a1a1a", borderRadius: 10, padding: "12px 14px 8px", border: "1px solid rgba(255,255,255,0.04)" }}>
+                  <div style={{ fontSize: 10, color: "#666", marginBottom: 8 }}>{chart.title}</div>
+                  <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 50 }}>
+                    {chart.bars.map((h, i) => (
+                      <div key={i} style={{ flex: 1, height: h, background: chart.color, borderRadius: "2px 2px 0 0", opacity: 0.7 }} />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </Section>
+
+      {/* SQL Lab Showcase */}
+      <Section style={{ padding: "0 24px 120px" }}>
+        <div style={{ maxWidth: 1100, margin: "0 auto", display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 48, alignItems: "center" }}>
+          <div style={{ background: "#141414", borderRadius: 16, border: "1px solid rgba(255,255,255,0.06)", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+            <div style={{ padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", gap: 12 }}>
+              <span style={{ fontSize: 12, color: "#4A9EE8", borderBottom: "2px solid #4A9EE8", paddingBottom: 8 }}>Query 1</span>
+              <span style={{ fontSize: 12, color: "#555", paddingBottom: 8 }}>Query 2</span>
+              <span style={{ fontSize: 12, color: "#555", paddingBottom: 8 }}>+ New</span>
+            </div>
+            <div style={{ padding: 16 }}>
+              {/* Code block */}
+              <div style={{ background: "#0e0e0e", borderRadius: 8, padding: "14px 16px", fontFamily: "'Fira Code', 'JetBrains Mono', monospace", fontSize: 12, lineHeight: 1.8, marginBottom: 12 }}>
+                <span style={{ color: "#c678dd" }}>SELECT</span>{" "}
+                <span style={{ color: "#e5c07b" }}>country</span>{", "}
+                <span style={{ color: "#61afef" }}>SUM</span>{"("}
+                <span style={{ color: "#e5c07b" }}>confirmed</span>{") "}
+                <span style={{ color: "#c678dd" }}>AS</span>{" "}
+                <span style={{ color: "#e5c07b" }}>total</span><br />
+                <span style={{ color: "#c678dd" }}>FROM</span>{" "}
+                <span style={{ color: "#98c379" }}>covid_by_country</span><br />
+                <span style={{ color: "#c678dd" }}>GROUP BY</span>{" "}
+                <span style={{ color: "#e5c07b" }}>country</span><br />
+                <span style={{ color: "#c678dd" }}>ORDER BY</span>{" "}
+                <span style={{ color: "#e5c07b" }}>total</span>{" "}
+                <span style={{ color: "#c678dd" }}>DESC</span><br />
+                <span style={{ color: "#c678dd" }}>LIMIT</span>{" "}
+                <span style={{ color: "#d19a66" }}>10</span>{";"}
+              </div>
+              {/* Results */}
+              <div style={{ fontSize: 10, color: "#555", marginBottom: 8 }}>195 rows · 42ms · cached</div>
+              <div style={{ background: "#0e0e0e", borderRadius: 8, overflow: "hidden" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", fontSize: 10, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                  <div style={{ padding: "6px 12px", color: "#888", fontWeight: 600 }}>country</div>
+                  <div style={{ padding: "6px 12px", color: "#888", fontWeight: 600 }}>total</div>
+                </div>
+                {[["United States", "103,802,702"], ["India", "45,035,393"], ["France", "39,866,718"], ["Germany", "38,437,756"], ["Brazil", "37,519,960"]].map(([c, v]) => (
+                  <div key={c} style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", fontSize: 11, borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
+                    <div style={{ padding: "5px 12px", color: "#bbb" }}>{c}</div>
+                    <div style={{ padding: "5px 12px", color: "#999" }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "3px", color: "#8b5cf6", marginBottom: 16 }}>SQL Lab</div>
+            <h3 style={{ fontSize: 32, fontWeight: 600, lineHeight: 1.2, marginBottom: 16, letterSpacing: "-0.5px" }}>VS Code in your browser</h3>
+            <p style={{ fontSize: 15, color: "#777", lineHeight: 1.8, marginBottom: 24 }}>
+              Monaco editor with full SQL autocomplete, syntax highlighting, multi-tab sessions, query history, and result caching. Write, run, and save queries against any connected database.
+            </p>
+            <a href="/" style={{ fontSize: 14, color: "#4A9EE8", textDecoration: "none" }}>Open SQL Lab →</a>
+          </div>
+        </div>
+      </Section>
+
       <section id="features" ref={r4} style={{ maxWidth: 1100, margin: "0 auto", padding: "0 24px 120px" }}>
         <h2 style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: "#4A9EE8", textAlign: "center", marginBottom: 12 }}>
           Everything you need
