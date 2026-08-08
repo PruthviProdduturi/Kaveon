@@ -108,7 +108,7 @@ const DashboardViewContent: React.FC<{
       {/* ── Elegant dashboard header ── */}
       <header style={{
         background: 'var(--bg-surface)', borderBottom: '1px solid var(--border)',
-        padding: '12px 24px', display: 'flex', alignItems: 'center',
+        padding: '16px 32px', display: 'flex', alignItems: 'center',
         justifyContent: 'space-between', gap: 16, flexWrap: 'wrap',
       }}>
         {/* Left: title + badge */}

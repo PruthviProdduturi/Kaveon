@@ -183,9 +183,9 @@ const BigNumberKpiCard: React.FC<BigNumberKpiCardProps> = ({ options, rows, colu
           so the value scales with the card and fills the available space. */}
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, padding: hasSpark ? "10px 20px 2px" : "12px 20px" }}>
         {options?.title?.text && (
-          <div style={{ fontSize: 13, color: "#6b7280", fontWeight: 500, textAlign: "center" }}>{options.title.text}</div>
+          <div style={{ fontSize: 13, color: "var(--text-muted, #6b7280)", fontWeight: 500, textAlign: "center" }}>{options.title.text}</div>
         )}
-        <div style={{ fontSize: hasSpark ? "clamp(28px, 3.9vw, 46px)" : "clamp(32px, 4.6vw, 56px)", fontWeight: 700, color: "#0f172a", lineHeight: 1.05, letterSpacing: "-1px", whiteSpace: "nowrap", maxWidth: "100%", fontVariantNumeric: "tabular-nums" }}>{formatted}</div>
+        <div style={{ fontSize: hasSpark ? "clamp(28px, 3.9vw, 46px)" : "clamp(32px, 4.6vw, 56px)", fontWeight: 700, color: "var(--text-primary, #0f172a)", lineHeight: 1.05, letterSpacing: "-1px", whiteSpace: "nowrap", maxWidth: "100%", fontVariantNumeric: "tabular-nums" }}>{formatted}</div>
         {displayLabel && <div style={{ fontSize: 11.5, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>{displayLabel}</div>}
         {trend !== null && (
           <div style={{ fontSize: 13, color: trendColor, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
@@ -349,7 +349,7 @@ const TableRenderer: React.FC<TableRendererProps> = ({ rows, columns, isPivot, a
           </thead>
           <tbody>
             {pageRows.map((row, ri) => (
-              <tr key={ri} style={{ background: ri % 2 === 0 ? "#fff" : "#f9fafb" }}>
+              <tr key={ri} style={{ background: ri % 2 === 0 ? "var(--bg-surface, #fff)" : "var(--bg-hover, #f9fafb)" }}>
                 {row.map((cell, ci) => {
                   const numeric = isNumeric(cell);
                   let bg: string | undefined;
@@ -390,21 +390,21 @@ const TableRenderer: React.FC<TableRendererProps> = ({ rows, columns, isPivot, a
       {/* Pagination */}
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "5px 10px", borderTop: "1px solid #e2e8f0", flexShrink: 0,
-        fontSize: 11, color: "#64748b",
+        padding: "5px 10px", borderTop: "1px solid var(--border, #e2e8f0)", flexShrink: 0,
+        fontSize: 11, color: "var(--text-muted, #64748b)",
       }}>
         <span>{filtered.length} row{filtered.length !== 1 ? "s" : ""}{search ? ` (filtered from ${baseRows.length})` : ""}</span>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <button
             onClick={() => setPage(p => Math.max(0, p - 1))}
             disabled={safePage === 0}
-            style={{ padding: "2px 7px", borderRadius: 4, border: "1px solid #e2e8f0", background: "#fff", cursor: safePage === 0 ? "default" : "pointer", opacity: safePage === 0 ? 0.4 : 1 }}
+            style={{ padding: "2px 7px", borderRadius: 4, border: "1px solid var(--border, #e2e8f0)", background: "var(--bg-surface, #fff)", cursor: safePage === 0 ? "default" : "pointer", opacity: safePage === 0 ? 0.4 : 1 }}
           >‹</button>
           <span>Page {safePage + 1} of {totalPages}</span>
           <button
             onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
             disabled={safePage >= totalPages - 1}
-            style={{ padding: "2px 7px", borderRadius: 4, border: "1px solid #e2e8f0", background: "#fff", cursor: safePage >= totalPages - 1 ? "default" : "pointer", opacity: safePage >= totalPages - 1 ? 0.4 : 1 }}
+            style={{ padding: "2px 7px", borderRadius: 4, border: "1px solid var(--border, #e2e8f0)", background: "var(--bg-surface, #fff)", cursor: safePage >= totalPages - 1 ? "default" : "pointer", opacity: safePage >= totalPages - 1 ? 0.4 : 1 }}
           >›</button>
         </div>
       </div>
@@ -586,7 +586,7 @@ const WorldMapRenderer: React.FC<{
     const dataLabel = {
       show: true,
       fontSize: 9,
-      color: "#0f172a",
+      color: "var(--text-primary, #0f172a)",
       formatter: (p: any) => {
         const v = Number(p.value);
         return !isNaN(v) && v >= labelThreshold ? `${p.name}\n${fmtVal(v)}` : "";
@@ -691,10 +691,10 @@ const WorldMapRenderer: React.FC<{
         aspectScale: 0.9,
         data,
         select: { itemStyle: { areaColor: "#f59e0b" } },
-        emphasis: { label: { show: true, fontSize: 11, color: "#0f172a", fontWeight: "bold" }, itemStyle: { areaColor: "#fbbf24" } },
-        itemStyle: { borderColor: "#fff", borderWidth: 0.5, areaColor: "#eef2f7" },
+        emphasis: { label: { show: true, fontSize: 11, color: "var(--text-primary, #0f172a)", fontWeight: "bold" }, itemStyle: { areaColor: "#fbbf24" } },
+        itemStyle: { borderColor: "var(--border, #fff)", borderWidth: 0.5, areaColor: "var(--bg-elevated, #eef2f7)" },
         labelLayout: { hideOverlap: true },
-        label: showLabels ? { show: true, fontSize: 10, color: "#1e293b" } : dataLabel,
+        label: showLabels ? { show: true, fontSize: 10, color: "var(--text-primary, #1e293b)" } : dataLabel,
       }],
     };
   }, [ready, rows, columns, advancedOptions, isGlobe, dynZoom]);
