@@ -104,6 +104,17 @@ export default function WorkspacePage() {
       const arr: WorkspaceItem[] = Array.isArray(data) ? data : Array.isArray(data.result) ? data.result : Array.isArray(data.items) ? data.items : [];
       setItems(arr);
     } catch {
+      // Retry once on failure (Neon cold start can cause first call to timeout)
+      try {
+        const retry = await msalFetch(tab.endpoint);
+        if (retry.ok) {
+          const retryData = await retry.json();
+          const retryArr: WorkspaceItem[] = Array.isArray(retryData) ? retryData : Array.isArray(retryData.result) ? retryData.result : Array.isArray(retryData.items) ? retryData.items : [];
+          setItems(retryArr);
+          setError(null);
+          return;
+        }
+      } catch {}
       setError(`Failed to load ${tab.label.toLowerCase()}.`);
     } finally {
       setLoading(false);
