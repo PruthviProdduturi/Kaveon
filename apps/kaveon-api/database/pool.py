@@ -470,6 +470,55 @@ class PostgreSQLConnection:
             self.connection.commit()
             return {"columns": [], "rows": [], "rows_objects": [], "row_count": row_count}
 
+    def execute_query_cancellable(
+        self, sql: str, params: Optional[list] = None, cancel_event=None
+    ) -> Dict[str, Any]:
+        """Like execute_query but watches *cancel_event* (threading.Event).
+        When set, psycopg2's thread-safe connection.cancel() aborts the query."""
+        import threading as _threading
+
+        self.connect()
+        cursor = self.connection.cursor()
+
+        if cancel_event is not None:
+            conn = self.connection
+            def _watcher():
+                cancel_event.wait()
+                try:
+                    conn.cancel()
+                except Exception:
+                    pass
+            _threading.Thread(target=_watcher, daemon=True).start()
+
+        try:
+            if params:
+                cursor.execute(sql, params)
+            else:
+                cursor.execute(sql)
+            sql_upper = sql.strip().upper()
+            is_modification = sql_upper.startswith(("INSERT", "UPDATE", "DELETE", "MERGE"))
+
+            if cursor.description:
+                columns = [col[0] for col in cursor.description]
+                rows_arrays: List[list] = []
+                rows_objects: List[dict] = []
+                for row in cursor.fetchall():
+                    safe_row = [_safe(v) for v in row]
+                    rows_arrays.append(safe_row)
+                    rows_objects.append({columns[i]: safe_row[i] for i in range(len(columns))})
+                cursor.close()
+                if is_modification:
+                    self.connection.commit()
+                return {"columns": columns, "rows": rows_arrays, "rows_objects": rows_objects, "row_count": len(rows_arrays)}
+            else:
+                row_count = cursor.rowcount
+                cursor.close()
+                self.connection.commit()
+                return {"columns": [], "rows": [], "rows_objects": [], "row_count": row_count}
+        finally:
+            if cancel_event is not None:
+                cancel_event.set()
+
     def get_tables(self) -> List[Dict[str, str]]:
         result = self.execute_query("""
             SELECT table_schema AS "schema", table_name AS "name"
@@ -577,6 +626,14 @@ class MySQLConnection:
             cursor.close()
             self.connection.commit()
             return {"columns": [], "rows": [], "rows_objects": [], "row_count": row_count}
+
+    def execute_query_cancellable(
+        self, sql: str, params: Optional[list] = None, cancel_event=None
+    ) -> Dict[str, Any]:
+        """Best-effort: MySQL/StarRocks lack an in-process cancel (would need a
+        side connection issuing KILL QUERY), so this just runs to completion.
+        Defined so the cancellable code path doesn't AttributeError on MySQL."""
+        return self.execute_query(sql, params)
 
     def get_tables(self) -> List[Dict[str, str]]:
         result = self.execute_query("""
@@ -734,6 +791,11 @@ def get_connection_pool(database: str) -> ConnectionPool:
     with _pool_lock:
         if database in _pools:
             return _pools[database]
+
+        # Default the physical/cache alias to the passed key; the data-source
+        # branch overrides it with the resolved database_name. Defining it here
+        # keeps the "store under both keys" step below valid for every branch.
+        actual_db = database
 
         if database == _live_meta_db():
             db_type = _live_meta_db_type()
