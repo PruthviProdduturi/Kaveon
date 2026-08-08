@@ -925,3 +925,134 @@
   background: var(--bg-hover) !important;
   color: var(--text-primary) !important;
 }
+
+/* ─── KPI / Big Number cards ─── */
+[data-theme="dark"] .dashboard-component-chart [style*="background: rgb(255"],
+[data-theme="dark"] .dashboard-component-chart [style*="background: #fff"],
+[data-theme="dark"] .dashboard-component-chart [style*="background:#fff"],
+[data-theme="dark"] .dashboard-component-chart [style*="background: white"],
+[data-theme="dark"] .dashboard-component-chart [style*="backgroundColor: \"white\""],
+[data-theme="dark"] .dashboard-component-chart [style*="background: #f"],
+[data-theme="dark"] .chart-builder-preview-card [style*="background: rgb(255"],
+[data-theme="dark"] .chart-builder-preview-card [style*="background: #fff"],
+[data-theme="dark"] .chart-builder-preview-card [style*="background:#fff"],
+[data-theme="dark"] .chart-builder-preview-card [style*="background: white"],
+[data-theme="dark"] .chart-builder-preview-card [style*="background: #f"] {
+  background: var(--bg-surface) !important;
+}
+
+/* KPI number values */
+[data-theme="dark"] .dashboard-component-chart [style*="font-size: 4"],
+[data-theme="dark"] .dashboard-component-chart [style*="font-size: 3"],
+[data-theme="dark"] .dashboard-component-chart [style*="font-size: 2"],
+[data-theme="dark"] .dashboard-component-chart [style*="fontSize: \"clamp"],
+[data-theme="dark"] .dashboard-component-chart [style*="fontSize:"] {
+  color: var(--text-primary) !important;
+}
+
+/* ─── Dashboard header / action bar ─── */
+[data-theme="dark"] header,
+[data-theme="dark"] [class*="header"] {
+  background: var(--bg-surface) !important;
+  border-color: var(--border) !important;
+}
+
+[data-theme="dark"] header button,
+[data-theme="dark"] header a {
+  background: var(--bg-elevated) !important;
+  border-color: var(--border) !important;
+  color: var(--text-secondary) !important;
+}
+
+[data-theme="dark"] header button:hover,
+[data-theme="dark"] header a:hover {
+  background: var(--bg-hover) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Published badge */
+[data-theme="dark"] [style*="background: #dcfce7"],
+[data-theme="dark"] [style*="background: #d1fae5"],
+[data-theme="dark"] [style*="background:#dcfce7"],
+[data-theme="dark"] [style*="background:#d1fae5"] {
+  background: rgba(16, 185, 129, 0.15) !important;
+  color: #10b981 !important;
+  border-color: rgba(16, 185, 129, 0.2) !important;
+}
+
+/* Edit button keeps blue */
+[data-theme="dark"] button[style*="background: #2563eb"],
+[data-theme="dark"] button[style*="background:#2563eb"] {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+  color: #fff !important;
+}
+
+/* ─── Star / favorite button ─── */
+[data-theme="dark"] button[style*="background: #fffbeb"],
+[data-theme="dark"] button[style*="background:#fffbeb"] {
+  background: rgba(245, 158, 11, 0.15) !important;
+}
+
+/* ─── Chart card inner backgrounds — force dark ─── */
+[data-theme="dark"] .dashboard-component-chart div,
+[data-theme="dark"] .chart-builder-preview-card div {
+  border-color: var(--border) !important;
+}
+
+/* Links inside dashboard */
+[data-theme="dark"] .dashboard-component-chart a,
+[data-theme="dark"] .dashboard-component-text a {
+  color: var(--accent) !important;
+}
+
+/* Markdown text blocks */
+[data-theme="dark"] .dashboard-component-text {
+  color: var(--text-primary) !important;
+  background: transparent !important;
+}
+
+[data-theme="dark"] .dashboard-component-text h1,
+[data-theme="dark"] .dashboard-component-text h2,
+[data-theme="dark"] .dashboard-component-text h3,
+[data-theme="dark"] .dashboard-component-text p,
+[data-theme="dark"] .dashboard-component-text li,
+[data-theme="dark"] .dashboard-component-text span {
+  color: var(--text-primary) !important;
+}
+
+[data-theme="dark"] .dashboard-component-text em,
+[data-theme="dark"] .dashboard-component-text i {
+  color: var(--text-muted) !important;
+}
+
+/* ⋯ menu dots button */
+[data-theme="dark"] .dashboard-component-chart button[style*="border-radius: 50%"],
+[data-theme="dark"] .dashboard-component-chart button[style*="borderRadius"] {
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border) !important;
+}
+
+/* Auto-refresh / filters dropdown */
+[data-theme="dark"] select {
+  background: var(--bg-elevated) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border) !important;
+}
+
+/* Tooltips and popovers */
+[data-theme="dark"] [role="tooltip"],
+[data-theme="dark"] [class*="tooltip"],
+[data-theme="dark"] [class*="popover"] {
+  background: var(--bg-elevated) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border) !important;
+}
+
+/* Footer / disclaimer text */
+[data-theme="dark"] footer,
+[data-theme="dark"] [class*="footer"] {
+  background: var(--bg-primary) !important;
+  color: var(--text-muted) !important;
+  border-color: var(--border) !important;
+}
