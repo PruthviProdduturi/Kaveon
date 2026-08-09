@@ -20,6 +20,10 @@ interface WorkspaceItem {
   chart_type?: string | null;
   dataset_name?: string | null;
   database_name?: string | null;
+  table_name?: string | null;
+  schema_name?: string | null;
+  sql?: string | null;
+  sql_text?: string | null;
 }
 
 // SVG icons for tabs and items
@@ -81,14 +85,19 @@ function ownerFirst(email?: string | null): string {
 const GROUP_ACCENTS = ["#3b82f6", "#10b981", "#8b5cf6", "#f59e0b", "#ec4899", "#06b6d4"];
 const NEUTRAL_ACCENT = "#64748b";
 
-// Which field groups a tab's items (their real organizing unit / mental model).
+// Layout per tab: visual objects → cards; data/text objects → dense rows.
+const TAB_LAYOUT: Record<TabKey, "cards" | "rows"> = {
+  dashboards: "cards",
+  charts: "cards",
+  datasets: "rows",
+  queries: "rows",
+};
+
+// Which field groups a tab's items. Only charts have many items across several
+// datasets, so only charts are grouped; the rest render as one flat list.
 function groupKeyFor(tab: TabKey, item: WorkspaceItem): string {
-  switch (tab) {
-    case "charts": return item.dataset_name || "Other";
-    case "datasets": return item.database_name || "Other";
-    case "queries": return item.database_name || "Other";
-    case "dashboards": return ""; // few, no meaningful grouping — one flat grid
-  }
+  if (tab === "charts") return item.dataset_name || "Other";
+  return "";
 }
 
 const RECENT_ICON: Record<string, string> = {
@@ -339,6 +348,98 @@ export default function WorkspacePage() {
     gap: 18,
   };
 
+  // Dense row for non-visual objects (datasets, saved queries). Shows the
+  // metadata that actually matters instead of a fake thumbnail cover.
+  const renderRow = (item: WorkspaceItem) => {
+    const label = item.name ?? item.title ?? "Untitled";
+    const ts = item.updated_at ?? item.created_at;
+    const owner = ownerFirst(item.created_by);
+    const isDataset = activeTab === "datasets";
+    const sql = (item.sql || item.sql_text || "").replace(/\s+/g, " ").trim();
+    const qualified = [item.schema_name, item.table_name].filter(Boolean).join(".");
+    return (
+      <div
+        key={item.id}
+        onClick={() => router.push(itemNav(activeTab, item.id))}
+        style={{
+          display: "flex", alignItems: "center", gap: 14, padding: "12px 14px",
+          cursor: "pointer", borderRadius: 12, border: "1px solid var(--border)",
+          background: "var(--bg-surface)", transition: "border-color 0.12s, background 0.12s",
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.borderColor = "var(--accent)";
+          const del = e.currentTarget.querySelector<HTMLElement>(".workspace-row-delete");
+          if (del) del.style.opacity = "1";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.borderColor = "var(--border)";
+          const del = e.currentTarget.querySelector<HTMLElement>(".workspace-row-delete");
+          if (del && deletingId !== item.id) del.style.opacity = "0";
+        }}
+      >
+        <div style={{
+          width: 38, height: 38, borderRadius: 9, flexShrink: 0,
+          background: "rgba(var(--accent-rgb), 0.07)", border: "1px solid rgba(var(--accent-rgb), 0.12)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>
+          <TabItemIcon size={18} color="var(--accent)" />
+        </div>
+
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+            {isDataset && qualified && (
+              <span style={{ fontSize: 11, fontFamily: "var(--font-mono, monospace)", color: "var(--text-muted)", background: "rgba(255,255,255,0.05)", border: "1px solid var(--border)", borderRadius: 6, padding: "1px 7px", flexShrink: 0 }}>
+                {qualified}
+              </span>
+            )}
+            {isDataset && item.database_name && (
+              <span style={{ fontSize: 11, color: "var(--text-muted)", flexShrink: 0 }}>{item.database_name}</span>
+            )}
+          </div>
+          {isDataset ? (
+            item.description && item.description !== label ? (
+              <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.description}</div>
+            ) : null
+          ) : (
+            sql && (
+              <div style={{ fontSize: 12, fontFamily: "var(--font-mono, monospace)", color: "var(--text-muted)", marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sql}</div>
+            )
+          )}
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0, fontSize: 11.5, color: "var(--text-muted)" }}>
+          {owner && <span>{owner}</span>}
+          {ts && <span>{fmtDate(ts)}</span>}
+        </div>
+
+        <button
+          type="button"
+          title={`Delete ${tab.label.toLowerCase().replace(/s$/, "")}`}
+          onClick={(e) => requestDelete(e, item)}
+          disabled={deletingId === item.id}
+          className="workspace-row-delete"
+          style={{
+            flexShrink: 0, width: 30, height: 30, borderRadius: 8, border: "1px solid transparent",
+            background: "transparent", display: "flex", alignItems: "center", justifyContent: "center",
+            cursor: deletingId === item.id ? "default" : "pointer",
+            color: "var(--text-faint)", opacity: 0, transition: "opacity 0.12s, color 0.12s, background 0.12s",
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = "#dc2626"; e.currentTarget.style.background = "rgba(220,38,38,0.08)"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-faint)"; e.currentTarget.style.background = "transparent"; }}
+        >
+          {deletingId === item.id ? (
+            <div className="spinner" style={{ width: 13, height: 13, borderWidth: 2 }} />
+          ) : (
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" />
+            </svg>
+          )}
+        </button>
+      </div>
+    );
+  };
+
   return (
     <div style={{ maxWidth: 1400, margin: "0 auto", padding: "32px 40px 64px" }}>
       {/* Jump back in — recents strip */}
@@ -475,9 +576,13 @@ export default function WorkspacePage() {
         </div>
       )}
 
-      {/* Items — grouped card grid (sections by dataset/source), or one flat grid */}
+      {/* Items — dense rows for datasets/queries; card grid (grouped for charts) otherwise */}
       {ready && !error && filtered.length > 0 && (
-        useSections ? (
+        TAB_LAYOUT[activeTab] === "rows" ? (
+          <div style={{ marginTop: 20, display: "flex", flexDirection: "column", gap: 8 }}>
+            {filtered.map((item) => renderRow(item))}
+          </div>
+        ) : useSections ? (
           <div style={{ marginTop: 20, display: "flex", flexDirection: "column", gap: 10 }}>
             {grouped.map((g) => {
               // Collapsed by default; searching force-expands so matches are visible.
