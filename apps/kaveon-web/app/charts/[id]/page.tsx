@@ -14,6 +14,7 @@ import { LoadingOverlay } from "../../../components/LoadingOverlay";
 import SaveChartModal from "../../../components/charts/SaveChartModal";
 import { msalFetch } from "../../../utils/msalFetch";
 import { useAuth } from "../../../auth/useAuth";
+import { useRecents } from "../../../hooks/useRecents";
 import { useRouter, useParams } from "next/navigation";
 
 export const dynamic = 'force-dynamic';
@@ -201,6 +202,7 @@ const ChartDetailPage: React.FC = () => {
   const router = useRouter();
   const params = useParams();
   const { isAuthenticated, account } = useAuth();
+  const { addRecent } = useRecents();
   const [accessToken, setAccessToken] = useState<string>("");
 
   const [chart, setChart] = useState<ChartDetail | null>(null);
@@ -265,6 +267,10 @@ const ChartDetailPage: React.FC = () => {
           .then(res => res.ok ? res.json() : Promise.reject("Failed to load chart details"))
           .then((chartDetail) => {
             setChart(chartDetail);
+            // Record in recents (id prefixed by type, matching delete cleanup).
+            if (chartDetail?.name) {
+              addRecent({ id: `chart-${chartId}`, label: chartDetail.name, href: `/charts/${chartId}`, type: "chart" });
+            }
             // Step 3: Fetch dataset details if dataset_id exists
             if (chartDetail.dataset_id) {
               // Fetch all summaries and filter for the correct one
