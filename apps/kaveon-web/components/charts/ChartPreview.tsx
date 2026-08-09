@@ -766,6 +766,7 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
   const { theme: appTheme } = useTheme();
   const isDark = appTheme === "dark";
   const echartsInstanceRef = useRef<any>(null);
+  const previewCardRef = useRef<HTMLDivElement>(null);
 
   // ── Download helpers ─────────────────────────────────────────────────────────
   const downloadPng = useCallback(() => {
@@ -800,13 +801,21 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
   }, [onRegisterExports, downloadPng, downloadCsv]);
 
   // Register a thumbnail-capture fn so the chart builder can persist a real
-  // preview on save. ECharts can snapshot itself; small + JPEG keeps it light.
+  // preview on save. ECharts snapshots itself (fast, crisp); other renderers
+  // (table, big-number, map) fall back to html-to-image of the preview node so
+  // EVERY chart type gets a real thumbnail.
   useEffect(() => {
-    registerThumbnailCapture?.(() => {
+    registerThumbnailCapture?.(async () => {
       try {
         const inst = echartsInstanceRef.current;
-        if (!inst || typeof inst.getDataURL !== "function") return null;
-        return inst.getDataURL({ type: "jpeg", pixelRatio: 0.5, backgroundColor: "#fff" });
+        if (inst && typeof inst.getDataURL === "function") {
+          return inst.getDataURL({ type: "jpeg", pixelRatio: 0.5, backgroundColor: "#fff" });
+        }
+        const node = previewCardRef.current;
+        if (!node) return null;
+        const { toJpeg } = await import("html-to-image");
+        const url = await toJpeg(node, { quality: 0.6, pixelRatio: 0.5, backgroundColor: "#fff", cacheBust: true });
+        return url && url.length < 2_500_000 ? url : null;
       } catch {
         return null;
       }
@@ -1200,6 +1209,7 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
 
   return (
     <div
+      ref={previewCardRef}
       className="chart-builder-preview-card"
     >
       <div className="chart-builder-preview-header">

@@ -1164,7 +1164,7 @@ export interface ChartBuilderContextValue {
   handleSave: () => void;
   registerInitialSnapshot: () => void;
   /** ChartPreview calls this to register a thumbnail-capture fn (returns a JPEG data URI). */
-  registerThumbnailCapture: (fn: (() => string | null) | null) => void;
+  registerThumbnailCapture: (fn: (() => string | null | Promise<string | null>) | null) => void;
 }
 
 const ChartBuilderContext = createContext<ChartBuilderContextValue | undefined>(undefined);
@@ -1225,7 +1225,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
   const activeJobIdRef = useRef<string | null>(null);
   // ChartPreview registers a fn that snapshots the rendered chart to a JPEG data
   // URI, so save() can persist a real thumbnail (like dashboards do).
-  const thumbnailCaptureRef = useRef<null | (() => string | null)>(null);
+  const thumbnailCaptureRef = useRef<null | (() => string | null | Promise<string | null>)>(null);
   const initialSnapshotRef = useRef<{
     config: any | null;
     name: string;
@@ -3420,7 +3420,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
       // so the workspace shows a real preview instead of a generic glyph.
       if (targetId) {
         try {
-          const thumb = thumbnailCaptureRef.current?.();
+          const thumb = await thumbnailCaptureRef.current?.();
           if (thumb) {
             void msalFetch(`${API_BASE}/api/v1/charts/${targetId}`, {
               method: "PATCH",
@@ -3501,7 +3501,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     saveError,
     handleSave,
     registerInitialSnapshot,
-    registerThumbnailCapture: useCallback((fn: (() => string | null) | null) => { thumbnailCaptureRef.current = fn; }, []),
+    registerThumbnailCapture: useCallback((fn: (() => string | null | Promise<string | null>) | null) => { thumbnailCaptureRef.current = fn; }, []),
   };
 
   return <ChartBuilderContext.Provider value={value}>{children}</ChartBuilderContext.Provider>;
