@@ -91,29 +91,58 @@ function renderMarkdown(text: string): React.ReactNode {
 
 type ToolFn = (text: string, ss: number, se: number) => [string, number, number];
 
-function wrap(pre: string, suf: string): ToolFn {
+// Toggle markers around the selection: adds them if absent, removes them if
+// already present — so clicking Bold twice returns the text to normal instead
+// of stacking **** markers.
+function toggleWrap(mk: string): ToolFn {
   return (t, ss, se) => {
     const sel = t.slice(ss, se);
-    return [t.slice(0, ss) + pre + sel + suf + t.slice(se), ss + pre.length, ss + pre.length + sel.length];
+    // A) selection itself already includes the markers → strip them
+    if (sel.length >= 2 * mk.length && sel.startsWith(mk) && sel.endsWith(mk)) {
+      const inner = sel.slice(mk.length, sel.length - mk.length);
+      return [t.slice(0, ss) + inner + t.slice(se), ss, ss + inner.length];
+    }
+    // B) markers sit immediately outside the selection → strip them
+    const before = t.slice(ss - mk.length, ss);
+    const after = t.slice(se, se + mk.length);
+    // For single-char markers (italic *, code `) don't mistake the inner star of
+    // a bold ** run for an italic wrapper.
+    const ambiguous = mk.length === 1 && (t[ss - 2] === mk || t[se + 1] === mk);
+    if (before === mk && after === mk && !ambiguous) {
+      return [t.slice(0, ss - mk.length) + sel + t.slice(se + mk.length), ss - mk.length, se - mk.length];
+    }
+    // C) not wrapped yet → add the markers
+    return [t.slice(0, ss) + mk + sel + mk + t.slice(se), ss + mk.length, ss + mk.length + sel.length];
   };
 }
 
-function prefixLine(prefix: string): ToolFn {
+// Toggle a line prefix (quote/bullet/numbered): removes it if the line already
+// starts with it, otherwise adds it — so a second click clears the formatting.
+function togglePrefix(prefix: string): ToolFn {
   return (t, ss) => {
     const ls = t.lastIndexOf('\n', ss - 1) + 1;
-    const out = t.slice(0, ls) + prefix + t.slice(ls);
-    return [out, ss + prefix.length, ss + prefix.length];
+    const line = t.slice(ls);
+    // Numbered list is a pattern (1. / 2. / …), not a literal prefix.
+    const match = prefix === '1. ' ? line.match(/^\d+\.\s/) : (line.startsWith(prefix) ? [prefix] : null);
+    if (match) {
+      const len = match[0].length;
+      const r = t.slice(0, ls) + line.slice(len);
+      const c = Math.max(ls, ss - len);
+      return [r, c, c];
+    }
+    const r = t.slice(0, ls) + prefix + t.slice(ls);
+    return [r, ss + prefix.length, ss + prefix.length];
   };
 }
 
 const TOOLBAR: { icon: string; title: string; fn: ToolFn }[] = [
-  { icon: 'fas fa-bold',        title: 'Bold',          fn: wrap('**', '**') },
-  { icon: 'fas fa-italic',      title: 'Italic',        fn: wrap('*', '*') },
-  { icon: 'fas fa-code',        title: 'Inline code',   fn: wrap('`', '`') },
+  { icon: 'fas fa-bold',        title: 'Bold',          fn: toggleWrap('**') },
+  { icon: 'fas fa-italic',      title: 'Italic',        fn: toggleWrap('*') },
+  { icon: 'fas fa-code',        title: 'Inline code',   fn: toggleWrap('`') },
   { icon: 'fas fa-link',        title: 'Link',          fn: (t, ss, se) => { const sel = t.slice(ss, se) || 'text'; const r = t.slice(0, ss) + `[${sel}](url)` + t.slice(se); return [r, ss + 1, ss + 1 + sel.length]; } },
-  { icon: 'fas fa-quote-right', title: 'Blockquote',    fn: prefixLine('> ') },
-  { icon: 'fas fa-list-ul',     title: 'Bullet list',   fn: prefixLine('- ') },
-  { icon: 'fas fa-list-ol',     title: 'Numbered list', fn: prefixLine('1. ') },
+  { icon: 'fas fa-quote-right', title: 'Blockquote',    fn: togglePrefix('> ') },
+  { icon: 'fas fa-list-ul',     title: 'Bullet list',   fn: togglePrefix('- ') },
+  { icon: 'fas fa-list-ol',     title: 'Numbered list', fn: togglePrefix('1. ') },
   { icon: 'fas fa-minus',       title: 'Horizontal rule', fn: (t, ss) => { const ls = t.lastIndexOf('\n', ss - 1) + 1; const r = t.slice(0, ls) + '\n---\n' + t.slice(ls); return [r, ls + 5, ls + 5]; } },
 ];
 
