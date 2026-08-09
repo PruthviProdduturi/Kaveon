@@ -131,7 +131,10 @@ export default function WorkspacePage() {
   const TabItemIcon = tab.Icon;
 
   const switchTab = (key: TabKey) => {
+    if (key === activeTab) return;
     setItems([]);
+    setLoadedTab(null);   // invalidate immediately so the old tab can't flash
+    setLoading(true);      // show the spinner right away, before the URL updates
     setError(null);
     setSearch("");
     setExpandedGroups(new Set()); // collapse all on tab change
