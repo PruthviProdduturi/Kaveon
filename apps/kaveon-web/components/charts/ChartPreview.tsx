@@ -894,7 +894,7 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
         const node = previewCardRef.current;
         if (!node) return null;
         const { toJpeg } = await import("html-to-image");
-        const url = await toJpeg(node, { quality: 0.6, pixelRatio: 0.5, backgroundColor: "#fff", cacheBust: true });
+        const url = await toJpeg(node, { quality: 0.6, pixelRatio: 0.5, backgroundColor: "#fff", cacheBust: true, skipFonts: true });
         return url && url.length < 2_500_000 ? url : null;
       } catch {
         return null;
