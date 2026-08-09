@@ -113,6 +113,16 @@ export default function WorkspacePage() {
   const [items, setItems] = useState<WorkspaceItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Groups are collapsed by default; a set of expanded group keys.
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+  const toggleGroup = useCallback((key: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }, []);
 
   const tab = TABS.find((t) => t.key === activeTab)!;
   const TabItemIcon = tab.Icon;
@@ -121,6 +131,7 @@ export default function WorkspacePage() {
     setItems([]);
     setError(null);
     setSearch("");
+    setExpandedGroups(new Set()); // collapse all on tab change
     router.push(`/workspace?tab=${key}`);
   };
 
@@ -455,21 +466,40 @@ export default function WorkspacePage() {
       {/* Items — grouped card grid (sections by dataset/source), or one flat grid */}
       {!loading && !error && filtered.length > 0 && (
         useSections ? (
-          <div style={{ marginTop: 20, display: "flex", flexDirection: "column", gap: 32 }}>
-            {grouped.map((g) => (
-              <div key={g.key || "all"}>
-                {/* Section header: one accent dot + group name + count */}
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-                  <span style={{ width: 9, height: 9, borderRadius: "50%", background: g.accent, flexShrink: 0 }} />
-                  <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}>{g.key || "Ungrouped"}</span>
-                  <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500 }}>{g.items.length}</span>
-                  <div style={{ flex: 1, height: 1, background: "var(--border)", marginLeft: 4 }} />
+          <div style={{ marginTop: 20, display: "flex", flexDirection: "column", gap: 10 }}>
+            {grouped.map((g) => {
+              // Collapsed by default; searching force-expands so matches are visible.
+              const open = !!search || expandedGroups.has(g.key);
+              return (
+                <div key={g.key || "all"}>
+                  {/* Section header — click to expand/collapse */}
+                  <button
+                    type="button"
+                    onClick={() => toggleGroup(g.key)}
+                    style={{
+                      width: "100%", display: "flex", alignItems: "center", gap: 10,
+                      padding: "12px 12px", background: "transparent", border: "none",
+                      borderBottom: "1px solid var(--border)", cursor: "pointer", textAlign: "left",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+                      style={{ flexShrink: 0, transform: open ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 0.15s" }}>
+                      <polyline points="9 18 15 12 9 6" />
+                    </svg>
+                    <span style={{ width: 9, height: 9, borderRadius: "50%", background: g.accent, flexShrink: 0 }} />
+                    <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}>{g.key || "Ungrouped"}</span>
+                    <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500 }}>{g.items.length}</span>
+                  </button>
+                  {open && (
+                    <div style={{ ...gridStyle, marginTop: 16, marginBottom: 8 }}>
+                      {g.items.map((item) => renderCard(item, g.accent))}
+                    </div>
+                  )}
                 </div>
-                <div style={gridStyle}>
-                  {g.items.map((item) => renderCard(item, g.accent))}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <div style={{ ...gridStyle, marginTop: 20 }}>
