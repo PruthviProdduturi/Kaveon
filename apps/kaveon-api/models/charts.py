@@ -23,3 +23,5 @@ class ChartUpdate(BaseModel):
     query_config: Optional[dict[str, Any]] = None
     viz_config: Optional[dict[str, Any]] = None
     description: Optional[str] = Field(default=None, max_length=1000)
+    # A base64 data-URI preview captured client-side after the chart renders.
+    thumbnail: Optional[str] = None

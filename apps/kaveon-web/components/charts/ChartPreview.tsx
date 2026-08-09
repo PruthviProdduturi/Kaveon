@@ -762,7 +762,7 @@ interface ChartPreviewProps {
 }
 
 const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterExports }) => {
-  const { selectedTemplate, selectedDatasetId, previewOptions, sqlPreview, description, chartType, advancedOptions, cancelRunningQuery, runContext, runPreviewQuery } = useChartBuilder();
+  const { selectedTemplate, selectedDatasetId, previewOptions, sqlPreview, description, chartType, advancedOptions, cancelRunningQuery, runContext, runPreviewQuery, registerThumbnailCapture } = useChartBuilder();
   const { theme: appTheme } = useTheme();
   const isDark = appTheme === "dark";
   const echartsInstanceRef = useRef<any>(null);
@@ -798,6 +798,21 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
   useEffect(() => {
     onRegisterExports?.({ downloadPng, downloadCsv });
   }, [onRegisterExports, downloadPng, downloadCsv]);
+
+  // Register a thumbnail-capture fn so the chart builder can persist a real
+  // preview on save. ECharts can snapshot itself; small + JPEG keeps it light.
+  useEffect(() => {
+    registerThumbnailCapture?.(() => {
+      try {
+        const inst = echartsInstanceRef.current;
+        if (!inst || typeof inst.getDataURL !== "function") return null;
+        return inst.getDataURL({ type: "jpeg", pixelRatio: 0.5, backgroundColor: "#fff" });
+      } catch {
+        return null;
+      }
+    });
+    return () => registerThumbnailCapture?.(null);
+  }, [registerThumbnailCapture]);
 
   const hasOption = Boolean(previewOptions);
 

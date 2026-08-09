@@ -26,6 +26,7 @@ def _adapt(row: dict) -> dict:
         "dataset_id": dataset_id,
         "dataset_name": row.get("dataset_name"),
         "chart_type": row.get("chart_type") or "table",
+        "thumbnail": row.get("thumbnail"),
         "config": config,
         "query_config": query_config,
         "viz_config": viz_config,
@@ -54,7 +55,7 @@ def list_charts(user_email: str, role: str = "Viewer") -> List[dict]:
     result = db.query(f"""
         SELECT c.id, c.name, c.description, c.chart_type, c.query_config, c.viz_config,
                c.created_on, c.created_by, c.changed_on, c.updated_by, c.created_at, c.updated_at,
-               c.visibility, ds.dataset_name,
+               c.visibility, c.thumbnail, ds.dataset_name,
                CASE WHEN f.id IS NOT NULL THEN 1 ELSE 0 END as favorite
         FROM dbo.charts c
         LEFT JOIN dbo.favorites f ON f.object_id = CAST(c.id AS NVARCHAR(255))
@@ -135,6 +136,8 @@ def update_chart(chart_id: str, data: dict) -> Optional[dict]:
     if "visibility" in data:
         vis = data["visibility"] if data["visibility"] in VALID_VISIBILITY else "internal"
         updates.append(f"visibility = @param{i}"); params.append(vis); i += 1
+    if "thumbnail" in data:
+        updates.append(f"thumbnail = @param{i}"); params.append(data["thumbnail"]); i += 1
 
     updates.append(f"changed_on = @param{i}"); params.append(now); i += 1
     updates.append(f"updated_at = @param{i}"); params.append(now); i += 1
