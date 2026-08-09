@@ -113,6 +113,9 @@ export default function WorkspacePage() {
   const [items, setItems] = useState<WorkspaceItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Which tab the current `items` belong to — gates rendering so the previous
+  // tab's content/empty-state never flashes while the new tab is still loading.
+  const [loadedTab, setLoadedTab] = useState<TabKey | null>(null);
   // Groups are collapsed by default; a set of expanded group keys.
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
@@ -137,6 +140,7 @@ export default function WorkspacePage() {
 
   const load = useCallback(async () => {
     if (!isAuthenticated) return;
+    const tabKey = tab.key; // the tab this load belongs to
     setLoading(true);
     setError(null);
     try {
@@ -145,14 +149,16 @@ export default function WorkspacePage() {
       const data = await res.json();
       const arr: WorkspaceItem[] = Array.isArray(data) ? data : Array.isArray(data.result) ? data.result : Array.isArray(data.items) ? data.items : [];
       setItems(arr);
+      setLoadedTab(tabKey);
     } catch {
-      // Retry once on failure (Neon cold start can cause first call to timeout)
+      // Retry once on failure (cold start can cause the first call to time out)
       try {
         const retry = await msalFetch(tab.endpoint);
         if (retry.ok) {
           const retryData = await retry.json();
           const retryArr: WorkspaceItem[] = Array.isArray(retryData) ? retryData : Array.isArray(retryData.result) ? retryData.result : Array.isArray(retryData.items) ? retryData.items : [];
           setItems(retryArr);
+          setLoadedTab(tabKey);
           setError(null);
           return;
         }
@@ -161,7 +167,7 @@ export default function WorkspacePage() {
     } finally {
       setLoading(false);
     }
-  }, [isAuthenticated, tab.endpoint, tab.label]);
+  }, [isAuthenticated, tab.endpoint, tab.label, tab.key]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -194,7 +200,9 @@ export default function WorkspacePage() {
   }, [confirmItem, tab.endpoint, tab.label]);
 
   const email = account?.email ?? "";
-  const filtered = items.filter((item) => {
+  // Only trust `items` once they've been loaded for the CURRENT tab.
+  const ready = loadedTab === activeTab && !loading;
+  const filtered = (ready ? items : []).filter((item) => {
     const label = (item.name ?? item.title ?? "").toLowerCase();
     if (search && !label.includes(search.toLowerCase())) return false;
     if (scope === "mine" && item.created_by && item.created_by !== email) return false;
@@ -431,8 +439,9 @@ export default function WorkspacePage() {
 
       <div style={{ height: 1, background: "var(--border)", marginBottom: 4 }} />
 
-      {/* Loading */}
-      {loading && (
+      {/* Loading — also covers the gap right after a tab switch, before the new
+          tab's data has arrived, so the previous tab never flashes through. */}
+      {(loading || (!error && !ready)) && (
         <div style={{ display: "flex", justifyContent: "center", padding: "80px 0", color: "var(--text-muted)" }}>
           <div className="spinner" style={{ width: 24, height: 24, borderWidth: 2 }} />
         </div>
@@ -451,7 +460,7 @@ export default function WorkspacePage() {
       )}
 
       {/* Empty */}
-      {!loading && !error && filtered.length === 0 && (
+      {ready && !error && filtered.length === 0 && (
         <div style={{ textAlign: "center", padding: "80px 0", color: "var(--text-muted)" }}>
           <p style={{ fontSize: 15, marginBottom: 16 }}>No {tab.label.toLowerCase()} yet</p>
           <button type="button" onClick={() => router.push(tab.newRoute)} style={{
@@ -464,7 +473,7 @@ export default function WorkspacePage() {
       )}
 
       {/* Items — grouped card grid (sections by dataset/source), or one flat grid */}
-      {!loading && !error && filtered.length > 0 && (
+      {ready && !error && filtered.length > 0 && (
         useSections ? (
           <div style={{ marginTop: 20, display: "flex", flexDirection: "column", gap: 10 }}>
             {grouped.map((g) => {
