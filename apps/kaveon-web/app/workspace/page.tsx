@@ -108,6 +108,13 @@ const RECENT_ICON: Record<string, string> = {
   chat: "fas fa-comment",
 };
 
+// Humanize a chart_type slug for display on chart cards (e.g. "time_series_line"
+// -> "Time Series Line", "big_number" -> "Big Number").
+function chartTypeLabel(t?: string | null): string {
+  if (!t) return "";
+  return t.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 export default function WorkspacePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -287,6 +294,19 @@ export default function WorkspacePage() {
             <img src={item.thumbnail as string} alt={label} style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top" }} />
           ) : (
             <TabItemIcon size={34} color={accent} />
+          )}
+
+          {/* Chart-type chip so the type is identifiable at a glance */}
+          {activeTab === "charts" && item.chart_type && (
+            <span style={{
+              position: "absolute", bottom: 8, left: 8,
+              display: "inline-flex", alignItems: "center", gap: 5,
+              padding: "3px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600,
+              background: "rgba(15,23,42,0.72)", backdropFilter: "blur(4px)", color: "#fff",
+            }}>
+              <i className="fas fa-chart-column" style={{ fontSize: 10, opacity: 0.9 }} />
+              {chartTypeLabel(item.chart_type)}
+            </span>
           )}
 
           {/* Delete — reveals on card hover */}
