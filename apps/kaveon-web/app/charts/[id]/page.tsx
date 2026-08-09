@@ -52,11 +52,27 @@ const ChartDetailBuilderView: React.FC<ChartDetailBuilderViewProps> = ({
   onToggleFavorite,
   dataset,
 }) => {
-  const { name, setName, canSave, isSaving, saveError } = useChartBuilder();
+  const { name, setName, canSave, isSaving, saveError, saveChartAs, chartId } = useChartBuilder();
   const headerRouter = useRouter();
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
   const [isAnimating, setIsAnimating] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
+  const [showSaveAs, setShowSaveAs] = useState(false);
+  const [saveAsName, setSaveAsName] = useState("");
+  const [savingAs, setSavingAs] = useState(false);
+
+  const openSaveAs = () => { setSaveAsName(name ? `${name} (Copy)` : "Untitled chart"); setShowSaveAs(true); };
+  const confirmSaveAs = async () => {
+    if (!saveAsName.trim()) return;
+    setSavingAs(true);
+    try {
+      const newId = await saveChartAs(saveAsName.trim());
+      setShowSaveAs(false);
+      if (newId) headerRouter.push(`/charts/${newId}/edit`);
+    } finally {
+      setSavingAs(false);
+    }
+  };
   const nameInputRef = useRef<HTMLInputElement>(null);
 
   const handleFavoriteClick = () => {
@@ -179,6 +195,22 @@ const ChartDetailBuilderView: React.FC<ChartDetailBuilderViewProps> = ({
               }}
             />
           </button>
+          {chartId && (
+            <button
+              type="button"
+              onClick={openSaveAs}
+              disabled={isSaving}
+              title="Save as a new chart (duplicate)"
+              style={{
+                padding: "8px 16px", fontWeight: 600, fontSize: 13,
+                background: "transparent", color: "var(--text-secondary)",
+                border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer",
+                display: "flex", alignItems: "center", gap: 6,
+              }}
+            >
+              <i className="fas fa-copy" /> Save As
+            </button>
+          )}
           <button
             type="button"
             className="chart-builder-primary-btn"
@@ -201,6 +233,40 @@ const ChartDetailBuilderView: React.FC<ChartDetailBuilderViewProps> = ({
         isOpen={isSaveModalOpen}
         onClose={() => setIsSaveModalOpen(false)}
       />
+
+      {showSaveAs && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1001, padding: 20 }}
+          onClick={() => { if (!savingAs) setShowSaveAs(false); }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: "100%", maxWidth: 420, background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 14, boxShadow: "0 24px 48px rgba(0,0,0,0.28)", padding: 24 }}
+          >
+            <h3 style={{ margin: "0 0 4px", fontSize: 17, fontWeight: 700, color: "var(--text-primary)" }}>Save as new chart</h3>
+            <p style={{ margin: "0 0 16px", fontSize: 13, color: "var(--text-muted)" }}>Creates an independent copy. The original stays unchanged.</p>
+            <label className="chart-builder-label" htmlFor="chart-save-as-name">Name</label>
+            <input
+              id="chart-save-as-name"
+              autoFocus
+              className="chart-builder-input"
+              value={saveAsName}
+              onChange={(e) => setSaveAsName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") confirmSaveAs(); }}
+            />
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
+              <button type="button" onClick={() => setShowSaveAs(false)} disabled={savingAs}
+                style={{ padding: "9px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer", border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg-surface)", color: "var(--text-secondary)" }}>
+                Cancel
+              </button>
+              <button type="button" onClick={confirmSaveAs} disabled={savingAs || !saveAsName.trim()}
+                style={{ padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", border: "none", borderRadius: 8, background: "#2563eb", color: "#fff", minWidth: 96 }}>
+                {savingAs ? "Saving…" : "Create copy"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 };
