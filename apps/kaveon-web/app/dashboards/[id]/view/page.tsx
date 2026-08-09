@@ -77,6 +77,17 @@ const DashboardViewContent: React.FC<{
       .catch(() => setChartsReady(true));
   }, [initialConfig, preloadAllCharts]);
 
+  // react-grid-layout measures the canvas width on mount; after a save→redirect
+  // that can land at half width before the layout settles. Nudge a remeasure
+  // once charts are ready (rAF + a short delayed retry).
+  useEffect(() => {
+    if (!chartsReady) return;
+    const fire = () => window.dispatchEvent(new Event("resize"));
+    const raf = requestAnimationFrame(fire);
+    const t = setTimeout(fire, 200);
+    return () => { cancelAnimationFrame(raf); clearTimeout(t); };
+  }, [chartsReady]);
+
   // Auto-refresh timer
   useEffect(() => {
     if (refreshTimerRef.current) clearInterval(refreshTimerRef.current);
