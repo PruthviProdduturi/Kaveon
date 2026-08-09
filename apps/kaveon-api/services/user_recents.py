@@ -60,6 +60,18 @@ def remove_recent(user_email: str, item_id: str) -> None:
     """, [user_email, item_id])
 
 
+def clear_recents(user_email: str, item_type: str | None = None) -> int:
+    """Clear a user's recents — all, or just one type."""
+    if item_type:
+        return db.execute(
+            "DELETE FROM user_recents WHERE user_email = @param0 AND type = @param1",
+            [user_email, item_type],
+        )
+    return db.execute(
+        "DELETE FROM user_recents WHERE user_email = @param0", [user_email]
+    )
+
+
 def remove_recent_all_users(item_id: str, item_type: str) -> None:
     """Purge a recents entry for every user — call when the underlying
     dashboard/chart/dataset is deleted so it stops showing in anyone's recents."""
