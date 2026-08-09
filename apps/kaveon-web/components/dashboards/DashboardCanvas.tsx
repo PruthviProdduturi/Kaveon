@@ -118,7 +118,7 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
           <button onClick={() => addLayoutItem('chart')} style={addBtnStyle}>
             <i className="fas fa-plus" /> Add Chart
           </button>
-          <button onClick={() => addLayoutItem('text')} style={{ ...addBtnStyle, background: 'transparent', color: '#64748b', border: '2px dashed #cbd5e1' }}>
+          <button onClick={() => addLayoutItem('text')} style={{ ...addBtnStyle, background: 'transparent', color: 'var(--text-muted)', border: '2px dashed var(--border)' }}>
             <i className="fas fa-font" /> Add Text
           </button>
         </div>

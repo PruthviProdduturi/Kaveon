@@ -270,7 +270,7 @@ const DashboardFilterBarEnhanced: React.FC = () => {
   if (loading) {
     return (
       <div className="chart-filter-card">
-        <div style={{ padding: '12px', textAlign: 'center', color: '#64748b', fontSize: 13 }}>
+        <div style={{ padding: '12px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
           <i className="fas fa-spinner fa-spin" style={{ marginRight: 8 }} />
           Loading filter options...
         </div>
@@ -366,7 +366,7 @@ const DashboardFilterBarEnhanced: React.FC = () => {
 
       {/* Empty state */}
       {dashboardFilters.length === 0 && !isAddingFilter && (
-        <div style={{ padding: '12px', textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>
+        <div style={{ padding: '12px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
           No filters added. Click "+ Add filter" to get started.
         </div>
       )}
