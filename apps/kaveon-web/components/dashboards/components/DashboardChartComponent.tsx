@@ -164,36 +164,42 @@ const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({
         crossFilterExtra={relevantCrossExtras}
         paletteOverride={themePalette}
       />
-      {/* Tile title bar — gives every chart a clear name + optional info tooltip */}
-      {tileTitle && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 6,
-          padding: '7px 12px 3px', flexShrink: 0, minHeight: 0,
-        }}>
-          <span
-            title={tileTitle}
-            style={{
-              fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.2px',
-              // Wrap up to 2 lines instead of hard-trimming a single line.
-              display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
-              overflow: 'hidden', lineHeight: 1.2,
-            }}
-          >{tileTitle}</span>
-          {tileInfo && (
+      {/* Tile body — title + chart in one positioned column so the actions
+          overlay (⋯) aligns with the title/info row at the top. */}
+      <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+        {/* Tile title bar — clear name + optional info tooltip. Extra top padding
+            (tiles used to sit flush against the top) and right padding to clear
+            the ⋯ options button. */}
+        {tileTitle && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '12px 44px 6px 14px', flexShrink: 0, minHeight: 0,
+          }}>
             <span
-              title={tileInfo}
-              style={{ color: '#94a3b8', fontSize: 11, cursor: 'help', flexShrink: 0, lineHeight: 1 }}
-            >
-              <i className="fas fa-circle-info" />
-            </span>
-          )}
+              title={tileTitle}
+              style={{
+                fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.2px',
+                display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+                overflow: 'hidden', lineHeight: 1.2,
+              }}
+            >{tileTitle}</span>
+            {tileInfo && (
+              <span
+                title={tileInfo}
+                style={{ color: 'var(--text-muted)', fontSize: 11, cursor: 'help', flexShrink: 0, lineHeight: 1 }}
+              >
+                <i className="fas fa-circle-info" />
+              </span>
+            )}
+          </div>
+        )}
+        <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
+          <ChartPreview
+            onCrossFilter={isEditMode ? undefined : handleCrossFilter}
+            onRegisterExports={(exp) => { exportsRef.current = exp; }}
+          />
         </div>
-      )}
-      <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
-        <ChartPreview
-          onCrossFilter={isEditMode ? undefined : handleCrossFilter}
-          onRegisterExports={(exp) => { exportsRef.current = exp; }}
-        />
+        {/* Positioned relative to the whole tile → top:6 aligns with the title row */}
         <ChartActionsOverlay
           chartId={chartId}
           dashboardId={dashboardId}
