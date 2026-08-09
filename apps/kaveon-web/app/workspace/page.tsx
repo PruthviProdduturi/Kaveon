@@ -445,7 +445,7 @@ export default function WorkspacePage() {
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, fontSize: 11.5, color: "var(--text-muted)" }}>
             {item.chart_type && (
               <>
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: accent, fontWeight: 600 }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--text-primary)", fontWeight: 600 }}>
                   <i className="fas fa-chart-column" style={{ fontSize: 10 }} />
                   {chartTypeLabel(item.chart_type)}
                 </span>
