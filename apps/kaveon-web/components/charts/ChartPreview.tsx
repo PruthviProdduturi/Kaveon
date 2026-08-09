@@ -1313,7 +1313,9 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
           {subtitle && <div>{subtitle}</div>}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {description && description.trim() && (
+          {/* In a dashboard tile the tile title already shows an info icon next to
+              the name — don't render a second one here. */}
+          {description && description.trim() && !(runContext || '').startsWith('dashboard') && (
             <div className="chart-info-icon-container">
               <i
                 className="fas fa-info-circle chart-info-icon"
