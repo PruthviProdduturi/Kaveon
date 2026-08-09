@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "../../auth/useAuth";
 import { msalFetch } from "../../utils/msalFetch";
@@ -153,9 +153,49 @@ export default function WorkspacePage() {
     setLoading(true);      // show the spinner right away, before the URL updates
     setError(null);
     setSearch("");
-    setExpandedGroups(new Set()); // collapse all on tab change
+    // expandedGroups is restored per-tab by the effect below (persisted state),
+    // so leaving/returning keeps your expanded sections.
     router.push(`/workspace?tab=${key}`);
   };
+
+  // Persist + restore expanded sections and scroll per tab, so navigating away
+  // (opening a chart) and back returns you to the exact position you left.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = sessionStorage.getItem(`ws-exp-${activeTab}`);
+      setExpandedGroups(raw ? new Set<string>(JSON.parse(raw)) : new Set());
+    } catch { setExpandedGroups(new Set()); }
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try { sessionStorage.setItem(`ws-exp-${activeTab}`, JSON.stringify([...expandedGroups])); } catch {}
+  }, [expandedGroups, activeTab]);
+
+  // Save scroll position per tab (throttled).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let t: ReturnType<typeof setTimeout>;
+    const onScroll = () => {
+      clearTimeout(t);
+      t = setTimeout(() => { try { sessionStorage.setItem(`ws-scroll-${activeTab}`, String(window.scrollY)); } catch {} }, 120);
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => { window.removeEventListener("scroll", onScroll); clearTimeout(t); };
+  }, [activeTab]);
+
+  // Restore scroll once this tab's items have loaded (so the content exists).
+  const scrollRestoredRef = useRef<string>("");
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (loadedTab !== activeTab || scrollRestoredRef.current === activeTab) return;
+    scrollRestoredRef.current = activeTab;
+    try {
+      const y = Number(sessionStorage.getItem(`ws-scroll-${activeTab}`) || 0);
+      if (y > 0) requestAnimationFrame(() => window.scrollTo(0, y));
+    } catch {}
+  }, [loadedTab, activeTab]);
 
   const load = useCallback(async () => {
     if (!isAuthenticated) return;
