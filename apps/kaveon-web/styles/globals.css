@@ -2968,7 +2968,6 @@ main.main-lab {
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
   flex: 1;
   min-height: 0;
-  border-top: 3px solid #dbeafe;
 }
 
 .chart-config-panel-card {
@@ -2983,7 +2982,6 @@ main.main-lab {
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
   min-height: 0;
   flex: 1;
-  border-top: 3px solid #dbeafe;
 }
 
 .chart-source-search {
