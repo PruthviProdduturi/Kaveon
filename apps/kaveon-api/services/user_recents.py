@@ -14,16 +14,34 @@ def get_recents(user_email: str) -> List[dict]:
 
 
 def add_recent(user_email: str, item_id: str, label: str, href: str, item_type: str) -> None:
-    db.execute("""
-        MERGE INTO user_recents AS target
-        USING (SELECT @param0 AS user_email, @param1 AS item_id) AS source
-            ON target.user_email = source.user_email AND target.item_id = source.item_id
-        WHEN MATCHED THEN
-            UPDATE SET label = @param2, href = @param3, type = @param4, created_at = GETUTCDATE()
-        WHEN NOT MATCHED THEN
-            INSERT (user_email, item_id, label, href, type, created_at)
-            VALUES (@param0, @param1, @param2, @param3, @param4, GETUTCDATE());
-    """, [user_email, item_id, label, href, item_type])
+    # Postgres/MySQL don't support T-SQL MERGE; use the (user_email, item_id)
+    # unique constraint for a native upsert. The dialect layer rewrites
+    # GETUTCDATE()->NOW() and @paramN->%s.
+    db_type = (__import__("os").environ.get("METADATA_DB_TYPE") or "").lower()
+    if db_type == "mysql":
+        db.execute("""
+            INSERT INTO user_recents (user_email, item_id, label, href, type, created_at)
+            VALUES (@param0, @param1, @param2, @param3, @param4, GETUTCDATE())
+            ON DUPLICATE KEY UPDATE label = @param2, href = @param3, type = @param4, created_at = GETUTCDATE()
+        """, [user_email, item_id, label, href, item_type])
+    elif db_type == "postgresql":
+        db.execute("""
+            INSERT INTO user_recents (user_email, item_id, label, href, type, created_at)
+            VALUES (@param0, @param1, @param2, @param3, @param4, GETUTCDATE())
+            ON CONFLICT (user_email, item_id)
+            DO UPDATE SET label = @param2, href = @param3, type = @param4, created_at = GETUTCDATE()
+        """, [user_email, item_id, label, href, item_type])
+    else:
+        db.execute("""
+            MERGE INTO user_recents AS target
+            USING (SELECT @param0 AS user_email, @param1 AS item_id) AS source
+                ON target.user_email = source.user_email AND target.item_id = source.item_id
+            WHEN MATCHED THEN
+                UPDATE SET label = @param2, href = @param3, type = @param4, created_at = GETUTCDATE()
+            WHEN NOT MATCHED THEN
+                INSERT (user_email, item_id, label, href, type, created_at)
+                VALUES (@param0, @param1, @param2, @param3, @param4, GETUTCDATE());
+        """, [user_email, item_id, label, href, item_type])
     # Trim to 20 most recent per user
     db.execute("""
         DELETE FROM user_recents
