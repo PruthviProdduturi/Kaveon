@@ -379,7 +379,11 @@ const DashboardViewPage: React.FC = () => {
         onFavoriteClick={handleFavoriteClick}
         onPublish={handlePublish}
         onEdit={() => router.push(`/dashboards/${id}/edit`)}
-        onClose={() => router.push('/workspace?tab=dashboards')}
+        onClose={() => {
+          // Back to the user's previous state; fall back to Library on direct visits.
+          if (typeof window !== 'undefined' && window.history.length > 1) router.back();
+          else router.push('/workspace?tab=dashboards');
+        }}
       />
     </DashboardProvider>
   );
