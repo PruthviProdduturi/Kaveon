@@ -164,10 +164,10 @@ const DashboardEditPage: React.FC = () => {
   }
 
   return (
+    // DashboardBuilder already renders its own .page-shell — don't double-wrap
+    // (that doubled the page padding vs the chart page).
     <DashboardProvider initialConfig={initialConfig} onSave={handleSave} onSaveAs={handleSaveAs}>
-      <div className="page-shell page-shell-wide">
-        <DashboardBuilder dashboardId={id as string} />
-      </div>
+      <DashboardBuilder dashboardId={id as string} />
     </DashboardProvider>
   );
 };
