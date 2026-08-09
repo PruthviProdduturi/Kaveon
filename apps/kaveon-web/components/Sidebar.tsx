@@ -348,7 +348,7 @@ export function Sidebar({ children }: SidebarProps) {
       exact: true,
     },
     {
-      label: "Workspace",
+      label: "Library",
       href: "/workspace",
       icon: <WorkspaceIcon />,
     },
