@@ -484,6 +484,16 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
 
         datasource = normalize_column_name(raw_datasource)
 
+        # Postgres/MySQL don't support 3-part `database.schema.table` references
+        # (that's T-SQL / Fabric only — Postgres raises "cross-database references
+        # are not implemented"). The client qualifies the source as
+        # database_name.schema.table, so for these dialects drop the leading
+        # database part, leaving a valid `schema.table`.
+        if db_type in ("postgresql", "mysql") and datasource:
+            _parts = datasource.split(".")
+            if len(_parts) == 3:
+                datasource = ".".join(_parts[1:])
+
         # Virtual SQL dataset — use the saved SQL as a subquery source
         if sql_text and not datasource:
             fact_alias = "fact"
