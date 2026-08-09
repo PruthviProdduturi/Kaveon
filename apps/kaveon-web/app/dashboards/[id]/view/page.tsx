@@ -8,6 +8,7 @@ import DashboardFilterBarReadOnly from "../../../../components/dashboards/Dashbo
 import { LoadingOverlay } from "../../../../components/LoadingOverlay";
 import { msalFetch } from "../../../../utils/msalFetch";
 import { useRecents } from "../../../../hooks/useRecents";
+import { resetQuerySemaphore } from "../../../../utils/querySemaphore";
 import { API_BASE } from "../../../../config";
 import { toJpeg } from "html-to-image";
 
@@ -392,8 +393,14 @@ const DashboardViewPage: React.FC = () => {
         initialConfig={initialConfig}
         onFavoriteClick={handleFavoriteClick}
         onPublish={handlePublish}
-        onEdit={() => router.push(`/dashboards/${id}/edit`)}
+        onEdit={() => {
+          // Drop queued dashboard-chart queries so the edit page isn't blocked
+          // behind this view's in-flight/queued queries.
+          resetQuerySemaphore();
+          router.push(`/dashboards/${id}/edit`);
+        }}
         onClose={() => {
+          resetQuerySemaphore();
           // Back to the user's previous state; fall back to Library on direct visits.
           if (typeof window !== 'undefined' && window.history.length > 1) router.back();
           else router.push('/workspace?tab=dashboards');

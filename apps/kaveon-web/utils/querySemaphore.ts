@@ -9,7 +9,7 @@ let running = 0;
 const queue: Array<() => void> = [];
 
 function release() {
-  running--;
+  running = Math.max(0, running - 1);
   if (queue.length > 0) {
     const next = queue.shift()!;
     running++;
@@ -27,4 +27,15 @@ export function acquireQuerySlot(): Promise<() => void> {
       queue.push(start);
     }
   });
+}
+
+/**
+ * Drop all *queued* (not-yet-started) query slots and reset the counter, so a
+ * page navigation (e.g. dashboard → edit) doesn't wait behind the previous
+ * page's queued dashboard-chart queries. In-flight fetches finish on their own
+ * (guarded release), but the next page gets fresh slots immediately.
+ */
+export function resetQuerySemaphore(): void {
+  queue.length = 0;
+  running = 0;
 }
