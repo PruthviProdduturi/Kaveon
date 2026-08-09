@@ -354,6 +354,15 @@ export default function WorkspacePage() {
           )}
           <div style={{ flex: 1 }} />
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, fontSize: 11.5, color: "var(--text-muted)" }}>
+            {activeTab === "charts" && item.chart_type && (
+              <>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: accent, fontWeight: 600 }}>
+                  <i className="fas fa-chart-column" style={{ fontSize: 10 }} />
+                  {chartTypeLabel(item.chart_type)}
+                </span>
+                {(owner || ts) && <span style={{ opacity: 0.5 }}>·</span>}
+              </>
+            )}
             {owner && <span>{owner}</span>}
             {owner && ts && <span style={{ opacity: 0.5 }}>·</span>}
             {ts && <span>{fmtDate(ts)}</span>}
