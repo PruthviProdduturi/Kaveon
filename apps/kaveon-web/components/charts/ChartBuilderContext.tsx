@@ -1162,6 +1162,8 @@ export interface ChartBuilderContextValue {
   canSave: boolean;
   saveError: string | null;
   handleSave: () => void;
+  /** Save the current chart as a NEW copy; resolves to the new chart id (or null). */
+  saveChartAs: (newName: string) => Promise<number | null>;
   registerInitialSnapshot: () => void;
   /** ChartPreview calls this to register a thumbnail-capture fn (returns a JPEG data URI). */
   registerThumbnailCapture: (fn: (() => string | null | Promise<string | null>) | null) => void;
@@ -3441,6 +3443,58 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     }
   };
 
+  // Save As — always create a NEW chart from the current config, capture a
+  // thumbnail for it, and return its id so the caller can open the copy.
+  const saveChartAs = async (newName: string): Promise<number | null> => {
+    if (!selectedTemplate || !selectedDatasetId) return null;
+    setIsSaving(true);
+    setSaveError(null);
+    try {
+      const config = buildQueryConfigForPreview();
+      const serializableOptions = {
+        ...advancedOptions,
+        legend: { ...(advancedOptions.legend || {}), order: (advancedOptions.legend && advancedOptions.legend.order) || undefined },
+        series: (advancedOptions.series || []).map((s: any) => ({ ...s, symbol: typeof s.symbol === 'function' ? 'circle' : s.symbol, labelLayout: undefined })),
+        labelLayout: advancedOptions.labelLayout,
+      };
+      const payload = {
+        name: newName.trim(),
+        description: description.trim() || null,
+        chart_type: selectedTemplate.id,
+        dataset_id: selectedDatasetId,
+        query_config: config,
+        viz_config: { echarts_option: serializableOptions },
+        sql_text: sqlPreview.lastSql || null,
+      };
+      const res = await msalFetch(`${API_BASE}/api/v1/charts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(`Failed to create copy: ${res.status}`);
+      const saved = await res.json();
+      const newId = saved?.id ?? null;
+      if (newId) {
+        try {
+          const thumb = await thumbnailCaptureRef.current?.();
+          if (thumb) {
+            void msalFetch(`${API_BASE}/api/v1/charts/${newId}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ thumbnail: thumb }),
+            }).catch(() => {});
+          }
+        } catch { /* thumbnail is best-effort */ }
+      }
+      return newId;
+    } catch (e: unknown) {
+      setSaveError(e instanceof Error ? e.message : "Failed to save a copy");
+      return null;
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const value: ChartBuilderContextValue = {
     chartId,
     setChartId,
@@ -3501,6 +3555,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     canSave,
     saveError,
     handleSave,
+    saveChartAs,
     registerInitialSnapshot,
     registerThumbnailCapture: useCallback((fn: (() => string | null | Promise<string | null>) | null) => { thumbnailCaptureRef.current = fn; }, []),
   };
