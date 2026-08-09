@@ -277,11 +277,15 @@ export default function WorkspacePage() {
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(it);
     }
-    // Larger groups first; stable within.
-    const entries = Array.from(map.entries()).sort((a, b) => b[1].length - a[1].length);
+    // Sections ordered alphabetically by name (ungrouped "" sorts last).
+    const entries = Array.from(map.entries()).sort((a, b) =>
+      (a[0] || "￿").localeCompare(b[0] || "￿")
+    );
     return entries.map(([key, groupItems], idx) => ({
       key,
-      items: groupItems,
+      items: [...groupItems].sort((a, b) =>
+        (a.name ?? a.title ?? "").localeCompare(b.name ?? b.title ?? "")
+      ),
       accent: key === "" ? NEUTRAL_ACCENT : GROUP_ACCENTS[idx % GROUP_ACCENTS.length],
     }));
   })();
