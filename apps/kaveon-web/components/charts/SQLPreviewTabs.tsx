@@ -237,7 +237,7 @@ const SQLPreviewTabs: React.FC = () => {
               {fabricDurationMs != null && !Number.isNaN(fabricDurationMs) && (
                 <span className="sql-runtime-chip sql-runtime-fabric-text">
                   <span className="sql-runtime-dot sql-runtime-dot-fabric" />
-                  <span>Fabric {formatDurationMs(fabricDurationMs)}</span>
+                  <span>Server {formatDurationMs(fabricDurationMs)}</span>
                 </span>
               )}
             </span>
