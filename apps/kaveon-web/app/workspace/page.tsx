@@ -282,8 +282,8 @@ export default function WorkspacePage() {
         }}>
           {!hasThumb && <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: accent, opacity: 0.85 }} />}
           {hasThumb ? (
+            // Top-align (objectPosition:top) so a tall dashboard shows its top, not a center crop.
             // eslint-disable-next-line @next/next/no-img-element
-            {/* Top-align so a tall dashboard shows its top (title/first row) instead of a center crop. */}
             <img src={item.thumbnail as string} alt={label} style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top" }} />
           ) : (
             <TabItemIcon size={34} color={accent} />
