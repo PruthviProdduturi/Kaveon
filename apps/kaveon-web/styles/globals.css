@@ -645,12 +645,12 @@ main.main-lab {
 .page-header-title {
   font-size: 1.25rem;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--text-primary);
 }
 
 .page-header-subtitle {
   font-size: 0.9rem;
-  color: #64748b;
+  color: var(--text-muted);
 }
 
 .page-header-actions {

@@ -108,7 +108,7 @@ const SQLPreviewTabs: React.FC = () => {
           )}
         <pre
           style={{
-            background: "#ffffff",
+            background: "var(--bg-surface)",
             borderRadius: 8,
             padding: 8,
             fontSize: 12,
@@ -116,7 +116,7 @@ const SQLPreviewTabs: React.FC = () => {
             width: "100%",
             boxSizing: "border-box",
             overflow: "auto",
-            border: "1px solid #e5e7eb",
+            border: "1px solid var(--border)",
           }}
         >
           {formattedSql}
@@ -176,7 +176,7 @@ const SQLPreviewTabs: React.FC = () => {
     return (
       <pre
         style={{
-          background: "#ffffff",
+          background: "var(--bg-surface)",
           borderRadius: 8,
           padding: 8,
           fontSize: 12,
@@ -184,7 +184,7 @@ const SQLPreviewTabs: React.FC = () => {
           width: "100%",
           boxSizing: "border-box",
           overflow: "auto",
-          border: "1px solid #e5e7eb",
+          border: "1px solid var(--border)",
         }}
       >
         {JSON.stringify(lastConfigJson, null, 2)}
