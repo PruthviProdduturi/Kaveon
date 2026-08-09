@@ -24,7 +24,16 @@ interface WorkspaceItem {
   schema_name?: string | null;
   sql?: string | null;
   sql_text?: string | null;
+  favorite?: boolean;
 }
+
+// Singular object_type used by the per-user favorites/pin store.
+const PIN_TYPE: Record<TabKey, string> = {
+  dashboards: "dashboard",
+  charts: "chart",
+  datasets: "dataset",
+  queries: "query",
+};
 
 // SVG icons for tabs and items
 function DashboardIcon({ size = 16, color = "currentColor" }: { size?: number; color?: string }) {
@@ -240,6 +249,28 @@ export default function WorkspacePage() {
     setConfirmItem(item);
   }, []);
 
+  // Pin/unpin — persisted per user via the generic favorites store.
+  const togglePin = useCallback(async (e: React.MouseEvent, item: WorkspaceItem) => {
+    e.stopPropagation();
+    const next = !item.favorite;
+    setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, favorite: next } : i)));
+    try {
+      const res = await msalFetch("/api/v1/favorites/toggle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          object_type: PIN_TYPE[activeTab],
+          object_id: String(item.id),
+          object_name: item.name ?? item.title ?? "",
+        }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+    } catch {
+      // Revert on failure.
+      setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, favorite: !next } : i)));
+    }
+  }, [activeTab]);
+
   const confirmDelete = useCallback(async () => {
     if (!confirmItem) return;
     const item = confirmItem;
@@ -268,11 +299,17 @@ export default function WorkspacePage() {
     return true;
   });
 
+  // Pinned items surface in their own section at the top (and are removed from
+  // the normal grouped sections so they aren't shown twice).
+  const pinned = filtered.filter((i) => i.favorite)
+    .sort((a, b) => (a.name ?? a.title ?? "").localeCompare(b.name ?? b.title ?? ""));
+  const unpinned = filtered.filter((i) => !i.favorite);
+
   // Group items by their organizing unit (dataset/source) and assign one calm
   // accent per group. Dashboards return "" from groupKeyFor → a single group.
   const grouped = (() => {
     const map = new Map<string, WorkspaceItem[]>();
-    for (const it of filtered) {
+    for (const it of unpinned) {
       const key = groupKeyFor(activeTab, it);
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(it);
@@ -314,6 +351,8 @@ export default function WorkspacePage() {
           e.currentTarget.style.borderColor = accent;
           const del = e.currentTarget.querySelector<HTMLElement>(".workspace-card-delete");
           if (del) del.style.opacity = "1";
+          const pin = e.currentTarget.querySelector<HTMLElement>(".workspace-card-pin");
+          if (pin) pin.style.opacity = "1";
         }}
         onMouseLeave={(e) => {
           e.currentTarget.style.transform = "translateY(0)";
@@ -321,6 +360,8 @@ export default function WorkspacePage() {
           e.currentTarget.style.borderColor = "var(--border)";
           const del = e.currentTarget.querySelector<HTMLElement>(".workspace-card-delete");
           if (del && deletingId !== item.id) del.style.opacity = "0";
+          const pin = e.currentTarget.querySelector<HTMLElement>(".workspace-card-pin");
+          if (pin && !item.favorite) pin.style.opacity = "0";
         }}
       >
         {/* Cover: real thumbnail (dashboards) else a calm group-tinted panel + glyph.
@@ -339,6 +380,23 @@ export default function WorkspacePage() {
           ) : (
             <TabItemIcon size={34} color={accent} />
           )}
+
+          {/* Pin — always visible when pinned, else reveals on hover */}
+          <button
+            type="button"
+            title={item.favorite ? "Unpin" : "Pin"}
+            onClick={(e) => togglePin(e, item)}
+            className="workspace-card-pin"
+            style={{
+              position: "absolute", top: 8, left: 8, width: 30, height: 30, borderRadius: 8,
+              border: "none", background: "rgba(15,23,42,0.72)", backdropFilter: "blur(4px)",
+              display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
+              color: item.favorite ? "#fbbf24" : "#fff",
+              opacity: item.favorite ? 1 : 0, transition: "opacity 0.12s",
+            }}
+          >
+            <i className={item.favorite ? "fas fa-thumbtack" : "fas fa-thumbtack"} style={{ fontSize: 12 }} />
+          </button>
 
           {/* Delete — reveals on card hover */}
           <button
@@ -431,11 +489,15 @@ export default function WorkspacePage() {
           e.currentTarget.style.borderColor = "var(--accent)";
           const del = e.currentTarget.querySelector<HTMLElement>(".workspace-row-delete");
           if (del) del.style.opacity = "1";
+          const pin = e.currentTarget.querySelector<HTMLElement>(".workspace-row-pin");
+          if (pin) pin.style.opacity = "1";
         }}
         onMouseLeave={(e) => {
           e.currentTarget.style.borderColor = "var(--border)";
           const del = e.currentTarget.querySelector<HTMLElement>(".workspace-row-delete");
           if (del && deletingId !== item.id) del.style.opacity = "0";
+          const pin = e.currentTarget.querySelector<HTMLElement>(".workspace-row-pin");
+          if (pin && !item.favorite) pin.style.opacity = "0";
         }}
       >
         <div style={{
@@ -473,6 +535,21 @@ export default function WorkspacePage() {
           {owner && <span>{owner}</span>}
           {ts && <span>{fmtDate(ts)}</span>}
         </div>
+
+        <button
+          type="button"
+          title={item.favorite ? "Unpin" : "Pin"}
+          onClick={(e) => togglePin(e, item)}
+          className="workspace-row-pin"
+          style={{
+            flexShrink: 0, width: 30, height: 30, borderRadius: 8, border: "1px solid transparent",
+            background: "transparent", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
+            color: item.favorite ? "#f59e0b" : "var(--text-faint)",
+            opacity: item.favorite ? 1 : 0, transition: "opacity 0.12s, color 0.12s",
+          }}
+        >
+          <i className="fas fa-thumbtack" style={{ fontSize: 12 }} />
+        </button>
 
         <button
           type="button"
@@ -638,11 +715,31 @@ export default function WorkspacePage() {
         </div>
       )}
 
+      {/* Pinned — user's pinned items surface at the top (persisted per user) */}
+      {ready && !error && pinned.length > 0 && (
+        <div style={{ marginTop: 20, marginBottom: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 12px", borderBottom: "1px solid var(--border)" }}>
+            <i className="fas fa-thumbtack" style={{ fontSize: 12, color: "#fbbf24" }} />
+            <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}>Pinned</span>
+            <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500 }}>{pinned.length}</span>
+          </div>
+          {TAB_LAYOUT[activeTab] === "rows" ? (
+            <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 8 }}>
+              {pinned.map((item) => renderRow(item))}
+            </div>
+          ) : (
+            <div style={{ ...gridStyle, marginTop: 16 }}>
+              {pinned.map((item) => renderCard(item, NEUTRAL_ACCENT))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Items — dense rows for datasets/queries; card grid (grouped for charts) otherwise */}
       {ready && !error && filtered.length > 0 && (
         TAB_LAYOUT[activeTab] === "rows" ? (
           <div style={{ marginTop: 20, display: "flex", flexDirection: "column", gap: 8 }}>
-            {filtered.map((item) => renderRow(item))}
+            {unpinned.map((item) => renderRow(item))}
           </div>
         ) : useSections ? (
           <div style={{ marginTop: 20, display: "flex", flexDirection: "column", gap: 10 }}>
