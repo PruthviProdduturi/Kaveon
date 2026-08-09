@@ -106,11 +106,11 @@ const DashboardViewContent: React.FC<{
 
   return (
     <div className="page-shell page-shell-wide">
-      {/* ── Elegant dashboard header ── */}
+      {/* ── Elegant dashboard header (rounded card, matches the chart page) ── */}
       <header style={{
-        background: 'var(--bg-surface)', borderBottom: '1px solid var(--border)',
-        padding: '16px 32px', display: 'flex', alignItems: 'center',
-        justifyContent: 'space-between', gap: 16, flexWrap: 'wrap',
+        background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12,
+        padding: '12px 18px', display: 'flex', alignItems: 'center',
+        justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 16,
       }}>
         {/* Left: back + title + badge */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
@@ -253,7 +253,8 @@ const DashboardViewContent: React.FC<{
       {/* Canvas — rendered only after all chart configs are preloaded so each
           chart mounts once with its config already in cache and runs exactly
           one query instead of flashing through multiple loading states. */}
-      <div style={{ flex: 1, overflow: 'auto', padding: '24px 32px', background: 'var(--bg-primary)' }}>
+      {/* Page-shell already provides the outer padding — don't double-inset here. */}
+      <div style={{ flex: 1, overflow: 'auto', background: 'var(--bg-primary)' }}>
         {!chartsReady ? (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 60, gap: 12, color: 'var(--text-muted)', fontSize: 13 }}>
             <i className="fas fa-spinner fa-spin" style={{ fontSize: 22, color: 'var(--accent)' }} />
