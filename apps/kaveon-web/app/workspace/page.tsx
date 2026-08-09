@@ -297,7 +297,7 @@ export default function WorkspacePage() {
           )}
 
           {/* Chart-type chip so the type is identifiable at a glance */}
-          {activeTab === "charts" && item.chart_type && (
+          {item.chart_type && (
             <span style={{
               position: "absolute", bottom: 8, left: 8,
               display: "inline-flex", alignItems: "center", gap: 5,
@@ -354,7 +354,7 @@ export default function WorkspacePage() {
           )}
           <div style={{ flex: 1 }} />
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, fontSize: 11.5, color: "var(--text-muted)" }}>
-            {activeTab === "charts" && item.chart_type && (
+            {item.chart_type && (
               <>
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: accent, fontWeight: 600 }}>
                   <i className="fas fa-chart-column" style={{ fontSize: 10 }} />
