@@ -166,7 +166,20 @@ const ChartTypeOptions: React.FC<ChartTypeOptionsProps> = ({ chartType, advanced
           const u: any = { ...s };
           if (current.showPieLabels !== undefined) {
             const lc = current.labelContent || "name_pct";
-            const fmt = lc === "percentage" ? "{d}%" : lc === "value" ? "{c}" : lc === "name_value" ? "{b}: {c}" : "{b}: {d}%";
+            const nf = current.labelNumberFormat || "none";
+            const fmtVal = (v: number): string => {
+              if (nf === "k") return `${(v / 1e3).toFixed(1)}K`;
+              if (nf === "m") return `${(v / 1e6).toFixed(1)}M`;
+              if (nf === "b") return `${(v / 1e9).toFixed(1)}B`;
+              if (nf === "t") return `${(v / 1e12).toFixed(1)}T`;
+              return Number(v).toLocaleString();
+            };
+            // Percentage/name+% stay as ECharts templates; value labels use a
+            // function so the number format (K/M/B/raw) is applied.
+            const fmt = lc === "percentage" ? "{d}%"
+              : lc === "value" ? (p: any) => fmtVal(Number(p.value))
+              : lc === "name_value" ? (p: any) => `${p.name}: ${fmtVal(Number(p.value))}`
+              : "{b}: {d}%";
             u.label = { show: current.showPieLabels, formatter: fmt };
             u.labelLine = { show: current.showPieLabels };
           }
@@ -387,6 +400,18 @@ const ChartTypeOptions: React.FC<ChartTypeOptionsProps> = ({ chartType, advanced
                 <option value="value">Value only</option>
                 <option value="name_value">Name + value</option>
               </select>
+              {(ctOpts.labelContent === "value" || ctOpts.labelContent === "name_value") && (
+                <div style={{ marginTop: 10 }}>
+                  <label className="chart-builder-label" htmlFor="pie-label-fmt">Label number format</label>
+                  <select id="pie-label-fmt" className="chart-builder-select" value={ctOpts.labelNumberFormat || "none"} onChange={(e) => set("labelNumberFormat", e.target.value)}>
+                    <option value="none">Raw</option>
+                    <option value="k">Thousands (K)</option>
+                    <option value="m">Millions (M)</option>
+                    <option value="b">Billions (B)</option>
+                    <option value="t">Trillions (T)</option>
+                  </select>
+                </div>
+              )}
             </div>
           )}
           {chartType === "donut" && (
