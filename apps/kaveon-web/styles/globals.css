@@ -627,11 +627,13 @@ main.main-lab {
 
 .page-header-with-actions {
   display: flex;
-  align-items: flex-start;
+  align-items: center;              /* even vertical alignment across back / name / actions */
   justify-content: space-between;
   gap: 16px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--border);
+  padding: 10px 14px;
+  border: 1px solid var(--border);  /* full rounded card instead of a bottom rule */
+  border-radius: 12px;
+  background: var(--bg-surface);
 }
 
 .page-header-main {
