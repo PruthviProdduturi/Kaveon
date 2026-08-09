@@ -336,19 +336,6 @@ export default function WorkspacePage() {
             <TabItemIcon size={34} color={accent} />
           )}
 
-          {/* Chart-type chip so the type is identifiable at a glance */}
-          {item.chart_type && (
-            <span style={{
-              position: "absolute", bottom: 8, left: 8,
-              display: "inline-flex", alignItems: "center", gap: 5,
-              padding: "3px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600,
-              background: "rgba(15,23,42,0.72)", backdropFilter: "blur(4px)", color: "#fff",
-            }}>
-              <i className="fas fa-chart-column" style={{ fontSize: 10, opacity: 0.9 }} />
-              {chartTypeLabel(item.chart_type)}
-            </span>
-          )}
-
           {/* Delete — reveals on card hover */}
           <button
             type="button"
