@@ -109,6 +109,7 @@ const SQLPreviewTabs: React.FC = () => {
         <pre
           style={{
             background: "var(--bg-surface)",
+            color: "var(--text-primary)",
             borderRadius: 8,
             padding: 8,
             fontSize: 12,
@@ -177,6 +178,7 @@ const SQLPreviewTabs: React.FC = () => {
       <pre
         style={{
           background: "var(--bg-surface)",
+          color: "var(--text-primary)",
           borderRadius: 8,
           padding: 8,
           fontSize: 12,
