@@ -6,6 +6,7 @@ from middleware.permissions import require_min_role, can_write, can_publish
 from models.charts import ChartCreate, ChartUpdate
 import services.charts as svc
 import services.favorites as fav_svc
+import services.user_recents as recents_svc
 
 router = APIRouter()
 NO_CACHE = {
@@ -100,6 +101,11 @@ def delete_chart(chart_id: str, ctx: UserContext = Depends(require_user_context)
     if not can_write(existing["created_by"], ctx):
         raise HTTPException(status_code=403, detail="You don't have permission to delete this chart")
     svc.delete_chart(chart_id)
+    # Also purge it from every user's recents (id is prefixed by type).
+    try:
+        recents_svc.remove_recent_all_users(f"chart-{chart_id}", "chart")
+    except Exception as e:
+        print(f"[Charts] recents cleanup failed for {chart_id}: {e}")
 
 
 @router.put("/charts/{chart_id}/favorite")

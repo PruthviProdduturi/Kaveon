@@ -58,3 +58,11 @@ def remove_recent(user_email: str, item_id: str) -> None:
     db.execute("""
         DELETE FROM user_recents WHERE user_email = @param0 AND item_id = @param1
     """, [user_email, item_id])
+
+
+def remove_recent_all_users(item_id: str, item_type: str) -> None:
+    """Purge a recents entry for every user — call when the underlying
+    dashboard/chart/dataset is deleted so it stops showing in anyone's recents."""
+    db.execute("""
+        DELETE FROM user_recents WHERE item_id = @param0 AND type = @param1
+    """, [item_id, item_type])

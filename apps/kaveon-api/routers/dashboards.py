@@ -6,6 +6,7 @@ from middleware.permissions import require_min_role, can_write, can_publish
 from models.dashboards import DashboardCreate, DashboardUpdate, DashboardFavoriteBody
 import services.dashboards as svc
 import services.favorites as fav_svc
+import services.user_recents as recents_svc
 
 router = APIRouter()
 NO_CACHE = {
@@ -79,6 +80,12 @@ def delete_dashboard(dashboard_id: str, ctx: UserContext = Depends(require_user_
     if not can_write(existing["created_by"], ctx):
         raise HTTPException(status_code=403, detail="You don't have permission to delete this dashboard")
     svc.delete_dashboard(dashboard_id)
+    # Also purge it from every user's recents so it doesn't linger there.
+    # Recents store the id prefixed by type (e.g. "dashboard-<id>").
+    try:
+        recents_svc.remove_recent_all_users(f"dashboard-{dashboard_id}", "dashboard")
+    except Exception as e:
+        print(f"[Dashboards] recents cleanup failed for {dashboard_id}: {e}")
 
 
 @router.put("/dashboards/{dashboard_id}/favorite")
