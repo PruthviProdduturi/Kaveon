@@ -82,45 +82,46 @@ const CreateChartLayout: React.FC = () => {
       <div className="chart-builder-center">
         <div className="chart-builder-center-scroll">
           <div className="chart-builder-tabs">
-            <div className="chart-builder-tabs-header">
-              <button
-                type="button"
-                className={
-                  activeCenterTab === "data"
-                    ? "chart-builder-tab chart-builder-tab-active"
-                    : "chart-builder-tab"
-                }
-                onClick={() => setActiveCenterTab("data")}
-              >
-                Data
-              </button>
-              <button
-                type="button"
-                className={
-                  activeCenterTab === "customize"
-                    ? "chart-builder-tab chart-builder-tab-active"
-                    : "chart-builder-tab"
-                }
-                onClick={() => setActiveCenterTab("customize")}
-              >
-                Customize
-              </button>
-            </div>
+            {/* One unified card: tabs + config body + Update button */}
+            <section className="chart-config-panel-card">
+              <div className="chart-builder-tabs-header">
+                <button
+                  type="button"
+                  className={
+                    activeCenterTab === "data"
+                      ? "chart-builder-tab chart-builder-tab-active"
+                      : "chart-builder-tab"
+                  }
+                  onClick={() => setActiveCenterTab("data")}
+                >
+                  Data
+                </button>
+                <button
+                  type="button"
+                  className={
+                    activeCenterTab === "customize"
+                      ? "chart-builder-tab chart-builder-tab-active"
+                      : "chart-builder-tab"
+                  }
+                  onClick={() => setActiveCenterTab("customize")}
+                >
+                  Customize
+                </button>
+              </div>
 
-            <div className="chart-builder-tabs-body">
-              <section className="chart-config-panel-card">
+              <div className="chart-builder-tabs-body">
                 {activeCenterTab === "data" ? (
                   <ChartConfigPanel />
                 ) : (
                   <AdvancedChartOptions />
                 )}
-              </section>
-            </div>
-          </div>
-        </div>
+              </div>
 
-        <div className="chart-builder-center-actions">
-          <RunQueryButton />
+              <div className="chart-builder-center-actions">
+                <RunQueryButton />
+              </div>
+            </section>
+          </div>
         </div>
       </div>
 
