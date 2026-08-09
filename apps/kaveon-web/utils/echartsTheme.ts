@@ -23,6 +23,17 @@ export function applyChartTheme(option: any, isDark: boolean): any {
   const bg = isDark ? DARK_BG : LIGHT_BG;
   const tooltipBg = isDark ? DARK_TOOLTIP_BG : LIGHT_TOOLTIP_BG;
 
+  // Chart-text colors are hardcoded (light-mode slate) in the option builders,
+  // so they render dark-on-dark. Remap the known ones to theme tokens so labels,
+  // donut-center totals, etc. stay readable in both themes.
+  const remap = (c: any): any => {
+    const k = typeof c === "string" ? c.toLowerCase() : "";
+    if (["#0f172a", "#111827", "#1e293b", "#334155", "#475569"].includes(k)) return text;
+    if (["#64748b", "#94a3b8", "#6b7280", "#9ca3af"].includes(k)) return muted;
+    if (["#cbd5e1", "#e2e8f0", "#d1d5db"].includes(k)) return border;
+    return c;
+  };
+
   const axisDefaults = {
     axisLine: { lineStyle: { color: border } },
     axisLabel: { color: muted },
@@ -41,13 +52,13 @@ export function applyChartTheme(option: any, isDark: boolean): any {
       ? {
           title: {
             ...option.title,
-            textStyle: { color: text, ...(option.title.textStyle || {}) },
+            textStyle: { ...(option.title.textStyle || {}), color: remap(option.title.textStyle?.color) ?? text },
           },
         }
       : {}),
     legend: {
       ...(option.legend || {}),
-      textStyle: { color: muted, ...(option.legend?.textStyle || {}) },
+      textStyle: { ...(option.legend?.textStyle || {}), color: remap(option.legend?.textStyle?.color) ?? muted },
     },
     tooltip: {
       ...(option.tooltip || {}),
@@ -75,6 +86,28 @@ export function applyChartTheme(option: any, isDark: boolean): any {
       splitLine: { lineStyle: { color: border }, ...(option.radar?.splitLine || {}) },
       axisName: { color: muted, ...(option.radar?.axisName || {}) },
     };
+  }
+
+  // Graphic text (e.g. the donut-centre TOTAL/value) — remap hardcoded dark fills.
+  if (Array.isArray(option.graphic)) {
+    themed.graphic = option.graphic.map((g: any) =>
+      g?.type === "text" && g.style?.fill
+        ? { ...g, style: { ...g.style, fill: remap(g.style.fill) } }
+        : g
+    );
+  }
+
+  // Series labels / label lines (pie & donut slice values, bar labels, etc.).
+  if (Array.isArray(option.series)) {
+    themed.series = option.series.map((s: any) => {
+      if (!s || typeof s !== "object") return s;
+      const ns: any = { ...s };
+      if (s.label?.color) ns.label = { ...s.label, color: remap(s.label.color) };
+      if (s.labelLine?.lineStyle?.color) {
+        ns.labelLine = { ...s.labelLine, lineStyle: { ...s.labelLine.lineStyle, color: remap(s.labelLine.lineStyle.color) } };
+      }
+      return ns;
+    });
   }
 
   return themed;
