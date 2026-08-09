@@ -3,6 +3,7 @@ import React, { useEffect, useState } from "react";
 import ColorPaletteSelector from "./ColorPaletteSelector";
 import styles from './AdvancedChartOptions.module.css'; // Import CSS Module
 import { useChartBuilder } from "./ChartBuilderContext";
+import { useTheme } from "../../contexts/ThemeContext";
 import { getPlugin } from "./chartPluginRegistry";
 const legendPositions = [
   { value: "top", label: "Top Left" },
@@ -800,6 +801,10 @@ function buildTooltipFormatter(
 
 const AdvancedChartOptions: React.FC = () => {
   const { advancedOptions, setAdvancedOptions, previewOptions, setPreviewOptions, selectedTemplate, runPreviewQuery, chartType, timeColumn } = useChartBuilder();
+  const { theme } = useTheme();
+  // Default title colour tracks the theme (white in dark, dark in light) until
+  // the user explicitly picks one.
+  const defaultTitleColor = theme === "dark" ? "#e2e8f0" : "#1a1a2e";
 
   // Legend order state for UI (local, then sync to advancedOptions)
   const legendOrder = advancedOptions?.legend?.order || (previewOptions?.legend?.data || []);
@@ -1126,7 +1131,7 @@ const AdvancedChartOptions: React.FC = () => {
             className="chart-builder-input"
           />
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 10, alignItems: 'end' }}>
           <div>
             <label className="chart-builder-label" htmlFor="title-font">Font</label>
             <select id="title-font" className="chart-builder-select" value={previewOptions?.titleFont || "sans-serif"}
@@ -1150,6 +1155,17 @@ const AdvancedChartOptions: React.FC = () => {
               <option value="28">28px</option>
               <option value="32">32px</option>
             </select>
+          </div>
+          <div>
+            <label className="chart-builder-label" htmlFor="title-color">Color</label>
+            <input
+              id="title-color"
+              type="color"
+              value={previewOptions?.titleColor || defaultTitleColor}
+              onChange={e => { setAdvancedOptions((p: any) => ({ ...(p||{}), titleColor: e.target.value })); setPreviewOptions((p: any) => ({ ...(p||{}), titleColor: e.target.value })); }}
+              title="Title color"
+              style={{ width: 44, height: 34, padding: 2, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg-surface)', cursor: 'pointer' }}
+            />
           </div>
         </div>
       </CollapsibleSection>

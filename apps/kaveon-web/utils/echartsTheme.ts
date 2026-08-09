@@ -34,6 +34,17 @@ export function applyChartTheme(option: any, isDark: boolean): any {
     ...option,
     backgroundColor: "transparent",
     textStyle: { color: text, ...(option.textStyle || {}) },
+    // Title defaults to the theme's text colour (white in dark, dark in light).
+    // An explicit colour from the title colour-picker lands in
+    // option.title.textStyle.color and overrides this default.
+    ...(option.title
+      ? {
+          title: {
+            ...option.title,
+            textStyle: { color: text, ...(option.title.textStyle || {}) },
+          },
+        }
+      : {}),
     legend: {
       ...(option.legend || {}),
       textStyle: { color: muted, ...(option.legend?.textStyle || {}) },

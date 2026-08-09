@@ -2953,6 +2953,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
             fontSize: Number(advancedOptions.titleSize) || 20,
             fontWeight: "bold",
             fontFamily: advancedOptions.titleFont || "sans-serif",
+            ...(advancedOptions.titleColor ? { color: advancedOptions.titleColor } : {}),
             ...(option.title && option.title.textStyle ? option.title.textStyle : {})
           },
         };

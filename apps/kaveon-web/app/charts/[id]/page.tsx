@@ -52,6 +52,7 @@ const ChartDetailBuilderView: React.FC<ChartDetailBuilderViewProps> = ({
   dataset,
 }) => {
   const { name, setName, canSave, isSaving, saveError } = useChartBuilder();
+  const headerRouter = useRouter();
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
   const [isAnimating, setIsAnimating] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
@@ -72,7 +73,27 @@ const ChartDetailBuilderView: React.FC<ChartDetailBuilderViewProps> = ({
   return (
     <>
       <header className="page-header page-header-with-actions">
-        <div className="page-header-main">
+        <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+          <button
+            type="button"
+            onClick={() => headerRouter.push("/workspace?tab=charts")}
+            title="Back to charts"
+            aria-label="Back to charts"
+            style={{
+              flexShrink: 0, width: 36, height: 36, borderRadius: 9,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              border: "1px solid var(--border)", background: "var(--bg-surface)",
+              color: "var(--text-secondary)", cursor: "pointer",
+              transition: "background 0.15s, color 0.15s, border-color 0.15s",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text-primary)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "var(--bg-surface)"; e.currentTarget.style.color = "var(--text-secondary)"; }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="19" y1="12" x2="5" y2="12" /><polyline points="12 19 5 12 12 5" />
+            </svg>
+          </button>
+          <div className="page-header-main">
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {!isEditingName ? (
               <h1
@@ -107,6 +128,7 @@ const ChartDetailBuilderView: React.FC<ChartDetailBuilderViewProps> = ({
           {chart.description && (
             <p className="page-header-subtitle">{chart.description}</p>
           )}
+          </div>
         </div>
         <div className="page-header-actions">
           {saveError && <span className="page-header-error">{saveError}</span>}

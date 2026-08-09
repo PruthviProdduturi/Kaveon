@@ -480,6 +480,8 @@ const WorldMapRenderer: React.FC<{
   const [ready, setReady] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const eRef = React.useRef<any>(null);
+  const { theme: mapTheme } = useTheme();
+  const mapIsDark = mapTheme === "dark";
 
   const ctOpts = advancedOptions?.chartTypeOptions || {};
   // Live zoom level — drives how many region labels we auto-reveal as the user
@@ -661,7 +663,7 @@ const WorldMapRenderer: React.FC<{
     };
 
     const titleOpt = advancedOptions?.title?.text
-      ? { title: { text: advancedOptions.title.text, left: "center", top: 5, textStyle: { fontSize: Number(advancedOptions.titleSize) || 20, fontFamily: advancedOptions.titleFont || "sans-serif" } } }
+      ? { title: { text: advancedOptions.title.text, left: "center", top: 5, textStyle: { fontSize: Number(advancedOptions.titleSize) || 20, fontFamily: advancedOptions.titleFont || "sans-serif", color: advancedOptions.titleColor || (mapIsDark ? "#e2e8f0" : "#1a1a2e") } } }
       : {};
 
     // Piecewise (tiered) legend — accurate for skewed data and reads cleanly.
@@ -764,7 +766,7 @@ const WorldMapRenderer: React.FC<{
         label: showLabels ? { show: true, fontSize: 10, color: "var(--text-primary, #1e293b)" } : dataLabel,
       }],
     };
-  }, [ready, rows, columns, advancedOptions, isGlobe, dynZoom, mapCenter]);
+  }, [ready, rows, columns, advancedOptions, isGlobe, dynZoom, mapCenter, mapIsDark]);
 
   if (error) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#ef4444", fontSize: 13 }}>{error}</div>;
   if (!ready) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#94a3b8", fontSize: 13 }}>Loading map…</div>;
