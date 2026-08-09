@@ -1,5 +1,5 @@
 
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, { createContext, useContext, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { API_BASE } from "../../config";
 import { msalFetch } from "../../utils/msalFetch";
@@ -1163,6 +1163,8 @@ export interface ChartBuilderContextValue {
   saveError: string | null;
   handleSave: () => void;
   registerInitialSnapshot: () => void;
+  /** ChartPreview calls this to register a thumbnail-capture fn (returns a JPEG data URI). */
+  registerThumbnailCapture: (fn: (() => string | null) | null) => void;
 }
 
 const ChartBuilderContext = createContext<ChartBuilderContextValue | undefined>(undefined);
@@ -1221,6 +1223,9 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
   const isQueryRunningRef = useRef(false);
   const cancelQueryRef = useRef(false);
   const activeJobIdRef = useRef<string | null>(null);
+  // ChartPreview registers a fn that snapshots the rendered chart to a JPEG data
+  // URI, so save() can persist a real thumbnail (like dashboards do).
+  const thumbnailCaptureRef = useRef<null | (() => string | null)>(null);
   const initialSnapshotRef = useRef<{
     config: any | null;
     name: string;
@@ -3411,6 +3416,21 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         window.history.replaceState(null, "", `/charts/${targetId}/edit`);
       }
 
+      // Best-effort: snapshot the rendered chart and persist it as a thumbnail,
+      // so the workspace shows a real preview instead of a generic glyph.
+      if (targetId) {
+        try {
+          const thumb = thumbnailCaptureRef.current?.();
+          if (thumb) {
+            void msalFetch(`${API_BASE}/api/v1/charts/${targetId}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ thumbnail: thumb }),
+            }).catch(() => {});
+          }
+        } catch { /* thumbnail is best-effort */ }
+      }
+
       // Don't redirect - keep the user on the edit page with their chart preview intact
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Unknown error";
@@ -3481,6 +3501,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     saveError,
     handleSave,
     registerInitialSnapshot,
+    registerThumbnailCapture: useCallback((fn: (() => string | null) | null) => { thumbnailCaptureRef.current = fn; }, []),
   };
 
   return <ChartBuilderContext.Provider value={value}>{children}</ChartBuilderContext.Provider>;
