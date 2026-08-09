@@ -318,10 +318,21 @@ function UserMenu({
   );
 }
 
+const RECENT_TYPES: { key: RecentItem["type"] | "all"; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "dashboard", label: "Dashboards" },
+  { key: "chart", label: "Charts" },
+  { key: "dataset", label: "Datasets" },
+  { key: "query", label: "Queries" },
+  { key: "chat", label: "Chats" },
+];
+
 export function Sidebar({ children }: SidebarProps) {
   const { account, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
-  const { recents, addRecent, removeRecent } = useRecents();
+  const { recents, addRecent, removeRecent, clearRecents } = useRecents();
+  const [recentFilter, setRecentFilter] = useState<RecentItem["type"] | "all">("all");
+  const [recentMenuOpen, setRecentMenuOpen] = useState(false);
   const router = useRouter();
   const { isAdmin } = useRole();
   const pathname = usePathname();
@@ -524,20 +535,56 @@ export function Sidebar({ children }: SidebarProps) {
               {/* Recent items */}
               {recents.length > 0 && (
                 <>
-                  {recents.length >= 3 && (
-                    <div style={{
-                      fontSize: 10,
-                      fontWeight: 600,
-                      letterSpacing: "1px",
-                      textTransform: "uppercase",
-                      color: "var(--text-faint)",
-                      padding: "8px 10px 4px",
-                      userSelect: "none",
-                    }}>
-                      Recent
-                    </div>
-                  )}
-                  {recents.map((item) => (
+                  {/* Header row: label + filter/clear options menu */}
+                  <div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 6px 4px 10px" }}>
+                    <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: "1px", textTransform: "uppercase", color: "var(--text-faint)", userSelect: "none" }}>
+                      {recentFilter === "all" ? "Recent" : `Recent · ${RECENT_TYPES.find(t => t.key === recentFilter)?.label}`}
+                    </span>
+                    <button
+                      type="button"
+                      title="Filter / clear recents"
+                      onClick={() => setRecentMenuOpen((v) => !v)}
+                      style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 22, height: 22, borderRadius: 6, border: "none", background: recentMenuOpen ? "var(--bg-hover)" : "transparent", color: "var(--text-muted)", cursor: "pointer" }}
+                    >
+                      <i className="fas fa-sliders-h" style={{ fontSize: 11 }} />
+                    </button>
+                    {recentMenuOpen && (
+                      <>
+                        <div style={{ position: "fixed", inset: 0, zIndex: 40 }} onClick={() => setRecentMenuOpen(false)} />
+                        <div style={{ position: "absolute", top: 28, right: 4, zIndex: 41, minWidth: 170, background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 10, padding: 4, boxShadow: "0 8px 24px rgba(0,0,0,0.35)" }}>
+                          <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.5px", textTransform: "uppercase", color: "var(--text-faint)", padding: "6px 10px 4px" }}>Filter</div>
+                          {RECENT_TYPES.map((t) => {
+                            const count = t.key === "all" ? recents.length : recents.filter((r) => r.type === t.key).length;
+                            return (
+                              <button key={t.key} type="button"
+                                onClick={() => { setRecentFilter(t.key); setRecentMenuOpen(false); }}
+                                style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, width: "100%", padding: "7px 10px", border: "none", background: recentFilter === t.key ? "var(--bg-hover)" : "transparent", color: "var(--text-secondary)", fontSize: 13, cursor: "pointer", borderRadius: 6, textAlign: "left", fontFamily: "inherit" }}
+                                onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
+                                onMouseLeave={(e) => (e.currentTarget.style.background = recentFilter === t.key ? "var(--bg-hover)" : "transparent")}
+                              >
+                                <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                  {recentFilter === t.key && <i className="fas fa-check" style={{ fontSize: 10, color: "var(--accent)" }} />}
+                                  <span style={{ marginLeft: recentFilter === t.key ? 0 : 18 }}>{t.label}</span>
+                                </span>
+                                <span style={{ fontSize: 11, color: "var(--text-faint)" }}>{count}</span>
+                              </button>
+                            );
+                          })}
+                          <div style={{ height: 1, background: "var(--border)", margin: "4px 0" }} />
+                          <button type="button"
+                            onClick={() => { clearRecents(recentFilter === "all" ? undefined : recentFilter); setRecentMenuOpen(false); }}
+                            style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "7px 10px", border: "none", background: "transparent", color: "#f87171", fontSize: 13, cursor: "pointer", borderRadius: 6, textAlign: "left", fontFamily: "inherit" }}
+                            onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(220,38,38,0.1)")}
+                            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                          >
+                            <i className="fas fa-trash" style={{ fontSize: 11 }} />
+                            {recentFilter === "all" ? "Clear all" : `Clear ${RECENT_TYPES.find(t => t.key === recentFilter)?.label}`}
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  {(recentFilter === "all" ? recents : recents.filter((r) => r.type === recentFilter)).map((item) => (
                     <button
                       key={item.id}
                       type="button"
@@ -631,6 +678,11 @@ export function Sidebar({ children }: SidebarProps) {
                       </span>
                     </button>
                   ))}
+                  {recentFilter !== "all" && recents.filter((r) => r.type === recentFilter).length === 0 && (
+                    <div style={{ padding: "10px 12px", fontSize: 12, color: "var(--text-faint)" }}>
+                      No {RECENT_TYPES.find((t) => t.key === recentFilter)?.label.toLowerCase()} recently
+                    </div>
+                  )}
                 </>
               )}
               {recents.length === 0 && (

@@ -26,6 +26,13 @@ def add_recent(item: RecentItem, ctx: UserContext = Depends(require_user_context
     return {"status": "ok"}
 
 
+@router.delete("/user/recents")
+def clear_recents(type: str | None = None, ctx: UserContext = Depends(require_user_context)):
+    """Clear all recents for the user, or just one category (?type=chart)."""
+    deleted = svc.clear_recents(ctx.email, type)
+    return {"status": "ok", "deleted": deleted}
+
+
 @router.delete("/user/recents/{item_id}")
 def remove_recent(item_id: str, ctx: UserContext = Depends(require_user_context)):
     svc.remove_recent(ctx.email, item_id)
