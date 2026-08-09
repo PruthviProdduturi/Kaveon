@@ -707,8 +707,8 @@ main.main-lab {
 }
 
 .chart-builder-primary-btn:disabled {
-  background: #e5e7eb;
-  color: #9ca3af;
+  background: var(--bg-hover);
+  color: var(--text-muted);
   box-shadow: none;
   cursor: not-allowed;
 }
@@ -2501,7 +2501,7 @@ main.main-lab {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  color: #6b7280;
+  color: var(--text-muted);
   transform: translateY(-2px);
 }
 
@@ -2511,7 +2511,7 @@ main.main-lab {
 }
 
 .chart-builder-right {
-  border-left: 1px solid #e5e7eb;
+  border-left: 1px solid var(--border);
   padding-left: 1.5rem;
 }
 
@@ -2582,7 +2582,7 @@ main.main-lab {
 .chart-builder-panel-title {
   font-size: 0.9rem;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--text-primary);
   margin-bottom: 0.75rem;
 }
 
@@ -2601,7 +2601,7 @@ main.main-lab {
 
 .chart-builder-tabs-header {
   display: inline-flex;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--border);
   margin-bottom: 0.4rem;
 }
 
@@ -2613,13 +2613,13 @@ main.main-lab {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #6b7280;
+  color: var(--text-muted);
   cursor: pointer;
   border-bottom: 2px solid transparent;
 }
 
 .chart-builder-tab-active {
-  color: #111827;
+  color: var(--text-primary);
   border-bottom-color: var(--lens-primary);
 }
 
@@ -2642,7 +2642,7 @@ main.main-lab {
   letter-spacing: 0.05em;
   padding: 0.3rem 0 0.4rem;
   border-bottom: 2px solid #0078D4;
-  color: #111827;
+  color: var(--text-primary);
 }
 
 .chart-builder-panel-icon {
@@ -2659,7 +2659,7 @@ main.main-lab {
   gap: 0.3rem;
   font-size: 12px;
   font-weight: 500;
-  color: #475569;
+  color: var(--text-secondary);
   margin-bottom: 5px;
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
@@ -2680,12 +2680,12 @@ main.main-lab {
 .chart-builder-select {
   width: 100%;
   border-radius: 7px;
-  border: 1.5px solid #e2e8f0;
+  border: 1.5px solid var(--border);
   padding: 6px 10px;
   font-size: 12.5px;
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #1e293b;
-  background-color: #ffffff;
+  color: var(--text-primary);
+  background-color: var(--bg-surface);
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
   line-height: 1.5;
 }
@@ -2695,20 +2695,20 @@ main.main-lab {
   align-items: center;
   justify-content: space-between;
   cursor: pointer;
-  background-color: #ffffff;
+  background-color: var(--bg-surface);
   user-select: none;
 }
 
 .chart-builder-input-clickable:hover {
-  border-color: #94a3b8;
+  border-color: var(--border);
 }
 
 .chart-builder-input-clickable-icon {
   width: 18px;
   height: 18px;
   border-radius: 4px;
-  border: 1px solid #d1d5db;
-  background: #f9fafb;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
   position: relative;
   flex: 0 0 auto;
 }
@@ -2721,9 +2721,9 @@ main.main-lab {
   top: 4px;
   bottom: 3px;
   border-radius: 3px;
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--border);
   border-top-width: 0;
-  background: #ffffff;
+  background: var(--bg-surface);
 }
 
 .chart-builder-input-clickable-icon::after {
@@ -2734,7 +2734,7 @@ main.main-lab {
   top: 3px;
   height: 3px;
   border-radius: 3px 3px 0 0;
-  background: #e5e7eb;
+  background: var(--bg-hover);
 }
 
 .chart-timerange-field {
@@ -2747,9 +2747,9 @@ main.main-lab {
   left: 0;
   margin-top: 0.5rem;
   min-width: 260px;
-  background: #ffffff;
+  background: var(--bg-surface);
   border-radius: 12px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
   box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
   padding: 0.75rem 0.85rem 0.7rem;
   z-index: 80;
@@ -2758,7 +2758,7 @@ main.main-lab {
 .chart-timerange-popover-header {
   font-size: 0.85rem;
   font-weight: 600;
-  color: #111827;
+  color: var(--text-primary);
   margin-bottom: 0.4rem;
 }
 
@@ -2778,11 +2778,11 @@ main.main-lab {
 .chart-builder-input-inline-btn {
   flex: 0 0 auto;
   border-radius: 8px;
-  border: 1px solid #e5e7eb;
-  background: #f9fafb;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
   padding: 0.4rem 0.6rem;
   font-size: 0.8rem;
-  color: #6b7280;
+  color: var(--text-muted);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -2791,15 +2791,15 @@ main.main-lab {
 
 .chart-builder-input-inline-btn:hover {
   background: #e5e7ff;
-  color: #1f2937;
-  border-color: #d1d5db;
+  color: var(--text-primary);
+  border-color: var(--border);
 }
 
 /* Nice, consistent dropdown styling for all select fields */
 .chart-builder-select {
   background-image:
-    linear-gradient(45deg, transparent 50%, #94a3b8 50%),
-    linear-gradient(135deg, #94a3b8 50%, transparent 50%);
+    linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+    linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
   background-position:
     calc(100% - 13px) calc(50% - 1px),
     calc(100% - 8px) calc(50% - 1px);
@@ -2821,17 +2821,17 @@ main.main-lab {
 
 .chart-builder-input:hover,
 .chart-builder-select:hover {
-  border-color: #94a3b8;
+  border-color: var(--border);
 }
 
 .chart-builder-textarea {
   width: 100%;
   border-radius: 7px;
-  border: 1.5px solid #e2e8f0;
+  border: 1.5px solid var(--border);
   padding: 6px 10px;
   font-size: 12.5px;
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #1e293b;
+  color: var(--text-primary);
   min-height: 72px;
   resize: vertical;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
@@ -2844,19 +2844,19 @@ main.main-lab {
 }
 
 .chart-builder-textarea:hover {
-  border-color: #94a3b8;
+  border-color: var(--border);
 }
 
 .chart-builder-preview-card {
-  background: #ffffff;
+  background: var(--bg-surface);
   padding: 0;
-  color: #111827;
+  color: var(--text-primary);
   display: flex;
   flex-direction: column;
   gap: 0;
   min-height: 0;
   flex: 1;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   overflow: hidden;
@@ -2867,7 +2867,7 @@ main.main-lab {
   justify-content: space-between;
   align-items: center;
   font-size: 0.8rem;
-  color: #9ca3af;
+  color: var(--text-muted);
   position: relative;
   padding: 12px 16px;
   background: transparent;
@@ -2876,7 +2876,7 @@ main.main-lab {
 
 .chart-builder-preview-title {
   font-weight: 500;
-  color: #111827;
+  color: var(--text-primary);
 }
 
 .chart-builder-preview-meta {
@@ -2953,10 +2953,8 @@ main.main-lab {
 
 .chart-source-panel {
   border-radius: 10px;
-  border: 1px solid #e5e7eb;
-  background:
-    radial-gradient(circle at top, #f3f4ff 0, #f9fafb 55%),
-    linear-gradient(180deg, #ffffff 0, #f9fafb 100%);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
   padding: 0.75rem 0.75rem 0.85rem;
   font-size: 0.85rem;
   display: flex;
@@ -2970,10 +2968,8 @@ main.main-lab {
 
 .chart-config-panel-card {
   border-radius: 10px;
-  border: 1px solid #e5e7eb;
-  background:
-    radial-gradient(circle at top, #f3f4ff 0, #f9fafb 55%),
-    linear-gradient(180deg, #ffffff 0, #f9fafb 100%);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
   padding: 0.85rem 0.9rem 0.95rem;
   font-size: 0.85rem;
   display: flex;
@@ -2992,7 +2988,7 @@ main.main-lab {
 .chart-source-search-input {
   width: 100%;
   border-radius: 8px;
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--border);
   padding: 0.35rem 0.6rem;
   font-size: 0.82rem;
 }
@@ -3034,7 +3030,7 @@ main.main-lab {
 
 .chart-source-section-arrow {
   font-size: 0.8rem;
-  color: #9ca3af;
+  color: var(--text-muted);
   transform: rotate(-90deg);
   transition: transform 120ms ease-out;
 }
@@ -3046,12 +3042,12 @@ main.main-lab {
 .chart-source-section-title {
   font-size: 0.8rem;
   font-weight: 600;
-  color: #4b5563;
+  color: var(--text-secondary);
 }
 
 .chart-source-count {
   font-size: 0.75rem;
-  color: #9ca3af;
+  color: var(--text-muted);
 }
 
 .chart-source-list {
@@ -3112,27 +3108,27 @@ main.main-lab {
 
 .chart-source-item-label {
   font-size: 0.82rem;
-  color: #111827;
+  color: var(--text-primary);
 }
 
 .chart-source-item-meta {
   font-size: 0.72rem;
-  color: #9ca3af;
+  color: var(--text-muted);
 }
 
 .chart-source-item-handle {
   margin-left: auto;
   font-size: 0.6rem;
-  color: #d1d5db;
+  color: var(--text-muted);
 }
 
 .chart-source-item:hover .chart-source-item-handle {
-  color: #9ca3af;
+  color: var(--text-muted);
 }
 
 .chart-source-empty {
   font-size: 0.78rem;
-  color: #9ca3af;
+  color: var(--text-muted);
   padding: 0.2rem 0.25rem;
 }
 
@@ -3145,15 +3141,15 @@ main.main-lab {
   margin: 0;
   padding: 8px 16px 20px 16px;
   font-size: 1.75rem;
-  color: #111827;
+  color: var(--text-primary);
   border-radius: 0;
   overflow: hidden;
-  background: #ffffff;
+  background: var(--bg-surface);
 }
 
 .chart-builder-preview-inner-empty {
   position: relative;
-  background: #ffffff;
+  background: var(--bg-surface);
 }
 
 .chart-builder-preview-inner-empty::before {
@@ -3190,7 +3186,7 @@ main.main-lab {
   flex: 1;
   margin: 0 3px;
   border-radius: 4px 4px 0 0;
-  background: #e5e7eb;
+  background: var(--bg-hover);
 }
 
 .chart-preview-empty-icon span:nth-child(1) {
@@ -3212,12 +3208,12 @@ main.main-lab {
 .chart-preview-empty-title {
   font-size: 0.9rem;
   font-weight: 600;
-  color: #4b5563;
+  color: var(--text-secondary);
 }
 
 .chart-preview-empty-subtitle {
   font-size: 0.78rem;
-  color: #9ca3af;
+  color: var(--text-muted);
 }
 
 /* Chart Loading Animation */
@@ -3269,7 +3265,7 @@ main.main-lab {
 .chart-loading-spinner {
   width: 40px;
   height: 40px;
-  border: 3px solid #e5e7eb;
+  border: 3px solid var(--bg-hover);
   border-top-color: var(--lens-primary);
   border-radius: 50%;
   animation: chartSpinnerRotate 1s linear infinite;
@@ -3287,7 +3283,7 @@ main.main-lab {
 .chart-loading-text {
   font-size: 1rem;
   font-weight: 500;
-  color: #64748b;
+  color: var(--text-muted);
   animation: chartTextFade 1.5s ease-in-out infinite;
 }
 
@@ -3314,9 +3310,9 @@ main.main-lab {
 .chart-filter-card {
   margin-top: 0.15rem;
   border-radius: 10px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
   padding: 0.55rem 0.65rem 0.7rem;
-  background: #f9fafb;
+  background: var(--bg-elevated);
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
@@ -3359,8 +3355,8 @@ main.main-lab {
 }
 
 .chart-filter-add-btn-secondary {
-  border-color: #d1d5db;
-  color: #6b7280;
+  border-color: var(--border);
+  color: var(--text-muted);
 }
 
 .chart-filter-add-btn-secondary:disabled {
@@ -3380,12 +3376,12 @@ main.main-lab {
 
 .chart-filter-logic-pill {
   border-radius: 999px;
-  border: 1px solid #d1d5db;
-  background: #ffffff;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
   font-size: 0.7rem;
   font-weight: 600;
   padding: 0.1rem 0.65rem;
-  color: #4b5563;
+  color: var(--text-secondary);
 }
 
 .chart-filter-list {
@@ -3396,8 +3392,8 @@ main.main-lab {
 
 .chart-filter-list-item {
   border-radius: 6px;
-  background: #ffffff;
-  border: 1px solid #e5e7eb;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
   padding: 0.15rem 0.25rem;
 }
 
@@ -3413,18 +3409,18 @@ main.main-lab {
   cursor: pointer;
   font-size: 0.9rem;
   line-height: 1;
-  color: #9ca3af;
+  color: var(--text-muted);
 }
 
 .chart-filter-chip-remove:hover {
-  color: #4b5563;
+  color: var(--text-secondary);
 }
 
 .chart-filter-chip {
   flex: 1;
   border-radius: 6px;
   border: none;
-  background: #f3f4f6;
+  background: var(--bg-elevated);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3434,16 +3430,16 @@ main.main-lab {
 }
 
 .chart-filter-chip:hover {
-  background: #e5e7eb;
+  background: var(--bg-hover);
 }
 
 .chart-filter-chip-label {
-  color: #111827;
+  color: var(--text-primary);
 }
 
 .chart-filter-chip-arrow {
   font-size: 0.78rem;
-  color: #9ca3af;
+  color: var(--text-muted);
 }
 
 .chart-filter-chip-active-indicator {
@@ -3474,9 +3470,9 @@ main.main-wide {
   left: 0;
   margin-top: 0.5rem;
   min-width: 320px;
-  background: #ffffff;
+  background: var(--bg-surface);
   border-radius: 12px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
   box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
   padding: 0.75rem 0.85rem 0.7rem;
   z-index: 80;
@@ -3494,7 +3490,7 @@ main.main-wide {
   width: 14px;
   height: 14px;
   border-radius: 999px;
-  border: 2px solid #e5e7eb;
+  border: 2px solid var(--bg-hover);
   border-top-color: var(--lens-primary);
   animation: chart-filter-spin 0.7s linear infinite;
 }
@@ -3511,7 +3507,7 @@ main.main-wide {
 .chart-filter-popover-header {
   font-size: 0.85rem;
   font-weight: 600;
-  color: #111827;
+  color: var(--text-primary);
   margin-bottom: 0.45rem;
 }
 
@@ -3535,9 +3531,9 @@ main.main-wide {
 .chart-save-modal {
   width: 100%;
   max-width: 440px;
-  background: #ffffff;
+  background: var(--bg-surface);
   border-radius: 14px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
   box-shadow: 0 22px 60px rgba(15, 23, 42, 0.28);
   padding: 1.1rem 1.25rem 1rem;
 }
@@ -3560,9 +3556,9 @@ main.main-wide {
 }
 
 .chart-save-modal-btn-secondary {
-  background: #ffffff;
-  color: #1f2937;
-  border-color: #d1d5db;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border-color: var(--border);
 }
 
 .chart-save-modal-btn-secondary:hover {
@@ -3583,8 +3579,8 @@ main.main-wide {
 }
 
 .chart-save-modal-btn-primary:disabled {
-  background: #e5e7eb;
-  color: #9ca3af;
+  background: var(--bg-hover);
+  color: var(--text-muted);
   box-shadow: none;
   cursor: not-allowed;
 }
