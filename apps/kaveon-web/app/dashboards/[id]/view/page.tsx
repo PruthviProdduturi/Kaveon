@@ -32,7 +32,8 @@ const DashboardViewContent: React.FC<{
   onFavoriteClick: () => void;
   onPublish: () => void;
   onEdit: () => void;
-}> = ({ isFavorite, isAnimating, isPublished, initialConfig, publishing, onFavoriteClick, onPublish, onEdit }) => {
+  onClose: () => void;
+}> = ({ isFavorite, isAnimating, isPublished, initialConfig, publishing, onFavoriteClick, onPublish, onEdit, onClose }) => {
   const { preloadAllCharts, isPreloading, dashboardFilters, triggerGlobalRefresh } = useDashboard();
   const hasPreloadedRef = useRef(false);
   const [chartsReady, setChartsReady] = useState(false);
@@ -111,8 +112,28 @@ const DashboardViewContent: React.FC<{
         padding: '16px 32px', display: 'flex', alignItems: 'center',
         justifyContent: 'space-between', gap: 16, flexWrap: 'wrap',
       }}>
-        {/* Left: title + badge */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+        {/* Left: back + title + badge */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
+          <button
+            type="button"
+            onClick={onClose}
+            title="Back to dashboards"
+            aria-label="Back to dashboards"
+            style={{
+              flexShrink: 0, width: 36, height: 36, borderRadius: 9,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              border: '1px solid var(--border)', background: 'var(--bg-surface)',
+              color: 'var(--text-secondary)', cursor: 'pointer',
+              transition: 'background 0.15s, color 0.15s, border-color 0.15s',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-hover)'; e.currentTarget.style.color = 'var(--text-primary)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--bg-surface)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="19" y1="12" x2="5" y2="12" /><polyline points="12 19 5 12 12 5" />
+            </svg>
+          </button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <h1 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 800, color: 'var(--text-primary)', lineHeight: 1.2, letterSpacing: '-0.3px' }}>
               {initialConfig?.name || 'Dashboard'}
@@ -131,6 +152,7 @@ const DashboardViewContent: React.FC<{
               {initialConfig.description}
             </p>
           )}
+          </div>
         </div>
 
         {/* Right: action toolbar */}
@@ -357,6 +379,7 @@ const DashboardViewPage: React.FC = () => {
         onFavoriteClick={handleFavoriteClick}
         onPublish={handlePublish}
         onEdit={() => router.push(`/dashboards/${id}/edit`)}
+        onClose={() => router.push('/workspace?tab=dashboards')}
       />
     </DashboardProvider>
   );
