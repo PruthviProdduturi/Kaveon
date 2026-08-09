@@ -68,11 +68,22 @@ export function applyChartTheme(option: any, isDark: boolean): any {
     },
   };
 
-  // Apply axis defaults to xAxis/yAxis (single or array)
+  // Apply axis defaults to xAxis/yAxis (single or array). Gridlines are FORCED to
+  // the subtle theme border at width 1 — the builders hardcode a light dashed
+  // colour (#f1f5f9) that reads as thick, prominent lines on a dark background.
+  const one = (a: any) => {
+    const m: any = { ...axisDefaults, ...a };
+    m.splitLine = {
+      ...(a?.splitLine || {}),
+      lineStyle: { ...(a?.splitLine?.lineStyle || {}), color: border, width: 1, opacity: 1 },
+    };
+    m.axisLine = { ...(a?.axisLine || {}), lineStyle: { ...(a?.axisLine?.lineStyle || {}), color: border } };
+    m.axisLabel = { ...(a?.axisLabel || {}), color: remap(a?.axisLabel?.color) ?? muted };
+    return m;
+  };
   const applyAxis = (axis: any) => {
     if (!axis) return axis;
-    if (Array.isArray(axis)) return axis.map((a: any) => ({ ...axisDefaults, ...a }));
-    return { ...axisDefaults, ...axis };
+    return Array.isArray(axis) ? axis.map(one) : one(axis);
   };
 
   if (option.xAxis) themed.xAxis = applyAxis(option.xAxis);
