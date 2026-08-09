@@ -518,7 +518,8 @@ export default function WorkspacePage() {
           <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: "0.4px", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 12 }}>
             Jump back in
           </div>
-          <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 4 }}>
+          {/* Vertical padding so the hover lift + accent border isn't clipped by overflow-x */}
+          <div style={{ display: "flex", gap: 12, overflowX: "auto", overflowY: "visible", padding: "6px 2px" }}>
             {recents.slice(0, 8).map((r) => (
               <button
                 key={r.id}
