@@ -52,7 +52,9 @@ const DashboardViewContent: React.FC<{
         const node = canvasRef.current;
         if (!node) return;
         const dataUrl = await toJpeg(node, {
-          quality: 0.55, pixelRatio: 0.4, backgroundColor: "#f8fafc", cacheBust: true,
+          // skipFonts avoids html-to-image reading cssRules from cross-origin
+          // stylesheets (FontAwesome/fonts CDN) which throws a SecurityError.
+          quality: 0.55, pixelRatio: 0.4, backgroundColor: "#f8fafc", cacheBust: true, skipFonts: true,
         });
         if (!dataUrl || dataUrl.length > 3_500_000) return;   // guard oversized
         await msalFetch(`${API_BASE}/api/v1/dashboards/${dashId}`, {
