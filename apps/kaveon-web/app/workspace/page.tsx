@@ -507,7 +507,7 @@ export default function WorkspacePage() {
           </div>
           {/* Vertical padding so the hover lift + accent border isn't clipped by overflow-x */}
           <div style={{ display: "flex", gap: 12, overflowX: "auto", overflowY: "visible", padding: "6px 2px" }}>
-            {recents.slice(0, 8).map((r) => (
+            {recents.slice(0, 5).map((r) => (
               <button
                 key={r.id}
                 type="button"
