@@ -1128,7 +1128,11 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
           fontSize: 11,
           fontWeight: isInside ? "700" : "600",
           fontFamily: font,
-          color: series.label?.color || (isInside ? "#ffffff" : pillStyle.color),
+          // Inside labels sit on coloured fills (white + shadow reads on both
+          // themes). Outside labels sit in the pill, so always use the pill's
+          // theme-aware text colour — don't inherit a hardcoded slate that would
+          // be dark-on-dark.
+          color: isInside ? "#ffffff" : pillStyle.color,
           textShadowColor: isInside ? "rgba(0,0,0,0.45)" : (isDark ? "rgba(0,0,0,0.6)" : "rgba(255,255,255,0.9)"),
           textShadowBlur: isInside ? 4 : 3,
           ...(!isInside && { ...pillStyle }),
