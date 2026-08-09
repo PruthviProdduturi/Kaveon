@@ -98,11 +98,16 @@ export function applyChartTheme(option: any, isDark: boolean): any {
   }
 
   // Series labels / label lines (pie & donut slice values, bar labels, etc.).
+  // Force a readable label colour: remap known dark slates, and if a shown label
+  // has no explicit colour, default it to the theme text (never dark-on-dark).
   if (Array.isArray(option.series)) {
     themed.series = option.series.map((s: any) => {
       if (!s || typeof s !== "object") return s;
       const ns: any = { ...s };
-      if (s.label?.color) ns.label = { ...s.label, color: remap(s.label.color) };
+      if (s.label && s.label.show !== false) {
+        const c = s.label.color;
+        ns.label = { ...s.label, color: remap(c) ?? (c || text) };
+      }
       if (s.labelLine?.lineStyle?.color) {
         ns.labelLine = { ...s.labelLine, lineStyle: { ...s.labelLine.lineStyle, color: remap(s.labelLine.lineStyle.color) } };
       }

@@ -1051,9 +1051,9 @@ main.main-lab {
 /* Generic page shell used by wide pages like chart builder */
 .page-shell {
   width: 100%;
-  /* Consistent breathing room at the top and sides across charts, dashboards,
-     datasets, favorites and lab (Library sets its own equivalent padding). */
-  padding: 20px 32px 28px;
+  /* Even breathing room on all sides (top matches bottom) across charts,
+     dashboards, datasets, favorites and lab. */
+  padding: 28px 32px;
   box-sizing: border-box;
 }
 
