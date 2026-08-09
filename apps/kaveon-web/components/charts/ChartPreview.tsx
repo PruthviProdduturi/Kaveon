@@ -427,6 +427,50 @@ const MAP_REGIONS: Record<string, { url: string; mapName: string; normalize: (s:
 // truthful for tiered choropleths — not a loud rainbow.
 const MAP_DEFAULT_COLORS = ["#eff6ff", "#bfdbfe", "#7dd3fc", "#38bdf8", "#0ea5e9", "#0369a1"];
 
+// ── Auto-fit helpers ────────────────────────────────────────────────────────
+// Bounding box [minLng, minLat, maxLng, maxLat] of a GeoJSON feature's coords.
+function featureBbox(f: any): [number, number, number, number] | null {
+  const g = f?.geometry;
+  if (!g?.coordinates) return null;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const scan = (c: any) => {
+    if (typeof c[0] === "number" && typeof c[1] === "number") {
+      if (c[0] < minX) minX = c[0]; if (c[0] > maxX) maxX = c[0];
+      if (c[1] < minY) minY = c[1]; if (c[1] > maxY) maxY = c[1];
+    } else if (Array.isArray(c)) {
+      for (const p of c) scan(p);
+    }
+  };
+  scan(g.coordinates);
+  return isFinite(minX) ? [minX, minY, maxX, maxY] : null;
+}
+
+// Center + zoom that frames just the regions present in the data. Zoom is the
+// ratio of the full map's span to the data's span (so US-only data zooms into
+// the US), padded and clamped to the map's scaleLimit.
+function computeAutoFit(features: any[], dataNames: Set<string>): { center: [number, number] | null; zoom: number } {
+  const union = (a: number[] | null, b: number[] | null) =>
+    !a ? b : !b ? a : [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])];
+  let full: number[] | null = null, data: number[] | null = null;
+  for (const f of features) {
+    const bb = featureBbox(f);
+    if (!bb) continue;
+    full = union(full, bb);
+    if (dataNames.has(f?.properties?.name)) data = union(data, bb);
+  }
+  const box = data || full;
+  if (!box) return { center: null, zoom: 1 };
+  const center: [number, number] = [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2];
+  let zoom = 1;
+  if (full && data) {
+    const fullW = full[2] - full[0], fullH = full[3] - full[1];
+    const dataW = Math.max(data[2] - data[0], 1e-3), dataH = Math.max(data[3] - data[1], 1e-3);
+    zoom = Math.min(fullW / dataW, fullH / dataH) * 0.82; // pad so it isn't edge-to-edge
+    zoom = Math.max(1, Math.min(zoom, 12));
+  }
+  return { center, zoom };
+}
+
 const WorldMapRenderer: React.FC<{
   rows: (string | number | null)[][];
   columns: string[];
@@ -441,7 +485,9 @@ const WorldMapRenderer: React.FC<{
   // Live zoom level — drives how many region labels we auto-reveal as the user
   // zooms the map in/out. Seeded from a saved zoom if present.
   const [dynZoom, setDynZoom] = React.useState<number>(Number(ctOpts.mapZoom) || 1);
+  const [mapCenter, setMapCenter] = React.useState<[number, number] | null>(null);
   const roamTimer = React.useRef<any>(null);
+  const fitSigRef = React.useRef<string>("");
   const region = ["usa", "nyc"].includes(ctOpts.mapRegion) ? ctOpts.mapRegion : "world";
   const REGION = MAP_REGIONS[region];
   // Globe only makes sense for the world map.
@@ -499,6 +545,27 @@ const WorldMapRenderer: React.FC<{
     };
     load();
   }, [isGlobe, region]);
+
+  // Auto-fit: once the geo + data are ready, frame the map to the regions that
+  // actually have data (US-only data zooms into the US). Re-fits whenever the
+  // data or region changes; keyed by a signature so interactive roam (which
+  // updates dynZoom/mapCenter below) isn't clobbered on every re-render.
+  React.useEffect(() => {
+    if (isGlobe || !ready || !rows.length || columns.length < 2) return;
+    const feats = geoCache[region]?.features || [];
+    if (!feats.length) return;
+    const nameIdx = columns.findIndex((_, i) => rows.some(r => isNaN(Number(r[i]))));
+    if (nameIdx < 0) return;
+    const dataNames = new Set(
+      rows.map(r => REGION.normalize(String(r[nameIdx] ?? ""))).filter(Boolean)
+    );
+    const sig = `${region}|${rows.length}|${[...dataNames].slice(0, 3).join(",")}`;
+    if (fitSigRef.current === sig) return;   // already fitted this dataset
+    fitSigRef.current = sig;
+    const { center, zoom } = computeAutoFit(feats, dataNames);
+    if (center) setMapCenter(center);
+    setDynZoom(zoom);
+  }, [ready, isGlobe, region, rows, columns, REGION]);
 
   const option = React.useMemo(() => {
     if (!ready || !rows.length || columns.length < 2) return null;
@@ -683,8 +750,8 @@ const WorldMapRenderer: React.FC<{
         type: "map",
         map: REGION.mapName,
         roam: showRoam,
-        zoom: dynZoom,                       // preserve the roamed zoom across re-renders
-        ...(ctOpts.mapCenter ? { center: ctOpts.mapCenter } : {}),
+        zoom: dynZoom,                       // seeded by auto-fit; preserves roam across re-renders
+        ...(mapCenter ? { center: mapCenter } : ctOpts.mapCenter ? { center: ctOpts.mapCenter } : {}),
         scaleLimit: { min: 1, max: 12 },
         layoutCenter: ["50%", "52%"],
         layoutSize: region === "usa" ? "148%" : region === "nyc" ? "132%" : "155%",
@@ -697,7 +764,7 @@ const WorldMapRenderer: React.FC<{
         label: showLabels ? { show: true, fontSize: 10, color: "var(--text-primary, #1e293b)" } : dataLabel,
       }],
     };
-  }, [ready, rows, columns, advancedOptions, isGlobe, dynZoom]);
+  }, [ready, rows, columns, advancedOptions, isGlobe, dynZoom, mapCenter]);
 
   if (error) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#ef4444", fontSize: 13 }}>{error}</div>;
   if (!ready) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#94a3b8", fontSize: 13 }}>Loading map…</div>;
@@ -745,7 +812,11 @@ const WorldMapRenderer: React.FC<{
             roamTimer.current = setTimeout(() => {
               const s = inst.getOption()?.series?.[0];
               const z = Number(s?.zoom) || 1;
+              // Preserve the user's manual pan/zoom in-session (don't fight it on
+              // the label-density re-render). Auto-fit still reapplies if the
+              // underlying data changes.
               setDynZoom((prev: number) => (Math.abs(prev - z) > 0.05 ? z : prev));
+              if (Array.isArray(s?.center)) setMapCenter([Number(s.center[0]), Number(s.center[1])]);
             }, 160);
           },
         }}
