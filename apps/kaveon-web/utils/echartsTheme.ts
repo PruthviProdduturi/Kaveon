@@ -64,7 +64,7 @@ export function applyChartTheme(option: any, isDark: boolean): any {
       ...(option.tooltip || {}),
       backgroundColor: tooltipBg,
       borderColor: border,
-      textStyle: { color: text, ...(option.tooltip?.textStyle || {}) },
+      textStyle: { ...(option.tooltip?.textStyle || {}), color: remap(option.tooltip?.textStyle?.color) ?? text },
     },
   };
 

@@ -1107,14 +1107,15 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
         const font = 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
         const existingFormatter = series.label?.formatter;
 
-        // Shared pill style — same values whether applied directly or via rich text
+        // Shared pill style — theme-aware so labels read on both light & dark
+        // charts (white pills used to litter the dark theme, worse at high density).
         const pillStyle = {
-          backgroundColor: "rgba(255,255,255,0.92)",
+          backgroundColor: isDark ? "rgba(30,30,30,0.92)" : "rgba(255,255,255,0.92)",
           borderRadius: 4,
           padding: [3, 6] as [number, number],
-          borderColor: "#e2e8f0",
+          borderColor: isDark ? "rgba(255,255,255,0.14)" : "#e2e8f0",
           borderWidth: 1,
-          color: "#334155",
+          color: isDark ? "#e2e8f0" : "#334155",
           fontSize: 11,
           fontWeight: "600",
           fontFamily: font,
@@ -1128,7 +1129,7 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
           fontWeight: isInside ? "700" : "600",
           fontFamily: font,
           color: series.label?.color || (isInside ? "#ffffff" : pillStyle.color),
-          textShadowColor: isInside ? "rgba(0,0,0,0.45)" : "rgba(255,255,255,0.9)",
+          textShadowColor: isInside ? "rgba(0,0,0,0.45)" : (isDark ? "rgba(0,0,0,0.6)" : "rgba(255,255,255,0.9)"),
           textShadowBlur: isInside ? 4 : 3,
           ...(!isInside && { ...pillStyle }),
         };
