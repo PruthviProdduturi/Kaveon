@@ -401,7 +401,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
               style={{
                 fontSize: 18,
                 fontWeight: 600,
-                color: name ? "#1e293b" : "#94a3b8",
+                color: name ? "var(--text-primary)" : "var(--text-muted)",
                 cursor: "pointer",
                 padding: "4px 8px",
                 margin: 0,
@@ -412,7 +412,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                 whiteSpace: 'nowrap',
               }}
               onMouseOver={(e) => {
-                e.currentTarget.style.background = "#f1f5f9";
+                e.currentTarget.style.background = "var(--bg-hover)";
               }}
               onMouseOut={(e) => {
                 e.currentTarget.style.background = "transparent";
@@ -437,13 +437,13 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
               style={{
                 fontSize: 18,
                 fontWeight: 600,
-                color: "#1e293b",
+                color: "var(--text-primary)",
                 padding: "4px 8px",
                 margin: 0,
                 border: "2px solid #2563eb",
                 borderRadius: 6,
                 outline: "none",
-                background: "#ffffff",
+                background: "var(--bg-surface)",
                 minWidth: 300,
                 lineHeight: 1.4,
                 boxSizing: "border-box",
@@ -558,11 +558,11 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
           )}
           {/* Colour theme picker — recolours every chart on the board */}
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginRight: 4 }} title="Colour theme — recolours all charts">
-            <i className="fas fa-palette" style={{ color: "#64748b", fontSize: 13 }} />
+            <i className="fas fa-palette" style={{ color: "var(--text-muted)", fontSize: 13 }} />
             <select
               value={theme || "default"}
               onChange={(e) => setTheme(e.target.value)}
-              style={{ padding: "7px 8px", fontSize: 13, borderRadius: 6, border: "1px solid #e2e8f0", background: "#fff", color: "#334155", cursor: "pointer" }}
+              style={{ padding: "7px 8px", fontSize: 13, borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-surface)", color: "var(--text-secondary)", cursor: "pointer" }}
             >
               {Object.entries(DASHBOARD_THEMES).map(([key, t]) => (
                 <option key={key} value={key}>{t.label}</option>
@@ -579,8 +579,8 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                 fontWeight: 600,
                 fontSize: 13,
                 background: "transparent",
-                color: "#475569",
-                border: "1px solid #e2e8f0",
+                color: "var(--text-secondary)",
+                border: "1px solid var(--border)",
                 borderRadius: 6,
                 cursor: "pointer",
                 display: "flex",
@@ -599,8 +599,8 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
               padding: "8px 20px",
               fontWeight: 600,
               fontSize: 13,
-              background: hasUnsavedChanges ? "#2563eb" : "#e2e8f0",
-              color: hasUnsavedChanges ? "#ffffff" : "#94a3b8",
+              background: hasUnsavedChanges ? "#2563eb" : "var(--border)",
+              color: hasUnsavedChanges ? "#ffffff" : "var(--text-muted)",
               border: "none",
               borderRadius: 6,
               cursor: hasUnsavedChanges ? "pointer" : "not-allowed",
@@ -640,15 +640,15 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                 fontWeight: 600,
                 fontSize: 13,
                 background: "transparent",
-                color: "#475569",
-                border: "1px solid #e2e8f0",
+                color: "var(--text-secondary)",
+                border: "1px solid var(--border)",
                 borderRadius: 6,
                 cursor: "pointer",
                 display: "flex",
                 alignItems: "center",
                 gap: 6,
               }}
-              onMouseOver={(e) => { e.currentTarget.style.background = "#f1f5f9"; }}
+              onMouseOver={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
               onMouseOut={(e) => { e.currentTarget.style.background = "transparent"; }}
             >
               <i className="fas fa-eye" />
@@ -678,8 +678,8 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
         {/* Left Sidebar - Dashboard Settings */}
         <div
           style={{
-            background: sidebarCollapsed ? 'transparent' : '#fff',
-            borderRight: sidebarCollapsed ? 'none' : '1px solid #e2e8f0',
+            background: sidebarCollapsed ? 'transparent' : 'var(--bg-surface)',
+            borderRight: sidebarCollapsed ? 'none' : '1px solid var(--border)',
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
@@ -688,8 +688,8 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
         >
           {sidebarCollapsed ? (
             <div style={{
-              background: '#f8fafc',
-              borderRight: '1px solid #e2e8f0',
+              background: 'var(--bg-elevated)',
+              borderRight: '1px solid var(--border)',
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
@@ -702,7 +702,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                   border: 'none',
                   padding: '12px 8px',
                   cursor: 'pointer',
-                  color: '#475569',
+                  color: 'var(--text-secondary)',
                   fontSize: 18,
                   fontWeight: 600,
                 }}
@@ -715,7 +715,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                 transform: 'rotate(180deg)',
                 fontSize: 12,
                 fontWeight: 600,
-                color: '#64748b',
+                color: 'var(--text-muted)',
                 letterSpacing: '0.5px',
                 padding: '16px 0',
                 textTransform: 'uppercase',
@@ -725,8 +725,8 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
             </div>
           ) : (
             <>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid #e2e8f0' }}>
-                <span style={{ fontSize: 14, fontWeight: 600, color: '#1e293b' }}>Dashboard Settings</span>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
+                <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>Dashboard Settings</span>
                 <button
                   onClick={() => setSidebarCollapsed(true)}
                   style={{
@@ -734,7 +734,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                     border: 'none',
                     padding: '4px 8px',
                     cursor: 'pointer',
-                    color: '#64748b',
+                    color: 'var(--text-muted)',
                     fontSize: 14,
                   }}
                   aria-label="Collapse dashboard settings"
@@ -744,7 +744,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
               </div>
               <div style={{ flex: 1, overflow: 'auto', padding: '16px' }}>
               {/* Sidebar Tabs */}
-              <div style={{ borderBottom: "1px solid #e2e8f0", marginBottom: 20 }}>
+              <div style={{ borderBottom: "1px solid var(--border)", marginBottom: 20 }}>
                 <div style={{ display: "flex", gap: 0 }}>
                   <button
                     onClick={() => setSidebarTab("items")}
@@ -754,7 +754,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                       fontSize: 13,
                       fontWeight: 600,
                       background: "transparent",
-                      color: sidebarTab === "items" ? "#2563eb" : "#64748b",
+                      color: sidebarTab === "items" ? "#2563eb" : "var(--text-muted)",
                       border: "none",
                       borderBottom: sidebarTab === "items" ? "2px solid #2563eb" : "2px solid transparent",
                       cursor: "pointer",
@@ -771,7 +771,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                       fontSize: 13,
                       fontWeight: 600,
                       background: "transparent",
-                      color: sidebarTab === "layout" ? "#2563eb" : "#64748b",
+                      color: sidebarTab === "layout" ? "#2563eb" : "var(--text-muted)",
                       border: "none",
                       borderBottom: sidebarTab === "layout" ? "2px solid #2563eb" : "2px solid transparent",
                       cursor: "pointer",
@@ -788,7 +788,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                       fontSize: 13,
                       fontWeight: 600,
                       background: "transparent",
-                      color: sidebarTab === "filters" ? "#2563eb" : "#64748b",
+                      color: sidebarTab === "filters" ? "#2563eb" : "var(--text-muted)",
                       border: "none",
                       borderBottom: sidebarTab === "filters" ? "2px solid #2563eb" : "2px solid transparent",
                       cursor: "pointer",
@@ -807,7 +807,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                   <div style={{ position: "relative", marginBottom: 8 }}>
                     <i className="fas fa-search" style={{
                       position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)",
-                      color: "#94a3b8", fontSize: 12, pointerEvents: "none",
+                      color: "var(--text-muted)", fontSize: 12, pointerEvents: "none",
                     }} />
                     <input
                       type="text"
@@ -816,17 +816,17 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                       onChange={(e) => setChartSearch(e.target.value)}
                       style={{
                         width: "100%", padding: "7px 10px 7px 30px",
-                        border: "1px solid #e2e8f0", borderRadius: 6,
+                        border: "1px solid var(--border)", borderRadius: 6,
                         fontSize: 12, outline: "none", boxSizing: "border-box",
-                        background: "#fff", color: "#0f172a",
+                        background: "var(--bg-surface)", color: "var(--text-primary)",
                       }}
                       onFocus={(e) => { e.target.style.borderColor = "#2563eb"; }}
-                      onBlur={(e) => { e.target.style.borderColor = "#e2e8f0"; }}
+                      onBlur={(e) => { e.target.style.borderColor = "var(--border)"; }}
                     />
                   </div>
                   {/* Toolbar: count + mine toggle */}
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                    <span style={{ fontSize: 11, color: "#94a3b8" }}>
+                    <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
                       {filteredCharts.length} chart{filteredCharts.length !== 1 ? "s" : ""}
                     </span>
                     <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none" }}>
@@ -834,7 +834,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                         onClick={() => setChartScope(chartScope === "mine" ? "all" : "mine")}
                         style={{
                           display: "inline-block", width: 30, height: 16,
-                          background: chartScope === "mine" ? "#2563eb" : "#cbd5e1",
+                          background: chartScope === "mine" ? "#2563eb" : "var(--border)",
                           borderRadius: 8, position: "relative",
                           transition: "background 0.2s ease", cursor: "pointer", flexShrink: 0,
                         }}
@@ -842,14 +842,14 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                         <span style={{
                           position: "absolute", top: 2,
                           left: chartScope === "mine" ? 14 : 2,
-                          width: 12, height: 12, background: "#fff",
+                          width: 12, height: 12, background: "var(--bg-surface)",
                           borderRadius: "50%", transition: "left 0.2s ease",
                           boxShadow: "0 1px 2px rgba(0,0,0,0.2)",
                         }} />
                       </span>
                       <span
                         onClick={() => setChartScope(chartScope === "mine" ? "all" : "mine")}
-                        style={{ fontSize: 11, color: "#475569", fontWeight: 500 }}
+                        style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 500 }}
                       >
                         Mine only
                       </span>
@@ -858,7 +858,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                   {/* Inline chart list */}
                   <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                     {loading ? (
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "24px 0", color: "#94a3b8", gap: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "24px 0", color: "var(--text-muted)", gap: 8 }}>
                         <i className="fas fa-spinner fa-spin" style={{ fontSize: 14 }} />
                         <span style={{ fontSize: 12 }}>Loading…</span>
                       </div>
@@ -867,7 +867,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                         {error}
                       </div>
                     ) : filteredCharts.length === 0 ? (
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "24px 0", color: "#94a3b8", gap: 6 }}>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "24px 0", color: "var(--text-muted)", gap: 6 }}>
                         <i className="fas fa-chart-bar" style={{ fontSize: 24, opacity: 0.4 }} />
                         <span style={{ fontSize: 12 }}>No charts found</span>
                       </div>
@@ -882,7 +882,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                             title={`Add "${chart.name}" to dashboard`}
                             style={{
                               width: "100%", padding: "8px 10px",
-                              background: "#fff", border: "1px solid #e2e8f0",
+                              background: "var(--bg-surface)", border: "1px solid var(--border)",
                               borderRadius: 6, textAlign: "left", cursor: "pointer",
                               display: "flex", alignItems: "center", gap: 8,
                               transition: "border-color 0.12s, background 0.12s",
@@ -893,8 +893,8 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                               e.currentTarget.style.background = info.bg;
                             }}
                             onMouseOut={(e) => {
-                              e.currentTarget.style.borderColor = "#e2e8f0";
-                              e.currentTarget.style.background = "#fff";
+                              e.currentTarget.style.borderColor = "var(--border)";
+                              e.currentTarget.style.background = "var(--bg-surface)";
                             }}
                           >
                             <div style={{
@@ -906,12 +906,12 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                             </div>
                             <div style={{ minWidth: 0, flex: 1 }}>
                               <div style={{
-                                fontSize: 12, fontWeight: 600, color: "#0f172a",
+                                fontSize: 12, fontWeight: 600, color: "var(--text-primary)",
                                 overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                               }}>
                                 {chart.name}
                               </div>
-                              <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: "#64748b", marginTop: 2 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: "var(--text-muted)", marginTop: 2 }}>
                                 <span style={{
                                   background: info.bg, color: info.color,
                                   borderRadius: 4, padding: "0px 4px", fontWeight: 500,
@@ -921,7 +921,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                                 </span>
                                 {chart.dataset_name && (
                                   <>
-                                    <span style={{ color: "#cbd5e1" }}>·</span>
+                                    <span style={{ color: "var(--border)" }}>·</span>
                                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                       {chart.dataset_name}
                                     </span>
@@ -930,7 +930,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                               </div>
                             </div>
                             {modified && (
-                              <div style={{ fontSize: 10, color: "#94a3b8", flexShrink: 0, whiteSpace: "nowrap" }}>
+                              <div style={{ fontSize: 10, color: "var(--text-muted)", flexShrink: 0, whiteSpace: "nowrap" }}>
                                 {modified}
                               </div>
                             )}
@@ -945,7 +945,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
               {/* Layout Tab Content */}
               {sidebarTab === "layout" && (
                 <div>
-                  <h3 style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                  <h3 style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.5px" }}>
                     Layout Components
                   </h3>
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -953,22 +953,22 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                       onClick={() => handleAddComponent("row")}
                       style={{
                         padding: "10px 12px",
-                        background: "#f8fafc",
-                        border: "1px solid #e2e8f0",
+                        background: "var(--bg-elevated)",
+                        border: "1px solid var(--border)",
                         borderRadius: 6,
                         textAlign: "left",
                         cursor: "pointer",
                         fontSize: 13,
                         fontWeight: 500,
-                        color: "#334155",
+                        color: "var(--text-secondary)",
                         transition: "all 0.15s ease",
                       }}
                       onMouseOver={(e) => {
-                        e.currentTarget.style.background = "#f1f5f9";
+                        e.currentTarget.style.background = "var(--bg-hover)";
                         e.currentTarget.style.transform = "translateX(2px)";
                       }}
                       onMouseOut={(e) => {
-                        e.currentTarget.style.background = "#f8fafc";
+                        e.currentTarget.style.background = "var(--bg-elevated)";
                         e.currentTarget.style.transform = "translateX(0)";
                       }}
                     >
@@ -979,22 +979,22 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                       onClick={() => handleAddComponent("column")}
                       style={{
                         padding: "10px 12px",
-                        background: "#f8fafc",
-                        border: "1px solid #e2e8f0",
+                        background: "var(--bg-elevated)",
+                        border: "1px solid var(--border)",
                         borderRadius: 6,
                         textAlign: "left",
                         cursor: "pointer",
                         fontSize: 13,
                         fontWeight: 500,
-                        color: "#334155",
+                        color: "var(--text-secondary)",
                         transition: "all 0.15s ease",
                       }}
                       onMouseOver={(e) => {
-                        e.currentTarget.style.background = "#f1f5f9";
+                        e.currentTarget.style.background = "var(--bg-hover)";
                         e.currentTarget.style.transform = "translateX(2px)";
                       }}
                       onMouseOut={(e) => {
-                        e.currentTarget.style.background = "#f8fafc";
+                        e.currentTarget.style.background = "var(--bg-elevated)";
                         e.currentTarget.style.transform = "translateX(0)";
                       }}
                     >
@@ -1005,22 +1005,22 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                       onClick={() => handleAddComponent("header")}
                       style={{
                         padding: "10px 12px",
-                        background: "#f8fafc",
-                        border: "1px solid #e2e8f0",
+                        background: "var(--bg-elevated)",
+                        border: "1px solid var(--border)",
                         borderRadius: 6,
                         textAlign: "left",
                         cursor: "pointer",
                         fontSize: 13,
                         fontWeight: 500,
-                        color: "#334155",
+                        color: "var(--text-secondary)",
                         transition: "all 0.15s ease",
                       }}
                       onMouseOver={(e) => {
-                        e.currentTarget.style.background = "#f1f5f9";
+                        e.currentTarget.style.background = "var(--bg-hover)";
                         e.currentTarget.style.transform = "translateX(2px)";
                       }}
                       onMouseOut={(e) => {
-                        e.currentTarget.style.background = "#f8fafc";
+                        e.currentTarget.style.background = "var(--bg-elevated)";
                         e.currentTarget.style.transform = "translateX(0)";
                       }}
                     >
@@ -1031,22 +1031,22 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                       onClick={() => handleAddComponent("text")}
                       style={{
                         padding: "10px 12px",
-                        background: "#f8fafc",
-                        border: "1px solid #e2e8f0",
+                        background: "var(--bg-elevated)",
+                        border: "1px solid var(--border)",
                         borderRadius: 6,
                         textAlign: "left",
                         cursor: "pointer",
                         fontSize: 13,
                         fontWeight: 500,
-                        color: "#334155",
+                        color: "var(--text-secondary)",
                         transition: "all 0.15s ease",
                       }}
                       onMouseOver={(e) => {
-                        e.currentTarget.style.background = "#f1f5f9";
+                        e.currentTarget.style.background = "var(--bg-hover)";
                         e.currentTarget.style.transform = "translateX(2px)";
                       }}
                       onMouseOut={(e) => {
-                        e.currentTarget.style.background = "#f8fafc";
+                        e.currentTarget.style.background = "var(--bg-elevated)";
                         e.currentTarget.style.transform = "translateX(0)";
                       }}
                     >
@@ -1057,22 +1057,22 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                       onClick={() => handleAddComponent("divider")}
                       style={{
                         padding: "10px 12px",
-                        background: "#f8fafc",
-                        border: "1px solid #e2e8f0",
+                        background: "var(--bg-elevated)",
+                        border: "1px solid var(--border)",
                         borderRadius: 6,
                         textAlign: "left",
                         cursor: "pointer",
                         fontSize: 13,
                         fontWeight: 500,
-                        color: "#334155",
+                        color: "var(--text-secondary)",
                         transition: "all 0.15s ease",
                       }}
                       onMouseOver={(e) => {
-                        e.currentTarget.style.background = "#f1f5f9";
+                        e.currentTarget.style.background = "var(--bg-hover)";
                         e.currentTarget.style.transform = "translateX(2px)";
                       }}
                       onMouseOut={(e) => {
-                        e.currentTarget.style.background = "#f8fafc";
+                        e.currentTarget.style.background = "var(--bg-elevated)";
                         e.currentTarget.style.transform = "translateX(0)";
                       }}
                     >
@@ -1086,7 +1086,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
               {/* Filters Tab Content */}
               {sidebarTab === "filters" && (
                 <div>
-                  <h3 style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                  <h3 style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.5px" }}>
                     Dashboard Filters
                   </h3>
                   <DashboardFilterBarEnhanced />
@@ -1098,7 +1098,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
         </div>
 
         {/* Main Center Area - Canvas */}
-        <div style={{ background: '#f8fafc', padding: '12px', overflow: 'auto' }}>
+        <div style={{ background: 'var(--bg-elevated)', padding: '12px', overflow: 'auto' }}>
           <DashboardCanvas />
         </div>
       </div>
