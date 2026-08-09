@@ -99,10 +99,12 @@ const ChartDetailBuilderView: React.FC<ChartDetailBuilderViewProps> = ({
             {!isEditingName ? (
               <h1
                 className="page-header-title"
-                style={{ margin: 0, cursor: "pointer", borderRadius: 6, padding: "4px 8px", border: "2px solid transparent", transition: "background 0.15s" }}
+                // Plain text (matches the dashboard title). Click to rename; the
+                // only hover affordance is a subtle underline — no boxy border/fill.
+                style={{ margin: 0, cursor: "pointer", textDecoration: "none", textDecorationColor: "var(--text-muted)", textUnderlineOffset: 4, transition: "text-decoration-color 0.15s" }}
                 onClick={() => setIsEditingName(true)}
-                onMouseOver={e => { e.currentTarget.style.background = "var(--bg-hover)"; }}
-                onMouseOut={e => { e.currentTarget.style.background = "transparent"; }}
+                onMouseOver={e => { e.currentTarget.style.textDecoration = "underline"; e.currentTarget.style.textDecorationColor = "var(--text-muted)"; }}
+                onMouseOut={e => { e.currentTarget.style.textDecoration = "none"; }}
                 title="Click to rename"
               >
                 {displayName}
