@@ -48,6 +48,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
     isSaving,
     saveError,
     saveDashboard,
+    saveDashboardAs,
     theme,
     setTheme,
   } = useDashboard();
@@ -58,6 +59,9 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [showSaveModal, setShowSaveModal] = useState(false);
+  const [showSaveAsModal, setShowSaveAsModal] = useState(false);
+  const [saveAsName, setSaveAsName] = useState("");
+  const [savingAs, setSavingAs] = useState(false);
   const [tempName, setTempName] = useState("");
   const [tempDescription, setTempDescription] = useState("");
   const [isEditingName, setIsEditingName] = useState(false);
@@ -222,24 +226,22 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
       return;
     }
 
-    // Update context with values from modal
+    // Update context for the UI…
     setName(tempName);
     setDescription(tempDescription);
     setValidationError(null);
     setShowSaveModal(false);
 
-    // Save after a brief delay to ensure state updates
-    setTimeout(async () => {
-      await saveDashboard();
-      // Navigate to view page on success (or list if new)
-      if (!saveError) {
-        if (dashboardId) {
-          router.push(`/dashboards/${dashboardId}/view`);
-        } else {
-          router.push("/dashboards");
-        }
+    // …but pass the just-typed values straight into the save so it never races
+    // the setState above (that race silently dropped description edits).
+    await saveDashboard({ name: tempName, description: tempDescription });
+    if (!saveError) {
+      if (dashboardId) {
+        router.push(`/dashboards/${dashboardId}/view`);
+      } else {
+        router.push("/dashboards");
       }
-    }, 100);
+    }
   };
 
   /**
@@ -248,6 +250,35 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
   const handleCancelSave = () => {
     setShowSaveModal(false);
     setValidationError(null);
+  };
+
+  /**
+   * Open "Save As" (duplicate) modal, pre-filled with a "Copy" name.
+   */
+  const handleOpenSaveAs = () => {
+    setSaveAsName(name ? `${name} (Copy)` : "Untitled dashboard");
+    setValidationError(null);
+    setShowSaveAsModal(true);
+  };
+
+  /**
+   * Confirm "Save As" — creates a new dashboard and navigates to its editor.
+   */
+  const handleConfirmSaveAs = async () => {
+    if (!saveAsName.trim()) {
+      setValidationError("Name is required");
+      return;
+    }
+    setSavingAs(true);
+    try {
+      const newId = await saveDashboardAs(saveAsName.trim());
+      setShowSaveAsModal(false);
+      if (newId) {
+        router.push(`/dashboards/${newId}/edit`);
+      }
+    } finally {
+      setSavingAs(false);
+    }
   };
 
   /**
@@ -538,6 +569,29 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
               ))}
             </select>
           </div>
+          {dashboardId && (
+            <button
+              onClick={handleOpenSaveAs}
+              disabled={isSaving}
+              title="Save as a new dashboard (duplicate)"
+              style={{
+                padding: "8px 16px",
+                fontWeight: 600,
+                fontSize: 13,
+                background: "transparent",
+                color: "#475569",
+                border: "1px solid #e2e8f0",
+                borderRadius: 6,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              <i className="fas fa-copy" />
+              Save As
+            </button>
+          )}
           <button
             onClick={handleSave}
             disabled={!hasUnsavedChanges || isSaving}
@@ -1269,6 +1323,59 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
       )}
 
       {/* Save Confirmation Modal */}
+      {showSaveAsModal && (
+        <div
+          style={{
+            position: "fixed", inset: 0, background: "rgba(15,23,42,0.5)",
+            display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1001, padding: 20,
+          }}
+          onClick={() => { if (!savingAs) setShowSaveAsModal(false); }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "100%", maxWidth: 420, background: "#ffffff", borderRadius: 14,
+              boxShadow: "0 24px 48px rgba(0,0,0,0.25)", padding: 24,
+            }}
+          >
+            <h3 style={{ margin: "0 0 4px", fontSize: 17, fontWeight: 700, color: "#0f172a" }}>Save as new dashboard</h3>
+            <p style={{ margin: "0 0 16px", fontSize: 13, color: "#64748b" }}>
+              Creates an independent copy. The original stays unchanged.
+            </p>
+            <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#475569", marginBottom: 6 }}>Name</label>
+            <input
+              autoFocus
+              value={saveAsName}
+              onChange={(e) => setSaveAsName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") handleConfirmSaveAs(); }}
+              style={{
+                width: "100%", padding: "10px 12px", fontSize: 14, boxSizing: "border-box",
+                border: "1px solid #e2e8f0", borderRadius: 8, outline: "none", color: "#0f172a",
+              }}
+            />
+            {validationError && <div style={{ marginTop: 10, fontSize: 13, color: "#dc2626" }}>{validationError}</div>}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
+              <button
+                type="button"
+                onClick={() => setShowSaveAsModal(false)}
+                disabled={savingAs}
+                style={{ padding: "9px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer", border: "1px solid #e2e8f0", borderRadius: 8, background: "#fff", color: "#475569" }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmSaveAs}
+                disabled={savingAs}
+                style={{ padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", border: "none", borderRadius: 8, background: "#2563eb", color: "#fff", display: "flex", alignItems: "center", gap: 8, minWidth: 96, justifyContent: "center" }}
+              >
+                {savingAs ? <i className="fas fa-spinner fa-spin" /> : "Create copy"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showSaveModal && (
         <div
           style={{
