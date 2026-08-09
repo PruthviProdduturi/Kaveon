@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { format as formatSql } from "sql-formatter";
 
-import RunQueryButton from "./RunQueryButton";
 import { useChartBuilder } from "./ChartBuilderContext";
 
 const SQLPreviewTabs: React.FC = () => {
@@ -245,7 +244,7 @@ const SQLPreviewTabs: React.FC = () => {
             </span>
           )}
         </div>
-        <RunQueryButton />
+        {/* Update chart lives in the DATA/CUSTOMIZE card — no duplicate here. */}
       </div>
       <div className="sql-preview-body">
         {activeTab === "sql" && renderSql()}
