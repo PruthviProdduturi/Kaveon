@@ -652,10 +652,14 @@ const WorldMapRenderer: React.FC<{
     const baseTopN = ctOpts.mapLabelTopN ?? 8;
     const effTopN = Math.round(baseTopN * Math.min(6, Math.max(1, dynZoom)));
     const labelThreshold = [...values].sort((a, b) => b - a)[Math.min(effTopN - 1, values.length - 1)] ?? Infinity;
+    // White text + dark outline (halo) so labels read on ANY region fill colour
+    // — a choropleth has light and dark tiers, so a single fixed colour never works.
     const dataLabel = {
       show: true,
       fontSize: 9,
-      color: "var(--text-primary, #0f172a)",
+      color: "#ffffff",
+      textBorderColor: "rgba(0,0,0,0.8)",
+      textBorderWidth: 2.5,
       formatter: (p: any) => {
         const v = Number(p.value);
         return !isNaN(v) && v >= labelThreshold ? `${p.name}\n${fmtVal(v)}` : "";
@@ -760,10 +764,13 @@ const WorldMapRenderer: React.FC<{
         aspectScale: 0.9,
         data,
         select: { itemStyle: { areaColor: "#f59e0b" } },
-        emphasis: { label: { show: true, fontSize: 11, color: "var(--text-primary, #0f172a)", fontWeight: "bold" }, itemStyle: { areaColor: "#fbbf24" } },
-        itemStyle: { borderColor: "var(--border, #fff)", borderWidth: 0.5, areaColor: "var(--bg-elevated, #eef2f7)" },
+        emphasis: { label: { show: true, fontSize: 11, color: "#ffffff", textBorderColor: "rgba(0,0,0,0.85)", textBorderWidth: 3, fontWeight: "bold" }, itemStyle: { areaColor: "#fbbf24" } },
+        // No-data regions + borders (canvas can't read CSS vars, so pick per-theme).
+        itemStyle: { borderColor: mapIsDark ? "rgba(255,255,255,0.12)" : "#ffffff", borderWidth: 0.5, areaColor: mapIsDark ? "#26262b" : "#eef2f7" },
         labelLayout: { hideOverlap: true },
-        label: showLabels ? { show: true, fontSize: 10, color: "var(--text-primary, #1e293b)" } : dataLabel,
+        label: showLabels
+          ? { show: true, fontSize: 10, color: "#ffffff", textBorderColor: "rgba(0,0,0,0.8)", textBorderWidth: 2.5 }
+          : dataLabel,
       }],
     };
   }, [ready, rows, columns, advancedOptions, isGlobe, dynZoom, mapCenter, mapIsDark]);
