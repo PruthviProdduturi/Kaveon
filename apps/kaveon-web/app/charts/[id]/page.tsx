@@ -77,9 +77,14 @@ const ChartDetailBuilderView: React.FC<ChartDetailBuilderViewProps> = ({
         <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
           <button
             type="button"
-            onClick={() => headerRouter.push("/workspace?tab=charts")}
-            title="Back to charts"
-            aria-label="Back to charts"
+            onClick={() => {
+              // Return to wherever the user came from (their previous state);
+              // fall back to the Library charts tab on a direct/first visit.
+              if (typeof window !== "undefined" && window.history.length > 1) headerRouter.back();
+              else headerRouter.push("/workspace?tab=charts");
+            }}
+            title="Back"
+            aria-label="Back"
             style={{
               flexShrink: 0, width: 36, height: 36, borderRadius: 9,
               display: "flex", alignItems: "center", justifyContent: "center",
