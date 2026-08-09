@@ -4,6 +4,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "../../auth/useAuth";
 import { msalFetch } from "../../utils/msalFetch";
+import { useRecents } from "../../hooks/useRecents";
 
 type TabKey = "dashboards" | "charts" | "datasets" | "queries";
 
@@ -11,9 +12,14 @@ interface WorkspaceItem {
   id: string | number;
   name?: string;
   title?: string;
+  description?: string | null;
   created_by?: string | null;
   updated_at?: string | null;
   created_at?: string | null;
+  thumbnail?: string | null;
+  chart_type?: string | null;
+  dataset_name?: string | null;
+  database_name?: string | null;
 }
 
 // SVG icons for tabs and items
@@ -69,10 +75,35 @@ function ownerFirst(email?: string | null): string {
   return name.split(".")[0].replace(/^\w/, c => c.toUpperCase());
 }
 
+// Curated, muted accent palette. Color is assigned per GROUP (dataset/source),
+// not per card — so it encodes "which dataset this belongs to" instead of being
+// decorative rainbow noise. One calm hue per group, cycled.
+const GROUP_ACCENTS = ["#3b82f6", "#10b981", "#8b5cf6", "#f59e0b", "#ec4899", "#06b6d4"];
+const NEUTRAL_ACCENT = "#64748b";
+
+// Which field groups a tab's items (their real organizing unit / mental model).
+function groupKeyFor(tab: TabKey, item: WorkspaceItem): string {
+  switch (tab) {
+    case "charts": return item.dataset_name || "Other";
+    case "datasets": return item.database_name || "Other";
+    case "queries": return item.database_name || "Other";
+    case "dashboards": return ""; // few, no meaningful grouping — one flat grid
+  }
+}
+
+const RECENT_ICON: Record<string, string> = {
+  dashboard: "fas fa-table-cells-large",
+  chart: "fas fa-chart-column",
+  dataset: "fas fa-database",
+  query: "fas fa-code",
+  chat: "fas fa-comment",
+};
+
 export default function WorkspacePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { isAuthenticated, account } = useAuth();
+  const { recents } = useRecents();
 
   const rawTab = searchParams.get("tab") as TabKey | null;
   const activeTab: TabKey = TABS.some((t) => t.key === rawTab) ? rawTab! : "dashboards";
@@ -123,6 +154,34 @@ export default function WorkspacePage() {
 
   useEffect(() => { void load(); }, [load]);
 
+  const [deletingId, setDeletingId] = useState<string | number | null>(null);
+  const [confirmItem, setConfirmItem] = useState<WorkspaceItem | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const requestDelete = useCallback((e: React.MouseEvent, item: WorkspaceItem) => {
+    e.stopPropagation();
+    setDeleteError(null);
+    setConfirmItem(item);
+  }, []);
+
+  const confirmDelete = useCallback(async () => {
+    if (!confirmItem) return;
+    const item = confirmItem;
+    const kind = tab.label.toLowerCase().replace(/s$/, "");
+    setDeletingId(item.id);
+    setDeleteError(null);
+    try {
+      const res = await msalFetch(`${tab.endpoint}/${item.id}`, { method: "DELETE" });
+      if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+      setItems((prev) => prev.filter((i) => i.id !== item.id));
+      setConfirmItem(null);
+    } catch {
+      setDeleteError(`Couldn't delete that ${kind}. You may not have permission.`);
+    } finally {
+      setDeletingId(null);
+    }
+  }, [confirmItem, tab.endpoint, tab.label]);
+
   const email = account?.email ?? "";
   const filtered = items.filter((item) => {
     const label = (item.name ?? item.title ?? "").toLowerCase();
@@ -131,40 +190,176 @@ export default function WorkspacePage() {
     return true;
   });
 
-  return (
-    <div style={{ maxWidth: 1000, margin: "0 auto", padding: "40px 48px" }}>
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 32 }}>
-        <h1 style={{ margin: 0, fontSize: 26, fontWeight: 600, color: "var(--text-primary)", flex: 1, letterSpacing: "-0.3px" }}>
-          Workspace
-        </h1>
-        <div style={{ position: "relative" }}>
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search..."
-            style={{
-              width: 200, padding: "9px 12px 9px 34px", fontSize: 13,
-              border: "1px solid var(--border)", borderRadius: 10,
-              background: "var(--bg-surface)", color: "var(--text-primary)",
-              outline: "none",
-            }}
-          />
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)" }}>
-            <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
-        </div>
-        <button type="button" onClick={() => router.push(tab.newRoute)} style={{
-          padding: "9px 20px", fontSize: 13, fontWeight: 500,
-          background: "var(--accent)", color: "#fff", border: "none",
-          borderRadius: 10, cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
-        }}>
-          + New
-        </button>
-      </div>
+  // Group items by their organizing unit (dataset/source) and assign one calm
+  // accent per group. Dashboards return "" from groupKeyFor → a single group.
+  const grouped = (() => {
+    const map = new Map<string, WorkspaceItem[]>();
+    for (const it of filtered) {
+      const key = groupKeyFor(activeTab, it);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(it);
+    }
+    // Larger groups first; stable within.
+    const entries = Array.from(map.entries()).sort((a, b) => b[1].length - a[1].length);
+    return entries.map(([key, groupItems], idx) => ({
+      key,
+      items: groupItems,
+      accent: key === "" ? NEUTRAL_ACCENT : GROUP_ACCENTS[idx % GROUP_ACCENTS.length],
+    }));
+  })();
+  const useSections = grouped.length > 1 || (grouped.length === 1 && grouped[0].key !== "");
 
-      {/* Tabs */}
-      <div style={{ display: "flex", alignItems: "center", marginBottom: 8 }}>
+  const showRecents = recents.length > 0 && !search;
+
+  const renderCard = (item: WorkspaceItem, accent: string) => {
+    const label = item.name ?? item.title ?? "Untitled";
+    const ts = item.updated_at ?? item.created_at;
+    const owner = ownerFirst(item.created_by);
+    const hasThumb = !!item.thumbnail && String(item.thumbnail).startsWith("data:");
+    return (
+      <div
+        key={item.id}
+        onClick={() => router.push(itemNav(activeTab, item.id))}
+        style={{
+          cursor: "pointer", borderRadius: 14, overflow: "hidden",
+          background: "var(--bg-surface)", border: "1px solid var(--border)",
+          transition: "transform 0.12s, box-shadow 0.12s, border-color 0.12s",
+          display: "flex", flexDirection: "column",
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.transform = "translateY(-3px)";
+          e.currentTarget.style.boxShadow = "0 12px 28px rgba(0,0,0,0.28)";
+          e.currentTarget.style.borderColor = accent;
+          const del = e.currentTarget.querySelector<HTMLElement>(".workspace-card-delete");
+          if (del) del.style.opacity = "1";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.transform = "translateY(0)";
+          e.currentTarget.style.boxShadow = "none";
+          e.currentTarget.style.borderColor = "var(--border)";
+          const del = e.currentTarget.querySelector<HTMLElement>(".workspace-card-delete");
+          if (del && deletingId !== item.id) del.style.opacity = "0";
+        }}
+      >
+        {/* Cover: real thumbnail (dashboards) else a calm group-tinted panel + glyph.
+            Color comes from the item's GROUP accent, not a random per-card hue. */}
+        <div style={{
+          position: "relative", height: 128, flexShrink: 0,
+          background: hasThumb ? "#0b1220" : `${accent}14`,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          borderBottom: "1px solid var(--border)",
+        }}>
+          {!hasThumb && <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: accent, opacity: 0.85 }} />}
+          {hasThumb ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={item.thumbnail as string} alt={label} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          ) : (
+            <TabItemIcon size={34} color={accent} />
+          )}
+
+          {/* Delete — reveals on card hover */}
+          <button
+            type="button"
+            title={`Delete ${tab.label.toLowerCase().replace(/s$/, "")}`}
+            onClick={(e) => requestDelete(e, item)}
+            disabled={deletingId === item.id}
+            className="workspace-card-delete"
+            style={{
+              position: "absolute", top: 8, right: 8, width: 30, height: 30, borderRadius: 8,
+              border: "none", background: "rgba(15,23,42,0.72)", backdropFilter: "blur(4px)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              cursor: deletingId === item.id ? "default" : "pointer",
+              color: "#fff", opacity: 0, transition: "opacity 0.12s, background 0.12s",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = "#dc2626"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(15,23,42,0.72)"; }}
+          >
+            {deletingId === item.id ? (
+              <div className="spinner" style={{ width: 13, height: 13, borderWidth: 2, borderTopColor: "#fff" }} />
+            ) : (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" />
+              </svg>
+            )}
+          </button>
+        </div>
+
+        {/* Body */}
+        <div style={{ padding: "12px 14px 14px", flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+          <div style={{
+            fontSize: 14, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "-0.2px",
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          }}>
+            {label}
+          </div>
+          {item.description && (
+            <div style={{
+              fontSize: 12, color: "var(--text-muted)", marginTop: 3, lineHeight: 1.4,
+              display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden",
+            }}>
+              {item.description}
+            </div>
+          )}
+          <div style={{ flex: 1 }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, fontSize: 11.5, color: "var(--text-muted)" }}>
+            {owner && <span>{owner}</span>}
+            {owner && ts && <span style={{ opacity: 0.5 }}>·</span>}
+            {ts && <span>{fmtDate(ts)}</span>}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const gridStyle: React.CSSProperties = {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
+    gap: 18,
+  };
+
+  return (
+    <div style={{ maxWidth: 1400, margin: "0 auto", padding: "32px 40px 64px" }}>
+      {/* Jump back in — recents strip */}
+      {showRecents && (
+        <div style={{ marginBottom: 28 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: "0.4px", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 12 }}>
+            Jump back in
+          </div>
+          <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 4 }}>
+            {recents.slice(0, 8).map((r) => (
+              <button
+                key={r.id}
+                type="button"
+                onClick={() => router.push(r.href)}
+                style={{
+                  flexShrink: 0, width: 200, textAlign: "left", cursor: "pointer",
+                  display: "flex", alignItems: "center", gap: 10, padding: "12px 14px",
+                  background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 12,
+                  transition: "border-color 0.12s, transform 0.12s",
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--accent)"; e.currentTarget.style.transform = "translateY(-1px)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.transform = "translateY(0)"; }}
+              >
+                <div style={{
+                  width: 34, height: 34, borderRadius: 9, flexShrink: 0,
+                  background: "rgba(255,255,255,0.05)", border: "1px solid var(--border)",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>
+                  <i className={RECENT_ICON[r.type] || "fas fa-file"} style={{ color: "var(--text-secondary)", fontSize: 14 }} />
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.label}</div>
+                  <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "capitalize", marginTop: 1 }}>{r.type}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Header: tabs + search + New in one row (no redundant page title) */}
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 8, gap: 16, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", flex: 1, minWidth: 0 }}>
         {TABS.map((t) => {
           const active = activeTab === t.key;
           return (
@@ -180,7 +375,9 @@ export default function WorkspacePage() {
             </button>
           );
         })}
-        <div style={{ flex: 1 }} />
+        </div>
+
+        {/* Scope toggle */}
         <div style={{ display: "flex", gap: 0, background: "rgba(255,255,255,0.04)", borderRadius: 8, border: "1px solid var(--border)", overflow: "hidden" }}>
           {(["mine", "all"] as const).map((s) => (
             <button key={s} type="button" onClick={() => setScope(s)} style={{
@@ -193,6 +390,32 @@ export default function WorkspacePage() {
             </button>
           ))}
         </div>
+
+        {/* Search */}
+        <div style={{ position: "relative" }}>
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search..."
+            style={{
+              width: 200, padding: "9px 12px 9px 34px", fontSize: 13,
+              border: "1px solid var(--border)", borderRadius: 10,
+              background: "var(--bg-surface)", color: "var(--text-primary)", outline: "none",
+            }}
+          />
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)" }}>
+            <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+        </div>
+
+        {/* New */}
+        <button type="button" onClick={() => router.push(tab.newRoute)} style={{
+          padding: "9px 20px", fontSize: 13, fontWeight: 500,
+          background: "var(--accent)", color: "#fff", border: "none",
+          borderRadius: 10, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap",
+        }}>
+          + New
+        </button>
       </div>
 
       <div style={{ height: 1, background: "var(--border)", marginBottom: 4 }} />
@@ -229,62 +452,106 @@ export default function WorkspacePage() {
         </div>
       )}
 
-      {/* Items */}
+      {/* Items — grouped card grid (sections by dataset/source), or one flat grid */}
       {!loading && !error && filtered.length > 0 && (
-        <div>
-          {filtered.map((item) => {
-            const label = item.name ?? item.title ?? "Untitled";
-            const ts = item.updated_at ?? item.created_at;
-            const owner = ownerFirst(item.created_by);
-            return (
-              <div
-                key={item.id}
-                onClick={() => router.push(itemNav(activeTab, item.id))}
-                style={{
-                  display: "flex", alignItems: "center", padding: "14px 12px",
-                  cursor: "pointer", transition: "background 0.1s", gap: 14,
-                  borderRadius: 10, margin: "2px 0",
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-              >
-                {/* Icon */}
-                <div style={{
-                  width: 36, height: 36, borderRadius: 10,
-                  background: "rgba(var(--accent-rgb), 0.06)",
-                  border: "1px solid rgba(var(--accent-rgb), 0.1)",
-                  display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-                }}>
-                  <TabItemIcon size={18} color="var(--accent)" />
+        useSections ? (
+          <div style={{ marginTop: 20, display: "flex", flexDirection: "column", gap: 32 }}>
+            {grouped.map((g) => (
+              <div key={g.key || "all"}>
+                {/* Section header: one accent dot + group name + count */}
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                  <span style={{ width: 9, height: 9, borderRadius: "50%", background: g.accent, flexShrink: 0 }} />
+                  <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}>{g.key || "Ungrouped"}</span>
+                  <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500 }}>{g.items.length}</span>
+                  <div style={{ flex: 1, height: 1, background: "var(--border)", marginLeft: 4 }} />
                 </div>
-
-                {/* Name */}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{
-                    fontSize: 14, fontWeight: 500, color: "var(--text-primary)",
-                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                  }}>
-                    {label}
-                  </div>
-                  {owner && (
-                    <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>{owner}</div>
-                  )}
+                <div style={gridStyle}>
+                  {g.items.map((item) => renderCard(item, g.accent))}
                 </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ ...gridStyle, marginTop: 20 }}>
+            {grouped[0]?.items.map((item) => renderCard(item, grouped[0].accent))}
+          </div>
+        )
+      )}
 
-                {/* Time */}
-                <div style={{ fontSize: 12, color: "var(--text-muted)", flexShrink: 0, minWidth: 50, textAlign: "right" }}>
-                  {fmtDate(ts)}
-                </div>
-
-                {/* Chevron */}
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-faint)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                  <polyline points="9 18 15 12 9 6" />
+      {/* Delete confirmation — card overlay */}
+      {confirmItem && (
+        <div
+          onClick={() => { if (!deletingId) setConfirmItem(null); }}
+          style={{
+            position: "fixed", inset: 0, zIndex: 1000,
+            background: "rgba(15, 23, 42, 0.45)", backdropFilter: "blur(2px)",
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "100%", maxWidth: 400, background: "var(--bg-surface)",
+              border: "1px solid var(--border)", borderRadius: 16,
+              boxShadow: "0 24px 48px rgba(0,0,0,0.28)", padding: 24,
+              animation: "workspaceModalIn 0.14s ease-out",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+              <div style={{
+                width: 40, height: 40, borderRadius: 10, flexShrink: 0,
+                background: "rgba(220,38,38,0.1)", display: "flex", alignItems: "center", justifyContent: "center",
+              }}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" />
                 </svg>
               </div>
-            );
-          })}
+              <h3 style={{ margin: 0, fontSize: 17, fontWeight: 600, color: "var(--text-primary)" }}>
+                Delete {tab.label.toLowerCase().replace(/s$/, "")}?
+              </h3>
+            </div>
+            <p style={{ margin: "0 0 20px", fontSize: 14, lineHeight: 1.5, color: "var(--text-secondary)" }}>
+              &ldquo;<span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{confirmItem.name ?? confirmItem.title ?? "Untitled"}</span>&rdquo; will be permanently removed. This can&apos;t be undone.
+            </p>
+            {deleteError && (
+              <div style={{ marginBottom: 14, fontSize: 13, color: "#dc2626" }}>{deleteError}</div>
+            )}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <button
+                type="button"
+                onClick={() => setConfirmItem(null)}
+                disabled={!!deletingId}
+                style={{
+                  padding: "9px 18px", fontSize: 13, fontWeight: 500, cursor: deletingId ? "default" : "pointer",
+                  border: "1px solid var(--border)", borderRadius: 10,
+                  background: "var(--bg-surface)", color: "var(--text-secondary)",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDelete}
+                disabled={!!deletingId}
+                style={{
+                  padding: "9px 18px", fontSize: 13, fontWeight: 600, cursor: deletingId ? "default" : "pointer",
+                  border: "none", borderRadius: 10, background: "#dc2626", color: "#fff",
+                  display: "flex", alignItems: "center", gap: 8, minWidth: 88, justifyContent: "center",
+                }}
+              >
+                {deletingId ? <div className="spinner" style={{ width: 13, height: 13, borderWidth: 2, borderTopColor: "#fff" }} /> : "Delete"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
+
+      <style jsx>{`
+        @keyframes workspaceModalIn {
+          from { opacity: 0; transform: translateY(8px) scale(0.98); }
+          to   { opacity: 1; transform: translateY(0)   scale(1); }
+        }
+      `}</style>
     </div>
   );
 }

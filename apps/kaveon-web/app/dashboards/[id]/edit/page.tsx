@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { DashboardProvider, DashboardConfig } from "../../../../components/dashboards/DashboardContext";
 import DashboardBuilder from "../../../../components/dashboards/DashboardBuilder";
 import { LoadingOverlay } from "../../../../components/LoadingOverlay";
@@ -13,6 +13,7 @@ export const dynamicParams = true;
 
 const DashboardEditPage: React.FC = () => {
   const params = useParams();
+  const router = useRouter();
   const id = params?.id as string | undefined;
   const [initialConfig, setInitialConfig] = useState<DashboardConfig | undefined>(undefined);
   const [loading, setLoading] = useState(true);
@@ -102,6 +103,35 @@ const DashboardEditPage: React.FC = () => {
     [id]
   );
 
+  /**
+   * Save As — create a NEW dashboard from the current config.
+   */
+  const handleSaveAs = useCallback(
+    async (config: DashboardConfig): Promise<string | number | null> => {
+      const payload = {
+        name: config.name,
+        description: config.description || "",
+        theme: config.theme || "default",
+        layout: config.layout,
+        charts: config.chartIds || [],
+        filters: config.filters || [],
+        is_published: false,
+      };
+      const response = await msalFetch(`${API_BASE}/api/v1/dashboards`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || `Failed to create copy: ${response.status}`);
+      }
+      const created = await response.json();
+      return created?.id ?? null;
+    },
+    []
+  );
+
   // Show loading state
   if (loading) {
     return <LoadingOverlay />;
@@ -134,7 +164,7 @@ const DashboardEditPage: React.FC = () => {
   }
 
   return (
-    <DashboardProvider initialConfig={initialConfig} onSave={handleSave}>
+    <DashboardProvider initialConfig={initialConfig} onSave={handleSave} onSaveAs={handleSaveAs}>
       <div className="page-shell page-shell-wide">
         <DashboardBuilder dashboardId={id as string} />
       </div>

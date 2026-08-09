@@ -139,7 +139,9 @@ interface DashboardContextState {
   setIsDragging: (isDragging: boolean) => void;
 
   // Save/load operations
-  saveDashboard: () => Promise<void>;
+  saveDashboard: (overrides?: Partial<DashboardConfig>) => Promise<void>;
+  /** Save the current dashboard as a NEW copy; resolves to the new dashboard id (or null). */
+  saveDashboardAs: (newName: string) => Promise<string | number | null>;
   loadDashboard: (config: DashboardConfig) => void;
   resetDashboard: () => void;
   registerInitialSnapshot: () => void;
@@ -171,6 +173,8 @@ interface DashboardProviderProps {
   initialConfig?: DashboardConfig;
   /** Callback when dashboard is saved */
   onSave?: (config: DashboardConfig) => Promise<void>;
+  /** Callback to create a NEW dashboard from the given config; returns the new id. */
+  onSaveAs?: (config: DashboardConfig) => Promise<string | number | null>;
 }
 
 /**
@@ -183,6 +187,7 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
   children,
   initialConfig,
   onSave,
+  onSaveAs,
 }) => {
   // Dashboard metadata state
   const [dashboardId, setDashboardId] = useState<number | null>(initialConfig?.id || null);
@@ -873,7 +878,7 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
    * Save the current dashboard state
    * Calls the onSave callback with the complete dashboard configuration
    */
-  const saveDashboard = useCallback(async () => {
+  const saveDashboard = useCallback(async (overrides?: Partial<DashboardConfig>) => {
     if (!onSave) {
       console.warn('No onSave callback provided to DashboardProvider');
       return;
@@ -883,6 +888,11 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
     setSaveError(null);
 
     try {
+      // Overrides win over current state — lets the save modal pass the just-typed
+      // name/description directly instead of relying on a setState having flushed.
+      // (Previously the modal did setDescription() then saveDashboard() in a
+      // setTimeout, but that closure captured the pre-update description, so
+      // description edits were silently dropped.)
       const config: DashboardConfig = {
         id: dashboardId || undefined,
         name,
@@ -892,9 +902,14 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
         filters: dashboardFilters,
         filterLogic,
         chartIds: collectChartIds(layout),
+        ...overrides,
       };
 
       await onSave(config);
+
+      // Reflect overrides in context state so the UI matches what was persisted.
+      if (overrides?.name !== undefined) setName(overrides.name);
+      if (overrides?.description !== undefined) setDescription(overrides.description);
 
       // Update the initial snapshot after successful save
       initialSnapshotRef.current = JSON.stringify(config);
@@ -906,6 +921,36 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
       setIsSaving(false);
     }
   }, [dashboardId, name, description, theme, layout, dashboardFilters, filterLogic, onSave]);
+
+  const saveDashboardAs = useCallback(async (newName: string): Promise<string | number | null> => {
+    if (!onSaveAs) {
+      console.warn('No onSaveAs callback provided to DashboardProvider');
+      return null;
+    }
+    setIsSaving(true);
+    setSaveError(null);
+    try {
+      // New copy: no id, new name, same everything else.
+      const config: DashboardConfig = {
+        id: undefined,
+        name: newName,
+        description,
+        theme,
+        layout,
+        filters: dashboardFilters,
+        filterLogic,
+        chartIds: collectChartIds(layout),
+      };
+      const newId = await onSaveAs(config);
+      return newId;
+    } catch (error) {
+      console.error('Error saving dashboard copy:', error);
+      setSaveError(error instanceof Error ? error.message : 'Failed to save a copy');
+      return null;
+    } finally {
+      setIsSaving(false);
+    }
+  }, [description, theme, layout, dashboardFilters, filterLogic, onSaveAs]);
 
   /**
    * Load a dashboard configuration
@@ -1131,6 +1176,7 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
 
     // Save/load operations
     saveDashboard,
+    saveDashboardAs,
     loadDashboard,
     resetDashboard,
     registerInitialSnapshot,
