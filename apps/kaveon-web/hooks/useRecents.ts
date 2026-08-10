@@ -112,10 +112,11 @@ export function useRecents() {
     }).catch(() => {});
   }, []);
 
-  // Clear all recents, or just one type — updates local + the per-user DB.
+  // Clear all recents, or just one type — updates local + state + the per-user DB.
   const clearRecents = useCallback((type?: RecentItem["type"]) => {
-    const current = loadLocal();
-    saveLocal(type ? current.filter((r) => r.type !== type) : []);
+    const next = type ? loadLocal().filter((r) => r.type !== type) : [];
+    saveLocal(next);
+    setRecents(next);            // update this instance immediately
     const qs = type ? `?type=${encodeURIComponent(type)}` : "";
     msalFetch(`/api/v1/user/recents${qs}`, { method: "DELETE" }).catch(() => {});
   }, []);
