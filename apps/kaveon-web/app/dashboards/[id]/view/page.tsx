@@ -11,6 +11,7 @@ import { useRecents } from "../../../../hooks/useRecents";
 import { resetQuerySemaphore, isQueryIdle } from "../../../../utils/querySemaphore";
 import { API_BASE } from "../../../../config";
 import { toJpeg } from "html-to-image";
+import { useTheme } from "../../../../contexts/ThemeContext";
 
 export const dynamic = 'force-dynamic';
 export const dynamicParams = true;
@@ -36,6 +37,8 @@ const DashboardViewContent: React.FC<{
   onClose: () => void;
 }> = ({ isFavorite, isAnimating, isPublished, initialConfig, publishing, onFavoriteClick, onPublish, onEdit, onClose }) => {
   const { preloadAllCharts, isPreloading, dashboardFilters, triggerGlobalRefresh } = useDashboard();
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
   const hasPreloadedRef = useRef(false);
   const [chartsReady, setChartsReady] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -61,7 +64,10 @@ const DashboardViewContent: React.FC<{
         const dataUrl = await toJpeg(node, {
           // skipFonts avoids html-to-image reading cssRules from cross-origin
           // stylesheets (FontAwesome/fonts CDN) which throws a SecurityError.
-          quality: 0.55, pixelRatio: 0.4, backgroundColor: "#f8fafc", cacheBust: true, skipFonts: true,
+          // Match the active theme so a dark-mode dashboard doesn't get a light
+          // thumbnail (and vice-versa). Re-captured on each view, so switching
+          // theme and reopening refreshes the thumbnail to match.
+          quality: 0.55, pixelRatio: 0.4, backgroundColor: isDark ? "#0b1220" : "#f8fafc", cacheBust: true, skipFonts: true,
         });
         if (!dataUrl || dataUrl.length > 3_500_000) return;
         await msalFetch(`${API_BASE}/api/v1/dashboards/${dashId}`, {
@@ -91,7 +97,11 @@ const DashboardViewContent: React.FC<{
     };
     let poll = window.setTimeout(tick, 800);
     return () => { cancelled = true; clearTimeout(poll); };
-  }, [chartsReady, dashId]);
+  }, [chartsReady, dashId, isDark]);
+
+  // If the user flips the theme while viewing, allow one fresh capture so the
+  // stored thumbnail is re-shot to match the new theme.
+  useEffect(() => { capturedRef.current = false; }, [isDark]);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [refreshInterval, setRefreshInterval] = useState(0);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);

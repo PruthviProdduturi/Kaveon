@@ -13,6 +13,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { HexColorPicker } from 'react-colorful';
 import type { DashboardComponentProps } from '../../../types/dashboard';
 import { ConfirmModal } from '../../ConfirmModal';
+import { useTheme } from '../../../contexts/ThemeContext';
 
 // ─── Lightweight markdown renderer ────────────────────────────────────────────
 
@@ -29,7 +30,7 @@ function parseInline(text: string, key?: string | number): React.ReactNode[] {
     else if (m[1].startsWith('*'))
       nodes.push(<em key={k}>{parseInline(m[3], k + 'i')}</em>);
     else if (m[1].startsWith('`'))
-      nodes.push(<code key={k} style={{ background: '#f1f5f9', padding: '1px 5px', borderRadius: 3, fontFamily: 'ui-monospace,monospace', fontSize: '0.88em', color: '#c7254e' }}>{m[4]}</code>);
+      nodes.push(<code key={k} style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', padding: '1px 5px', borderRadius: 3, fontFamily: 'ui-monospace,monospace', fontSize: '0.88em', color: 'var(--accent)' }}>{m[4]}</code>);
     else if (m[1].startsWith('['))
       nodes.push(<a key={k} href={m[6]} target={m[6].startsWith('/') ? '_self' : '_blank'} rel="noopener noreferrer" style={{ color: '#2563eb', textDecoration: 'underline', fontWeight: 600 }}>{parseInline(m[5], k + 'l')}</a>);
     last = m.index + m[0].length;
@@ -52,12 +53,12 @@ function renderMarkdown(text: string): React.ReactNode {
     if (line.startsWith('### ')) { out.push(<h3 key={i} style={{ fontSize: 14, fontWeight: 700, margin: '10px 0 3px', color: 'inherit' }}>{parseInline(line.slice(4), i)}</h3>); i++; continue; }
     if (line.startsWith('## '))  { out.push(<h2 key={i} style={{ fontSize: 17, fontWeight: 700, margin: '12px 0 4px', color: 'inherit' }}>{parseInline(line.slice(3), i)}</h2>); i++; continue; }
     if (line.startsWith('# '))   { out.push(<h1 key={i} style={{ fontSize: 21, fontWeight: 800, margin: '14px 0 5px', color: 'inherit' }}>{parseInline(line.slice(2), i)}</h1>); i++; continue; }
-    if (/^-{3,}$/.test(line.trim())) { out.push(<hr key={i} style={{ border: 'none', borderTop: '1px solid #e2e8f0', margin: '8px 0' }} />); i++; continue; }
+    if (/^-{3,}$/.test(line.trim())) { out.push(<hr key={i} style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '8px 0' }} />); i++; continue; }
     if (line.startsWith('> ')) {
       const qLines: string[] = [];
       while (i < lines.length && lines[i].startsWith('> ')) { qLines.push(lines[i].slice(2)); i++; }
       out.push(
-        <blockquote key={`bq-${i}`} style={{ borderLeft: '3px solid #94a3b8', paddingLeft: 12, margin: '6px 0', color: '#64748b', fontStyle: 'italic' }}>
+        <blockquote key={`bq-${i}`} style={{ borderLeft: '3px solid var(--border)', paddingLeft: 12, margin: '6px 0', color: 'var(--text-muted)', fontStyle: 'italic' }}>
           {qLines.map((ql, qi) => <p key={qi} style={{ margin: 0 }}>{parseInline(ql, qi)}</p>)}
         </blockquote>
       );
@@ -159,7 +160,9 @@ const DashboardTextComponent: React.FC<DashboardComponentProps> = ({ item, isEdi
   const [content,     setContent]     = useState(item.textConfig?.content    || '');
   const [alignment,   setAlignment]   = useState<'left'|'center'|'right'>(item.textConfig?.alignment || 'left');
   const [fontSize,    setFontSize]    = useState(item.textConfig?.fontSize   || 14);
-  const [color,       setColor]       = useState(item.textConfig?.color      || '#334155');
+  // Empty color == "auto": follow the theme (dark text in light mode, light text
+  // in dark mode) instead of a baked-in slate that's unreadable on a dark tile.
+  const [color,       setColor]       = useState(item.textConfig?.color      || '');
   const [isEditing,   setIsEditing]   = useState(false);
   const [tab,         setTab]         = useState<'markdown'|'preview'>('markdown');
   const [hovered,     setHovered]     = useState(false);
@@ -172,8 +175,14 @@ const DashboardTextComponent: React.FC<DashboardComponentProps> = ({ item, isEdi
     setContent(item.textConfig?.content   || '');
     setAlignment(item.textConfig?.alignment || 'left');
     setFontSize(item.textConfig?.fontSize   || 14);
-    setColor(item.textConfig?.color         || '#334155');
+    setColor(item.textConfig?.color         || '');
   }, [item.textConfig?.content, item.textConfig?.alignment, item.textConfig?.fontSize, item.textConfig?.color]);
+
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
+  // The color actually applied when rendering: the user's picked color, or the
+  // theme's primary text color when left on auto.
+  const effColor = color || 'var(--text-primary)';
 
   useEffect(() => {
     if (isEditing && tab === 'markdown') {
@@ -302,11 +311,11 @@ const DashboardTextComponent: React.FC<DashboardComponentProps> = ({ item, isEdi
                   onClick={() => setShowColor(v => !v)}
                   style={{ width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: '1px solid #e2e8f0', borderRadius: 4, cursor: 'pointer', padding: 0 }}
                 >
-                  <span style={{ width: 14, height: 14, borderRadius: 3, background: color, border: '1px solid rgba(0,0,0,0.15)', display: 'block' }} />
+                  <span style={{ width: 14, height: 14, borderRadius: 3, background: effColor, border: '1px solid rgba(0,0,0,0.15)', display: 'block' }} />
                 </button>
                 {showColor && (
                   <div style={{ position: 'absolute', top: 26, left: 0, zIndex: 50, boxShadow: '0 4px 16px rgba(0,0,0,0.15)', borderRadius: 8, overflow: 'hidden', border: '1px solid #e2e8f0' }}>
-                    <HexColorPicker color={color} onChange={setColor} />
+                    <HexColorPicker color={color || (isDark ? '#e2e8f0' : '#334155')} onChange={setColor} />
                   </div>
                 )}
               </div>
@@ -330,8 +339,8 @@ const DashboardTextComponent: React.FC<DashboardComponentProps> = ({ item, isEdi
                 style={{
                   flex: 1, resize: 'none', width: '100%',
                   fontSize: 12, fontFamily: 'ui-monospace, monospace',
-                  lineHeight: 1.7, color: '#334155',
-                  background: '#fafafa', border: '1px solid #e2e8f0',
+                  lineHeight: 1.7, color: 'var(--text-primary)',
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
                   borderRadius: 6, outline: 'none', padding: '8px 10px',
                   boxSizing: 'border-box',
                 }}
@@ -339,11 +348,11 @@ const DashboardTextComponent: React.FC<DashboardComponentProps> = ({ item, isEdi
             ) : (
               <div style={{
                 flex: 1, overflow: 'auto', padding: '8px 10px',
-                fontSize, color, textAlign: alignment,
-                lineHeight: 1.7, background: '#fff',
-                border: '1px solid #e2e8f0', borderRadius: 6,
+                fontSize, color: effColor, textAlign: alignment,
+                lineHeight: 1.7, background: 'var(--bg-surface)',
+                border: '1px solid var(--border)', borderRadius: 6,
               }}>
-                {content ? renderMarkdown(content) : <span style={{ color: '#94a3b8' }}>Nothing to preview.</span>}
+                {content ? renderMarkdown(content) : <span style={{ color: 'var(--text-muted)' }}>Nothing to preview.</span>}
               </div>
             )}
           </div>
@@ -352,7 +361,7 @@ const DashboardTextComponent: React.FC<DashboardComponentProps> = ({ item, isEdi
           <div
             onClick={() => { if (isEditMode) { setIsEditing(true); setTab('markdown'); } }}
             style={{
-              padding: '8px 10px', fontSize, color,
+              padding: '8px 10px', fontSize, color: effColor,
               textAlign: alignment, lineHeight: 1.7,
               cursor: isEditMode ? 'text' : 'default',
               height: '100%', overflow: 'auto', boxSizing: 'border-box',
@@ -361,7 +370,7 @@ const DashboardTextComponent: React.FC<DashboardComponentProps> = ({ item, isEdi
             {content
               ? renderMarkdown(content)
               : isEditMode
-                ? <span style={{ color: '#94a3b8', fontSize: 13 }}>Click to add text — supports <strong>markdown</strong></span>
+                ? <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Click to add text — supports <strong>markdown</strong></span>
                 : null
             }
           </div>

@@ -50,6 +50,8 @@ export default function DataSourcesPage() {
   const [editingDataSource, setEditingDataSource] = useState<DataSource | null>(null);
   const [copyingDataSource, setCopyingDataSource] = useState<DataSource | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [buildingContextId, setBuildingContextId] = useState<number | null>(null);
+  const [contextMessage, setContextMessage] = useState<string | null>(null);
   const [tableCounts, setTableCounts] = useState<Record<number, number | null>>({});
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -199,6 +201,34 @@ export default function DataSourcesPage() {
     }
   };
 
+  const buildContext = async (ds: DataSource, e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    const database = ds.database_name || ds.name;
+    setBuildingContextId(ds.id);
+    setContextMessage(null);
+    setError(null);
+    try {
+      const response = await msalFetch(`${API_BASE}/api/v1/context/build`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ database, schema_name: "public" }),
+      });
+      if (!response.ok) throw new Error("Failed to build context");
+      const data = await response.json();
+      if (data.supported === false) {
+        setError(data.reason || "Context building is not supported for this data source");
+      } else {
+        setContextMessage(`Context built: ${data.tables_profiled} tables, ${data.elements} elements profiled.`);
+        setTimeout(() => setContextMessage(null), 4000);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to build context");
+    } finally {
+      setBuildingContextId(null);
+    }
+  };
+
   const filtered = dataSources.filter(ds =>
     !search || ds.name.toLowerCase().includes(search.toLowerCase()) ||
     (ds.description ?? "").toLowerCase().includes(search.toLowerCase()) ||
@@ -241,6 +271,17 @@ export default function DataSourcesPage() {
         resultCount={search ? filtered.length : undefined}
       >
         <div className="card">
+          {contextMessage && (
+            <div style={{
+              padding: "0.75rem 1rem", borderRadius: 8, marginBottom: "1rem",
+              background: "rgba(16,185,129,0.08)", color: "var(--success)",
+              border: "1px solid rgba(16,185,129,0.3)",
+              display: "flex", alignItems: "center", gap: "0.75rem", fontSize: 13,
+            }}>
+              <i className="fas fa-check-circle" />
+              {contextMessage}
+            </div>
+          )}
           <div className="results-table-container">
             <table className="results-table">
               <thead>
@@ -293,6 +334,9 @@ export default function DataSourcesPage() {
                         </button>
                         <button type="button" className="action-icon-btn" title="Copy data source" onClick={e => { e.stopPropagation(); setCopyingDataSource(ds); }}>
                           <i className="fas fa-copy" />
+                        </button>
+                        <button type="button" className="action-icon-btn" title="Build Context" onClick={e => buildContext(ds, e)} disabled={buildingContextId === ds.id}>
+                          <i className={buildingContextId === ds.id ? "fas fa-spinner fa-spin" : "fas fa-brain"} />
                         </button>
                         <button type="button" className="action-icon-btn" title="Edit data source" onClick={e => { e.stopPropagation(); setEditingDataSource(ds); }}>
                           <i className="fas fa-edit" />
