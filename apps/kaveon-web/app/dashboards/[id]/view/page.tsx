@@ -69,13 +69,32 @@ const DashboardViewContent: React.FC<{
           // theme and reopening refreshes the thumbnail to match.
           quality: 0.55, pixelRatio: 0.4, backgroundColor: isDark ? "#0b1220" : "#f8fafc", cacheBust: true, skipFonts: true,
         });
-        if (!dataUrl || dataUrl.length > 3_500_000) return;
+        if (!dataUrl || dataUrl.length > 3_500_000) {
+          notifyParentDone();
+          return;
+        }
+        // Save into the theme-specific slot so both a light and a dark preview
+        // can coexist; the Library shows whichever matches the viewer's theme.
         await msalFetch(`${API_BASE}/api/v1/dashboards/${dashId}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ thumbnail: dataUrl }),
+          body: JSON.stringify(isDark ? { thumbnail_dark: dataUrl } : { thumbnail: dataUrl }),
         });
       } catch { /* best-effort */ }
+      finally { notifyParentDone(); }
+    };
+
+    // When rendered inside the thumbnail-refresh iframe (?capture=1), tell the
+    // parent this dashboard+theme is done so it can advance to the next one.
+    const notifyParentDone = () => {
+      try {
+        const sp = new URLSearchParams(window.location.search);
+        if (sp.get("capture") === "1" && window.parent && window.parent !== window) {
+          window.parent.postMessage(
+            { type: "kaveon-thumb-done", id: dashId, theme: isDark ? "dark" : "light" }, "*",
+          );
+        }
+      } catch { /* ignore */ }
     };
 
     // Poll: wait until queries have started AND then gone idle (charts rendered),

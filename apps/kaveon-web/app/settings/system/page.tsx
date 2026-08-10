@@ -91,6 +91,68 @@ export default function SystemSettingsPage() {
 
   const [showReset, setShowReset] = useState(false);
 
+  // Thumbnail refresh: re-render every dashboard for BOTH themes via a hidden
+  // iframe that loads each dashboard's view route (which captures + saves the
+  // thumbnail into the theme-matched slot) and posts back when done.
+  const [thumbStatus, setThumbStatus] = useState<
+    { running: boolean; done: number; total: number; label: string } | null
+  >(null);
+
+  const refreshAllThumbnails = async () => {
+    if (thumbStatus?.running) return;
+    setThumbStatus({ running: true, done: 0, total: 0, label: "Loading dashboards…" });
+
+    let dashboards: { id: string; name: string }[] = [];
+    try {
+      const res = await msalFetch(`${API_BASE}/api/v1/dashboards`);
+      const data = await res.json();
+      const arr = Array.isArray(data) ? data : data.result || data.items || [];
+      dashboards = arr.map((d: any) => ({ id: String(d.id), name: d.name || "Untitled" }));
+    } catch {
+      setThumbStatus({ running: false, done: 0, total: 0, label: "Failed to load dashboards" });
+      setTimeout(() => setThumbStatus(null), 5000);
+      return;
+    }
+
+    const themes: ("light" | "dark")[] = ["light", "dark"];
+    const jobs = dashboards.flatMap((d) => themes.map((t) => ({ ...d, theme: t })));
+    const total = jobs.length;
+    if (total === 0) {
+      setThumbStatus({ running: false, done: 0, total: 0, label: "No dashboards to refresh" });
+      setTimeout(() => setThumbStatus(null), 5000);
+      return;
+    }
+
+    const iframe = document.createElement("iframe");
+    iframe.style.cssText =
+      "position:fixed;left:-9999px;top:0;width:1280px;height:800px;border:0;visibility:hidden;";
+    document.body.appendChild(iframe);
+
+    let resolveDone: (() => void) | null = null;
+    const onMsg = (e: MessageEvent) => {
+      if (e.data && e.data.type === "kaveon-thumb-done") resolveDone?.();
+    };
+    window.addEventListener("message", onMsg);
+
+    try {
+      for (let i = 0; i < jobs.length; i++) {
+        const job = jobs[i];
+        setThumbStatus({ running: true, done: i, total, label: `${job.name} · ${job.theme}` });
+        await new Promise<void>((resolve) => {
+          const finish = () => { clearTimeout(timer); resolveDone = null; resolve(); };
+          const timer = setTimeout(finish, 25000); // per-dashboard safety cap
+          resolveDone = finish;
+          iframe.src = `/dashboards/${job.id}/view?capture=1&forceTheme=${job.theme}`;
+        });
+      }
+      setThumbStatus({ running: false, done: total, total, label: "All thumbnails refreshed" });
+    } finally {
+      window.removeEventListener("message", onMsg);
+      iframe.remove();
+      setTimeout(() => setThumbStatus(null), 6000);
+    }
+  };
+
   useEffect(() => {
     if (!roleLoading && !isAdmin) router.replace("/");
   }, [roleLoading, isAdmin, router]);
@@ -300,6 +362,50 @@ export default function SystemSettingsPage() {
                 Changing the metadata server re-runs schema initialisation and restarts the API. Existing data is preserved.
               </div>
             </>
+          )}
+        </SectionCard>
+
+        {/* ── Dashboard Thumbnails ─────────────────────────────────────────── */}
+        <SectionCard
+          accentColor={primaryColor}
+          status="active"
+          header={
+            <CardHeader
+              icon="fa-images"
+              title="Dashboard Thumbnails"
+              subtitle="Re-render every dashboard preview for both light and dark themes"
+              status="active"
+              statusLabel="Ready"
+              primaryColor={primaryColor}
+              action={
+                <Button onClick={refreshAllThumbnails} disabled={!!thumbStatus?.running}>
+                  {thumbStatus?.running
+                    ? <><i className="fas fa-spinner fa-spin" /> Refreshing…</>
+                    : <><i className="fas fa-arrows-rotate" /> Refresh all</>}
+                </Button>
+              }
+            />
+          }
+        >
+          <div style={{ fontSize: 13, color: "#64748b", lineHeight: 1.6 }}>
+            Opens each dashboard off-screen, waits for its charts to render, and captures a
+            preview in both themes so the Library always shows a thumbnail that matches the
+            current mode. Runs one dashboard at a time to avoid overloading queries.
+          </div>
+          {thumbStatus && (
+            <div style={{ marginTop: "1rem" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, color: "#475569", marginBottom: 6 }}>
+                <span>{thumbStatus.label}</span>
+                {thumbStatus.total > 0 && <span>{thumbStatus.done}/{thumbStatus.total}</span>}
+              </div>
+              <div style={{ height: 6, borderRadius: 999, background: "#e2e8f0", overflow: "hidden" }}>
+                <div style={{
+                  height: "100%",
+                  width: thumbStatus.total > 0 ? `${Math.round((thumbStatus.done / thumbStatus.total) * 100)}%` : "0%",
+                  background: primaryColor, transition: "width 0.3s ease",
+                }} />
+              </div>
+            </div>
           )}
         </SectionCard>
 

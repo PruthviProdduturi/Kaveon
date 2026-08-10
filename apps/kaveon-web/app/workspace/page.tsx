@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "../../auth/useAuth";
 import { msalFetch } from "../../utils/msalFetch";
 import { useRecents } from "../../hooks/useRecents";
+import { useTheme } from "../../contexts/ThemeContext";
 
 type TabKey = "dashboards" | "charts" | "datasets" | "queries";
 
@@ -17,6 +18,7 @@ interface WorkspaceItem {
   updated_at?: string | null;
   created_at?: string | null;
   thumbnail?: string | null;
+  thumbnail_dark?: string | null;
   chart_type?: string | null;
   dataset_name?: string | null;
   database_name?: string | null;
@@ -129,6 +131,8 @@ export default function WorkspacePage() {
   const searchParams = useSearchParams();
   const { isAuthenticated, account } = useAuth();
   const { recents } = useRecents();
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
 
   const rawTab = searchParams.get("tab") as TabKey | null;
   const activeTab: TabKey = TABS.some((t) => t.key === rawTab) ? rawTab! : "dashboards";
@@ -334,7 +338,12 @@ export default function WorkspacePage() {
     const label = item.name ?? item.title ?? "Untitled";
     const ts = item.updated_at ?? item.created_at;
     const owner = ownerFirst(item.created_by);
-    const hasThumb = !!item.thumbnail && String(item.thumbnail).startsWith("data:");
+    // Prefer the thumbnail matching the current theme; fall back to the other so
+    // a dashboard that only has one still shows something.
+    const themedThumb = isDark
+      ? (item.thumbnail_dark || item.thumbnail)
+      : (item.thumbnail || item.thumbnail_dark);
+    const hasThumb = !!themedThumb && String(themedThumb).startsWith("data:");
     return (
       <div
         key={item.id}
@@ -376,7 +385,7 @@ export default function WorkspacePage() {
           {hasThumb ? (
             // Top-align (objectPosition:top) so a tall dashboard shows its top, not a center crop.
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={item.thumbnail as string} alt={label} style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top" }} />
+            <img src={themedThumb as string} alt={label} style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top" }} />
           ) : (
             <TabItemIcon size={34} color={accent} />
           )}
