@@ -23,14 +23,22 @@ def _adapt(row: dict) -> dict:
         "created_at": row.get("created_at"),
         "updated_at": row.get("modified_at"),
         "created_by": row.get("created_by"),
+        # Pinned = a row in the shared favorites store (object_type 'query'),
+        # same mechanism the Library pin uses for charts/dashboards/datasets.
+        "favorite": bool(row.get("fav")),
     }
 
 
 def list_saved_queries(user_id: str) -> List[dict]:
-    result = db.query(
-        _SELECT + "WHERE created_by = @param0 ORDER BY modified_at DESC",
-        [user_id],
-    )
+    result = db.query("""
+        SELECT s.id, s.name, s.description, s.sql_text, s.created_by,
+               s.created_at, s.modified_at,
+               CASE WHEN f.id IS NOT NULL THEN 1 ELSE 0 END AS fav
+        FROM saved_queries s
+        LEFT JOIN favorites f ON f.object_id = CAST(s.id AS NVARCHAR(255))
+            AND f.object_type = 'query' AND f.user_email = @param0
+        WHERE s.created_by = @param0 ORDER BY s.modified_at DESC
+    """, [user_id])
     return [_adapt(r) for r in result["rows"]]
 
 
