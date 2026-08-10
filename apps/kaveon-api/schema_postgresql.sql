@@ -78,7 +78,8 @@ CREATE TABLE IF NOT EXISTS charts (
     config      TEXT         NOT NULL DEFAULT '{}',
     visibility  VARCHAR(20)  NOT NULL DEFAULT 'internal'
                 CONSTRAINT ck_charts_visibility CHECK (visibility IN ('private','internal','published')),
-    thumbnail   TEXT         NULL,
+    thumbnail      TEXT      NULL,
+    thumbnail_dark TEXT      NULL,
     created_at  TIMESTAMP    NOT NULL DEFAULT NOW(),
     modified_at TIMESTAMP    NOT NULL DEFAULT NOW(),
     created_by  VARCHAR(255) NOT NULL DEFAULT 'system',
