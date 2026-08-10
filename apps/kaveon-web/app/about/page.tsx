@@ -36,11 +36,33 @@ export default function AboutPage() {
   const r7 = useFadeIn(0);
 
   const [showcaseTheme, setShowcaseTheme] = useState<"dark" | "light">("dark");
+  const [activeSlide, setActiveSlide] = useState(0);
+  const [showScroll, setShowScroll] = useState(true);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const [scrollProgress, setScrollProgress] = useState(0);
+
+  useEffect(() => {
+    const container = scrollRef.current;
+    if (!container) return;
+    const onScroll = () => {
+      const max = container.scrollHeight - container.clientHeight;
+      const progress = max > 0 ? container.scrollTop / max : 0;
+      setScrollProgress(progress);
+      setShowScroll(progress < 0.85);
+    };
+    container.addEventListener("scroll", onScroll, { passive: true });
+    return () => container.removeEventListener("scroll", onScroll);
+  }, []);
+  const slides = [
+    { dark: "/showcase/dashboard-dark.png", light: "/showcase/dashboard-light.png", title: "COVID-19 Global Overview", desc: "World map, KPI cards, donut chart, cross-filtering" },
+    { dark: "/showcase/taxi-dark.png", light: "/showcase/taxi-light.png", title: "NYC Yellow Taxi \u00b7 Jan 2023", desc: "Borough map, 3M rides, zone analysis, trip metrics" },
+  ];
 
   const B = "#4A9EE8";
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "#0a0a0a", color: "#f5f5f5", overflowY: "auto", overflowX: "hidden" }}>
+    <div ref={scrollRef} style={{ position: "fixed", inset: 0, background: "#0a0a0a", color: "#f5f5f5", overflowY: "auto", overflowX: "hidden", scrollBehavior: "smooth", scrollPaddingTop: 60 }}>
 
       <style>{`
         @keyframes float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-20px); } }
@@ -49,6 +71,7 @@ export default function AboutPage() {
         @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
         @keyframes orb1 { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(60px,-30px) scale(1.1); } }
         @keyframes orb2 { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(-40px,40px) scale(0.9); } }
+        @keyframes beam-flow { 0% { transform: translateY(-100%); } 100% { transform: translateY(200%); } }
         .about-link:hover { color: #fff !important; }
         .about-card:hover { transform: translateY(-4px); border-color: rgba(255,255,255,0.12) !important; box-shadow: 0 12px 40px rgba(0,0,0,0.4) !important; }
         .about-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(74,158,232,0.4) !important; }
@@ -84,27 +107,72 @@ export default function AboutPage() {
           </svg>
         </a>
         <div style={{ display: "flex", alignItems: "center", gap: 36 }}>
-          <a href="#features" className="about-link" style={{ fontSize: 13, color: "#666", textDecoration: "none", transition: "color 0.2s" }}>Features</a>
-          <a href="/docs" target="_blank" className="about-link" style={{ fontSize: 13, color: "#666", textDecoration: "none", transition: "color 0.2s" }}>Docs</a>
-          <a href="https://github.com/PruthviProdduturi/Kaveon" target="_blank" rel="noopener noreferrer" className="about-link" style={{ fontSize: 13, color: "#666", textDecoration: "none", transition: "color 0.2s" }}>GitHub</a>
+          <a href="#features" className="about-link" style={{ fontSize: 13, color: "#ccc", textDecoration: "none", transition: "color 0.2s" }}>Features</a>
+          <a href="/docs" target="_blank" className="about-link" style={{ fontSize: 13, color: "#ccc", textDecoration: "none", transition: "color 0.2s" }}>Docs</a>
+          <a href="https://github.com/PruthviProdduturi/Kaveon" target="_blank" rel="noopener noreferrer" className="about-link" style={{ fontSize: 13, color: "#ccc", textDecoration: "none", transition: "color 0.2s" }}>GitHub</a>
           <a href="/" className="about-btn" style={{ display: "inline-block", padding: "8px 20px", borderRadius: 8, background: B, color: "#fff", fontSize: 13, fontWeight: 600, textDecoration: "none", transition: "all 0.2s" }}>
             Launch App
           </a>
         </div>
       </nav>
 
+      {/* Scroll indicator — travels down with scroll, fades near bottom */}
+      <a
+        href="#dashboards"
+        style={{
+          position: "fixed",
+          bottom: `calc(${28 + scrollProgress * 60}px)`,
+          right: 28,
+          zIndex: 9999,
+          opacity: showScroll ? Math.max(0, 1 - scrollProgress * 1.3) : 0,
+          transition: "top 0.15s ease-out, opacity 0.3s ease",
+          pointerEvents: showScroll ? "auto" : "none",
+          display: "flex", flexDirection: "column", alignItems: "center", gap: 6,
+          textDecoration: "none", cursor: "pointer",
+          padding: 8, borderRadius: 20,
+          background: "rgba(10,10,10,0.6)",
+          border: "1px solid rgba(255,255,255,0.1)",
+          backdropFilter: "blur(12px)",
+          animation: "float 3s ease-in-out infinite",
+        }}
+      >
+        <svg width="24" height="40" viewBox="0 0 24 40" fill="none">
+          <rect x="1.5" y="1.5" width="21" height="37" rx="10.5" stroke={B} strokeWidth="1.5" strokeOpacity="0.6" />
+          <circle cx="12" cy="12" r="3" fill={B} opacity="0.8">
+            <animate attributeName="cy" values="12;26;12" dur="1.8s" repeatCount="indefinite" />
+          </circle>
+        </svg>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={B} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.7 }}>
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </a>
+
       {/* ─── Hero ─── */}
-      <section ref={r1} style={{ position: "relative", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", padding: "60px 24px 80px", overflow: "hidden" }}>
+      <section ref={r1} style={{ position: "relative", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", padding: "60px 24px 100px", overflow: "hidden" }}>
         {/* Layered ambient lighting */}
         <div style={{ position: "absolute", top: "8%", left: "50%", transform: "translateX(-50%)", width: 1000, height: 600, borderRadius: "50%", background: `radial-gradient(ellipse, ${B}0a 0%, transparent 60%)`, pointerEvents: "none" }} />
         <div style={{ position: "absolute", top: "20%", left: "15%", width: 600, height: 600, borderRadius: "50%", background: `radial-gradient(circle, rgba(139,92,246,0.05) 0%, transparent 60%)`, animation: "orb1 14s ease-in-out infinite", pointerEvents: "none" }} />
         <div style={{ position: "absolute", bottom: "5%", right: "10%", width: 500, height: 500, borderRadius: "50%", background: `radial-gradient(circle, rgba(16,185,129,0.04) 0%, transparent 60%)`, animation: "orb2 11s ease-in-out infinite", pointerEvents: "none" }} />
         {/* Subtle grid */}
         <div style={{ position: "absolute", inset: 0, backgroundImage: "linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px)", backgroundSize: "80px 80px", pointerEvents: "none", maskImage: "radial-gradient(ellipse 70% 60% at 50% 40%, black 20%, transparent 100%)" }} />
-        {/* Top-down light beam */}
-        <div style={{ position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)", width: 2, height: "30%", background: `linear-gradient(180deg, ${B}30, transparent)`, pointerEvents: "none" }} />
 
-        <div style={{ position: "relative", maxWidth: 900 }}>
+        {/* Beam — top to top of logo, ends in glow */}
+        <div style={{
+          position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)",
+          width: 1, height: "calc(50% - 120px)",
+          background: `linear-gradient(180deg, transparent 0%, ${B}15 30%, ${B}25 100%)`,
+          pointerEvents: "none", zIndex: 1,
+        }} />
+        {/* Glow at beam endpoint (top of logo) */}
+        <div style={{
+          position: "absolute", top: "calc(50% - 120px)", left: "50%", transform: "translate(-50%, -50%)",
+          width: 100, height: 100, borderRadius: "50%",
+          background: `radial-gradient(circle, ${B}15 0%, ${B}06 50%, transparent 70%)`,
+          pointerEvents: "none", zIndex: 1,
+          filter: "blur(10px)",
+        }} />
+
+        <div style={{ position: "relative", maxWidth: 900, zIndex: 2 }}>
           {/* Guardian O — large, with glow ring */}
           <div style={{ position: "relative", display: "inline-block", marginBottom: 0 }}>
             <div style={{
@@ -114,12 +182,12 @@ export default function AboutPage() {
               filter: "blur(20px)",
               pointerEvents: "none",
             }} />
-            <KaveonMark size={200} useDirectColor />
+            <KaveonMark size={240} useDirectColor />
           </div>
 
           <h1 style={{
-            fontSize: "clamp(56px, 8vw, 96px)", fontWeight: 800, letterSpacing: "-3px", lineHeight: 1,
-            margin: "0 0 28px",
+            fontSize: "clamp(56px, 8vw, 96px)", fontWeight: 800, letterSpacing: "-3px", lineHeight: 1.1,
+            margin: "-8px 0 24px", padding: 0,
             background: `linear-gradient(135deg, #ffffff 0%, #e2e8f0 30%, ${B} 70%, #8b5cf6 100%)`,
             backgroundSize: "300% 300%",
             animation: "gradientShift 8s ease infinite",
@@ -178,19 +246,6 @@ export default function AboutPage() {
             </a>
           </div>
 
-          {/* Scroll indicator — bottom right */}
-          <div style={{
-            position: "fixed", bottom: 28, right: 28, zIndex: 50,
-            display: "flex", flexDirection: "column", alignItems: "center", gap: 6,
-            animation: "float 3s ease-in-out infinite",
-          }}>
-            <svg width="28" height="44" viewBox="0 0 28 44" fill="none">
-              <rect x="1.5" y="1.5" width="25" height="41" rx="12.5" stroke="rgba(255,255,255,0.35)" strokeWidth="2" />
-              <circle cx="14" cy="14" r="3.5" fill="rgba(255,255,255,0.6)">
-                <animate attributeName="cy" values="14;28;14" dur="2s" repeatCount="indefinite" />
-              </circle>
-            </svg>
-          </div>
         </div>
       </section>
 
@@ -326,18 +381,17 @@ export default function AboutPage() {
         </div>
       </section>
 
-      {/* ─── Dashboard Showcase ─── */}
-      <section id="dashboards" ref={r7} style={{ padding: "60px 24px 120px", background: "#0a0a0a", position: "relative" }}>
-        {/* Ambient glow behind the screenshot */}
-        <div style={{ position: "absolute", top: "30%", left: "50%", transform: "translateX(-50%)", width: 900, height: 500, borderRadius: "50%", background: `radial-gradient(circle, ${B}06 0%, transparent 70%)`, pointerEvents: "none" }} />
+      {/* ─── Dashboard Showcase — Apple-style horizontal scroll ─────── */}
+      <section id="dashboards" ref={r7} style={{ padding: "60px 0 100px", background: "#0a0a0a", position: "relative", overflow: "hidden" }}>
+        <div style={{ position: "absolute", top: "20%", left: "50%", transform: "translateX(-50%)", width: 1200, height: 600, borderRadius: "50%", background: `radial-gradient(circle, ${B}06 0%, transparent 60%)`, pointerEvents: "none" }} />
 
-        <div style={{ textAlign: "center", marginBottom: 48, position: "relative" }}>
+        <div style={{ textAlign: "center", marginBottom: 40, position: "relative", padding: "0 24px" }}>
           <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: "#f59e0b", marginBottom: 12 }}>Dashboards</div>
           <h2 style={{ fontSize: "clamp(28px, 4vw, 44px)", fontWeight: 700, letterSpacing: "-1px", marginBottom: 12 }}>
             Build dashboards that tell stories
           </h2>
           <p style={{ fontSize: 16, color: "#666", maxWidth: 540, margin: "0 auto 28px" }}>
-            World maps, KPI cards, trend lines, donut charts — drag, drop, publish. Every chart renders in parallel with cross-filtering.
+            World maps, KPI cards, trend lines, donut charts — drag, drop, publish.
           </p>
           {/* Theme toggle */}
           <div style={{ display: "inline-flex", borderRadius: 10, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)", padding: 3, gap: 2 }}>
@@ -358,18 +412,17 @@ export default function AboutPage() {
           </div>
         </div>
 
-        <div style={{ maxWidth: 1140, margin: "0 auto", position: "relative" }}>
-          {/* Browser frame */}
-          <div className="dash-frame" style={{
+        {/* Stacked dashboard viewer */}
+        <div style={{ maxWidth: 1140, margin: "0 auto", position: "relative", padding: "0 24px" }}>
+          {/* Browser frame with active screenshot */}
+          <div style={{
             borderRadius: 16, overflow: "hidden",
-            border: "1px solid rgba(255,255,255,0.08)",
-            boxShadow: `0 40px 100px rgba(0,0,0,0.6), 0 0 60px ${B}06`,
-            transition: "all 0.4s ease",
+            border: `1px solid ${showcaseTheme === "dark" ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)"}`,
+            boxShadow: `0 40px 100px rgba(0,0,0,0.6), 0 0 60px ${B}04`,
           }}>
             {/* Chrome bar */}
             <div style={{
-              display: "flex", alignItems: "center", gap: 8,
-              padding: "10px 16px",
+              display: "flex", alignItems: "center", gap: 8, padding: "10px 16px",
               background: showcaseTheme === "dark" ? "rgba(255,255,255,0.03)" : "#f3f4f6",
               borderBottom: `1px solid ${showcaseTheme === "dark" ? "rgba(255,255,255,0.04)" : "#e5e7eb"}`,
             }}>
@@ -378,51 +431,57 @@ export default function AboutPage() {
                 <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#febc2e" }} />
                 <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#28c840" }} />
               </div>
-              <div style={{ flex: 1, display: "flex", justifyContent: "center" }}>
-                <div style={{
-                  display: "flex", alignItems: "center", gap: 6,
-                  padding: "4px 16px", borderRadius: 6,
+              <div style={{ flex: 1, textAlign: "center" }}>
+                <span style={{
+                  fontSize: 11, padding: "3px 14px", borderRadius: 6,
                   background: showcaseTheme === "dark" ? "rgba(255,255,255,0.04)" : "#e5e7eb",
-                  fontSize: 11,
                   color: showcaseTheme === "dark" ? "#555" : "#999",
-                }}>
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                  kaveon.vercel.app/dashboards/global-overview
-                </div>
+                }}>kaveon.vercel.app</span>
               </div>
             </div>
-            {/* Screenshot */}
+            {/* Screenshot — crossfade, active image sets height */}
             <div style={{ position: "relative", overflow: "hidden" }}>
-              <img
-                src={showcaseTheme === "dark" ? "/showcase/dashboard-dark.png" : "/showcase/dashboard-light.png"}
-                alt="COVID-19 Global Overview Dashboard"
-                style={{
-                  width: "100%", display: "block",
-                  transition: "opacity 0.3s ease",
-                }}
-              />
+              {slides.map((slide, i) => (
+                <img
+                  key={slide.title}
+                  src={showcaseTheme === "dark" ? slide.dark : slide.light}
+                  alt={slide.title}
+                  style={{
+                    width: "100%", display: "block",
+                    ...(activeSlide === i
+                      ? { position: "relative", opacity: 1 }
+                      : { position: "absolute", top: 0, left: 0, opacity: 0, pointerEvents: "none" }),
+                    transition: "opacity 0.5s ease",
+                  }}
+                />
+              ))}
             </div>
           </div>
 
-          {/* Feature pills below */}
-          <div style={{ display: "flex", justifyContent: "center", gap: 10, marginTop: 24, flexWrap: "wrap" }}>
-            {[
-              { icon: "fa-globe", text: "World Maps" },
-              { icon: "fa-chart-line", text: "KPI Cards" },
-              { icon: "fa-chart-pie", text: "Donut Charts" },
-              { icon: "fa-filter", text: "Cross-filtering" },
-              { icon: "fa-sun", text: "Light & Dark" },
-              { icon: "fa-arrows-rotate", text: "Auto-refresh" },
-            ].map(({ icon, text }) => (
-              <div key={text} style={{
-                display: "flex", alignItems: "center", gap: 6,
-                padding: "6px 14px", borderRadius: 20,
-                background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)",
-                fontSize: 11.5, color: "#888", fontWeight: 500,
-              }}>
-                <i className={`fas ${icon}`} style={{ fontSize: 10, color: B, opacity: 0.7 }} />
-                {text}
-              </div>
+          {/* Dashboard selector tabs */}
+          <div style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 24 }}>
+            {slides.map((slide, i) => (
+              <button
+                key={slide.title}
+                onClick={() => setActiveSlide(i)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  padding: "10px 20px", borderRadius: 12, border: "none", cursor: "pointer",
+                  background: activeSlide === i ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.02)",
+                  border: `1px solid ${activeSlide === i ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.05)"}`,
+                  transition: "all 0.2s",
+                }}
+              >
+                <div style={{
+                  width: 8, height: 8, borderRadius: "50%",
+                  background: activeSlide === i ? B : "#444",
+                  transition: "background 0.2s",
+                }} />
+                <div style={{ textAlign: "left" }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: activeSlide === i ? "#fff" : "#777" }}>{slide.title}</div>
+                  <div style={{ fontSize: 11, color: "#555" }}>{slide.desc}</div>
+                </div>
+              </button>
             ))}
           </div>
         </div>
@@ -615,8 +674,7 @@ export default function AboutPage() {
       </section>
 
       {/* ─── CTA ─── */}
-      <section ref={r6} style={{ textAlign: "center", padding: "80px 24px 100px", position: "relative" }}>
-        <div style={{ position: "absolute", bottom: -100, left: "50%", transform: "translateX(-50%)", width: 800, height: 400, borderRadius: "50%", background: `radial-gradient(circle, ${B}08 0%, transparent 70%)`, pointerEvents: "none" }} />
+      <section ref={r6} style={{ textAlign: "center", padding: "80px 24px 60px", position: "relative" }}>
         <div style={{ position: "relative" }}>
           <KaveonMark size={44} useDirectColor />
           <h2 style={{ fontSize: "clamp(28px, 4vw, 42px)", fontWeight: 700, letterSpacing: "-1px", margin: "20px 0 12px" }}>
@@ -624,21 +682,21 @@ export default function AboutPage() {
           </h2>
           <p style={{ fontSize: 15, color: "#666", marginBottom: 36 }}>Open source &middot; Self-hosted &middot; MIT License</p>
           <a href="/" className="about-btn" style={{ display: "inline-block", padding: "16px 44px", borderRadius: 12, background: B, color: "#fff", fontSize: 16, fontWeight: 600, textDecoration: "none", boxShadow: `0 4px 24px ${B}30`, transition: "all 0.2s" }}>
-            Get Started
+            Try Kaveon
           </a>
         </div>
       </section>
 
       {/* ─── Footer ─── */}
-      <footer style={{ borderTop: "1px solid rgba(255,255,255,0.04)", padding: "28px 48px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <footer style={{ borderTop: "1px solid rgba(255,255,255,0.06)", padding: "20px 48px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <KaveonMark size={16} useDirectColor />
-          <span style={{ fontSize: 12, color: "#333" }}>&copy; {new Date().getFullYear()} Kaveon</span>
+          <span style={{ fontSize: 12, color: "#e2e8f0" }}>&copy; {new Date().getFullYear()} Kaveon</span>
         </div>
         <div style={{ display: "flex", gap: 24 }}>
-          <a href="/docs" target="_blank" className="about-link" style={{ fontSize: 12, color: "#444", textDecoration: "none", transition: "color 0.2s" }}>Documentation</a>
-          <a href="https://github.com/PruthviProdduturi/Kaveon" target="_blank" rel="noopener noreferrer" className="about-link" style={{ fontSize: 12, color: "#444", textDecoration: "none", transition: "color 0.2s" }}>GitHub</a>
-          <a href="/" className="about-link" style={{ fontSize: 12, color: "#444", textDecoration: "none", transition: "color 0.2s" }}>Launch App</a>
+          <a href="/docs" target="_blank" className="about-link" style={{ fontSize: 12, color: "#e2e8f0", textDecoration: "none", transition: "color 0.2s" }}>Documentation</a>
+          <a href="https://github.com/PruthviProdduturi/Kaveon" target="_blank" rel="noopener noreferrer" className="about-link" style={{ fontSize: 12, color: "#e2e8f0", textDecoration: "none", transition: "color 0.2s" }}>GitHub</a>
+          <a href="/" className="about-link" style={{ fontSize: 12, color: "#e2e8f0", textDecoration: "none", transition: "color 0.2s" }}>Launch App</a>
         </div>
       </footer>
     </div>

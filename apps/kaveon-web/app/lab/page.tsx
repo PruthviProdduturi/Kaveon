@@ -10,6 +10,7 @@ import dynamic from "next/dynamic";
 import { format as formatSql } from "sql-formatter";
 import { msalFetch } from "../../utils/msalFetch";
 import { useAuth } from "../../auth/useAuth";
+import { useTheme } from "../../contexts/ThemeContext";
 import { useRouter, useSearchParams } from "next/navigation";
 // using same-origin relative API calls
 const PRIMARY_DB_NAME = process.env.NEXT_PUBLIC_PRIMARY_DATABASE_NAME || "";
@@ -170,6 +171,8 @@ const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
 
 export default function LabPage() {
   const { isAuthenticated, account } = useAuth();
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
   const router = useRouter();
   const searchParams = useSearchParams();
   const savedQueryId = searchParams.get('savedQueryId');
@@ -2029,7 +2032,7 @@ return;
                 <MonacoEditor
                   height="100%"
                   defaultLanguage="sql"
-                  theme="vs"
+                  theme={isDark ? "vs-dark" : "vs"}
                   value={getActiveQuery()?.text ?? ""}
                   onChange={(value) => {
                     const text = value ?? "";
