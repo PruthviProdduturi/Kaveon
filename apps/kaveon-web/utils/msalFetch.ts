@@ -28,6 +28,44 @@ export async function msalFetch(input: RequestInfo, init: RequestInit = {}): Pro
 }
 
 /**
+ * msalFetch that retries transient 5xx / network failures with a short backoff.
+ * Use ONLY for idempotent reads (e.g. SQL SELECT execution, chart data) — the
+ * backend already retries stale DB connections, but a request can still surface a
+ * transient 500 if the pool blips mid-flight; retrying smooths that over so a
+ * dashboard tile doesn't show a hard error for a blip that succeeds on retry.
+ */
+export async function msalFetchRetry(
+	input: RequestInfo,
+	init: RequestInit = {},
+	opts: { retries?: number; backoffMs?: number } = {},
+): Promise<Response> {
+	const retries = opts.retries ?? 2;
+	const backoffMs = opts.backoffMs ?? 250;
+	let lastErr: unknown;
+	for (let attempt = 0; attempt <= retries; attempt++) {
+		try {
+			const res = await msalFetch(input, init);
+			// Retry only on transient server errors; 4xx are the caller's problem.
+			if (res.status >= 500 && res.status <= 504 && attempt < retries) {
+				await new Promise((r) => setTimeout(r, backoffMs * (attempt + 1)));
+				continue;
+			}
+			return res;
+		} catch (e) {
+			// Network-level failure (dropped connection, etc.) — retry with backoff.
+			lastErr = e;
+			if (attempt < retries) {
+				await new Promise((r) => setTimeout(r, backoffMs * (attempt + 1)));
+				continue;
+			}
+			throw lastErr;
+		}
+	}
+	// Exhausted retries on 5xx — return the last response by doing one final call.
+	return msalFetch(input, init);
+}
+
+/**
  * Deprecated: tokens are no longer handled client-side (NextAuth session cookie
  * + server-side proxy). Kept as a no-op so any lingering imports don't break.
  */

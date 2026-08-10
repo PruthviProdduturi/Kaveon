@@ -2,7 +2,7 @@
 import React, { createContext, useContext, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { API_BASE } from "../../config";
-import { msalFetch } from "../../utils/msalFetch";
+import { msalFetch, msalFetchRetry } from "../../utils/msalFetch";
 import { useAuth } from "../../auth/useAuth";
 import { useRouter } from "next/navigation";
 import { getRegisteredPlugins, getPlugin } from "./chartPluginRegistry";
@@ -2891,7 +2891,9 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
       // Synchronous execution for all charts (dashboard + builder).
       // The global semaphore (max 3 concurrent) prevents backend overload.
       // Async polling was unreliable on Render free tier (job store clears on restart → 404 loops).
-      const executeRes = await msalFetch(`${API_BASE}/api/v1/sql/execute`, {
+      // Idempotent read (SELECT) — retry transient 5xx/network blips so a single
+      // pool hiccup doesn't surface as a hard chart error on dashboards.
+      const executeRes = await msalFetchRetry(`${API_BASE}/api/v1/sql/execute`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(executeBody),

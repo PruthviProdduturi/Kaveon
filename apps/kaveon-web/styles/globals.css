@@ -3229,47 +3229,62 @@ main.main-lab {
   align-items: center;
   justify-content: center;
   text-align: center;
-  gap: 1.5rem;
+  /* Gaps scale with the tile so the stack never overflows a small tile. */
+  gap: clamp(0.5rem, 4cqmin, 1.5rem);
+  /* Fill the tile on both axes even though the inner flex centers its child,
+     so the size query below measures the real tile width AND height. */
+  flex: 1;
+  align-self: stretch;
+  width: 100%;
   height: 100%;
+  /* Establish a query container + clip so nothing bleeds out of a small tile. */
+  container-type: size;
+  overflow: hidden;
+  box-sizing: border-box;
+  padding: clamp(4px, 3cqmin, 16px);
 }
 
 .chart-loading-animation {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2rem;
+  gap: clamp(0.5rem, 5cqmin, 2rem);
 }
 
 .chart-loading-bars {
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  gap: 8px;
-  height: 80px;
+  /* Bar spacing + rail height scale to the tile (cqmin = min of tile W/H). */
+  gap: clamp(3px, 1.6cqmin, 8px);
+  height: clamp(24px, 22cqmin, 80px);
 }
 
 .chart-loading-bar {
-  width: 12px;
+  width: clamp(4px, 2.4cqmin, 12px);
   background: linear-gradient(180deg, var(--lens-primary) 0%, var(--lens-primary-hover) 100%);
   border-radius: 4px;
+  /* Fill the (already-scaled) rail; keyframes animate a relative height. */
+  height: 100%;
+  transform-origin: bottom;
   animation: chartBarBounce 1.2s ease-in-out infinite;
 }
 
 @keyframes chartBarBounce {
   0%, 100% {
-    height: 20px;
+    transform: scaleY(0.28);
     opacity: 0.4;
   }
   50% {
-    height: 60px;
+    transform: scaleY(0.85);
     opacity: 1;
   }
 }
 
 .chart-loading-spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid var(--bg-hover);
+  width: clamp(16px, 12cqmin, 40px);
+  height: clamp(16px, 12cqmin, 40px);
+  border: clamp(2px, 0.8cqmin, 3px) solid var(--bg-hover);
   border-top-color: var(--lens-primary);
   border-radius: 50%;
   animation: chartSpinnerRotate 1s linear infinite;
@@ -3285,10 +3300,23 @@ main.main-lab {
 }
 
 .chart-loading-text {
-  font-size: 1rem;
+  font-size: clamp(0.7rem, 4cqmin, 1rem);
   font-weight: 500;
   color: var(--text-muted);
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   animation: chartTextFade 1.5s ease-in-out infinite;
+}
+
+/* Very short/narrow tiles: drop the label + cancel button entirely so the
+   spinner alone stays centered and fully visible. */
+@container (max-height: 110px), (max-width: 130px) {
+  .chart-loading-text,
+  .chart-preview-loading-state > button {
+    display: none;
+  }
 }
 
 @keyframes chartTextFade {
