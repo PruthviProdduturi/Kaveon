@@ -3721,6 +3721,10 @@ main.main-wide {
 
 /* SQL Lab layout (ported from legacy main.css) */
 .main-content {
+  /* SQL Lab is a fixed-height, IDE-style page: pin to the viewport and let the
+     inner panels (table tree, results) scroll internally, not the whole page. */
+  height: 100vh;
+  box-sizing: border-box;
   flex: 1;
   display: flex;
   overflow: hidden;
