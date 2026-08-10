@@ -8,7 +8,7 @@ import DashboardFilterBarReadOnly from "../../../../components/dashboards/Dashbo
 import { LoadingOverlay } from "../../../../components/LoadingOverlay";
 import { msalFetch } from "../../../../utils/msalFetch";
 import { useRecents } from "../../../../hooks/useRecents";
-import { resetQuerySemaphore } from "../../../../utils/querySemaphore";
+import { resetQuerySemaphore, isQueryIdle } from "../../../../utils/querySemaphore";
 import { API_BASE } from "../../../../config";
 import { toJpeg } from "html-to-image";
 
@@ -43,12 +43,18 @@ const DashboardViewContent: React.FC<{
   const viewParams = useParams();
   const dashId = viewParams?.id as string | undefined;
 
-  // Capture a real full-dashboard thumbnail a few seconds after it renders, then
-  // save it so the dashboards list can show an actual preview (not a placeholder).
+  // Capture a real full-dashboard thumbnail — but only AFTER the charts have
+  // actually finished querying/rendering (else the thumbnail is just spinners),
+  // and off the main thread (toJpeg is heavy and would block clicks mid-load).
   useEffect(() => {
     if (!chartsReady || capturedRef.current || !dashId || !canvasRef.current) return;
-    capturedRef.current = true;
-    const t = setTimeout(async () => {
+    let cancelled = false;
+    let sawActivity = false;
+    const started = Date.now();
+
+    const capture = async () => {
+      if (cancelled || capturedRef.current) return;
+      capturedRef.current = true;
       try {
         const node = canvasRef.current;
         if (!node) return;
@@ -57,15 +63,34 @@ const DashboardViewContent: React.FC<{
           // stylesheets (FontAwesome/fonts CDN) which throws a SecurityError.
           quality: 0.55, pixelRatio: 0.4, backgroundColor: "#f8fafc", cacheBust: true, skipFonts: true,
         });
-        if (!dataUrl || dataUrl.length > 3_500_000) return;   // guard oversized
+        if (!dataUrl || dataUrl.length > 3_500_000) return;
         await msalFetch(`${API_BASE}/api/v1/dashboards/${dashId}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ thumbnail: dataUrl }),
         });
-      } catch { /* thumbnail is best-effort */ }
-    }, 3500);
-    return () => clearTimeout(t);
+      } catch { /* best-effort */ }
+    };
+
+    // Poll: wait until queries have started AND then gone idle (charts rendered),
+    // plus a short render buffer; hard cap at 12s. Run the capture when the main
+    // thread is free so it doesn't block interaction.
+    const tick = () => {
+      if (cancelled || capturedRef.current) return;
+      if (!isQueryIdle()) sawActivity = true;
+      const elapsed = Date.now() - started;
+      const ready = (sawActivity && isQueryIdle()) || elapsed > 12000;
+      if (ready) {
+        setTimeout(() => {
+          const ric = (window as any).requestIdleCallback as undefined | ((cb: () => void) => void);
+          if (ric) ric(() => capture()); else setTimeout(capture, 0);
+        }, 900); // render buffer after queries drain
+        return;
+      }
+      poll = window.setTimeout(tick, 500);
+    };
+    let poll = window.setTimeout(tick, 800);
+    return () => { cancelled = true; clearTimeout(poll); };
   }, [chartsReady, dashId]);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [refreshInterval, setRefreshInterval] = useState(0);

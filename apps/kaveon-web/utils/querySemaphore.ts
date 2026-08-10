@@ -42,3 +42,8 @@ export function resetQuerySemaphore(): void {
   queue.length = 0;
   running = 0;
 }
+
+/** True when no chart queries are running or queued (dashboard finished loading). */
+export function isQueryIdle(): boolean {
+  return running === 0 && queue.length === 0;
+}
