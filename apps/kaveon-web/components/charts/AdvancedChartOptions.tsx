@@ -31,6 +31,42 @@ const colorPalettes = [
   // Add more palettes as needed
 ];
 
+// ── Monochromatic shades from one base color ────────────────────────────────
+function hexToHsl(hex: string): { h: number; s: number; l: number } {
+  let c = hex.replace("#", "");
+  if (c.length === 3) c = c.split("").map((x) => x + x).join("");
+  const r = parseInt(c.slice(0, 2), 16) / 255;
+  const g = parseInt(c.slice(2, 4), 16) / 255;
+  const b = parseInt(c.slice(4, 6), 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h = 0, s = 0; const l = (max + min) / 2;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60;
+  }
+  return { h, s: s * 100, l: l * 100 };
+}
+function hslToHex(h: number, s: number, l: number): string {
+  s /= 100; l /= 100;
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  const to = (x: number) => Math.round(x * 255).toString(16).padStart(2, "0");
+  return `#${to(f(0))}${to(f(8))}${to(f(4))}`;
+}
+// Generate n shades of a base color by spreading lightness (dark → light).
+function monochromeShades(base: string, n: number): string[] {
+  const { h, s } = hexToHsl(base);
+  const sat = Math.max(35, Math.min(90, s));
+  const lo = 30, hi = 76;
+  if (n <= 1) return [base];
+  return Array.from({ length: n }, (_, i) => hslToHex(h, sat, lo + (hi - lo) * (i / (n - 1))));
+}
+
 // Utility for formatting numbers for Y axis
 function formatYAxisValue(val: number, format: string) {
   if (format === "k") return `${(val / 1e3).toFixed(0)}K`;
@@ -838,6 +874,7 @@ const AdvancedChartOptions: React.FC = () => {
   // Color picker state
   const [colorPickerOpen, setColorPickerOpen] = useState<number | null>(null);
   const [tempColor, setTempColor] = useState<string>("#000000");
+  const [customBase, setCustomBase] = useState<string>("#2E91E5");
 
   // Collapsible section state
   const [isColorsExpanded, setIsColorsExpanded] = useState(false);
@@ -1006,11 +1043,26 @@ const AdvancedChartOptions: React.FC = () => {
     }));
   };
   const handlePaletteDropdown = (name: string) => {
+    if (name === "Custom") {
+      // Selecting Custom auto-generates shades of the current base color and
+      // applies them to every series, so the dropdown actually switches modes.
+      applyCustomBase(customBase);
+      return;
+    }
     const found = colorPalettes.find(p => p.name === name);
     if (found) {
       setAdvancedOptions((prev: any) => ({ ...(prev || {}), color: found.colors }));
       setPreviewOptions((prev: any) => ({ ...(prev || {}), color: found.colors }));
     }
+  };
+  // Pick ONE base colour → generate a monochromatic palette (light→dark shades)
+  // sized to the current palette, applied to all series automatically.
+  const applyCustomBase = (base: string) => {
+    setCustomBase(base);
+    const n = Math.min(12, Math.max(3, (advancedOptions?.color?.length || 6)));
+    const shades = monochromeShades(base, n);
+    setAdvancedOptions((prev: any) => ({ ...(prev || {}), color: shades }));
+    setPreviewOptions((prev: any) => ({ ...(prev || {}), color: shades }));
   };
   const handleLegendShow = (show: boolean) => {
     setAdvancedOptions((prev: any) => ({ ...(prev || {}), legend: { ...(prev?.legend || {}), show } }));
@@ -1486,9 +1538,22 @@ const AdvancedChartOptions: React.FC = () => {
                 ))}
               </div>
             </div>
-            <div style={{ fontSize:11, color:'var(--text-muted)', marginTop:-2, marginBottom:8 }}>Click a swatch to pick a custom shade.</div>
+            <div style={{ fontSize:11, color:'var(--text-muted)', marginTop:-2, marginBottom:10 }}>Click a swatch to tweak an individual shade.</div>
             {selectedPaletteName === "Custom" && (
-              <ColorPaletteSelector value={palette} onChange={colors => { setAdvancedOptions((p:any) => ({...(p||{}), color:colors})); setPreviewOptions((p:any) => ({...(p||{}), color:colors})); }} />
+              <>
+                {/* Pick ONE base color → auto shades for every series */}
+                <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10 }}>
+                  <input
+                    type="color"
+                    value={customBase}
+                    onChange={e => applyCustomBase(e.target.value)}
+                    title="Base color — generates shades for all series"
+                    style={{ width:44, height:34, padding:2, border:'1px solid var(--border)', borderRadius:6, background:'var(--bg-surface)', cursor:'pointer' }}
+                  />
+                  <div style={{ fontSize:12, color:'var(--text-secondary)' }}>Base color — all series use shades of this.</div>
+                </div>
+                <ColorPaletteSelector value={palette} onChange={colors => { setAdvancedOptions((p:any) => ({...(p||{}), color:colors})); setPreviewOptions((p:any) => ({...(p||{}), color:colors})); }} />
+              </>
             )}
           </div>
         )}
