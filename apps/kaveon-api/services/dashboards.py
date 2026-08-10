@@ -9,6 +9,22 @@ import database.metadata as db
 
 VALID_VISIBILITY = {"private", "internal", "published"}
 
+_thumb_dark_ready = False
+
+
+def _ensure_thumbnail_dark_column() -> None:
+    """Self-migrate: add dashboards.thumbnail_dark for the second (dark-mode)
+    thumbnail. Idempotent (ADD COLUMN IF NOT EXISTS); best-effort so a metadata
+    store that lacks the syntax simply degrades to a single (light) thumbnail."""
+    global _thumb_dark_ready
+    if _thumb_dark_ready:
+        return
+    try:
+        db.execute("ALTER TABLE dbo.dashboards ADD COLUMN IF NOT EXISTS thumbnail_dark TEXT")
+    except Exception:
+        pass
+    _thumb_dark_ready = True
+
 
 def _adapt(row: dict) -> dict:
     layout = "[]"
@@ -24,6 +40,7 @@ def _adapt(row: dict) -> dict:
         "description": row.get("description"),
         "theme": row.get("theme"),
         "thumbnail": row.get("thumbnail"),
+        "thumbnail_dark": row.get("thumbnail_dark"),
         "layout": layout,
         "charts": row.get("charts") or "[]",
         "filters": row.get("filters") or "[]",
@@ -49,10 +66,11 @@ def _vis_clause(role_idx: int, email_idx: int, alias: str = "d") -> str:
 
 
 def list_dashboards(user_email: str, role: str = "Viewer") -> List[dict]:
+    _ensure_thumbnail_dark_column()
     vis = _vis_clause(1, 0)
     result = db.query(f"""
         SELECT d.id, d.name, d.slug, d.description, d.layout, d.charts, d.filters,
-               d.theme, d.tags, d.thumbnail, d.is_published, d.is_archived, d.visibility,
+               d.theme, d.tags, d.thumbnail, d.thumbnail_dark, d.is_published, d.is_archived, d.visibility,
                d.created_by, d.modified_by, d.created_at, d.modified_at,
                CASE WHEN f.id IS NOT NULL THEN 1 ELSE 0 END as favorite
         FROM dbo.dashboards d
@@ -141,6 +159,9 @@ def update_dashboard(dashboard_id: str, data: dict) -> Optional[dict]:
         updates.append(f"theme = @param{i}"); params.append(data["theme"]); i += 1
     if "thumbnail" in data:
         updates.append(f"thumbnail = @param{i}"); params.append(data["thumbnail"]); i += 1
+    if "thumbnail_dark" in data:
+        _ensure_thumbnail_dark_column()
+        updates.append(f"thumbnail_dark = @param{i}"); params.append(data["thumbnail_dark"]); i += 1
 
     def _to_str(v):
         return v if isinstance(v, str) else json.dumps(v)
