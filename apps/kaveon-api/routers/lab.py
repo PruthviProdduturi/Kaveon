@@ -76,10 +76,34 @@ def _resolve_db(database: str | None) -> str:
     return database or settings.METADATA_DATABASE
 
 
+# Platform's own tables. These live in the metadata database (which currently
+# also holds the demo/open-source data) and must never appear in SQL Lab — users
+# browse *their* data, not Kaveon's control-plane. When the metadata store is
+# split onto its own database, a pure data source simply won't match this filter.
+PLATFORM_METADATA_TABLES = frozenset({
+    "activity", "auth_config", "charts", "context_answer_cache", "context_snapshots",
+    "dashboards", "data_sources", "dataset_columns", "dataset_dimensions",
+    "dataset_metrics", "datasets", "favorites", "local_users", "query_history",
+    "saved_queries", "user_recents", "user_themes",
+})
+
+
+def _hide_platform_tables(tables: list, resolved_db: str) -> list:
+    """Drop platform metadata tables from a Lab table listing, but only for the
+    metadata database — a dedicated data source is returned untouched."""
+    if resolved_db != settings.METADATA_DATABASE:
+        return tables
+    return [
+        t for t in tables
+        if str((t or {}).get("name", "")).lower() not in PLATFORM_METADATA_TABLES
+    ]
+
+
 @router.get("/lab/tables")
 def list_tables(response: Response, database: str = Query(default=None), user: str = Depends(require_auth)):
     response.headers.update(NO_CACHE)
-    tables = pool.get_tables(_resolve_db(database))
+    resolved = _resolve_db(database)
+    tables = _hide_platform_tables(pool.get_tables(resolved), resolved)
     return {"success": True, "tables": tables}
 
 
