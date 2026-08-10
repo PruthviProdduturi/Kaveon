@@ -139,9 +139,13 @@ def is_connection_error(e: Exception) -> bool:
         "connection already closed", "server closed the connection",
         "ssl connection has been closed", "connection not open",
         "terminating connection", "consuming input failed",   # psycopg2
+        "could not connect", "connection reset", "eof detected",  # psycopg2 transient
         "lost connection", "mysql server has gone away", "broken pipe",  # pymysql
     )
-    return any(p in msg for p in patterns)
+    if any(p in msg for p in patterns):
+        return True
+    # psycopg2/psycopg raise these classes for transient socket/protocol failures.
+    return e.__class__.__name__ in ("OperationalError", "InterfaceError")
 
 
 # ── Dialect adaptation ─────────────────────────────────────────────────────────
@@ -930,25 +934,29 @@ def _resolve_endpoint(database: str) -> str:
 def execute_query(sql: str, database: str, params: Optional[list] = None) -> Dict[str, Any]:
     """
     Execute *sql* against *database* using the connection pool.
-    Retries once on stale-connection errors (08S01 / 10054).
+    Retries up to 3 attempts on stale-connection errors (08S01 / 10054), with a
+    small backoff between attempts. Non-connection errors (e.g. SQL syntax) fail fast.
     """
     pool = get_connection_pool(database)
     # Translate T-SQL idioms when the target is Postgres/MySQL (idempotent).
     sql = adapt_sql(sql, pool.db_type)
-    for attempt in range(2):
+    max_attempts = 3
+    for attempt in range(max_attempts):
         conn = pool.get_connection()
         try:
             result = conn.execute_query(sql, params)
             pool.return_connection(conn)
             return result
         except Exception as e:
-            if attempt == 0 and is_connection_error(e):
-                print(f"[Pool] Stale connection on {database} — discarding and retrying")
+            if attempt < max_attempts - 1 and is_connection_error(e):
+                print(f"[Pool] Stale connection on {database} — discarding and retrying "
+                      f"(attempt {attempt + 1}/{max_attempts})")
                 pool.discard_connection(conn)
+                time.sleep(0.15 * (attempt + 1))  # short linear backoff
                 continue
             pool.return_connection(conn)
             raise
-    raise Exception(f"Query failed after retry on {database}")
+    raise Exception(f"Query failed after {max_attempts} attempts on {database}")
 
 
 def execute_query_cancellable(
