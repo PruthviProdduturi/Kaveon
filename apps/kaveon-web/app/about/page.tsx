@@ -84,7 +84,6 @@ export default function AboutPage() {
           </svg>
         </a>
         <div style={{ display: "flex", alignItems: "center", gap: 36 }}>
-          <a href="#dashboards" className="about-link" style={{ fontSize: 13, color: "#666", textDecoration: "none", transition: "color 0.2s" }}>Dashboards</a>
           <a href="#features" className="about-link" style={{ fontSize: 13, color: "#666", textDecoration: "none", transition: "color 0.2s" }}>Features</a>
           <a href="/docs" target="_blank" className="about-link" style={{ fontSize: 13, color: "#666", textDecoration: "none", transition: "color 0.2s" }}>Docs</a>
           <a href="https://github.com/PruthviProdduturi/Kaveon" target="_blank" rel="noopener noreferrer" className="about-link" style={{ fontSize: 13, color: "#666", textDecoration: "none", transition: "color 0.2s" }}>GitHub</a>
@@ -95,7 +94,7 @@ export default function AboutPage() {
       </nav>
 
       {/* ─── Hero ─── */}
-      <section ref={r1} style={{ position: "relative", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", padding: "140px 24px 100px", overflow: "hidden" }}>
+      <section ref={r1} style={{ position: "relative", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", padding: "60px 24px 80px", overflow: "hidden" }}>
         {/* Layered ambient lighting */}
         <div style={{ position: "absolute", top: "8%", left: "50%", transform: "translateX(-50%)", width: 1000, height: 600, borderRadius: "50%", background: `radial-gradient(ellipse, ${B}0a 0%, transparent 60%)`, pointerEvents: "none" }} />
         <div style={{ position: "absolute", top: "20%", left: "15%", width: 600, height: 600, borderRadius: "50%", background: `radial-gradient(circle, rgba(139,92,246,0.05) 0%, transparent 60%)`, animation: "orb1 14s ease-in-out infinite", pointerEvents: "none" }} />
@@ -107,7 +106,7 @@ export default function AboutPage() {
 
         <div style={{ position: "relative", maxWidth: 900 }}>
           {/* Guardian O — large, with glow ring */}
-          <div style={{ position: "relative", display: "inline-block", marginBottom: 40 }}>
+          <div style={{ position: "relative", display: "inline-block", marginBottom: 0 }}>
             <div style={{
               position: "absolute", inset: -20,
               borderRadius: "50%",
@@ -115,7 +114,7 @@ export default function AboutPage() {
               filter: "blur(20px)",
               pointerEvents: "none",
             }} />
-            <KaveonMark size={88} useDirectColor />
+            <KaveonMark size={200} useDirectColor />
           </div>
 
           <h1 style={{
@@ -163,10 +162,10 @@ export default function AboutPage() {
               transition: "all 0.2s",
               letterSpacing: "-0.01em",
             }}>
-              Get Started <span style={{ fontSize: 20 }}>&rarr;</span>
+              Try Kaveon <span style={{ fontSize: 20 }}>&rarr;</span>
             </a>
-            <a href="#dashboards" style={{
-              display: "inline-flex", alignItems: "center", gap: 8,
+            <a href="https://github.com/PruthviProdduturi/Kaveon" target="_blank" rel="noopener noreferrer" style={{
+              display: "inline-flex", alignItems: "center", gap: 10,
               padding: "18px 36px", borderRadius: 14,
               background: "rgba(255,255,255,0.03)",
               border: "1px solid rgba(255,255,255,0.08)",
@@ -174,8 +173,23 @@ export default function AboutPage() {
               transition: "all 0.2s",
               backdropFilter: "blur(8px)",
             }}>
-              See Dashboards
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+              Star on GitHub
             </a>
+          </div>
+
+          {/* Scroll indicator — bottom right */}
+          <div style={{
+            position: "fixed", bottom: 28, right: 28, zIndex: 50,
+            display: "flex", flexDirection: "column", alignItems: "center", gap: 6,
+            animation: "float 3s ease-in-out infinite",
+          }}>
+            <svg width="28" height="44" viewBox="0 0 28 44" fill="none">
+              <rect x="1.5" y="1.5" width="25" height="41" rx="12.5" stroke="rgba(255,255,255,0.35)" strokeWidth="2" />
+              <circle cx="14" cy="14" r="3.5" fill="rgba(255,255,255,0.6)">
+                <animate attributeName="cy" values="14;28;14" dur="2s" repeatCount="indefinite" />
+              </circle>
+            </svg>
           </div>
         </div>
       </section>
