@@ -43,6 +43,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved === "dark" || saved === "light") return saved;
     }
+    // Default to system preference, fallback to dark
+    if (typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: light)").matches) return "light";
     return "dark";
   });
   const forced = typeof window !== "undefined" && getForcedTheme() !== null;

@@ -335,6 +335,7 @@ export function Sidebar({ children }: SidebarProps) {
   const { recents, addRecent, removeRecent, clearRecents } = useRecents();
   const [recentFilter, setRecentFilter] = useState<RecentItem["type"] | "all">("all");
   const [recentMenuOpen, setRecentMenuOpen] = useState(false);
+  const [recentsCollapsed, setRecentsCollapsed] = useState(false);
   const router = useRouter();
   const { isAdmin } = useRole();
   const pathname = usePathname();
@@ -528,7 +529,7 @@ export function Sidebar({ children }: SidebarProps) {
         </nav>
 
         {/* Divider */}
-        <div style={{ height: 1, background: "rgba(255,255,255,0.1)", margin: "8px 16px", flexShrink: 0 }} />
+        <div style={{ height: 1, background: "var(--border)", margin: "8px 16px", flexShrink: 0 }} />
 
         {/* Conversations + Pinned */}
         <div style={{ flex: 1, overflow: "auto", padding: collapsed ? "0" : "0 8px" }}>
@@ -537,11 +538,16 @@ export function Sidebar({ children }: SidebarProps) {
               {/* Recent items */}
               {recents.length > 0 && (
                 <>
-                  {/* Header row: label + filter/clear options menu */}
+                  {/* Header row: label + collapse + filter/clear options menu */}
                   <div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 6px 4px 10px" }}>
-                    <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: "1px", textTransform: "uppercase", color: "var(--text-faint)", userSelect: "none" }}>
-                      {recentFilter === "all" ? "Recent" : `Recent · ${RECENT_TYPES.find(t => t.key === recentFilter)?.label}`}
-                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setRecentsCollapsed(v => !v)}
+                      style={{ display: "flex", alignItems: "center", gap: 5, background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 11, fontWeight: 600, color: "var(--text-muted)", userSelect: "none" }}
+                    >
+                      <i className={`fas fa-chevron-${recentsCollapsed ? "right" : "down"}`} style={{ fontSize: 8, opacity: 0.5, transition: "transform 0.15s" }} />
+                      {recentFilter === "all" ? "Recents" : `Recents · ${RECENT_TYPES.find(t => t.key === recentFilter)?.label}`}
+                    </button>
                     <button
                       type="button"
                       title="Filter / clear recents"
@@ -586,7 +592,7 @@ export function Sidebar({ children }: SidebarProps) {
                       </>
                     )}
                   </div>
-                  {(recentFilter === "all" ? recents : recents.filter((r) => r.type === recentFilter)).map((item) => (
+                  {!recentsCollapsed && (recentFilter === "all" ? recents : recents.filter((r) => r.type === recentFilter)).map((item) => (
                     <button
                       key={item.id}
                       type="button"
@@ -679,7 +685,7 @@ export function Sidebar({ children }: SidebarProps) {
                       </span>
                     </button>
                   ))}
-                  {recentFilter !== "all" && recents.filter((r) => r.type === recentFilter).length === 0 && (
+                  {!recentsCollapsed && recentFilter !== "all" && recents.filter((r) => r.type === recentFilter).length === 0 && (
                     <div style={{ padding: "10px 12px", fontSize: 12, color: "var(--text-faint)" }}>
                       No {RECENT_TYPES.find((t) => t.key === recentFilter)?.label.toLowerCase()} recently
                     </div>

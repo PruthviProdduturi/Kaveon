@@ -4,12 +4,12 @@
   --accent-dark: #2d7dd2;
   --accent-rgb: 74, 158, 232;
 
-  --bg-primary: #f5f5f7;
-  --bg-surface: #ffffff;
+  --bg-primary: #f8f7f5;
+  --bg-surface: #fdfcfa;
   --bg-elevated: #ffffff;
-  --bg-hover: #eef0f3;
+  --bg-hover: #f0efec;
 
-  --border: #d8dce3;
+  --border: #e0ddd8;
   --border-hover: rgba(74, 158, 232, 0.4);
 
   --text-primary: #1a1a2e;

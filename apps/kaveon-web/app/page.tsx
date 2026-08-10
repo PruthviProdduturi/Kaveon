@@ -498,9 +498,9 @@ export default function Home() {
                   ))
                 : DEFAULT_SUGGESTIONS.map(s => (
                     <button key={s} onClick={() => { if (canSend) { setQuery(s); setTimeout(() => void sendMessage(s), 50); } }}
-                      style={{ padding: "9px 18px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.04)", color: "#b0b8c4", fontSize: 13.5, cursor: "pointer", boxShadow: "var(--shadow-md)", transition: "all 0.15s" }}
-                      onMouseEnter={(e) => { e.currentTarget.style.borderColor = "rgba(var(--accent-rgb), 0.3)"; e.currentTarget.style.color = "#e2e8f0"; e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; e.currentTarget.style.color = "#b0b8c4"; e.currentTarget.style.background = "rgba(255,255,255,0.04)"; }}>
+                      style={{ padding: "9px 18px", borderRadius: 999, border: "1.5px solid var(--border)", background: "var(--bg-surface)", color: "var(--text-secondary)", fontSize: 13.5, fontWeight: 500, cursor: "pointer", boxShadow: "var(--shadow-md)", transition: "all 0.15s" }}
+                      onMouseEnter={(e) => { e.currentTarget.style.borderColor = "rgba(var(--accent-rgb), 0.4)"; e.currentTarget.style.color = "var(--text-primary)"; e.currentTarget.style.background = "var(--bg-elevated)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.color = "var(--text-secondary)"; e.currentTarget.style.background = "var(--bg-surface)"; }}>
                       {s}
                     </button>
                   ))}
