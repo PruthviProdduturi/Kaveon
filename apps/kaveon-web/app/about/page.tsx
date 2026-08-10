@@ -95,35 +95,85 @@ export default function AboutPage() {
       </nav>
 
       {/* ─── Hero ─── */}
-      <section ref={r1} style={{ position: "relative", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", padding: "120px 24px 80px", overflow: "hidden" }}>
-        {/* Ambient orbs */}
-        <div style={{ position: "absolute", top: "15%", left: "20%", width: 500, height: 500, borderRadius: "50%", background: `radial-gradient(circle, ${B}08 0%, transparent 70%)`, animation: "orb1 12s ease-in-out infinite", pointerEvents: "none" }} />
-        <div style={{ position: "absolute", bottom: "10%", right: "15%", width: 400, height: 400, borderRadius: "50%", background: "radial-gradient(circle, rgba(139,92,246,0.06) 0%, transparent 70%)", animation: "orb2 10s ease-in-out infinite", pointerEvents: "none" }} />
-        {/* Grid overlay */}
-        <div style={{ position: "absolute", inset: 0, backgroundImage: "linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px)", backgroundSize: "60px 60px", pointerEvents: "none", maskImage: "radial-gradient(ellipse 80% 70% at 50% 40%, black 30%, transparent 100%)" }} />
+      <section ref={r1} style={{ position: "relative", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", padding: "140px 24px 100px", overflow: "hidden" }}>
+        {/* Layered ambient lighting */}
+        <div style={{ position: "absolute", top: "8%", left: "50%", transform: "translateX(-50%)", width: 1000, height: 600, borderRadius: "50%", background: `radial-gradient(ellipse, ${B}0a 0%, transparent 60%)`, pointerEvents: "none" }} />
+        <div style={{ position: "absolute", top: "20%", left: "15%", width: 600, height: 600, borderRadius: "50%", background: `radial-gradient(circle, rgba(139,92,246,0.05) 0%, transparent 60%)`, animation: "orb1 14s ease-in-out infinite", pointerEvents: "none" }} />
+        <div style={{ position: "absolute", bottom: "5%", right: "10%", width: 500, height: 500, borderRadius: "50%", background: `radial-gradient(circle, rgba(16,185,129,0.04) 0%, transparent 60%)`, animation: "orb2 11s ease-in-out infinite", pointerEvents: "none" }} />
+        {/* Subtle grid */}
+        <div style={{ position: "absolute", inset: 0, backgroundImage: "linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px)", backgroundSize: "80px 80px", pointerEvents: "none", maskImage: "radial-gradient(ellipse 70% 60% at 50% 40%, black 20%, transparent 100%)" }} />
+        {/* Top-down light beam */}
+        <div style={{ position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)", width: 2, height: "30%", background: `linear-gradient(180deg, ${B}30, transparent)`, pointerEvents: "none" }} />
 
-        <div style={{ position: "relative", maxWidth: 800 }}>
-          <div style={{ marginBottom: 32 }}>
-            <KaveonMark size={72} useDirectColor />
+        <div style={{ position: "relative", maxWidth: 900 }}>
+          {/* Guardian O — large, with glow ring */}
+          <div style={{ position: "relative", display: "inline-block", marginBottom: 40 }}>
+            <div style={{
+              position: "absolute", inset: -20,
+              borderRadius: "50%",
+              background: `radial-gradient(circle, ${B}15 0%, transparent 70%)`,
+              filter: "blur(20px)",
+              pointerEvents: "none",
+            }} />
+            <KaveonMark size={88} useDirectColor />
           </div>
+
           <h1 style={{
-            fontSize: "clamp(48px, 7vw, 80px)", fontWeight: 700, letterSpacing: "-2px", lineHeight: 1.05,
-            margin: "0 0 24px",
-            background: "linear-gradient(135deg, #fff 0%, #e2e8f0 40%, #4A9EE8 100%)",
-            backgroundSize: "200% 200%",
-            animation: "gradientShift 6s ease infinite",
+            fontSize: "clamp(56px, 8vw, 96px)", fontWeight: 800, letterSpacing: "-3px", lineHeight: 1,
+            margin: "0 0 28px",
+            background: `linear-gradient(135deg, #ffffff 0%, #e2e8f0 30%, ${B} 70%, #8b5cf6 100%)`,
+            backgroundSize: "300% 300%",
+            animation: "gradientShift 8s ease infinite",
             WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
           }}>
             Talk to your data
           </h1>
-          <p style={{ fontSize: "clamp(17px, 2vw, 20px)", color: "#777", lineHeight: 1.7, maxWidth: 600, margin: "0 auto 40px" }}>
+
+          <p style={{
+            fontSize: "clamp(18px, 2.2vw, 22px)", color: "#888", lineHeight: 1.7,
+            maxWidth: 640, margin: "0 auto 20px", fontWeight: 400,
+          }}>
             Connect your databases. Ask anything. Get instant answers with interactive charts — powered by a deterministic engine, not an LLM.
           </p>
-          <div style={{ display: "flex", justifyContent: "center", gap: 16 }}>
-            <a href="/" className="about-btn" style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "16px 36px", borderRadius: 12, background: B, color: "#fff", fontSize: 16, fontWeight: 600, textDecoration: "none", boxShadow: `0 4px 24px ${B}40`, transition: "all 0.2s" }}>
-              Get Started <span style={{ fontSize: 18 }}>&rarr;</span>
+
+          {/* Subtle accent line */}
+          <div style={{ width: 60, height: 3, borderRadius: 2, background: `linear-gradient(90deg, ${B}, #8b5cf6)`, margin: "0 auto 36px" }} />
+
+          {/* Trust signals */}
+          <div style={{ display: "flex", justifyContent: "center", gap: 24, marginBottom: 44, flexWrap: "wrap" }}>
+            {[
+              { icon: "fa-bolt", text: "No LLM required" },
+              { icon: "fa-database", text: "Multi-database" },
+              { icon: "fa-lock-open", text: "MIT Licensed" },
+            ].map(({ icon, text }) => (
+              <div key={text} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13, color: "#666" }}>
+                <i className={`fas ${icon}`} style={{ fontSize: 11, color: B, opacity: 0.7 }} />
+                {text}
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "center", gap: 14 }}>
+            <a href="/" className="about-btn" style={{
+              display: "inline-flex", alignItems: "center", gap: 10,
+              padding: "18px 44px", borderRadius: 14,
+              background: `linear-gradient(135deg, ${B}, #3b82f6)`,
+              color: "#fff", fontSize: 17, fontWeight: 700, textDecoration: "none",
+              boxShadow: `0 6px 30px ${B}50, 0 2px 8px rgba(0,0,0,0.3)`,
+              transition: "all 0.2s",
+              letterSpacing: "-0.01em",
+            }}>
+              Get Started <span style={{ fontSize: 20 }}>&rarr;</span>
             </a>
-            <a href="#dashboards" style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "16px 36px", borderRadius: 12, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#ccc", fontSize: 16, fontWeight: 500, textDecoration: "none", transition: "all 0.2s" }}>
+            <a href="#dashboards" style={{
+              display: "inline-flex", alignItems: "center", gap: 8,
+              padding: "18px 36px", borderRadius: 14,
+              background: "rgba(255,255,255,0.03)",
+              border: "1px solid rgba(255,255,255,0.08)",
+              color: "#bbb", fontSize: 17, fontWeight: 500, textDecoration: "none",
+              transition: "all 0.2s",
+              backdropFilter: "blur(8px)",
+            }}>
               See Dashboards
             </a>
           </div>
