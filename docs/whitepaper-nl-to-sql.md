@@ -357,6 +357,7 @@ The template-based approach has clear boundaries.
 - **User correction learning.** When a user modifies the generated SQL in SQL Lab and re-runs it, capture the correction as a training signal for pattern refinement.
 - **Hybrid LLM fallback.** When the template parser returns `null` or a confidence below 0.3, optionally route to an LLM with the schema as context. The LLM handles the 20% case; the template engine handles the 80% case at zero cost.
 - **Additional patterns.** Year-over-year comparison, percentile queries, conditional aggregation.
+- **Staleness-scored execution.** Once a question is translated, it still hits the database every time. The companion work *Adaptive Context-Based Query Routing Using Data Staleness Scoring* (`whitepaper-adaptive-context-routing.md`) sits behind this translation layer and routes each translated question to an instant context-based answer or a live query, based on a per-element validity score measured from the database's own change counters — so the system re-queries only when, and only where, the data has actually moved.
 
 ---
 
