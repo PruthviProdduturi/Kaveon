@@ -8,6 +8,7 @@ import { useAuth } from "../auth/useAuth";
 import { useTheme } from "../contexts/ThemeContext";
 import { useRole } from "../hooks/useRole";
 import { useRecents, RecentItem } from "../hooks/useRecents";
+import { msalFetch } from "../utils/msalFetch";
 
 const SIDEBAR_COLLAPSED_KEY = "kaveon-sidebar-collapsed";
 const EXPANDED_WIDTH = 250;
@@ -336,6 +337,7 @@ export function Sidebar({ children }: SidebarProps) {
   const [recentFilter, setRecentFilter] = useState<RecentItem["type"] | "all">("all");
   const [recentMenuOpen, setRecentMenuOpen] = useState(false);
   const [recentsCollapsed, setRecentsCollapsed] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const router = useRouter();
   const { isAdmin } = useRole();
   const pathname = usePathname();
@@ -351,6 +353,16 @@ export function Sidebar({ children }: SidebarProps) {
   useEffect(() => {
     localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(collapsed));
   }, [collapsed]);
+
+  // Cmd+K / Ctrl+K shortcut
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") { e.preventDefault(); setSearchOpen(true); }
+      if (e.key === "Escape") setSearchOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const width = collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH;
 
@@ -460,7 +472,7 @@ export function Sidebar({ children }: SidebarProps) {
               </Link>
               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                 {/* Search icon */}
-                <button type="button" title="Search" style={{ background: "none", border: "none", cursor: "pointer", padding: 6, borderRadius: 6, color: "var(--text-muted)", display: "flex", alignItems: "center", transition: "color 0.15s" }}
+                <button type="button" title="Search (Ctrl+K)" onClick={() => setSearchOpen(true)} style={{ background: "none", border: "none", cursor: "pointer", padding: 6, borderRadius: 6, color: "var(--text-muted)", display: "flex", alignItems: "center", transition: "color 0.15s" }}
                   onMouseEnter={e => e.currentTarget.style.color = "var(--text-primary)"}
                   onMouseLeave={e => e.currentTarget.style.color = "var(--text-muted)"}>
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -728,7 +740,210 @@ export function Sidebar({ children }: SidebarProps) {
       }}>
         {children}
       </div>
+
+      {searchOpen && <SpotlightSearch recents={recents} onClose={() => setSearchOpen(false)} onNavigate={(href) => { setSearchOpen(false); router.push(href); }} />}
     </div>
+  );
+}
+
+/* ─── Spotlight Search (Cmd+K) ─────────────────────────────────────────────── */
+
+interface SearchResult {
+  id: string;
+  label: string;
+  href: string;
+  type: "dashboard" | "chart" | "dataset" | "query" | "recent" | "page";
+  icon: string;
+}
+
+const PAGES: SearchResult[] = [
+  { id: "p-chat",    label: "New Chat",     href: "/",                  type: "page", icon: "fa-plus" },
+  { id: "p-library", label: "Library",      href: "/workspace",         type: "page", icon: "fa-grid-2" },
+  { id: "p-sql",     label: "SQL Lab",      href: "/lab",               type: "page", icon: "fa-code" },
+  { id: "p-ds",      label: "Data Sources", href: "/data-sources",      type: "page", icon: "fa-database" },
+  { id: "p-settings",label: "Settings",     href: "/settings/system",   type: "page", icon: "fa-sliders" },
+  { id: "p-about",   label: "About Kaveon", href: "/about",             type: "page", icon: "fa-info-circle" },
+];
+
+const TYPE_ICONS: Record<string, string> = {
+  dashboard: "fa-grid-2",
+  chart: "fa-chart-bar",
+  dataset: "fa-table",
+  query: "fa-terminal",
+  recent: "fa-clock-rotate-left",
+  page: "fa-arrow-right",
+};
+
+function SpotlightSearch({ recents, onClose, onNavigate }: {
+  recents: RecentItem[];
+  onClose: () => void;
+  onNavigate: (href: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<SearchResult[]>([]);
+  const [selected, setSelected] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  // Search API + recents + pages
+  useEffect(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) {
+      // Show recents + pages when empty
+      const recentResults: SearchResult[] = recents.slice(0, 5).map(r => ({
+        id: `r-${r.id}`, label: r.label, href: r.href, type: "recent", icon: TYPE_ICONS[r.type] || "fa-clock",
+      }));
+      setResults([...recentResults, ...PAGES]);
+      setSelected(0);
+      return;
+    }
+
+    // Filter pages
+    const pageMatches = PAGES.filter(p => p.label.toLowerCase().includes(q));
+
+    // Filter recents
+    const recentMatches: SearchResult[] = recents
+      .filter(r => r.label.toLowerCase().includes(q))
+      .slice(0, 3)
+      .map(r => ({ id: `r-${r.id}`, label: r.label, href: r.href, type: "recent", icon: TYPE_ICONS[r.type] || "fa-clock" }));
+
+    // Debounced API search
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const [dashRes, chartRes, dsRes] = await Promise.all([
+          msalFetch("/api/v1/dashboards").then(r => r.ok ? r.json() : []).catch(() => []),
+          msalFetch("/api/v1/charts").then(r => r.ok ? r.json() : []).catch(() => []),
+          msalFetch("/api/v1/datasets/summary").then(r => r.ok ? r.json() : []).catch(() => []),
+        ]);
+
+        const toArr = (d: any) => Array.isArray(d) ? d : d?.result || d?.items || [];
+
+        const dashboards: SearchResult[] = toArr(dashRes)
+          .filter((d: any) => (d.name || "").toLowerCase().includes(q))
+          .slice(0, 5)
+          .map((d: any) => ({ id: `d-${d.id}`, label: d.name, href: `/dashboards/${d.id}/view`, type: "dashboard" as const, icon: "fa-grid-2" }));
+
+        const charts: SearchResult[] = toArr(chartRes)
+          .filter((c: any) => (c.name || "").toLowerCase().includes(q))
+          .slice(0, 5)
+          .map((c: any) => ({ id: `c-${c.id}`, label: c.name, href: `/charts/${c.id}`, type: "chart" as const, icon: "fa-chart-bar" }));
+
+        const datasets: SearchResult[] = toArr(dsRes)
+          .filter((d: any) => (d.name || "").toLowerCase().includes(q))
+          .slice(0, 3)
+          .map((d: any) => ({ id: `ds-${d.id}`, label: d.name, href: `/datasets/${d.id}`, type: "dataset" as const, icon: "fa-table" }));
+
+        // Deduplicate against recents
+        const seen = new Set(recentMatches.map(r => r.href));
+        const apiResults = [...dashboards, ...charts, ...datasets].filter(r => !seen.has(r.href));
+
+        setResults([...recentMatches, ...apiResults, ...pageMatches]);
+        setSelected(0);
+      } catch { /* ignore */ }
+      setLoading(false);
+    }, 200);
+
+    // Show immediate local results
+    setResults([...recentMatches, ...pageMatches]);
+    setSelected(0);
+
+    return () => clearTimeout(debounceRef.current);
+  }, [query, recents]);
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setSelected(s => Math.min(s + 1, results.length - 1)); }
+    if (e.key === "ArrowUp") { e.preventDefault(); setSelected(s => Math.max(s - 1, 0)); }
+    if (e.key === "Enter" && results[selected]) { onNavigate(results[selected].href); }
+    if (e.key === "Escape") onClose();
+  };
+
+  const typeLabel = (t: string) => t === "recent" ? "Recent" : t === "page" ? "Navigation" : t.charAt(0).toUpperCase() + t.slice(1);
+
+  return (
+    <>
+      <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", backdropFilter: "blur(4px)", zIndex: 10000 }} onClick={onClose} />
+      <div style={{
+        position: "fixed", top: "18%", left: "50%", transform: "translateX(-50%)",
+        width: "90%", maxWidth: 560,
+        background: "var(--bg-surface)", border: "1px solid var(--border)",
+        borderRadius: 16, boxShadow: "0 24px 80px rgba(0,0,0,0.4)",
+        zIndex: 10001, overflow: "hidden",
+      }}>
+        {/* Search input */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", borderBottom: "1px solid var(--border)" }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input
+            ref={inputRef}
+            type="text"
+            placeholder="Search dashboards, charts, datasets..."
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            onKeyDown={handleKeyDown}
+            style={{
+              flex: 1, border: "none", outline: "none", background: "transparent",
+              fontSize: 15, color: "var(--text-primary)", fontFamily: "inherit",
+            }}
+          />
+          {loading && <i className="fas fa-spinner fa-spin" style={{ fontSize: 12, color: "var(--text-muted)" }} />}
+          <kbd style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, border: "1px solid var(--border)", color: "var(--text-faint)", background: "var(--bg-primary)" }}>ESC</kbd>
+        </div>
+
+        {/* Results */}
+        <div style={{ maxHeight: 380, overflowY: "auto", padding: "6px" }}>
+          {results.length === 0 && query && (
+            <div style={{ padding: "24px 16px", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>
+              No results for &ldquo;{query}&rdquo;
+            </div>
+          )}
+          {results.map((r, i) => {
+            const isSelected = i === selected;
+            const showLabel = i === 0 || results[i - 1].type !== r.type;
+            return (
+              <React.Fragment key={r.id}>
+                {showLabel && (
+                  <div style={{ fontSize: 10, fontWeight: 600, color: "var(--text-faint)", padding: "8px 12px 4px", letterSpacing: "0.04em" }}>
+                    {typeLabel(r.type)}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => onNavigate(r.href)}
+                  onMouseEnter={() => setSelected(i)}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 10,
+                    width: "100%", padding: "9px 12px", border: "none", borderRadius: 8,
+                    background: isSelected ? "var(--bg-hover)" : "transparent",
+                    color: isSelected ? "var(--text-primary)" : "var(--text-secondary)",
+                    fontSize: 13.5, cursor: "pointer", textAlign: "left",
+                    fontFamily: "inherit", transition: "background 0.1s",
+                  }}
+                >
+                  <i className={`fas ${r.icon}`} style={{ fontSize: 12, opacity: 0.5, width: 16, textAlign: "center" }} />
+                  <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.label}</span>
+                  {isSelected && (
+                    <span style={{ fontSize: 10, color: "var(--text-faint)" }}>
+                      <kbd style={{ padding: "1px 4px", borderRadius: 3, border: "1px solid var(--border)", fontSize: 9 }}>&#x23CE;</kbd>
+                    </span>
+                  )}
+                </button>
+              </React.Fragment>
+            );
+          })}
+        </div>
+
+        {/* Footer */}
+        <div style={{ padding: "8px 16px", borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 16, fontSize: 10, color: "var(--text-faint)" }}>
+          <span><kbd style={{ padding: "1px 4px", borderRadius: 3, border: "1px solid var(--border)", fontSize: 9 }}>&uarr;&darr;</kbd> navigate</span>
+          <span><kbd style={{ padding: "1px 4px", borderRadius: 3, border: "1px solid var(--border)", fontSize: 9 }}>&#x23CE;</kbd> open</span>
+          <span><kbd style={{ padding: "1px 4px", borderRadius: 3, border: "1px solid var(--border)", fontSize: 9 }}>esc</kbd> close</span>
+        </div>
+      </div>
+    </>
   );
 }
 
