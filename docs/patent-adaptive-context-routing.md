@@ -1,0 +1,217 @@
+# Patent — Adaptive Context-Based Query Routing Using Data Staleness Scoring
+
+**Inventor:** Pruthvi Prodduturi
+**Status:** draft claim set for filing
+**Related:** `whitepaper-adaptive-context-routing.md` (technical disclosure),
+`whitepaper-nl-to-sql.md` (deterministic translation layer)
+
+> Drafting notes and rationale are quoted like this and are **not** part of the
+> claims. They record why each limitation is worded as it is, and the prior-art
+> delta each is meant to hold.
+
+---
+
+## Field
+
+Methods and systems for routing natural-language questions over structured data
+between a cached context representation and live database execution, based on a
+measured data-staleness score computed per context element.
+
+---
+
+## Independent Claim 1 (method)
+
+A computer-implemented method comprising:
+
+**(a)** generating, without use of a large language model, a global context
+representation of a structured dataset by statistically profiling column value
+distributions, inferred relationships between tables, and query pattern frequency,
+wherein the column value distributions are obtained by reading statistics
+maintained by the database management system about the dataset **rather than by
+scanning the dataset's rows**;
+
+**(b)** capturing, for each of a plurality of context elements of the context
+representation, one or more data-change indicators reported by the database
+management system, the data-change indicators comprising at least a count of row
+modifications and a time of last statistics computation, each context element
+comprising one of a table or a column;
+
+**(c)** assigning a validity score to individual context elements, the validity
+score computed from a combination of (i) elapsed time since the context element
+was last refreshed, (ii) a magnitude of detected change in the underlying data of
+the context element since the context element was generated, **the magnitude of
+detected change being determined from a change in the said data-change indicators
+without re-querying the underlying data**, and (iii) a decay function weighted by
+how frequently the context element has been relied upon for prior answers;
+
+**(d)** receiving a natural-language question from a user;
+
+**(e)** determining, without use of a large language model, a set of context
+elements relevant to the natural-language question by matching terms of the
+question against names of the tables and columns of the context representation;
+
+**(f)** determining, using the validity scores of the set of context elements
+relevant to the question and not the validity of the dataset as a whole, whether
+to answer the question from the context representation or to trigger execution of
+a live database query;
+
+**(g)** responsive to determining to trigger a live query, generating and
+executing the query, updating the captured data-change indicators and the validity
+scores of the affected context elements to a refreshed state, caching a result of
+the query in association with the question and the set of context elements the
+result depends upon, and returning the result; and
+
+**(h)** responsive to determining to answer from the context representation,
+returning an answer without query execution.
+
+> **Why (a) adds "reading statistics … rather than scanning."** The original
+> claim said "statistically profiling column value distributions" but not how.
+> Grounding it in reading DBMS-maintained statistics (a) states a concrete,
+> enabling mechanism and (b) draws the novelty line against any approach that
+> profiles by scanning or sampling data.
+>
+> **Why (b) is a separate step.** Capturing the change indicators is the
+> enablement pivot for (c)(ii). Making it an explicit limitation forecloses the
+> reading that change is detected by re-computing statistics (i.e., by querying),
+> which would defeat the invention.
+>
+> **Why (c)(ii) says "without re-querying the underlying data."** This is the
+> load-bearing distinction from a materialized-view/incremental-maintenance system
+> and the answer to the enablement question "how do you know the data changed
+> without looking at it?" — you read a counter the DBMS already maintains.
+>
+> **Why (e) is added.** The original independent claim assumed the system could
+> identify "the specific context elements relevant to the question" but never
+> claimed the step. Claiming it (deterministically, no LLM) keeps the no-LLM story
+> internally consistent and adds a limitation competitors must design around.
+>
+> **Why (f) says "and not the validity of the dataset as a whole."** Per-element
+> granularity is the core differentiator from a TTL/whole-cache scheme; stating it
+> in the independent claim protects it directly rather than leaving it to a
+> dependent.
+
+---
+
+## Dependent Claims
+
+**2.** The method of claim 1, wherein the decay function of (c)(iii) shortens an
+effective half-life of factor (c)(i) as the frequency of reliance on the context
+element increases, such that context elements relied upon more frequently are
+assigned a lower validity score at equal elapsed time and equal detected change.
+
+> Fixes the ambiguity in the original "weighted by how frequently relied upon":
+> pins the *direction* (hot decays faster) so the claim is definite.
+
+**3.** The method of claim 1, wherein determining whether to answer from the
+context representation or trigger a live query comprises comparing a minimum
+validity score among the set of relevant context elements against a configurable
+threshold, and selecting the context representation only when the minimum validity
+score satisfies the threshold.
+
+> Supplies the decision *mechanism* the original claim's "determining whether"
+> lacked.
+
+**4.** The method of claim 3, wherein, when a first subset of the relevant context
+elements satisfies the threshold and a second subset does not, the method answers a
+first portion of the question from the context representation for the first subset
+and triggers a live query only for the second subset.
+
+> The hybrid/partial-answer path — the strongest independent-of-prior-art
+> dependent, and hard to design around because it exploits the per-element graph.
+
+**5.** The method of claim 1, wherein the data-change indicators comprise a running
+count of row modifications since a last statistics computation reported by the
+database management system, and the magnitude of detected change is computed as a
+function of a change in said count divided by a row count captured at generation
+time.
+
+> Nails factor (b) to a concrete, named signal (`n_mod_since_analyze`-class
+> counters) and a concrete formula, strengthening enablement.
+
+**6.** The method of claim 5, wherein a change in the time of last statistics
+computation is treated as an independent indicator of data change even when the
+running count of row modifications has been reset.
+
+> Covers the autovacuum/ANALYZE reset case so a competitor can't evade (5) by
+> relying on counter resets.
+
+**7.** The method of claim 1, wherein answering from the context representation
+comprises synthesizing the answer directly from the profiled column value
+distributions without executing any query, for questions requesting one of a row
+count, an approximate count of distinct values, a null fraction, or a most-common
+value.
+
+> Claims the profile-synthesised-answer path (answer *is* the statistic), a
+> no-query-ever behavior a result cache cannot provide.
+
+**8.** The method of claim 7, wherein an answer synthesized from a distinct-value
+estimate is returned with an indication that the answer is approximate.
+
+> The confidence/uncertainty output, attached where it actually applies.
+
+**9.** The method of claim 1, wherein answering from the context representation
+comprises returning a previously cached result of a prior live query, and the
+cached result is returned only while the validity score of every context element
+the cached result depends upon satisfies a threshold.
+
+> Claims the dependency-valid cache — the precise upgrade over a TTL cache.
+
+**10.** The method of claim 1, wherein the inferred relationships between tables
+comprise foreign-key relationships read from the database catalog and,
+additionally, relationships inferred by matching a column name and type against a
+primary key of another table in the absence of a declared foreign key.
+
+> Covers the FK-inference heuristic for warehouses that drop constraints.
+
+**11.** The method of claim 1, wherein updating the validity scores of the affected
+context elements to a refreshed state in response to the live query causes a
+subsequent identical question to be answered from the context representation until
+a further change is detected in the data-change indicators of those elements.
+
+> Claims the self-healing feedback loop: stale→query→refresh→context.
+
+**12.** The method of claim 1, wherein the query pattern frequency is derived from a
+stored history of previously executed queries and the tables each executed query
+referenced, and is used to compute the reliance frequency of factor (c)(iii).
+
+> Grounds "query pattern frequency" and ties it to factor (c).
+
+**13.** The method of claim 1, further comprising periodically or on-demand
+re-generating the context representation for a dataset in response to a user action
+associated with the dataset in a user interface, without executing a query that
+scans the dataset's rows.
+
+> Covers the "Build Context" UI action — an on-demand profile trigger next to the
+> dataset/data-source, reading statistics only.
+
+---
+
+## Independent Claim 14 (system)
+
+A system comprising one or more processors and memory storing instructions that,
+when executed, cause the system to perform the method of claim 1.
+
+## Independent Claim 15 (medium)
+
+A non-transitory computer-readable medium storing instructions that, when executed
+by one or more processors, cause the processors to perform the method of claim 1.
+
+> Standard system + CRM independent claims so the invention is protected in all
+> three statutory categories.
+
+---
+
+## Prior-Art Delta (summary for prosecution)
+
+| Reference class | What it teaches | What claim 1 adds |
+|---|---|---|
+| TTL result cache | expire cached answers on a clock | invalidation by **measured per-element data change**, not time |
+| Materialized view / incremental view maintenance | keep a view fresh as base tables change | no view maintenance; **route** a NL question, answer from statistics with **no query**, per-element |
+| Query-plan statistics (`pg_stats`, histograms) | help the optimizer choose plans | repurpose the statistics as a **user-facing context representation** and as a **staleness signal** |
+| LLM RAG over embeddings | retrieve context by semantic similarity | context built **without an LLM**; freshness by **counter**, not similarity; routes to live SQL |
+| Cache invalidation via triggers/CDC | invalidate on write events | **score** staleness continuously and **per element relevant to a question**, and answer partially (hybrid) |
+
+The defensible core is the **combination**: a per-element validity score whose
+change term is read from a DBMS-maintained modification counter (not a re-query),
+used to route a natural-language question between a no-query context answer and a
+live query, over a context representation built without a large language model.
