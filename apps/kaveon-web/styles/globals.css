@@ -4395,12 +4395,19 @@ main.main-wide {
 .template-btn {
   background: var(--bg-elevated);
   border: 1px solid var(--border);
+  color: var(--text-secondary);
   padding: 0.25rem 0.75rem;
   border-radius: 4px;
   font-size: 0.8rem;
   cursor: pointer;
-  transition: all 0.3s ease;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
+.template-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+.template-btn i { color: inherit; }
 
 .results-section {
   flex: 1;
