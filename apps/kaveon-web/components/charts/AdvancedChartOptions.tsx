@@ -1474,10 +1474,19 @@ const AdvancedChartOptions: React.FC = () => {
               </select>
               <div style={{ display:'flex', gap:4 }}>
                 {(colorPalettes.find(p => p.name === selectedPaletteName)?.colors || palette).map((c:string, i:number) => (
-                  <span key={i} style={{ width:18, height:18, borderRadius:3, border:'2px solid var(--bg-surface)', boxShadow:'0 0 0 1px var(--border)', background:c, display:'inline-block' }} />
+                  <button
+                    key={i}
+                    type="button"
+                    title="Click to pick a shade"
+                    onClick={() => openColorPicker(i)}
+                    style={{ width:18, height:18, borderRadius:3, border:'2px solid var(--bg-surface)', boxShadow:'0 0 0 1px var(--border)', background:c, display:'inline-block', cursor:'pointer', padding:0, transition:'transform 0.1s' }}
+                    onMouseOver={e => (e.currentTarget.style.transform = 'scale(1.15)')}
+                    onMouseOut={e => (e.currentTarget.style.transform = 'scale(1)')}
+                  />
                 ))}
               </div>
             </div>
+            <div style={{ fontSize:11, color:'var(--text-muted)', marginTop:-2, marginBottom:8 }}>Click a swatch to pick a custom shade.</div>
             {selectedPaletteName === "Custom" && (
               <ColorPaletteSelector value={palette} onChange={colors => { setAdvancedOptions((p:any) => ({...(p||{}), color:colors})); setPreviewOptions((p:any) => ({...(p||{}), color:colors})); }} />
             )}
