@@ -22,11 +22,12 @@
    - [Dashboards: Multi-Chart Composition](#3-dashboards-multi-chart-composition)
    - [SQL Lab: Direct Query Interface](#4-sql-lab-direct-query-interface)
    - [How Everything Connects](#how-everything-connects)
-10. [Caching Strategy](#caching-strategy)
-11. [Component Architecture](#component-architecture)
-12. [API Design](#api-design)
-13. [Frontend Architecture](#frontend-architecture)
-14. [Deployment](#deployment)
+10. [Adaptive Context Routing](#adaptive-context-routing)
+11. [Caching Strategy](#caching-strategy)
+12. [Component Architecture](#component-architecture)
+13. [API Design](#api-design)
+14. [Frontend Architecture](#frontend-architecture)
+15. [Deployment](#deployment)
 
 ---
 
@@ -63,8 +64,9 @@ Kaveon is a modern data exploration platform built with a clean, two-tier servic
 ┌─────────────────────────────────────────────────────────────┐
 │                    Data Sources                               │
 │  ┌──────────────┐ ┌──────────────┐ ┌──────────────────────┐ │
-│  │ Neon Postgres │ │ Azure SQL /  │ │ MySQL / StarRocks    │ │
-│  │ (metadata +   │ │ Fabric SQL   │ │                      │ │
+│  │ Azure Postgres │ │ Azure SQL /  │ │ MySQL / StarRocks    │ │
+│  │  Flexible     │ │ Fabric SQL   │ │                      │ │
+│  │ (metadata +   │ │              │ │                      │ │
 │  │  data tables) │ │              │ │                      │ │
 │  └──────────────┘ └──────────────┘ └──────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
@@ -641,6 +643,91 @@ data_sources table
 
 ---
 
+## Adaptive Context Routing
+
+> **Patent-pending** — see `docs/patent-adaptive-context-routing.md` for the full claim set.
+
+Kaveon's core differentiator: route natural-language questions between cached context answers and live database queries using **per-element data-staleness scoring** — without a large language model.
+
+### How It Works
+
+```
+User: "How many COVID deaths in the US?"
+         │
+         ▼
+┌─────────────────────────────────────────────────────┐
+│  1. Context Profiler                                 │
+│     Reads pg_stats, pg_stat_user_tables,             │
+│     pg_constraint, query_history — NO data scan      │
+│     Builds per-table + per-column context elements   │
+│     File: services/context_profiler.py               │
+└──────────────────────┬──────────────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│  2. Validity Scorer                                  │
+│     Per-element score = f(time, change, usage)       │
+│     - Time: exponential decay (6h half-life)         │
+│     - Change: n_mod_since_analyze delta / row_count  │
+│     - Usage: hot elements decay faster (log-scaled)  │
+│     File: services/context_validity.py               │
+└──────────────────────┬──────────────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│  3. Question Router                                  │
+│     NL question → deterministic token matching →     │
+│     identify relevant context elements               │
+│     Route decision based on MIN(relevant scores):    │
+│     ┌────────────┬────────────┬────────────────────┐ │
+│     │  All ≥ 0.7 │  Mixed     │  All < 0.7         │ │
+│     │  CONTEXT   │  HYBRID    │  LIVE QUERY        │ │
+│     └────────────┴────────────┴────────────────────┘ │
+│     File: services/context_router.py                 │
+└──────────────────────┬──────────────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│  4. Answer Paths                                     │
+│     Context: profile-synthesized (row count, distinct │
+│       count, null rate) OR dependency-valid cache     │
+│     Live: execute SQL → refresh elements → cache →   │
+│       self-healing loop (same question now serves     │
+│       from context until data moves again)            │
+└─────────────────────────────────────────────────────┘
+```
+
+### Key Design Decisions
+
+| Decision | Rationale |
+|---|---|
+| No LLM anywhere in the routing path | Deterministic, zero-cost, no API keys, no latency, patentable |
+| Staleness from DBMS counters, not re-query | `n_mod_since_analyze` is free; re-querying defeats the purpose |
+| Per-element, not per-dataset | Table A fresh + Table B stale → only re-query Table B's data |
+| Profile-synthesized answers | "How many rows?" returns `n_live_tup` directly — no query ever |
+| Dependency-valid cache | Cached result served only while ALL its element dependencies are fresh |
+
+### API Endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/v1/context/build` | Build/refresh context for a database (reads DBMS statistics) |
+| `GET /api/v1/context/validity` | Report validity scores for all context elements |
+| `POST /api/v1/context/ask` | Route a NL question → context answer or live query |
+
+### Implementation Status
+
+| Component | Status | Files |
+|---|---|---|
+| Context profiler (pg_stats reader) | Complete | `services/context_profiler.py` |
+| Validity scorer (3-factor decay) | Complete | `services/context_validity.py` |
+| Question router (deterministic) | Complete | `services/context_router.py` |
+| Profile-synthesized answers | Complete | `context_router.py:109-159` |
+| Dependency-valid cache | Complete | `context_router.py:172-203` |
+| Self-healing feedback loop | Complete | `context_profiler.py:304-333` |
+| Hybrid path (partial decomposition) | Routing only | SQL not decomposed; full query re-run |
+| FK heuristic inference | Declared FK only | `<t>_id` name matching not yet implemented |
+| Frontend integration (`/context/ask`) | Not wired | Chat uses `nlToSql` directly; routing engine is backend-only |
+
+---
+
 ## Caching Strategy
 
 Kaveon intentionally avoids server-side caching of query results — all data is fetched live from Fabric SQL on every request. This ensures users always see the most current data.
@@ -805,7 +892,7 @@ app/
 
 ## Deployment
 
-See [DEPLOYMENT.md](./DEPLOYMENT.md) for the deployment guide and [deploy-vercel-render-neon.md](./docs/guides/deploy-vercel-render-neon.md) for the full walkthrough.
+See [DEPLOYMENT.md](./DEPLOYMENT.md) for the deployment guide.
 
 ### Summary
 
@@ -813,7 +900,7 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for the deployment guide and [deploy-vercel
 |---|---|
 | Frontend hosting | Vercel — auto-deploy from `dev` branch |
 | API hosting | Azure Container Apps — image from `kaveonacr.azurecr.io`, IaC in `infra/bicep/` |
-| Database | Neon (serverless Postgres) — metadata; Azure PostgreSQL Flexible (migration target) |
+| Database | Azure PostgreSQL Flexible Server (`kaveon-db.postgres.database.azure.com/kaveon`) — metadata; auth via Managed Identity |
 | Auth | NextAuth (GitHub / Microsoft Entra ID) |
 | API auth | Proxy secret (`KAVEON_PROXY_SECRET`) — Vercel injects `X-User-*` headers |
 | API runtime | Gunicorn + Uvicorn workers (4 workers × 8 threads) |
