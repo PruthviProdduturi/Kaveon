@@ -245,3 +245,45 @@ CREATE TABLE IF NOT EXISTS user_recents (
     CONSTRAINT uq_user_recents_email_item UNIQUE (user_email, item_id)
 );
 CREATE INDEX IF NOT EXISTS idx_user_recents_email ON user_recents(user_email);
+
+-- ── Adaptive Context Routing (staleness-scored NL query router) ────────────────
+-- Global context representation: one row per profiled table/column element.
+-- Populated from pg_stats + pg_stat_user_tables (no LLM, no data scan). The
+-- change counters captured here are what let the validity engine detect drift
+-- without re-querying the underlying data.
+CREATE TABLE IF NOT EXISTS context_snapshots (
+    id                TEXT             PRIMARY KEY,
+    database_name     TEXT             NOT NULL,
+    schema_name       TEXT             NOT NULL,
+    table_name        TEXT             NOT NULL,
+    column_name       TEXT,                       -- NULL => table-level element
+    element_key       TEXT             NOT NULL,   -- "schema.table" or "schema.table.column"
+    element_type      TEXT             NOT NULL,   -- 'table' | 'column'
+    profile           TEXT,                        -- JSON: distribution / relationship stats
+    row_count         BIGINT,                      -- n_live_tup at capture
+    mods_at_capture   BIGINT,                      -- n_mod_since_analyze at capture
+    last_analyze      TEXT,                        -- source last_analyze at capture (ISO)
+    usage_count       BIGINT           DEFAULT 0,  -- query_history hits (usage-weighted decay)
+    captured_at       TEXT             NOT NULL,
+    refreshed_at      TEXT             NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_context_snapshots_elem
+    ON context_snapshots (database_name, element_key);
+
+-- Result cache keyed by question signature + the element dependencies the answer
+-- relied on. Unlike a flat TTL cache, an entry is served only while every
+-- dependency's validity score stays above the routing threshold.
+CREATE TABLE IF NOT EXISTS context_answer_cache (
+    id                TEXT             PRIMARY KEY,
+    database_name     TEXT             NOT NULL,
+    question_sig      TEXT             NOT NULL,
+    sql_hash          TEXT,
+    result            TEXT,                        -- JSON: cached result set
+    element_deps      TEXT,                        -- JSON: [element_key, ...]
+    created_at        TEXT             NOT NULL,
+    last_served_at    TEXT             NOT NULL,
+    serve_count       BIGINT           DEFAULT 0,
+    validity_at_serve DOUBLE PRECISION
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_context_answer_sig
+    ON context_answer_cache (database_name, question_sig);
