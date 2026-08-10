@@ -455,9 +455,7 @@ const DashboardViewPage: React.FC = () => {
         }}
         onClose={() => {
           resetQuerySemaphore();
-          // Back to the user's previous state; fall back to Library on direct visits.
-          if (typeof window !== 'undefined' && window.history.length > 1) router.back();
-          else router.push('/workspace?tab=dashboards');
+          router.push('/workspace?tab=dashboards');
         }}
       />
     </DashboardProvider>
