@@ -3311,8 +3311,15 @@ main.main-lab {
 }
 
 /* Very short/narrow tiles: drop the label + cancel button entirely so the
-   spinner alone stays centered and fully visible. */
-@container (max-height: 110px), (max-width: 130px) {
+   spinner alone stays centered and fully visible. (Two rules instead of a
+   comma list — container queries reject comma-separated conditions in Turbopack.) */
+@container (max-height: 110px) {
+  .chart-loading-text,
+  .chart-preview-loading-state > button {
+    display: none;
+  }
+}
+@container (max-width: 130px) {
   .chart-loading-text,
   .chart-preview-loading-state > button {
     display: none;
