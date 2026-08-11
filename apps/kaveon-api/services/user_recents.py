@@ -43,15 +43,28 @@ def add_recent(user_email: str, item_id: str, label: str, href: str, item_type: 
                 VALUES (@param0, @param1, @param2, @param3, @param4, GETUTCDATE());
         """, [user_email, item_id, label, href, item_type])
     # Trim to 20 most recent per user
-    db.execute("""
-        DELETE FROM user_recents
-        WHERE user_email = @param0
-          AND id NOT IN (
-              SELECT TOP 20 id FROM user_recents
-              WHERE user_email = @param0
-              ORDER BY created_at DESC
-          )
-    """, [user_email, user_email])
+    db_type = db_type or (__import__("os").environ.get("METADATA_DB_TYPE") or "").lower()
+    if db_type in ("postgresql", "mysql"):
+        db.execute("""
+            DELETE FROM user_recents
+            WHERE user_email = @param0
+              AND id NOT IN (
+                  SELECT id FROM user_recents
+                  WHERE user_email = @param0
+                  ORDER BY created_at DESC
+                  LIMIT 20
+              )
+        """, [user_email, user_email])
+    else:
+        db.execute("""
+            DELETE FROM user_recents
+            WHERE user_email = @param0
+              AND id NOT IN (
+                  SELECT TOP 20 id FROM user_recents
+                  WHERE user_email = @param0
+                  ORDER BY created_at DESC
+              )
+        """, [user_email, user_email])
 
 
 def remove_recent(user_email: str, item_id: str) -> None:
