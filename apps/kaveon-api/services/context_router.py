@@ -265,14 +265,23 @@ def ask(question: str, database: str, sql: Optional[str] = None,
                 "reason": "route requires a live query; supply generated SQL as `sql`"}
 
     result = _maybe_exec(sql, database)
-    # refresh validity of the elements this query touched
-    refreshed = profiler.refresh_elements(database, relevant)
+    # Hybrid route (claim 4): only the STALE subset needed the live query — the
+    # fresh elements were already trusted from context. Refresh just the stale
+    # subset; a full query refreshes everything relevant.
+    is_hybrid = decision["route"] == "hybrid"
+    to_refresh = decision.get("stale_elements", []) if is_hybrid else relevant
+    refreshed = profiler.refresh_elements(database, to_refresh or relevant)
     # cache the fresh result against the question signature
     _cache_put(database, _question_sig(question), sql, result, relevant, decision["min_score"])
 
     return {**base, "route": decision["route"],
             "source": "live", "sql": sql, "result": result,
-            "executed_query": True, "elements_refreshed": refreshed}
+            "executed_query": True, "elements_refreshed": refreshed,
+            # For a hybrid answer, report which elements were served from context
+            # vs which drove the live query (claim 4: answer the valid portion from
+            # context, query only the stale portion).
+            "elements_from_context": decision.get("fresh_elements", []) if is_hybrid else [],
+            "elements_queried": to_refresh if is_hybrid else relevant}
 
 
 # --------------------------------------------------------------------------- #
