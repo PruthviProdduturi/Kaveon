@@ -7,6 +7,7 @@ import { LoadingOverlay } from "../../../components/LoadingOverlay";
 import { msalFetch } from "../../../utils/msalFetch";
 import { useAuth } from "../../../auth/useAuth";
 import { useRouter, useParams } from "next/navigation";
+import { useRecents } from "../../../hooks/useRecents";
 
 export const dynamic = 'force-dynamic';
 export const dynamicParams = true;
@@ -436,6 +437,7 @@ export default function DatasetDetailPage() {
   const [editNameValue, setEditNameValue] = useState("");
   const nameInputRef = useRef<HTMLInputElement>(null);
   const [accessToken] = useState<string>("proxy");
+  const { addRecent } = useRecents();
   const [previewColumns, setPreviewColumns] = useState<string[]>([]);
   const [previewRows, setPreviewRows] = useState<any[][]>([]);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
@@ -528,6 +530,7 @@ export default function DatasetDetailPage() {
         };
 
         setDataset(mappedData);
+        addRecent({ id: String(mappedData.id), label: mappedData.name, href: `/datasets/${datasetId}`, type: "dataset" });
       } catch (e: unknown) {
         const message = e instanceof Error ? e.message : "Unknown error";
         setError(message);
