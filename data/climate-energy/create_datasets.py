@@ -1,11 +1,16 @@
-"""Create Climate x Energy datasets in Kaveon metadata database."""
+"""Create Climate x Energy datasets in Kaveon metadata database.
+
+Credentials come from the environment — never hardcode secrets in a public repo.
+    export PGUSER=kaveon_admin PGPASSWORD="$(az keyvault secret show --vault-name kaveon-kv -n azure-db-password --query value -o tsv)"
+"""
+import os
 import psycopg2
 
 conn = psycopg2.connect(
-    host="kaveon-db.postgres.database.azure.com",
-    dbname="kaveon",
-    user="kaveon_admin",
-    password="Kav30n!Db2026#S3cure",
+    host=os.environ.get("PGHOST", "kaveon-db.postgres.database.azure.com"),
+    dbname=os.environ.get("PGDATABASE", "kaveon"),
+    user=os.environ["PGUSER"],
+    password=os.environ["PGPASSWORD"],
     sslmode="require",
 )
 conn.autocommit = True
