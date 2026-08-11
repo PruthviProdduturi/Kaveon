@@ -45,6 +45,16 @@
   --shadow-lg: 0 8px 24px rgba(0,0,0,0.5);
 }
 
+/* ─── Scrollbar styling ─── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+*::-webkit-scrollbar { width: 6px; height: 6px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+
 /* ─── Legacy compat — other components still reference these ─── */
 :root {
   --lens-primary: #4A9EE8;
