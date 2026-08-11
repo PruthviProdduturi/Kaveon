@@ -4717,7 +4717,7 @@ main.main-wide {
 }
 
 .results-table tbody tr:hover {
-  background: color-mix(in srgb, var(--lens-primary) 8%, white);
+  background: var(--bg-hover);
 }
 
 .results-table td.numeric-cell {
