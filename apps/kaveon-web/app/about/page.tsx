@@ -209,9 +209,9 @@ export default function AboutPage() {
           {/* Trust signals */}
           <div style={{ display: "flex", justifyContent: "center", gap: 24, marginBottom: 44, flexWrap: "wrap" }}>
             {[
-              { icon: "fa-bolt", text: "No LLM required" },
-              { icon: "fa-database", text: "Multi-database" },
-              { icon: "fa-lock-open", text: "MIT Licensed" },
+              { icon: "fa-shield-check", text: "Zero Hallucination" },
+              { icon: "fa-bolt", text: "Sub-10ms Latency" },
+              { icon: "fa-lock", text: "Zero Token Cost" },
             ].map(({ icon, text }) => (
               <div key={text} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13, color: "#666" }}>
                 <i className={`fas ${icon}`} style={{ fontSize: 11, color: B, opacity: 0.7 }} />
@@ -380,6 +380,93 @@ export default function AboutPage() {
           </div>
         </div>
       </section>
+
+      {/* ─── Why No LLM — Enterprise value props ─────────────────────── */}
+      <Section style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0a0a0a 0%, #0f1218 50%, #0a0a0a 100%)" }}>
+        <div style={{ maxWidth: 1000, margin: "0 auto" }}>
+          <div style={{ textAlign: "center", marginBottom: 56 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: "#10b981", marginBottom: 12 }}>Architecture</div>
+            <h2 style={{ fontSize: "clamp(28px, 4vw, 40px)", fontWeight: 700, letterSpacing: "-1px" }}>
+              Why deterministic, not generative?
+            </h2>
+            <p style={{ fontSize: 16, color: "#666", maxWidth: 560, margin: "12px auto 0" }}>
+              Every NL&#x2192;SQL product today sends your schema to an LLM. Kaveon doesn&apos;t.
+            </p>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20 }}>
+            {[
+              {
+                icon: "fa-shield-halved",
+                title: "Zero Hallucination",
+                desc: "100% predictable SQL generation with schema boundary enforcement. Every query maps directly to your metadata — no guessing, no made-up columns, no wrong JOINs.",
+                color: "#10b981",
+                metric: "0%",
+                metricLabel: "hallucination rate",
+              },
+              {
+                icon: "fa-bolt",
+                title: "Sub-10ms Latency",
+                desc: "Compiled rule-based parsing returns SQL in single-digit milliseconds. No token generation pipeline, no API round-trip, no queue. Your dashboard loads before you blink.",
+                color: B,
+                metric: "<10ms",
+                metricLabel: "parse time",
+              },
+              {
+                icon: "fa-lock",
+                title: "Zero Token Cost & Total Privacy",
+                desc: "No data leaves your network. No schema sent to third-party model providers. No per-query API costs. Run on your infrastructure with complete data sovereignty.",
+                color: "#8b5cf6",
+                metric: "$0",
+                metricLabel: "per query",
+              },
+            ].map(({ icon, title, desc, color, metric, metricLabel }) => (
+              <div key={title} style={{
+                padding: "36px 28px", borderRadius: 16,
+                background: "rgba(255,255,255,0.02)",
+                border: "1px solid rgba(255,255,255,0.05)",
+                transition: "all 0.3s",
+              }} className="about-card">
+                <div style={{
+                  fontSize: 36, fontWeight: 800, color, letterSpacing: "-1px",
+                  marginBottom: 4, lineHeight: 1,
+                }}>
+                  {metric}
+                </div>
+                <div style={{ fontSize: 11, color: "#555", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 20 }}>
+                  {metricLabel}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                  <i className={`fas ${icon}`} style={{ fontSize: 14, color, opacity: 0.8 }} />
+                  <h3 style={{ fontSize: 17, fontWeight: 700, color: "#e2e8f0", margin: 0 }}>{title}</h3>
+                </div>
+                <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.7, margin: 0 }}>{desc}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* Comparison row */}
+          <div style={{
+            display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 20, alignItems: "center",
+            marginTop: 40, padding: "28px 32px", borderRadius: 16,
+            background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)",
+          }}>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#ef4444", marginBottom: 8 }}>LLM-based NL&#x2192;SQL</div>
+              <div style={{ fontSize: 12, color: "#666", lineHeight: 1.7 }}>
+                500-2000ms latency &middot; $0.01-0.05/query &middot; Schema leaked to provider &middot; Hallucination risk &middot; Rate limits
+              </div>
+            </div>
+            <div style={{ fontSize: 20, color: "#333", fontWeight: 300 }}>vs</div>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#10b981", marginBottom: 8 }}>Kaveon Deterministic Engine</div>
+              <div style={{ fontSize: 12, color: "#666", lineHeight: 1.7 }}>
+                &lt;10ms latency &middot; $0/query &middot; Data never leaves network &middot; Zero hallucination &middot; No limits
+              </div>
+            </div>
+          </div>
+        </div>
+      </Section>
 
       {/* ─── Dashboard Showcase — Apple-style horizontal scroll ─────── */}
       <section id="dashboards" ref={r7} style={{ padding: "60px 0 100px", background: "#0a0a0a", position: "relative", overflow: "hidden" }}>
