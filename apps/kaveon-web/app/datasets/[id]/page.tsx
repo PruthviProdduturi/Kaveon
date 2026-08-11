@@ -565,8 +565,11 @@ export default function DatasetDetailPage() {
           }
         }
 
+        const qualifiedTable = dataset.schema_name && dataset.schema_name !== "dbo"
+          ? `${dataset.schema_name}.${dataset.table_name}`
+          : dataset.table_name;
         const sql = dataset.sql_text && !dataset.table_name
-          ? `SELECT TOP 100 * FROM (\n${dataset.sql_text.replace(/;\s*$/, "").trim()}\n) AS _preview`
+          ? `SELECT * FROM (${dataset.sql_text.replace(/;\s*$/, "").trim()}) AS _preview LIMIT 100`
           : buildDatasetPreviewSql(dataset, 100);
 
         // Build list of tables used in this query for query history
