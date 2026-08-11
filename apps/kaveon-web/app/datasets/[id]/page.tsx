@@ -1166,8 +1166,8 @@ export default function DatasetDetailPage() {
             {!isLoadingPreview && !previewError && previewColumns.length > 0 && (
               <div className="dataset-preview-container" style={{ flex: 1, overflowY: "auto", borderRadius: 8, border: "1px solid var(--border)", minHeight: 0 }}>
                 <table className="results-table" style={{ width: "100%", fontSize: 12 }}>
-                  <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
-                    <tr style={{ background: "var(--bg-surface)", boxShadow: "0 1px 0 var(--border)" }}>
+                  <thead>
+                    <tr>
                       {previewColumns.map((col, colIndex) => {
                         const isSorted = previewSortColumnIndex === colIndex;
                         const sortIconClass = !isSorted
