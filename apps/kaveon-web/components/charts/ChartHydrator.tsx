@@ -135,7 +135,26 @@ const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = 
       setSelectedDatasetId(chart.dataset_id ?? null);
       setName(chart.name ?? "");
       setDescription(chart.description ?? "");
-      if (chart.chart_type) setChartType(chart.chart_type as ChartKind);
+      // Map generic chart_type names (e.g. from programmatically-created charts)
+      // onto concrete template ids the builder actually renders. Without this a
+      // chart_type of "bar"/"line" matches no template → no query → the chart
+      // shows "Configure your chart to see preview".
+      if (chart.chart_type) {
+        const CHART_TYPE_ALIASES: Record<string, string> = {
+          bar: "bar_vertical",
+          column: "bar_vertical",
+          horizontal_bar: "bar_horizontal",
+          stacked_bar: "stacked_bar_vertical",
+          line: "line_multi_series",
+          area: "time_series_area",
+          number: "big_number",
+          kpi: "big_number",
+          map: "world_map",
+          choropleth: "world_map",
+        };
+        const resolved = CHART_TYPE_ALIASES[chart.chart_type] || chart.chart_type;
+        setChartType(resolved as ChartKind);
+      }
 
       const mergedAdv = chart.viz_config
         ? mergeAdvancedOptions(chart.viz_config.echarts_option || chart.viz_config)
