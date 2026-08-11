@@ -58,10 +58,10 @@ interface SourceOption {
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const DEFAULT_SUGGESTIONS = [
-  "Show total confirmed cases by country",
-  "Top 10 countries by total deaths",
-  "NYC taxi trips by borough",
-  "Trend of new cases over time",
+  "Top models by Arena ELO",
+  "Energy consumption by country",
+  "Which model has the best MMLU score",
+  "Renewables share trend over time",
 ];
 
 const EMPTY_SUGGESTIONS = [
