@@ -805,7 +805,7 @@ export default function DatasetDetailPage() {
   }
 
   return (
-    <div className="page-shell">
+    <div className="page-shell" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
       {/* ── Header card — matches dashboard view style ── */}
       <header style={{
         background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 12,
@@ -970,9 +970,9 @@ export default function DatasetDetailPage() {
       )}
 
       {!isLoading && !error && dataset && (
-        <>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", gap: 12 }}>
           {/* Key Info and Metrics */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, flexShrink: 0 }}>
             {/* Dataset Info */}
             <div className="card" style={{ padding: "18px 20px", border: "1px solid var(--border)", borderRadius: 12 }}>
               <h3 style={{ fontSize: 13, fontWeight: 700, color: "var(--text-muted)", margin: "0 0 14px 0", textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: 8 }}>
@@ -1035,7 +1035,7 @@ export default function DatasetDetailPage() {
             details.schema-card summary:hover { background: var(--bg-hover); }
             details.schema-card summary:hover .schema-chevron-box { border-color: var(--accent); color: var(--accent); }
           `}</style>
-          <details className="card schema-card" style={{ marginBottom: 16, border: "1px solid var(--border)", borderRadius: 12 }}>
+          <details className="card schema-card" style={{ flexShrink: 0, border: "1px solid var(--border)", borderRadius: 12 }}>
             <summary style={{
               padding: "14px 16px",
               cursor: "pointer",
@@ -1151,7 +1151,7 @@ export default function DatasetDetailPage() {
           </details>
 
           {/* Data Preview */}
-          <div className="card" style={{ padding: "18px 20px", border: "1px solid var(--border)", borderRadius: 12 }}>
+          <div className="card" style={{ padding: "18px 20px", border: "1px solid var(--border)", borderRadius: 12, flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
             <h3 style={{ fontSize: 13, fontWeight: 700, color: "var(--text-muted)", margin: "0 0 14px 0", textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: 8 }}>
               <i className="fas fa-eye" style={{ fontSize: 12, color: "var(--accent)", opacity: 0.7 }} />
               Data Preview <span style={{ fontWeight: 500, fontSize: 12 }}>(top 100 rows)</span>
@@ -1164,7 +1164,7 @@ export default function DatasetDetailPage() {
               <p className="page-empty-body">No rows returned.</p>
             )}
             {!isLoadingPreview && !previewError && previewColumns.length > 0 && (
-              <div className="dataset-preview-container" style={{ maxHeight: 400, overflowY: "auto", borderRadius: 8, border: "1px solid var(--border)" }}>
+              <div className="dataset-preview-container" style={{ flex: 1, overflowY: "auto", borderRadius: 8, border: "1px solid var(--border)", minHeight: 0 }}>
                 <table className="results-table" style={{ width: "100%", fontSize: 12 }}>
                   <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
                     <tr style={{ background: "var(--bg-elevated)" }}>
@@ -1204,7 +1204,7 @@ export default function DatasetDetailPage() {
               </div>
             )}
           </div>
-        </>
+        </div>
       )}
     </div>
   );
