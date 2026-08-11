@@ -1012,7 +1012,12 @@ export default function DatasetDetailPage() {
           </div>
 
           {/* Schema and Dimensions - Collapsible */}
-          <details className="card" style={{ marginBottom: 16 }}>
+          <style>{`
+            details.schema-card summary::-webkit-details-marker { display: none; }
+            details.schema-card[open] .schema-chevron { transform: rotate(180deg); }
+            details.schema-card summary:hover { background: var(--bg-hover); }
+          `}</style>
+          <details className="card schema-card" style={{ marginBottom: 16 }}>
             <summary style={{
               padding: "14px 16px",
               cursor: "pointer",
@@ -1024,10 +1029,22 @@ export default function DatasetDetailPage() {
               fontSize: 15,
               color: "var(--text-primary)",
               userSelect: "none",
-              letterSpacing: "-0.01em"
+              letterSpacing: "-0.01em",
+              borderRadius: 10,
+              transition: "background 0.15s",
             }}>
-              <span>Schema & Dimensions <span style={{ color: "var(--text-muted)", fontWeight: 500, fontSize: 14 }}>({schemaColumns?.length || 0} columns, {dataset.dimensions?.length || 0} joins)</span></span>
-              <i className="fas fa-chevron-down" style={{ fontSize: 12, color: "var(--text-muted)", transition: "transform 0.2s" }}></i>
+              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <i className="fas fa-table" style={{ fontSize: 13, color: "var(--accent)", opacity: 0.7 }} />
+                Schema & Dimensions
+                <span style={{ color: "var(--text-muted)", fontWeight: 500, fontSize: 13 }}>({schemaColumns?.length || 0} columns, {dataset.dimensions?.length || 0} joins)</span>
+              </span>
+              <div style={{
+                width: 26, height: 26, borderRadius: 6,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                background: "var(--bg-primary)", border: "1px solid var(--border)",
+              }}>
+                <i className="fas fa-chevron-down schema-chevron" style={{ fontSize: 10, color: "var(--text-muted)", transition: "transform 0.2s" }} />
+              </div>
             </summary>
 
             <div style={{ borderTop: "1px solid var(--border)", padding: 16 }}>
