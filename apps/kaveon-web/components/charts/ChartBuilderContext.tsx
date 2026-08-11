@@ -424,18 +424,61 @@ export function buildEChartsOptionsFromQueryResult(
     }
     case "scatter":
     case "bubble": {
-      const xIndex = 0;
-      const yIndex = 1;
-      const scatterData = rows.map((r) => [r[xIndex], r[yIndex]]);
+      // Honor the configured axes (x_axis/y_axis) and optional bubble size +
+      // point label columns, instead of blindly using columns 0/1 (which breaks
+      // when column 0 is a text label like "country").
+      const idxOf = (name?: string) => (name ? columns.indexOf(name) : -1);
+      let sx = idxOf(queryConfig?.x_axis);
+      let sy = idxOf(queryConfig?.y_axis);
+      const sizeIndex = idxOf(queryConfig?.size_column);
+      const labelIndex = idxOf(queryConfig?.label_column);
+      // Fallback: first columns that actually hold numbers (skip label columns).
+      if (sx < 0 || sy < 0) {
+        const numericCols = columns
+          .map((_, i) => i)
+          .filter((i) => rows.some((r) => r[i] != null && r[i] !== "" && !Number.isNaN(Number(r[i]))));
+        if (sx < 0) sx = numericCols[0] ?? 0;
+        if (sy < 0) sy = numericCols.find((i) => i !== sx) ?? 1;
+      }
+
+      const sizeVals = sizeIndex >= 0 ? rows.map((r) => Number(r[sizeIndex]) || 0) : [];
+      const sMin = sizeVals.length ? Math.min(...sizeVals) : 0;
+      const sMax = sizeVals.length ? Math.max(...sizeVals) : 0;
+      const baseSize = (advancedOptions as any)?.symbolSize ?? 12;
+      const scaleSize = (v: number) =>
+        sizeIndex < 0 || sMax === sMin ? baseSize : 8 + ((v - sMin) / (sMax - sMin)) * 42; // 8–50px
+
+      const scatterData = rows.map((r) => {
+        const point: any[] = [Number(r[sx]), Number(r[sy])];
+        if (sizeIndex >= 0) point.push(Number(r[sizeIndex]) || 0);
+        if (labelIndex >= 0) point.push(r[labelIndex]);
+        return point;
+      });
+
       return {
         ...common,
-        xAxis: { type: "value", name: columns[xIndex] },
-        yAxis: { type: "value", name: columns[yIndex] },
+        tooltip: {
+          trigger: "item",
+          formatter: (p: any) => {
+            const d = p.data as any[];
+            const lbl = labelIndex >= 0 ? `<b>${d[d.length - 1]}</b><br/>` : "";
+            let s = `${lbl}${columns[sx]}: ${d[0]}<br/>${columns[sy]}: ${d[1]}`;
+            if (sizeIndex >= 0) s += `<br/>${columns[sizeIndex]}: ${d[2]}`;
+            return s;
+          },
+        },
+        xAxis: { type: "value", name: columns[sx], nameLocation: "middle", nameGap: 28, scale: true },
+        yAxis: { type: "value", name: columns[sy], scale: true },
         series: [
           {
             type: "scatter",
             data: scatterData,
-            symbolSize: 10,
+            symbolSize: sizeIndex >= 0 ? (d: any[]) => scaleSize(Number(d[2])) : baseSize,
+            itemStyle: { opacity: (advancedOptions as any)?.pointOpacity ?? 0.8 },
+            label:
+              labelIndex >= 0 && (advancedOptions as any)?.showDataLabels
+                ? { show: true, position: "top", fontSize: 10, formatter: (p: any) => { const d = p.data as any[]; return d[d.length - 1]; } }
+                : undefined,
           },
         ],
       };
@@ -1621,7 +1664,11 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         ...option,
         series: option.series.map((s: any) => {
           const updated: any = { ...s };
-          if (ctOpts.symbolSize !== undefined) updated.symbolSize = Number(ctOpts.symbolSize);
+          // Don't clobber a bubble-size function (data-driven point size) with a
+          // fixed manual size — only apply the manual size to plain scatters.
+          if (ctOpts.symbolSize !== undefined && typeof s.symbolSize !== "function") {
+            updated.symbolSize = Number(ctOpts.symbolSize);
+          }
           if (ctOpts.pointOpacity !== undefined) {
             updated.itemStyle = { ...s.itemStyle, opacity: Number(ctOpts.pointOpacity) };
           }
@@ -2230,24 +2277,56 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
       }
       case "scatter":
       case "bubble": {
-        const xIdx = 0;
-        const yIdx = Math.min(1, columns.length - 1);
-        const sizeIdx = chartKind === "bubble" && columns.length >= 3 ? 2 : -1;
+        // Map columns by TYPE rather than blindly using 0/1: the first
+        // non-numeric column is the point label (e.g. country); numeric columns
+        // are x, y and (optionally) a 3rd = bubble size, in selection order.
+        // A raw scatter SELECT is typically (label, x, y[, size]) — using col 0
+        // as x plotted the text label as a NaN x, which broke the chart.
+        const isNumericCol = (i: number) =>
+          rows.some((r) => r[i] != null && r[i] !== "" && !Number.isNaN(Number(r[i])));
+        const labelIdx = columns.findIndex((_, i) => !isNumericCol(i));
+        const numericIdx = columns.map((_, i) => i).filter((i) => i !== labelIdx && isNumericCol(i));
+        const xIdx = numericIdx[0] ?? 0;
+        const yIdx = numericIdx[1] ?? Math.min(1, columns.length - 1);
+        const sizeIdx = numericIdx[2] ?? -1; // 3rd numeric column → bubble size
+
+        const sizeVals = sizeIdx >= 0 ? rows.map((r) => Number(r[sizeIdx]) || 0) : [];
+        const sMin = sizeVals.length ? Math.min(...sizeVals) : 0;
+        const sMax = sizeVals.length ? Math.max(...sizeVals) : 0;
+        const scaleSize = (v: number) =>
+          sizeIdx < 0 || sMax === sMin ? 14 : 8 + ((v - sMin) / (sMax - sMin)) * 42; // 8–50px
+
         const scatterData = rows.map((r) => {
-          const x = Number(r[xIdx]);
-          const y = Number(r[yIdx]);
-          return sizeIdx >= 0 ? [x, y, Number(r[sizeIdx] ?? 1)] : [x, y];
+          const pt: any[] = [Number(r[xIdx]), Number(r[yIdx])];
+          if (sizeIdx >= 0) pt.push(Number(r[sizeIdx]) || 0);
+          if (labelIdx >= 0) pt.push(r[labelIdx]);
+          return pt;
         });
+
         return {
           ...common,
-          xAxis: { type: "value", name: columns[xIdx], nameLocation: "center", nameGap: 30 },
-          yAxis: { type: "value", name: columns[yIdx] },
+          tooltip: {
+            trigger: "item",
+            appendToBody: true,
+            formatter: (p: any) => {
+              const d = p.data as any[];
+              const lbl = labelIdx >= 0 ? `<b>${d[d.length - 1]}</b><br/>` : "";
+              let s = `${lbl}${columns[xIdx]}: ${d[0]}<br/>${columns[yIdx]}: ${d[1]}`;
+              if (sizeIdx >= 0) s += `<br/>${columns[sizeIdx]}: ${d[2]}`;
+              return s;
+            },
+          },
+          xAxis: { type: "value", name: columns[xIdx], nameLocation: "center", nameGap: 30, scale: true },
+          yAxis: { type: "value", name: columns[yIdx], scale: true },
           series: [{
             type: "scatter",
             data: scatterData,
-            symbolSize: sizeIdx >= 0
-              ? (d: number[]) => Math.max(8, Math.sqrt(Math.abs(d[2] || 1)) * 4)
-              : 10,
+            symbolSize: sizeIdx >= 0 ? (d: any[]) => scaleSize(Number(d[2])) : 14,
+            itemStyle: { opacity: 0.8 },
+            label:
+              labelIdx >= 0 && (advancedOptions as any)?.showDataLabels
+                ? { show: true, position: "top", fontSize: 10, formatter: (p: any) => { const d = p.data as any[]; return d[d.length - 1]; } }
+                : undefined,
           }],
         };
       }
