@@ -1016,6 +1016,7 @@ export default function DatasetDetailPage() {
             details.schema-card summary::-webkit-details-marker { display: none; }
             details.schema-card[open] .schema-chevron { transform: rotate(180deg); }
             details.schema-card summary:hover { background: var(--bg-hover); }
+            details.schema-card summary:hover .schema-chevron-box { border-color: var(--accent); color: var(--accent); }
           `}</style>
           <details className="card schema-card" style={{ marginBottom: 16 }}>
             <summary style={{
@@ -1038,12 +1039,13 @@ export default function DatasetDetailPage() {
                 Schema & Dimensions
                 <span style={{ color: "var(--text-muted)", fontWeight: 500, fontSize: 13 }}>({schemaColumns?.length || 0} columns, {dataset.dimensions?.length || 0} joins)</span>
               </span>
-              <div style={{
+              <div className="schema-chevron-box" style={{
                 width: 26, height: 26, borderRadius: 6,
                 display: "flex", alignItems: "center", justifyContent: "center",
                 background: "var(--bg-primary)", border: "1px solid var(--border)",
+                transition: "border-color 0.15s, color 0.15s",
               }}>
-                <i className="fas fa-chevron-down schema-chevron" style={{ fontSize: 10, color: "var(--text-muted)", transition: "transform 0.2s" }} />
+                <i className="fas fa-chevron-down schema-chevron" style={{ fontSize: 10, color: "inherit", transition: "transform 0.2s" }} />
               </div>
             </summary>
 
