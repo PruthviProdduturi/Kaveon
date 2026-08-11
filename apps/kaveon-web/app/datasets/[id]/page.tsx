@@ -437,6 +437,8 @@ export default function DatasetDetailPage() {
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewSortColumnIndex, setPreviewSortColumnIndex] = useState<number | null>(null);
   const [previewSortDirection, setPreviewSortDirection] = useState<"asc" | "desc">("asc");
+  const [buildingContext, setBuildingContext] = useState(false);
+  const [contextStatus, setContextStatus] = useState<{ ok: boolean; message: string } | null>(null);
 
   // For the Schema card we want to show ALL columns, even when
   // multiple fact columns map to the same dimension table.
@@ -754,6 +756,42 @@ export default function DatasetDetailPage() {
     }
   };
 
+  const handleBuildContext = async () => {
+    if (!dataset || buildingContext) return;
+    setBuildingContext(true);
+    setContextStatus(null);
+    try {
+      // Gather all tables: fact table + dimension tables
+      const tables = [dataset.table_name];
+      if (dataset.dimensions) {
+        for (const dim of dataset.dimensions) {
+          const tbl = (dim as any).dimension_table || (dim as any).table_name;
+          if (tbl && !tables.includes(tbl)) tables.push(tbl);
+        }
+      }
+      const res = await msalFetch(`${API_BASE}/api/v1/context/build`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          database: dataset.database_name || "",
+          schema_name: dataset.schema_name || "public",
+          tables,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.supported !== false) {
+        setContextStatus({ ok: true, message: `Context built: ${data.elements} elements across ${data.tables_profiled} tables` });
+      } else {
+        setContextStatus({ ok: false, message: data.reason || data.detail || "Failed to build context" });
+      }
+    } catch (e) {
+      setContextStatus({ ok: false, message: e instanceof Error ? e.message : "Failed to build context" });
+    } finally {
+      setBuildingContext(false);
+      setTimeout(() => setContextStatus(null), 8000);
+    }
+  };
+
   if (isLoading) {
     return <LoadingOverlay />;
   }
@@ -840,6 +878,20 @@ export default function DatasetDetailPage() {
               <button
                 type="button"
                 className="icon-button"
+                onClick={handleBuildContext}
+                disabled={buildingContext}
+                title="Build context for Adaptive Context Routing"
+                style={{
+                  width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center",
+                  opacity: buildingContext ? 0.5 : 1, cursor: buildingContext ? "not-allowed" : "pointer",
+                }}
+              >
+                <i className={buildingContext ? "fas fa-spinner fa-spin" : "fas fa-brain"} aria-hidden="true" style={{ fontSize: 14 }} />
+                <span className="sr-only">Build Context</span>
+              </button>
+              <button
+                type="button"
+                className="icon-button"
                 onClick={handleToggleFavorite}
                 disabled={isTogglingFavorite}
                 title={dataset.favorite ? "Remove from favorites" : "Add to favorites"}
@@ -871,6 +923,19 @@ export default function DatasetDetailPage() {
           )}
         </div>
       </header>
+
+      {contextStatus && (
+        <div style={{
+          margin: "0 24px 12px", padding: "10px 16px", borderRadius: 10,
+          display: "flex", alignItems: "center", gap: 10, fontSize: 13,
+          background: contextStatus.ok ? "color-mix(in srgb, var(--success) 10%, var(--bg-surface))" : "color-mix(in srgb, var(--error) 10%, var(--bg-surface))",
+          border: `1px solid ${contextStatus.ok ? "color-mix(in srgb, var(--success) 30%, transparent)" : "color-mix(in srgb, var(--error) 30%, transparent)"}`,
+          color: contextStatus.ok ? "var(--success)" : "var(--error)",
+        }}>
+          <i className={`fas ${contextStatus.ok ? "fa-check-circle" : "fa-exclamation-circle"}`} />
+          {contextStatus.message}
+        </div>
+      )}
 
       {isLoading && <LoadingOverlay />}
       {error && !isLoading && (

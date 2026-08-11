@@ -22,11 +22,18 @@ interface ChartData {
   sql: string;
 }
 
+interface RouteMeta {
+  route: "context" | "hybrid" | "query" | "direct";
+  durationMs?: number;
+  elementsChecked?: number;
+}
+
 interface Message {
   role: "user" | "assistant";
   content: string;
   loading?: boolean;
   chart?: ChartData;
+  routeMeta?: RouteMeta;
 }
 
 interface PageData {
@@ -362,12 +369,84 @@ export default function Home() {
       }
 
       if (schema && parsed) {
+        const dbName = srcDb || "kaveon";
+
+        // ── Try Adaptive Context Routing first ──────────────────────────────
+        let usedAcr = false;
+        const t0 = performance.now();
+        try {
+          const acrRes = await msalFetch("/api/v1/context/ask", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              question: text.trim(),
+              database: dbName,
+              sql: parsed.sql,
+              schema_name: "public",
+            }),
+          });
+
+          if (acrRes.ok) {
+            const acr = await acrRes.json();
+            const durationMs = Math.round(performance.now() - t0);
+
+            // Profile-synthesized answer (no query executed)
+            if (acr.route === "context" && acr.answer && !acr.result) {
+              usedAcr = true;
+              setMessages(prev => [...prev.slice(0, -1), {
+                role: "assistant",
+                content: `${acr.answer.explanation || acr.answer.value}`,
+                routeMeta: { route: "context", durationMs, elementsChecked: Object.keys(acr.validity || {}).length },
+              }]);
+              return;
+            }
+
+            // Context-routed with cached result
+            if (acr.route === "context" && acr.result) {
+              usedAcr = true;
+              const rows = acr.result.rows || [];
+              const columns = acr.result.columns || [];
+              if (rows.length > 0) {
+                const summary = generateInsight(rows, columns, parsed, text.trim());
+                setMessages(prev => [...prev.slice(0, -1), {
+                  role: "assistant",
+                  content: summary,
+                  chart: { rows, columns, chartType: parsed.chartType, xAxis: parsed.xAxis, yAxis: parsed.yAxis, title: parsed.title, sql: parsed.sql },
+                  routeMeta: { route: "context", durationMs, elementsChecked: Object.keys(acr.validity || {}).length },
+                }]);
+                return;
+              }
+            }
+
+            // Live query path — ACR executed the SQL and refreshed elements
+            if ((acr.route === "query" || acr.route === "hybrid") && acr.result) {
+              usedAcr = true;
+              const rows = acr.result.rows || [];
+              const columns = acr.result.columns || [];
+              if (rows.length > 0) {
+                const summary = generateInsight(rows, columns, parsed, text.trim());
+                setMessages(prev => [...prev.slice(0, -1), {
+                  role: "assistant",
+                  content: summary,
+                  chart: { rows, columns, chartType: parsed.chartType, xAxis: parsed.xAxis, yAxis: parsed.yAxis, title: parsed.title, sql: parsed.sql },
+                  routeMeta: { route: acr.route, durationMs, elementsChecked: Object.keys(acr.validity || {}).length },
+                }]);
+                return;
+              }
+            }
+          }
+        } catch {
+          // ACR not available (no context built, or endpoint error) — fall through to direct
+        }
+
+        // ── Direct SQL execution (fallback) ─────────────────────────────────
+        if (!usedAcr) {
           const execRes = await msalFetch("/api/v1/sql/execute", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               sql_text: parsed.sql,
-              database: srcDb || "neondb",
+              database: dbName,
               source: "chat",
             }),
           });
@@ -378,12 +457,12 @@ export default function Home() {
             const columns = execData.columns || execData.column_names || [];
 
             if (rows.length > 0) {
-              console.log("[DEBUG] Chart data:", { columns, xAxis: parsed.xAxis, yAxis: parsed.yAxis, chartType: parsed.chartType, rowSample: rows[0], rowCount: rows.length });
               const summary = generateInsight(rows, columns, parsed, text.trim());
               setMessages(prev => [...prev.slice(0, -1), {
                 role: "assistant",
                 content: summary,
                 chart: { rows, columns, chartType: parsed.chartType, xAxis: parsed.xAxis, yAxis: parsed.yAxis, title: parsed.title, sql: parsed.sql },
+                routeMeta: { route: "direct", durationMs: Math.round(performance.now() - t0) },
               }]);
               return;
             }
@@ -394,6 +473,7 @@ export default function Home() {
             }]);
             return;
           }
+        }
       }
 
       // Parser couldn't handle it — show helpful suggestions
@@ -562,6 +642,22 @@ export default function Home() {
                           title={m.chart.title}
                           sql={m.chart.sql}
                         />
+                      )}
+                      {m.routeMeta && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 10.5, color: "var(--text-faint)" }}>
+                          <span style={{
+                            display: "inline-flex", alignItems: "center", gap: 4,
+                            padding: "2px 8px", borderRadius: 10,
+                            background: m.routeMeta.route === "context" ? "rgba(16,185,129,0.1)" : m.routeMeta.route === "direct" ? "rgba(255,255,255,0.04)" : "rgba(74,158,232,0.1)",
+                            color: m.routeMeta.route === "context" ? "#10b981" : m.routeMeta.route === "direct" ? "var(--text-faint)" : "#4A9EE8",
+                            fontWeight: 600,
+                          }}>
+                            <i className={`fas ${m.routeMeta.route === "context" ? "fa-bolt" : m.routeMeta.route === "direct" ? "fa-database" : "fa-route"}`} style={{ fontSize: 8 }} />
+                            {m.routeMeta.route === "context" ? "From context" : m.routeMeta.route === "direct" ? "Live query" : m.routeMeta.route === "hybrid" ? "Hybrid" : "Live query"}
+                          </span>
+                          {m.routeMeta.durationMs != null && <span>{m.routeMeta.durationMs}ms</span>}
+                          {m.routeMeta.elementsChecked != null && <span>&middot; {m.routeMeta.elementsChecked} elements</span>}
+                        </div>
                       )}
                     </>
                   )}
