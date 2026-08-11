@@ -105,6 +105,8 @@ function buildDatasetPreviewSql(dataset: DatasetDetail, rowLimit: number = 100):
   const schema = dataset.schema_name || "dbo";
   const table = dataset.table_name;
   const top = Math.max(1, Math.min(rowLimit, 1000));
+  // PostgreSQL uses "schema"."table" LIMIT N; SQL Server uses [schema].[table] TOP N
+  const isPg = schema === "public" || schema === "climate_energy" || (dataset.database_name || "").includes("postgres") || (dataset.database_name || "") === "kaveon";
 
   const filters = dataset.filters || [];
   const whereClauses: string[] = [];
@@ -316,7 +318,7 @@ function buildDatasetPreviewSql(dataset: DatasetDetail, rowLimit: number = 100):
     sources: sources.map(s => `${s.alias}.${s.columnName}`)
   })));
 
-  const factRef = `${quoteIdentifier(schema)}.${quoteIdentifier(table)}`;
+  const factRef = isPg ? `${schema}.${table}` : `${quoteIdentifier(schema)}.${quoteIdentifier(table)}`;
 
   let selectClause: string;
   if (modelColumns.length > 0) {
@@ -405,16 +407,20 @@ function buildDatasetPreviewSql(dataset: DatasetDetail, rowLimit: number = 100):
     selectClause = "*";
   }
 
-  let base = `SELECT TOP ${top} ${selectClause} FROM ${factRef}`;
+  let base = isPg
+    ? `SELECT ${selectClause} FROM ${factRef}`
+    : `SELECT TOP ${top} ${selectClause} FROM ${factRef}`;
   if (joinClauses.length > 0) {
     base = `${base} ${joinClauses.join(" ")}`;
   }
-  if (whereClauses.length === 0) {
-    console.log(`[Dataset Preview] Final query built (${joinedCount} JOINs, ${Object.keys(semanticToSources).length} COALESCE groups)`);
-    return base;
+  if (whereClauses.length > 0) {
+    base = `${base} WHERE ${whereClauses.join(" AND ")}`;
   }
-  console.log(`[Dataset Preview] Final query built (${joinedCount} JOINs, ${Object.keys(semanticToSources).length} COALESCE groups, ${whereClauses.length} WHERE filters)`);
-  return `${base} WHERE ${whereClauses.join(" AND ")}`;
+  if (isPg) {
+    base = `${base} LIMIT ${top}`;
+  }
+  console.log(`[Dataset Preview] Final query built (${joinedCount} JOINs, ${Object.keys(semanticToSources).length} COALESCE groups)`);
+  return base;
 }
 
 export default function DatasetDetailPage() {
