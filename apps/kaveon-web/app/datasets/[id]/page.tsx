@@ -962,33 +962,32 @@ export default function DatasetDetailPage() {
           {/* Key Info and Metrics */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
             {/* Dataset Info */}
-            <div className="card" style={{ padding: 16 }}>
+            <div className="card" style={{ padding: "18px 20px", border: "1px solid var(--border)", borderRadius: 12 }}>
+              <h3 style={{ fontSize: 13, fontWeight: 700, color: "var(--text-muted)", margin: "0 0 14px 0", textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: 8 }}>
+                <i className="fas fa-database" style={{ fontSize: 12, color: "var(--accent)", opacity: 0.7 }} />
+                Connection
+              </h3>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-                  <span style={{ color: "var(--text-muted)", fontSize: 13, minWidth: 100 }}>Database</span>
-                  <span style={{ fontWeight: 500, fontSize: 14, color: "var(--text-primary)" }}>{dataset.database_name || "(default)"}</span>
-                </div>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-                  <span style={{ color: "var(--text-muted)", fontSize: 13, minWidth: 100 }}>Schema</span>
-                  <span style={{ fontWeight: 500, fontSize: 14, color: "var(--text-primary)" }}>{dataset.schema_name || "(default)"}</span>
-                </div>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-                  <span style={{ color: "var(--text-muted)", fontSize: 13, minWidth: 100 }}>Table</span>
-                  <span style={{ fontWeight: 500, fontSize: 14, color: "var(--text-primary)" }}>
-                    {dataset.table_name || (dataset.sql_text ? <em style={{ color: "var(--text-muted)" }}>Virtual (SQL)</em> : "(none)")}
-                  </span>
-                </div>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-                  <span style={{ color: "var(--text-muted)", fontSize: 13, minWidth: 100 }}>Date column</span>
-                  <span style={{ fontWeight: 500, fontSize: 14, color: "var(--text-primary)" }}>{dataset.date_column || "(none)"}</span>
-                </div>
+                {[
+                  { label: "Database", value: dataset.database_name || "(default)", icon: "fa-server" },
+                  { label: "Schema", value: dataset.schema_name || "(default)", icon: "fa-folder" },
+                  { label: "Table", value: dataset.table_name || (dataset.sql_text ? "Virtual (SQL)" : "(none)"), icon: "fa-table" },
+                  { label: "Date column", value: dataset.date_column || "(none)", icon: "fa-calendar" },
+                ].map(({ label, value, icon }) => (
+                  <div key={label} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <i className={`fas ${icon}`} style={{ fontSize: 10, color: "var(--text-faint)", width: 14, textAlign: "center" }} />
+                    <span style={{ color: "var(--text-muted)", fontSize: 12.5, minWidth: 90 }}>{label}</span>
+                    <span style={{ fontWeight: 600, fontSize: 13, color: "var(--text-primary)", fontFamily: "var(--font-mono, monospace)" }}>{value}</span>
+                  </div>
+                ))}
               </div>
             </div>
 
             {/* Metrics */}
-            <div className="card" style={{ padding: 16 }}>
-              <h3 style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)", margin: "0 0 12px 0", letterSpacing: "-0.01em" }}>
-                Metrics {dataset.metrics && dataset.metrics.length > 0 && <span style={{ color: "var(--text-muted)", fontWeight: 500, fontSize: 14 }}>({dataset.metrics.length})</span>}
+            <div className="card" style={{ padding: "18px 20px", border: "1px solid var(--border)", borderRadius: 12 }}>
+              <h3 style={{ fontSize: 13, fontWeight: 700, color: "var(--text-muted)", margin: "0 0 14px 0", textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: 8 }}>
+                <i className="fas fa-calculator" style={{ fontSize: 12, color: "var(--accent)", opacity: 0.7 }} />
+                Metrics {dataset.metrics && dataset.metrics.length > 0 && <span style={{ fontWeight: 500, fontSize: 12 }}>({dataset.metrics.length})</span>}
               </h3>
               {dataset.metrics && dataset.metrics.length > 0 ? (
                 <div style={{ overflowY: "auto", maxHeight: 320 }}>
@@ -1024,7 +1023,7 @@ export default function DatasetDetailPage() {
             details.schema-card summary:hover { background: var(--bg-hover); }
             details.schema-card summary:hover .schema-chevron-box { border-color: var(--accent); color: var(--accent); }
           `}</style>
-          <details className="card schema-card" style={{ marginBottom: 16 }}>
+          <details className="card schema-card" style={{ marginBottom: 16, border: "1px solid var(--border)", borderRadius: 12 }}>
             <summary style={{
               padding: "14px 16px",
               cursor: "pointer",
@@ -1072,7 +1071,7 @@ export default function DatasetDetailPage() {
                         </thead>
                         <tbody>
                           {schemaColumns.map((col, idx) => {
-                            const label = col.semantic_type && col.semantic_type.toLowerCase() !== "time" ? col.semantic_type : col.column_name;
+                            const label = col.column_name;
                             let role = "";
                             let roleColor = "var(--text-muted)";
                             if (col.is_dimension) {
@@ -1140,9 +1139,10 @@ export default function DatasetDetailPage() {
           </details>
 
           {/* Data Preview */}
-          <div className="card" style={{ padding: 16 }}>
-            <h3 style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)", margin: "0 0 12px 0", letterSpacing: "-0.01em" }}>
-              Data Preview <span style={{ color: "var(--text-muted)", fontWeight: 500, fontSize: 14 }}>(top 100 rows)</span>
+          <div className="card" style={{ padding: "18px 20px", border: "1px solid var(--border)", borderRadius: 12 }}>
+            <h3 style={{ fontSize: 13, fontWeight: 700, color: "var(--text-muted)", margin: "0 0 14px 0", textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: 8 }}>
+              <i className="fas fa-eye" style={{ fontSize: 12, color: "var(--accent)", opacity: 0.7 }} />
+              Data Preview <span style={{ fontWeight: 500, fontSize: 12 }}>(top 100 rows)</span>
             </h3>
             {isLoadingPreview && <p className="muted">Loading preview…</p>}
             {previewError && !isLoadingPreview && (
