@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { loginRequest, getMsalInstance } from "../../../auth/msalConfig";
 
 import { API_BASE } from "../../../config";
 import { LoadingOverlay } from "../../../components/LoadingOverlay";
@@ -430,7 +429,7 @@ export default function DatasetDetailPage() {
   const [isEditingName, setIsEditingName] = useState(false);
   const [editNameValue, setEditNameValue] = useState("");
   const nameInputRef = useRef<HTMLInputElement>(null);
-  const [accessToken, setAccessToken] = useState<string>("");
+  const [accessToken] = useState<string>("proxy");
   const [previewColumns, setPreviewColumns] = useState<string[]>([]);
   const [previewRows, setPreviewRows] = useState<any[][]>([]);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
@@ -484,18 +483,7 @@ export default function DatasetDetailPage() {
     } catch { /* silent — name reverts on next load */ }
   };
 
-  // Acquire and cache access token once
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    const getToken = async () => {
-      const accounts = getMsalInstance().getAllAccounts();
-      if (accounts && accounts.length > 0) {
-        const result = await getMsalInstance().acquireTokenSilent({ ...loginRequest, account: accounts[0] });
-        setAccessToken(result.accessToken);
-      }
-    };
-    getToken();
-  }, [isAuthenticated]);
+  // Token no longer needed — NextAuth proxy handles auth via session cookie.
 
   useEffect(() => {
     if (!isAuthenticated || !datasetId || !accessToken) return;
