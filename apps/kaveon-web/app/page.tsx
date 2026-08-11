@@ -231,7 +231,7 @@ export default function Home() {
           }));
           const table = d.fact_table ? (d.schema_name ? `${d.schema_name}.${d.fact_table}` : d.fact_table) : d.table_name || "data";
           const src = sources.find(s => s.database_name === ds.database_name);
-          return { id: ds.id, name: ds.name, sourceId: src?.id, sourceName: src?.database_name, schema: { tableName: table, columns: cols, metrics } };
+          return { id: ds.id, name: ds.name, sourceId: src?.id, sourceName: src?.database_name || ds.database_name, schema: { tableName: table, columns: cols, metrics } };
         } catch { return null; }
       })
     ).then(results => {
@@ -344,6 +344,7 @@ export default function Home() {
     try {
       // Auto-find best matching dataset
       const match = findBestSchema(text.trim());
+      console.log("[Chat] Best schema match:", match ? { name: match.name, confidence: match.confidence, hasParsed: !!match.parsed, cols: match.schema.columns.length } : "none", "allSchemas:", allSchemasRef.current.length);
       const schema = match?.schema || datasetSchema;
       const srcId = match?.sourceId || selectedSource?.id;
       const srcDb = match?.sourceName || selectedSource?.database_name;
@@ -351,7 +352,7 @@ export default function Home() {
 
       // Fallback: if we matched a dataset by name but parser returned null,
       // build a simple SELECT query showing the data
-      if (schema && !parsed && match && match.confidence >= 0.3) {
+      if (schema && !parsed && match && match.confidence >= 0.2) {
         const numCols = schema.columns.filter(c => c.type === "number").slice(0, 2);
         const strCols = schema.columns.filter(c => c.type === "string").slice(0, 1);
         const dateCols = schema.columns.filter(c => c.type === "date").slice(0, 1);
