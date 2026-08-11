@@ -55,8 +55,8 @@ export default function AboutPage() {
     return () => container.removeEventListener("scroll", onScroll);
   }, []);
   const slides = [
-    { dark: "/showcase/dashboard-dark.png", light: "/showcase/dashboard-light.png", title: "COVID-19 Global Overview", desc: "World map, KPI cards, donut chart, cross-filtering" },
-    { dark: "/showcase/taxi-dark.png", light: "/showcase/taxi-light.png", title: "NYC Yellow Taxi \u00b7 Jan 2023", desc: "Borough map, 3M rides, zone analysis, trip metrics" },
+    { dark: "/showcase/dashboard-dark.png", light: "/showcase/dashboard-light.png", title: "Global Energy & Climate", desc: "188 countries — temperature anomaly vs energy consumption, renewables adoption" },
+    { dark: "/showcase/taxi-dark.png", light: "/showcase/taxi-light.png", title: "AI Model Arena", desc: "34 LLMs — Arena ELO rankings, benchmarks, pricing, head-to-head battles" },
   ];
 
   const B = "#4A9EE8";
@@ -273,7 +273,7 @@ export default function AboutPage() {
                 </div>
                 <div style={{ height: 1, background: "rgba(255,255,255,0.04)", margin: "8px 0" }} />
                 <div style={{ fontSize: 10, color: "#333", padding: "0 8px", marginBottom: 4 }}>RECENT</div>
-                {["COVID by country", "Revenue by region", "Top customers"].map(t => (
+                {["Energy consumption by country", "Top models by ELO", "Renewables share trend"].map(t => (
                   <div key={t} style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", fontSize: 11, color: "#444" }}>
                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
                     {t}
@@ -284,7 +284,7 @@ export default function AboutPage() {
               <div style={{ flex: 1, padding: "24px" }}>
                 <div style={{ display: "flex", gap: 10, marginBottom: 18, justifyContent: "flex-end" }}>
                   <div style={{ background: B, color: "#fff", padding: "10px 16px", borderRadius: "14px 4px 14px 14px", fontSize: 14 }}>
-                    Show confirmed cases by country
+                    Top models by Arena ELO
                   </div>
                   <div style={{ width: 24, height: 24, borderRadius: "50%", background: `linear-gradient(135deg, #6db3ed, #2d7dd2)`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: "#fff", flexShrink: 0 }}>P</div>
                 </div>
@@ -292,24 +292,24 @@ export default function AboutPage() {
                   <KaveonMark size={20} useDirectColor />
                   <div style={{ flex: 1 }}>
                     <p style={{ fontSize: 13, color: "#999", lineHeight: 1.7, margin: "0 0 12px" }}>
-                      Found <strong style={{ color: "#fff" }}>195</strong> results. Top 3: <strong style={{ color: "#fff" }}>United States</strong> (103.8M), <strong style={{ color: "#fff" }}>India</strong> (45.0M), <strong style={{ color: "#fff" }}>France</strong> (39.9M).
+                      Found <strong style={{ color: "#fff" }}>34</strong> models. Top 3: <strong style={{ color: "#fff" }}>o3</strong> (1402 ELO), <strong style={{ color: "#fff" }}>Gemini 2.5 Pro</strong> (1388), <strong style={{ color: "#fff" }}>Claude Opus 4</strong> (1380).
                     </p>
                     <div style={{ background: "#1a1a1a", borderRadius: 10, padding: "14px 18px 10px", border: "1px solid rgba(255,255,255,0.04)" }}>
-                      <div style={{ fontSize: 11, color: "#555", marginBottom: 8, fontWeight: 500 }}>Confirmed Cases by Country</div>
+                      <div style={{ fontSize: 11, color: "#555", marginBottom: 8, fontWeight: 500 }}>Arena ELO by Model</div>
                       <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 80 }}>
                         {[{h:80,c:B},{h:35,c:"#10b981"},{h:31,c:"#f59e0b"},{h:27,c:"#ef4444"},{h:25,c:"#8b5cf6"},{h:20,c:"#ec4899"},{h:19,c:"#06b6d4"},{h:16,c:"#f97316"},{h:15,c:"#6366f1"},{h:13,c:"#14b8a6"}].map((b,i) => (
                           <div key={i} style={{ flex: 1, height: b.h, background: b.c, borderRadius: "3px 3px 0 0", opacity: 0.8 }} />
                         ))}
                       </div>
                       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 5, fontSize: 8, color: "#333" }}>
-                        {["US","IN","FR","DE","BR","JP","KR","IT","UK","RU"].map(c => <span key={c}>{c}</span>)}
+                        {["o3","Gem2.5","Opus4","Grok3","Son4","R1","o1","DSv3","Mav","4o"].map(c => <span key={c}>{c}</span>)}
                       </div>
                     </div>
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginBottom: 18 }}>
                   <div style={{ background: B, color: "#fff", padding: "10px 16px", borderRadius: "14px 4px 14px 14px", fontSize: 14 }}>
-                    Show this on a world map
+                    Compare cost vs performance
                   </div>
                   <div style={{ width: 24, height: 24, borderRadius: "50%", background: "linear-gradient(135deg, #6db3ed, #2d7dd2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: "#fff", flexShrink: 0 }}>P</div>
                 </div>
@@ -317,7 +317,7 @@ export default function AboutPage() {
                   <KaveonMark size={20} useDirectColor />
                   <div style={{ flex: 1 }}>
                     <p style={{ fontSize: 13, color: "#999", lineHeight: 1.7, margin: "0 0 12px" }}>
-                      Here&#39;s the global distribution. Darker regions indicate higher case counts.
+                      DeepSeek V3 offers the best value at $0.27/1M tokens with 1318 ELO. Claude Opus 4 leads quality at 1380 ELO but costs $15/1M.
                     </p>
                     <div style={{ background: "#1a1a1a", borderRadius: 10, padding: "14px 18px", border: "1px solid rgba(255,255,255,0.04)", position: "relative", height: 100, display: "flex", alignItems: "center", justifyContent: "center" }}>
                       <div style={{ fontSize: 11, color: "#555", fontWeight: 500 }}>
@@ -578,33 +578,37 @@ export default function AboutPage() {
             <div style={{ padding: 16 }}>
               <div style={{ background: "#0a0a0a", borderRadius: 8, padding: "14px 16px", fontFamily: "'Fira Code', 'JetBrains Mono', monospace", fontSize: 12, lineHeight: 1.8, marginBottom: 12 }}>
                 <span style={{ color: "#c678dd" }}>SELECT</span>{" "}
-                <span style={{ color: "#e5c07b" }}>country</span>{", "}
-                <span style={{ color: "#61afef" }}>SUM</span>{"("}
-                <span style={{ color: "#e5c07b" }}>confirmed</span>{") "}
-                <span style={{ color: "#c678dd" }}>AS</span>{" "}
-                <span style={{ color: "#e5c07b" }}>total</span><br />
+                <span style={{ color: "#e5c07b" }}>model_name</span>{", "}
+                <span style={{ color: "#e5c07b" }}>provider</span>{", "}<br />
+                {"       "}
+                <span style={{ color: "#e5c07b" }}>arena_elo</span>{", "}
+                <span style={{ color: "#e5c07b" }}>mmlu</span>{", "}
+                <span style={{ color: "#e5c07b" }}>input_cost</span><br />
                 <span style={{ color: "#c678dd" }}>FROM</span>{" "}
-                <span style={{ color: "#98c379" }}>covid_by_country</span><br />
-                <span style={{ color: "#c678dd" }}>GROUP BY</span>{" "}
-                <span style={{ color: "#e5c07b" }}>country</span><br />
+                <span style={{ color: "#98c379" }}>ai_benchmarks.leaderboard</span><br />
+                <span style={{ color: "#c678dd" }}>WHERE</span>{" "}
+                <span style={{ color: "#e5c07b" }}>arena_elo</span>{" "}
+                <span style={{ color: "#c678dd" }}>IS NOT NULL</span><br />
                 <span style={{ color: "#c678dd" }}>ORDER BY</span>{" "}
-                <span style={{ color: "#e5c07b" }}>total</span>{" "}
+                <span style={{ color: "#e5c07b" }}>arena_elo</span>{" "}
                 <span style={{ color: "#c678dd" }}>DESC</span><br />
                 <span style={{ color: "#c678dd" }}>LIMIT</span>{" "}
                 <span style={{ color: "#d19a66" }}>10</span>{";"}
               </div>
               <div style={{ fontSize: 10, color: "#555", marginBottom: 8, display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ color: "#10b981" }}>&#x2713;</span> 195 rows &middot; 42ms &middot; cached
+                <span style={{ color: "#10b981" }}>&#x2713;</span> 22 rows &middot; 8ms &middot; cached
               </div>
               <div style={{ background: "#0a0a0a", borderRadius: 8, overflow: "hidden" }}>
-                <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", fontSize: 10, borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-                  <div style={{ padding: "6px 12px", color: "#666", fontWeight: 600 }}>country</div>
-                  <div style={{ padding: "6px 12px", color: "#666", fontWeight: 600 }}>total</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr", fontSize: 10, borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                  <div style={{ padding: "6px 12px", color: "#666", fontWeight: 600 }}>model_name</div>
+                  <div style={{ padding: "6px 12px", color: "#666", fontWeight: 600 }}>arena_elo</div>
+                  <div style={{ padding: "6px 12px", color: "#666", fontWeight: 600 }}>input_cost</div>
                 </div>
-                {[["United States", "103,802,702"], ["India", "45,035,393"], ["France", "39,866,718"], ["Germany", "38,437,756"], ["Brazil", "37,519,960"]].map(([c, v]) => (
-                  <div key={c} style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", fontSize: 11, borderBottom: "1px solid rgba(255,255,255,0.02)" }}>
+                {[["o3", "1402", "$10.00"], ["Gemini 2.5 Pro", "1388", "$1.25"], ["Claude Opus 4", "1380", "$15.00"], ["Grok 3", "1376", "$2.00"], ["DeepSeek R1", "1358", "$0.55"]].map(([c, v, p]) => (
+                  <div key={c} style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr", fontSize: 11, borderBottom: "1px solid rgba(255,255,255,0.02)" }}>
                     <div style={{ padding: "5px 12px", color: "#999" }}>{c}</div>
                     <div style={{ padding: "5px 12px", color: "#777" }}>{v}</div>
+                    <div style={{ padding: "5px 12px", color: "#777" }}>{p}</div>
                   </div>
                 ))}
               </div>
@@ -652,7 +656,7 @@ export default function AboutPage() {
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               {[
                 { label: "Question", sub: "\"How many deaths in the US?\"", color: "#e2e8f0", bg: "rgba(255,255,255,0.04)" },
-                { label: "Element Matching", sub: "covid_daily.deaths, covid_daily.country", color: "#8b5cf6", bg: "rgba(139,92,246,0.06)" },
+                { label: "Element Matching", sub: "leaderboard.arena_elo, leaderboard.provider", color: "#8b5cf6", bg: "rgba(139,92,246,0.06)" },
                 { label: "Validity Check", sub: "deaths: 0.92  ·  country: 0.88  ·  min: 0.88", color: "#10b981", bg: "rgba(16,185,129,0.06)" },
                 { label: "Route: Context", sub: "Score 0.88 ≥ 0.70 threshold — answer from cache", color: B, bg: `${B}08` },
                 { label: "Answer", sub: "1,127,152 deaths · 42ms · no query executed", color: "#f59e0b", bg: "rgba(245,158,11,0.06)" },
