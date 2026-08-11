@@ -565,12 +565,17 @@ export default function DatasetDetailPage() {
           }
         }
 
-        const qualifiedTable = dataset.schema_name && dataset.schema_name !== "dbo"
+        const qualifiedTable = dataset.schema_name && dataset.schema_name !== "dbo" && dataset.schema_name !== "public"
           ? `${dataset.schema_name}.${dataset.table_name}`
           : dataset.table_name;
+        const isPg = dataset.database_name === "kaveon" || dataset.schema_name === "climate_energy" || dataset.schema_name === "public";
+        // For PostgreSQL: simple SELECT * LIMIT — bypass the complex dimension JOIN builder
+        // which generates SQL Server syntax and breaks on PG
         const sql = dataset.sql_text && !dataset.table_name
           ? `SELECT * FROM (${dataset.sql_text.replace(/;\s*$/, "").trim()}) AS _preview LIMIT 100`
-          : buildDatasetPreviewSql(dataset, 100);
+          : isPg
+            ? `SELECT * FROM ${qualifiedTable} LIMIT 100`
+            : buildDatasetPreviewSql(dataset, 100);
 
         // Build list of tables used in this query for query history
         const tablesUsed = dataset.sql_text && !dataset.table_name
