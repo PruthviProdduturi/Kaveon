@@ -156,20 +156,12 @@ export default function AboutPage() {
         {/* Subtle grid */}
         <div style={{ position: "absolute", inset: 0, backgroundImage: "linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px)", backgroundSize: "80px 80px", pointerEvents: "none", maskImage: "radial-gradient(ellipse 70% 60% at 50% 40%, black 20%, transparent 100%)" }} />
 
-        {/* Beam — top to top of logo, ends in glow */}
+        {/* Beam — short, top only */}
         <div style={{
           position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)",
-          width: 1, height: "calc(50% - 120px)",
-          background: `linear-gradient(180deg, transparent 0%, ${B}15 30%, ${B}25 100%)`,
+          width: 1, height: "20%",
+          background: `linear-gradient(180deg, ${B}30, ${B}10, transparent)`,
           pointerEvents: "none", zIndex: 1,
-        }} />
-        {/* Glow at beam endpoint (top of logo) */}
-        <div style={{
-          position: "absolute", top: "calc(50% - 120px)", left: "50%", transform: "translate(-50%, -50%)",
-          width: 100, height: 100, borderRadius: "50%",
-          background: `radial-gradient(circle, ${B}15 0%, ${B}06 50%, transparent 70%)`,
-          pointerEvents: "none", zIndex: 1,
-          filter: "blur(10px)",
         }} />
 
         <div style={{ position: "relative", maxWidth: 900, zIndex: 2 }}>
@@ -200,7 +192,7 @@ export default function AboutPage() {
             fontSize: "clamp(18px, 2.2vw, 22px)", color: "#888", lineHeight: 1.7,
             maxWidth: 640, margin: "0 auto 20px", fontWeight: 400,
           }}>
-            Connect your databases. Ask anything. Get instant answers with interactive charts — powered by a deterministic engine, not an LLM.
+            Connect your databases. Ask anything. Get instant answers with interactive charts — powered by a deterministic engine,<br />not an LLM.
           </p>
 
           {/* Subtle accent line */}
