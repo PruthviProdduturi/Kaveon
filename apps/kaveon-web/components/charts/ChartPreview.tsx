@@ -582,6 +582,12 @@ const WorldMapRenderer: React.FC<{
       if (numFmt === "m") return `${(v / 1e6).toFixed(1)}M`;
       if (numFmt === "b") return `${(v / 1e9).toFixed(1)}B`;
       if (numFmt === "t") return `${(v / 1e12).toFixed(1)}T`;
+      // Default: auto-abbreviate large numbers so map labels/tooltips stay readable.
+      const a = Math.abs(v);
+      if (a >= 1e12) return `${(v / 1e12).toFixed(1)}T`;
+      if (a >= 1e9) return `${(v / 1e9).toFixed(1)}B`;
+      if (a >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
+      if (a >= 1e3) return `${(v / 1e3).toFixed(1)}K`;
       return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
     };
 

@@ -33,6 +33,49 @@ export const DEFAULT_ADVANCED_OPTIONS = {
 };
 
 /**
+ * Abbreviate large numbers as K / M / B / T so charts and dashboards stay
+ * readable (47,072,000 -> "47.1M"). Values below 1,000 are shown as-is (so
+ * percentages, temperatures, ratios keep their precision).
+ */
+export function abbreviateNumber(v: unknown): string {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return String(v ?? "");
+  const abs = Math.abs(n);
+  const trim = (s: string) => s.replace(/\.0$/, "");
+  if (abs >= 1e12) return trim((n / 1e12).toFixed(1)) + "T";
+  if (abs >= 1e9) return trim((n / 1e9).toFixed(1)) + "B";
+  if (abs >= 1e6) return trim((n / 1e6).toFixed(1)) + "M";
+  if (abs >= 1e3) return trim((n / 1e3).toFixed(1)) + "K";
+  return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+/**
+ * Post-process a built ECharts option so every numeric ("value") axis and the
+ * tooltip abbreviate large numbers by default — unless the chart already set its
+ * own formatter (e.g. a percentage share chart). Applied to the final option so
+ * it covers bar/line/area/scatter/etc. without touching each case individually.
+ */
+export function applyNumberAbbreviation(option: any): any {
+  if (!option || typeof option !== "object") return option;
+  const fmtAxis = (ax: any) => {
+    (Array.isArray(ax) ? ax : [ax]).forEach((a: any) => {
+      if (a && a.type === "value") {
+        a.axisLabel = { ...(a.axisLabel || {}) };
+        if (!a.axisLabel.formatter) a.axisLabel.formatter = (val: number) => abbreviateNumber(val);
+      }
+    });
+  };
+  fmtAxis(option.xAxis);
+  fmtAxis(option.yAxis);
+  if (option.tooltip && !Array.isArray(option.tooltip)) {
+    if (!option.tooltip.formatter && !option.tooltip.valueFormatter) {
+      option.tooltip.valueFormatter = (val: unknown) => abbreviateNumber(val);
+    }
+  }
+  return option;
+}
+
+/**
  * @deprecated No longer needed - dashboards now use ChartBuilderProvider + ChartPreview directly
  */
 export function buildEChartsOptionsFromQueryResult(
@@ -1615,7 +1658,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
               if (labelNumFmt === "m") return `${(v / 1e6).toFixed(1)}M`;
               if (labelNumFmt === "b") return `${(v / 1e9).toFixed(1)}B`;
               if (labelNumFmt === "t") return `${(v / 1e12).toFixed(1)}T`;
-              return v.toLocaleString();
+              return abbreviateNumber(v); // default: auto K/M/B/T
             };
             updated.label = {
               ...s.label,
@@ -3406,6 +3449,8 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
           }));
         }
       }
+      // Abbreviate large numbers on value axes + tooltips by default (K/M/B/T).
+      option = applyNumberAbbreviation(option);
       setPreviewOptions(option);
 
       setSqlPreview({
