@@ -1159,11 +1159,10 @@ export default function DatasetDetailPage() {
           </details>
 
           {/* Data Preview */}
-          <div className="card" style={{ padding: "18px 20px", border: "1px solid var(--border)", borderRadius: 12, flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
-            <h3 style={{ fontSize: 13, fontWeight: 700, color: "var(--text-muted)", margin: "0 0 14px 0", textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: 8 }}>
-              <i className="fas fa-eye" style={{ fontSize: 12, color: "var(--accent)", opacity: 0.7 }} />
-              Data Preview <span style={{ fontWeight: 500, fontSize: 12 }}>(top 100 rows)</span>
-            </h3>
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 8, flexShrink: 0 }}>
+              Data Preview <span style={{ fontWeight: 400 }}>(top 100 rows)</span>
+            </div>
             {isLoadingPreview && <p className="muted">Loading preview…</p>}
             {previewError && !isLoadingPreview && (
               <p className="page-empty-body">{previewError}</p>
@@ -1172,10 +1171,10 @@ export default function DatasetDetailPage() {
               <p className="page-empty-body">No rows returned.</p>
             )}
             {!isLoadingPreview && !previewError && previewColumns.length > 0 && (
-              <div className="dataset-preview-container" style={{ flex: 1, overflowY: "auto", borderRadius: 8, border: "1px solid var(--border)", minHeight: 0 }}>
+              <div style={{ flex: 1, overflow: "auto", borderRadius: 8, border: "1px solid var(--border)", minHeight: 0 }}>
                 <table className="results-table" style={{ width: "100%", fontSize: 12 }}>
-                  <thead>
-                    <tr>
+                  <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
+                    <tr style={{ background: "var(--bg-surface)" }}>
                       {previewColumns.map((col, colIndex) => {
                         const isSorted = previewSortColumnIndex === colIndex;
                         const sortIconClass = !isSorted
