@@ -55,6 +55,7 @@ const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = 
     setTimeGrain,
     setSortBy,
     setQueryMode,
+    groupByColumns,
     setGroupByColumns,
     setTimeColumn,
     setFilters,
@@ -229,12 +230,26 @@ const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = 
     }
 
     // Group-by columns
-    if (Array.isArray(qc.groupby)) {
+    if (Array.isArray(qc.groupby) && qc.groupby.length > 0) {
       const mapped = qc.groupby
         .filter((g: unknown) => typeof g === "string")
         .map((g: string) => normalizeLookup(g))
         .filter((g: string | null): g is string => Boolean(g));
       setGroupByColumns(mapped);
+    } else if (Array.isArray(qc.columns) && qc.columns.length > 0) {
+      // Raw column list (e.g. scatter/bubble: [label, x, y, size]). The backend's
+      // raw mode SELECTs the groupby columns in order, so hydrate qc.columns there
+      // when there's no explicit groupby. Without this a scatter chart selects
+      // nothing and never renders ("Configure your chart to see preview"). Order is
+      // preserved so the renderer maps label/x/y/size by column type correctly.
+      const rawCols = qc.columns
+        .filter((c: unknown) => typeof c === "string")
+        .map((c: string) => normalizeLookup(c))
+        .filter((c: string | null): c is string => Boolean(c));
+      if (rawCols.length > 0) {
+        setGroupByColumns(rawCols);
+        setQueryMode("raw");
+      }
     }
 
     // Time column
@@ -314,7 +329,11 @@ const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = 
     if (!selectedDatasetId || !chartType) return;
 
     const isTable = chartType === "table" || chartType === "pivot_table";
-    if (!isTable && !metricColumn) return;    // Non-table charts must have a metric
+    const isScatterLike = chartType === "scatter" || chartType === "bubble";
+    // Scatter/bubble and any raw-column chart render from selected columns, not a
+    // metric — don't block their auto-run on metricColumn.
+    const hasRawColumns = groupByColumns.length > 0;
+    if (!isTable && !isScatterLike && !hasRawColumns && !metricColumn) return;
 
     const isTimeSeries = [
       "time_series_line",
@@ -333,6 +352,7 @@ const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = 
     chartType,
     selectedDatasetId,
     metricColumn,
+    groupByColumns,
     timeColumn,
     sqlPreview.lastSql,
     advancedOptions,
