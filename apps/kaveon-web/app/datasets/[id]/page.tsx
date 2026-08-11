@@ -1171,7 +1171,7 @@ export default function DatasetDetailPage() {
               <p className="page-empty-body">No rows returned.</p>
             )}
             {!isLoadingPreview && !previewError && previewColumns.length > 0 && (
-              <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
+              <div style={{ flex: 1, overflow: "auto", minHeight: 0, border: "1px solid var(--border)", borderRadius: 8 }}>
                 <table className="results-table" style={{ width: "100%", fontSize: 12 }}>
                   <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
                     <tr style={{ background: "var(--bg-surface)" }}>

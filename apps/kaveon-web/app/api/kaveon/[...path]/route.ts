@@ -16,10 +16,27 @@ import { auth } from "../../../../auth";
 const API_BASE = (process.env.API_URL || "http://localhost:8080").replace(/\/+$/, "");
 const PROXY_SECRET = process.env.KAVEON_PROXY_SECRET || "";
 
+const DEV_BYPASS = process.env.NODE_ENV === "development" && process.env.KAVEON_DEV_USER_EMAIL;
+
 async function handler(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
-	const session = await auth();
-	if (!session?.user) {
-		return Response.json({ detail: { code: "unauthorized", message: "Not authenticated" } }, { status: 401 });
+	let email = "";
+	let name = "";
+	let role = "Viewer";
+
+	if (DEV_BYPASS) {
+		// Local dev: skip auth() (can hang on Entra OIDC from corporate network)
+		email = process.env.KAVEON_DEV_USER_EMAIL!;
+		name = process.env.KAVEON_DEV_USER_NAME || "Dev User";
+		role = process.env.KAVEON_DEV_USER_ROLE || "Admin";
+	} else {
+		const session = await auth();
+		if (!session?.user) {
+			return Response.json({ detail: { code: "unauthorized", message: "Not authenticated" } }, { status: 401 });
+		}
+		const user = session.user as { email?: string | null; name?: string | null; role?: string };
+		email = user.email ?? "";
+		name = user.name ?? "";
+		role = user.role ?? "Viewer";
 	}
 
 	const { path } = await ctx.params;
@@ -28,12 +45,10 @@ async function handler(req: NextRequest, ctx: { params: Promise<{ path: string[]
 	const headers = new Headers(req.headers);
 	headers.delete("host");
 	headers.delete("content-length");
-	// Identity from the verified NextAuth session — never from the client.
-	const user = session.user as { email?: string | null; name?: string | null; role?: string };
-	headers.set("x-user-email", user.email ?? "");
-	headers.set("x-user-name", user.name ?? "");
-	headers.set("x-user-role", user.role ?? "Viewer");
-	headers.set("x-user-roles", user.role ?? "Viewer");
+	headers.set("x-user-email", email);
+	headers.set("x-user-name", name);
+	headers.set("x-user-role", role);
+	headers.set("x-user-roles", role);
 	if (PROXY_SECRET) headers.set("x-proxy-secret", PROXY_SECRET);
 
 	const init: RequestInit = { method: req.method, headers, redirect: "manual" };
