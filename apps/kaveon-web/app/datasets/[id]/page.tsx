@@ -799,7 +799,24 @@ export default function DatasetDetailPage() {
     <div className="page-shell">
       <header className="page-header">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <div style={{ flex: 1 }}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flex: 1 }}>
+            <button
+              type="button"
+              onClick={() => router.push("/workspace?tab=datasets")}
+              title="Back to datasets"
+              style={{
+                width: 34, height: 34, borderRadius: 8, flexShrink: 0, marginTop: 4,
+                border: "1px solid var(--border)", background: "var(--bg-surface)",
+                color: "var(--text-secondary)", cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                transition: "background 0.15s, color 0.15s",
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text-primary)"; }}
+              onMouseLeave={e => { e.currentTarget.style.background = "var(--bg-surface)"; e.currentTarget.style.color = "var(--text-secondary)"; }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <div style={{ flex: 1 }}>
             {dataset && (
               <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)", marginBottom: 6, fontWeight: 600 }}>
                 Dataset
@@ -837,6 +854,7 @@ export default function DatasetDetailPage() {
                 {dataset.description}
               </p>
             )}
+          </div>
           </div>
           {dataset && (
             <div style={{ display: "flex", gap: 8, alignItems: "center", marginLeft: 24 }}>
