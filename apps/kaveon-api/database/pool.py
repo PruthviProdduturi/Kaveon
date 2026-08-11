@@ -431,11 +431,16 @@ class PostgreSQLConnection:
                 sslmode=sslmode, connect_timeout=30,
             )
         else:
-            # Azure AD Managed Identity (Azure Database for PostgreSQL).
-            token, username = _get_ossrdbms_token()
+            # Azure Entra Managed Identity (Azure Database for PostgreSQL).
+            # The Postgres role to authenticate as is the configured user — the
+            # pgaadauth role mapped to the app's managed identity (e.g. kaveon_api)
+            # — falling back to the token's own principal name. The token is the
+            # password. No secret is stored anywhere.
+            token, token_user = _get_ossrdbms_token()
+            aad_user = self.user or _os.environ.get("METADATA_USER") or settings.METADATA_USER or token_user
             self.connection = psycopg2.connect(
                 host=self.host, port=self.port, dbname=self.database,
-                user=username, password=token,
+                user=aad_user, password=token,
                 sslmode="require", connect_timeout=30,
             )
         # autocommit avoids a failed statement poisoning the pooled connection
