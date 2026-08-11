@@ -806,34 +806,35 @@ export default function DatasetDetailPage() {
 
   return (
     <div className="page-shell">
-      <header className="page-header">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flex: 1 }}>
-            <button
-              type="button"
-              onClick={() => router.push("/workspace?tab=datasets")}
-              title="Back to datasets"
-              style={{
-                width: 34, height: 34, borderRadius: 8, flexShrink: 0, marginTop: 4,
-                border: "1px solid var(--border)", background: "var(--bg-surface)",
-                color: "var(--text-secondary)", cursor: "pointer",
-                display: "flex", alignItems: "center", justifyContent: "center",
-                transition: "background 0.15s, color 0.15s",
-              }}
-              onMouseEnter={e => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text-primary)"; }}
-              onMouseLeave={e => { e.currentTarget.style.background = "var(--bg-surface)"; e.currentTarget.style.color = "var(--text-secondary)"; }}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-            </button>
-            <div style={{ flex: 1 }}>
-            {dataset && (
-              <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)", marginBottom: 6, fontWeight: 600 }}>
-                Dataset
-              </div>
-            )}
+      {/* ── Header card — matches dashboard view style ── */}
+      <header style={{
+        background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 12,
+        padding: "12px 18px", display: "flex", alignItems: "center",
+        justifyContent: "space-between", gap: 16, flexWrap: "wrap", marginBottom: 16,
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, flex: 1, minWidth: 0 }}>
+          <button
+            type="button"
+            onClick={() => router.push("/workspace?tab=datasets")}
+            title="Back to datasets"
+            style={{
+              flexShrink: 0, width: 36, height: 36, borderRadius: 9,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              border: "1px solid var(--border)", background: "var(--bg-surface)",
+              color: "var(--text-secondary)", cursor: "pointer",
+              transition: "background 0.15s, color 0.15s",
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text-primary)"; }}
+            onMouseLeave={e => { e.currentTarget.style.background = "var(--bg-surface)"; e.currentTarget.style.color = "var(--text-secondary)"; }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="19" y1="12" x2="5" y2="12" /><polyline points="12 19 5 12 12 5" />
+            </svg>
+          </button>
+          <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
             {!isEditingName ? (
               <h1
-                style={{ fontSize: 28, fontWeight: 600, color: "var(--text-primary)", margin: 0, lineHeight: 1.2, cursor: "pointer", borderRadius: 6, padding: "4px 8px", border: "2px solid transparent", transition: "background 0.15s", display: "inline-block" }}
+                style={{ margin: 0, fontSize: "1.25rem", fontWeight: 800, color: "var(--text-primary)", lineHeight: 1.2, letterSpacing: "-0.3px", cursor: "pointer", borderRadius: 6, padding: "2px 6px", border: "2px solid transparent", transition: "background 0.15s" }}
                 onClick={startEditingName}
                 onMouseOver={e => { e.currentTarget.style.background = "var(--bg-hover)"; }}
                 onMouseOut={e => { e.currentTarget.style.background = "transparent"; }}
@@ -850,8 +851,8 @@ export default function DatasetDetailPage() {
                 onBlur={commitRename}
                 onKeyDown={e => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") setIsEditingName(false); }}
                 style={{
-                  fontSize: 28, fontWeight: 600, color: "var(--text-primary)",
-                  padding: "4px 8px", margin: 0,
+                  fontSize: "1.25rem", fontWeight: 800, color: "var(--text-primary)",
+                  padding: "2px 6px", margin: 0,
                   border: "2px solid var(--accent)", borderRadius: 6,
                   outline: "none", background: "var(--bg-surface)",
                   fontFamily: "inherit", minWidth: 260,
@@ -859,14 +860,14 @@ export default function DatasetDetailPage() {
               />
             )}
             {dataset?.description && (
-              <p style={{ fontSize: 14, color: "var(--text-muted)", margin: "6px 0 0 0", lineHeight: 1.4, maxWidth: 600 }}>
+              <p style={{ fontSize: 12.5, color: "var(--text-muted)", margin: "2px 0 0 6px", lineHeight: 1.4 }}>
                 {dataset.description}
               </p>
             )}
           </div>
-          </div>
+        </div>
           {dataset && (
-            <div style={{ display: "flex", gap: 8, alignItems: "center", marginLeft: 24 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <button
                 type="button"
                 className="overview-primary-btn"
@@ -936,7 +937,6 @@ export default function DatasetDetailPage() {
               </button>
             </div>
           )}
-        </div>
       </header>
 
       {contextStatus && (
