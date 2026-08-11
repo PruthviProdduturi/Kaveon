@@ -894,6 +894,15 @@ export default function DatasetDetailPage() {
               <button
                 type="button"
                 className="icon-button"
+                onClick={() => window.location.reload()}
+                title="Refresh"
+                style={{ width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center" }}
+              >
+                <i className="fas fa-arrows-rotate" aria-hidden="true" style={{ fontSize: 14 }} />
+              </button>
+              <button
+                type="button"
+                className="icon-button"
                 onClick={handleBuildContext}
                 disabled={buildingContext}
                 title="Build context for Adaptive Context Routing"
@@ -1155,10 +1164,10 @@ export default function DatasetDetailPage() {
               <p className="page-empty-body">No rows returned.</p>
             )}
             {!isLoadingPreview && !previewError && previewColumns.length > 0 && (
-              <div className="dataset-preview-container">
+              <div className="dataset-preview-container" style={{ maxHeight: 400, overflowY: "auto", borderRadius: 8, border: "1px solid var(--border)" }}>
                 <table className="results-table" style={{ width: "100%", fontSize: 12 }}>
-                  <thead>
-                    <tr>
+                  <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
+                    <tr style={{ background: "var(--bg-elevated)" }}>
                       {previewColumns.map((col, colIndex) => {
                         const isSorted = previewSortColumnIndex === colIndex;
                         const sortIconClass = !isSorted
