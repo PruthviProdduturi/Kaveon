@@ -1807,27 +1807,53 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
       }
     });
 
+    // Multi-metric charts (e.g. an energy-mix stacked bar with solar/wind/hydro/…)
+    // have several metric columns. The backend appends metrics last, so the final
+    // `metricCount` columns are the metrics — turn each into its own series.
+    const metricCount = Array.isArray(config?.metrics) && config.metrics.length > 0
+      ? config.metrics.length : 1;
+    const isMultiMetric = metricCount > 1 && columns.length > metricCount;
+    const metricLabels: string[] = isMultiMetric
+      ? (config!.metrics as any[]).map((m, i) => m.label || m.column || `metric ${i + 1}`)
+      : [];
+
     const xValues: string[] = [];
     const seriesNamesSet = new Set<string>();
     const dataMap = new Map<string, Map<string, number>>();
 
-    rows.forEach((row) => {
-      const xRaw = row[xIndex];
-      const x = xRaw == null ? "" : String(xRaw);
-      if (!xValues.includes(x)) xValues.push(x);
+    if (isMultiMetric) {
+      const metricStart = columns.length - metricCount;
+      rows.forEach((row) => {
+        const x = row[0] == null ? "" : String(row[0]);
+        if (!xValues.includes(x)) xValues.push(x);
+        for (let j = 0; j < metricCount; j++) {
+          const sName = metricLabels[j];
+          const raw = row[metricStart + j];
+          const val = raw == null || raw === "" ? 0 : Number(raw);
+          seriesNamesSet.add(sName);
+          if (!dataMap.has(sName)) dataMap.set(sName, new Map());
+          dataMap.get(sName)!.set(x, val);
+        }
+      });
+    } else {
+      rows.forEach((row) => {
+        const xRaw = row[xIndex];
+        const x = xRaw == null ? "" : String(xRaw);
+        if (!xValues.includes(x)) xValues.push(x);
 
-      const metricRaw = row[metricIndex];
-      const metric = metricRaw == null || metricRaw === "" ? 0 : Number(metricRaw);
+        const metricRaw = row[metricIndex];
+        const metric = metricRaw == null || metricRaw === "" ? 0 : Number(metricRaw);
 
-      const seriesName =
-        dimensionIndexes.length === 0
-          ? columns[metricIndex] ?? "value"
-          : dimensionIndexes.map((idx) => String(row[idx] ?? "")).join(" · ");
+        const seriesName =
+          dimensionIndexes.length === 0
+            ? columns[metricIndex] ?? "value"
+            : dimensionIndexes.map((idx) => String(row[idx] ?? "")).join(" · ");
 
-      seriesNamesSet.add(seriesName);
-      if (!dataMap.has(seriesName)) dataMap.set(seriesName, new Map());
-      dataMap.get(seriesName)!.set(x, metric);
-    });
+        seriesNamesSet.add(seriesName);
+        if (!dataMap.has(seriesName)) dataMap.set(seriesName, new Map());
+        dataMap.get(seriesName)!.set(x, metric);
+      });
+    }
 
     let seriesNames = Array.from(seriesNamesSet);
     // Apply legend order if present in advancedOptions, but always validate
