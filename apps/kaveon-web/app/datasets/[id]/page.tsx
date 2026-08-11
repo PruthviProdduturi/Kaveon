@@ -813,7 +813,7 @@ export default function DatasetDetailPage() {
   }
 
   return (
-    <div className="page-shell" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+    <div className="page-shell" style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 8px)", overflow: "hidden" }}>
       {/* ── Header card — matches dashboard view style ── */}
       <header style={{
         background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 12,
@@ -978,7 +978,8 @@ export default function DatasetDetailPage() {
       )}
 
       {!isLoading && !error && dataset && (
-        <div className="card" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", border: "1px solid var(--border)", borderRadius: 12, padding: "20px" }}>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", gap: 12, minHeight: 0 }}>
+        <div className="card" style={{ flexShrink: 0, border: "1px solid var(--border)", borderRadius: 12, padding: "20px" }}>
           {/* Key Info and Metrics */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, flexShrink: 0, marginBottom: 12 }}>
             {/* Dataset Info */}
@@ -987,20 +988,27 @@ export default function DatasetDetailPage() {
                 <i className="fas fa-database" style={{ fontSize: 12, color: "var(--accent)", opacity: 0.7 }} />
                 Connection
               </h3>
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {[
-                  { label: "Database", value: dataset.database_name || "(default)", icon: "fa-server" },
-                  { label: "Schema", value: dataset.schema_name || "(default)", icon: "fa-folder" },
-                  { label: "Table", value: dataset.table_name || (dataset.sql_text ? "Virtual (SQL)" : "(none)"), icon: "fa-table" },
-                  { label: "Date column", value: dataset.date_column || "(none)", icon: "fa-calendar" },
-                ].map(({ label, value, icon }) => (
-                  <div key={label} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <i className={`fas ${icon}`} style={{ fontSize: 10, color: "var(--text-faint)", width: 14, textAlign: "center" }} />
-                    <span style={{ color: "var(--text-muted)", fontSize: 12.5, minWidth: 90 }}>{label}</span>
-                    <span style={{ fontWeight: 600, fontSize: 13, color: "var(--text-primary)", fontFamily: "var(--font-mono, monospace)" }}>{value}</span>
-                  </div>
-                ))}
-              </div>
+              <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
+                <thead>
+                  <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                    <th align="left" style={{ padding: "0 12px 8px 0", color: "var(--text-muted)", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Property</th>
+                    <th align="left" style={{ padding: "0 0 8px 0", color: "var(--text-muted)", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[
+                    { label: "Database", value: dataset.database_name || "(default)" },
+                    { label: "Schema", value: dataset.schema_name || "(default)" },
+                    { label: "Table", value: dataset.table_name || (dataset.sql_text ? "Virtual (SQL)" : "(none)") },
+                    { label: "Date column", value: dataset.date_column || "(none)" },
+                  ].map(({ label, value }, idx) => (
+                    <tr key={label} style={{ borderBottom: idx < 3 ? "1px solid var(--border)" : "none" }}>
+                      <td style={{ padding: "10px 12px 10px 0", fontWeight: 500, fontSize: 13, color: "var(--text-primary)" }}>{label}</td>
+                      <td style={{ padding: "10px 0", fontSize: 13, color: "var(--text-secondary)", fontFamily: "var(--font-mono, monospace)" }}>{value}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
 
             {/* Metrics */}
@@ -1022,9 +1030,9 @@ export default function DatasetDetailPage() {
                     <tbody>
                       {dataset.metrics.map((m, idx) => (
                         <tr key={`${m.name}-${idx}`} style={{ borderBottom: idx < dataset.metrics!.length - 1 ? "1px solid var(--border)" : "none" }}>
-                          <td style={{ padding: "10px 12px 10px 0", fontWeight: 500, fontSize: 13, verticalAlign: "top" }}>{m.name}</td>
+                          <td style={{ padding: "10px 12px 10px 0", fontWeight: 500, fontSize: 13, color: "var(--text-primary)", verticalAlign: "top" }}>{m.name}</td>
                           <td style={{ padding: "10px 12px 10px 0", fontSize: 11, color: "var(--success)", fontWeight: 600, textTransform: "uppercase", verticalAlign: "top" }}>{m.metric_type}</td>
-                          <td style={{ padding: "10px 0", fontFamily: "monospace", fontSize: 12, color: "var(--text-muted)", verticalAlign: "top" }}>{m.expression}</td>
+                          <td style={{ padding: "10px 0", fontFamily: "monospace", fontSize: 12, color: "var(--text-secondary)", verticalAlign: "top" }}>{m.expression}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1106,8 +1114,8 @@ export default function DatasetDetailPage() {
                             }
                             return (
                               <tr key={`${col.column_name}-${idx}`} style={{ borderBottom: idx < schemaColumns.length - 1 ? "1px solid var(--border)" : "none" }}>
-                                <td style={{ padding: "10px 12px 10px 0", fontWeight: 500, fontSize: 13, verticalAlign: "top" }}>{label}</td>
-                                <td style={{ padding: "10px 12px 10px 0", fontSize: 12, color: "var(--text-muted)", verticalAlign: "top" }}>{col.data_type}</td>
+                                <td style={{ padding: "10px 12px 10px 0", fontWeight: 500, fontSize: 13, color: "var(--text-primary)", verticalAlign: "top" }}>{label}</td>
+                                <td style={{ padding: "10px 12px 10px 0", fontSize: 12, color: "var(--text-secondary)", verticalAlign: "top" }}>{col.data_type}</td>
                                 <td style={{ padding: "10px 0", fontSize: 11, fontWeight: 600, color: roleColor, textTransform: "uppercase", verticalAlign: "top" }}>{role}</td>
                               </tr>
                             );
@@ -1157,9 +1165,10 @@ export default function DatasetDetailPage() {
               </div>
             </div>
           </details>
+        </div>
 
-          {/* Data Preview */}
-          <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 12, flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
+        {/* Data Preview — separate card */}
+          <div className="card" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 20px", minHeight: 0 }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 8, flexShrink: 0 }}>
               Data Preview <span style={{ fontWeight: 400 }}>(top 100 rows)</span>
             </div>
