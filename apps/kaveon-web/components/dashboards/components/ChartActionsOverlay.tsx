@@ -2,8 +2,13 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import ReactDOM from 'react-dom';
+import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import { useChartBuilder } from '../../charts/ChartBuilderContext';
+
+// Rendered inside the fullscreen modal — the same chart, big. Loaded lazily so it
+// doesn't bloat the tile bundle.
+const ChartPreview = dynamic(() => import('../../charts/ChartPreview'), { ssr: false });
 
 interface ChartActionsOverlayProps {
   chartId: number;
@@ -185,11 +190,10 @@ const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
                 <i className="fas fa-times" />
               </button>
             </div>
-            <div style={{ flex: 1, padding: 16, overflow: 'hidden', position: 'relative' }}>
-              {/* Note: full-screen renders placeholder — actual chart content lives in the card */}
-              <div style={{ color: 'var(--text-muted)', fontSize: 13, padding: 20, textAlign: 'center' }}>
-                Full-screen view — Chart #{chartId}
-              </div>
+            <div style={{ flex: 1, padding: 16, overflow: 'hidden', position: 'relative', display: 'flex' }}>
+              {/* Render the real chart big — reads the same ChartBuilder context as
+                  the tile, so it shows the exact same data/options. */}
+              <ChartPreview />
             </div>
           </div>
         </div>,
