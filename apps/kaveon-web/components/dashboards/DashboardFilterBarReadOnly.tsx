@@ -225,7 +225,11 @@ const DashboardFilterBarReadOnly: React.FC = () => {
 
   const clearAll = () => {
     dashboardFilters.forEach((f) => {
-      if (f.enabled || f.value) updateDashboardFilter(f.id, { enabled: false, value: '' });
+      if (f.value || f.dateFrom || f.dateTo) {
+        // Clear the value but keep the filter enabled/visible so it stays usable
+        // (disabling it grays the chip out and blocks reopening).
+        updateDashboardFilter(f.id, { value: '', valueKey: '', dateFrom: '', dateTo: '' });
+      }
     });
     resetEdit();
   };
