@@ -710,7 +710,10 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
                 sb_expr = f"SUM({s_alias}.{quote_identifier(s_col)})"
             else:
                 sb_expr = _resolve_column_expression(sb_col, fact_alias, alias_map, column_table_map, coalesce_map)
-            order_by_clause = f"ORDER BY {sb_expr} {sb_dir}"
+            # NULLS LAST so a sorted+limited ranking (e.g. top-20 by Arena ELO)
+            # isn't dominated by rows whose sort metric is NULL.
+            _nulls = " NULLS LAST" if db_type == "postgresql" else ""
+            order_by_clause = f"ORDER BY {sb_expr} {sb_dir}{_nulls}"
         elif time_grain_expr:
             order_by_clause = f"ORDER BY {time_grain_expr} ASC"
         elif group_by_parts:

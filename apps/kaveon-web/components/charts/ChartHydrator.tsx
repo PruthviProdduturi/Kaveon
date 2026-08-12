@@ -174,6 +174,23 @@ const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = 
       }
       setAdvancedOptions(mergedAdv);
 
+      // These need NO datasetColumns (raw column names / flags) — hydrate them
+      // here, ungated, so scatter axes + raw mode are set even before dataset
+      // columns finish loading. Otherwise the scatter query falls back to SELECT *
+      // and the renderer grabs the wrong column (e.g. context_window, millions) for Y.
+      if (qc.query_mode === "raw") setQueryMode("raw");
+      if (qc.x_axis || qc.y_axis || qc.size_column || qc.label_column) {
+        setScatterAxes({
+          x: qc.x_axis || undefined,
+          y: qc.y_axis || undefined,
+          size: qc.size_column || undefined,
+          label: qc.label_column || undefined,
+        });
+      }
+      if (qc.category_labels && typeof qc.category_labels === "object") {
+        setCategoryLabels(qc.category_labels);
+      }
+
       hasSetMetadataRef.current = true;
     }
 
@@ -245,24 +262,7 @@ const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = 
       setSortBy({ column: qc.sort_by.column, direction: qc.sort_by.direction || "asc" });
     }
 
-    // Query mode
-    if (qc.query_mode === "raw") {
-      setQueryMode("raw");
-    }
-
-    // Scatter/bubble axes (by column name) — so the renderer plots the intended
-    // columns even if the query returns extra columns.
-    if (qc.x_axis || qc.y_axis || qc.size_column || qc.label_column) {
-      setScatterAxes({
-        x: qc.x_axis || undefined,
-        y: qc.y_axis || undefined,
-        size: qc.size_column || undefined,
-        label: qc.label_column || undefined,
-      });
-    }
-    if (qc.category_labels && typeof qc.category_labels === "object") {
-      setCategoryLabels(qc.category_labels);
-    }
+    // (query_mode, scatter axes, category_labels are hydrated ungated above.)
 
     // Group-by columns
     if (Array.isArray(qc.groupby) && qc.groupby.length > 0) {
