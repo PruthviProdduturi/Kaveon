@@ -160,7 +160,7 @@ const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({
       <ChartHydrator
         key={`${refreshKey}:${themePalette ? themePalette.join(',') : 'none'}`}
         chart={chart}
-        externalFilters={filtersRef.current}
+        externalFilters={filters}
         crossFilterExtra={relevantCrossExtras}
         paletteOverride={themePalette}
       />
