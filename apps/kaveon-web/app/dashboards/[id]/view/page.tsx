@@ -168,13 +168,13 @@ const DashboardViewContent: React.FC<{
 
   const hasFilters = dashboardFilters.length > 0;
 
-  // Open the filter bar by default the first time filters are present.
+  // Open the filter bar by default the first time filters are present (published only).
   useEffect(() => {
-    if (hasFilters && !filtersAutoOpenedRef.current) {
+    if (hasFilters && isPublished && !filtersAutoOpenedRef.current) {
       filtersAutoOpenedRef.current = true;
       setFiltersOpen(true);
     }
-  }, [hasFilters]);
+  }, [hasFilters, isPublished]);
 
   // Shared action button style
   const btnBase: React.CSSProperties = {
