@@ -57,6 +57,8 @@ const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = 
     setQueryMode,
     groupByColumns,
     setGroupByColumns,
+    setScatterAxes,
+    setCategoryLabels,
     setTimeColumn,
     setFilters,
     setFilterLogic,
@@ -246,6 +248,20 @@ const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = 
     // Query mode
     if (qc.query_mode === "raw") {
       setQueryMode("raw");
+    }
+
+    // Scatter/bubble axes (by column name) — so the renderer plots the intended
+    // columns even if the query returns extra columns.
+    if (qc.x_axis || qc.y_axis || qc.size_column || qc.label_column) {
+      setScatterAxes({
+        x: qc.x_axis || undefined,
+        y: qc.y_axis || undefined,
+        size: qc.size_column || undefined,
+        label: qc.label_column || undefined,
+      });
+    }
+    if (qc.category_labels && typeof qc.category_labels === "object") {
+      setCategoryLabels(qc.category_labels);
     }
 
     // Group-by columns

@@ -45,7 +45,7 @@ export function abbreviateNumber(v: unknown): string {
   if (abs >= 1e12) return trim((n / 1e12).toFixed(1)) + "T";
   if (abs >= 1e9) return trim((n / 1e9).toFixed(1)) + "B";
   if (abs >= 1e6) return trim((n / 1e6).toFixed(1)) + "M";
-  if (abs >= 1e3) return trim((n / 1e3).toFixed(1)) + "K";
+  if (abs >= 1e4) return trim((n / 1e3).toFixed(1)) + "K"; // only abbreviate 10k+ so ELO/scores/small counts (e.g. 1,400) stay exact
   return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
@@ -1224,6 +1224,8 @@ export interface ChartBuilderContextValue {
   setQueryMode: (value: "aggregate" | "raw") => void;
   groupByColumns: string[];
   setGroupByColumns: (value: string[]) => void;
+  setScatterAxes: (value: { x?: string; y?: string; size?: string; label?: string }) => void;
+  setCategoryLabels: (value: Record<string, string> | null) => void;
   timeColumn: string | null;
   setTimeColumn: (value: string | null) => void;
   timeRange: TimeRangePreset;
@@ -1291,6 +1293,11 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
   const [sortBy, setSortBy] = useState<{ column: string; direction: "asc" | "desc" } | null>(null);
   const [queryMode, setQueryMode] = useState<"aggregate" | "raw">("aggregate");
   const [groupByColumns, setGroupByColumns] = useState<string[]>([]);
+  // Scatter/bubble axis columns (by name) — carried through so the renderer maps
+  // the intended columns instead of guessing by position.
+  const [scatterAxes, setScatterAxes] = useState<{ x?: string; y?: string; size?: string; label?: string }>({});
+  // Friendly display labels for category values (e.g. {"true":"Open Source","false":"Proprietary"}).
+  const [categoryLabels, setCategoryLabels] = useState<Record<string, string> | null>(null);
   const [timeColumn, setTimeColumn] = useState<string | null>(null);
   const [timeRange, setTimeRange] = useState<TimeRangePreset>("last_30_days");
   const [customStartDate, setCustomStartDate] = useState<string | null>(null);
@@ -1604,6 +1611,13 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
       // legacy single-metric kept for backward compat with saved charts
       metric: metricColumn && metrics.length === 0 ? { column: metricColumn, agg: "SUM" } : null,
       groupby: groupByColumns,
+      // Scatter/bubble axis columns (by name) — the renderer maps these instead
+      // of guessing by position.
+      x_axis: scatterAxes.x || null,
+      y_axis: scatterAxes.y || null,
+      size_column: scatterAxes.size || null,
+      label_column: scatterAxes.label || null,
+      category_labels: categoryLabels || null,
       time_column: timeColumn,
       time_grain: timeGrain !== "none" ? timeGrain : null,
       sort_by: sortBy,
@@ -2156,7 +2170,28 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
           formatter: (val: string) => formatXAxisLabel(String(val), xAxisDateFormat),
         };
       }
+      // Optional friendly category labels (e.g. is_open_source false/true →
+      // Proprietary/Open Source), applied to display only.
+      const catLabels = (config as any)?.category_labels;
+      if (catLabels && typeof catLabels === "object") {
+        axis.axisLabel = {
+          ...(axis.axisLabel || {}),
+          formatter: (val: string) => catLabels[String(val)] ?? val,
+        };
+      }
       return axis;
+    };
+
+    // Value axis with a smart non-zero baseline: when values are large AND
+    // clustered away from 0 (e.g. Arena ELO ~1200–1400), a 0-baseline makes every
+    // bar look identical. scale:true lets ECharts pick a sensible min so the
+    // differences read. Small values (min < 100, e.g. counts) keep a 0 baseline so
+    // they aren't misleadingly truncated.
+    const valueAxis = (extra: any = {}) => {
+      let vMin = Infinity, vMax = -Infinity;
+      dataMap.forEach((m) => m.forEach((v) => { if (v < vMin) vMin = v; if (v > vMax) vMax = v; }));
+      const clustered = Number.isFinite(vMin) && vMin > 100 && vMax > 0 && vMin / vMax > 0.5;
+      return { type: "value", ...(clustered ? { scale: true } : {}), ...extra };
     };
 
     switch (chartKind) {
@@ -2209,7 +2244,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         return {
           ...common,
           xAxis: buildCategoryAxis(),
-          yAxis: { type: "value" },
+          yAxis: chartKind === "stacked_bar_vertical" ? { type: "value" } : valueAxis(),
           series: buildLineOrBarSeries({
             type: "bar",
             stacked: chartKind === "stacked_bar_vertical",
@@ -2225,7 +2260,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         }
         return {
           ...common,
-          xAxis: { type: "value" },
+          xAxis: chartKind === "stacked_bar_horizontal" ? { type: "value" } : valueAxis(),
           yAxis: hBarYAxis,
           series: buildLineOrBarSeries({
             type: "bar",
@@ -2346,18 +2381,26 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
       }
       case "scatter":
       case "bubble": {
-        // Map columns by TYPE rather than blindly using 0/1: the first
-        // non-numeric column is the point label (e.g. country); numeric columns
-        // are x, y and (optionally) a 3rd = bubble size, in selection order.
-        // A raw scatter SELECT is typically (label, x, y[, size]) — using col 0
-        // as x plotted the text label as a NaN x, which broke the chart.
+        // Prefer the configured axes by COLUMN NAME (x_axis/y_axis/size/label) —
+        // robust even when the query returns extra columns (e.g. a huge params or
+        // context-window column that would otherwise get plotted on Y and blow the
+        // scale to the millions). Fall back to column-type detection only when the
+        // config didn't specify them.
         const isNumericCol = (i: number) =>
           rows.some((r) => r[i] != null && r[i] !== "" && !Number.isNaN(Number(r[i])));
-        const labelIdx = columns.findIndex((_, i) => !isNumericCol(i));
-        const numericIdx = columns.map((_, i) => i).filter((i) => i !== labelIdx && isNumericCol(i));
-        const xIdx = numericIdx[0] ?? 0;
-        const yIdx = numericIdx[1] ?? Math.min(1, columns.length - 1);
-        const sizeIdx = numericIdx[2] ?? -1; // 3rd numeric column → bubble size
+        const byName = (name: any): number =>
+          typeof name === "string" && name ? columns.indexOf(name) : -1;
+        let xIdx = byName(config?.x_axis);
+        let yIdx = byName(config?.y_axis);
+        let labelIdx = byName(config?.label_column);
+        const sizeIdx = byName(config?.size_column); // bubble-size ONLY when configured
+        if (xIdx < 0 || yIdx < 0 || labelIdx < 0) {
+          const autoLabel = columns.findIndex((_, i) => !isNumericCol(i));
+          const numericIdx = columns.map((_, i) => i).filter((i) => i !== autoLabel && isNumericCol(i));
+          if (xIdx < 0) xIdx = numericIdx[0] ?? 0;
+          if (yIdx < 0) yIdx = numericIdx[1] ?? Math.min(1, columns.length - 1);
+          if (labelIdx < 0) labelIdx = autoLabel;
+        }
 
         const sizeVals = sizeIdx >= 0 ? rows.map((r) => Number(r[sizeIdx]) || 0) : [];
         const sMin = sizeVals.length ? Math.min(...sizeVals) : 0;
@@ -3683,6 +3726,8 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     setQueryMode,
     groupByColumns,
     setGroupByColumns,
+    setScatterAxes,
+    setCategoryLabels,
     timeColumn,
     setTimeColumn,
     timeRange,
