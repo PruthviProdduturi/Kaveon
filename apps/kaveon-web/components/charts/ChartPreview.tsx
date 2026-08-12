@@ -165,7 +165,7 @@ const BigNumberKpiCard: React.FC<BigNumberKpiCardProps> = ({ options, rows, colu
     if (numFmt === "fixed") return v.toFixed(kpiOpts.decimalPlaces ?? 2);
     if (Math.abs(v) >= 1e9) return `${(v / 1e9).toFixed(1)}B`;
     if (Math.abs(v) >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
-    if (Math.abs(v) >= 1e3) return `${(v / 1e3).toFixed(1)}K`;
+    if (Math.abs(v) >= 1e4) return `${(v / 1e3).toFixed(1)}K`; // 10k+ only — ELO 1400 stays "1,400"
     return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
   };
 
@@ -587,7 +587,7 @@ const WorldMapRenderer: React.FC<{
       if (a >= 1e12) return `${(v / 1e12).toFixed(1)}T`;
       if (a >= 1e9) return `${(v / 1e9).toFixed(1)}B`;
       if (a >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
-      if (a >= 1e3) return `${(v / 1e3).toFixed(1)}K`;
+      if (a >= 1e4) return `${(v / 1e3).toFixed(1)}K`; // 10k+ only
       return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
     };
 
