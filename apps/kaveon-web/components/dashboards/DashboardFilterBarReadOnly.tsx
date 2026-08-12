@@ -263,16 +263,6 @@ const DashboardFilterBarReadOnly: React.FC = () => {
 
   return (
     <div className="chart-filter-card">
-      {dashboardFilters.length > 1 && (
-        <div className="chart-filter-body">
-          <div className="chart-filter-logic-row">
-            <span className="chart-filter-logic-pill" style={{ cursor: 'default' }}>
-              {filterLogic}
-            </span>
-          </div>
-        </div>
-      )}
-
       {activeCount > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 12px' }}>
           <span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>
@@ -375,7 +365,7 @@ const DashboardFilterBarReadOnly: React.FC = () => {
                       autoFocus
                       style={{ marginBottom: 6 }}
                     />
-                    <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: 6 }}>
+                    <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6 }}>
                       {editingOptions
                         .filter((opt) => !optSearch || opt.value.toLowerCase().includes(optSearch.toLowerCase()))
                         .slice(0, 300)
@@ -384,16 +374,17 @@ const DashboardFilterBarReadOnly: React.FC = () => {
                           return (
                             <label key={opt.key || `opt-${i}`}
                               style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', cursor: 'pointer',
-                                       fontSize: 13, background: checked ? '#eff6ff' : 'transparent' }}
-                              onMouseOver={(e) => { if (!checked) e.currentTarget.style.background = '#f8fafc'; }}
+                                       fontSize: 13, color: 'var(--text-primary)',
+                                       background: checked ? 'rgba(37,99,235,0.14)' : 'transparent' }}
+                              onMouseOver={(e) => { if (!checked) e.currentTarget.style.background = 'var(--bg-hover)'; }}
                               onMouseOut={(e) => { if (!checked) e.currentTarget.style.background = 'transparent'; }}>
-                              <input type="checkbox" checked={checked} onChange={() => toggleEditValue(opt.value)} />
+                              <input type="checkbox" checked={checked} onChange={() => toggleEditValue(opt.value)} style={{ accentColor: 'var(--accent)' }} />
                               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{opt.value}</span>
                             </label>
                           );
                         })}
                       {editingOptions.filter((opt) => !optSearch || opt.value.toLowerCase().includes(optSearch.toLowerCase())).length === 0 && (
-                        <div style={{ padding: 10, color: '#94a3b8', fontSize: 12 }}>No matches</div>
+                        <div style={{ padding: 10, color: 'var(--text-muted)', fontSize: 12 }}>No matches</div>
                       )}
                     </div>
                   </>

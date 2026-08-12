@@ -90,24 +90,35 @@ const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = 
   // Keep latest external filters in a ref — avoids re-triggering hydration on
   // every filter change while still applying the current values at run-time.
   const externalFiltersRef = useRef(externalFilters);
-  useEffect(() => {
-    externalFiltersRef.current = externalFilters;
-  }, [externalFilters]);
+  useEffect(() => { externalFiltersRef.current = externalFilters; }, [externalFilters]);
+  const crossFilterExtraRef = useRef(crossFilterExtra);
+  useEffect(() => { crossFilterExtraRef.current = crossFilterExtra; }, [crossFilterExtra]);
 
-  // Re-run query when cross-filter changes after initial hydration.
-  // crossFilterExtra is kept SEPARATE from externalFilters so it is NOT baked into
-  // context filter state during hydration — preventing dashboard filters from being
-  // applied twice and making clear/restore work correctly.
-  const prevCrossFilterSerialRef = useRef<string>(JSON.stringify(crossFilterExtra ?? []));
+  // Both dashboard (external) filters AND cross-filters are applied as run-time
+  // extras — so both are reactive (changing either re-runs the query).
+  const buildExtras = (): any[] => [
+    ...(externalFiltersRef.current || []).map((f: any) => ({
+      column: f.column,
+      operator: f.operator || "=",
+      value: Array.isArray(f.value) ? f.value.join(", ") : String(f.value ?? ""),
+      valueKey: f.valueKey ?? "",
+      keyColumn: f.keyColumn ?? null,
+    })),
+    ...(crossFilterExtraRef.current || []),
+  ];
+
+  // Re-run the query whenever dashboard filters OR cross-filters change (after
+  // the initial auto-run). Previously only cross-filters re-ran; dashboard filters
+  // were baked once at hydration, so applying a filter did nothing.
+  const prevExtrasSerialRef = useRef<string>(JSON.stringify([externalFilters ?? [], crossFilterExtra ?? []]));
   useEffect(() => {
     if (!hasAutoRunRef.current) return;
-    const serial = JSON.stringify(crossFilterExtra);
-    if (serial === prevCrossFilterSerialRef.current) return;
-    prevCrossFilterSerialRef.current = serial;
-    // Pass only the cross-filter as extra; dashboard filters are already in context state
-    void runPreviewQuery(true, crossFilterExtra);
+    const serial = JSON.stringify([externalFilters, crossFilterExtra]);
+    if (serial === prevExtrasSerialRef.current) return;
+    prevExtrasSerialRef.current = serial;
+    void runPreviewQuery(true, buildExtras());
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [crossFilterExtra]);
+  }, [externalFilters, crossFilterExtra]);
 
   // Reset metadata flag when a different chart is loaded.
   useEffect(() => {
@@ -329,17 +340,9 @@ const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = 
           isPending: false,
         };
       }),
-      ...externalFiltersRef.current.map((f: any, idx: number) => ({
-        id: `ext-${idx}`,
-        column: f.column,
-        operator: f.operator || "=",
-        value: Array.isArray(f.value) ? f.value.join(", ") : String(f.value ?? ""),
-        valueKey: f.valueKey ?? "",
-        keyColumn: f.keyColumn ?? null,
-        options: [],
-        isLoading: false,
-        isPending: false,
-      })),
+      // Dashboard (external) filters are NOT baked here — they're applied as
+      // reactive run-time extras (see the effect below), so changing a dashboard
+      // filter re-runs the query. Baking them here only applied them once.
     ];
     setFilters(mergedFilters);
 
@@ -381,7 +384,7 @@ const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = 
     if (!advancedOptions) return;             // Wait for viz config to be applied
 
     hasAutoRunRef.current = true;
-    void runPreviewQuery();
+    void runPreviewQuery(false, buildExtras());  // apply any dashboard filters on the first run too
   }, [
     chart?.id,
     chartType,
