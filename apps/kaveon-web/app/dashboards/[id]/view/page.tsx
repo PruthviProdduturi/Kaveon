@@ -122,6 +122,10 @@ const DashboardViewContent: React.FC<{
   // stored thumbnail is re-shot to match the new theme.
   useEffect(() => { capturedRef.current = false; }, [isDark]);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  // Show the filter bar by default when the dashboard has filters (once, on load)
+  // — filters that exist should be visible, not hidden behind the button. The user
+  // can still collapse it.
+  const filtersAutoOpenedRef = useRef(false);
   const [refreshInterval, setRefreshInterval] = useState(0);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -163,6 +167,14 @@ const DashboardViewContent: React.FC<{
   };
 
   const hasFilters = dashboardFilters.length > 0;
+
+  // Open the filter bar by default the first time filters are present.
+  useEffect(() => {
+    if (hasFilters && !filtersAutoOpenedRef.current) {
+      filtersAutoOpenedRef.current = true;
+      setFiltersOpen(true);
+    }
+  }, [hasFilters]);
 
   // Shared action button style
   const btnBase: React.CSSProperties = {
