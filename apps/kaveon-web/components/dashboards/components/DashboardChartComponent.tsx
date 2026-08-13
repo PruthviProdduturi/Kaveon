@@ -15,7 +15,7 @@
  */
 
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import type { DashboardComponentProps } from '../../../types/dashboard';
+import type { DashboardComponentProps, DashboardLayoutItem } from '../../../types/dashboard';
 import { msalFetch } from '../../../utils/msalFetch';
 import { API_BASE } from '../../../config';
 import { useDashboard } from '../DashboardContext';
@@ -28,6 +28,7 @@ import ChartActionsOverlay from './ChartActionsOverlay';
 
 interface DashboardChartLoaderProps {
   itemId: string;
+  item?: DashboardLayoutItem;
   chartId: number;
   filters: any[];
   crossFilterFilters: Array<{ column: string | null; operator: string; value: string }>;
@@ -43,6 +44,7 @@ interface DashboardChartLoaderProps {
  */
 const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({
   itemId,
+  item,
   chartId,
   filters,
   crossFilterFilters,
@@ -210,6 +212,8 @@ const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({
           exportsRef={exportsRef}
           title={tileTitle}
           subtitle={tileInfo}
+          chart={chart}
+          item={item}
         />
       </div>
     </ChartBuilderProvider>
@@ -272,6 +276,7 @@ export const DashboardChartComponent: React.FC<DashboardComponentProps> = ({ ite
       )}
       <DashboardChartLoader
         itemId={item.i}
+        item={item}
         chartId={item.chartId!}
         filters={appliedFilters}
         crossFilterFilters={crossFilterFilters}
