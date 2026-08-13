@@ -80,6 +80,26 @@ def _get_google_jwks_client() -> PyJWKClient:
 
 # ── Provider resolution ───────────────────────────────────────────────────────
 
+def _allow_unsigned_setup() -> bool:
+    """True ONLY during genuine first-run bootstrap — when nothing that could verify
+    identity is configured yet.
+
+    In production the NextAuth proxy secret (KAVEON_PROXY_SECRET) and/or Azure AD is
+    set, so this returns False and the unsigned-JWT fallback in _decode_token is
+    disabled. That closes the bypass where an attacker mints a
+    {"email": "x@y", "roles": ["Admin"]} token and has it accepted unverified.
+    """
+    if settings.KAVEON_PROXY_SECRET or _AAD_CONFIGURED:
+        return False
+    try:
+        import services.auth_config as _ac
+        if (_ac.get_config() or {}).get("google_client_id"):
+            return False
+    except Exception:
+        pass
+    return True
+
+
 def _get_active_provider() -> str:
     """
     Return the active auth provider name.
@@ -232,8 +252,11 @@ def _decode_token(token: str) -> Optional[tuple[str, list[str]]]:
     elif provider == "google":
         return _decode_google(token)
 
-    # Setup/fallback mode — accept any structurally valid JWT without signature verification.
-    # Preserve the roles claim from the payload so bootstrap Admin tokens stay Admin.
+    # Setup/fallback mode — accept an unsigned JWT ONLY during genuine first-run
+    # bootstrap (nothing configured to verify identity yet). Once a proxy secret or
+    # provider is configured, an unverified token is rejected — no forged-Admin bypass.
+    if not _allow_unsigned_setup():
+        return None
     try:
         payload = jwt.decode(token, options={"verify_signature": False})
         email = _email_from_payload(payload)

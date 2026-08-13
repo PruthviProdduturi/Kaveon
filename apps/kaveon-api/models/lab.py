@@ -81,3 +81,11 @@ class CtasBody(BaseModel):
         if not re.match(r'^[\w\s]+$', v):
             raise ValueError("Table name may only contain letters, digits, underscores and spaces")
         return v
+
+    @field_validator("schema")
+    @classmethod
+    def safe_schema(cls, v: str) -> str:
+        import re
+        if not re.match(r'^\w+$', v):
+            raise ValueError("Schema may only contain letters, digits and underscores")
+        return v

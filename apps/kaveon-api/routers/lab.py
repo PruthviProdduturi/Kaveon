@@ -13,6 +13,7 @@ import database.metadata as meta_db
 import services.saved_queries as saved_q_svc
 import services.query_history as history_svc
 from services.query_generator import quote_identifier
+from services.sql_guard import PLATFORM_METADATA_TABLES, assert_no_platform_tables
 from config import settings
 import time
 
@@ -76,16 +77,10 @@ def _resolve_db(database: str | None) -> str:
     return database or settings.METADATA_DATABASE
 
 
-# Platform's own tables. These live in the metadata database (which currently
-# also holds the demo/open-source data) and must never appear in SQL Lab — users
-# browse *their* data, not Kaveon's control-plane. When the metadata store is
-# split onto its own database, a pure data source simply won't match this filter.
-PLATFORM_METADATA_TABLES = frozenset({
-    "activity", "auth_config", "charts", "context_answer_cache", "context_snapshots",
-    "dashboards", "data_sources", "dataset_columns", "dataset_dimensions",
-    "dataset_metrics", "datasets", "favorites", "local_users", "query_history",
-    "saved_queries", "user_recents", "user_themes",
-})
+# Platform's own tables (PLATFORM_METADATA_TABLES) live in services.sql_guard, shared
+# with the query guard so the listing filter and the SQL guard can never drift apart.
+# They live in the metadata database (which currently also holds the demo/open-source
+# data) and must never appear in — or be queryable from — SQL Lab.
 
 
 def _hide_platform_tables(tables: list, resolved_db: str) -> list:
@@ -124,7 +119,9 @@ def get_schema(schema: str, table_name: str, database: str = Query(default=None)
 def execute_sql(data: LabExecuteBody, response: Response, ctx=Depends(require_min_role("Analyst"))):
     user = ctx.email
     sql_execute_limiter.check(user)
-    result = pool.execute_query(data.sql, _resolve_db(data.database))
+    resolved = _resolve_db(data.database)
+    assert_no_platform_tables(data.sql, resolved)
+    result = pool.execute_query(data.sql, resolved)
     return {"columns": result.get("columns", []), "rows": result.get("rows", []),
             "rowCount": result.get("row_count", 0)}
 
@@ -136,6 +133,7 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
     user_id = user
     sql = data.query
     database = _resolve_db(data.database)
+    assert_no_platform_tables(sql, database)
     dataset_id = data.datasetId
     run_context = data.runContext
     tables_used = data.tablesUsed
@@ -221,7 +219,12 @@ def create_table_as_select(data: CtasBody, ctx=Depends(require_min_role("Analyst
     sql_execute_limiter.check(user)
     # Wrap user SQL in SELECT … INTO — strip trailing semicolon first
     source_sql = data.sql.rstrip().rstrip(";").strip()
-    target = f"[{data.schema}].[{data.table_name}]"
+    # Never let CTAS read from or write into the control plane.
+    assert_no_platform_tables(source_sql, data.database)
+    if data.table_name.strip().lower() in PLATFORM_METADATA_TABLES and _resolve_db(data.database) == settings.METADATA_DATABASE:
+        raise HTTPException(status_code=403, detail="Cannot create a table with a reserved platform name.")
+    # Bracket-escape the identifiers (validated in CtasBody, but quote defensively).
+    target = f"{quote_identifier(data.schema)}.{quote_identifier(data.table_name)}"
     ctas_sql = f"SELECT * INTO {target} FROM (\n{source_sql}\n) AS __ctas_source"
     try:
         pool.execute_query(ctas_sql, data.database)
@@ -264,6 +267,7 @@ def get_distinct_values(
     user_id = user
     start_time = int(time.time() * 1000)
 
+    assert_no_platform_tables(f"{schema}.{table}", database)
     safe_schema = quote_identifier(schema)
     safe_table = quote_identifier(table)
     safe_column = quote_identifier(column)
