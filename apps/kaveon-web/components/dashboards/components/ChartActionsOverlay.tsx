@@ -18,12 +18,14 @@ interface ChartActionsOverlayProps {
   onDuplicate?: () => void;
   onRemove?: () => void;
   exportsRef: React.MutableRefObject<{ downloadPng: () => void; downloadCsv: () => void } | null>;
+  title?: string;
+  subtitle?: string;
 }
 
 const DIVIDER = '---';
 
 const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
-  chartId, dashboardId, isEditMode, onRefresh, onDuplicate, onRemove, exportsRef,
+  chartId, dashboardId, isEditMode, onRefresh, onDuplicate, onRemove, exportsRef, title, subtitle,
 }) => {
   const router = useRouter();
   const { sqlPreview } = useChartBuilder();
@@ -182,10 +184,22 @@ const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
               boxShadow: '0 24px 64px rgba(0,0,0,0.25)',
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span
+                  title={title || undefined}
+                  style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                >{title || 'Chart'}</span>
+                {subtitle && (
+                  <span
+                    title={subtitle}
+                    style={{ fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                  >{subtitle}</span>
+                )}
+              </div>
               <button
                 onClick={() => setFullScreen(false)}
-                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 18, padding: '0 4px' }}
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 18, padding: '0 4px', flexShrink: 0 }}
               >
                 <i className="fas fa-times" />
               </button>
