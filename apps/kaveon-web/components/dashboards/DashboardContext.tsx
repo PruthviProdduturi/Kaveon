@@ -1187,3 +1187,56 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
 
 // Re-export types for convenience
 export type { DashboardConfig };
+
+/**
+ * Pure filter resolver — mirrors the in-component getEffectiveFilters logic but takes
+ * the item and the filter set explicitly. This lets callers (e.g. the full-screen
+ * sandbox) resolve a chart's filters against a LOCAL copy of the filters without
+ * mutating global dashboard state. Keep in sync with getEffectiveFilters above.
+ */
+export function resolveEffectiveFilters(
+  item: { chartId?: number | null; ignoreFilters?: string[]; filters?: FilterConfig[] } | null | undefined,
+  dashboardFilters: DashboardFilter[],
+): FilterResolutionResult {
+  if (!item) {
+    return { effectiveFilters: [], appliedDashboardFilters: [], ignoredDashboardFilters: [], componentFilters: [] };
+  }
+
+  const ignoreList = item.ignoreFilters || [];
+  const componentFilters = item.filters || [];
+
+  const applicableDashboardFilters = dashboardFilters.filter((filter) => {
+    if (!filter.enabled) return false;
+    if (filter.filterType !== 'date_range' && !String(filter.value ?? '').trim()) return false;
+    if (ignoreList.includes(filter.id)) return false;
+    if (filter.appliesTo === 'all') return true;
+    if (item.chartId && Array.isArray(filter.appliesTo) && filter.appliesTo.includes(item.chartId)) return true;
+    return false;
+  });
+
+  const ignoredDashboardFilters = dashboardFilters.filter(
+    (filter) => filter.enabled && ignoreList.includes(filter.id),
+  );
+
+  const dashboardFilterConfigs: FilterConfig[] = [];
+  for (const f of applicableDashboardFilters) {
+    if (f.filterType === 'date_range') {
+      if (f.dateFrom) dashboardFilterConfigs.push({ id: `${f.id}_from`, column: f.column, operator: '>=', value: f.dateFrom });
+      if (f.dateTo) dashboardFilterConfigs.push({ id: `${f.id}_to`, column: f.column, operator: '<=', value: f.dateTo });
+    } else {
+      dashboardFilterConfigs.push({
+        id: f.id, column: f.column, operator: f.operator, value: f.value,
+        options: f.options, isLoading: f.isLoading, isPending: f.isPending,
+      });
+    }
+  }
+
+  const effectiveFilters: FilterConfig[] = [...dashboardFilterConfigs];
+  componentFilters.forEach((compFilter) => {
+    const existingIndex = effectiveFilters.findIndex((f) => f.column === compFilter.column);
+    if (existingIndex >= 0) effectiveFilters[existingIndex] = compFilter;
+    else effectiveFilters.push(compFilter);
+  });
+
+  return { effectiveFilters, appliedDashboardFilters: applicableDashboardFilters, ignoredDashboardFilters, componentFilters };
+}

@@ -1,14 +1,19 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import ReactDOM from 'react-dom';
 import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
-import { useChartBuilder } from '../../charts/ChartBuilderContext';
+import { useChartBuilder, ChartBuilderProvider } from '../../charts/ChartBuilderContext';
+import { useDashboard, resolveEffectiveFilters } from '../DashboardContext';
+import DashboardFilterBarReadOnly from '../DashboardFilterBarReadOnly';
+import type { DashboardFilter, DashboardLayoutItem } from '../../../types/dashboard';
 
 // Rendered inside the fullscreen modal — the same chart, big. Loaded lazily so it
 // doesn't bloat the tile bundle.
 const ChartPreview = dynamic(() => import('../../charts/ChartPreview'), { ssr: false });
+// A fresh hydrator for the full-screen sandbox so it queries independently of the tile.
+const ChartHydrator = dynamic(() => import('../../charts/ChartHydrator'), { ssr: false });
 
 interface ChartActionsOverlayProps {
   chartId: number;
@@ -20,15 +25,35 @@ interface ChartActionsOverlayProps {
   exportsRef: React.MutableRefObject<{ downloadPng: () => void; downloadCsv: () => void } | null>;
   title?: string;
   subtitle?: string;
+  chart?: any;         // chart config — used to hydrate the isolated full-screen chart
+  item?: DashboardLayoutItem; // dashboard item — used to resolve which filters apply
 }
 
 const DIVIDER = '---';
 
 const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
-  chartId, dashboardId, isEditMode, onRefresh, onDuplicate, onRemove, exportsRef, title, subtitle,
+  chartId, dashboardId, isEditMode, onRefresh, onDuplicate, onRemove, exportsRef, title, subtitle, chart, item,
 }) => {
   const router = useRouter();
   const { sqlPreview } = useChartBuilder();
+  const { dashboardFilters, themePalette } = useDashboard();
+
+  // ── Full-screen filter sandbox ─────────────────────────────────────────────
+  // On open, seed a LOCAL copy of the dashboard filters. Edits here re-run only the
+  // isolated full-screen chart; the real dashboard is never touched. Closing simply
+  // drops the local copy, so the tile keeps the dashboard's own filters.
+  const [fsFilters, setFsFilters] = useState<DashboardFilter[]>([]);
+  const updateFsFilter = (id: string, patch: Partial<DashboardFilter>) =>
+    setFsFilters((prev) => prev.map((f) => (f.id === id ? { ...f, ...patch } : f)));
+  // Filters that could apply to this chart (shown in the sandbox bar, incl. unset ones).
+  const fsApplicable = useMemo(
+    () => fsFilters.filter((f) => f.appliesTo === 'all' || (chartId != null && Array.isArray(f.appliesTo) && f.appliesTo.includes(chartId))),
+    [fsFilters, chartId],
+  );
+  const fsEffective = useMemo(
+    () => resolveEffectiveFilters(item ?? null, fsFilters).effectiveFilters,
+    [item, fsFilters],
+  );
   const [open, setOpen]               = useState(false);   // menu open
   const [fullScreen, setFullScreen]   = useState(false);
   const [showQuery, setShowQuery]     = useState(false);
@@ -37,6 +62,12 @@ const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
   const [confirmRemove, setConfirmRemove] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const btnRef  = useRef<HTMLButtonElement>(null);
+
+  // Seed the sandbox with a fresh copy of the dashboard filters each time full
+  // screen opens, so it always starts from the dashboard's current state.
+  useEffect(() => {
+    if (fullScreen) setFsFilters(dashboardFilters.map((f) => ({ ...f })));
+  }, [fullScreen, dashboardFilters]);
 
   // Close menu on outside click
   useEffect(() => {
@@ -204,10 +235,27 @@ const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
                 <i className="fas fa-times" />
               </button>
             </div>
+            {fsApplicable.length > 0 && (
+              <div style={{ borderBottom: '1px solid var(--border)', padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
+                <DashboardFilterBarReadOnly filtersOverride={fsApplicable} onUpdateFilter={updateFsFilter} />
+                <span style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <i className="fas fa-circle-info" style={{ fontSize: 10 }} />
+                  Filters here only change this view — the dashboard is unaffected.
+                </span>
+              </div>
+            )}
             <div style={{ flex: 1, padding: 16, overflow: 'hidden', position: 'relative', display: 'flex' }}>
-              {/* Render the real chart big — reads the same ChartBuilder context as
-                  the tile, so it shows the exact same data/options. */}
-              <ChartPreview />
+              {/* Isolated chart instance — its own ChartBuilder context + hydrator, seeded
+                  with the sandbox filters, so nothing here leaks back to the tile. */}
+              <ChartBuilderProvider runContext={`fullscreen:${chartId}`}>
+                <ChartHydrator
+                  key={`fs:${chartId}`}
+                  chart={chart}
+                  externalFilters={fsEffective}
+                  paletteOverride={themePalette}
+                />
+                <ChartPreview />
+              </ChartBuilderProvider>
             </div>
           </div>
         </div>,

@@ -35,13 +35,18 @@ interface FilterOption {
 /** Cache of fetched options per column string, shared across renders */
 const optionsCache: Record<string, { options: FilterOption[]; keyColumn: string | null }> = {};
 
-const DashboardFilterBarReadOnly: React.FC = () => {
-  const {
-    dashboardFilters,
-    filterLogic,
-    layout,
-    updateDashboardFilter,
-  } = useDashboard();
+interface DashboardFilterBarReadOnlyProps {
+  /** When provided, the bar reads/writes this filter set instead of the global
+   *  dashboard filters — used by the full-screen sandbox so edits stay local. */
+  filtersOverride?: DashboardFilter[];
+  onUpdateFilter?: (filterId: string, updates: Partial<DashboardFilter>) => void;
+}
+
+const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({ filtersOverride, onUpdateFilter }) => {
+  const ctx = useDashboard();
+  const { filterLogic, layout } = ctx;
+  const dashboardFilters = filtersOverride ?? ctx.dashboardFilters;
+  const updateDashboardFilter = onUpdateFilter ?? ctx.updateDashboardFilter;
 
   const [editingFilterId, setEditingFilterId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
