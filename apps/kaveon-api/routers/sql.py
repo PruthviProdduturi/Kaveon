@@ -14,6 +14,7 @@ import services.datasets as datasets_svc
 import services.query_history as history_svc
 from services.query_generator import build_chart_preview_query, build_distinct_filter_values_query
 from services.sql_table_extractor import extract_tables_from_sql
+from services.sql_guard import assert_no_platform_tables, assert_read_only
 import database.pool as pool
 
 router = APIRouter()
@@ -272,6 +273,12 @@ def execute_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Dep
                 status_code=403,
                 detail={"code": "forbidden", "message": "Analyst role required to execute queries."},
             )
+        # The dashboard-source exception must not become a write primitive: a Viewer
+        # may only run a single read-only SELECT (no INSERT/UPDATE/DELETE/DDL, no
+        # stacked statements) even when the request claims a dashboard source.
+        assert_read_only(data.sql_text)
+    # Never expose Kaveon's control-plane tables (auth_config, local_users, …) via Lab/API.
+    assert_no_platform_tables(data.sql_text, data.database)
     sql_execute_limiter.check(ctx.email)
     response.headers.update(NO_CACHE)
     user_id = ctx.email
@@ -373,6 +380,7 @@ def execute_sql_async(
 ):
     """Start an async query job. Returns job_id immediately for polling."""
     user = ctx.email
+    assert_no_platform_tables(data.sql_text, data.database)
     sql_execute_limiter.check(user)
     job_id = str(uuid.uuid4())
     with _ASYNC_JOBS_LOCK:
