@@ -208,6 +208,8 @@ const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({
           onDuplicate={onDuplicate}
           onRemove={onRemove}
           exportsRef={exportsRef}
+          title={tileTitle}
+          subtitle={tileInfo}
         />
       </div>
     </ChartBuilderProvider>
