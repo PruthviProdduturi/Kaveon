@@ -281,7 +281,7 @@ const DashboardViewContent: React.FC<{
 
           {/* Favorite */}
           <button type="button" onClick={onFavoriteClick} title={isFavorite ? 'Remove from favorites' : 'Add to favorites'} style={{
-            ...btnBase, padding: '0 10px',
+            ...btnBase, width: 34, padding: 0, justifyContent: 'center',
             background: isFavorite ? 'rgba(245, 158, 11, 0.08)' : 'var(--bg-surface)',
             borderColor: isFavorite ? '#fde68a' : '#e2e8f0',
             transform: isAnimating ? 'scale(0.88)' : 'scale(1)',
@@ -308,13 +308,13 @@ const DashboardViewContent: React.FC<{
             </button>
           )}
 
-          {/* Edit */}
-          <button onClick={onEdit} style={{ ...btnBase, background: '#2563eb', borderColor: '#2563eb', color: 'white', fontWeight: 600 }}
+          {/* Edit — icon-only */}
+          <button onClick={onEdit} title="Edit dashboard" aria-label="Edit dashboard"
+            style={{ ...btnBase, width: 34, padding: 0, justifyContent: 'center', background: '#2563eb', borderColor: '#2563eb', color: 'white' }}
             onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#1d4ed8'; }}
             onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = '#2563eb'; }}
           >
-            <i className="fas fa-edit" style={{ fontSize: 12 }} />
-            Edit
+            <i className="fas fa-edit" style={{ fontSize: 13 }} />
           </button>
         </div>
       </header>
