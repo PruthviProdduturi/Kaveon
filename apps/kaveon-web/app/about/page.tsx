@@ -217,45 +217,59 @@ export default function AboutPage() {
         }} />
 
         <div style={{ position: "relative", maxWidth: 900, zIndex: 2 }}>
-          {/* Guardian O — drops in with data particles radiating outward */}
+          {/* Guardian O — drops in with clean particle burst */}
           <div style={{ position: "relative", display: "inline-block", marginBottom: 0 }}>
-            {/* Data particles — words that scatter outward on logo landing */}
-            {["SELECT", "FROM", "WHERE", "JOIN", "GROUP BY", "AVG()", "SUM()", "COUNT"].map((word, i) => {
-              const angle = (i / 8) * 360;
+            {/* Minimal dot particles — burst outward on landing */}
+            <style>{`
+              @keyframes particle-burst {
+                0% { opacity: 0; transform: translate(-50%, -50%) scale(0); }
+                20% { opacity: 0.8; }
+                100% { opacity: 0; }
+              }
+            `}</style>
+            {Array.from({ length: 12 }).map((_, i) => {
+              const angle = (i / 12) * 360;
               const rad = angle * Math.PI / 180;
-              const tx = Math.cos(rad) * 180;
-              const ty = Math.sin(rad) * 140;
+              const dist = 100 + Math.random() * 60;
               return (
-                <span key={word} style={{
+                <div key={i} style={{
                   position: "absolute", top: "50%", left: "50%",
-                  fontSize: 10, fontFamily: "monospace", fontWeight: 600,
-                  color: `${B}`,
-                  pointerEvents: "none", whiteSpace: "nowrap",
-                  opacity: 0,
-                  animation: `particle-scatter-${i} 1.4s cubic-bezier(0.16, 1, 0.3, 1) 0.5s both`,
+                  width: 4, height: 4, borderRadius: "50%",
+                  background: B,
+                  pointerEvents: "none",
+                  animation: `particle-burst 1s ease-out 0.45s both`,
+                  transform: `translate(-50%, -50%)`,
+                  offsetPath: `path('M 0 0 L ${Math.cos(rad) * dist} ${Math.sin(rad) * dist}')`,
+                  offsetDistance: "0%",
+                  animationName: "particle-burst",
+                  // Use inline keyframes via style override
+                  ...({ "--tx": `${Math.cos(rad) * dist}px`, "--ty": `${Math.sin(rad) * dist}px` } as any),
                 }}>
                   <style>{`
-                    @keyframes particle-scatter-${i} {
-                      0% { opacity: 0; transform: translate(-50%, -50%) scale(0.5); }
-                      30% { opacity: 0.7; transform: translate(calc(-50% + ${tx * 0.3}px), calc(-50% + ${ty * 0.3}px)) scale(1); }
-                      70% { opacity: 0.4; transform: translate(calc(-50% + ${tx}px), calc(-50% + ${ty}px)) scale(0.8); }
-                      100% { opacity: 0; transform: translate(calc(-50% + ${tx * 1.3}px), calc(-50% + ${ty * 1.3}px)) scale(0.5); }
+                    @keyframes pb-${i} {
+                      0% { opacity: 0; transform: translate(-50%, -50%) scale(0); }
+                      15% { opacity: 0.6; transform: translate(calc(-50% + ${Math.cos(rad) * dist * 0.3}px), calc(-50% + ${Math.sin(rad) * dist * 0.3}px)) scale(1); }
+                      100% { opacity: 0; transform: translate(calc(-50% + ${Math.cos(rad) * dist}px), calc(-50% + ${Math.sin(rad) * dist}px)) scale(0); }
                     }
                   `}</style>
-                  {word}
-                </span>
+                  <div style={{
+                    width: i % 3 === 0 ? 5 : 3, height: i % 3 === 0 ? 5 : 3,
+                    borderRadius: "50%", background: B,
+                    animation: `pb-${i} 0.9s ease-out ${0.4 + i * 0.02}s both`,
+                  }} />
+                </div>
               );
             })}
-            {/* Glow — settles then breathes */}
+            {/* Single clean glow */}
             <div style={{
-              position: "absolute", inset: -30,
+              position: "absolute", inset: -40,
               borderRadius: "50%",
-              background: `radial-gradient(circle, ${B}25 0%, transparent 70%)`,
-              filter: "blur(25px)",
+              background: `radial-gradient(circle, ${B}18 0%, transparent 70%)`,
+              filter: "blur(30px)",
               pointerEvents: "none",
-              animation: "logo-glow-settle 1s ease 0.4s both, logo-glow-breathe 4s ease-in-out infinite 2s",
+              animation: "logo-glow-settle 0.8s ease 0.4s both, logo-glow-breathe 5s ease-in-out infinite 2s",
             }} />
-            {/* Logo — drops in with elastic bounce */}
+            {/* Logo — drops in */}
             <div style={{ animation: "logo-drop-in 1.1s cubic-bezier(0.34, 1.56, 0.64, 1) forwards" }}>
               <KaveonMark size={240} useDirectColor />
             </div>
