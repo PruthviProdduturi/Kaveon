@@ -3,27 +3,45 @@
 import { useEffect, useRef, useState } from "react";
 import { KaveonMark } from "../../components/KaveonMark";
 
-function useFadeIn(delay = 0) {
+type AnimDirection = "up" | "down" | "left" | "right" | "scale" | "none";
+
+function useScrollAnim(direction: AnimDirection = "up", delay = 0, duration = 0.8) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    const transforms: Record<AnimDirection, string> = {
+      up: "translateY(60px)",
+      down: "translateY(-60px)",
+      left: "translateX(-80px)",
+      right: "translateX(80px)",
+      scale: "scale(0.9)",
+      none: "none",
+    };
     el.style.opacity = "0";
-    el.style.transform = "translateY(40px)";
-    el.style.transition = `opacity 0.8s ease-out ${delay}ms, transform 0.8s ease-out ${delay}ms`;
+    el.style.transform = transforms[direction];
+    el.style.transition = `opacity ${duration}s cubic-bezier(0.16, 1, 0.3, 1) ${delay}ms, transform ${duration}s cubic-bezier(0.16, 1, 0.3, 1) ${delay}ms`;
     const obs = new IntersectionObserver(
-      ([e]) => { if (e.isIntersecting) { el.style.opacity = "1"; el.style.transform = "translateY(0)"; obs.disconnect(); } },
-      { threshold: 0.1 }
+      ([e]) => { if (e.isIntersecting) { el.style.opacity = "1"; el.style.transform = "translate(0) scale(1)"; obs.disconnect(); } },
+      { threshold: 0.08, rootMargin: "0px 0px -50px 0px" }
     );
     obs.observe(el);
     return () => obs.disconnect();
-  }, [delay]);
+  }, [direction, delay, duration]);
   return ref;
 }
 
+function Anim({ dir = "up" as AnimDirection, delay = 0, duration = 0.8, children, style, className }: {
+  dir?: AnimDirection; delay?: number; duration?: number; children: React.ReactNode; style?: React.CSSProperties; className?: string;
+}) {
+  const ref = useScrollAnim(dir, delay, duration);
+  return <div ref={ref} style={style} className={className}>{children}</div>;
+}
+
+// Legacy compat
+function useFadeIn(delay = 0) { return useScrollAnim("up", delay); }
 function Section({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
-  const ref = useFadeIn();
-  return <div ref={ref} style={style}>{children}</div>;
+  return <Anim dir="up">{(() => { return <div style={style}>{children}</div>; })()}</Anim>;
 }
 
 export default function AboutPage() {
@@ -351,8 +369,8 @@ export default function AboutPage() {
               { n: "01", title: "You ask", desc: "Type a question in natural language. No syntax. No training.", color: B, icon: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" },
               { n: "02", title: "We parse", desc: "A deterministic engine matches your words to schema metadata and generates SQL. No LLM. Instant.", color: "#8b5cf6", icon: "M13 2L3 14h9l-1 8 10-12h-9l1-8z" },
               { n: "03", title: "Data answers", desc: "SQL executes, the right visualization is selected, and you see data with an intelligent summary.", color: "#10b981", icon: "M22 12h-4l-3 9L9 3l-3 9H2" },
-            ].map((s) => (
-              <div key={s.n} style={{
+            ].map((s, idx) => (
+              <Anim key={s.n} dir="up" delay={idx * 150} style={{
                 padding: "40px 32px", borderRadius: 16,
                 background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)",
                 textAlign: "center", transition: "all 0.3s",
@@ -367,7 +385,7 @@ export default function AboutPage() {
                 <div style={{ fontSize: 11, fontWeight: 700, color: s.color, letterSpacing: "0.08em", marginBottom: 8 }}>STEP {s.n}</div>
                 <h3 style={{ fontSize: 20, fontWeight: 700, marginBottom: 10, color: "#e2e8f0" }}>{s.title}</h3>
                 <p style={{ fontSize: 14, color: "#666", lineHeight: 1.7 }}>{s.desc}</p>
-              </div>
+              </Anim>
             ))}
           </div>
         </div>
@@ -412,8 +430,8 @@ export default function AboutPage() {
                 metric: "$0",
                 metricLabel: "per query",
               },
-            ].map(({ icon, title, desc, color, metric, metricLabel }) => (
-              <div key={title} style={{
+            ].map(({ icon, title, desc, color, metric, metricLabel }, idx) => (
+              <Anim key={title} dir="up" delay={idx * 150} style={{
                 padding: "36px 28px", borderRadius: 16,
                 background: "rgba(255,255,255,0.02)",
                 border: "1px solid rgba(255,255,255,0.05)",
@@ -433,7 +451,7 @@ export default function AboutPage() {
                   <h3 style={{ fontSize: 17, fontWeight: 700, color: "#e2e8f0", margin: 0 }}>{title}</h3>
                 </div>
                 <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.7, margin: 0 }}>{desc}</p>
-              </div>
+              </Anim>
             ))}
           </div>
 
@@ -464,7 +482,7 @@ export default function AboutPage() {
       <section id="dashboards" ref={r7} style={{ padding: "60px 0 100px", background: "#0a0a0a", position: "relative", overflow: "hidden" }}>
         <div style={{ position: "absolute", top: "20%", left: "50%", transform: "translateX(-50%)", width: 1200, height: 600, borderRadius: "50%", background: `radial-gradient(circle, ${B}06 0%, transparent 60%)`, pointerEvents: "none" }} />
 
-        <div style={{ textAlign: "center", marginBottom: 40, position: "relative", padding: "0 24px" }}>
+        <Anim dir="up" style={{ textAlign: "center", marginBottom: 40, position: "relative", padding: "0 24px" }}>
           <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: "#f59e0b", marginBottom: 12 }}>Dashboards</div>
           <h2 style={{ fontSize: "clamp(28px, 4vw, 44px)", fontWeight: 700, letterSpacing: "-1px", marginBottom: 12 }}>
             Build dashboards that tell stories
@@ -489,10 +507,10 @@ export default function AboutPage() {
               </button>
             ))}
           </div>
-        </div>
+        </Anim>
 
         {/* Stacked dashboard viewer */}
-        <div style={{ maxWidth: 1140, margin: "0 auto", position: "relative", padding: "0 24px" }}>
+        <Anim dir="left" delay={200} style={{ maxWidth: 1140, margin: "0 auto", position: "relative", padding: "0 24px" }}>
           {/* Browser frame with active screenshot */}
           <div style={{
             borderRadius: 16, overflow: "hidden",
@@ -563,13 +581,13 @@ export default function AboutPage() {
               </button>
             ))}
           </div>
-        </div>
+        </Anim>
       </section>
 
       {/* ─── SQL Lab Showcase ─── */}
       <Section style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0a0a0a 0%, #0f1520 50%, #0a0a0a 100%)" }}>
         <div style={{ maxWidth: 1100, margin: "0 auto", display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 48, alignItems: "center" }}>
-          <div style={{ background: "#111", borderRadius: 16, border: "1px solid rgba(255,255,255,0.05)", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
+          <Anim dir="left" style={{ background: "#111", borderRadius: 16, border: "1px solid rgba(255,255,255,0.05)", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
             <div style={{ padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", display: "flex", gap: 12 }}>
               <span style={{ fontSize: 12, color: B, borderBottom: `2px solid ${B}`, paddingBottom: 8 }}>Query 1</span>
               <span style={{ fontSize: 12, color: "#555", paddingBottom: 8 }}>Query 2</span>
@@ -613,22 +631,22 @@ export default function AboutPage() {
                 ))}
               </div>
             </div>
-          </div>
-          <div>
+          </Anim>
+          <Anim dir="right" delay={200}>
             <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "3px", color: "#8b5cf6", marginBottom: 16 }}>SQL Lab</div>
             <h3 style={{ fontSize: 32, fontWeight: 700, lineHeight: 1.2, marginBottom: 16, letterSpacing: "-0.5px", color: "#e2e8f0" }}>VS Code in your browser</h3>
             <p style={{ fontSize: 15, color: "#666", lineHeight: 1.8, marginBottom: 24 }}>
               Monaco editor with full SQL autocomplete, syntax highlighting, multi-tab sessions, query history, and result caching. Write, run, and save queries against any connected database.
             </p>
             <a href="/lab" style={{ fontSize: 14, color: B, textDecoration: "none", fontWeight: 500 }}>Open SQL Lab &rarr;</a>
-          </div>
+          </Anim>
         </div>
       </Section>
 
       {/* ─── Adaptive Context Routing ─── */}
       <Section style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0a0a0a 0%, #0f1520 50%, #0a0a0a 100%)" }}>
         <div style={{ maxWidth: 1000, margin: "0 auto", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 60, alignItems: "center" }}>
-          <div>
+          <Anim dir="left">
             <h3 style={{ fontSize: 32, fontWeight: 700, lineHeight: 1.2, marginBottom: 16, letterSpacing: "-0.5px", color: "#e2e8f0" }}>
               Adaptive Context Routing
             </h3>
@@ -650,9 +668,9 @@ export default function AboutPage() {
                 </div>
               ))}
             </div>
-          </div>
+          </Anim>
           {/* Routing diagram */}
-          <div style={{ padding: 32, borderRadius: 16, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
+          <Anim dir="right" delay={200} style={{ padding: 32, borderRadius: 16, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               {[
                 { label: "Question", sub: "\"How many deaths in the US?\"", color: "#e2e8f0", bg: "rgba(255,255,255,0.04)" },
@@ -674,7 +692,7 @@ export default function AboutPage() {
                 </div>
               ))}
             </div>
-          </div>
+          </Anim>
         </div>
       </Section>
 
