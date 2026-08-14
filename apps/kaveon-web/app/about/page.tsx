@@ -219,14 +219,13 @@ export default function AboutPage() {
         <div style={{ position: "relative", maxWidth: 900, zIndex: 2 }}>
           {/* Guardian O — spins into existence */}
           <style>{`
-            @keyframes logo-arc-spin {
-              0% { opacity: 0; transform: rotate(-540deg) scale(0.15); filter: blur(16px); }
-              30% { opacity: 1; transform: rotate(-90deg) scale(0.8); filter: blur(2px); }
-              50% { transform: rotate(20deg) scale(1.12); filter: blur(0); }
-              65% { transform: rotate(-8deg) scale(0.96); }
-              78% { transform: rotate(4deg) scale(1.03); }
-              88% { transform: rotate(-1deg) scale(0.99); }
-              100% { transform: rotate(0deg) scale(1); }
+            @keyframes logo-materialize {
+              0% { opacity: 0; transform: scale(2.5) rotate(0deg); filter: blur(40px) brightness(3); }
+              25% { opacity: 0.6; transform: scale(1.4) rotate(0deg); filter: blur(15px) brightness(2); }
+              50% { opacity: 0.9; transform: scale(0.92) rotate(0deg); filter: blur(3px) brightness(1.2); }
+              70% { opacity: 1; transform: scale(1.05) rotate(0deg); filter: blur(0) brightness(1); }
+              85% { transform: scale(0.98); }
+              100% { transform: scale(1); }
             }
             @keyframes logo-ring-trace {
               0% { stroke-dashoffset: 754; opacity: 0; }
@@ -246,7 +245,7 @@ export default function AboutPage() {
               animation: "logo-glow-settle 0.8s ease 0.6s both, logo-glow-breathe 5s ease-in-out infinite 2s",
             }} />
             {/* Logo — spins in */}
-            <div style={{ animation: "logo-arc-spin 1.2s cubic-bezier(0.22, 1, 0.36, 1) forwards" }}>
+            <div style={{ animation: "logo-materialize 1.4s cubic-bezier(0.16, 1, 0.3, 1) forwards" }}>
               <KaveonMark size={240} useDirectColor />
             </div>
           </div>
