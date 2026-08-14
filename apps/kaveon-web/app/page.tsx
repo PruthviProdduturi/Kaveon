@@ -378,18 +378,24 @@ export default function Home() {
       // reuse the previous query's dataset/SQL context
       let queryText = text.trim();
       const isFollowUp = /^(?:what about|how about|and |show me |now |same for )/i.test(queryText);
-      const prevAssistant = [...messages].reverse().find(m => m.role === "assistant" && m.chart?.sql);
+      // Find previous assistant message with query context (chart or routeMeta)
+      const prevAssistant = [...messages].reverse().find(m => m.role === "assistant" && (m.chart?.title || m.routeMeta));
+      // Also find the previous user message to reuse their query
+      const prevUser = [...messages].reverse().find(m => m.role === "user" && m !== messages[messages.length - 1]);
 
-      if (isFollowUp && prevAssistant?.chart) {
-        // Extract the entity from the follow-up (e.g. "India" from "What about India")
+      if (isFollowUp && prevUser) {
         const entityMatch = queryText.match(/(?:what about|how about|and|show me|now|same for)\s+(.+)/i);
         if (entityMatch) {
           const entity = entityMatch[1].replace(/[?.!]$/, "").trim();
-          // Rebuild the previous query with the new entity filter
-          const prevSql = prevAssistant.chart.sql;
-          const prevTitle = prevAssistant.chart.title;
-          // Rewrite: inject entity into previous query context
-          queryText = `${prevTitle} in ${entity}`;
+          // Replace previous entity in the user query, or append "in [entity]"
+          const prev = prevUser.content;
+          // Remove any existing entity from previous query (capitalized words that aren't keywords)
+          const cleaned = prev.replace(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b/g, match => {
+            const lower = match.toLowerCase();
+            const isKeyword = /^(energy|carbon|total|show|top|get|what|how|consumption|emissions|temperature|renewable|global|trend|arena|benchmark|model)$/i.test(lower);
+            return isKeyword ? match : "";
+          }).replace(/\s+/g, " ").replace(/\b(in|for|of)\s*$/i, "").trim();
+          queryText = cleaned ? `${cleaned} in ${entity}` : `${entity} energy`;
         }
       }
 
