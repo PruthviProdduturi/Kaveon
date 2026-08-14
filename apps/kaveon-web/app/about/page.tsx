@@ -234,16 +234,6 @@ export default function AboutPage() {
             }
           `}</style>
           <div style={{ position: "relative", display: "inline-block", marginBottom: 0 }}>
-            {/* Arc ring that traces around the logo as it spins */}
-            <svg width="300" height="300" viewBox="0 0 300 300" style={{
-              position: "absolute", top: "50%", left: "50%",
-              marginTop: -150, marginLeft: -150,
-              pointerEvents: "none",
-            }}>
-              <circle cx="150" cy="150" r="120" fill="none" stroke={B} strokeWidth="1"
-                strokeDasharray="754" strokeDashoffset="754" opacity="0"
-                style={{ animation: "logo-ring-trace 1.5s ease-out 0.2s both" }} />
-            </svg>
             {/* Soft glow */}
             <div style={{
               position: "absolute", inset: -40,
