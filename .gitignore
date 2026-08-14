@@ -152,3 +152,4 @@ CLAUDE.md
 
 .vercel
 .env*
+data/covid-taxi/*.csv
