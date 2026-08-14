@@ -264,6 +264,15 @@ function extractEntityFilter(
     }
   }
 
+  // Mid-sentence entity: "does India consume" or "how much energy does China use"
+  const midMatch = query.match(/\b(?:does|did|is|has|for|about)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b/);
+  if (midMatch && isEntity(midMatch[1])) {
+    const value = midMatch[1];
+    const col = stringCols.find(c => /country|name|region|provider|model/i.test(c.name)) || stringCols[0];
+    const clean = query.replace(midMatch[1], "").replace(/\s+/g, " ").trim();
+    return { filterCol: col.name, filterValue: value, cleanQuery: clean };
+  }
+
   // "What about India" pattern
   const aboutMatch = query.match(/\b(?:what about|how about|and)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i);
   if (aboutMatch) {
@@ -282,10 +291,26 @@ export function nlToSql(query: string, schema: DatasetSchema): NlToSqlResult | n
 
   // Extract entity filter before parsing (e.g. "India" → WHERE country = 'India')
   const entityFilter = extractEntityFilter(corrected, columns);
-  const q = (entityFilter?.cleanQuery || corrected).toLowerCase().trim();
-  const whereClause = entityFilter
-    ? ` WHERE ${entityFilter.filterCol} = '${entityFilter.filterValue.replace(/'/g, "''")}'`
-    : "";
+  let cleanedQuery = entityFilter?.cleanQuery || corrected;
+
+  // Extract year filter (e.g. "in 2024", "for 2023", "2025 data")
+  const yearMatch = cleanedQuery.match(/\b(?:in|for|during|year)?\s*(20[1-9]\d)\b/);
+  const yearCol = columns.find(c => /year|dt|date/i.test(c.name));
+  let yearFilter = "";
+  if (yearMatch && yearCol) {
+    yearFilter = yearCol.type === "number"
+      ? `${yearCol.name} = ${yearMatch[1]}`
+      : `EXTRACT(YEAR FROM ${yearCol.name}) = ${yearMatch[1]}`;
+    cleanedQuery = cleanedQuery.replace(yearMatch[0], "").replace(/\s+/g, " ").trim();
+  }
+
+  const q = cleanedQuery.toLowerCase().trim();
+
+  // Build WHERE clause combining entity + year filters
+  const filters: string[] = [];
+  if (entityFilter) filters.push(`${entityFilter.filterCol} = '${entityFilter.filterValue.replace(/'/g, "''")}'`);
+  if (yearFilter) filters.push(yearFilter);
+  const whereClause = filters.length > 0 ? ` WHERE ${filters.join(" AND ")}` : "";
 
   // If entity extracted but no meaningful query left (e.g. "What about India"), show summary
   if (entityFilter && (!q || q.length < 3)) {
