@@ -230,8 +230,22 @@ function extractEntityFilter(
   if (stringCols.length === 0) return null;
 
   // Common patterns: "in India", "for India", "of India", "India's"
+  // Words that look capitalized but are NOT entities
+  const NOT_ENTITIES = new Set([
+    "energy", "carbon", "total", "average", "show", "get", "what", "top", "consumption",
+    "emissions", "temperature", "renewable", "renewables", "intensity", "fossil", "solar",
+    "wind", "nuclear", "hydro", "electricity", "global", "trend", "distribution",
+    "arena", "benchmark", "model", "models", "score", "pricing", "compare",
+    "summary", "summarize", "list", "count", "how", "which", "where", "the",
+  ]);
+
+  function isEntity(word: string): boolean {
+    return !NOT_ENTITIES.has(word.toLowerCase());
+  }
+
+  // Common patterns: "in India", "for India", "of India"
   const inMatch = query.match(/\b(?:in|for|of)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/);
-  if (inMatch) {
+  if (inMatch && isEntity(inMatch[1])) {
     const value = inMatch[1];
     const col = stringCols.find(c => /country|name|region|provider|model/i.test(c.name)) || stringCols[0];
     const clean = query.replace(inMatch[0], "").replace(/\s+/g, " ").trim();
@@ -240,9 +254,8 @@ function extractEntityFilter(
 
   // Leading entity: "India consumption" or "China energy"
   const leadMatch = query.match(/^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+(.+)/);
-  if (leadMatch) {
+  if (leadMatch && isEntity(leadMatch[1])) {
     const candidate = leadMatch[1];
-    // Only treat as entity if the rest of the query has meaningful words
     const rest = leadMatch[2].toLowerCase();
     const hasKeyword = /energy|consumption|carbon|emission|temperature|elo|score|model|benchmark|renewable/.test(rest);
     if (hasKeyword && candidate.length > 2) {
