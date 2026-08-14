@@ -73,8 +73,10 @@ export default function AboutPage() {
     return () => container.removeEventListener("scroll", onScroll);
   }, []);
   const slides = [
-    { dark: "/showcase/energy-dark.png", light: "/showcase/energy-dark.png", title: "Global Energy", desc: "220 countries — consumption, renewables, carbon intensity, GHG emissions" },
-    { dark: "/showcase/ai-arena-dark.png", light: "/showcase/ai-arena-dark.png", title: "AI Model Arena", desc: "34 LLMs — Arena ELO rankings, benchmarks, pricing, head-to-head battles" },
+    { dark: "/showcase/climate-dark.png", light: "/showcase/climate-dark.png", title: "Climate x Energy Impact", desc: "Cross-domain — warming vs renewables, carbon intensity across 188 countries" },
+    { dark: "/showcase/ai-arena-dark.png", light: "/showcase/ai-arena-dark.png", title: "AI Model Arena", desc: "34 LLMs — Arena ELO rankings, benchmarks, pricing, head-to-head" },
+    { dark: "/showcase/energy-dark.png", light: "/showcase/energy-dark.png", title: "Global Energy", desc: "220 countries — consumption, carbon intensity, energy mix, GHG trends" },
+    { dark: "/showcase/taxi-dark.png", light: "/showcase/taxi-dark.png", title: "NYC Yellow Taxi", desc: "3M rides — borough map, revenue breakdown, trip analysis" },
   ];
 
   const B = "#4A9EE8";
