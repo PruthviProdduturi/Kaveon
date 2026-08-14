@@ -244,7 +244,7 @@ export default function AboutPage() {
               animation: "logo-glow-settle 0.8s ease 0.6s both, logo-glow-breathe 5s ease-in-out infinite 2s",
             }} />
             {/* Logo — spins in */}
-            <div style={{ animation: "logo-arc-spin 1.4s cubic-bezier(0.16, 1, 0.3, 1) forwards" }}>
+            <div style={{ animation: "logo-arc-spin 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards" }}>
               <KaveonMark size={240} useDirectColor />
             </div>
           </div>
@@ -254,7 +254,7 @@ export default function AboutPage() {
             margin: "-8px 0 24px", padding: 0,
             background: `linear-gradient(135deg, #ffffff 0%, #e2e8f0 30%, ${B} 70%, #8b5cf6 100%)`,
             backgroundSize: "300% 300%",
-            animation: "gradientShift 8s ease infinite, hero-title-drop 0.9s cubic-bezier(0.34, 1.56, 0.64, 1) 0.7s both",
+            animation: "gradientShift 8s ease infinite, hero-title-drop 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) 0.3s both",
             WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
           }}>
             Talk to your data
@@ -263,16 +263,16 @@ export default function AboutPage() {
           <p style={{
             fontSize: "clamp(18px, 2.2vw, 22px)", color: "#888", lineHeight: 1.7,
             maxWidth: 640, margin: "0 auto 20px", fontWeight: 400,
-            animation: "hero-sub-drop 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) 1.2s both",
+            animation: "hero-sub-drop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 0.5s both",
           }}>
             Connect your databases. Ask anything. Get instant answers with interactive charts — powered by a deterministic engine,<br />not an LLM.
           </p>
 
           {/* Subtle accent line */}
-          <div style={{ height: 3, borderRadius: 2, background: `linear-gradient(90deg, ${B}, #8b5cf6)`, margin: "0 auto 36px", animation: "hero-line-draw 0.6s ease 1.5s both" }} />
+          <div style={{ height: 3, borderRadius: 2, background: `linear-gradient(90deg, ${B}, #8b5cf6)`, margin: "0 auto 36px", animation: "hero-line-draw 0.4s ease 0.7s both" }} />
 
           {/* Trust signals */}
-          <div style={{ display: "flex", justifyContent: "center", gap: 24, marginBottom: 44, flexWrap: "wrap", animation: "hero-sub-drop 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) 1.7s both" }}>
+          <div style={{ display: "flex", justifyContent: "center", gap: 24, marginBottom: 44, flexWrap: "wrap", animation: "hero-sub-drop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 0.8s both" }}>
             {[
               { icon: "fa-shield-check", text: "Zero Hallucination" },
               { icon: "fa-bolt", text: "Sub-10ms Latency" },
@@ -285,7 +285,7 @@ export default function AboutPage() {
             ))}
           </div>
 
-          <div style={{ display: "flex", justifyContent: "center", gap: 14, animation: "hero-cta-drop 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) 2.0s both" }}>
+          <div style={{ display: "flex", justifyContent: "center", gap: 14, animation: "hero-cta-drop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 1.0s both" }}>
             <a href="/" className="about-btn hero-cta-primary" style={{
               display: "inline-flex", alignItems: "center", gap: 10,
               padding: "18px 44px", borderRadius: 14,
