@@ -596,56 +596,88 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
         # ── Time range filter ─────────────────────────────────────────────────
         if time_column and time_range and time_range != "all_time":
             raw_time_expr = _resolve_column_expression(time_column, fact_alias, alias_map, column_table_map, coalesce_map)
-            today = "CAST(GETUTCDATE() AS DATE)"
+            is_pg = db_type in ("postgresql", "mysql")
+            today = "CURRENT_DATE" if is_pg else "CAST(GETUTCDATE() AS DATE)"
             tr = time_range.lower()
 
             range_sql: Optional[str] = None
             if tr == "latest_day":
-                # Filter to rows where the date equals the maximum date in the table
                 tc_parts = time_column.split(".")
                 tc_quoted = quote_identifier(tc_parts[-1])
                 range_sql = (
                     f"CAST({raw_time_expr} AS DATE) = "
                     f"(SELECT MAX(CAST({tc_quoted} AS DATE)) FROM {fact_table})"
                 )
-            elif tr == "last_day":
-                range_sql = f"{raw_time_expr} >= DATEADD(DAY, -1, {today})"
-            elif tr == "last_week":
-                range_sql = f"{raw_time_expr} >= DATEADD(WEEK, -1, {today})"
-            elif tr == "last_month":
-                range_sql = f"{raw_time_expr} >= DATEADD(MONTH, -1, {today})"
-            elif tr == "last_quarter":
-                range_sql = f"{raw_time_expr} >= DATEADD(QUARTER, -1, {today})"
-            elif tr == "last_year":
-                range_sql = f"{raw_time_expr} >= DATEADD(YEAR, -1, {today})"
-            elif tr == "week_to_date":
-                range_sql = f"{raw_time_expr} >= DATEADD(DAY, 1 - DATEPART(WEEKDAY, {today}), {today})"
-            elif tr == "month_to_date":
-                range_sql = f"{raw_time_expr} >= DATEFROMPARTS(YEAR({today}), MONTH({today}), 1)"
-            elif tr == "quarter_to_date":
-                range_sql = f"{raw_time_expr} >= DATEFROMPARTS(YEAR({today}), ((DATEPART(QUARTER, {today}) - 1) * 3) + 1, 1)"
-            elif tr == "year_to_date":
-                range_sql = f"{raw_time_expr} >= DATEFROMPARTS(YEAR({today}), 1, 1)"
-            elif tr == "previous_week":
-                range_sql = (f"{raw_time_expr} >= DATEADD(WEEK, -2, DATEADD(DAY, 1 - DATEPART(WEEKDAY, {today}), {today})) "
-                             f"AND {raw_time_expr} < DATEADD(DAY, 1 - DATEPART(WEEKDAY, {today}), {today})")
-            elif tr == "previous_month":
-                range_sql = (f"{raw_time_expr} >= DATEFROMPARTS(YEAR(DATEADD(MONTH, -1, {today})), MONTH(DATEADD(MONTH, -1, {today})), 1) "
-                             f"AND {raw_time_expr} < DATEFROMPARTS(YEAR({today}), MONTH({today}), 1)")
-            elif tr == "previous_quarter":
-                range_sql = (f"{raw_time_expr} >= DATEADD(QUARTER, -2, DATEFROMPARTS(YEAR({today}), ((DATEPART(QUARTER, {today}) - 1) * 3) + 1, 1)) "
-                             f"AND {raw_time_expr} < DATEFROMPARTS(YEAR({today}), ((DATEPART(QUARTER, {today}) - 1) * 3) + 1, 1)")
-            elif tr == "previous_year":
-                range_sql = (f"{raw_time_expr} >= DATEFROMPARTS(YEAR({today}) - 1, 1, 1) "
-                             f"AND {raw_time_expr} < DATEFROMPARTS(YEAR({today}), 1, 1)")
-            elif tr == "last_7_days":
-                range_sql = f"{raw_time_expr} >= DATEADD(DAY, -7, {today})"
-            elif tr == "last_30_days":
-                range_sql = f"{raw_time_expr} >= DATEADD(DAY, -30, {today})"
-            elif tr == "last_90_days":
-                range_sql = f"{raw_time_expr} >= DATEADD(DAY, -90, {today})"
-            elif tr == "last_365_days":
-                range_sql = f"{raw_time_expr} >= DATEADD(DAY, -365, {today})"
+            elif is_pg:
+                # PostgreSQL date arithmetic using INTERVAL
+                pg_intervals = {
+                    "last_day": "1 day", "last_week": "7 days", "last_month": "1 month",
+                    "last_quarter": "3 months", "last_year": "1 year",
+                    "last_7_days": "7 days", "last_30_days": "30 days",
+                    "last_90_days": "90 days", "last_365_days": "365 days",
+                }
+                if tr in pg_intervals:
+                    range_sql = f"{raw_time_expr} >= {today} - INTERVAL '{pg_intervals[tr]}'"
+                elif tr == "week_to_date":
+                    range_sql = f"{raw_time_expr} >= DATE_TRUNC('week', {today})"
+                elif tr == "month_to_date":
+                    range_sql = f"{raw_time_expr} >= DATE_TRUNC('month', {today})"
+                elif tr == "quarter_to_date":
+                    range_sql = f"{raw_time_expr} >= DATE_TRUNC('quarter', {today})"
+                elif tr == "year_to_date":
+                    range_sql = f"{raw_time_expr} >= DATE_TRUNC('year', {today})"
+                elif tr == "previous_week":
+                    range_sql = (f"{raw_time_expr} >= DATE_TRUNC('week', {today}) - INTERVAL '7 days' "
+                                 f"AND {raw_time_expr} < DATE_TRUNC('week', {today})")
+                elif tr == "previous_month":
+                    range_sql = (f"{raw_time_expr} >= DATE_TRUNC('month', {today}) - INTERVAL '1 month' "
+                                 f"AND {raw_time_expr} < DATE_TRUNC('month', {today})")
+                elif tr == "previous_quarter":
+                    range_sql = (f"{raw_time_expr} >= DATE_TRUNC('quarter', {today}) - INTERVAL '3 months' "
+                                 f"AND {raw_time_expr} < DATE_TRUNC('quarter', {today})")
+                elif tr == "previous_year":
+                    range_sql = (f"{raw_time_expr} >= DATE_TRUNC('year', {today}) - INTERVAL '1 year' "
+                                 f"AND {raw_time_expr} < DATE_TRUNC('year', {today})")
+            else:
+                # SQL Server / Fabric date arithmetic
+                if tr == "last_day":
+                    range_sql = f"{raw_time_expr} >= DATEADD(DAY, -1, {today})"
+                elif tr == "last_week":
+                    range_sql = f"{raw_time_expr} >= DATEADD(WEEK, -1, {today})"
+                elif tr == "last_month":
+                    range_sql = f"{raw_time_expr} >= DATEADD(MONTH, -1, {today})"
+                elif tr == "last_quarter":
+                    range_sql = f"{raw_time_expr} >= DATEADD(QUARTER, -1, {today})"
+                elif tr == "last_year":
+                    range_sql = f"{raw_time_expr} >= DATEADD(YEAR, -1, {today})"
+                elif tr == "week_to_date":
+                    range_sql = f"{raw_time_expr} >= DATEADD(DAY, 1 - DATEPART(WEEKDAY, {today}), {today})"
+                elif tr == "month_to_date":
+                    range_sql = f"{raw_time_expr} >= DATEFROMPARTS(YEAR({today}), MONTH({today}), 1)"
+                elif tr == "quarter_to_date":
+                    range_sql = f"{raw_time_expr} >= DATEFROMPARTS(YEAR({today}), ((DATEPART(QUARTER, {today}) - 1) * 3) + 1, 1)"
+                elif tr == "year_to_date":
+                    range_sql = f"{raw_time_expr} >= DATEFROMPARTS(YEAR({today}), 1, 1)"
+                elif tr == "previous_week":
+                    range_sql = (f"{raw_time_expr} >= DATEADD(WEEK, -2, DATEADD(DAY, 1 - DATEPART(WEEKDAY, {today}), {today})) "
+                                 f"AND {raw_time_expr} < DATEADD(DAY, 1 - DATEPART(WEEKDAY, {today}), {today})")
+                elif tr == "previous_month":
+                    range_sql = (f"{raw_time_expr} >= DATEFROMPARTS(YEAR(DATEADD(MONTH, -1, {today})), MONTH(DATEADD(MONTH, -1, {today})), 1) "
+                                 f"AND {raw_time_expr} < DATEFROMPARTS(YEAR({today}), MONTH({today}), 1)")
+                elif tr == "previous_quarter":
+                    range_sql = (f"{raw_time_expr} >= DATEADD(QUARTER, -2, DATEFROMPARTS(YEAR({today}), ((DATEPART(QUARTER, {today}) - 1) * 3) + 1, 1)) "
+                                 f"AND {raw_time_expr} < DATEFROMPARTS(YEAR({today}), ((DATEPART(QUARTER, {today}) - 1) * 3) + 1, 1)")
+                elif tr == "previous_year":
+                    range_sql = (f"{raw_time_expr} >= DATEFROMPARTS(YEAR({today}) - 1, 1, 1) "
+                                 f"AND {raw_time_expr} < DATEFROMPARTS(YEAR({today}), 1, 1)")
+                elif tr == "last_7_days":
+                    range_sql = f"{raw_time_expr} >= DATEADD(DAY, -7, {today})"
+                elif tr == "last_30_days":
+                    range_sql = f"{raw_time_expr} >= DATEADD(DAY, -30, {today})"
+                elif tr == "last_90_days":
+                    range_sql = f"{raw_time_expr} >= DATEADD(DAY, -90, {today})"
+                elif tr == "last_365_days":
+                    range_sql = f"{raw_time_expr} >= DATEADD(DAY, -365, {today})"
             elif tr == "custom":
                 custom_start = params.get("custom_start_date")
                 custom_end = params.get("custom_end_date")
