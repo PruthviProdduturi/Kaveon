@@ -5,7 +5,7 @@
   <img src="docs/reference/kaveon-logo.svg?v=16" alt="Kaveon — Talk to your data." width="380" />
 </picture>
 
-Ask a question. Get a chart. Kaveon connects to your databases, understands your schema, and answers data questions instantly — no API keys, no LLM costs, no setup.
+Connect your databases. Ask anything. Get instant answers with interactive charts — powered by a deterministic engine, not an LLM.
 
 [![Deploy](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/deploy.yml/badge.svg)](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/deploy.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Live Demo](https://img.shields.io/badge/Live-kaveon.vercel.app-4A9EE8?style=flat)](https://kaveon.vercel.app)
 
