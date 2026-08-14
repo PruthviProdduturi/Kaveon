@@ -45,12 +45,27 @@ const COLUMN_ALIASES: Record<string, string[]> = {
   revenue: ["rev", "total_revenue", "revenue_amount", "sales"],
   profit: ["margin", "net_profit", "gross_profit"],
   quantity: ["qty", "units", "count", "volume"],
-  price: ["unit_price", "cost", "rate", "amount"],
-  date: ["created_at", "order_date", "timestamp", "created", "updated_at"],
-  name: ["title", "label", "description"],
-  category: ["type", "group", "segment", "class"],
-  region: ["area", "territory", "location", "country", "state", "city"],
+  price: ["unit_price", "cost", "rate", "amount", "input_cost", "output_cost"],
+  date: ["created_at", "order_date", "timestamp", "created", "updated_at", "release_date"],
+  name: ["title", "label", "description", "model_name", "model"],
+  category: ["type", "group", "segment", "class", "provider", "family"],
+  region: ["area", "territory", "location", "country", "state", "city", "iso_code"],
   customer: ["client", "account", "buyer", "user"],
+  // Energy / Climate
+  energy: ["primary_energy_consumption", "energy_per_capita", "electricity_generation", "electricity_demand", "fossil_fuel_consumption", "renewables_consumption"],
+  consumption: ["primary_energy_consumption", "fossil_fuel_consumption", "renewables_consumption", "energy_per_capita"],
+  renewables: ["renewables_share_energy", "renewables_consumption", "renewables_electricity", "solar_electricity", "wind_electricity"],
+  carbon: ["carbon_intensity_elec", "greenhouse_gas_emissions", "low_carbon_share_energy"],
+  emissions: ["greenhouse_gas_emissions", "carbon_intensity_elec"],
+  temperature: ["temp_change_c", "avg_tc", "max_tc", "min_tc"],
+  warming: ["temp_change_c", "avg_tc", "max_tc"],
+  // AI / LLM
+  elo: ["arena_elo"],
+  score: ["arena_elo", "mmlu", "humaneval", "gsm8k", "gpqa", "math_score"],
+  benchmark: ["mmlu", "humaneval", "gsm8k", "gpqa", "arena_elo"],
+  performance: ["arena_elo", "mmlu", "humaneval"],
+  cost: ["input_cost", "output_cost"],
+  model: ["model_name", "model_a", "model_b"],
 };
 
 function normalize(text: string): string {
