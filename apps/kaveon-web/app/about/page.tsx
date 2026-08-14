@@ -234,7 +234,7 @@ export default function AboutPage() {
               100% { stroke-dashoffset: 0; opacity: 0; }
             }
           `}</style>
-          <div style={{ position: "relative", display: "inline-block", marginBottom: 0 }}>
+          <div style={{ position: "relative", display: "inline-block", marginBottom: -12 }}>
             {/* Soft glow */}
             <div style={{
               position: "absolute", inset: -40,
@@ -252,7 +252,7 @@ export default function AboutPage() {
 
           <h1 style={{
             fontSize: "clamp(56px, 8vw, 96px)", fontWeight: 800, letterSpacing: "-3px", lineHeight: 1.2,
-            margin: "4px 0 20px", padding: "0 0 8px",
+            margin: "0 0 20px", padding: "0 0 8px",
             background: `linear-gradient(135deg, #ffffff 0%, #e2e8f0 30%, ${B} 70%, #8b5cf6 100%)`,
             backgroundSize: "300% 300%",
             animation: "gradientShift 8s ease infinite, hero-title-drop 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) 0.3s both",
