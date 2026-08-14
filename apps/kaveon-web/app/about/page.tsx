@@ -90,6 +90,13 @@ export default function AboutPage() {
         @keyframes orb1 { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(60px,-30px) scale(1.1); } }
         @keyframes orb2 { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(-40px,40px) scale(0.9); } }
         @keyframes beam-flow { 0% { transform: translateY(-100%); } 100% { transform: translateY(200%); } }
+        @keyframes logo-spin-in { 0% { opacity: 0; transform: scale(0.3) rotate(-180deg); filter: blur(10px); } 60% { opacity: 1; transform: scale(1.05) rotate(10deg); filter: blur(0); } 80% { transform: scale(0.98) rotate(-3deg); } 100% { transform: scale(1) rotate(0deg); } }
+        @keyframes hero-title-reveal { 0% { opacity: 0; transform: translateY(30px); filter: blur(8px); } 100% { opacity: 1; transform: translateY(0); filter: blur(0); } }
+        @keyframes hero-sub-reveal { 0% { opacity: 0; transform: translateY(20px); } 100% { opacity: 1; transform: translateY(0); } }
+        @keyframes hero-cta-pop { 0% { opacity: 0; transform: scale(0.8) translateY(15px); } 100% { opacity: 1; transform: scale(1) translateY(0); } }
+        @keyframes logo-glow-pulse { 0%,100% { opacity: 0.3; transform: scale(1); } 50% { opacity: 0.6; transform: scale(1.15); } }
+        .hero-cta-primary { position: relative; overflow: hidden; }
+        .hero-cta-primary::after { content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: linear-gradient(45deg, transparent 40%, rgba(255,255,255,0.15) 50%, transparent 60%); animation: shimmer 3s ease-in-out infinite; }
         .about-link:hover { color: #fff !important; }
         .about-card:hover { transform: translateY(-4px); border-color: rgba(255,255,255,0.12) !important; box-shadow: 0 12px 40px rgba(0,0,0,0.4) !important; }
         .about-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(74,158,232,0.4) !important; }
@@ -183,14 +190,18 @@ export default function AboutPage() {
         }} />
 
         <div style={{ position: "relative", maxWidth: 900, zIndex: 2 }}>
-          {/* Guardian O — large, with glow ring */}
-          <div style={{ position: "relative", display: "inline-block", marginBottom: 0 }}>
+          {/* Guardian O — spins in on load with glow pulse */}
+          <div style={{
+            position: "relative", display: "inline-block", marginBottom: 0,
+            animation: "logo-spin-in 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards",
+          }}>
             <div style={{
-              position: "absolute", inset: -20,
+              position: "absolute", inset: -24,
               borderRadius: "50%",
-              background: `radial-gradient(circle, ${B}15 0%, transparent 70%)`,
+              background: `radial-gradient(circle, ${B}20 0%, transparent 70%)`,
               filter: "blur(20px)",
               pointerEvents: "none",
+              animation: "logo-glow-pulse 4s ease-in-out infinite 1.2s",
             }} />
             <KaveonMark size={240} useDirectColor />
           </div>
@@ -200,7 +211,7 @@ export default function AboutPage() {
             margin: "-8px 0 24px", padding: 0,
             background: `linear-gradient(135deg, #ffffff 0%, #e2e8f0 30%, ${B} 70%, #8b5cf6 100%)`,
             backgroundSize: "300% 300%",
-            animation: "gradientShift 8s ease infinite",
+            animation: "gradientShift 8s ease infinite, hero-title-reveal 0.9s cubic-bezier(0.16, 1, 0.3, 1) 0.6s both",
             WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
           }}>
             Talk to your data
@@ -209,15 +220,16 @@ export default function AboutPage() {
           <p style={{
             fontSize: "clamp(18px, 2.2vw, 22px)", color: "#888", lineHeight: 1.7,
             maxWidth: 640, margin: "0 auto 20px", fontWeight: 400,
+            animation: "hero-sub-reveal 0.8s cubic-bezier(0.16, 1, 0.3, 1) 1.0s both",
           }}>
             Connect your databases. Ask anything. Get instant answers with interactive charts — powered by a deterministic engine,<br />not an LLM.
           </p>
 
           {/* Subtle accent line */}
-          <div style={{ width: 60, height: 3, borderRadius: 2, background: `linear-gradient(90deg, ${B}, #8b5cf6)`, margin: "0 auto 36px" }} />
+          <div style={{ width: 60, height: 3, borderRadius: 2, background: `linear-gradient(90deg, ${B}, #8b5cf6)`, margin: "0 auto 36px", animation: "hero-sub-reveal 0.6s ease 1.3s both" }} />
 
           {/* Trust signals */}
-          <div style={{ display: "flex", justifyContent: "center", gap: 24, marginBottom: 44, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", justifyContent: "center", gap: 24, marginBottom: 44, flexWrap: "wrap", animation: "hero-sub-reveal 0.7s ease 1.5s both" }}>
             {[
               { icon: "fa-shield-check", text: "Zero Hallucination" },
               { icon: "fa-bolt", text: "Sub-10ms Latency" },
@@ -230,8 +242,8 @@ export default function AboutPage() {
             ))}
           </div>
 
-          <div style={{ display: "flex", justifyContent: "center", gap: 14 }}>
-            <a href="/" className="about-btn" style={{
+          <div style={{ display: "flex", justifyContent: "center", gap: 14, animation: "hero-cta-pop 0.7s cubic-bezier(0.16, 1, 0.3, 1) 1.8s both" }}>
+            <a href="/" className="about-btn hero-cta-primary" style={{
               display: "inline-flex", alignItems: "center", gap: 10,
               padding: "18px 44px", borderRadius: 14,
               background: `linear-gradient(135deg, ${B}, #3b82f6)`,
