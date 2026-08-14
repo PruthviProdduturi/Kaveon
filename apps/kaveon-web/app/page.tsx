@@ -678,10 +678,10 @@ export default function Home() {
                 <div style={{
                   width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
                   display: "flex", alignItems: "center", justifyContent: "center",
-                  background: m.role === "user" ? "var(--accent)" : "var(--bg-hover)",
+                  background: m.role === "user" ? "var(--accent)" : "transparent",
                   fontSize: 12, fontWeight: 600, color: m.role === "user" ? "#fff" : "var(--text-secondary)",
                 }}>
-                  {m.role === "user" ? (account?.name?.[0] ?? "U") : "K"}
+                  {m.role === "user" ? (account?.name?.[0] ?? "U") : <KaveonMark size={22} useDirectColor />}
                 </div>
 
                 {/* Bubble */}
