@@ -217,60 +217,44 @@ export default function AboutPage() {
         }} />
 
         <div style={{ position: "relative", maxWidth: 900, zIndex: 2 }}>
-          {/* Guardian O — drops in with clean particle burst */}
+          {/* Guardian O — spins into existence */}
+          <style>{`
+            @keyframes logo-arc-spin {
+              0% { opacity: 0; transform: rotate(-360deg) scale(0.2); filter: blur(12px); }
+              50% { opacity: 1; filter: blur(0); }
+              75% { transform: rotate(15deg) scale(1.04); }
+              90% { transform: rotate(-5deg) scale(0.98); }
+              100% { transform: rotate(0deg) scale(1); }
+            }
+            @keyframes logo-ring-trace {
+              0% { stroke-dashoffset: 754; opacity: 0; }
+              10% { opacity: 1; }
+              80% { stroke-dashoffset: 0; opacity: 0.6; }
+              100% { stroke-dashoffset: 0; opacity: 0; }
+            }
+          `}</style>
           <div style={{ position: "relative", display: "inline-block", marginBottom: 0 }}>
-            {/* Minimal dot particles — burst outward on landing */}
-            <style>{`
-              @keyframes particle-burst {
-                0% { opacity: 0; transform: translate(-50%, -50%) scale(0); }
-                20% { opacity: 0.8; }
-                100% { opacity: 0; }
-              }
-            `}</style>
-            {Array.from({ length: 12 }).map((_, i) => {
-              const angle = (i / 12) * 360;
-              const rad = angle * Math.PI / 180;
-              const dist = 100 + Math.random() * 60;
-              return (
-                <div key={i} style={{
-                  position: "absolute", top: "50%", left: "50%",
-                  width: 4, height: 4, borderRadius: "50%",
-                  background: B,
-                  pointerEvents: "none",
-                  animation: `particle-burst 1s ease-out 0.45s both`,
-                  transform: `translate(-50%, -50%)`,
-                  offsetPath: `path('M 0 0 L ${Math.cos(rad) * dist} ${Math.sin(rad) * dist}')`,
-                  offsetDistance: "0%",
-                  animationName: "particle-burst",
-                  // Use inline keyframes via style override
-                  ...({ "--tx": `${Math.cos(rad) * dist}px`, "--ty": `${Math.sin(rad) * dist}px` } as any),
-                }}>
-                  <style>{`
-                    @keyframes pb-${i} {
-                      0% { opacity: 0; transform: translate(-50%, -50%) scale(0); }
-                      15% { opacity: 0.6; transform: translate(calc(-50% + ${Math.cos(rad) * dist * 0.3}px), calc(-50% + ${Math.sin(rad) * dist * 0.3}px)) scale(1); }
-                      100% { opacity: 0; transform: translate(calc(-50% + ${Math.cos(rad) * dist}px), calc(-50% + ${Math.sin(rad) * dist}px)) scale(0); }
-                    }
-                  `}</style>
-                  <div style={{
-                    width: i % 3 === 0 ? 5 : 3, height: i % 3 === 0 ? 5 : 3,
-                    borderRadius: "50%", background: B,
-                    animation: `pb-${i} 0.9s ease-out ${0.4 + i * 0.02}s both`,
-                  }} />
-                </div>
-              );
-            })}
-            {/* Single clean glow */}
+            {/* Arc ring that traces around the logo as it spins */}
+            <svg width="300" height="300" viewBox="0 0 300 300" style={{
+              position: "absolute", top: "50%", left: "50%",
+              marginTop: -150, marginLeft: -150,
+              pointerEvents: "none",
+            }}>
+              <circle cx="150" cy="150" r="120" fill="none" stroke={B} strokeWidth="1"
+                strokeDasharray="754" strokeDashoffset="754" opacity="0"
+                style={{ animation: "logo-ring-trace 1.5s ease-out 0.2s both" }} />
+            </svg>
+            {/* Soft glow */}
             <div style={{
               position: "absolute", inset: -40,
               borderRadius: "50%",
-              background: `radial-gradient(circle, ${B}18 0%, transparent 70%)`,
+              background: `radial-gradient(circle, ${B}15 0%, transparent 70%)`,
               filter: "blur(30px)",
               pointerEvents: "none",
-              animation: "logo-glow-settle 0.8s ease 0.4s both, logo-glow-breathe 5s ease-in-out infinite 2s",
+              animation: "logo-glow-settle 0.8s ease 0.6s both, logo-glow-breathe 5s ease-in-out infinite 2s",
             }} />
-            {/* Logo — drops in */}
-            <div style={{ animation: "logo-drop-in 1.1s cubic-bezier(0.34, 1.56, 0.64, 1) forwards" }}>
+            {/* Logo — spins in */}
+            <div style={{ animation: "logo-arc-spin 1.4s cubic-bezier(0.16, 1, 0.3, 1) forwards" }}>
               <KaveonMark size={240} useDirectColor />
             </div>
           </div>
