@@ -153,3 +153,10 @@ CLAUDE.md
 .vercel
 .env*
 data/covid-taxi/*.csv
+
+# Data files — loaded into DB, not tracked in git
+data/**/*.csv
+data/**/*.txt
+data/**/*.zip
+data/**/*.json
+data/**/*.parquet
