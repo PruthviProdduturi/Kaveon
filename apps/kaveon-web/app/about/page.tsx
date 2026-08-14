@@ -220,10 +220,12 @@ export default function AboutPage() {
           {/* Guardian O — spins into existence */}
           <style>{`
             @keyframes logo-arc-spin {
-              0% { opacity: 0; transform: rotate(-360deg) scale(0.2); filter: blur(12px); }
-              50% { opacity: 1; filter: blur(0); }
-              75% { transform: rotate(15deg) scale(1.04); }
-              90% { transform: rotate(-5deg) scale(0.98); }
+              0% { opacity: 0; transform: rotate(-540deg) scale(0.15); filter: blur(16px); }
+              30% { opacity: 1; transform: rotate(-90deg) scale(0.8); filter: blur(2px); }
+              50% { transform: rotate(20deg) scale(1.12); filter: blur(0); }
+              65% { transform: rotate(-8deg) scale(0.96); }
+              78% { transform: rotate(4deg) scale(1.03); }
+              88% { transform: rotate(-1deg) scale(0.99); }
               100% { transform: rotate(0deg) scale(1); }
             }
             @keyframes logo-ring-trace {
@@ -244,7 +246,7 @@ export default function AboutPage() {
               animation: "logo-glow-settle 0.8s ease 0.6s both, logo-glow-breathe 5s ease-in-out infinite 2s",
             }} />
             {/* Logo — spins in */}
-            <div style={{ animation: "logo-arc-spin 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards" }}>
+            <div style={{ animation: "logo-arc-spin 1.2s cubic-bezier(0.22, 1, 0.36, 1) forwards" }}>
               <KaveonMark size={240} useDirectColor />
             </div>
           </div>
