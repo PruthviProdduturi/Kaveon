@@ -229,7 +229,9 @@ export default function Home() {
             expression: m.sql_expression || m.expression || `SUM(${m.name})`,
             description: m.description || "",
           }));
-          const table = d.fact_table ? (d.schema_name ? `${d.schema_name}.${d.fact_table}` : d.fact_table) : d.table_name || "data";
+          const rawTable = d.fact_table || d.table_name || "data";
+          const table = d.schema_name && d.schema_name !== "public" && d.schema_name !== "dbo" && !rawTable.includes(".")
+            ? `${d.schema_name}.${rawTable}` : rawTable;
           const src = sources.find(s => s.database_name === ds.database_name);
           return { id: ds.id, name: ds.name, sourceId: src?.id, sourceName: src?.database_name || ds.database_name, schemaName: d.schema_name || "public", schema: { tableName: table, columns: cols, metrics } };
         } catch { return null; }
@@ -402,8 +404,8 @@ export default function Home() {
               return;
             }
 
-            // Context-routed with cached result
-            if (acr.route === "context" && acr.result) {
+            // Context-routed with cached result (skip if result has error)
+            if (acr.route === "context" && acr.result && !acr.result.error) {
               usedAcr = true;
               const rows = acr.result.rows || [];
               const columns = acr.result.columns || [];
@@ -420,7 +422,7 @@ export default function Home() {
             }
 
             // Live query path — ACR executed the SQL and refreshed elements
-            if ((acr.route === "query" || acr.route === "hybrid") && acr.result) {
+            if ((acr.route === "query" || acr.route === "hybrid") && acr.result && !acr.result.error) {
               usedAcr = true;
               const rows = acr.result.rows || [];
               const columns = acr.result.columns || [];
@@ -442,35 +444,50 @@ export default function Home() {
 
         // ── Direct SQL execution (fallback) ─────────────────────────────────
         if (!usedAcr) {
-          const execRes = await msalFetch("/api/v1/sql/execute", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              sql_text: parsed.sql,
-              database: dbName,
-              source: "chat",
-            }),
-          });
+          try {
+            const execRes = await msalFetch("/api/v1/sql/execute", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                sql_text: parsed.sql,
+                database: dbName,
+                source: "chat",
+              }),
+            });
 
-          if (execRes.ok) {
-            const execData = await execRes.json();
-            const rows = execData.rows || execData.data || [];
-            const columns = execData.columns || execData.column_names || [];
+            if (execRes.ok) {
+              const execData = await execRes.json();
+              const rows = execData.rows || execData.data || [];
+              const columns = execData.columns || execData.column_names || [];
 
-            if (rows.length > 0) {
-              const summary = generateInsight(rows, columns, parsed, text.trim());
+              if (rows.length > 0) {
+                const summary = generateInsight(rows, columns, parsed, text.trim());
+                setMessages(prev => [...prev.slice(0, -1), {
+                  role: "assistant",
+                  content: summary,
+                  chart: { rows, columns, chartType: parsed.chartType, xAxis: parsed.xAxis, yAxis: parsed.yAxis, title: parsed.title, sql: parsed.sql },
+                  routeMeta: { route: "direct", durationMs: Math.round(performance.now() - t0) },
+                }]);
+                return;
+              }
+
               setMessages(prev => [...prev.slice(0, -1), {
                 role: "assistant",
-                content: summary,
-                chart: { rows, columns, chartType: parsed.chartType, xAxis: parsed.xAxis, yAxis: parsed.yAxis, title: parsed.title, sql: parsed.sql },
-                routeMeta: { route: "direct", durationMs: Math.round(performance.now() - t0) },
+                content: `No results found. The query returned empty.\n\nSQL: \`${parsed.sql}\``,
+              }]);
+              return;
+            } else {
+              const errText = await execRes.text().catch(() => "");
+              setMessages(prev => [...prev.slice(0, -1), {
+                role: "assistant",
+                content: `Query failed (${execRes.status}).\n\nSQL: \`${parsed.sql}\`\n\n${errText.substring(0, 200)}`,
               }]);
               return;
             }
-
+          } catch (execErr) {
             setMessages(prev => [...prev.slice(0, -1), {
               role: "assistant",
-              content: `No results found. The query returned empty.\n\nSQL: \`${parsed.sql}\``,
+              content: `Query execution error: ${execErr instanceof Error ? execErr.message : "Unknown"}\n\nSQL: \`${parsed.sql}\``,
             }]);
             return;
           }
