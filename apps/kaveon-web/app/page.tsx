@@ -374,12 +374,31 @@ export default function Home() {
       const chartKeywords = /\b(chart|graph|plot|visuali[sz]e|draw|map|heatmap|scatter|bar chart|pie chart|line chart|show me a)\b/i;
       const wantsChart = chartKeywords.test(text.trim());
 
+      // Conversation context: if the user asks a follow-up like "What about India",
+      // reuse the previous query's dataset/SQL context
+      let queryText = text.trim();
+      const isFollowUp = /^(?:what about|how about|and |show me |now |same for )/i.test(queryText);
+      const prevAssistant = [...messages].reverse().find(m => m.role === "assistant" && m.chart?.sql);
+
+      if (isFollowUp && prevAssistant?.chart) {
+        // Extract the entity from the follow-up (e.g. "India" from "What about India")
+        const entityMatch = queryText.match(/(?:what about|how about|and|show me|now|same for)\s+(.+)/i);
+        if (entityMatch) {
+          const entity = entityMatch[1].replace(/[?.!]$/, "").trim();
+          // Rebuild the previous query with the new entity filter
+          const prevSql = prevAssistant.chart.sql;
+          const prevTitle = prevAssistant.chart.title;
+          // Rewrite: inject entity into previous query context
+          queryText = `${prevTitle} in ${entity}`;
+        }
+      }
+
       // Auto-find best matching dataset
-      const match = findBestSchema(text.trim());
+      const match = findBestSchema(queryText);
       const schema = match?.schema || datasetSchema;
       const srcId = match?.sourceId || selectedSource?.id;
       const srcDb = match?.sourceName || selectedSource?.database_name;
-      let parsed = match?.parsed || (schema ? nlToSql(text.trim(), schema) : null);
+      let parsed = match?.parsed || (schema ? nlToSql(queryText, schema) : null);
 
       // Fallback: if we matched a dataset by name but parser returned null,
       // build a simple SELECT query showing the data
