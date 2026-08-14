@@ -353,56 +353,58 @@ export default function AboutPage() {
                   </div>
                 ))}
               </div>
-              {/* Chat */}
-              <div style={{ flex: 1, padding: "24px" }}>
-                <div style={{ display: "flex", gap: 10, marginBottom: 18, justifyContent: "flex-end" }}>
+              {/* Chat — shows text-first, chart only when asked */}
+              <div style={{ flex: 1, padding: "20px 24px" }}>
+                {/* User: text question */}
+                <div style={{ display: "flex", gap: 10, marginBottom: 16, justifyContent: "flex-end" }}>
                   <div style={{ background: B, color: "#fff", padding: "10px 16px", borderRadius: "14px 4px 14px 14px", fontSize: 14 }}>
-                    Top models by Arena ELO
-                  </div>
-                  <div style={{ width: 24, height: 24, borderRadius: "50%", background: `linear-gradient(135deg, #6db3ed, #2d7dd2)`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: "#fff", flexShrink: 0 }}>P</div>
-                </div>
-                <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
-                  <KaveonMark size={20} useDirectColor />
-                  <div style={{ flex: 1 }}>
-                    <p style={{ fontSize: 13, color: "#999", lineHeight: 1.7, margin: "0 0 12px" }}>
-                      Found <strong style={{ color: "#fff" }}>34</strong> models. Top 3: <strong style={{ color: "#fff" }}>o3</strong> (1402 ELO), <strong style={{ color: "#fff" }}>Gemini 2.5 Pro</strong> (1388), <strong style={{ color: "#fff" }}>Claude Opus 4</strong> (1380).
-                    </p>
-                    <div style={{ background: "#1a1a1a", borderRadius: 10, padding: "14px 18px 10px", border: "1px solid rgba(255,255,255,0.04)" }}>
-                      <div style={{ fontSize: 11, color: "#555", marginBottom: 8, fontWeight: 500 }}>Arena ELO by Model</div>
-                      <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 80 }}>
-                        {[{h:80,c:B},{h:35,c:"#10b981"},{h:31,c:"#f59e0b"},{h:27,c:"#ef4444"},{h:25,c:"#8b5cf6"},{h:20,c:"#ec4899"},{h:19,c:"#06b6d4"},{h:16,c:"#f97316"},{h:15,c:"#6366f1"},{h:13,c:"#14b8a6"}].map((b,i) => (
-                          <div key={i} style={{ flex: 1, height: b.h, background: b.c, borderRadius: "3px 3px 0 0", opacity: 0.8 }} />
-                        ))}
-                      </div>
-                      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 5, fontSize: 8, color: "#333" }}>
-                        {["o3","Gem2.5","Opus4","Grok3","Son4","R1","o1","DSv3","Mav","4o"].map(c => <span key={c}>{c}</span>)}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginBottom: 18 }}>
-                  <div style={{ background: B, color: "#fff", padding: "10px 16px", borderRadius: "14px 4px 14px 14px", fontSize: 14 }}>
-                    Compare cost vs performance
+                    Top 10 countries by carbon intensity
                   </div>
                   <div style={{ width: 24, height: 24, borderRadius: "50%", background: "linear-gradient(135deg, #6db3ed, #2d7dd2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: "#fff", flexShrink: 0 }}>P</div>
                 </div>
+                {/* Kaveon: text response — numbered list, no chart */}
+                <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
+                  <KaveonMark size={20} useDirectColor />
+                  <div style={{ flex: 1, fontSize: 13, color: "#999", lineHeight: 1.8 }}>
+                    <p style={{ margin: "0 0 8px", color: "#ccc", fontWeight: 600, fontSize: 14 }}>Top country by Carbon Intensity (10 results)</p>
+                    <div style={{ display: "grid", gridTemplateColumns: "auto 1fr auto", gap: "2px 10px" }}>
+                      {[["1","Turkmenistan","1,340"],["2","Uzbekistan","1,100"],["3","Bahrain","903"],["4","Libya","828"],["5","Kazakhstan","822"]].map(([n,c,v]) => (
+                        <>{/* @ts-ignore */}
+                          <span key={n} style={{ color: "#555", fontSize: 12 }}>{n}.</span>
+                          <span style={{ color: "#e2e8f0", fontWeight: 500 }}>{c}</span>
+                          <span style={{ color: "#777", fontFamily: "monospace", fontSize: 12 }}>{v} gCO₂</span>
+                        </>
+                      ))}
+                    </div>
+                    <p style={{ margin: "6px 0 0", fontSize: 11, color: "#555" }}>*...and 5 more*</p>
+                    <div style={{ display: "flex", gap: 8, marginTop: 8, fontSize: 10, color: "#444" }}>
+                      <span style={{ padding: "2px 8px", borderRadius: 10, background: "rgba(16,185,129,0.1)", color: "#10b981", fontWeight: 600 }}>From context</span>
+                      <span>680ms · 4 elements</span>
+                    </div>
+                  </div>
+                </div>
+                {/* User: explicitly asks for chart */}
+                <div style={{ display: "flex", gap: 10, marginBottom: 16, justifyContent: "flex-end" }}>
+                  <div style={{ background: B, color: "#fff", padding: "10px 16px", borderRadius: "14px 4px 14px 14px", fontSize: 14 }}>
+                    Show me a chart of that
+                  </div>
+                  <div style={{ width: 24, height: 24, borderRadius: "50%", background: "linear-gradient(135deg, #6db3ed, #2d7dd2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: "#fff", flexShrink: 0 }}>P</div>
+                </div>
+                {/* Kaveon: chart response — only because user asked */}
                 <div style={{ display: "flex", gap: 10 }}>
                   <KaveonMark size={20} useDirectColor />
                   <div style={{ flex: 1 }}>
-                    <p style={{ fontSize: 13, color: "#999", lineHeight: 1.7, margin: "0 0 12px" }}>
-                      DeepSeek V3 offers the best value at $0.27/1M tokens with 1318 ELO. Claude Opus 4 leads quality at 1380 ELO but costs $15/1M.
-                    </p>
-                    <div style={{ background: "#1a1a1a", borderRadius: 10, padding: "14px 18px", border: "1px solid rgba(255,255,255,0.04)", position: "relative", height: 100, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                      <div style={{ fontSize: 11, color: "#555", fontWeight: 500 }}>
-                        <svg width="200" height="60" viewBox="0 0 400 120" style={{ opacity: 0.4 }}>
-                          {/* Simplified world outline */}
-                          <ellipse cx="200" cy="60" rx="180" ry="50" fill="none" stroke="#333" strokeWidth="1" />
-                          <ellipse cx="140" cy="50" rx="40" ry="25" fill={B} opacity="0.3" />
-                          <ellipse cx="220" cy="45" rx="50" ry="20" fill={B} opacity="0.2" />
-                          <ellipse cx="300" cy="55" rx="35" ry="30" fill={B} opacity="0.15" />
-                          <ellipse cx="170" cy="80" rx="30" ry="15" fill="#10b981" opacity="0.2" />
-                        </svg>
+                    <div style={{ background: "#1a1a1a", borderRadius: 10, padding: "14px 18px 10px", border: "1px solid rgba(255,255,255,0.04)" }}>
+                      <div style={{ fontSize: 11, color: "#555", marginBottom: 8, fontWeight: 500 }}>Carbon Intensity by Country</div>
+                      <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 60 }}>
+                        {[80,60,54,50,49,46,44,40,38,36].map((h,i) => (
+                          <div key={i} style={{ flex: 1, height: h, background: B, borderRadius: "3px 3px 0 0", opacity: 0.7 + i * -0.04 }} />
+                        ))}
                       </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, marginTop: 6, fontSize: 10, color: "#444" }}>
+                      <span style={{ padding: "2px 8px", borderRadius: 10, background: `${B}15`, color: B, fontWeight: 600 }}>Live query</span>
+                      <span>456ms</span>
                     </div>
                   </div>
                 </div>
