@@ -205,7 +205,7 @@ export default function Home() {
   }, [messages]);
 
   // Cache all dataset schemas for auto-matching
-  type SchemaEntry = { id: number; name: string; sourceId?: number; sourceName?: string; schema: DatasetSchema };
+  type SchemaEntry = { id: number; name: string; sourceId?: number; sourceName?: string; schemaName?: string; schema: DatasetSchema };
   const [allSchemas, setAllSchemas] = useState<SchemaEntry[]>([]);
   const allSchemasRef = useRef<SchemaEntry[]>([]);
 
@@ -231,7 +231,7 @@ export default function Home() {
           }));
           const table = d.fact_table ? (d.schema_name ? `${d.schema_name}.${d.fact_table}` : d.fact_table) : d.table_name || "data";
           const src = sources.find(s => s.database_name === ds.database_name);
-          return { id: ds.id, name: ds.name, sourceId: src?.id, sourceName: src?.database_name || ds.database_name, schema: { tableName: table, columns: cols, metrics } };
+          return { id: ds.id, name: ds.name, sourceId: src?.id, sourceName: src?.database_name || ds.database_name, schemaName: d.schema_name || "public", schema: { tableName: table, columns: cols, metrics } };
         } catch { return null; }
       })
     ).then(results => {
@@ -247,7 +247,7 @@ export default function Home() {
   function findBestSchema(text: string) {
     const lower = text.toLowerCase();
     const words = lower.split(/\s+/).filter(w => w.length >= 3);
-    let best: { schema: DatasetSchema; sourceId?: number; sourceName?: string; confidence: number; name: string; parsed: any } | null = null;
+    let best: { schema: DatasetSchema; sourceId?: number; sourceName?: string; schemaName?: string; confidence: number; name: string; parsed: any } | null = null;
 
     const schemas = allSchemasRef.current;
     for (const ds of schemas) {
@@ -281,7 +281,7 @@ export default function Home() {
       if (parsed) score += parsed.confidence;
 
       if (score > (best?.confidence ?? 0)) {
-        best = { schema: ds.schema, sourceId: ds.sourceId, sourceName: ds.sourceName, confidence: score, name: ds.name, parsed };
+        best = { schema: ds.schema, sourceId: ds.sourceId, sourceName: ds.sourceName, schemaName: ds.schemaName, confidence: score, name: ds.name, parsed };
       }
     }
 
@@ -344,7 +344,6 @@ export default function Home() {
     try {
       // Auto-find best matching dataset
       const match = findBestSchema(text.trim());
-      console.log("[Chat] Best schema match:", match ? { name: match.name, confidence: match.confidence, hasParsed: !!match.parsed, cols: match.schema.columns.length } : "none", "allSchemas:", allSchemasRef.current.length);
       const schema = match?.schema || datasetSchema;
       const srcId = match?.sourceId || selectedSource?.id;
       const srcDb = match?.sourceName || selectedSource?.database_name;
@@ -376,6 +375,7 @@ export default function Home() {
         let usedAcr = false;
         const t0 = performance.now();
         try {
+          const acrSchemaName = match?.schemaName || "public";
           const acrRes = await msalFetch("/api/v1/context/ask", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -383,7 +383,7 @@ export default function Home() {
               question: text.trim(),
               database: dbName,
               sql: parsed.sql,
-              schema_name: "public",
+              schema_name: acrSchemaName,
             }),
           });
 
