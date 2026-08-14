@@ -678,14 +678,15 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
                     range_sql = f"{raw_time_expr} >= DATEADD(DAY, -90, {today})"
                 elif tr == "last_365_days":
                     range_sql = f"{raw_time_expr} >= DATEADD(DAY, -365, {today})"
-            elif tr == "custom":
+            # Custom ranges — same syntax for all dialects
+            if not range_sql and tr == "custom":
                 custom_start = params.get("custom_start_date")
                 custom_end = params.get("custom_end_date")
                 if custom_start and custom_end:
                     range_sql = f"{raw_time_expr} >= '{custom_start}' AND {raw_time_expr} <= '{custom_end}'"
                 elif custom_start:
                     range_sql = f"{raw_time_expr} >= '{custom_start}'"
-            elif tr == "custom_to_latest":
+            elif not range_sql and tr == "custom_to_latest":
                 custom_start = params.get("custom_start_date")
                 if custom_start:
                     range_sql = f"{raw_time_expr} >= '{custom_start}'"
