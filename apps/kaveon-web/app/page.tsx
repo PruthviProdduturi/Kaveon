@@ -381,7 +381,9 @@ export default function Home() {
       // Find previous assistant message with query context (chart or routeMeta)
       const prevAssistant = [...messages].reverse().find(m => m.role === "assistant" && (m.chart?.title || m.routeMeta));
       // Also find the previous user message to reuse their query
-      const prevUser = [...messages].reverse().find(m => m.role === "user" && m !== messages[messages.length - 1]);
+      // Find the last user message that was a real query (not a follow-up)
+      const followUpPattern = /^(?:what about|how about|and |show me |now |same for )/i;
+      const prevUser = [...messages].reverse().find(m => m.role === "user" && !followUpPattern.test(m.content));
 
       if (isFollowUp && prevUser) {
         const entityMatch = queryText.match(/(?:what about|how about|and|show me|now|same for)\s+(.+)/i);
