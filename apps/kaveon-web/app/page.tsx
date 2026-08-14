@@ -344,6 +344,10 @@ export default function Home() {
     setSending(true);
 
     try {
+      // Only show charts when user explicitly asks for visualization
+      const chartKeywords = /\b(chart|graph|plot|visuali[sz]e|draw|map|heatmap|scatter|bar chart|pie chart|line chart|show me a)\b/i;
+      const wantsChart = chartKeywords.test(text.trim());
+
       // Auto-find best matching dataset
       const match = findBestSchema(text.trim());
       const schema = match?.schema || datasetSchema;
@@ -414,7 +418,7 @@ export default function Home() {
                 setMessages(prev => [...prev.slice(0, -1), {
                   role: "assistant",
                   content: summary,
-                  chart: { rows, columns, chartType: parsed.chartType, xAxis: parsed.xAxis, yAxis: parsed.yAxis, title: parsed.title, sql: parsed.sql },
+                  ...(wantsChart ? { chart: { rows, columns, chartType: parsed.chartType, xAxis: parsed.xAxis, yAxis: parsed.yAxis, title: parsed.title, sql: parsed.sql } } : {}),
                   routeMeta: { route: "context", durationMs, elementsChecked: Object.keys(acr.validity || {}).length },
                 }]);
                 return;
@@ -431,7 +435,7 @@ export default function Home() {
                 setMessages(prev => [...prev.slice(0, -1), {
                   role: "assistant",
                   content: summary,
-                  chart: { rows, columns, chartType: parsed.chartType, xAxis: parsed.xAxis, yAxis: parsed.yAxis, title: parsed.title, sql: parsed.sql },
+                  ...(wantsChart ? { chart: { rows, columns, chartType: parsed.chartType, xAxis: parsed.xAxis, yAxis: parsed.yAxis, title: parsed.title, sql: parsed.sql } } : {}),
                   routeMeta: { route: acr.route, durationMs, elementsChecked: Object.keys(acr.validity || {}).length },
                 }]);
                 return;
@@ -465,7 +469,7 @@ export default function Home() {
                 setMessages(prev => [...prev.slice(0, -1), {
                   role: "assistant",
                   content: summary,
-                  chart: { rows, columns, chartType: parsed.chartType, xAxis: parsed.xAxis, yAxis: parsed.yAxis, title: parsed.title, sql: parsed.sql },
+                  ...(wantsChart ? { chart: { rows, columns, chartType: parsed.chartType, xAxis: parsed.xAxis, yAxis: parsed.yAxis, title: parsed.title, sql: parsed.sql } } : {}),
                   routeMeta: { route: "direct", durationMs: Math.round(performance.now() - t0) },
                 }]);
                 return;
