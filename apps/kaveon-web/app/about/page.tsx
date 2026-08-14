@@ -73,8 +73,8 @@ export default function AboutPage() {
     return () => container.removeEventListener("scroll", onScroll);
   }, []);
   const slides = [
-    { dark: "/showcase/dashboard-dark.png", light: "/showcase/dashboard-light.png", title: "Global Energy & Climate", desc: "188 countries — temperature anomaly vs energy consumption, renewables adoption" },
-    { dark: "/showcase/taxi-dark.png", light: "/showcase/taxi-light.png", title: "AI Model Arena", desc: "34 LLMs — Arena ELO rankings, benchmarks, pricing, head-to-head battles" },
+    { dark: "/showcase/energy-dark.png", light: "/showcase/energy-dark.png", title: "Global Energy", desc: "220 countries — consumption, renewables, carbon intensity, GHG emissions" },
+    { dark: "/showcase/ai-arena-dark.png", light: "/showcase/ai-arena-dark.png", title: "AI Model Arena", desc: "34 LLMs — Arena ELO rankings, benchmarks, pricing, head-to-head battles" },
   ];
 
   const B = "#4A9EE8";
