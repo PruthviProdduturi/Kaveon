@@ -234,7 +234,7 @@ export default function AboutPage() {
               100% { stroke-dashoffset: 0; opacity: 0; }
             }
           `}</style>
-          <div style={{ position: "relative", display: "inline-block", marginBottom: -12 }}>
+          <div style={{ position: "relative", display: "inline-block", marginBottom: -24 }}>
             {/* Soft glow */}
             <div style={{
               position: "absolute", inset: -40,
