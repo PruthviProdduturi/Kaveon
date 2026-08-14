@@ -7,7 +7,9 @@ import { useRouter } from 'next/navigation';
 import { useChartBuilder, ChartBuilderProvider } from '../../charts/ChartBuilderContext';
 import { useDashboard, resolveEffectiveFilters } from '../DashboardContext';
 import DashboardFilterBarReadOnly from '../DashboardFilterBarReadOnly';
-import type { DashboardFilter, DashboardLayoutItem } from '../../../types/dashboard';
+import type { DashboardFilter, DashboardLayoutItem, FilterConfig, FilterOperator } from '../../../types/dashboard';
+import { msalFetch } from '../../../utils/msalFetch';
+import { API_BASE } from '../../../config';
 
 // Rendered inside the fullscreen modal — the same chart, big. Loaded lazily so it
 // doesn't bloat the tile bundle.
@@ -36,7 +38,10 @@ const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
 }) => {
   const router = useRouter();
   const { sqlPreview } = useChartBuilder();
-  const { dashboardFilters, themePalette } = useDashboard();
+  const {
+    dashboardFilters, themePalette,
+    setComponentFilters, addIgnoredFilter, removeIgnoredFilter,
+  } = useDashboard();
 
   // ── Full-screen filter sandbox ─────────────────────────────────────────────
   // On open, seed a LOCAL copy of the dashboard filters. Edits here re-run only the
@@ -69,6 +74,80 @@ const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
     if (fullScreen) setFsFilters(dashboardFilters.map((f) => ({ ...f })));
   }, [fullScreen, dashboardFilters]);
 
+  // ── Chart-specific filters (edit mode) ──────────────────────────────────────
+  // Per-tile filters live on the layout item (item.filters) and override dashboard
+  // filters by column. Actions apply immediately so the chart re-runs live.
+  const [showChartFilters, setShowChartFilters] = useState(false);
+  const [cfCols, setCfCols] = useState<Array<{ table_name: string; column_name: string }>>([]);
+  const [cfCol, setCfCol] = useState('');
+  const [cfOp, setCfOp] = useState<FilterOperator>('=');
+  const [cfVal, setCfVal] = useState('');
+  const [cfValOpts, setCfValOpts] = useState<string[]>([]);
+  const datasetId: number | undefined = chart?.dataset_id ?? chart?.datasetId;
+  const compFilters: FilterConfig[] = (item?.filters as FilterConfig[]) || [];
+  const ignoredIds: string[] = item?.ignoreFilters || [];
+
+  // Load the chart's dataset columns when the editor opens.
+  useEffect(() => {
+    if (!showChartFilters || !datasetId || cfCols.length) return;
+    let alive = true;
+    (async () => {
+      try {
+        const res = await msalFetch(`${API_BASE}/api/v1/datasets/${datasetId}/columns`);
+        const cols = await res.json();
+        if (alive && Array.isArray(cols)) setCfCols(cols);
+      } catch { /* non-fatal — column picker just stays empty */ }
+    })();
+    return () => { alive = false; };
+  }, [showChartFilters, datasetId, cfCols.length]);
+
+  // Load distinct values for the picked column (as datalist suggestions).
+  useEffect(() => {
+    if (!showChartFilters || !datasetId || !cfCol) { setCfValOpts([]); return; }
+    let alive = true;
+    (async () => {
+      try {
+        const params = new URLSearchParams({ dataset_id: String(datasetId), column: cfCol, limit: '100', source: 'dashboard-filter' });
+        const res = await msalFetch(`${API_BASE}/api/v1/sql/distinct-filter-values?${params}`);
+        const data = await res.json();
+        const vals: string[] = Array.isArray(data?.values)
+          ? data.values.map((v: any) => (v && typeof v === 'object' ? String(v.value ?? v.key ?? '') : String(v))).filter(Boolean)
+          : [];
+        if (alive) setCfValOpts(vals);
+      } catch { if (alive) setCfValOpts([]); }
+    })();
+    return () => { alive = false; };
+  }, [showChartFilters, datasetId, cfCol]);
+
+  const addChartFilter = () => {
+    if (!item || !cfCol || (cfOp !== 'IN' && cfOp !== 'NOT IN' && !cfVal.trim())) return;
+    const nf: FilterConfig = {
+      id: (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `cf_${Date.now()}`,
+      column: cfCol,
+      operator: cfOp,
+      value: cfVal.trim(),
+      datasetId,
+    };
+    setComponentFilters(item.i, [...compFilters, nf]);
+    setCfCol(''); setCfVal(''); setCfOp('='); setCfValOpts([]);
+  };
+  const removeChartFilter = (id: string) => {
+    if (!item) return;
+    setComponentFilters(item.i, compFilters.filter((f) => f.id !== id));
+  };
+  const toggleIgnore = (filterId: string) => {
+    if (!item) return;
+    if (ignoredIds.includes(filterId)) removeIgnoredFilter(item.i, filterId);
+    else addIgnoredFilter(item.i, filterId);
+  };
+  // Dashboard filters that would otherwise reach this chart (candidates to ignore).
+  const ignoreCandidates = dashboardFilters.filter(
+    (f) => f.appliesTo === 'all' || (chartId != null && Array.isArray(f.appliesTo) && f.appliesTo.includes(chartId)),
+  );
+  const shortCol = (c: string) => c.split('.').pop() || c;
+  const CF_OPS: FilterOperator[] = ['=', '!=', '>', '<', '>=', '<=', 'IN', 'NOT IN', 'LIKE', 'NOT LIKE'];
+  const cfInputStyle: React.CSSProperties = { height: 34, padding: '0 8px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface)', color: 'var(--text-primary)', fontSize: 13 };
+
   // Close menu on outside click
   useEffect(() => {
     if (!open) return;
@@ -84,7 +163,7 @@ const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
 
   // Close on Escape
   useEffect(() => {
-    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') { setOpen(false); setFullScreen(false); setShowQuery(false); setShowTable(false); } };
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') { setOpen(false); setFullScreen(false); setShowQuery(false); setShowTable(false); setShowChartFilters(false); } };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
   }, []);
@@ -108,6 +187,7 @@ const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
     { icon: 'fas fa-expand',       label: 'Full screen',       action: () => { setFullScreen(true); setOpen(false); } },
     DIVIDER,
     ...(isEditMode ? [{ icon: 'fas fa-edit', label: 'Edit chart', action: () => { router.push(`/charts/${chartId}`); setOpen(false); } }] : []),
+    ...(isEditMode ? [{ icon: 'fas fa-filter', label: 'Chart filters', action: () => { setShowChartFilters(true); setOpen(false); } }] : []),
     { icon: 'fas fa-code',         label: 'View query',        action: () => { setShowQuery(true); setOpen(false); }, disabled: !queryText },
     { icon: 'fas fa-table',        label: 'View as table',     action: () => { setShowTable(true); setOpen(false); }, disabled: !hasData },
     DIVIDER,
@@ -256,6 +336,85 @@ const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
                 />
                 <ChartPreview />
               </ChartBuilderProvider>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Chart-specific filters modal */}
+      {showChartFilters && typeof document !== 'undefined' && ReactDOM.createPortal(
+        <div
+          onClick={() => setShowChartFilters(false)}
+          style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(15,23,42,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
+        >
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg-surface)', borderRadius: 12, width: 460, maxWidth: 'calc(100vw - 32px)', maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 64px rgba(0,0,0,0.25)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px', borderBottom: '1px solid var(--border)' }}>
+              <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>Chart filters{title ? ` — ${title}` : ''}</span>
+              <button onClick={() => setShowChartFilters(false)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 16 }}><i className="fas fa-times" /></button>
+            </div>
+
+            <div style={{ padding: 18, overflow: 'auto' }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 8 }}>Filters on this chart</div>
+              {compFilters.length === 0 ? (
+                <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 12 }}>None yet — these apply only to this chart and override dashboard filters on the same column.</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
+                  {compFilters.map((f) => (
+                    <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: 'var(--bg-hover)', border: '1px solid var(--border)', borderRadius: 8 }}>
+                      <span style={{ fontSize: 12.5, color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <strong>{shortCol(f.column)}</strong> {f.operator} {f.value}
+                      </span>
+                      <button onClick={() => removeChartFilter(f.id)} title="Remove" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 12 }}><i className="fas fa-trash" /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
+                <select value={cfCol} onChange={(e) => setCfCol(e.target.value)} style={{ ...cfInputStyle, flex: 1 }}>
+                  <option value="">Column…</option>
+                  {cfCols.map((c) => {
+                    const val = `${c.table_name}.${c.column_name}`;
+                    return <option key={val} value={val}>{c.column_name}</option>;
+                  })}
+                </select>
+                <select value={cfOp} onChange={(e) => setCfOp(e.target.value as FilterOperator)} style={{ ...cfInputStyle, width: 92 }}>
+                  {CF_OPS.map((op) => <option key={op} value={op}>{op}</option>)}
+                </select>
+              </div>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input
+                  list="cf-val-options"
+                  value={cfVal}
+                  onChange={(e) => setCfVal(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') addChartFilter(); }}
+                  placeholder={cfOp === 'IN' || cfOp === 'NOT IN' ? 'value1, value2…' : 'value'}
+                  style={{ ...cfInputStyle, flex: 1 }}
+                />
+                <datalist id="cf-val-options">
+                  {cfValOpts.map((v, i) => <option key={i} value={v} />)}
+                </datalist>
+                <button onClick={addChartFilter} disabled={!cfCol} style={{ padding: '7px 14px', background: cfCol ? '#2563eb' : '#94a3b8', border: 'none', borderRadius: 8, color: '#fff', fontWeight: 600, fontSize: 13, cursor: cfCol ? 'pointer' : 'default' }}>Add</button>
+              </div>
+
+              {ignoreCandidates.length > 0 && (
+                <>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', margin: '18px 0 8px' }}>Ignore dashboard filters here</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {ignoreCandidates.map((f) => (
+                      <label key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--text-primary)', cursor: 'pointer' }}>
+                        <input type="checkbox" checked={ignoredIds.includes(f.id)} onChange={() => toggleIgnore(f.id)} style={{ accentColor: 'var(--accent)' }} />
+                        {f.label?.trim() || shortCol(f.column)}
+                      </label>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '12px 18px', borderTop: '1px solid var(--border)' }}>
+              <button onClick={() => setShowChartFilters(false)} style={{ padding: '8px 18px', background: 'var(--bg-hover)', border: '1px solid var(--border)', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>Done</button>
             </div>
           </div>
         </div>,
