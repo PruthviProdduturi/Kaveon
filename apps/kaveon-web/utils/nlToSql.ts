@@ -261,7 +261,10 @@ export function nlToSql(query: string, schema: DatasetSchema): NlToSqlResult | n
       const yLabel = metric?.name ?? numCol?.name;
 
       if (groupCol && yExpr && yLabel) {
-        const sql = `SELECT ${groupCol.name}, ${yExpr} FROM ${tableName} GROUP BY ${groupCol.name} ORDER BY ${yExpr} DESC LIMIT ${topN}`;
+        // Extract raw column from expression for NULL filter (e.g. "AVG(carbon_intensity_elec)" → "carbon_intensity_elec")
+        const rawCol = yExpr.match(/\(([^)]+)\)/)?.[1] || numCol?.name;
+        const nullFilter = rawCol ? ` HAVING ${yExpr} IS NOT NULL` : "";
+        const sql = `SELECT ${groupCol.name}, ${yExpr} FROM ${tableName} GROUP BY ${groupCol.name}${nullFilter} ORDER BY ${yExpr} DESC LIMIT ${topN}`;
         return {
           sql,
           chartType: "bar",
@@ -394,7 +397,9 @@ export function nlToSql(query: string, schema: DatasetSchema): NlToSqlResult | n
 
     if (groupCol && yExpr && yLabel) {
       const orderBy = groupCol.type === "date" ? groupCol.name : `${yExpr} DESC`;
-      const sql = `SELECT ${groupCol.name}, ${yExpr} FROM ${tableName} GROUP BY ${groupCol.name} ORDER BY ${orderBy} LIMIT 1000`;
+      const rawCol = yExpr.match(/\(([^)]+)\)/)?.[1] || numCol?.name;
+      const nullFilter = rawCol && groupCol.type !== "date" ? ` HAVING ${yExpr} IS NOT NULL` : "";
+      const sql = `SELECT ${groupCol.name}, ${yExpr} FROM ${tableName} GROUP BY ${groupCol.name}${nullFilter} ORDER BY ${orderBy} LIMIT 1000`;
       return {
         sql,
         chartType: pickChartType("grouped", groupCol),

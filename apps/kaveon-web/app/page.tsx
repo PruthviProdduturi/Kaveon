@@ -321,8 +321,9 @@ export default function Home() {
 
     // KPI — single value
     if (parsed.chartType === "kpi" && rows.length === 1) {
-      const val = rows[0][0];
-      return `The total **${parsed.yAxis || columns[0]}** is **${fmt(Number(val))}**.`;
+      const val = Number(rows[0][yIdx >= 0 ? yIdx : 0]);
+      const label = parsed.title || parsed.yAxis || columns[0];
+      return `**${label}:** ${fmt(val)}`;
     }
 
     // Grouped data — smart listing based on result count
