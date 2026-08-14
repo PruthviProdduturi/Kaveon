@@ -763,37 +763,47 @@ export default function AboutPage() {
             <p style={{ fontSize: 16, color: "#666", marginTop: 12 }}>One platform. Ask questions, build charts, create dashboards, write SQL.</p>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gridAutoRows: "auto", gap: 14 }}>
-            <div className="about-card" style={{ gridColumn: "span 2", padding: 40, borderRadius: 16, background: `linear-gradient(135deg, ${B}06 0%, transparent 100%)`, border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s" }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: B, textTransform: "uppercase", letterSpacing: "2px", marginBottom: 12 }}>Core</div>
-              <h3 style={{ fontSize: 24, fontWeight: 700, marginBottom: 12, lineHeight: 1.3 }}>Conversational Data Querying</h3>
-              <p style={{ fontSize: 15, color: "#777", lineHeight: 1.8, maxWidth: 500 }}>
-                Type questions in plain English. A template-based NL&#x2192;SQL engine parses your words, matches schema metadata, generates SQL, and renders the answer as an interactive chart.
-              </p>
-            </div>
-            <div className="about-card" style={{ padding: 36, borderRadius: 16, background: "linear-gradient(135deg, rgba(16,185,129,0.05) 0%, transparent 100%)", border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s" }}>
-              <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>37 Chart Types</h3>
-              <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.8 }}>Bar, line, pie, heatmap, treemap, scatter, funnel, gauge, world map, 3D globe. All dark-mode aware.</p>
-            </div>
-            <div className="about-card" style={{ padding: 36, borderRadius: 16, background: "linear-gradient(135deg, rgba(139,92,246,0.05) 0%, transparent 100%)", border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s" }}>
-              <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>SQL Lab</h3>
-              <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.8 }}>Monaco editor with autocomplete, multi-tab, query history, and caching.</p>
-            </div>
-            <div className="about-card" style={{ gridColumn: "span 2", padding: 40, borderRadius: 16, background: "linear-gradient(135deg, rgba(245,158,11,0.05) 0%, transparent 100%)", border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s" }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#f59e0b", textTransform: "uppercase", letterSpacing: "2px", marginBottom: 12 }}>Build &amp; Share</div>
-              <h3 style={{ fontSize: 24, fontWeight: 700, marginBottom: 12, lineHeight: 1.3 }}>Dashboards That Tell Stories</h3>
-              <p style={{ fontSize: 15, color: "#777", lineHeight: 1.8, maxWidth: 500 }}>
-                Drag-and-drop canvas with cross-chart filtering, shared filter bar, auto-refresh, and one-click publishing.
-              </p>
-            </div>
+            <Anim dir="up" delay={0} style={{ gridColumn: "span 2" }}>
+              <div className="about-card" style={{ padding: 40, borderRadius: 16, background: `linear-gradient(135deg, ${B}06 0%, transparent 100%)`, border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: B, textTransform: "uppercase", letterSpacing: "2px", marginBottom: 12 }}>Core</div>
+                <h3 style={{ fontSize: 24, fontWeight: 700, marginBottom: 12, lineHeight: 1.3 }}>Conversational Data Querying</h3>
+                <p style={{ fontSize: 15, color: "#777", lineHeight: 1.8, maxWidth: 500 }}>
+                  Type questions in plain English. A template-based NL&#x2192;SQL engine parses your words, matches schema metadata, generates SQL, and renders the answer as an interactive chart.
+                </p>
+              </div>
+            </Anim>
+            <Anim dir="up" delay={100}>
+              <div className="about-card" style={{ padding: 36, borderRadius: 16, background: "linear-gradient(135deg, rgba(16,185,129,0.05) 0%, transparent 100%)", border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
+                <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>37 Chart Types</h3>
+                <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.8 }}>Bar, line, pie, heatmap, treemap, scatter, funnel, gauge, world map, 3D globe. All dark-mode aware.</p>
+              </div>
+            </Anim>
+            <Anim dir="up" delay={200}>
+              <div className="about-card" style={{ padding: 36, borderRadius: 16, background: "linear-gradient(135deg, rgba(139,92,246,0.05) 0%, transparent 100%)", border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
+                <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>SQL Lab</h3>
+                <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.8 }}>Monaco editor with autocomplete, multi-tab, query history, and caching.</p>
+              </div>
+            </Anim>
+            <Anim dir="up" delay={300} style={{ gridColumn: "span 2" }}>
+              <div className="about-card" style={{ padding: 40, borderRadius: 16, background: "linear-gradient(135deg, rgba(245,158,11,0.05) 0%, transparent 100%)", border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#f59e0b", textTransform: "uppercase", letterSpacing: "2px", marginBottom: 12 }}>Build &amp; Share</div>
+                <h3 style={{ fontSize: 24, fontWeight: 700, marginBottom: 12, lineHeight: 1.3 }}>Dashboards That Tell Stories</h3>
+                <p style={{ fontSize: 15, color: "#777", lineHeight: 1.8, maxWidth: 500 }}>
+                  Drag-and-drop canvas with cross-chart filtering, shared filter bar, auto-refresh, and one-click publishing.
+                </p>
+              </div>
+            </Anim>
             {[
               { title: "Multi-Source", desc: "Fabric, Azure SQL, PostgreSQL, MySQL. Connect them all.", color: "rgba(236,72,153,0.05)" },
               { title: "Semantic Datasets", desc: "Define dimensions, metrics, and joins once. Reuse everywhere.", color: "rgba(6,182,212,0.05)" },
               { title: "Self-Hosted", desc: "Your infrastructure, your data. OAuth, RBAC, MIT licensed.", color: "rgba(99,102,241,0.05)" },
-            ].map(f => (
-              <div key={f.title} className="about-card" style={{ padding: 36, borderRadius: 16, background: `linear-gradient(135deg, ${f.color} 0%, transparent 100%)`, border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s" }}>
-                <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>{f.title}</h3>
-                <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.8 }}>{f.desc}</p>
-              </div>
+            ].map((f, idx) => (
+              <Anim key={f.title} dir="up" delay={400 + idx * 100}>
+                <div className="about-card" style={{ padding: 36, borderRadius: 16, background: `linear-gradient(135deg, ${f.color} 0%, transparent 100%)`, border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
+                  <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>{f.title}</h3>
+                  <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.8 }}>{f.desc}</p>
+                </div>
+              </Anim>
             ))}
           </div>
         </div>
@@ -818,15 +828,17 @@ export default function AboutPage() {
               { name: "Azure", version: "Container Apps", color: "#0078d4" },
               { name: "Vercel", version: "Edge", color: "#fff" },
               { name: "Bicep", version: "IaC", color: "#f7a21b" },
-            ].map((t) => (
-              <div key={t.name} className="about-card" style={{
-                padding: "20px 16px", borderRadius: 12,
-                background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)",
-                textAlign: "center", transition: "all 0.3s",
-              }}>
-                <div style={{ fontSize: 15, fontWeight: 600, color: t.color, marginBottom: 4 }}>{t.name}</div>
-                <div style={{ fontSize: 11, color: "#444" }}>{t.version}</div>
-              </div>
+            ].map((t, idx) => (
+              <Anim key={t.name} dir="up" delay={idx * 50}>
+                <div className="about-card" style={{
+                  padding: "20px 16px", borderRadius: 12,
+                  background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)",
+                  textAlign: "center", transition: "all 0.3s",
+                }}>
+                  <div style={{ fontSize: 15, fontWeight: 600, color: t.color, marginBottom: 4 }}>{t.name}</div>
+                  <div style={{ fontSize: 11, color: "#444" }}>{t.version}</div>
+                </div>
+              </Anim>
             ))}
           </div>
         </div>
@@ -834,16 +846,18 @@ export default function AboutPage() {
 
       {/* ─── CTA ─── */}
       <section ref={r6} style={{ textAlign: "center", padding: "80px 24px 60px", position: "relative" }}>
-        <div style={{ position: "relative" }}>
-          <KaveonMark size={44} useDirectColor />
-          <h2 style={{ fontSize: "clamp(28px, 4vw, 42px)", fontWeight: 700, letterSpacing: "-1px", margin: "20px 0 12px" }}>
-            Ready to talk to your data?
-          </h2>
-          <p style={{ fontSize: 15, color: "#666", marginBottom: 36 }}>Open source &middot; Self-hosted &middot; MIT License</p>
-          <a href="/" className="about-btn" style={{ display: "inline-block", padding: "16px 44px", borderRadius: 12, background: B, color: "#fff", fontSize: 16, fontWeight: 600, textDecoration: "none", boxShadow: `0 4px 24px ${B}30`, transition: "all 0.2s" }}>
-            Try Kaveon
-          </a>
-        </div>
+        <Anim dir="scale">
+          <div style={{ position: "relative" }}>
+            <KaveonMark size={44} useDirectColor />
+            <h2 style={{ fontSize: "clamp(28px, 4vw, 42px)", fontWeight: 700, letterSpacing: "-1px", margin: "20px 0 12px" }}>
+              Ready to talk to your data?
+            </h2>
+            <p style={{ fontSize: 15, color: "#666", marginBottom: 36 }}>Open source &middot; Self-hosted &middot; MIT License</p>
+            <a href="/" className="about-btn" style={{ display: "inline-block", padding: "16px 44px", borderRadius: 12, background: B, color: "#fff", fontSize: 16, fontWeight: 600, textDecoration: "none", boxShadow: `0 4px 24px ${B}30`, transition: "all 0.2s" }}>
+              Try Kaveon
+            </a>
+          </div>
+        </Anim>
       </section>
 
       {/* ─── Footer ─── */}
