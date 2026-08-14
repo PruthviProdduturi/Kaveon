@@ -846,12 +846,50 @@ def build_distinct_filter_values_query(params: dict) -> Optional[dict]:
 
         column_table_map = _build_column_table_map(columns)
         fake_filter = {"column": column}
-        required_dims = _get_required_dimensions(dimensions, [], [fake_filter], column_table_map, datasource)
+
+        # Cascading (dependent) filters: other active filters on the SAME dataset
+        # narrow this column's distinct values (e.g. Provider=Anthropic → only
+        # Anthropic's models). The target column's own selection is excluded.
+        narrow_filters = []
+        for nf in (params.get("filters") or []):
+            if not isinstance(nf, dict):
+                continue
+            nf_col = nf.get("column") or nf.get("col") or ""
+            nf_val = nf.get("value")
+            if not nf_col or nf_val in (None, "", []):
+                continue
+            if normalize_column_name(str(nf_col)) == column:
+                continue
+            narrow_filters.append(nf)
+
+        # Resolve joins including the narrow-filter columns so their predicates bind.
+        required_dims = _get_required_dimensions(
+            dimensions, [], [fake_filter] + narrow_filters, column_table_map, datasource
+        )
         alias_map, join_clauses = _build_dimension_joins(required_dims, fact_alias, datasource)
         key_column, tier = _determine_filtering_strategy(column, dimensions, datasource, column_table_map)
         coalesce_map = _build_coalesce_map(required_dims, alias_map, columns)
 
         alias, col_name = _resolve_column_alias(column, fact_alias, alias_map, column_table_map)
+
+        # When cascading filters are present, always take the fact+join path with a
+        # WHERE — the fast dim-direct path can't relate two different columns.
+        if narrow_filters:
+            target_quoted = f"{alias}.{quote_identifier(col_name)}"
+            where_parts = [f"{target_quoted} IS NOT NULL"]
+            for nf in narrow_filters:
+                clause = _build_optimized_filter_clause(nf, fact_alias, alias_map, column_table_map)
+                if clause:
+                    where_parts.append(clause)
+            join_clause = " ".join(join_clauses)
+            sql = " ".join(p for p in [
+                f"SELECT DISTINCT TOP {int(limit)} {target_quoted} AS [key], {target_quoted} AS [value]",
+                f"FROM {fact_table} AS {fact_alias}",
+                join_clause,
+                f"WHERE {' AND '.join(where_parts)}",
+                "ORDER BY [value]",
+            ] if p)
+            return {"sql": sql, "keyColumn": key_column, "filteringTier": tier}
 
         # ── Fast path: column lives in a dim table ────────────────────────────
         # Query the dim table directly — no fact table, no join, much cheaper

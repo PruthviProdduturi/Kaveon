@@ -66,6 +66,10 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
   const colDatasetMapRef = useRef(colDatasetMap);
   colDatasetMapRef.current = colDatasetMap;
 
+  // Narrowing signature each column's options were last loaded under, so cached
+  // options are refetched when a parent (cascading) selection changes.
+  const colNarrowSigRef = useRef<Record<string, string>>({});
+
   // Build column → dataset_id mapping from the dashboard's charts
   useEffect(() => {
     const chartIds = layout
@@ -109,12 +113,46 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
     return colDatasetMapRef.current[filter.column] ?? null;
   };
 
-  /** Fetch distinct values for the given filter's column, unless already cached */
+  /** Sibling filters (same dataset, different column, with a value) that narrow
+   *  this filter's option list — the cascading-filter inputs. */
+  const getNarrowFilters = (target: DashboardFilter) => {
+    const tds = getDatasetId(target);
+    if (!tds) return [] as { column: string; operator: string; value: string; valueKey?: string; keyColumn?: string }[];
+    return dashboardFilters
+      .filter((f) =>
+        f.id !== target.id &&
+        f.enabled &&
+        f.filterType !== 'date_range' &&
+        String(f.value ?? '').trim() !== '' &&
+        getDatasetId(f) === tds
+      )
+      .map((f) => ({
+        column: f.column,
+        operator: f.operator,
+        value: f.value,
+        valueKey: f.valueKey,
+        keyColumn: (f as any).keyColumn,
+      }));
+  };
+
+  /** Stable signature of the narrowing context, so cached options refetch when a
+   *  parent selection changes. */
+  const narrowSig = (narrow: { column: string; operator: string; value: string }[]) =>
+    JSON.stringify(narrow.map((n) => [n.column, n.operator, n.value]).sort());
+
+  /** Fetch distinct values for the given filter's column under the CURRENT
+   *  narrowing context, unless the right (context-matched) options are loaded. */
   const loadOptions = async (filter: DashboardFilter) => {
     const col = filter.column;
-    if (colOptions[col] !== undefined || loadingCol === col) return;
-    if (col in optionsCache) {
-      const cached = optionsCache[col];
+    const narrow = getNarrowFilters(filter);
+    const sig = narrowSig(narrow);
+    if (colOptions[col] !== undefined && colNarrowSigRef.current[col] === sig) return;
+    if (loadingCol === col) return;
+
+    const cacheKey = `${col}|${sig}`;
+    if (cacheKey in optionsCache) {
+      const cached = optionsCache[cacheKey];
+      colNarrowSigRef.current[col] = sig;
       setColOptions((prev) => ({ ...prev, [col]: cached.options }));
       setColKeyColumn((prev) => ({ ...prev, [col]: cached.keyColumn }));
       return;
@@ -131,6 +169,7 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
         limit: '100',
         source: 'dashboard-filter',
       });
+      if (narrow.length) params.set('filters', JSON.stringify(narrow));
       const res = await msalFetch(`${API_BASE}/api/v1/sql/distinct-filter-values?${params}`);
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || 'Failed');
@@ -149,11 +188,13 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
         : [];
 
       const keyCol: string | null = data.keyColumn || null;
-      optionsCache[col] = { options: values, keyColumn: keyCol };
+      optionsCache[cacheKey] = { options: values, keyColumn: keyCol };
+      colNarrowSigRef.current[col] = sig;
       setColOptions((prev) => ({ ...prev, [col]: values }));
       setColKeyColumn((prev) => ({ ...prev, [col]: keyCol }));
     } catch {
-      optionsCache[col] = { options: [], keyColumn: null };
+      optionsCache[cacheKey] = { options: [], keyColumn: null };
+      colNarrowSigRef.current[col] = sig;
       setColOptions((prev) => ({ ...prev, [col]: [] }));
     } finally {
       setLoadingCol(null);
