@@ -452,7 +452,7 @@ export function Sidebar({ children }: SidebarProps) {
           ) : (
             <>
               <Link href="/" onClick={() => { if (pathname === "/") window.dispatchEvent(new CustomEvent("kaveon-new-chat")); }} style={{ display: "flex", alignItems: "center", textDecoration: "none" }}>
-              <svg width="130" height="22" viewBox="60 50 1180 200" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ shapeRendering: "geometricPrecision", flexShrink: 0, cursor: "pointer" }}>
+              <svg width="140" height="24" viewBox="60 50 1180 200" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ shapeRendering: "geometricPrecision" }}>
                 <g fill="var(--text-primary)">
                   <rect x="90" y="70" width="20" height="165" />
                   <polygon points="108.73,161.20 215.73,86.39 204.27,70 97.27,144.80" />
