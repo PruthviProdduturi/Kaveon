@@ -98,11 +98,6 @@ export default function AboutPage() {
           85% { transform: translateY(-1px) scale(0.99); }
           100% { transform: translateY(0) scale(1); }
         }
-        @keyframes logo-ring-expand {
-          0% { opacity: 0; transform: scale(0.2); }
-          40% { opacity: 0.8; }
-          100% { opacity: 0; transform: scale(2.5); }
-        }
         @keyframes logo-glow-settle {
           0% { opacity: 0; transform: scale(0.5); }
           50% { opacity: 0.7; transform: scale(1.3); }
@@ -222,26 +217,35 @@ export default function AboutPage() {
         }} />
 
         <div style={{ position: "relative", maxWidth: 900, zIndex: 2 }}>
-          {/* Guardian O — drops from above with bounce + ring burst on landing */}
+          {/* Guardian O — drops in with data particles radiating outward */}
           <div style={{ position: "relative", display: "inline-block", marginBottom: 0 }}>
-            {/* Impact ring — expands outward on landing */}
-            <div style={{
-              position: "absolute", top: "50%", left: "50%",
-              width: 240, height: 240, marginTop: -120, marginLeft: -120,
-              borderRadius: "50%",
-              border: `2px solid ${B}`,
-              pointerEvents: "none",
-              animation: "logo-ring-expand 1s cubic-bezier(0.16, 1, 0.3, 1) 0.5s both",
-            }} />
-            {/* Second ring — slightly delayed */}
-            <div style={{
-              position: "absolute", top: "50%", left: "50%",
-              width: 240, height: 240, marginTop: -120, marginLeft: -120,
-              borderRadius: "50%",
-              border: `1px solid ${B}40`,
-              pointerEvents: "none",
-              animation: "logo-ring-expand 1.2s cubic-bezier(0.16, 1, 0.3, 1) 0.65s both",
-            }} />
+            {/* Data particles — words that scatter outward on logo landing */}
+            {["SELECT", "FROM", "WHERE", "JOIN", "GROUP BY", "AVG()", "SUM()", "COUNT"].map((word, i) => {
+              const angle = (i / 8) * 360;
+              const rad = angle * Math.PI / 180;
+              const tx = Math.cos(rad) * 180;
+              const ty = Math.sin(rad) * 140;
+              return (
+                <span key={word} style={{
+                  position: "absolute", top: "50%", left: "50%",
+                  fontSize: 10, fontFamily: "monospace", fontWeight: 600,
+                  color: `${B}`,
+                  pointerEvents: "none", whiteSpace: "nowrap",
+                  opacity: 0,
+                  animation: `particle-scatter-${i} 1.4s cubic-bezier(0.16, 1, 0.3, 1) 0.5s both`,
+                }}>
+                  <style>{`
+                    @keyframes particle-scatter-${i} {
+                      0% { opacity: 0; transform: translate(-50%, -50%) scale(0.5); }
+                      30% { opacity: 0.7; transform: translate(calc(-50% + ${tx * 0.3}px), calc(-50% + ${ty * 0.3}px)) scale(1); }
+                      70% { opacity: 0.4; transform: translate(calc(-50% + ${tx}px), calc(-50% + ${ty}px)) scale(0.8); }
+                      100% { opacity: 0; transform: translate(calc(-50% + ${tx * 1.3}px), calc(-50% + ${ty * 1.3}px)) scale(0.5); }
+                    }
+                  `}</style>
+                  {word}
+                </span>
+              );
+            })}
             {/* Glow — settles then breathes */}
             <div style={{
               position: "absolute", inset: -30,
