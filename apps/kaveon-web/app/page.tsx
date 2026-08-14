@@ -314,18 +314,26 @@ export default function Home() {
       return `The total **${parsed.yAxis || columns[0]}** is **${fmt(Number(val))}**.`;
     }
 
-    // Grouped data — show top 3 and total count
+    // Grouped data — smart listing based on result count
     if (rows.length > 1 && xIdx >= 0 && yIdx >= 0) {
       const sorted = [...rows].sort((a, b) => Number(b[yIdx] || 0) - Number(a[yIdx] || 0));
-      const top3 = sorted.slice(0, 3).map(r => `**${r[xIdx]}** (${fmt(Number(r[yIdx] || 0))})`);
       const total = rows.length;
+      const xLabel = parsed.xAxis || columns[xIdx] || "item";
       const yLabel = parsed.yAxis || columns[yIdx] || "value";
 
-      let insight = `Found **${total}** results for ${yLabel} by ${parsed.xAxis || columns[xIdx]}. `;
-      insight += `Top 3: ${top3.join(", ")}. `;
+      let insight = "";
 
-      if (total > 10) {
-        insight += `\n\nWant me to show just the **top 10** or filter by a specific value?`;
+      // If ≤ 20 results (e.g. Top 10, Top 15), list them all
+      if (total <= 20) {
+        insight = `**${parsed.title || `${yLabel} by ${xLabel}`}** (${total} results)\n\n`;
+        sorted.forEach((r, i) => {
+          insight += `${i + 1}. **${r[xIdx]}** — ${fmt(Number(r[yIdx] || 0))}\n`;
+        });
+      } else {
+        // Large result set — show top 5 with context
+        const top5 = sorted.slice(0, 5).map((r, i) => `${i + 1}. **${r[xIdx]}** — ${fmt(Number(r[yIdx] || 0))}`);
+        insight = `Found **${total}** results for ${yLabel} by ${xLabel}.\n\n${top5.join("\n")}\n`;
+        insight += `\n*...and ${total - 5} more.* Ask for "top 10" or "top 20" to narrow down.`;
       }
 
       return insight;
