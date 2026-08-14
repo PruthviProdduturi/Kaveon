@@ -207,9 +207,88 @@ function buildTitle(pattern: string, metric: string, groupCol: string | null): s
   }
 }
 
+// Common typos and their corrections
+const TYPO_MAP: Record<string, string> = {
+  cosumption: "consumption", consumtion: "consumption", enery: "energy", enegry: "energy",
+  contry: "country", coutry: "country", counry: "country", temperture: "temperature",
+  renewble: "renewable", renewbles: "renewables", intesity: "intensity", intensty: "intensity",
+  emisions: "emissions", emisssions: "emissions", cabon: "carbon", carbn: "carbon",
+  eletric: "electric", eletricity: "electricity", modle: "model", modl: "model",
+  benchmak: "benchmark", benchark: "benchmark",
+};
+
+function fixTypos(text: string): string {
+  return text.split(/\s+/).map(w => TYPO_MAP[w.toLowerCase()] || w).join(" ");
+}
+
+// Extract entity filter (e.g. "India" from "India energy usage" or "consumption in India")
+function extractEntityFilter(
+  query: string,
+  columns: DatasetColumn[],
+): { filterCol: string; filterValue: string; cleanQuery: string } | null {
+  const stringCols = columns.filter(c => c.type === "string");
+  if (stringCols.length === 0) return null;
+
+  // Common patterns: "in India", "for India", "of India", "India's"
+  const inMatch = query.match(/\b(?:in|for|of)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/);
+  if (inMatch) {
+    const value = inMatch[1];
+    const col = stringCols.find(c => /country|name|region|provider|model/i.test(c.name)) || stringCols[0];
+    const clean = query.replace(inMatch[0], "").replace(/\s+/g, " ").trim();
+    return { filterCol: col.name, filterValue: value, cleanQuery: clean };
+  }
+
+  // Leading entity: "India consumption" or "China energy"
+  const leadMatch = query.match(/^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+(.+)/);
+  if (leadMatch) {
+    const candidate = leadMatch[1];
+    // Only treat as entity if the rest of the query has meaningful words
+    const rest = leadMatch[2].toLowerCase();
+    const hasKeyword = /energy|consumption|carbon|emission|temperature|elo|score|model|benchmark|renewable/.test(rest);
+    if (hasKeyword && candidate.length > 2) {
+      const col = stringCols.find(c => /country|name|region|provider|model/i.test(c.name)) || stringCols[0];
+      return { filterCol: col.name, filterValue: candidate, cleanQuery: leadMatch[2] };
+    }
+  }
+
+  // "What about India" pattern
+  const aboutMatch = query.match(/\b(?:what about|how about|and)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i);
+  if (aboutMatch) {
+    const value = aboutMatch[1];
+    const col = stringCols.find(c => /country|name|region|provider|model/i.test(c.name)) || stringCols[0];
+    // Use a generic query with the filter
+    return { filterCol: col.name, filterValue: value, cleanQuery: "" };
+  }
+
+  return null;
+}
+
 export function nlToSql(query: string, schema: DatasetSchema): NlToSqlResult | null {
-  const q = query.toLowerCase().trim();
+  const corrected = fixTypos(query);
   const { tableName, columns, metrics } = schema;
+
+  // Extract entity filter before parsing (e.g. "India" → WHERE country = 'India')
+  const entityFilter = extractEntityFilter(corrected, columns);
+  const q = (entityFilter?.cleanQuery || corrected).toLowerCase().trim();
+  const whereClause = entityFilter
+    ? ` WHERE ${entityFilter.filterCol} = '${entityFilter.filterValue.replace(/'/g, "''")}'`
+    : "";
+
+  // If entity extracted but no meaningful query left (e.g. "What about India"), show summary
+  if (entityFilter && (!q || q.length < 3)) {
+    const metric = metrics[0];
+    if (metric) {
+      const sql = `SELECT ${metric.expression} FROM ${tableName}${whereClause} LIMIT 1`;
+      return {
+        sql,
+        chartType: "kpi",
+        xAxis: null,
+        yAxis: metric.name,
+        title: `${metric.name} for ${entityFilter.filterValue}`,
+        confidence: 0.8,
+      };
+    }
+  }
 
   // --- Pattern 4: aggregate-only (total/sum/count/average with no grouping keywords) ---
   const aggMatch = q.match(
@@ -222,7 +301,7 @@ export function nlToSql(query: string, schema: DatasetSchema): NlToSqlResult | n
     const col = findColumn(target, columns, "number");
 
     if (metric) {
-      const sql = `SELECT ${metric.expression} FROM ${tableName} LIMIT 1`;
+      const sql = `SELECT ${metric.expression} FROM ${tableName}${whereClause} LIMIT 1`;
       return {
         sql,
         chartType: "kpi",
@@ -234,7 +313,7 @@ export function nlToSql(query: string, schema: DatasetSchema): NlToSqlResult | n
     }
     if (col) {
       const expr = aggFunc === "COUNT" ? `COUNT(${col.name})` : `${aggFunc}(${col.name})`;
-      const sql = `SELECT ${expr} FROM ${tableName} LIMIT 1`;
+      const sql = `SELECT ${expr} FROM ${tableName}${whereClause} LIMIT 1`;
       return {
         sql,
         chartType: "kpi",
@@ -264,7 +343,7 @@ export function nlToSql(query: string, schema: DatasetSchema): NlToSqlResult | n
         // Extract raw column from expression for NULL filter (e.g. "AVG(carbon_intensity_elec)" → "carbon_intensity_elec")
         const rawCol = yExpr.match(/\(([^)]+)\)/)?.[1] || numCol?.name;
         const nullFilter = rawCol ? ` HAVING ${yExpr} IS NOT NULL` : "";
-        const sql = `SELECT ${groupCol.name}, ${yExpr} FROM ${tableName} GROUP BY ${groupCol.name}${nullFilter} ORDER BY ${yExpr} DESC LIMIT ${topN}`;
+        const sql = `SELECT ${groupCol.name}, ${yExpr} FROM ${tableName}${whereClause} GROUP BY ${groupCol.name}${nullFilter} ORDER BY ${yExpr} DESC LIMIT ${topN}`;
         return {
           sql,
           chartType: "bar",
@@ -304,7 +383,7 @@ export function nlToSql(query: string, schema: DatasetSchema): NlToSqlResult | n
       const yLabel = metric?.name ?? numCol?.name;
 
       if (yExpr && yLabel) {
-        const sql = `SELECT ${dateCol.name}, ${yExpr} FROM ${tableName} GROUP BY ${dateCol.name} ORDER BY ${dateCol.name} LIMIT 1000`;
+        const sql = `SELECT ${dateCol.name}, ${yExpr} FROM ${tableName}${whereClause} GROUP BY ${dateCol.name} ORDER BY ${dateCol.name} LIMIT 1000`;
         return {
           sql,
           chartType: "line",
@@ -343,7 +422,7 @@ export function nlToSql(query: string, schema: DatasetSchema): NlToSqlResult | n
     if (matchedCol && metric) {
       const escaped = compareValues.map((v) => `'${v}'`).join(", ");
       const groupBy = dateCol ? dateCol.name : matchedCol.name;
-      const sql = `SELECT ${groupBy}, ${matchedCol.name}, ${metric.expression} FROM ${tableName} WHERE ${matchedCol.name} IN (${escaped}) GROUP BY ${groupBy}, ${matchedCol.name} ORDER BY ${groupBy} LIMIT 1000`;
+      const sql = `SELECT ${groupBy}, ${matchedCol.name}, ${metric.expression} FROM ${tableName}${whereClause} WHERE ${matchedCol.name} IN (${escaped}) GROUP BY ${groupBy}, ${matchedCol.name} ORDER BY ${groupBy} LIMIT 1000`;
       return {
         sql,
         chartType: dateCol ? "line" : "bar",
@@ -366,7 +445,7 @@ export function nlToSql(query: string, schema: DatasetSchema): NlToSqlResult | n
     for (const t of tokens) {
       const col = findColumn(t, columns, "string") ?? findColumn(t, columns);
       if (col) {
-        const sql = `SELECT ${col.name}, COUNT(*) as count FROM ${tableName} GROUP BY ${col.name} ORDER BY count DESC LIMIT 1000`;
+        const sql = `SELECT ${col.name}, COUNT(*) as count FROM ${tableName}${whereClause} GROUP BY ${col.name} ORDER BY count DESC LIMIT 1000`;
         return {
           sql,
           chartType: pickChartType("distribution", col),
@@ -399,7 +478,7 @@ export function nlToSql(query: string, schema: DatasetSchema): NlToSqlResult | n
       const orderBy = groupCol.type === "date" ? groupCol.name : `${yExpr} DESC`;
       const rawCol = yExpr.match(/\(([^)]+)\)/)?.[1] || numCol?.name;
       const nullFilter = rawCol && groupCol.type !== "date" ? ` HAVING ${yExpr} IS NOT NULL` : "";
-      const sql = `SELECT ${groupCol.name}, ${yExpr} FROM ${tableName} GROUP BY ${groupCol.name}${nullFilter} ORDER BY ${orderBy} LIMIT 1000`;
+      const sql = `SELECT ${groupCol.name}, ${yExpr} FROM ${tableName}${whereClause} GROUP BY ${groupCol.name}${nullFilter} ORDER BY ${orderBy} LIMIT 1000`;
       return {
         sql,
         chartType: pickChartType("grouped", groupCol),
@@ -412,7 +491,7 @@ export function nlToSql(query: string, schema: DatasetSchema): NlToSqlResult | n
 
     // Partial: found group col but no metric — use COUNT
     if (groupCol) {
-      const sql = `SELECT ${groupCol.name}, COUNT(*) as count FROM ${tableName} GROUP BY ${groupCol.name} ORDER BY count DESC LIMIT 1000`;
+      const sql = `SELECT ${groupCol.name}, COUNT(*) as count FROM ${tableName}${whereClause} GROUP BY ${groupCol.name} ORDER BY count DESC LIMIT 1000`;
       return {
         sql,
         chartType: pickChartType("grouped", groupCol),
@@ -456,7 +535,7 @@ export function nlToSql(query: string, schema: DatasetSchema): NlToSqlResult | n
 
   if (foundGroupCol && yExpr && yLabel) {
     const orderBy = foundGroupCol.type === "date" ? foundGroupCol.name : `${yExpr} DESC`;
-    const sql = `SELECT ${foundGroupCol.name}, ${yExpr} FROM ${tableName} GROUP BY ${foundGroupCol.name} ORDER BY ${orderBy} LIMIT 1000`;
+    const sql = `SELECT ${foundGroupCol.name}, ${yExpr} FROM ${tableName}${whereClause} GROUP BY ${foundGroupCol.name} ORDER BY ${orderBy} LIMIT 1000`;
     return {
       sql,
       chartType: pickChartType("fallback", foundGroupCol),
@@ -468,7 +547,7 @@ export function nlToSql(query: string, schema: DatasetSchema): NlToSqlResult | n
   }
 
   if (yExpr && yLabel) {
-    const sql = `SELECT ${yExpr} FROM ${tableName} LIMIT 1`;
+    const sql = `SELECT ${yExpr} FROM ${tableName}${whereClause} LIMIT 1`;
     return {
       sql,
       chartType: "kpi",
@@ -480,7 +559,7 @@ export function nlToSql(query: string, schema: DatasetSchema): NlToSqlResult | n
   }
 
   if (foundGroupCol) {
-    const sql = `SELECT ${foundGroupCol.name}, COUNT(*) as count FROM ${tableName} GROUP BY ${foundGroupCol.name} ORDER BY count DESC LIMIT 1000`;
+    const sql = `SELECT ${foundGroupCol.name}, COUNT(*) as count FROM ${tableName}${whereClause} GROUP BY ${foundGroupCol.name} ORDER BY count DESC LIMIT 1000`;
     return {
       sql,
       chartType: "table",
