@@ -316,14 +316,14 @@ export default function AboutPage() {
 
 
       {/* ─── Chat Demo ─── */}
-      <Section style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0a0a0a 0%, #0f1520 50%, #0a0a0a 100%)" }}>
+      <section style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0a0a0a 0%, #0f1520 50%, #0a0a0a 100%)", overflow: "hidden" }}>
         <div style={{ maxWidth: 920, margin: "0 auto" }}>
-          <div style={{ textAlign: "center", marginBottom: 48 }}>
+          <Anim dir="up" style={{ textAlign: "center", marginBottom: 48 }}>
             <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: "#8b5cf6", marginBottom: 12 }}>Conversational Analytics</div>
             <h2 style={{ fontSize: "clamp(28px, 4vw, 40px)", fontWeight: 700, letterSpacing: "-1px" }}>Ask anything. Get answers.</h2>
-          </div>
+          </Anim>
 
-          <div style={{ background: "#141414", borderRadius: 20, border: "1px solid rgba(255,255,255,0.06)", overflow: "hidden", boxShadow: "0 40px 80px rgba(0,0,0,0.5)" }}>
+          <Anim dir="right" delay={200} duration={1.0} style={{ background: "#141414", borderRadius: 20, border: "1px solid rgba(255,255,255,0.06)", overflow: "hidden", boxShadow: "0 40px 80px rgba(0,0,0,0.5)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 20px", borderBottom: "1px solid rgba(255,255,255,0.04)", background: "rgba(255,255,255,0.02)" }}>
               <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#ff5f57" }} />
               <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#febc2e" }} />
@@ -408,11 +408,12 @@ export default function AboutPage() {
                 </div>
               </div>
             </div>
-          </div>
+          </Anim>
         </div>
-      </Section>
+      </section>
 
       {/* ─── How It Works ─── */}
+
       <section ref={r3} style={{ padding: "100px 24px", background: "#0a0a0a" }}>
         <div style={{ maxWidth: 1000, margin: "0 auto" }}>
           <div style={{ textAlign: "center", marginBottom: 56 }}>
