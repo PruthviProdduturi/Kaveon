@@ -298,8 +298,19 @@ export default function Home() {
     parsed: { chartType: string; xAxis: string | null; yAxis: string | null; title: string },
     userQuery: string,
   ): string {
-    const xIdx = parsed.xAxis ? columns.indexOf(parsed.xAxis) : 0;
-    const yIdx = parsed.yAxis ? columns.indexOf(parsed.yAxis) : (columns.length > 1 ? 1 : 0);
+    // Match column by name — ACR/SQL may return aliased names (e.g. "avg" for AVG(...))
+    const findCol = (name: string | null): number => {
+      if (!name) return -1;
+      const lower = name.toLowerCase();
+      let idx = columns.findIndex(c => c.toLowerCase() === lower);
+      if (idx >= 0) return idx;
+      // Fuzzy: column starts with or contains the name
+      idx = columns.findIndex(c => c.toLowerCase().includes(lower) || lower.includes(c.toLowerCase()));
+      if (idx >= 0) return idx;
+      return -1;
+    };
+    const xIdx = findCol(parsed.xAxis) >= 0 ? findCol(parsed.xAxis) : 0;
+    const yIdx = findCol(parsed.yAxis) >= 0 ? findCol(parsed.yAxis) : (columns.length > 1 ? 1 : 0);
 
     const fmt = (v: number): string => {
       if (Math.abs(v) >= 1_000_000_000) return (v / 1_000_000_000).toFixed(1) + "B";
