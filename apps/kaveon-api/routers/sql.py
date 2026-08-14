@@ -161,11 +161,23 @@ def distinct_filter_values(
     source: str = Query(default=None),
     chart_id: str = Query(default=None),
     dashboard_id: str = Query(default=None),
+    filters: str = Query(default=None),   # JSON list of sibling filters that narrow this column
     user: str = Depends(require_auth),
 ):
     response.headers.update(NO_CACHE)
     user_id = user
     row_limit = min(limit, 500)
+
+    # Cascading filters — other active filters on the same dataset that narrow the
+    # returned distinct values. Sent JSON-encoded; malformed input is ignored.
+    narrow_filters: list = []
+    if filters:
+        try:
+            parsed = json.loads(filters)
+            if isinstance(parsed, list):
+                narrow_filters = [f for f in parsed if isinstance(f, dict)]
+        except Exception:
+            narrow_filters = []
 
     dataset = datasets_svc.get_dataset_by_id(dataset_id)
     if not dataset:
@@ -194,6 +206,7 @@ def distinct_filter_values(
         "datasource": datasource, "column": column,
         "dimensions": raw_dims, "columns": dataset.get("columns") or [],
         "limit": row_limit,
+        "filters": narrow_filters,
     })
     if not query_result:
         raise HTTPException(status_code=400, detail="Failed to generate distinct values query")
