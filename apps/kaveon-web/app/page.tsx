@@ -322,8 +322,14 @@ export default function Home() {
     // KPI — single value
     if (parsed.chartType === "kpi" && rows.length === 1) {
       const val = Number(rows[0][yIdx >= 0 ? yIdx : 0]);
-      const label = parsed.title || parsed.yAxis || columns[0];
-      return `**${label}:** ${fmt(val)}`;
+      const metric = parsed.yAxis || columns[0];
+      // Extract context from user query (e.g. "India" from "India energy usage")
+      const queryWords = userQuery.toLowerCase().split(/\s+/);
+      const metricWords = (metric || "").toLowerCase().replace(/[_()]/g, " ").split(/\s+/);
+      const contextWords = queryWords.filter(w => w.length > 2 && !metricWords.some(m => m.includes(w) || w.includes(m)));
+      const context = contextWords.length > 0 ? contextWords.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") : "";
+      const label = context ? `${metric} of ${context}` : metric;
+      return `**${label}** is **${fmt(val)}**`;
     }
 
     // Grouped data — smart listing based on result count
