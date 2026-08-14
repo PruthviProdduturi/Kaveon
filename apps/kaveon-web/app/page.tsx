@@ -397,11 +397,13 @@ export default function Home() {
       if (schema && parsed) {
         const dbName = srcDb || "kaveon";
 
-        // ── Try Adaptive Context Routing first ──────────────────────────────
+        // ── Try Adaptive Context Routing first (only for profile-synthesizable questions) ──
         let usedAcr = false;
         const t0 = performance.now();
-        try {
-          const acrSchemaName = match?.schemaName || "public";
+        const acrSchemaName = match?.schemaName || "public";
+        // Skip ACR cache when parser already generated SQL — run it fresh
+        const tryAcr = parsed.chartType === "kpi" && parsed.confidence >= 0.9;
+        if (tryAcr) try {
           const acrRes = await msalFetch("/api/v1/context/ask", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
