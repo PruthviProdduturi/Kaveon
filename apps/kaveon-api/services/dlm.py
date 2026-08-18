@@ -186,7 +186,7 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
     usage_rollup = _usage_rollup(schema, columns, dimensions, snapshots)
 
     # 5) stats rollup — cardinalities / row counts / freshness / date-range digest
-    stats_rollup = _stats_rollup(database, schema, columns, dimensions, snapshots,
+    stats_rollup = _stats_rollup(database, schema, columns, dimensions, snapshots, metrics,
                                  ds.get("date_column"), ds.get("table_name") or ds.get("fact_table"))
 
     # 6) manifest — the deterministic assembler's map of the dataset
@@ -408,14 +408,20 @@ def _scan_distinct(database: str, schema: str, table: str, column: str,
     return out
 
 
-def _scan_min_max(database: str, schema: str, table: str, column: str) -> Optional[tuple]:
-    """MIN/MAX of a column via one aggregate — the date-range fallback when
-    pg_stats histogram_bounds are unavailable (views / unanalyzed)."""
+def _scan_min_max(database: str, schema: str, table: str, column: str,
+                  require_nonnull: Optional[List[str]] = None) -> Optional[tuple]:
+    """MIN/MAX of a column via one aggregate. With *require_nonnull*, restricts to
+    rows where ALL those columns are non-null — used to bound the date range to
+    where the defined metrics actually have data (so a future placeholder row
+    with null metrics doesn't stretch the range)."""
     import database.pool as pool
     tbl = f"{_qid(schema)}.{_qid(table)}" if schema else _qid(table)
     qcol = _qid(column)
+    where = ""
+    if require_nonnull:
+        where = " WHERE " + " AND ".join(f"{_qid(c)} IS NOT NULL" for c in require_nonnull)
     try:
-        res = pool.execute_query(f"SELECT MIN({qcol}) AS mn, MAX({qcol}) AS mx FROM {tbl}", database)
+        res = pool.execute_query(f"SELECT MIN({qcol}) AS mn, MAX({qcol}) AS mx FROM {tbl}{where}", database)
     except Exception:
         return None
     rows = res.get("rows_objects", res.get("rows", []))
@@ -435,7 +441,8 @@ def _num(v: Any) -> float:
 
 
 def _stats_rollup(database: str, schema: str, columns: List[dict], dimensions: List[dict],
-                  snapshots: Dict[str, dict], date_column: Optional[str] = None,
+                  snapshots: Dict[str, dict], metrics: Optional[List[dict]] = None,
+                  date_column: Optional[str] = None,
                   fact_table: Optional[str] = None) -> Dict[str, Any]:
     cardinalities: Dict[str, Any] = {}
     freshest = None
@@ -455,19 +462,41 @@ def _stats_rollup(database: str, schema: str, columns: List[dict], dimensions: L
         ra = snap.get("refreshed_at")
         if ra and (freshest is None or ra > freshest):
             freshest = ra
+    metric_cols = _metric_columns(metrics or [], columns, date_column)
     return {
         "cardinalities": cardinalities,
         "row_counts": row_counts,
         "profiled_at": freshest,
-        "date_range": _date_range(database, schema, columns, snapshots, date_column, fact_table),
+        "date_range": _date_range(database, schema, columns, snapshots, date_column, fact_table, metric_cols),
     }
 
 
+def _metric_columns(metrics: List[dict], columns: List[dict], date_column: Optional[str]) -> List[str]:
+    """Underlying fact columns referenced by the dataset's defined metric
+    expressions (e.g. SUM(primary_energy_consumption) -> primary_energy_consumption).
+    Used to bound the date range to where those metrics actually have data."""
+    colnames = {(c.get("column_name") or c.get("name") or "").strip() for c in columns}
+    colnames.discard("")
+    dc = (date_column or "").strip()
+    out: List[str] = []
+    seen: set = set()
+    for m in metrics:
+        for ident in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", m.get("expression") or ""):
+            if ident in colnames and ident != dc and ident not in seen:
+                seen.add(ident)
+                out.append(ident)
+    return out
+
+
 def _date_range(database: str, schema: str, columns: List[dict], snapshots: Dict[str, dict],
-                date_column: Optional[str], fact_table: Optional[str]) -> Optional[Dict[str, Any]]:
-    """Min/max of the dataset's date column. Prefers pg_stats histogram_bounds
-    (zero scan, approximate); falls back to a MIN/MAX aggregate when there are no
-    stats (views / unanalyzed) — exact, one-time, at generate."""
+                date_column: Optional[str], fact_table: Optional[str],
+                metric_cols: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
+    """Min/max of the dataset's date column, bounded to where the defined metrics
+    have data. ``basis='metric_coverage'`` means the range only spans rows where
+    every defined-metric column is non-null (so a future placeholder row with
+    empty metrics won't extend it — e.g. energy 'year' reaches 2025 but the
+    consumption metric ends 2024). Falls back to the full column span
+    (``basis='all_rows'``) when no metrics resolve."""
     if not date_column:
         return None
     dc = date_column.strip()
@@ -480,20 +509,27 @@ def _date_range(database: str, schema: str, columns: List[dict], snapshots: Dict
     if not table:
         return None
 
+    # Metric-coverage range: exact MIN/MAX over rows where every defined metric
+    # is present. One aggregate query at generate time; works on views.
+    if metric_cols:
+        mm = _scan_min_max(database, schema, table, dc, require_nonnull=metric_cols)
+        if mm and (mm[0] is not None or mm[1] is not None):
+            return {"column": dc, "min": mm[0], "max": mm[1], "approx": False, "basis": "metric_coverage"}
+
+    # Fallback: full column span — zero-scan histogram / most_common_vals first.
     snap = snapshots.get(profiler.column_key(schema, table, dc))
     if snap:
         prof = _loads(snap.get("profile")) or {}
         bounds = _parse_pg_array(prof.get("histogram_bounds"))
         if bounds:
-            return {"column": dc, "min": bounds[0], "max": bounds[-1], "approx": True}
+            return {"column": dc, "min": bounds[0], "max": bounds[-1], "approx": True, "basis": "all_rows"}
         vals = sorted(_parse_pg_array(prof.get("most_common_vals")))
         if vals:
-            return {"column": dc, "min": vals[0], "max": vals[-1], "approx": True}
+            return {"column": dc, "min": vals[0], "max": vals[-1], "approx": True, "basis": "all_rows"}
 
-    # fallback: exact MIN/MAX (works on views)
     mm = _scan_min_max(database, schema, table, dc)
     if mm:
-        return {"column": dc, "min": mm[0], "max": mm[1], "approx": False}
+        return {"column": dc, "min": mm[0], "max": mm[1], "approx": False, "basis": "all_rows"}
     return None
 
 
