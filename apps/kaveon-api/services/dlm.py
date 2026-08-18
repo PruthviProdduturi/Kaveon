@@ -41,6 +41,16 @@ import services.datasets as datasets_svc
 # text) are matched structurally, never by value.
 _MAX_CARDINALITY_FOR_VALUES = 1000
 
+# Common aliases so "USA"/"America" resolve to "United States", etc. Keyed and
+# valued by normalized (lowercased) text.
+_VALUE_ALIASES = {
+    "usa": "united states", "us": "united states", "u s": "united states",
+    "america": "united states", "united states of america": "united states",
+    "uk": "united kingdom", "u k": "united kingdom", "britain": "united kingdom",
+    "great britain": "united kingdom", "uae": "united arab emirates",
+    "south korea": "korea", "s korea": "korea", "russia": "russian federation",
+}
+
 # Words that never denote a filter value on their own — prevents "in" matching
 # "India", "for" matching a value, etc.
 _STOPWORDS = frozenset({
@@ -237,6 +247,7 @@ def resolve_value(dataset_id: str, term: str, limit: int = 5,
     norm = _normalize(term)
     if not norm:
         return []
+    norm = _VALUE_ALIASES.get(norm, norm)   # USA -> united states, etc.
     exact = meta.query(
         "SELECT element_key, value_text, key_column, key_value, freq "
         "FROM dlm_value_index WHERE dataset_id = @param0 AND value_norm = @param1 "
@@ -252,30 +263,99 @@ def resolve_value(dataset_id: str, term: str, limit: int = 5,
             [str(dataset_id), norm + "%"],
         )
         rows = pref.get("rows_objects", pref.get("rows", []))
+    # typo tolerance: fuzzy-match against this dataset's values (japn -> japan)
+    if not rows and len(norm) >= 4:
+        rows = _fuzzy_value(str(dataset_id), norm)
     return [_value_hit(r) for r in rows[:limit]]
 
 
-def route(question: str, limit: int = 3) -> List[Dict[str, Any]]:
-    """CLM-over-CLMs, v1 (lexical): rank datasets whose router summary/terms
-    overlap the question. Discrete-code routing replaces this at v2."""
-    ensure_tables()
-    q_terms = set(_tokenize(question))
-    if not q_terms:
+def _fuzzy_value(dataset_id: str, norm: str) -> List[dict]:
+    """Close-match a (possibly misspelled) term against the dataset's indexed
+    values using edit-distance ratio. 'paskistan' -> 'Pakistan'."""
+    import difflib
+    res = meta.query(
+        "SELECT element_key, value_text, value_norm, key_column, key_value, freq "
+        "FROM dlm_value_index WHERE dataset_id = @param0", [dataset_id])
+    cand = res.get("rows_objects", res.get("rows", []))
+    if not cand:
         return []
-    res = meta.query("SELECT dataset_id, summary, terms FROM dlm_router", [])
+    by_norm = {}
+    for c in cand:
+        if isinstance(c, dict):
+            by_norm.setdefault(c.get("value_norm"), c)
+    close = difflib.get_close_matches(norm, [k for k in by_norm if k], n=1, cutoff=0.84)
+    return [by_norm[close[0]]] if close else []
+
+
+_ROUTE_NOISE = frozenset({"sum", "avg", "count", "total", "max", "min", "the", "of", "by"})
+_ROUTE_FLOOR = 2  # reject routing on a single stray generic-word match
+
+
+def route(question: str, limit: int = 3) -> List[Dict[str, Any]]:
+    """CLM-over-CLMs (weighted lexical): rank datasets by how strongly the
+    question matches each dataset's metrics (x3), indexed values (x2), name (x2)
+    and columns (x1). A floor prevents a single generic word from routing (which
+    sent 'USA consumption' to the AI leaderboard). Discrete-code routing at v2."""
+    ensure_tables()
+    q_tokens = set(_tokenize(question))
+    if not q_tokens:
+        return []
+
+    value_hits = _value_dataset_hits(q_tokens)  # dataset_id -> count of value matches
+    arts = meta.query("SELECT dataset_id, manifest FROM dlm_artifact", [])
     ranked: List[Dict[str, Any]] = []
-    for r in res.get("rows_objects", res.get("rows", [])):
-        terms = set(_loads(r.get("terms")) or [])
-        overlap = q_terms & terms
-        if overlap:
+    for a in arts.get("rows_objects", arts.get("rows", [])):
+        did = str(a.get("dataset_id"))
+        manifest = _loads(a.get("manifest")) or {}
+        metric_toks: set = set()
+        for m in manifest.get("metrics", []) or []:
+            metric_toks |= set(_tokenize(m.get("name"))) | set(_tokenize(m.get("expression"))) | set(m.get("synonyms") or [])
+        col_toks: set = set()
+        for c in manifest.get("columns", []) or []:
+            col_toks |= set(_tokenize(c.get("name"))) | set(c.get("synonyms") or [])
+        name_toks = set(_tokenize(manifest.get("name")))
+        metric_toks -= _ROUTE_NOISE
+        col_toks -= _ROUTE_NOISE
+        name_toks -= _ROUTE_NOISE
+
+        m_hit = q_tokens & metric_toks
+        n_hit = q_tokens & name_toks
+        c_hit = q_tokens & col_toks
+        v_hit = value_hits.get(did, 0)
+        score = 3 * len(m_hit) + 2 * v_hit + 2 * len(n_hit) + 1 * len(c_hit)
+        if score >= _ROUTE_FLOOR:
             ranked.append({
-                "dataset_id": r.get("dataset_id"),
-                "score": len(overlap) / (len(q_terms) or 1),
-                "matched": sorted(overlap),
-                "summary": r.get("summary"),
+                "dataset_id": did,
+                "score": score,
+                "matched": sorted(m_hit | n_hit | c_hit),
+                "value_matches": v_hit,
+                "summary": manifest.get("name"),
             })
     ranked.sort(key=lambda x: x["score"], reverse=True)
     return ranked[:limit]
+
+
+def _value_dataset_hits(q_tokens: set) -> Dict[str, int]:
+    """Which datasets have an indexed value equal to one of the question tokens
+    (e.g. 'japan', 'anthropic') — a strong routing signal."""
+    toks = [t for t in q_tokens if len(t) >= 3]
+    if not toks:
+        return {}
+    placeholders = ",".join(f"@param{i}" for i in range(len(toks)))
+    try:
+        res = meta.query(
+            f"SELECT dataset_id, COUNT(*) AS n FROM dlm_value_index "
+            f"WHERE value_norm IN ({placeholders}) GROUP BY dataset_id", list(toks))
+    except Exception:
+        return {}
+    out: Dict[str, int] = {}
+    for r in res.get("rows_objects", res.get("rows", [])):
+        if isinstance(r, dict):
+            try:
+                out[str(r.get("dataset_id"))] = int(r.get("n") or 0)
+            except Exception:
+                continue
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -285,11 +365,12 @@ def route(question: str, limit: int = 3) -> List[Dict[str, Any]]:
 
 def _build_value_index(dataset_id: str, database: str, schema: str, columns: List[dict],
                        dimensions: List[dict], snapshots: Dict[str, dict]) -> List[Dict[str, Any]]:
-    """Frequent values of each low-card dimension. Primary source is pg_stats
-    most_common_vals (zero scan, but a *sample* of top values). When a column has
-    no catalog stats — e.g. its table is a VIEW, or was never analyzed — fall
-    back to a bounded generate-time GROUP BY scan that enumerates the values
-    exactly (paid once, at generate). High-cardinality columns are skipped."""
+    """Enumerate the values of each low-cardinality dimension. A bounded GROUP BY
+    scan is the primary source — it returns the COMPLETE set exactly, which
+    matters for uniformly-distributed dims (e.g. covid 'country' in a daily
+    panel) where pg_stats most_common_vals only samples a few. pg_stats is used
+    just to pre-skip clearly high-cardinality columns (ids, free text) so we
+    never scan those. Falls back to most_common_vals if the scan can't run."""
     key_by_dim = _dim_key_columns(dimensions)
     out: List[Dict[str, Any]] = []
     for col in columns:
@@ -297,29 +378,31 @@ def _build_value_index(dataset_id: str, database: str, schema: str, columns: Lis
             continue
         table = (col.get("table_name") or "").strip()
         cname = (col.get("column_name") or col.get("name") or "").strip()
-        if not cname:
+        if not (cname and table):
             continue
-        ek = profiler.column_key(schema, table, cname) if table else None
-        pairs: List[tuple] = []          # (value, approx_row_count)
-        source = None
+        ek = profiler.column_key(schema, table, cname)
+        snap = snapshots.get(ek)
 
-        snap = snapshots.get(ek) if ek else None
+        # pre-skip high-cardinality columns using the cheap pg_stats estimate
         if snap:
             prof = _loads(snap.get("profile")) or {}
-            row_count = snap.get("row_count") or 0
-            est_distinct = _estimate_distinct(prof.get("n_distinct"), row_count)
-            if est_distinct is not None and 0 < est_distinct <= _MAX_CARDINALITY_FOR_VALUES:
+            est = _estimate_distinct(prof.get("n_distinct"), snap.get("row_count") or 0)
+            if est is not None and est > _MAX_CARDINALITY_FOR_VALUES:
+                continue
+
+        # complete, exact values via bounded scan (returns None if > cap or fails)
+        pairs = _scan_distinct(database, schema, table, cname, _MAX_CARDINALITY_FOR_VALUES)
+        source = "scan.group_by"
+        if pairs is None:               # scan unavailable — fall back to pg_stats sample
+            pairs = []
+            if snap:
+                prof = _loads(snap.get("profile")) or {}
+                rc = snap.get("row_count") or 0
                 vals = _parse_pg_array(prof.get("most_common_vals"))
                 freqs = _parse_pg_floats(prof.get("most_common_freqs"))
-                pairs = [(v, (freqs[i] if i < len(freqs) else 0.0) * float(row_count or 0))
+                pairs = [(v, (freqs[i] if i < len(freqs) else 0.0) * float(rc or 0))
                          for i, v in enumerate(vals)]
                 source = "pg_stats.most_common_vals"
-
-        if not pairs and table:          # fallback: bounded scan (views / unanalyzed)
-            scanned = _scan_distinct(database, schema, table, cname, _MAX_CARDINALITY_FOR_VALUES)
-            if scanned:
-                pairs = scanned
-                source = "scan.group_by"
 
         if not pairs:
             continue
@@ -569,6 +652,16 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
     # 3) group-by dimension ("... by country")
     group_col = _match_group_by(question, dims)
 
+    # 3b) top-N ("top 10 countries by consumption") — sets the row limit and, if
+    #     no explicit "by <dim>", groups by the dimension named in the question.
+    top_n = None
+    mtop = re.search(r"\btop\s+(\d+)\b", question, re.I)
+    if mtop:
+        top_n = int(mtop.group(1))
+        if not group_col:
+            group_col = _match_any_dim(question, dims)
+    limit_n = top_n or limit
+
     # 4) year filter
     year = _extract_year(question)
 
@@ -601,7 +694,7 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
     if where:
         sql += " WHERE " + " AND ".join(where)
     if group_col:
-        sql += f" GROUP BY {_qid(group_col)} ORDER BY {_qid(metric_name)} DESC LIMIT {int(limit)}"
+        sql += f" GROUP BY {_qid(group_col)} ORDER BY {_qid(metric_name)} DESC LIMIT {int(limit_n)}"
 
     title = metric_name
     if group_col:
@@ -728,6 +821,22 @@ def _match_group_by(question: str, dims: List[dict]) -> Optional[str]:
         col = d.get("column_name") or d.get("name") or ""
         ctoks = set(_tokenize(col)) | set(_synonyms_for(col))
         if set(target) & ctoks:
+            return col
+    return None
+
+
+def _match_any_dim(question: str, dims: List[dict]) -> Optional[str]:
+    """Find a dimension named anywhere in the question (handles plurals/typos via
+    a 4-char prefix match, e.g. 'countries'/'counties' -> country)."""
+    qt = _tokenize(question)
+    for d in dims:
+        col = (d.get("column_name") or d.get("name") or "").strip()
+        if not col:
+            continue
+        c4 = _normalize(col)[:4]
+        if c4 and len(c4) >= 4 and any(_normalize(t)[:4] == c4 for t in qt):
+            return col
+        if set(_synonyms_for(col)) & set(qt):
             return col
     return None
 
