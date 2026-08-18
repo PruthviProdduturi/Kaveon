@@ -291,6 +291,23 @@ _ROUTE_NOISE = frozenset({"sum", "avg", "count", "total", "max", "min", "the", "
 _ROUTE_FLOOR = 2  # reject routing on a single stray generic-word match
 
 
+def _stem(word: str) -> str:
+    """Minimal suffix stemmer for routing (taxi/taxis, model/models, etc.)."""
+    if len(word) <= 3:
+        return word
+    if word.endswith("ies"):
+        return word[:-3] + "y"
+    if word.endswith("ses") or word.endswith("xes") or word.endswith("zes"):
+        return word[:-2]
+    if word.endswith("s") and not word.endswith("ss"):
+        return word[:-1]
+    return word
+
+
+def _stem_set(tokens: set) -> set:
+    return {_stem(t) for t in tokens}
+
+
 def route(question: str, limit: int = 3) -> List[Dict[str, Any]]:
     """CLM-over-CLMs (weighted lexical): rank datasets by how strongly the
     question matches each dataset's metrics (x3), indexed values (x2), name (x2)
@@ -300,6 +317,7 @@ def route(question: str, limit: int = 3) -> List[Dict[str, Any]]:
     q_tokens = set(_tokenize(question))
     if not q_tokens:
         return []
+    q_stems = _stem_set(q_tokens)
 
     value_hits = _value_dataset_hits(q_tokens)  # dataset_id -> count of value matches
     arts = meta.query("SELECT dataset_id, manifest FROM dlm_artifact", [])
@@ -318,11 +336,15 @@ def route(question: str, limit: int = 3) -> List[Dict[str, Any]]:
         col_toks -= _ROUTE_NOISE
         name_toks -= _ROUTE_NOISE
 
-        m_hit = q_tokens & metric_toks
-        n_hit = q_tokens & name_toks
-        c_hit = q_tokens & col_toks
+        # Match both exact and stemmed tokens for better recall
+        m_hit = q_tokens & metric_toks | (q_stems & _stem_set(metric_toks))
+        n_hit = q_tokens & name_toks | (q_stems & _stem_set(name_toks))
+        c_hit = q_tokens & col_toks | (q_stems & _stem_set(col_toks))
         v_hit = value_hits.get(did, 0)
-        score = 3 * len(m_hit) + 2 * v_hit + 2 * len(n_hit) + 1 * len(c_hit)
+        # Name hits are the strongest signal — a question containing "taxi"
+        # should route to the taxi dataset even if other datasets have matching
+        # entity values (like "india" appearing in climate data).
+        score = 3 * len(m_hit) + 2 * v_hit + 4 * len(n_hit) + 1 * len(c_hit)
         if score >= _ROUTE_FLOOR:
             ranked.append({
                 "dataset_id": did,
@@ -679,10 +701,19 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
             note = f"No data for {year} — {metric_name} data starts in {lo}; showing {lo}."
             year = lo
 
+    # 5) trend detection — "trend over time" / "by year" → time-series line
+    is_trend = bool(re.search(r"\b(trend|over time|by year|by month|yearly|monthly|over the years)\b", question, re.I))
+    time_group = None
+    if is_trend and date_column and not group_col:
+        time_group = date_column
+        year = None  # don't filter by year when showing trend
+
     # ── assemble ──────────────────────────────────────────────────────────────
     metric_expr = (metric or {}).get("expression") or "COUNT(*)"
 
     select_parts: List[str] = []
+    if time_group:
+        select_parts.append(_qid(time_group))
     if group_col:
         select_parts.append(_qid(group_col))
     select_parts.append(f"{metric_expr} AS {_qid(metric_name)}")
@@ -696,11 +727,21 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
     sql = f"SELECT {', '.join(select_parts)} FROM {_qid(schema)}.{_qid(fact)}"
     if where:
         sql += " WHERE " + " AND ".join(where)
-    if group_col:
+    if time_group:
+        gb = _qid(time_group)
+        if group_col:
+            gb += f", {_qid(group_col)}"
+        sql += f" GROUP BY {gb} ORDER BY {_qid(time_group)} LIMIT 1000"
+    elif group_col:
         sql += f" GROUP BY {_qid(group_col)} ORDER BY {_qid(metric_name)} DESC LIMIT {int(limit_n)}"
 
+    chart_type = "line" if time_group else ("bar" if group_col else "kpi")
+    x_axis = time_group or group_col
+
     title = metric_name
-    if group_col:
+    if time_group:
+        title += " over time"
+    elif group_col:
         title += f" by {group_col}"
     ctx_bits = [f["value"] for f in filters] + ([str(year)] if year else [])
     if ctx_bits:
@@ -715,8 +756,8 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
         "database": database,
         "schema_name": schema,
         "sql": sql,
-        "chartType": "bar" if group_col else "kpi",
-        "xAxis": group_col,
+        "chartType": chart_type,
+        "xAxis": x_axis,
         "yAxis": metric_name,
         "title": title,
         "columns": ([group_col] if group_col else []) + [metric_name],

@@ -473,17 +473,17 @@ export default function Home() {
       // Score: how well does this dataset match the query?
       let score = 0;
 
-      // Dataset name overlap
+      // Dataset name overlap — weighted heavily so the right dataset wins
       const nameWords = ds.name.toLowerCase().split(/[\s_\-·:]+/).filter(w => w.length >= 3);
       for (const nw of nameWords) {
-        if (words.some(w => w.includes(nw) || nw.includes(w))) score += 0.3;
+        if (words.some(w => w === nw || w.includes(nw) || nw.includes(w))) score += 0.5;
       }
 
-      // Column name overlap
+      // Column name overlap — require ≥4 char overlap to avoid spurious substring matches
       for (const col of ds.schema.columns) {
         const colWords = col.name.toLowerCase().replace(/_/g, " ").split(/\s+/).filter(w => w.length >= 3);
         for (const cw of colWords) {
-          if (words.some(w => w.includes(cw) || cw.includes(w))) score += 0.2;
+          if (words.some(w => (cw.length >= 4 || w.length >= 4) && (w.includes(cw) || cw.includes(w)))) score += 0.15;
         }
       }
 
@@ -612,19 +612,24 @@ export default function Home() {
       // Conversation context: if the user asks a follow-up like "What about India",
       // reuse the previous query's dataset/SQL context
       let queryText = text.trim();
-      const isFollowUp = /^(?:what about|how about|and |show me |now |same for )/i.test(queryText);
-      // Find previous assistant message with query context (chart or routeMeta)
-      const prevAssistant = [...messages].reverse().find(m => m.role === "assistant" && (m.chart?.title || m.routeMeta));
-      // Also find the previous user message to reuse their query
-      // Find the last user message that was a real query (not a follow-up)
       const followUpPattern = /^(?:what about|how about|and |show me |now |same for )/i;
-      const prevUser = [...messages].reverse().find(m => m.role === "user" && !followUpPattern.test(m.content));
+      // Detect short entity-only follow-ups: 1-3 words, no verb, likely a country/name
+      const isShortEntity = /^[A-Za-z]+(?:\s+[A-Za-z]+){0,2}\s*[?.!]?\s*$/i.test(queryText)
+        && queryText.replace(/[?.!]/g, "").trim().split(/\s+/).length <= 3
+        && !/\b(show|get|what|how|total|top|trend|compare|list|count|average)\b/i.test(queryText)
+        && messages.length >= 2;
+      const isFollowUp = followUpPattern.test(queryText) || isShortEntity;
+      // Find the last user message that was a real query (not a follow-up)
+      const prevUser = [...messages].reverse().find(m => m.role === "user" && !followUpPattern.test(m.content) && m.content.split(/\s+/).length > 3);
 
       if (isFollowUp && prevUser) {
-        const entityMatch = queryText.match(/(?:what about|how about|and|show me|now|same for)\s+(.+)/i);
-        if (entityMatch) {
-          const entity = entityMatch[1].replace(/[?.!]$/, "").trim();
-          // Replace previous entity in the user query, or append "in [entity]"
+        const entityMatch = followUpPattern.test(queryText)
+          ? queryText.match(/(?:what about|how about|and|show me|now|same for)\s+(.+)/i)
+          : null;
+        const entity = entityMatch
+          ? entityMatch[1].replace(/[?.!]$/, "").trim()
+          : queryText.replace(/[?.!]$/, "").trim();
+        if (entity) {
           const prev = prevUser.content;
           // Remove any existing entity from previous query (capitalized words that aren't keywords)
           const cleaned = prev.replace(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b/g, match => {
