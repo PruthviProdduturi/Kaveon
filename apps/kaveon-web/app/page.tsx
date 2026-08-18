@@ -66,10 +66,10 @@ interface ChatSession {
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const DEFAULT_SUGGESTIONS = [
-  "Top models by Arena ELO",
-  "Energy consumption by country",
-  "Which model has the best MMLU score",
+  "Top 10 countries by energy consumption",
   "Renewables share trend over time",
+  "Total taxi trips by borough",
+  "Top models by Arena ELO",
 ];
 
 const EMPTY_SUGGESTIONS = [
