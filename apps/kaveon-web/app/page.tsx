@@ -578,6 +578,16 @@ export default function Home() {
     return `Here are **${rows.length}** results from your data. ${rows.length > 20 ? "Showing first 50 rows." : ""}`;
   }
 
+  // A single row whose only values are null/blank (e.g. SUM over a year with no
+  // data) is NOT a real answer — used to decide whether to keep the DLM answer.
+  function resultHasData(rows: (string | number | null)[][] | Record<string, unknown>[]): boolean {
+    if (!rows || rows.length === 0) return false;
+    if (rows.length > 1) return true;
+    const row = rows[0] as unknown;
+    const vals = Array.isArray(row) ? row : Object.values((row as Record<string, unknown>) ?? {});
+    return vals.some(v => v !== null && v !== undefined && v !== "");
+  }
+
   async function sendMessage(text: string) {
     if (!text.trim() || !canSend) return;
     const userMsg: Message = { role: "user", content: text.trim() };
@@ -622,6 +632,53 @@ export default function Home() {
           }).replace(/\s+/g, " ").replace(/\b(in|for|of)\s*$/i, "").trim();
           queryText = cleaned ? `${cleaned} in ${entity}` : `${entity} energy`;
         }
+      }
+
+      // ── DLM first — the compiled Data Language Model is the PRIMARY NL→SQL
+      // engine: metric-aware, resolves entities from the value index, and handles
+      // out-of-range years (answers with the latest available). The in-browser
+      // template parser below is only a fallback for shapes the DLM can't cover
+      // yet (e.g. time-series trends). A null/empty result doesn't count as a hit.
+      try {
+        const dlmT0 = performance.now();
+        const dlmRes = await msalFetch("/api/v1/dlm/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question: queryText }),
+        });
+        if (dlmRes.ok) {
+          const dlm = await dlmRes.json();
+          if (dlm?.ok && dlm.sql) {
+            const execRes = await msalFetch("/api/v1/sql/execute", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ sql_text: dlm.sql, database: dlm.database || "kaveon", source: "chat" }),
+            });
+            if (execRes.ok) {
+              const execData = await execRes.json();
+              const rows = execData.rows || execData.data || [];
+              const columns = execData.columns || execData.column_names || [];
+              if (resultHasData(rows) || dlm.note) {
+                const parsedLike = { sql: dlm.sql, chartType: dlm.chartType, xAxis: dlm.xAxis, yAxis: dlm.yAxis, title: dlm.title, confidence: dlm.confidence ?? 0.5 };
+                const insight = generateInsight(rows, columns, parsedLike, queryText);
+                const summary = dlm.note ? `${dlm.note}\n\n${insight}` : insight;
+                if (sid) {
+                  void saveMessage(sid, "user", text.trim());
+                  void saveMessage(sid, "assistant", summary, { sql_query: dlm.sql, chart_type: wantsChart ? dlm.chartType : undefined, data: { columns, rows: rows.slice(0, 100), row_count: rows.length }, route: "dlm" });
+                }
+                setMessages(prev => [...prev.slice(0, -1), {
+                  role: "assistant",
+                  content: summary,
+                  ...(wantsChart ? { chart: { rows, columns, chartType: dlm.chartType, xAxis: dlm.xAxis, yAxis: dlm.yAxis, title: dlm.title, sql: dlm.sql } } : {}),
+                  routeMeta: { route: "dlm", durationMs: Math.round(performance.now() - dlmT0) },
+                }]);
+                return;
+              }
+            }
+          }
+        }
+      } catch {
+        // DLM unavailable — fall through to the in-browser parser
       }
 
       // Auto-find best matching dataset
@@ -813,56 +870,8 @@ export default function Home() {
         }
       }
 
-      // ── DLM fallback: deterministic NL→SQL via the compiled Data Language Model ──
-      // The in-browser template parser couldn't match this. Ask the server-side
-      // DLM (no LLM): it routes to a dataset, resolves entities from the value
-      // index, and assembles SQL. Resolves things like "India consumption in 2025".
-      try {
-        const dlmRes = await msalFetch("/api/v1/dlm/ask", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question: text.trim() }),
-        });
-        if (dlmRes.ok) {
-          const dlm = await dlmRes.json();
-          if (dlm?.ok && dlm.sql) {
-            const t0 = performance.now();
-            const execRes = await msalFetch("/api/v1/sql/execute", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ sql_text: dlm.sql, database: dlm.database || "kaveon", source: "chat" }),
-            });
-            if (execRes.ok) {
-              const execData = await execRes.json();
-              const rows = execData.rows || execData.data || [];
-              const columns = execData.columns || execData.column_names || [];
-              if (rows.length > 0) {
-                const parsedLike = { sql: dlm.sql, chartType: dlm.chartType, xAxis: dlm.xAxis, yAxis: dlm.yAxis, title: dlm.title, confidence: dlm.confidence ?? 0.5 };
-                const insight = generateInsight(rows, columns, parsedLike, text.trim());
-                // Prepend the DLM's note (e.g. "No data for 2025 yet — showing
-                // the latest available (2024)…") when the requested year was
-                // beyond the metric's actual coverage.
-                const summary = dlm.note ? `${dlm.note}\n\n${insight}` : insight;
-                if (sid) {
-                  void saveMessage(sid, "user", text.trim());
-                  void saveMessage(sid, "assistant", summary, { sql_query: dlm.sql, chart_type: wantsChart ? dlm.chartType : undefined, data: { columns, rows: rows.slice(0, 100), row_count: rows.length }, route: "dlm" });
-                }
-                setMessages(prev => [...prev.slice(0, -1), {
-                  role: "assistant",
-                  content: summary,
-                  ...(wantsChart ? { chart: { rows, columns, chartType: dlm.chartType, xAxis: dlm.xAxis, yAxis: dlm.yAxis, title: dlm.title, sql: dlm.sql } } : {}),
-                  routeMeta: { route: "dlm", durationMs: Math.round(performance.now() - t0) },
-                }]);
-                return;
-              }
-            }
-          }
-        }
-      } catch {
-        // DLM unavailable — fall through to suggestions
-      }
-
-      // Parser couldn't handle it — show helpful suggestions
+      // Neither the DLM (tried first) nor the in-browser parser could answer —
+      // show helpful suggestions.
       const schemasNow = allSchemasRef.current;
       const availableDatasets = schemasNow.map(s => s.name).join(", ");
       const fallbackMsg = schemasNow.length === 0
