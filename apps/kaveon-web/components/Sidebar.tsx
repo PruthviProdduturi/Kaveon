@@ -454,20 +454,20 @@ export function Sidebar({ children }: SidebarProps) {
               <Link href="/" onClick={() => { if (pathname === "/") window.dispatchEvent(new CustomEvent("kaveon-new-chat")); }} style={{ display: "flex", alignItems: "center", textDecoration: "none" }}>
               <svg width="140" height="24" viewBox="60 50 1180 200" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ shapeRendering: "geometricPrecision" }}>
                 <g fill="var(--text-primary)">
-                  <rect x="90" y="70" width="20" height="165" />
-                  <polygon points="108.73,161.20 215.73,86.39 204.27,70 97.27,144.80" />
-                  <polygon points="97.51,161.36 209.51,235 220.49,218.29 108.49,144.64" />
-                  <path d="M 260 235 L 330 70 L 350 70 L 420 235 L 397 235 L 340 104 L 283 235 Z" />
-                  <path d="M 465 70 L 488 70 L 545 201 L 602 70 L 625 70 L 555 235 L 535 235 Z" />
-                  <rect x="675" y="70" width="20" height="165" />
-                  <rect x="675" y="70" width="130" height="20" />
-                  <rect x="675" y="142.5" width="108" height="20" />
-                  <rect x="675" y="215" width="130" height="20" />
-                  <rect x="1060" y="70" width="20" height="165" />
-                  <rect x="1195" y="70" width="20" height="165" />
-                  <polygon points="1062.53,83.30 1197.53,235 1212.47,221.70 1077.47,70" />
+                  <rect x="88" y="70" width="24" height="165" />
+                  <polygon points="110,162 218,86 206,68 98,144" />
+                  <polygon points="96,162 210,236 222,218 108,144" />
+                  <path d="M 258 235 L 328 70 L 352 70 L 422 235 L 398 235 L 340 102 L 282 235 Z" />
+                  <path d="M 463 70 L 490 70 L 545 199 L 600 70 L 627 70 L 557 235 L 533 235 Z" />
+                  <rect x="673" y="70" width="24" height="165" />
+                  <rect x="673" y="70" width="132" height="22" />
+                  <rect x="673" y="141" width="110" height="22" />
+                  <rect x="673" y="213" width="132" height="22" />
+                  <rect x="1058" y="70" width="24" height="165" />
+                  <rect x="1193" y="70" width="24" height="165" />
+                  <polygon points="1064,84 1199,235 1214,222 1079,70" />
                 </g>
-                <path d="M 966.25 215.29 A 72.5 72.5 0 1 0 893.75 215.29" fill="none" stroke="#4A9EE8" strokeWidth="20" strokeLinecap="butt" />
+                <path d="M 966.25 215.29 A 72.5 72.5 0 1 0 893.75 215.29" fill="none" stroke="#4A9EE8" strokeWidth="24" strokeLinecap="butt" />
               </svg>
               </Link>
               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
