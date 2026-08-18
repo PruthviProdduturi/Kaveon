@@ -97,6 +97,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [web]
     if: github.ref == 'refs/heads/dev' && github.event_name == 'push'
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
     steps:
       - uses: actions/checkout@v4
 
@@ -104,16 +107,19 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
-
-      - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
+          node-version: "20"
 
       - name: Install Vercel CLI
         run: npm install -g vercel
 
-      - name: Deploy to Vercel
-        run: vercel deploy --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
-        env:
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      # Build ON the GitHub runner (where `pnpm install` works) and upload the
+      # prebuilt output. Vercel's own build sandbox trips pnpm's fetch on the
+      # public registry (ERR_INVALID_THIS), so we never let it run install.
+      - name: Pull Vercel project settings
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build (prebuilt, on CI)
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy prebuilt to Vercel
+        run: vercel deploy --prebuilt --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
