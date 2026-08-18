@@ -2,6 +2,6 @@
   "name": "kaveon",
   "private": true,
   "packageManager": "pnpm@10.34.5",
-  "engines": { "node": "20.x" },
+  "engines": { "node": "22.x" },
   "pnpm": {}
 }

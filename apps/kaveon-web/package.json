@@ -2,7 +2,7 @@
   "name": "kaveon-web",
   "version": "2.0.0",
   "private": true,
-  "engines": { "node": "20.x" },
+  "engines": { "node": "22.x" },
   "scripts": {
     "dev": "next dev --turbo -p 3000",
     "build": "next build",
