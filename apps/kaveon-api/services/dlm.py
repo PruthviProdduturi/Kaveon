@@ -572,9 +572,19 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
     # 4) year filter
     year = _extract_year(question)
 
+    # 4b) if the requested year is beyond where this metric actually has data
+    #     (for these entity filters), answer with the latest available year and
+    #     say so, instead of returning an empty result for a future/missing year.
+    note = None
+    metric_name = (metric or {}).get("name") or "Count"
+    if year and metric:
+        latest = _metric_latest_year(database, schema, fact, date_column, metric, columns, filters)
+        if latest is not None and year > latest:
+            note = f"No data for {year} yet — showing the latest available ({latest}) for {metric_name}."
+            year = latest
+
     # ── assemble ──────────────────────────────────────────────────────────────
     metric_expr = (metric or {}).get("expression") or "COUNT(*)"
-    metric_name = (metric or {}).get("name") or "Count"
 
     select_parts: List[str] = []
     if group_col:
@@ -599,6 +609,8 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
     ctx_bits = [f["value"] for f in filters] + ([str(year)] if year else [])
     if ctx_bits:
         title += " — " + ", ".join(str(b) for b in ctx_bits)
+    if note:
+        title += " (latest available)"
 
     return {
         "ok": True,
@@ -614,8 +626,42 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
         "columns": ([group_col] if group_col else []) + [metric_name],
         "filters": filters,
         "year": year,
+        "note": note,
         "confidence": round(routed[0].get("score", 0.0), 3),
     }
+
+
+def _metric_latest_year(database: str, schema: str, table: str, date_column: Optional[str],
+                        metric: dict, columns: List[dict], filters: List[Dict[str, Any]]) -> Optional[int]:
+    """Latest year for which *metric* actually has data under the given entity
+    filters — e.g. India's Total Energy ends 2024 even though the table's 'year'
+    column reaches 2025. Returns None when it can't be determined (COUNT(*),
+    no date column, query error)."""
+    if not date_column:
+        return None
+    mcols = _metric_columns([metric], columns, date_column)
+    if not mcols:
+        return None
+    conds = [f"{_qid(c)} IS NOT NULL" for c in mcols]
+    for f in filters:
+        conds.append(f"{_qid(f['column'])} = '{str(f['value']).replace(chr(39), chr(39) * 2)}'")
+    import database.pool as pool
+    tbl = f"{_qid(schema)}.{_qid(table)}" if schema else _qid(table)
+    try:
+        res = pool.execute_query(
+            f"SELECT MAX({_qid(date_column)}) AS mx FROM {tbl} WHERE {' AND '.join(conds)}", database)
+    except Exception:
+        return None
+    rows = res.get("rows") or res.get("rows_objects") or []
+    if not rows:
+        return None
+    mx = rows[0].get("mx") if isinstance(rows[0], dict) else rows[0][0]
+    if mx is None:
+        return None
+    try:
+        return int(mx) if isinstance(mx, int) else int(str(mx)[:4])
+    except Exception:
+        return None
 
 
 def _resolve_entity_filters(dataset_id: str, question: str) -> List[Dict[str, Any]]:

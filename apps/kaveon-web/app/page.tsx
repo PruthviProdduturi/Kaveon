@@ -838,7 +838,11 @@ export default function Home() {
               const columns = execData.columns || execData.column_names || [];
               if (rows.length > 0) {
                 const parsedLike = { sql: dlm.sql, chartType: dlm.chartType, xAxis: dlm.xAxis, yAxis: dlm.yAxis, title: dlm.title, confidence: dlm.confidence ?? 0.5 };
-                const summary = generateInsight(rows, columns, parsedLike, text.trim());
+                const insight = generateInsight(rows, columns, parsedLike, text.trim());
+                // Prepend the DLM's note (e.g. "No data for 2025 yet — showing
+                // the latest available (2024)…") when the requested year was
+                // beyond the metric's actual coverage.
+                const summary = dlm.note ? `${dlm.note}\n\n${insight}` : insight;
                 if (sid) {
                   void saveMessage(sid, "user", text.trim());
                   void saveMessage(sid, "assistant", summary, { sql_query: dlm.sql, chart_type: wantsChart ? dlm.chartType : undefined, data: { columns, rows: rows.slice(0, 100), row_count: rows.length }, route: "dlm" });
