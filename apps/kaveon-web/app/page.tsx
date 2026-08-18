@@ -545,7 +545,9 @@ export default function Home() {
       const metricWords = (metric || "").toLowerCase().replace(/[_()]/g, " ").split(/\s+/);
       const contextWords = queryWords.filter(w => w.length > 2 && !metricWords.some(m => m.includes(w) || w.includes(m)));
       const context = contextWords.length > 0 ? contextWords.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") : "";
-      const label = context ? `${metric} of ${context}` : metric;
+      // Prefer a clean assembled title (the DLM provides one, e.g.
+      // "Total Cases — India") over stitching the raw question into the label.
+      const label = parsed.title || (context ? `${metric} of ${context}` : metric);
       return `**${label}** is **${fmt(val)}**`;
     }
 
