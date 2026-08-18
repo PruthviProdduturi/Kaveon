@@ -29,6 +29,7 @@ class ChatRequest(BaseModel):
     question: str
     database: Optional[str] = None
     dataset_id: Optional[int] = None
+    session_id: Optional[int] = None
 
 
 class ChatResponse(BaseModel):
@@ -318,6 +319,28 @@ def _generate_answer(rows, columns, chart_type, title, question) -> str:
     return "\n".join(lines)
 
 
+# ── Persistence helper ────────────────────────────────────────────────────────
+
+def _save_message(session_id: int, role: str, content: str,
+                  sql_query: Optional[str] = None, chart_type: Optional[str] = None,
+                  data: Optional[dict] = None, route: Optional[str] = None):
+    """Best-effort save — failures don't block the chat response."""
+    try:
+        import json as _json
+        data_json = _json.dumps(data) if data else None
+        db.execute(
+            "INSERT INTO dbo.chat_messages (session_id, role, content, sql_query, chart_type, data, route) "
+            "VALUES (@param0, @param1, @param2, @param3, @param4, @param5::jsonb, @param6)",
+            [session_id, role, content, sql_query, chart_type, data_json, route],
+        )
+        db.execute(
+            "UPDATE dbo.chat_sessions SET updated_at = NOW() WHERE id = @param0",
+            [session_id],
+        )
+    except Exception:
+        pass  # persistence is best-effort; never break the chat flow
+
+
 # ── Endpoint ───────────────────────────────────────────────────────────────────
 
 @router.post("/chat")
@@ -328,27 +351,33 @@ def chat(req: ChatRequest, ctx: UserContext = Depends(require_user_context)):
     if not question:
         return ChatResponse(question=req.question, answer="Please ask a question.", route="error")
 
+    sid = req.session_id
+
+    # Save the user's question
+    if sid:
+        _save_message(sid, "user", req.question.strip())
+
     # Find matching dataset
     ds_info, columns, metrics = _find_dataset(question, req.dataset_id)
     if not ds_info:
         # List available datasets
         all_ds = db.query("SELECT dataset_name FROM dbo.datasets")
         names = [r.get("dataset_name") for r in all_ds.get("rows", [])]
-        return ChatResponse(
-            question=req.question,
-            answer=f"I couldn't match that to your data. Available datasets: **{', '.join(names)}**",
-            route="no_match",
-        )
+        answer = f"I couldn't match that to your data. Available datasets: **{', '.join(names)}**"
+        if sid:
+            _save_message(sid, "assistant", answer, route="no_match")
+        return ChatResponse(question=req.question, answer=answer, route="no_match")
 
     database = req.database or ds_info.get("database_name") or "kaveon"
 
     # Build SQL
     sql, chart_type, title = _build_sql(question, ds_info, columns, metrics)
     if not sql:
+        answer = "I couldn't generate a query for that question. Try: 'Show [metric] by [column]' or 'Top 10 [column] by [metric]'."
+        if sid:
+            _save_message(sid, "assistant", answer, route="parse_error")
         return ChatResponse(
-            question=req.question,
-            answer="I couldn't generate a query for that question. Try: 'Show [metric] by [column]' or 'Top 10 [column] by [metric]'.",
-            route="parse_error",
+            question=req.question, answer=answer, route="parse_error",
             dataset_name=ds_info.get("dataset_name"),
         )
 
@@ -360,6 +389,11 @@ def chat(req: ChatRequest, ctx: UserContext = Depends(require_user_context)):
         duration_ms = int((time.time() - t0) * 1000)
 
         answer = _generate_answer(rows, cols, chart_type, title or "", question)
+
+        if sid:
+            _save_message(sid, "assistant", answer, sql_query=sql,
+                          chart_type=chart_type, route="direct",
+                          data={"columns": cols, "rows": rows[:100], "row_count": len(rows)})
 
         return ChatResponse(
             question=req.question,
@@ -373,9 +407,12 @@ def chat(req: ChatRequest, ctx: UserContext = Depends(require_user_context)):
         )
     except Exception as e:
         duration_ms = int((time.time() - t0) * 1000)
+        answer = f"Query failed: {str(e)[:200]}"
+        if sid:
+            _save_message(sid, "assistant", answer, sql_query=sql, route="error")
         return ChatResponse(
             question=req.question,
-            answer=f"Query failed: {str(e)[:200]}",
+            answer=answer,
             sql=sql,
             route="error",
             duration_ms=duration_ms,

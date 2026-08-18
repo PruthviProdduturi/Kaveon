@@ -100,7 +100,7 @@ export function buildEChartsOptionsFromQueryResult(
   // Heuristics: last column is metric, a column containing "date"/"time" is x-axis,
   // remaining dimension columns define series keys.
   const metricIndex = columns.length - 1;
-  let timeIndex = columns.findIndex((c) => /date|time/i.test(c));
+  let timeIndex = columns.findIndex((c) => /date|time|^year$/i.test(c));
   // Only assume a positional time axis for time-series chart kinds. For
   // categorical charts (bar/pie/donut/map) there is no time column — the first
   // non-metric column is the x-axis category, not a series.
@@ -195,10 +195,14 @@ export function buildEChartsOptionsFromQueryResult(
       chartKind === "time_series_area_share";
     const isAreaChart = chartKind.includes("area");
     const isShareChart = chartKind === "time_series_area_share" || chartKind === "time_series_line_share";
+    const isStackedBarPercentage =
+      (chartKind === "stacked_bar_vertical" || chartKind === "stacked_bar_horizontal") &&
+      advancedOptions?.showAsPercentage === true;
+    const isPercentageMode = isShareChart || isStackedBarPercentage;
 
-    // For share charts, calculate totals for percentage conversion
+    // For percentage modes, calculate totals for normalization
     const xTotals: Record<string, number> = {};
-    if (isShareChart) {
+    if (isPercentageMode) {
       xValues.forEach((x) => {
         let total = 0;
         seriesNames.forEach((name) => {
@@ -262,14 +266,14 @@ export function buildEChartsOptionsFromQueryResult(
               if (!isMarkerPoint) return "";
               const v = Number(params.value);
               if (Number.isNaN(v)) return "";
-              if (isShareChart) return `${v.toFixed(1)}%`;
+              if (isPercentageMode) return `${v.toFixed(1)}%`;
               return v.toLocaleString();
             },
             position: "top",
             fontSize: 10,
             overflow: "truncate",
           }
-        : isShareChart
+        : isPercentageMode
         ? {
             show: true,
             formatter: (params: any) => {
@@ -282,10 +286,10 @@ export function buildEChartsOptionsFromQueryResult(
             overflow: "truncate",
           }
         : undefined,
-      labelLayout: markersEnabled || isShareChart ? { hideOverlap: true } : undefined,
+      labelLayout: markersEnabled || isPercentageMode ? { hideOverlap: true } : undefined,
       data: xValues.map((x, dataIndex) => {
         const raw = dataMap.get(name)?.get(x) ?? 0;
-        const value = isShareChart
+        const value = isPercentageMode
           ? (xTotals[x] > 0 ? (raw / xTotals[x]) * 100 : 0)
           : raw;
         // First/last points get alignment overrides so labels stay within the plot area
@@ -399,27 +403,44 @@ export function buildEChartsOptionsFromQueryResult(
       };
     case "bar_vertical":
     case "grouped_bar":
-    case "stacked_bar_vertical":
+    case "stacked_bar_vertical": {
+      const pctBar = chartKind === "stacked_bar_vertical" && advancedOptions?.showAsPercentage === true;
+      const pctAxis = pctBar ? {
+        type: "value",
+        max: 100,
+        axisLabel: { formatter: (val: number) => `${val}%` },
+      } : { type: "value" };
       return {
         ...common,
+        tooltip: pctBar
+          ? { ...(common.tooltip ?? {}), valueFormatter: (v: number | string) => `${Number(v).toFixed(1)}%` }
+          : common.tooltip,
         xAxis: buildCategoryAxis(),
-        yAxis: { type: "value" },
+        yAxis: pctAxis,
         series: buildLineOrBarSeries({
           type: "bar",
           stacked: chartKind === "stacked_bar_vertical",
         }),
       };
+    }
     case "bar_horizontal":
-    case "stacked_bar_horizontal":
+    case "stacked_bar_horizontal": {
+      const pctBarH = chartKind === "stacked_bar_horizontal" && advancedOptions?.showAsPercentage === true;
       return {
         ...common,
-        xAxis: { type: "value" },
+        tooltip: pctBarH
+          ? { ...(common.tooltip ?? {}), valueFormatter: (v: number | string) => `${Number(v).toFixed(1)}%` }
+          : common.tooltip,
+        xAxis: pctBarH
+          ? { type: "value", max: 100, axisLabel: { formatter: (val: number) => `${val}%` } }
+          : { type: "value" },
         yAxis: { type: "category", data: xValues },
         series: buildLineOrBarSeries({
           type: "bar",
           stacked: chartKind === "stacked_bar_horizontal",
         }),
       };
+    }
     case "pie":
     case "donut": {
       const data = seriesNames.length > 1 ? seriesNames : xValues;
@@ -1850,7 +1871,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     // time-series charts; for categorical charts (bar/pie/donut/map) the FIRST
     // column is the x-axis category — NOT a series. Series = any remaining column.
     const metricIndex = columns.length - 1;
-    let timeIndex = columns.findIndex((c) => /date|time/i.test(c));
+    let timeIndex = columns.findIndex((c) => /date|time|^year$/i.test(c));
     const _isTimeKind = /time_series|_line|_area|line_multi|area_stack/.test(chartKind);
     if (timeIndex === -1 && columns.length >= 2 && _isTimeKind) {
       timeIndex = 1;
@@ -1940,8 +1961,12 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
       // Share variants: line_share and area_share both show percentages and share the same template
       const isShareChart =
         chartKind === "time_series_area_share" || chartKind === "time_series_line_share";
+      const isStackedBarPercentage =
+        (chartKind === "stacked_bar_vertical" || chartKind === "stacked_bar_horizontal") &&
+        advancedOptions?.showAsPercentage === true;
+      const isPercentageMode = isShareChart || isStackedBarPercentage;
       const xTotals: Record<string, number> = {};
-      if (isShareChart) {
+      if (isPercentageMode) {
         xValues.forEach((x) => {
           let total = 0;
           seriesNames.forEach((name) => {
@@ -2052,8 +2077,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
 
                 const v = Number(params.value);
                 if (Number.isNaN(v)) return "";
-                // For share charts, show percentage
-                if (isShareChart) {
+                if (isPercentageMode) {
                   return `${v.toFixed(1)}%`;
                 }
                 return v.toLocaleString();
@@ -2062,7 +2086,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
               fontSize: 10,
               overflow: "truncate",
             }
-          : isShareChart
+          : isPercentageMode
           ? {
               show: true,
               formatter: (params: any) => {
@@ -2078,10 +2102,10 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
               overflow: "truncate",
             }
           : undefined,
-        labelLayout: markersEnabled || isShareChart ? { hideOverlap: true } : undefined,
+        labelLayout: markersEnabled || isPercentageMode ? { hideOverlap: true } : undefined,
         data: xValues.map((x, dataIndex) => {
           const raw = dataMap.get(name)?.get(x) ?? 0;
-          const value = isShareChart
+          const value = isPercentageMode
             ? (xTotals[x] > 0 ? (raw / xTotals[x]) * 100 : 0)
             : raw;
           if (dataIndex === 0) return { value, label: { align: 'left' } };
@@ -2240,18 +2264,29 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         };
       case "bar_vertical":
       case "grouped_bar":
-      case "stacked_bar_vertical":
+      case "stacked_bar_vertical": {
+        const pctBar = chartKind === "stacked_bar_vertical" && advancedOptions?.showAsPercentage === true;
+        const pctAxis = pctBar ? {
+          type: "value",
+          max: 100,
+          axisLabel: { formatter: (val: number) => `${val}%` },
+        } : (chartKind === "stacked_bar_vertical" ? { type: "value" } : valueAxis());
         return {
           ...common,
+          tooltip: pctBar
+            ? { ...(common.tooltip ?? {}), valueFormatter: (v: number | string) => `${Number(v).toFixed(1)}%` }
+            : common.tooltip,
           xAxis: buildCategoryAxis(),
-          yAxis: chartKind === "stacked_bar_vertical" ? { type: "value" } : valueAxis(),
+          yAxis: pctAxis,
           series: buildLineOrBarSeries({
             type: "bar",
             stacked: chartKind === "stacked_bar_vertical",
           }),
         };
+      }
       case "bar_horizontal":
       case "stacked_bar_horizontal": {
+        const pctBarH = chartKind === "stacked_bar_horizontal" && advancedOptions?.showAsPercentage === true;
         const hBarYAxis: any = { type: "category", data: xValues };
         if (yAxisDateFormat && yAxisDateFormat !== "auto") {
           hBarYAxis.axisLabel = {
@@ -2260,7 +2295,12 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         }
         return {
           ...common,
-          xAxis: chartKind === "stacked_bar_horizontal" ? { type: "value" } : valueAxis(),
+          tooltip: pctBarH
+            ? { ...(common.tooltip ?? {}), valueFormatter: (v: number | string) => `${Number(v).toFixed(1)}%` }
+            : common.tooltip,
+          xAxis: pctBarH
+            ? { type: "value", max: 100, axisLabel: { formatter: (val: number) => `${val}%` } }
+            : (chartKind === "stacked_bar_horizontal" ? { type: "value" } : valueAxis()),
           yAxis: hBarYAxis,
           series: buildLineOrBarSeries({
             type: "bar",

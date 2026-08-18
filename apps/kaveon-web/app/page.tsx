@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, KeyboardEvent } from "react";
+import { useEffect, useRef, useState, useCallback, KeyboardEvent } from "react";
 import { useAuth } from "../auth/useAuth";
 import { useSetup } from "../components/ClientLayout";
 import { msalFetch } from "../utils/msalFetch";
@@ -55,6 +55,13 @@ interface SourceOption {
   database_name: string;
 }
 
+interface ChatSession {
+  id: number;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const DEFAULT_SUGGESTIONS = [
@@ -69,6 +76,99 @@ const EMPTY_SUGGESTIONS = [
   { label: "Connect PostgreSQL", href: "/data-sources" },
   { label: "Connect Azure SQL", href: "/data-sources" },
 ];
+
+// ── Chat History Sidebar ────────────────────────────────────────────────────────
+
+function ChatHistorySidebar({
+  sessions,
+  activeSessionId,
+  onSelect,
+  onDelete,
+  onNewChat,
+  visible,
+  onToggle,
+}: {
+  sessions: ChatSession[];
+  activeSessionId: number | null;
+  onSelect: (id: number) => void;
+  onDelete: (id: number) => void;
+  onNewChat: () => void;
+  visible: boolean;
+  onToggle: () => void;
+}) {
+  if (!visible) return null;
+
+  const grouped: Record<string, ChatSession[]> = {};
+  const now = new Date();
+  for (const s of sessions) {
+    const d = new Date(s.updated_at);
+    const diffMs = now.getTime() - d.getTime();
+    const diffDays = Math.floor(diffMs / 86_400_000);
+    const label = diffDays === 0 ? "Today" : diffDays === 1 ? "Yesterday" : diffDays < 7 ? "This week" : diffDays < 30 ? "This month" : "Older";
+    (grouped[label] ??= []).push(s);
+  }
+  const order = ["Today", "Yesterday", "This week", "This month", "Older"];
+
+  return (
+    <div style={{
+      width: 260, flexShrink: 0, borderRight: "1px solid var(--border)",
+      background: "var(--bg-surface)", display: "flex", flexDirection: "column",
+      height: "100%", overflow: "hidden",
+    }}>
+      <div style={{ padding: "16px 14px 10px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.5px" }}>History</span>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button onClick={onNewChat} title="New chat" style={{ width: 28, height: 28, borderRadius: 6, border: "1px solid var(--border)", background: "transparent", color: "var(--text-secondary)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>+</button>
+          <button onClick={onToggle} title="Close history" style={{ width: 28, height: 28, borderRadius: 6, border: "1px solid var(--border)", background: "transparent", color: "var(--text-secondary)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12 }}>
+            <i className="fas fa-chevron-left" />
+          </button>
+        </div>
+      </div>
+
+      <div style={{ flex: 1, overflow: "auto", padding: "0 8px 12px" }}>
+        {sessions.length === 0 && (
+          <p style={{ fontSize: 12, color: "var(--text-faint)", padding: "12px 6px", textAlign: "center" }}>No conversations yet</p>
+        )}
+        {order.map(label => {
+          const items = grouped[label];
+          if (!items?.length) return null;
+          return (
+            <div key={label}>
+              <p style={{ fontSize: 10.5, fontWeight: 600, color: "var(--text-faint)", padding: "10px 6px 4px", margin: 0, textTransform: "uppercase", letterSpacing: "0.5px" }}>{label}</p>
+              {items.map(s => (
+                <div
+                  key={s.id}
+                  onClick={() => onSelect(s.id)}
+                  style={{
+                    padding: "8px 10px", borderRadius: 8, cursor: "pointer",
+                    background: s.id === activeSessionId ? "rgba(var(--accent-rgb), 0.12)" : "transparent",
+                    color: s.id === activeSessionId ? "var(--text-primary)" : "var(--text-secondary)",
+                    fontSize: 13, lineHeight: 1.4, marginBottom: 2, display: "flex",
+                    alignItems: "center", justifyContent: "space-between", gap: 6,
+                    transition: "background 0.1s",
+                  }}
+                  onMouseEnter={e => { if (s.id !== activeSessionId) e.currentTarget.style.background = "rgba(255,255,255,0.04)"; }}
+                  onMouseLeave={e => { if (s.id !== activeSessionId) e.currentTarget.style.background = "transparent"; }}
+                >
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{s.title}</span>
+                  <button
+                    onClick={e => { e.stopPropagation(); onDelete(s.id); }}
+                    title="Delete conversation"
+                    style={{ width: 22, height: 22, borderRadius: 4, border: "none", background: "transparent", color: "var(--text-faint)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, opacity: 0.5, flexShrink: 0 }}
+                    onMouseEnter={e => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.color = "#ef4444"; }}
+                    onMouseLeave={e => { e.currentTarget.style.opacity = "0.5"; e.currentTarget.style.color = "var(--text-faint)"; }}
+                  >
+                    <i className="fas fa-trash-alt" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 // ── Page ───────────────────────────────────────────────────────────────────────
 
@@ -90,18 +190,119 @@ export default function Home() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const { addRecent } = useRecents();
 
-  // Listen for "new-chat" event from sidebar nav
+  // Chat history state
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
+  const [historyVisible, setHistoryVisible] = useState(false);
+
+  // Load chat history sessions
+  const loadSessions = useCallback(async () => {
+    try {
+      const res = await msalFetch("/api/v1/chat/history?limit=100");
+      if (res.ok) {
+        const body = await res.json();
+        setSessions(body.sessions || []);
+      }
+    } catch {
+      // History unavailable — tables may not exist yet
+    }
+  }, []);
+
   useEffect(() => {
-    const handler = () => {
-      if (messages.length > 0) {
-        const firstUserMsg = messages.find(m => m.role === "user");
-        if (firstUserMsg) addRecent({ id: `chat-${Date.now()}`, label: firstUserMsg.content.slice(0, 50), href: "/", type: "chat" });
+    if (isSetupOk && account?.email) loadSessions();
+  }, [isSetupOk, account?.email, loadSessions]);
+
+  // Create a new session for the first message in a conversation
+  const ensureSession = useCallback(async (firstMessage: string): Promise<number | null> => {
+    try {
+      const title = firstMessage.slice(0, 80) || "New conversation";
+      const res = await msalFetch("/api/v1/chat/history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      });
+      if (res.ok) {
+        const session = await res.json();
+        setActiveSessionId(session.id);
+        await loadSessions();
+        return session.id;
+      }
+    } catch {
+      // Persistence unavailable
+    }
+    return null;
+  }, [loadSessions]);
+
+  // Save a message pair (user + assistant) to the active session
+  const saveMessage = useCallback(async (sessionId: number, role: string, content: string, extra?: { sql_query?: string; chart_type?: string; data?: Record<string, unknown>; route?: string }) => {
+    try {
+      await msalFetch(`/api/v1/chat/history/${sessionId}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role, content, ...extra }),
+      });
+    } catch {
+      // Best-effort
+    }
+  }, []);
+
+  // Load messages from a past session
+  const loadSession = useCallback(async (sessionId: number) => {
+    try {
+      const res = await msalFetch(`/api/v1/chat/history/${sessionId}`);
+      if (!res.ok) return;
+      const body = await res.json();
+      const msgs: Message[] = (body.messages || []).map((m: Record<string, unknown>) => ({
+        role: m.role as "user" | "assistant",
+        content: m.content as string,
+        ...(m.chart_type && m.data ? {
+          chart: {
+            rows: (m.data as Record<string, unknown>).rows || [],
+            columns: (m.data as Record<string, unknown>).columns || [],
+            chartType: m.chart_type as ChartData["chartType"],
+            xAxis: null,
+            yAxis: null,
+            title: "",
+            sql: (m.sql_query as string) || "",
+          },
+        } : {}),
+        ...(m.route ? { routeMeta: { route: m.route as RouteMeta["route"] } } : {}),
+      }));
+      setMessages(msgs);
+      setActiveSessionId(sessionId);
+    } catch {
+      // Failed to load session
+    }
+  }, []);
+
+  const deleteSession = useCallback(async (sessionId: number) => {
+    try {
+      await msalFetch(`/api/v1/chat/history/${sessionId}`, { method: "DELETE" });
+      setSessions(prev => prev.filter(s => s.id !== sessionId));
+      if (activeSessionId === sessionId) {
+        setActiveSessionId(null);
         setMessages([]);
       }
-    };
+    } catch {
+      // Best-effort
+    }
+  }, [activeSessionId]);
+
+  const startNewChat = useCallback(() => {
+    if (messages.length > 0) {
+      const firstUserMsg = messages.find(m => m.role === "user");
+      if (firstUserMsg) addRecent({ id: `chat-${Date.now()}`, label: firstUserMsg.content.slice(0, 50), href: "/", type: "chat" });
+    }
+    setMessages([]);
+    setActiveSessionId(null);
+  }, [messages, addRecent]);
+
+  // Listen for "new-chat" event from sidebar nav
+  useEffect(() => {
+    const handler = () => startNewChat();
     window.addEventListener("kaveon-new-chat", handler);
     return () => window.removeEventListener("kaveon-new-chat", handler);
-  }, [messages, addRecent]);
+  }, [startNewChat]);
 
   const email = account?.email ?? "";
   const hasData = data !== null && data.sourceCount > 0;
@@ -341,7 +542,7 @@ export default function Home() {
 
       let insight = "";
 
-      // If ≤ 20 results (e.g. Top 10, Top 15), list them all
+      // If <= 20 results (e.g. Top 10, Top 15), list them all
       if (total <= 20) {
         insight = `**${parsed.title || `${yLabel} by ${xLabel}`}** (${total} results)\n\n`;
         sorted.forEach((r, i) => {
@@ -368,6 +569,12 @@ export default function Home() {
     setMessages(prev => [...prev, userMsg, loadingMsg]);
     setQuery("");
     setSending(true);
+
+    // Ensure we have a session — create on first message
+    let sid = activeSessionId;
+    if (!sid) {
+      sid = await ensureSession(text.trim());
+    }
 
     try {
       // Only show charts when user explicitly asks for visualization
@@ -455,9 +662,14 @@ export default function Home() {
             // Profile-synthesized answer (no query executed)
             if (acr.route === "context" && acr.answer && !acr.result) {
               usedAcr = true;
+              const content = `${acr.answer.explanation || acr.answer.value}`;
+              if (sid) {
+                void saveMessage(sid, "user", text.trim());
+                void saveMessage(sid, "assistant", content, { route: "context" });
+              }
               setMessages(prev => [...prev.slice(0, -1), {
                 role: "assistant",
-                content: `${acr.answer.explanation || acr.answer.value}`,
+                content,
                 routeMeta: { route: "context", durationMs, elementsChecked: Object.keys(acr.validity || {}).length },
               }]);
               return;
@@ -470,6 +682,10 @@ export default function Home() {
               const columns = acr.result.columns || [];
               if (rows.length > 0) {
                 const summary = generateInsight(rows, columns, parsed, text.trim());
+                if (sid) {
+                  void saveMessage(sid, "user", text.trim());
+                  void saveMessage(sid, "assistant", summary, { sql_query: parsed.sql, chart_type: wantsChart ? parsed.chartType : undefined, route: "context" });
+                }
                 setMessages(prev => [...prev.slice(0, -1), {
                   role: "assistant",
                   content: summary,
@@ -487,6 +703,10 @@ export default function Home() {
               const columns = acr.result.columns || [];
               if (rows.length > 0) {
                 const summary = generateInsight(rows, columns, parsed, text.trim());
+                if (sid) {
+                  void saveMessage(sid, "user", text.trim());
+                  void saveMessage(sid, "assistant", summary, { sql_query: parsed.sql, chart_type: wantsChart ? parsed.chartType : undefined, route: acr.route });
+                }
                 setMessages(prev => [...prev.slice(0, -1), {
                   role: "assistant",
                   content: summary,
@@ -521,6 +741,15 @@ export default function Home() {
 
               if (rows.length > 0) {
                 const summary = generateInsight(rows, columns, parsed, text.trim());
+                if (sid) {
+                  void saveMessage(sid, "user", text.trim());
+                  void saveMessage(sid, "assistant", summary, {
+                    sql_query: parsed.sql,
+                    chart_type: wantsChart ? parsed.chartType : undefined,
+                    data: { columns, rows: rows.slice(0, 100), row_count: rows.length },
+                    route: "direct",
+                  });
+                }
                 setMessages(prev => [...prev.slice(0, -1), {
                   role: "assistant",
                   content: summary,
@@ -530,23 +759,38 @@ export default function Home() {
                 return;
               }
 
+              const noResultMsg = `No results found. The query returned empty.\n\nSQL: \`${parsed.sql}\``;
+              if (sid) {
+                void saveMessage(sid, "user", text.trim());
+                void saveMessage(sid, "assistant", noResultMsg, { sql_query: parsed.sql, route: "direct" });
+              }
               setMessages(prev => [...prev.slice(0, -1), {
                 role: "assistant",
-                content: `No results found. The query returned empty.\n\nSQL: \`${parsed.sql}\``,
+                content: noResultMsg,
               }]);
               return;
             } else {
               const errText = await execRes.text().catch(() => "");
+              const errMsg = `Query failed (${execRes.status}).\n\nSQL: \`${parsed.sql}\`\n\n${errText.substring(0, 200)}`;
+              if (sid) {
+                void saveMessage(sid, "user", text.trim());
+                void saveMessage(sid, "assistant", errMsg, { sql_query: parsed.sql, route: "error" });
+              }
               setMessages(prev => [...prev.slice(0, -1), {
                 role: "assistant",
-                content: `Query failed (${execRes.status}).\n\nSQL: \`${parsed.sql}\`\n\n${errText.substring(0, 200)}`,
+                content: errMsg,
               }]);
               return;
             }
           } catch (execErr) {
+            const errMsg = `Query execution error: ${execErr instanceof Error ? execErr.message : "Unknown"}\n\nSQL: \`${parsed.sql}\``;
+            if (sid) {
+              void saveMessage(sid, "user", text.trim());
+              void saveMessage(sid, "assistant", errMsg, { route: "error" });
+            }
             setMessages(prev => [...prev.slice(0, -1), {
               role: "assistant",
-              content: `Query execution error: ${execErr instanceof Error ? execErr.message : "Unknown"}\n\nSQL: \`${parsed.sql}\``,
+              content: errMsg,
             }]);
             return;
           }
@@ -556,16 +800,26 @@ export default function Home() {
       // Parser couldn't handle it — show helpful suggestions
       const schemasNow = allSchemasRef.current;
       const availableDatasets = schemasNow.map(s => s.name).join(", ");
+      const fallbackMsg = schemasNow.length === 0
+        ? "No datasets found. Create a dataset in the Workspace first, then come back and ask me about your data."
+        : `I couldn't match that to your data. You have these datasets: **${availableDatasets}**\n\nTry something specific like:\n• "Show [metric] by [column]"\n• "Top 10 [column] by [metric]"\n• "Total [metric]"\n• "Trend of [metric] over time"`;
+      if (sid) {
+        void saveMessage(sid, "user", text.trim());
+        void saveMessage(sid, "assistant", fallbackMsg, { route: "no_match" });
+      }
       setMessages(prev => [...prev.slice(0, -1), {
         role: "assistant",
-        content: schemasNow.length === 0
-          ? "No datasets found. Create a dataset in the Workspace first, then come back and ask me about your data."
-          : `I couldn't match that to your data. You have these datasets: **${availableDatasets}**\n\nTry something specific like:\n• "Show [metric] by [column]"\n• "Top 10 [column] by [metric]"\n• "Total [metric]"\n• "Trend of [metric] over time"`,
+        content: fallbackMsg,
       }]);
     } catch (e) {
+      const errMsg = `Something went wrong. ${e instanceof Error ? e.message : "Please try again."}`;
+      if (sid) {
+        void saveMessage(sid, "user", text.trim());
+        void saveMessage(sid, "assistant", errMsg, { route: "error" });
+      }
       setMessages(prev => [...prev.slice(0, -1), {
         role: "assistant",
-        content: `Something went wrong. ${e instanceof Error ? e.message : "Please try again."}`,
+        content: errMsg,
       }]);
     } finally {
       setSending(false);
@@ -585,8 +839,8 @@ export default function Home() {
 
   const heroText = isEmpty ? "Connect your first data source" : "Your data has answers";
   const placeholder = isEmpty ? "Set up a connection to get started..."
-    : !schemasReady ? "Loading your data context…"
-    : "Talk to your data…";
+    : !schemasReady ? "Loading your data context..."
+    : "Talk to your data...";
 
   // Build meta line — only show positive counts
   let metaParts: string[] = [];
@@ -604,168 +858,199 @@ export default function Home() {
         position: "relative",
         minHeight: "100vh",
         display: "flex",
-        flexDirection: "column",
         background: "var(--bg-primary)",
       }}
     >
-      {/* Hero section — collapses when in conversation */}
-      {!inConversation && (
-        <div
-          style={{
-            flex: 1,
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            position: "relative",
-            paddingBottom: "8vh",
-          }}
-        >
-          <div style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: "1rem", width: "100%", maxWidth: 680, padding: "0 1.5rem" }}>
-            {/* Greeting — with Guardian O inline like Claude's ✳ */}
-            <h1 style={{ margin: "0 0 8px", fontSize: 32, fontWeight: 500, color: "var(--text-primary)", textAlign: "center", letterSpacing: "-0.5px", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-              <KaveonMark size={52} useDirectColor />
-              {isEmpty ? heroText : `${new Date().getHours() < 12 ? "Morning" : new Date().getHours() < 17 ? "Afternoon" : "Evening"}, ${(account?.name || "there").replace(/\w\S*/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase())}`}
-            </h1>
-            
+      {/* Chat History Sidebar */}
+      <ChatHistorySidebar
+        sessions={sessions}
+        activeSessionId={activeSessionId}
+        onSelect={loadSession}
+        onDelete={deleteSession}
+        onNewChat={startNewChat}
+        visible={historyVisible}
+        onToggle={() => setHistoryVisible(false)}
+      />
 
-            {/* Input */}
-            <div style={{ width: "100%", maxWidth: 640, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 16, padding: "16px", boxShadow: "0 0 0 1px rgba(var(--accent-rgb), 0.06), 0 4px 20px rgba(0,0,0,0.3)", display: "flex", flexDirection: "column", gap: 10 }}>
-              <textarea
-                ref={inputRef as any}
-                value={query}
-                onChange={e => setQuery(e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
-                placeholder={placeholder}
-                rows={2}
-                style={{ width: "100%", border: "none", outline: "none", background: "transparent", color: "#f0f0f2", fontSize: 15, lineHeight: 1.5, resize: "none", fontFamily: "inherit" }}
-              />
-              <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                <button onClick={submit} disabled={!query.trim() || !canSend} style={{ width: 34, height: 34, borderRadius: 10, border: "none", background: query.trim() && canSend ? "var(--accent)" : "rgba(255,255,255,0.08)", color: query.trim() && canSend ? "#fff" : "#64748b", cursor: query.trim() && canSend ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, transition: "all 0.15s" }}>
-                  ↑
-                </button>
-              </div>
-            </div>
+      {/* Main content */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: "100vh" }}>
 
-            {/* Suggestions */}
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", justifyContent: "center" }}>
-              {isEmpty
-                ? EMPTY_SUGGESTIONS.map(s => (
-                    <a key={s.label} href={s.href} style={{ padding: "6px 14px", borderRadius: 999, border: "1px solid var(--border)", background: "var(--bg-surface)", color: "var(--text-secondary)", fontSize: 13, textDecoration: "none", boxShadow: "var(--shadow-sm)" }}>{s.label}</a>
-                  ))
-                : DEFAULT_SUGGESTIONS.map(s => (
-                    <button key={s} onClick={() => { if (canSend) { setQuery(s); setTimeout(() => void sendMessage(s), 50); } }}
-                      style={{ padding: "9px 18px", borderRadius: 999, border: "1.5px solid var(--border)", background: "var(--bg-surface)", color: "var(--text-secondary)", fontSize: 13.5, fontWeight: 500, cursor: "pointer", boxShadow: "var(--shadow-md)", transition: "all 0.15s" }}
-                      onMouseEnter={(e) => { e.currentTarget.style.borderColor = "rgba(var(--accent-rgb), 0.4)"; e.currentTarget.style.color = "var(--text-primary)"; e.currentTarget.style.background = "var(--bg-elevated)"; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.color = "var(--text-secondary)"; e.currentTarget.style.background = "var(--bg-surface)"; }}>
-                      {s}
-                    </button>
-                  ))}
-            </div>
-          </div>
-        </div>
-      )}
+        {/* History toggle button — shown when sidebar is hidden */}
+        {!historyVisible && sessions.length > 0 && (
+          <button
+            onClick={() => setHistoryVisible(true)}
+            title="Show chat history"
+            style={{
+              position: "absolute", top: 14, left: 14, zIndex: 10,
+              width: 34, height: 34, borderRadius: 8,
+              border: "1px solid var(--border)", background: "var(--bg-surface)",
+              color: "var(--text-secondary)", cursor: "pointer",
+              display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14,
+            }}
+          >
+            <i className="fas fa-history" />
+          </button>
+        )}
 
-      {/* Conversation view — appears after first message */}
-      {inConversation && (
-        <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+        {/* Hero section — collapses when in conversation */}
+        {!inConversation && (
+          <div
+            style={{
+              flex: 1,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              position: "relative",
+              paddingBottom: "8vh",
+            }}
+          >
+            <div style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: "1rem", width: "100%", maxWidth: 680, padding: "0 1.5rem" }}>
+              {/* Greeting — with Guardian O inline like Claude's */}
+              <h1 style={{ margin: "0 0 8px", fontSize: 32, fontWeight: 500, color: "var(--text-primary)", textAlign: "center", letterSpacing: "-0.5px", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                <KaveonMark size={52} useDirectColor />
+                {isEmpty ? heroText : `${new Date().getHours() < 12 ? "Morning" : new Date().getHours() < 17 ? "Afternoon" : "Evening"}, ${(account?.name || "there").replace(/\w\S*/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase())}`}
+              </h1>
 
-          {/* Messages */}
-          <div style={{ flex: 1, overflow: "auto", padding: "32px 24px", display: "flex", flexDirection: "column", gap: 16 }}>
-            {messages.map((m, i) => (
-              <div key={i} style={{ display: "flex", flexDirection: m.role === "user" ? "row-reverse" : "row", gap: 10, alignItems: "flex-start" }}>
-                {/* Avatar */}
-                <div style={{
-                  width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  background: m.role === "user" ? "var(--accent)" : "transparent",
-                  fontSize: 12, fontWeight: 600, color: m.role === "user" ? "#fff" : "var(--text-secondary)",
-                }}>
-                  {m.role === "user" ? (account?.name?.[0] ?? "U") : <KaveonMark size={22} useDirectColor />}
-                </div>
 
-                {/* Bubble */}
-                <div style={{
-                  maxWidth: m.chart ? "90%" : "75%",
-                  padding: "10px 14px",
-                  borderRadius: m.role === "user" ? "14px 4px 14px 14px" : "4px 14px 14px 14px",
-                  background: m.role === "user" ? "var(--accent)" : "var(--bg-surface)",
-                  color: m.role === "user" ? "#fff" : "var(--text-primary)",
-                  border: m.role === "user" ? "none" : "1px solid var(--border)",
-                  fontSize: 14, lineHeight: 1.6,
-                  overflow: "hidden",
-                }}>
-                  {m.loading ? (
-                    <div style={{ display: "flex", gap: 4, padding: "8px 14px" }}>
-                      {[0, 1, 2].map(d => (
-                        <div key={d} style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", animation: `bounce 1.2s ease-in-out ${d * 0.2}s infinite` }} />
-                      ))}
-                      <style>{`@keyframes bounce { 0%,80%,100% { transform:translateY(0) } 40% { transform:translateY(-6px) } }`}</style>
-                    </div>
-                  ) : (
-                    <>
-                      {m.content && (
-                        <div style={{ padding: m.chart ? "0 0 8px" : 0, whiteSpace: "pre-wrap", lineHeight: 1.6 }}
-                          dangerouslySetInnerHTML={{ __html: m.content.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>") }}
-                        />
-                      )}
-                      {m.chart && (
-                        <InlineChart
-                          rows={m.chart.rows}
-                          columns={m.chart.columns}
-                          chartType={m.chart.chartType}
-                          xAxis={m.chart.xAxis}
-                          yAxis={m.chart.yAxis}
-                          title={m.chart.title}
-                          sql={m.chart.sql}
-                        />
-                      )}
-                      {m.routeMeta && (
-                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 10.5, color: "var(--text-faint)" }}>
-                          <span style={{
-                            display: "inline-flex", alignItems: "center", gap: 4,
-                            padding: "2px 8px", borderRadius: 10,
-                            background: m.routeMeta.route === "context" ? "rgba(16,185,129,0.1)" : m.routeMeta.route === "direct" ? "rgba(255,255,255,0.04)" : "rgba(74,158,232,0.1)",
-                            color: m.routeMeta.route === "context" ? "#10b981" : m.routeMeta.route === "direct" ? "var(--text-faint)" : "#4A9EE8",
-                            fontWeight: 600,
-                          }}>
-                            <i className={`fas ${m.routeMeta.route === "context" ? "fa-bolt" : m.routeMeta.route === "direct" ? "fa-database" : "fa-route"}`} style={{ fontSize: 8 }} />
-                            {m.routeMeta.route === "context" ? "From context" : m.routeMeta.route === "direct" ? "Live query" : m.routeMeta.route === "hybrid" ? "Hybrid" : "Live query"}
-                          </span>
-                          {m.routeMeta.durationMs != null && <span>{m.routeMeta.durationMs}ms</span>}
-                          {m.routeMeta.elementsChecked != null && <span>&middot; {m.routeMeta.elementsChecked} elements</span>}
-                        </div>
-                      )}
-                    </>
-                  )}
+              {/* Input */}
+              <div style={{ width: "100%", maxWidth: 640, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 16, padding: "16px", boxShadow: "0 0 0 1px rgba(var(--accent-rgb), 0.06), 0 4px 20px rgba(0,0,0,0.3)", display: "flex", flexDirection: "column", gap: 10 }}>
+                <textarea
+                  ref={inputRef as any}
+                  value={query}
+                  onChange={e => setQuery(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
+                  placeholder={placeholder}
+                  rows={2}
+                  style={{ width: "100%", border: "none", outline: "none", background: "transparent", color: "#f0f0f2", fontSize: 15, lineHeight: 1.5, resize: "none", fontFamily: "inherit" }}
+                />
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <button onClick={submit} disabled={!query.trim() || !canSend} style={{ width: 34, height: 34, borderRadius: 10, border: "none", background: query.trim() && canSend ? "var(--accent)" : "rgba(255,255,255,0.08)", color: query.trim() && canSend ? "#fff" : "#64748b", cursor: query.trim() && canSend ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, transition: "all 0.15s" }}>
+                    ↑
+                  </button>
                 </div>
               </div>
-            ))}
-            <div ref={bottomRef} />
-          </div>
 
-          {/* Input bar (bottom) — matches homepage textarea */}
-          <div style={{ padding: "16px 24px", flexShrink: 0 }}>
-            <div style={{ maxWidth: 700, margin: "0 auto", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 16, padding: "16px", boxShadow: "0 0 0 1px rgba(var(--accent-rgb), 0.06), 0 4px 20px rgba(0,0,0,0.3)", display: "flex", flexDirection: "column", gap: 10 }}>
-              <textarea
-                ref={inputRef as any}
-                value={query}
-                onChange={e => setQuery(e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
-                placeholder="Ask anything..."
-                rows={2}
-                style={{ width: "100%", border: "none", outline: "none", background: "transparent", color: "#f0f0f2", fontSize: 15, lineHeight: 1.5, resize: "none", fontFamily: "inherit" }}
-              />
-              <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                <button onClick={submit} disabled={!query.trim() || !canSend} style={{ width: 34, height: 34, borderRadius: 10, border: "none", background: query.trim() && canSend ? "var(--accent)" : "rgba(255,255,255,0.08)", color: query.trim() && canSend ? "#fff" : "#64748b", cursor: query.trim() && canSend ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, transition: "all 0.15s" }}>
-                  ↑
-                </button>
+              {/* Suggestions */}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", justifyContent: "center" }}>
+                {isEmpty
+                  ? EMPTY_SUGGESTIONS.map(s => (
+                      <a key={s.label} href={s.href} style={{ padding: "6px 14px", borderRadius: 999, border: "1px solid var(--border)", background: "var(--bg-surface)", color: "var(--text-secondary)", fontSize: 13, textDecoration: "none", boxShadow: "var(--shadow-sm)" }}>{s.label}</a>
+                    ))
+                  : DEFAULT_SUGGESTIONS.map(s => (
+                      <button key={s} onClick={() => { if (canSend) { setQuery(s); setTimeout(() => void sendMessage(s), 50); } }}
+                        style={{ padding: "9px 18px", borderRadius: 999, border: "1.5px solid var(--border)", background: "var(--bg-surface)", color: "var(--text-secondary)", fontSize: 13.5, fontWeight: 500, cursor: "pointer", boxShadow: "var(--shadow-md)", transition: "all 0.15s" }}
+                        onMouseEnter={(e) => { e.currentTarget.style.borderColor = "rgba(var(--accent-rgb), 0.4)"; e.currentTarget.style.color = "var(--text-primary)"; e.currentTarget.style.background = "var(--bg-elevated)"; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.color = "var(--text-secondary)"; e.currentTarget.style.background = "var(--bg-surface)"; }}>
+                        {s}
+                      </button>
+                    ))}
               </div>
             </div>
-            <p style={{ textAlign: "center", fontSize: 11, color: "#444", margin: "6px 0 0" }}>Kaveon generates SQL from your questions. Always verify queries before running in production.</p>
           </div>
-        </div>
-      )}
+        )}
+
+        {/* Conversation view — appears after first message */}
+        {inConversation && (
+          <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+
+            {/* Messages */}
+            <div style={{ flex: 1, overflow: "auto", padding: "32px 24px", display: "flex", flexDirection: "column", gap: 16 }}>
+              {messages.map((m, i) => (
+                <div key={i} style={{ display: "flex", flexDirection: m.role === "user" ? "row-reverse" : "row", gap: 10, alignItems: "flex-start" }}>
+                  {/* Avatar */}
+                  <div style={{
+                    width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    background: m.role === "user" ? "var(--accent)" : "transparent",
+                    fontSize: 12, fontWeight: 600, color: m.role === "user" ? "#fff" : "var(--text-secondary)",
+                  }}>
+                    {m.role === "user" ? (account?.name?.[0] ?? "U") : <KaveonMark size={22} useDirectColor />}
+                  </div>
+
+                  {/* Bubble */}
+                  <div style={{
+                    maxWidth: m.chart ? "90%" : "75%",
+                    padding: "10px 14px",
+                    borderRadius: m.role === "user" ? "14px 4px 14px 14px" : "4px 14px 14px 14px",
+                    background: m.role === "user" ? "var(--accent)" : "var(--bg-surface)",
+                    color: m.role === "user" ? "#fff" : "var(--text-primary)",
+                    border: m.role === "user" ? "none" : "1px solid var(--border)",
+                    fontSize: 14, lineHeight: 1.6,
+                    overflow: "hidden",
+                  }}>
+                    {m.loading ? (
+                      <div style={{ display: "flex", gap: 4, padding: "8px 14px" }}>
+                        {[0, 1, 2].map(d => (
+                          <div key={d} style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", animation: `bounce 1.2s ease-in-out ${d * 0.2}s infinite` }} />
+                        ))}
+                        <style>{`@keyframes bounce { 0%,80%,100% { transform:translateY(0) } 40% { transform:translateY(-6px) } }`}</style>
+                      </div>
+                    ) : (
+                      <>
+                        {m.content && (
+                          <div style={{ padding: m.chart ? "0 0 8px" : 0, whiteSpace: "pre-wrap", lineHeight: 1.6 }}
+                            dangerouslySetInnerHTML={{ __html: m.content.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>") }}
+                          />
+                        )}
+                        {m.chart && (
+                          <InlineChart
+                            rows={m.chart.rows}
+                            columns={m.chart.columns}
+                            chartType={m.chart.chartType}
+                            xAxis={m.chart.xAxis}
+                            yAxis={m.chart.yAxis}
+                            title={m.chart.title}
+                            sql={m.chart.sql}
+                          />
+                        )}
+                        {m.routeMeta && (
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 10.5, color: "var(--text-faint)" }}>
+                            <span style={{
+                              display: "inline-flex", alignItems: "center", gap: 4,
+                              padding: "2px 8px", borderRadius: 10,
+                              background: m.routeMeta.route === "context" ? "rgba(16,185,129,0.1)" : m.routeMeta.route === "direct" ? "rgba(255,255,255,0.04)" : "rgba(74,158,232,0.1)",
+                              color: m.routeMeta.route === "context" ? "#10b981" : m.routeMeta.route === "direct" ? "var(--text-faint)" : "#4A9EE8",
+                              fontWeight: 600,
+                            }}>
+                              <i className={`fas ${m.routeMeta.route === "context" ? "fa-bolt" : m.routeMeta.route === "direct" ? "fa-database" : "fa-route"}`} style={{ fontSize: 8 }} />
+                              {m.routeMeta.route === "context" ? "From context" : m.routeMeta.route === "direct" ? "Live query" : m.routeMeta.route === "hybrid" ? "Hybrid" : "Live query"}
+                            </span>
+                            {m.routeMeta.durationMs != null && <span>{m.routeMeta.durationMs}ms</span>}
+                            {m.routeMeta.elementsChecked != null && <span>&middot; {m.routeMeta.elementsChecked} elements</span>}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+              <div ref={bottomRef} />
+            </div>
+
+            {/* Input bar (bottom) — matches homepage textarea */}
+            <div style={{ padding: "16px 24px", flexShrink: 0 }}>
+              <div style={{ maxWidth: 700, margin: "0 auto", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 16, padding: "16px", boxShadow: "0 0 0 1px rgba(var(--accent-rgb), 0.06), 0 4px 20px rgba(0,0,0,0.3)", display: "flex", flexDirection: "column", gap: 10 }}>
+                <textarea
+                  ref={inputRef as any}
+                  value={query}
+                  onChange={e => setQuery(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
+                  placeholder="Ask anything..."
+                  rows={2}
+                  style={{ width: "100%", border: "none", outline: "none", background: "transparent", color: "#f0f0f2", fontSize: 15, lineHeight: 1.5, resize: "none", fontFamily: "inherit" }}
+                />
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <button onClick={submit} disabled={!query.trim() || !canSend} style={{ width: 34, height: 34, borderRadius: 10, border: "none", background: query.trim() && canSend ? "var(--accent)" : "rgba(255,255,255,0.08)", color: query.trim() && canSend ? "#fff" : "#64748b", cursor: query.trim() && canSend ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, transition: "all 0.15s" }}>
+                    ↑
+                  </button>
+                </div>
+              </div>
+              <p style={{ textAlign: "center", fontSize: 11, color: "#444", margin: "6px 0 0" }}>Kaveon generates SQL from your questions. Always verify queries before running in production.</p>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
