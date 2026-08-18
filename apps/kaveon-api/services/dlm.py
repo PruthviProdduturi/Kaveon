@@ -680,8 +680,15 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
     mtop = re.search(r"\btop\s+(\d+)\b", question, re.I)
     if mtop:
         top_n = int(mtop.group(1))
+    elif re.search(r"\btop\b", question, re.I):
+        top_n = 10  # "top models" without a number → default 10
+    if top_n:
         if not group_col:
             group_col = _match_any_dim(question, dims)
+    # If "by <metric>" was parsed but didn't match a dimension, also try
+    # matching a dimension anywhere in the question (e.g. "top models by ELO")
+    if not group_col and re.search(r"\b(?:by|per)\b", question, re.I):
+        group_col = _match_any_dim(question, dims)
     limit_n = top_n or limit
 
     # 4) year filter
