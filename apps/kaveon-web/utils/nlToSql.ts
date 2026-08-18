@@ -162,7 +162,9 @@ function findMetric(token: string, metrics: DatasetMetric[]): DatasetMetric | nu
 }
 
 function findDateColumn(columns: DatasetColumn[]): DatasetColumn | null {
-  return columns.find((c) => c.type === "date") ?? null;
+  return columns.find((c) => c.type === "date")
+    ?? columns.find((c) => /^year$/i.test(c.name))
+    ?? null;
 }
 
 function extractNumber(query: string): number | null {
