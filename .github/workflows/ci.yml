@@ -112,6 +112,14 @@ jobs:
       - name: Install Vercel CLI
         run: npm install -g vercel
 
+      # Link the project explicitly from secrets. `vercel pull` alone can't
+      # retrieve settings headlessly ("Could not retrieve Project Settings") —
+      # writing .vercel/project.json provides the link it needs.
+      - name: Link Vercel project
+        run: |
+          mkdir -p .vercel
+          printf '{"orgId":"%s","projectId":"%s"}' "$VERCEL_ORG_ID" "$VERCEL_PROJECT_ID" > .vercel/project.json
+
       # Build ON the GitHub runner (where `pnpm install` works) and upload the
       # prebuilt output. Vercel's own build sandbox trips pnpm's fetch on the
       # public registry (ERR_INVALID_THIS), so we never let it run install.
