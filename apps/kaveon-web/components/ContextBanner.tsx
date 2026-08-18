@@ -72,12 +72,13 @@ export function ContextBanner() {
 
   const wrap: React.CSSProperties = {
     position: "sticky", top: 0, zIndex: 20,
-    display: "flex", alignItems: "center", justifyContent: "center", gap: 12,
-    padding: "8px 40px",
+    display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "center",
+    gap: 8,
+    padding: "8px 44px",
+    width: "100%", maxWidth: "100%", boxSizing: "border-box",
     background: "var(--bg-surface)",
     borderBottom: "1px solid var(--border)",
     fontSize: 12.5, color: "var(--text-secondary)",
-    overflowX: "auto", whiteSpace: "nowrap",
   };
   const label: React.CSSProperties = {
     display: "flex", alignItems: "center", gap: 6,
@@ -87,14 +88,14 @@ export function ContextBanner() {
     display: "inline-flex", alignItems: "center", gap: 8,
     padding: "3px 10px", borderRadius: 999,
     border: "1px solid var(--border)", background: "rgba(var(--accent-rgb),0.06)",
-    flexShrink: 0,
+    flexShrink: 0, whiteSpace: "nowrap", maxWidth: "100%",
   };
   const dot = (ok: boolean): React.CSSProperties => ({
     width: 6, height: 6, borderRadius: 999,
     background: ok ? "#22c55e" : "#f59e0b", flexShrink: 0,
   });
   const closeBtn: React.CSSProperties = {
-    position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)",
+    position: "absolute", right: 10, top: 8,
     flexShrink: 0,
     border: "none", background: "transparent", cursor: "pointer",
     color: "var(--text-secondary)", fontSize: 13, padding: 4,
