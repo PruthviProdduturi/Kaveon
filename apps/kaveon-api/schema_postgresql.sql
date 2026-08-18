@@ -288,3 +288,46 @@ CREATE TABLE IF NOT EXISTS context_answer_cache (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_context_answer_sig
     ON context_answer_cache (database_name, question_sig);
+
+-- ── DLM: per-dataset compiled context artifact (Data Language Model) ──────────
+-- Compiled ON TOP of context_snapshots: the retrievable manifest + value index
+-- that resolves NL terms to columns/filters with no hosted LLM, no data scan.
+-- Self-migrates via services/dlm.py; kept here for schema parity. ``codes``
+-- columns are reserved for the v2 discrete-code (RQ-VAE) upgrade.
+CREATE TABLE IF NOT EXISTS dlm_artifact (
+    dataset_id   TEXT             PRIMARY KEY,
+    version      INTEGER          NOT NULL DEFAULT 1,
+    manifest     TEXT             NOT NULL,   -- JSON: columns, join graph, grain, metrics, synonyms
+    stats_rollup TEXT,                        -- JSON: cardinalities / row counts / freshness
+    usage_rollup TEXT,                        -- JSON: per-table usage from query_history
+    embeds       TEXT,                        -- v1 reserved: packed dense element vectors
+    codes        TEXT,                        -- v2 reserved: discrete codes
+    source_hash  TEXT             NOT NULL,   -- schema+snapshot fingerprint; skip rebuild if unchanged
+    built_at     TEXT             NOT NULL,
+    status       TEXT             NOT NULL DEFAULT 'ready'
+);
+
+CREATE TABLE IF NOT EXISTS dlm_value_index (
+    id          TEXT              PRIMARY KEY,
+    dataset_id  TEXT              NOT NULL,
+    element_key TEXT              NOT NULL,   -- schema.table.column
+    value_text  TEXT              NOT NULL,
+    value_norm  TEXT              NOT NULL,   -- lowercased/trimmed/deaccented
+    key_column  TEXT,                         -- surrogate key column if role-playing dim
+    key_value   TEXT,
+    freq        DOUBLE PRECISION  DEFAULT 0,
+    source      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_dlm_value_norm ON dlm_value_index (dataset_id, value_norm);
+CREATE INDEX IF NOT EXISTS idx_dlm_value_elem ON dlm_value_index (element_key);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_dlm_value_uniq
+    ON dlm_value_index (dataset_id, element_key, value_norm);
+
+CREATE TABLE IF NOT EXISTS dlm_router (
+    dataset_id TEXT               PRIMARY KEY,
+    summary    TEXT               NOT NULL,
+    terms      TEXT,                          -- JSON: normalized keyword bag for lexical routing
+    embeds     TEXT,                          -- v1 reserved
+    codes      TEXT,                          -- v2 reserved: same code space as artifacts
+    updated_at TEXT               NOT NULL
+);

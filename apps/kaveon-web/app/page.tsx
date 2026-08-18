@@ -5,6 +5,7 @@ import { useAuth } from "../auth/useAuth";
 import { useSetup } from "../components/ClientLayout";
 import { msalFetch } from "../utils/msalFetch";
 import { KaveonMark } from "../components/KaveonMark";
+import { ContextBanner } from "../components/ContextBanner";
 import { nlToSql, DatasetSchema } from "../utils/nlToSql";
 import { InlineChart } from "../components/chat/InlineChart";
 import { API_BASE } from "../config";
@@ -23,7 +24,7 @@ interface ChartData {
 }
 
 interface RouteMeta {
-  route: "context" | "hybrid" | "query" | "direct";
+  route: "context" | "hybrid" | "query" | "direct" | "dlm";
   durationMs?: number;
   elementsChecked?: number;
 }
@@ -193,7 +194,6 @@ export default function Home() {
   // Chat history state
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
-  const [historyVisible, setHistoryVisible] = useState(false);
 
   // Load chat history sessions
   const loadSessions = useCallback(async () => {
@@ -224,6 +224,14 @@ export default function Home() {
       if (res.ok) {
         const session = await res.json();
         setActiveSessionId(session.id);
+        // Surface the conversation in Recents (single unified surface) with a
+        // deep link that resumes this session.
+        addRecent({
+          id: `chat-${session.id}`,
+          label: firstMessage.slice(0, 50) || "New conversation",
+          href: `/?session=${session.id}`,
+          type: "chat",
+        });
         await loadSessions();
         return session.id;
       }
@@ -231,7 +239,7 @@ export default function Home() {
       // Persistence unavailable
     }
     return null;
-  }, [loadSessions]);
+  }, [loadSessions, addRecent]);
 
   // Save a message pair (user + assistant) to the active session
   const saveMessage = useCallback(async (sessionId: number, role: string, content: string, extra?: { sql_query?: string; chart_type?: string; data?: Record<string, unknown>; route?: string }) => {
@@ -275,6 +283,16 @@ export default function Home() {
     }
   }, []);
 
+  // Resume a chat deep-linked from Recents (?session=<id>). Runs once on mount.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sid = new URLSearchParams(window.location.search).get("session");
+    if (!sid) return;
+    const n = parseInt(sid, 10);
+    if (!Number.isNaN(n)) void loadSession(n);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const deleteSession = useCallback(async (sessionId: number) => {
     try {
       await msalFetch(`/api/v1/chat/history/${sessionId}`, { method: "DELETE" });
@@ -289,13 +307,11 @@ export default function Home() {
   }, [activeSessionId]);
 
   const startNewChat = useCallback(() => {
-    if (messages.length > 0) {
-      const firstUserMsg = messages.find(m => m.role === "user");
-      if (firstUserMsg) addRecent({ id: `chat-${Date.now()}`, label: firstUserMsg.content.slice(0, 50), href: "/", type: "chat" });
-    }
+    // The conversation is already recorded in Recents at session-create time,
+    // so just reset the view here.
     setMessages([]);
     setActiveSessionId(null);
-  }, [messages, addRecent]);
+  }, []);
 
   // Listen for "new-chat" event from sidebar nav
   useEffect(() => {
@@ -759,7 +775,7 @@ export default function Home() {
                 return;
               }
 
-              const noResultMsg = `No results found. The query returned empty.\n\nSQL: \`${parsed.sql}\``;
+              const noResultMsg = `The query completed successfully but returned no rows.\n\nSQL: \`${parsed.sql}\``;
               if (sid) {
                 void saveMessage(sid, "user", text.trim());
                 void saveMessage(sid, "assistant", noResultMsg, { sql_query: parsed.sql, route: "direct" });
@@ -771,7 +787,7 @@ export default function Home() {
               return;
             } else {
               const errText = await execRes.text().catch(() => "");
-              const errMsg = `Query failed (${execRes.status}).\n\nSQL: \`${parsed.sql}\`\n\n${errText.substring(0, 200)}`;
+              const errMsg = `The query could not be completed (status ${execRes.status}).\n\nSQL: \`${parsed.sql}\`\n\n${errText.substring(0, 200)}`;
               if (sid) {
                 void saveMessage(sid, "user", text.trim());
                 void saveMessage(sid, "assistant", errMsg, { sql_query: parsed.sql, route: "error" });
@@ -783,7 +799,7 @@ export default function Home() {
               return;
             }
           } catch (execErr) {
-            const errMsg = `Query execution error: ${execErr instanceof Error ? execErr.message : "Unknown"}\n\nSQL: \`${parsed.sql}\``;
+            const errMsg = `The query could not be executed: ${execErr instanceof Error ? execErr.message : "an unexpected error occurred"}.\n\nSQL: \`${parsed.sql}\``;
             if (sid) {
               void saveMessage(sid, "user", text.trim());
               void saveMessage(sid, "assistant", errMsg, { route: "error" });
@@ -797,12 +813,57 @@ export default function Home() {
         }
       }
 
+      // ── DLM fallback: deterministic NL→SQL via the compiled Data Language Model ──
+      // The in-browser template parser couldn't match this. Ask the server-side
+      // DLM (no LLM): it routes to a dataset, resolves entities from the value
+      // index, and assembles SQL. Resolves things like "India consumption in 2025".
+      try {
+        const dlmRes = await msalFetch("/api/v1/dlm/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question: text.trim() }),
+        });
+        if (dlmRes.ok) {
+          const dlm = await dlmRes.json();
+          if (dlm?.ok && dlm.sql) {
+            const t0 = performance.now();
+            const execRes = await msalFetch("/api/v1/sql/execute", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ sql_text: dlm.sql, database: dlm.database || "kaveon", source: "chat" }),
+            });
+            if (execRes.ok) {
+              const execData = await execRes.json();
+              const rows = execData.rows || execData.data || [];
+              const columns = execData.columns || execData.column_names || [];
+              if (rows.length > 0) {
+                const parsedLike = { sql: dlm.sql, chartType: dlm.chartType, xAxis: dlm.xAxis, yAxis: dlm.yAxis, title: dlm.title, confidence: dlm.confidence ?? 0.5 };
+                const summary = generateInsight(rows, columns, parsedLike, text.trim());
+                if (sid) {
+                  void saveMessage(sid, "user", text.trim());
+                  void saveMessage(sid, "assistant", summary, { sql_query: dlm.sql, chart_type: wantsChart ? dlm.chartType : undefined, data: { columns, rows: rows.slice(0, 100), row_count: rows.length }, route: "dlm" });
+                }
+                setMessages(prev => [...prev.slice(0, -1), {
+                  role: "assistant",
+                  content: summary,
+                  ...(wantsChart ? { chart: { rows, columns, chartType: dlm.chartType, xAxis: dlm.xAxis, yAxis: dlm.yAxis, title: dlm.title, sql: dlm.sql } } : {}),
+                  routeMeta: { route: "dlm", durationMs: Math.round(performance.now() - t0) },
+                }]);
+                return;
+              }
+            }
+          }
+        }
+      } catch {
+        // DLM unavailable — fall through to suggestions
+      }
+
       // Parser couldn't handle it — show helpful suggestions
       const schemasNow = allSchemasRef.current;
       const availableDatasets = schemasNow.map(s => s.name).join(", ");
       const fallbackMsg = schemasNow.length === 0
-        ? "No datasets found. Create a dataset in the Workspace first, then come back and ask me about your data."
-        : `I couldn't match that to your data. You have these datasets: **${availableDatasets}**\n\nTry something specific like:\n• "Show [metric] by [column]"\n• "Top 10 [column] by [metric]"\n• "Total [metric]"\n• "Trend of [metric] over time"`;
+        ? "No datasets are available yet. Please create a dataset in the Workspace, then return here to ask questions about your data."
+        : `I wasn't able to match that request to your data. The following datasets are available: **${availableDatasets}**\n\nYou might try, for example:\n• "Show [metric] by [column]"\n• "Top 10 [column] by [metric]"\n• "Total [metric]"\n• "Trend of [metric] over time"`;
       if (sid) {
         void saveMessage(sid, "user", text.trim());
         void saveMessage(sid, "assistant", fallbackMsg, { route: "no_match" });
@@ -861,36 +922,11 @@ export default function Home() {
         background: "var(--bg-primary)",
       }}
     >
-      {/* Chat History Sidebar */}
-      <ChatHistorySidebar
-        sessions={sessions}
-        activeSessionId={activeSessionId}
-        onSelect={loadSession}
-        onDelete={deleteSession}
-        onNewChat={startNewChat}
-        visible={historyVisible}
-        onToggle={() => setHistoryVisible(false)}
-      />
-
-      {/* Main content */}
+      {/* Main content — chat history lives in Recents now, no separate sidebar */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: "100vh" }}>
 
-        {/* History toggle button — shown when sidebar is hidden */}
-        {!historyVisible && sessions.length > 0 && (
-          <button
-            onClick={() => setHistoryVisible(true)}
-            title="Show chat history"
-            style={{
-              position: "absolute", top: 14, left: 14, zIndex: 10,
-              width: 34, height: 34, borderRadius: 8,
-              border: "1px solid var(--border)", background: "var(--bg-surface)",
-              color: "var(--text-secondary)", cursor: "pointer",
-              display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14,
-            }}
-          >
-            <i className="fas fa-history" />
-          </button>
-        )}
+        {/* Available-context banner — what's compiled & testable (date ranges, values) */}
+        <ContextBanner />
 
         {/* Hero section — collapses when in conversation */}
         {!inConversation && (

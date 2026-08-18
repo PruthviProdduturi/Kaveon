@@ -38,6 +38,7 @@ from routers import (
     chat,
     chat_history,
     context,
+    dlm,
 )
 
 
@@ -165,6 +166,7 @@ app.include_router(users.router,            prefix="/api/v1")
 app.include_router(user_recents.router,     prefix="/api/v1")
 app.include_router(ai.router,               prefix="/api/v1")
 app.include_router(context.router,          prefix="/api/v1")
+app.include_router(dlm.router,              prefix="/api/v1")
 app.include_router(chat.router,             prefix="/api/v1")
 app.include_router(chat_history.router,     prefix="/api/v1")
 
