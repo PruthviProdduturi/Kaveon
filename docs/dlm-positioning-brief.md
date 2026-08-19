@@ -1,8 +1,8 @@
 # DLM — the short version
 
-*Email-length brief. For the full argument (Fabric-capability breakdown, architecture, where we don't win), see [dlm-positioning.md](dlm-positioning.md).*
+*One-screen brief — full version: [dlm-positioning.md](dlm-positioning.md).*
 
-**In one line:** Fabric makes the query fast; Fabric IQ makes it conversational with an LLM in the loop. Kaveon makes it conversational with **no LLM in the loop — and, for the common questions, no database query either.** It answers 10 million rows in ~1.5 seconds from precompiled context, on a tiny box, and only touches the warehouse when the question is genuinely novel — running in production today.
+**In one line:** Fabric makes the query fast; Fabric IQ makes it conversational with an LLM in the loop. Kaveon does it with **no LLM — and, for common questions, no database query either**: 10M rows answered in ~1.5s from precompiled context, hitting the warehouse only when the question is genuinely novel. Live in production today.
 
 **Proven** — measured live at [kaveon.vercel.app](https://kaveon.vercel.app) over a 10.1M-row dataset:
 
