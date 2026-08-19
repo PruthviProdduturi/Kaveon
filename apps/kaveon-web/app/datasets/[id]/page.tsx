@@ -6,6 +6,7 @@ import { API_BASE } from "../../../config";
 import { LoadingOverlay } from "../../../components/LoadingOverlay";
 import { msalFetch } from "../../../utils/msalFetch";
 import { DatasetContextPanel } from "../../../components/DatasetContextPanel";
+import { DatasetContextEditor } from "../../../components/DatasetContextEditor";
 import { useAuth } from "../../../auth/useAuth";
 import { useRouter, useParams } from "next/navigation";
 import { useRecents } from "../../../hooks/useRecents";
@@ -981,6 +982,7 @@ export default function DatasetDetailPage() {
       {!isLoading && !error && dataset && (
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", gap: 12, minHeight: 0 }}>
         <DatasetContextPanel datasetId={datasetId} />
+        <DatasetContextEditor datasetId={datasetId} />
         <div className="card" style={{ flexShrink: 0, border: "1px solid var(--border)", borderRadius: 12, padding: "20px" }}>
           {/* Key Info and Metrics */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, flexShrink: 0, marginBottom: 12 }}>
