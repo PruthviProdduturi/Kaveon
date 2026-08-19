@@ -655,32 +655,44 @@ export default function Home() {
         });
         if (dlmRes.ok) {
           const dlm = await dlmRes.json();
-          if (dlm?.ok && dlm.sql) {
-            const execRes = await msalFetch("/api/v1/sql/execute", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ sql_text: dlm.sql, database: dlm.database || "kaveon", source: "chat" }),
-            });
-            if (execRes.ok) {
-              const execData = await execRes.json();
-              const rows = execData.rows || execData.data || [];
-              const columns = execData.columns || execData.column_names || [];
-              if (resultHasData(rows) || dlm.note) {
-                const parsedLike = { sql: dlm.sql, chartType: dlm.chartType, xAxis: dlm.xAxis, yAxis: dlm.yAxis, title: dlm.title, confidence: dlm.confidence ?? 0.5 };
-                const insight = generateInsight(rows, columns, parsedLike, queryText);
-                const summary = dlm.note ? `${dlm.note}\n\n${insight}` : insight;
-                if (sid) {
-                  void saveMessage(sid, "user", text.trim());
-                  void saveMessage(sid, "assistant", summary, { sql_query: dlm.sql, chart_type: wantsChart ? dlm.chartType : undefined, data: { columns, rows: rows.slice(0, 100), row_count: rows.length }, route: "dlm" });
-                }
-                setMessages(prev => [...prev.slice(0, -1), {
-                  role: "assistant",
-                  content: summary,
-                  ...(wantsChart ? { chart: { rows, columns, chartType: dlm.chartType, xAxis: dlm.xAxis, yAxis: dlm.yAxis, title: dlm.title, sql: dlm.sql } } : {}),
-                  routeMeta: { route: "dlm", durationMs: Math.round(performance.now() - dlmT0) },
-                }]);
-                return;
+          if (dlm?.ok && (dlm.from_context || dlm.sql)) {
+            // Answered from precomputed context (no DB trip) vs a live query.
+            let rows: (string | number | null)[][] = [];
+            let columns: string[] = [];
+            let got = false;
+            if (dlm.from_context) {
+              rows = dlm.rows || [];
+              columns = dlm.columns || [];
+              got = true;
+            } else {
+              const execRes = await msalFetch("/api/v1/sql/execute", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ sql_text: dlm.sql, database: dlm.database || "kaveon", source: "chat" }),
+              });
+              if (execRes.ok) {
+                const execData = await execRes.json();
+                rows = execData.rows || execData.data || [];
+                columns = execData.columns || execData.column_names || [];
+                got = true;
               }
+            }
+            if (got && (resultHasData(rows) || dlm.note)) {
+              const route = dlm.from_context ? "context" : "dlm";
+              const parsedLike = { sql: dlm.sql, chartType: dlm.chartType, xAxis: dlm.xAxis, yAxis: dlm.yAxis, title: dlm.title, confidence: dlm.confidence ?? 0.5 };
+              const insight = generateInsight(rows, columns, parsedLike, queryText);
+              const summary = dlm.note ? `${dlm.note}\n\n${insight}` : insight;
+              if (sid) {
+                void saveMessage(sid, "user", text.trim());
+                void saveMessage(sid, "assistant", summary, { sql_query: dlm.sql, chart_type: wantsChart ? dlm.chartType : undefined, data: { columns, rows: rows.slice(0, 100), row_count: rows.length }, route });
+              }
+              setMessages(prev => [...prev.slice(0, -1), {
+                role: "assistant",
+                content: summary,
+                ...(wantsChart ? { chart: { rows, columns, chartType: dlm.chartType, xAxis: dlm.xAxis, yAxis: dlm.yAxis, title: dlm.title, sql: dlm.sql } } : {}),
+                routeMeta: { route, durationMs: Math.round(performance.now() - dlmT0) },
+              }]);
+              return;
             }
           }
         }
