@@ -71,6 +71,7 @@ _SEED_SYNONYMS: Dict[str, List[str]] = {
     "customer": ["client", "account", "user", "buyer"],
     "provider": ["vendor", "supplier", "publisher", "maker"],
     "model": ["variant", "version", "sku"],
+    "plan": ["tier", "segment", "segments", "subscription", "package"],
     "region": ["geography", "geo", "area", "territory"],
     "date": ["day", "time", "period", "when"],
 }
