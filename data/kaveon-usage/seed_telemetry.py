@@ -31,7 +31,7 @@ SELECT
   gen_random_uuid()::text,
   'SELECT * FROM ' || tbl || ' LIMIT 100',
   'kaveon',
-  timestamp '2024-01-01' + (random()*525600)::int * interval '1 minute',
+  timestamp '2026-01-01' + (random()*331200)::int * interval '1 minute',
   round((0.02 + random()*2.4)::numeric, 3),
   (random()*8000)::int,
   CASE WHEN random() < 0.97 THEN 'success' ELSE 'error' END,
@@ -51,7 +51,7 @@ SELECT
   ot,
   (1 + floor(random()*40)::int)::text,
   initcap(ot) || ' ' || (1 + floor(random()*40)::int),
-  timestamp '2024-01-01' + (random()*525600)::int * interval '1 minute',
+  timestamp '2026-01-01' + (random()*331200)::int * interval '1 minute',
   'user' || (1 + floor(random()*3000)::int) || '@kaveon-demo.io',
   NULL
 FROM (SELECT split_part('dataset,dashboard,dashboard,chart,chart,query', ',', 1 + floor(random()*6)::int) AS ot
