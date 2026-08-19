@@ -1,6 +1,6 @@
 # Deploying kaveon-web to Vercel
 
-`kaveon-web` (Next.js 15) deploys to Vercel. `kaveon-api` runs on Azure Container Apps — see [deploy-vercel-azure-neon.md](deploy-vercel-azure-neon.md) for the full two-service deploy.
+`kaveon-web` (Next.js 15) deploys to Vercel. `kaveon-api` runs on Azure Container Apps, backed by Azure PostgreSQL (`kaveonmeta` + `kaveon`) — see [deploy-vercel-azure-postgres.md](deploy-vercel-azure-postgres.md) for the full two-service deploy.
 
 ## Prerequisites
 
@@ -15,7 +15,7 @@ cd apps/kaveon-web
 vercel link --yes
 ```
 
-Set **Root Directory** to `apps/kaveon-web` — Vercel detects the pnpm workspace and installs from the repo root.
+Set **Root Directory** to `apps/kaveon-web`. Note: `apps/kaveon-web/vercel.json` overrides the install with `npm install --legacy-peer-deps` — pnpm fails inside Vercel's build sandbox with `ERR_INVALID_THIS`, so the install is pinned to npm.
 
 ## 2 · Set environment variables
 
@@ -74,12 +74,12 @@ Set `WEB_URL` on the Container App to `https://<your-project>.vercel.app` and re
 
 ## Architecture
 
-```
-Browser ──► Vercel (kaveon-web)
-               │  NextAuth session (server-side)
-               │  /api/kaveon/[...path] proxy → stamps X-User-* + KAVEON_PROXY_SECRET
-               ▼
-            Azure Container Apps (kaveon-api)
+```mermaid
+flowchart TD
+    B["🌐 Browser"]
+    V["▲ Vercel · kaveon-web<br/><small>NextAuth session (server-side)<br/>/api/kaveon/[...path] proxy → X-User-* + KAVEON_PROXY_SECRET</small>"]
+    A["⚙️ Azure Container Apps · kaveon-api"]
+    B --> V --> A
 ```
 
 The API is not on Vercel. Serverless functions cannot hold a persistent pyodbc connection pool; the API needs a long-lived process for the warm-pool + heartbeat behaviour.
