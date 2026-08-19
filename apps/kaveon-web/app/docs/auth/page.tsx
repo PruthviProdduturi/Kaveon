@@ -33,7 +33,7 @@ export default function AuthDocs() {
       </Callout>
 
       <h2>Roles</h2>
-      <p>Four roles, ordered by privilege. The role is resolved from the JWT claim, then the metadata DB, defaulting to Viewer:</p>
+      <p>Four roles, ordered by privilege, gate what you can do in the API. Through sign-in a user resolves to <strong>Admin</strong> (email in <code>AUTH_ADMIN_EMAILS</code>) or <strong>Viewer</strong>:</p>
       <table>
         <thead><tr><th>Role</th><th>Can</th></tr></thead>
         <tbody>
