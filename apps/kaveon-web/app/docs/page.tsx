@@ -15,13 +15,14 @@ export default function DocsIntro() {
       <p>
         Kaveon sits between you and your data. Point it at a warehouse or database and you
         get a private analytics workspace: a full <strong>SQL Lab</strong>, a drag-and-drop <strong>chart builder</strong>,
-        composable <strong>dashboards</strong>, reusable <strong>semantic datasets</strong>, and an{" "}
-        <strong>AI layer</strong> that turns plain-English questions into charts. It is open source, MIT-licensed,
+        composable <strong>dashboards</strong>, reusable <strong>semantic datasets</strong>, and a{" "}
+        <strong>DLM (Data Language Model)</strong> that turns plain-English questions into charts with no hosted
+        LLM — answering the common ones straight from precomputed context. It is open source, MIT-licensed,
         and runs entirely on infrastructure you control.
       </p>
       <p>
-        Everything is configurable from the UI — no config-file edits, no restarts to add a data source or
-        switch authentication provider.
+        Data sources are configurable from the UI — no config-file edits, no restarts to add one. Authentication
+        providers (GitHub, Google, Microsoft Entra) activate automatically when their env vars are set.
       </p>
 
       <Callout type="tip">
@@ -44,12 +45,12 @@ export default function DocsIntro() {
           <tr>
             <td><strong>kaveon-api</strong></td>
             <td>FastAPI · Python 3.11</td>
-            <td>Query execution, semantic SQL generation, RBAC, connection pooling to every data source.</td>
+            <td>Query execution, semantic SQL generation, the DLM engine, RBAC, connection pooling to every data source.</td>
           </tr>
           <tr>
             <td><strong>Data layer</strong></td>
-            <td>Postgres · Fabric SQL · Azure SQL · MySQL · StarRocks</td>
-            <td>A metadata database (Kaveon&rsquo;s own state) plus the data sources you register.</td>
+            <td>Azure PostgreSQL · Fabric SQL · Azure SQL · MySQL · StarRocks</td>
+            <td>A two-plane store — <code>kaveonmeta</code> (Kaveon&rsquo;s own state + DLM context) and the <code>kaveon</code> warehouse — plus the data sources you register.</td>
           </tr>
         </tbody>
       </table>
