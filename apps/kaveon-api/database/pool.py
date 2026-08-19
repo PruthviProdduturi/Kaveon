@@ -791,6 +791,16 @@ def _live_meta_db_type() -> str:
     return _os.environ.get("METADATA_DB_TYPE") or settings.METADATA_DB_TYPE or "fabric_sql"
 
 
+def _aad_dbs() -> set:
+    """Databases (besides the metadata DB) reached on the SAME AAD-auth Postgres
+    server — e.g. the data warehouse after the metadata/data split. Comma-listed
+    in AAD_DATABASES. These share the metadata host + Entra token auth (no stored
+    password) but are not the control plane."""
+    import os as _os
+    raw = _os.environ.get("AAD_DATABASES") or getattr(settings, "AAD_DATABASES", "") or ""
+    return {x.strip().lower() for x in raw.split(",") if x.strip()}
+
+
 def get_connection_pool(database: str) -> ConnectionPool:
     """Get or create the pool for *database* (keyed by database name).
 
@@ -806,9 +816,10 @@ def get_connection_pool(database: str) -> ConnectionPool:
         # keeps the "store under both keys" step below valid for every branch.
         actual_db = database
 
-        if database == _live_meta_db():
+        _is_meta = database == _live_meta_db()
+        if _is_meta or database.lower() in _aad_dbs():
             db_type = _live_meta_db_type()
-            pool_size = settings.MAX_POOL_SIZE_METADATA
+            pool_size = settings.MAX_POOL_SIZE_METADATA if _is_meta else settings.MAX_POOL_SIZE_DATAWAREHOUSE
             if db_type in ("fabric_sql", "azure_sql"):
                 endpoint = _live_meta_endpoint()
                 if not endpoint:
