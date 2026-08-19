@@ -122,6 +122,18 @@ CREATE TABLE IF NOT EXISTS dlm_router (
     codes        TEXT,                     -- v2 (reserved): same code space as artifacts
     updated_at   TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS dlm_answers (
+    id           TEXT PRIMARY KEY,
+    dataset_id   TEXT NOT NULL,
+    metric_name  TEXT NOT NULL,
+    group_col    TEXT NOT NULL DEFAULT '',  -- '' = grand total (no group-by)
+    columns      TEXT NOT NULL,             -- JSON: [column names]
+    rows         TEXT NOT NULL,             -- JSON: precomputed result rows
+    computed_at  TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_dlm_answers
+    ON dlm_answers (dataset_id, metric_name, group_col);
 """
 
 _tables_ready = False
@@ -208,6 +220,14 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
                      source_hash, "ready" if stats_supported else "unsupported")
     _upsert_router(str(dataset_id), ds, columns, metrics, value_rows)
 
+    # 8) precompute the common answers (each metric's total + per-dimension
+    #    breakdown) so those questions serve from context with no live query.
+    #    A handful of scans now; every matching question is a lookup forever after.
+    answers = _precompute_answers(str(dataset_id), database, schema,
+                                  ds.get("table_name") or ds.get("fact_table"),
+                                  columns, dimensions, metrics)
+    _ANSWER_CACHE.pop(str(dataset_id), None)  # invalidate in-memory cache after regen
+
     return {
         "ok": True,
         "dataset_id": dataset_id,
@@ -216,9 +236,97 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
         "stats_supported": stats_supported,
         "columns": len(columns),
         "values_indexed": len(value_rows),
+        "answers_precomputed": answers,
         "built_at": _now_iso(),
         "method": "manifest + pg_stats value inventory + query_history usage (no LLM, no data scan)",
     }
+
+
+def _precompute_answers(dataset_id: str, database: str, schema: str, fact: Optional[str],
+                        columns: List[dict], dimensions: List[dict], metrics: List[dict]) -> int:
+    """Compute + store the common answers for this dataset: every metric's grand
+    total (one scan for all metrics) and every metric grouped by each low-card
+    dimension (one scan per dimension). Stored in dlm_answers for instant,
+    no-DB-trip serving. Returns how many answers were stored."""
+    import database.pool as pool
+    meta.execute("DELETE FROM dlm_answers WHERE dataset_id = @param0", [dataset_id])
+    if not fact or not metrics:
+        return 0
+
+    tbl = f"{_qid(schema)}.{_qid(fact)}" if schema else _qid(fact)
+    # metric_name -> (alias, expression); alias is a safe positional handle
+    mdefs = []
+    for i, m in enumerate(metrics):
+        name = m.get("name") or m.get("metric_name")
+        expr = m.get("expression")
+        if name and expr:
+            mdefs.append((f"m{i}", name, expr))
+    if not mdefs:
+        return 0
+    now = _now_iso()
+    stored = 0
+
+    # 1) grand totals — one scan computes all metrics at once
+    sel = ", ".join(f"{expr} AS {alias}" for alias, _n, expr in mdefs)
+    try:
+        res = pool.execute_query(f"SELECT {sel} FROM {tbl}", database)
+        row = (res.get("rows") or res.get("rows_objects") or [None])[0]
+        vals = list(row.values()) if isinstance(row, dict) else (list(row) if row else [])
+        for j, (_a, name, _e) in enumerate(mdefs):
+            v = vals[j] if j < len(vals) else None
+            _store_answer(dataset_id, name, "", [name], [[_json_scalar(v)]], now)
+            stored += 1
+    except Exception:
+        pass
+
+    # 2) per low-card dimension — one scan per dim computes all metrics grouped
+    dim_cols = [(_c.get("column_name") or _c.get("name") or "").strip()
+                for _c in columns if _c.get("is_dimension")]
+    for dim in dim_cols:
+        if not dim:
+            continue
+        gsel = ", ".join(f"{expr} AS {alias}" for alias, _n, expr in mdefs)
+        # order by the first metric desc so top-N questions can slice the head
+        order = mdefs[0][0]
+        try:
+            res = pool.execute_query(
+                f"SELECT {_qid(dim)} AS grp, {gsel} FROM {tbl} "
+                f"WHERE {_qid(dim)} IS NOT NULL GROUP BY {_qid(dim)} "
+                f"ORDER BY {order} DESC LIMIT 500", database)
+            rows = res.get("rows") or res.get("rows_objects") or []
+            if not rows:
+                continue
+            norm = [(_row_vals(r)) for r in rows]   # [grp, m0, m1, ...]
+            for j, (_a, name, _e) in enumerate(mdefs):
+                out = [[_json_scalar(rv[0]), _json_scalar(rv[j + 1] if j + 1 < len(rv) else None)] for rv in norm]
+                _store_answer(dataset_id, name, dim, [dim, name], out, now)
+                stored += 1
+        except Exception:
+            continue
+    return stored
+
+
+def _store_answer(dataset_id: str, metric_name: str, group_col: str,
+                  cols: List[str], rows: List[list], now: str) -> None:
+    meta.execute(
+        "INSERT INTO dlm_answers (id, dataset_id, metric_name, group_col, columns, rows, computed_at) "
+        "VALUES (@param0,@param1,@param2,@param3,@param4,@param5,@param6)",
+        [str(uuid.uuid4()), dataset_id, metric_name, group_col,
+         json.dumps(cols), json.dumps(rows, default=str), now])
+
+
+def _row_vals(r) -> list:
+    return list(r.values()) if isinstance(r, dict) else list(r)
+
+
+def _json_scalar(v: Any) -> Any:
+    import decimal
+    import datetime as _dt
+    if isinstance(v, decimal.Decimal):
+        return float(v)
+    if isinstance(v, (_dt.date, _dt.datetime)):
+        return v.isoformat()
+    return v
 
 
 def get_dlm(dataset_id: str) -> Optional[Dict[str, Any]]:
@@ -715,7 +823,17 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
         time_group = date_column
         year = None  # don't filter by year when showing trend
 
-    # ── assemble ──────────────────────────────────────────────────────────────
+    # ── answer from context (precomputed) — NO database trip ─────────────────
+    # Totals, single-dimension breakdowns, and single-dimension equality filters
+    # are all already in dlm_answers. Only trends/year-slices/combos fall through
+    # to a live query below (which we then cache).
+    if not time_group and not year:
+        served = _serve_from_context(dataset_id, ds, metric_name, group_col, top_n,
+                                     filters, routed[0])
+        if served is not None:
+            return served
+
+    # ── assemble (live query path) ───────────────────────────────────────────
     metric_expr = (metric or {}).get("expression") or "COUNT(*)"
 
     select_parts: List[str] = []
@@ -763,6 +881,8 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
         "database": database,
         "schema_name": schema,
         "sql": sql,
+        "from_context": False,
+        "route": "live",
         "chartType": chart_type,
         "xAxis": x_axis,
         "yAxis": metric_name,
@@ -772,6 +892,81 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
         "year": year,
         "note": note,
         "confidence": round(routed[0].get("score", 0.0), 3),
+    }
+
+
+# In-memory answer cache: {dataset_id: {(metric_name, group_col): {columns, rows}}}.
+# Warmed lazily from dlm_answers (one query per dataset), invalidated on regen.
+# After warmup every context answer is a dict hit — microseconds, zero DB trip.
+_ANSWER_CACHE: Dict[str, Dict[tuple, Dict[str, Any]]] = {}
+
+
+def _load_answers(dataset_id: str) -> Dict[tuple, Dict[str, Any]]:
+    cached = _ANSWER_CACHE.get(dataset_id)
+    if cached is not None:
+        return cached
+    ensure_tables()
+    res = meta.query(
+        "SELECT metric_name, group_col, columns, rows FROM dlm_answers WHERE dataset_id = @param0",
+        [dataset_id])
+    out: Dict[tuple, Dict[str, Any]] = {}
+    for r in res.get("rows_objects", res.get("rows", [])):
+        if not isinstance(r, dict):
+            continue
+        out[(r.get("metric_name"), r.get("group_col") or "")] = {
+            "columns": _loads(r.get("columns")) or [],
+            "rows": _loads(r.get("rows")) or [],
+        }
+    _ANSWER_CACHE[dataset_id] = out
+    return out
+
+
+def _context_answer(dataset_id: str, metric_name: str, group_col: str) -> Optional[Dict[str, Any]]:
+    return _load_answers(dataset_id).get((metric_name, group_col or ""))
+
+
+def _serve_from_context(dataset_id: str, ds: dict, metric_name: str, group_col: Optional[str],
+                        top_n: Optional[int], filters: List[Dict[str, Any]],
+                        routed: dict) -> Optional[Dict[str, Any]]:
+    """Serve totals / single-dim breakdowns / single-dim equality filters straight
+    from the precomputed answers — no live query."""
+    dataset_name = ds.get("dataset_name") or ds.get("name")
+    conf = round(routed.get("score", 0.0), 3)
+
+    if not filters:
+        ctx = _context_answer(dataset_id, metric_name, group_col or "")
+        if ctx is None:
+            return None
+        rows = ctx["rows"]
+        if group_col and top_n:
+            rows = rows[:int(top_n)]
+        return _ctx_response(dataset_id, dataset_name, metric_name, group_col, ctx["columns"], rows, conf)
+
+    # exactly one single-dimension equality filter, no group-by → pick the row
+    if len(filters) == 1 and not group_col:
+        f = filters[0]
+        ctx = _context_answer(dataset_id, metric_name, f["column"])
+        if ctx is None:
+            return None
+        want = _normalize(f.get("value"))
+        for r in ctx["rows"]:
+            if r and _normalize(r[0]) == want:
+                return _ctx_response(dataset_id, dataset_name, metric_name, None,
+                                     [metric_name], [[r[1]]], conf, subtitle=str(f.get("value")))
+    return None
+
+
+def _ctx_response(dataset_id, dataset_name, metric_name, group_col, columns, rows, conf, subtitle=None):
+    title = metric_name + (f" by {group_col}" if group_col else "")
+    if subtitle:
+        title += f" — {subtitle}"
+    return {
+        "ok": True, "dataset_id": dataset_id, "dataset_name": dataset_name,
+        "from_context": True, "route": "context",
+        "columns": columns, "rows": rows,
+        "chartType": "bar" if group_col else "kpi",
+        "xAxis": group_col, "yAxis": metric_name, "title": title,
+        "note": None, "confidence": conf,
     }
 
 

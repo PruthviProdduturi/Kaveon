@@ -10,7 +10,11 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { HexColorPicker } from 'react-colorful';
+import { HexColorPicker, HexColorInput } from 'react-colorful';
+
+// Quick-pick swatches for the text colour popover.
+const COLOR_PRESETS = ['#334155', '#ef4444', '#f59e0b', '#22c55e', '#3b82f6',
+  '#8b5cf6', '#ec4899', '#06b6d4', '#64748b', '#ffffff'];
 import type { DashboardComponentProps } from '../../../types/dashboard';
 import { ConfirmModal } from '../../ConfirmModal';
 import { useTheme } from '../../../contexts/ThemeContext';
@@ -314,8 +318,38 @@ const DashboardTextComponent: React.FC<DashboardComponentProps> = ({ item, isEdi
                   <span style={{ width: 14, height: 14, borderRadius: 3, background: effColor, border: '1px solid rgba(0,0,0,0.15)', display: 'block' }} />
                 </button>
                 {showColor && (
-                  <div style={{ position: 'absolute', top: 26, left: 0, zIndex: 50, boxShadow: '0 4px 16px rgba(0,0,0,0.15)', borderRadius: 8, overflow: 'hidden', border: '1px solid #e2e8f0' }}>
-                    <HexColorPicker color={color || (isDark ? '#e2e8f0' : '#334155')} onChange={setColor} />
+                  <div className="dtc-color-pop" style={{ position: 'absolute', top: 28, left: 0, zIndex: 50, boxShadow: '0 8px 28px rgba(0,0,0,0.20)', borderRadius: 10, border: '1px solid #e2e8f0', background: '#fff', padding: 10, width: 196 }}>
+                    <HexColorPicker color={color || (isDark ? '#e2e8f0' : '#334155')} onChange={setColor} style={{ width: '100%', height: 128 }} />
+                    {/* selected value + hex input */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 9 }}>
+                      <span style={{ width: 20, height: 20, borderRadius: 5, background: effColor, border: '1px solid rgba(0,0,0,0.15)', flexShrink: 0 }} />
+                      <span style={{ fontSize: 12, color: '#94a3b8' }}>#</span>
+                      <HexColorInput
+                        color={color || (isDark ? '#e2e8f0' : '#334155')}
+                        onChange={setColor}
+                        prefixed={false}
+                        style={{ flex: 1, minWidth: 0, fontSize: 11.5, padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: 5, textTransform: 'uppercase', color: '#334155', outline: 'none', letterSpacing: 0.5 }}
+                      />
+                    </div>
+                    {/* one-click presets */}
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 9 }}>
+                      {COLOR_PRESETS.map(c => (
+                        <button
+                          key={c}
+                          onClick={() => setColor(c)}
+                          title={c}
+                          style={{ width: 20, height: 20, borderRadius: 5, background: c, cursor: 'pointer', padding: 0,
+                            border: color.toLowerCase() === c.toLowerCase() ? '2px solid #2563eb' : '1px solid rgba(0,0,0,0.15)' }}
+                        />
+                      ))}
+                    </div>
+                    {/* reset to theme */}
+                    <button
+                      onClick={() => setColor('')}
+                      style={{ marginTop: 9, width: '100%', fontSize: 11, padding: '5px 0', background: color ? '#f1f5f9' : '#e0edff', border: '1px solid ' + (color ? '#e2e8f0' : '#93c5fd'), borderRadius: 5, cursor: 'pointer', color: color ? '#475569' : '#2563eb', fontWeight: 600 }}
+                    >
+                      {color ? 'Auto (theme colour)' : '✓ Auto (theme colour)'}
+                    </button>
                   </div>
                 )}
               </div>
