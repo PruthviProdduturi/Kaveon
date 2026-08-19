@@ -841,9 +841,16 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
             group_col = _match_any_dim(question, dims, d_alias)
     # If "by <metric>" was parsed but didn't match a dimension, also try
     # matching a dimension anywhere in the question (e.g. "top models by ELO")
-    if not group_col and re.search(r"\b(?:by|per)\b", question, re.I):
+    wanted_groupby = bool(re.search(r"\b(?:by|per|across|for each)\b", question, re.I))
+    if not group_col and wanted_groupby:
         group_col = _match_any_dim(question, dims, d_alias)
     limit_n = top_n or limit
+
+    # If the user asked for a breakdown but no dimension matched, note it
+    if wanted_groupby and not group_col:
+        dim_names = [d.get("column_name") or d.get("name") for d in dims if d.get("column_name") or d.get("name")]
+        if dim_names:
+            note = f"No matching breakdown found. Available dimensions: {', '.join(dim_names)}."
 
     # 4) year filter
     year = _extract_year(question)
@@ -886,6 +893,8 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
         served = _serve_from_context(dataset_id, ds, metric_name, group_col, top_n,
                                      filters, routed[0])
         if served is not None:
+            if note:
+                served["note"] = note
             return served
 
     # ── assemble (live query path) ───────────────────────────────────────────

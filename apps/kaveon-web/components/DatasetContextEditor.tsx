@@ -16,7 +16,7 @@ interface DimSpec { display_name?: string; aliases?: string[]; precompute?: bool
 interface Spec { metrics?: Record<string, MetricSpec>; dimensions?: Record<string, DimSpec>; value_aliases?: Record<string, string>; default_metric?: string; }
 interface ContextResp { ok?: boolean; dataset_name?: string; effective?: Spec; }
 
-const card: React.CSSProperties = { flexShrink: 0, border: "1px solid var(--border)", borderRadius: 12, padding: 20, marginTop: 16 };
+const card: React.CSSProperties = { flexShrink: 0, border: "1px solid var(--border)", borderRadius: 12, padding: "16px 20px" };
 const h3: React.CSSProperties = { fontSize: 13, fontWeight: 700, color: "var(--text-muted)", margin: 0, textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: 8 };
 const sub: React.CSSProperties = { fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", margin: "18px 0 8px" };
 const label: React.CSSProperties = { fontSize: 11, color: "var(--text-muted)", minWidth: 70 };
@@ -67,13 +67,45 @@ export function DatasetContextEditor({ datasetId }: { datasetId?: string }) {
   const load = useCallback(async () => {
     if (!datasetId) return;
     try {
+      // Load context spec
       const r = await msalFetch(`/api/v1/datasets/${datasetId}/dlm/context`);
       if (!r.ok) { setReady(false); return; }
       const j: ContextResp = await r.json();
       const eff = j.effective || {};
       setName(j.dataset_name || "");
-      setMetrics(JSON.parse(JSON.stringify(eff.metrics || {})));
-      setDims(JSON.parse(JSON.stringify(eff.dimensions || {})));
+
+      let mSpec = JSON.parse(JSON.stringify(eff.metrics || {})) as Record<string, MetricSpec>;
+      let dSpec = JSON.parse(JSON.stringify(eff.dimensions || {})) as Record<string, DimSpec>;
+
+      // If the spec is empty, pre-populate from the DLM manifest
+      if (Object.keys(mSpec).length === 0 || Object.keys(dSpec).length === 0) {
+        try {
+          const dlmR = await msalFetch(`/api/v1/datasets/${datasetId}/dlm`);
+          if (dlmR.ok) {
+            const dlm = await dlmR.json();
+            const manifest = dlm.manifest || {};
+            if (Object.keys(mSpec).length === 0 && manifest.metrics) {
+              for (const m of manifest.metrics) {
+                const n = m.name || m.metric_name;
+                const expr = ((m.expression || "") as string).toLowerCase();
+                // COUNT DISTINCT / AVG / MAX / MIN are not additive
+                const isAdditive = !/(count_distinct|count\s*\(\s*distinct|avg\(|max\(|min\(|active|unique|distinct)/i.test(expr + " " + (n || ""));
+                if (n) mSpec[n] = { display_name: n, aliases: [], additive: isAdditive, default: false, hidden: false };
+              }
+            }
+            if (Object.keys(dSpec).length === 0 && manifest.columns) {
+              for (const c of manifest.columns) {
+                if (c.is_dimension && c.name) {
+                  dSpec[c.name] = { display_name: c.name, aliases: [], precompute: true, top_n: 500, hidden: false };
+                }
+              }
+            }
+          }
+        } catch { /* DLM not available — show empty */ }
+      }
+
+      setMetrics(mSpec);
+      setDims(dSpec);
       setValiases(Object.entries(eff.value_aliases || {}));
       setDflt(eff.default_metric || "");
       setReady(true);
@@ -116,47 +148,47 @@ export function DatasetContextEditor({ datasetId }: { datasetId?: string }) {
   return (
     <div className="card" style={card}>
       <div style={{ display: "flex", alignItems: "center", cursor: "pointer" }} onClick={() => setOpen((o) => !o)}>
-        <h3 style={h3}><i className="fas fa-sliders" style={{ fontSize: 12, color: "var(--accent)", opacity: 0.8 }} /> Curate context</h3>
-        <span style={{ marginLeft: 10, fontSize: 12, color: "var(--text-muted)" }}>aliases · breakdowns · default metric</span>
-        <i className={`fas fa-chevron-${open ? "up" : "down"}`} style={{ marginLeft: "auto", fontSize: 12, color: "var(--text-muted)" }} />
+        <i className="fas fa-sliders" style={{ fontSize: 12, color: "var(--accent)", marginRight: 8 }} />
+        <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Customize</span>
+        <span style={{ marginLeft: 10, fontSize: 12, color: "var(--text-muted)" }}>metric aliases, breakdowns, value mappings</span>
+        <i className={`fas fa-chevron-${open ? "up" : "down"}`} style={{ marginLeft: "auto", fontSize: 10, color: "var(--text-muted)" }} />
       </div>
 
       {open && (
         <>
-          <div style={{ fontSize: 12.5, color: "var(--text-secondary)", marginTop: 12 }}>
-            The DLM suggested these defaults from your schema and data. Edit what it should understand for <b>{name || "this dataset"}</b>.
+          <div style={{ fontSize: 12.5, color: "var(--text-muted)", marginTop: 10, marginBottom: 4 }}>
+            Teach the query engine how to interpret questions about <b>{name || "this dataset"}</b>.
           </div>
 
-          {/* Metrics */}
-          <div style={sub}>Metrics</div>
+          {/* Metrics + Dimensions side by side */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginTop: 12 }}>
+          <div>
+          <div style={sub}>Metrics ({Object.keys(metrics).length})</div>
           {Object.keys(metrics).map((k) => {
             const m = metrics[k];
             return (
               <div key={k} style={rowCard}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                  <b style={{ fontSize: 13 }}>{k}</b>
-                  <input style={{ ...input, width: 150 }} value={m.display_name ?? k} onChange={(e) => patchMetric(k, { display_name: e.target.value })} placeholder="display name" />
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <b style={{ fontSize: 13, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{k}</b>
                   <Toggle on={m.additive !== false} onClick={() => patchMetric(k, { additive: !(m.additive !== false) })}>additive</Toggle>
-                  <label style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "var(--text-muted)", cursor: "pointer" }}>
-                    <input type="radio" name="default_metric" checked={dflt === k} onChange={() => setDflt(k)} /> default
-                  </label>
                   <Toggle on={!m.hidden} onClick={() => patchMetric(k, { hidden: !m.hidden })}>{m.hidden ? "hidden" : "visible"}</Toggle>
                 </div>
-                <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                   <span style={label}>aliases</span>
                   <Aliases items={m.aliases || []} onChange={(v) => patchMetric(k, { aliases: v })} />
                 </div>
               </div>
             );
           })}
+          </div>
 
-          {/* Dimensions */}
-          <div style={sub}>Dimensions (breakdowns)</div>
+          <div>
+          <div style={sub}>Dimensions ({Object.keys(dims).length})</div>
           {Object.keys(dims).map((k) => {
             const d = dims[k];
             return (
               <div key={k} style={rowCard}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                   <b style={{ fontSize: 13 }}>{k}</b>
                   <input style={{ ...input, width: 150 }} value={d.display_name ?? k} onChange={(e) => patchDim(k, { display_name: e.target.value })} placeholder="display name" />
                   <Toggle on={d.precompute !== false} onClick={() => patchDim(k, { precompute: !(d.precompute !== false) })}>precompute</Toggle>
@@ -173,6 +205,8 @@ export function DatasetContextEditor({ datasetId }: { datasetId?: string }) {
               </div>
             );
           })}
+          </div>
+          </div>
 
           {/* Value aliases */}
           <div style={sub}>Value aliases <span style={{ textTransform: "none", fontWeight: 400 }}>— map a phrase to a real value (e.g. <code>smb → Team</code>)</span></div>
