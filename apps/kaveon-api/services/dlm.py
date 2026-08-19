@@ -228,7 +228,8 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
     answers = _precompute_answers(str(dataset_id), database, schema,
                                   ds.get("table_name") or ds.get("fact_table"),
                                   columns, dimensions, metrics)
-    _ANSWER_CACHE.pop(str(dataset_id), None)  # invalidate in-memory cache after regen
+    _ANSWER_CACHE.pop(str(dataset_id), None)  # invalidate in-memory caches after regen
+    _RANGE_CACHE.pop(str(dataset_id), None)
 
     # record generation timing (+ what drove it) into the stored stats rollup so
     # the dataset page can be transparent about how long it took and why.
@@ -821,6 +822,15 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
     # 4) year filter
     year = _extract_year(question)
 
+    # 4a) if the requested year spans the dataset's ENTIRE date range, the filter
+    #     is a no-op — e.g. a single-year dataset (2026-only) asked "... in 2026".
+    #     Drop it (zero DB trip via the cached range) so the answer serves from
+    #     precomputed context instead of a full live scan.
+    if year:
+        _dlo, _dhi = _dataset_year_bounds(dataset_id)
+        if _dlo is not None and _dhi is not None and _dlo == _dhi == year:
+            year = None
+
     # 4b) if the requested year is beyond where this metric actually has data
     #     (for these entity filters), answer with the latest available year and
     #     say so, instead of returning an empty result for a future/missing year.
@@ -944,6 +954,38 @@ def _context_answer(dataset_id: str, metric_name: str, group_col: str) -> Option
     return _load_answers(dataset_id).get((metric_name, group_col or ""))
 
 
+# Per-dataset (min_year, max_year) from the precomputed stats_rollup.date_range —
+# warmed once, invalidated on regen. Lets ask() tell whether a requested year
+# spans the whole dataset (a no-op filter) with ZERO database trip.
+_RANGE_CACHE: Dict[str, tuple] = {}
+
+
+def _dataset_year_bounds(dataset_id: str) -> tuple:
+    """(min_year, max_year) for the dataset's date column, read from the compiled
+    stats_rollup.date_range — no live query. (None, None) when unknown."""
+    if dataset_id in _RANGE_CACHE:
+        return _RANGE_CACHE[dataset_id]
+    ensure_tables()
+    res = meta.query("SELECT stats_rollup FROM dlm_artifact WHERE dataset_id = @param0", [dataset_id])
+    lo = hi = None
+    rows = res.get("rows_objects", res.get("rows", []))
+    if rows:
+        r = rows[0]
+        stats = _loads(r.get("stats_rollup") if isinstance(r, dict) else r[0]) or {}
+        dr = stats.get("date_range") or {}
+
+        def _yr(v):
+            if v is None:
+                return None
+            try:
+                return int(v) if isinstance(v, int) else int(str(v)[:4])
+            except Exception:
+                return None
+        lo, hi = _yr(dr.get("min")), _yr(dr.get("max"))
+    _RANGE_CACHE[dataset_id] = (lo, hi)
+    return (lo, hi)
+
+
 def _serve_from_context(dataset_id: str, ds: dict, metric_name: str, group_col: Optional[str],
                         top_n: Optional[int], filters: List[Dict[str, Any]],
                         routed: dict) -> Optional[Dict[str, Any]]:
@@ -1062,18 +1104,27 @@ def _resolve_entity_filters(dataset_id: str, question: str) -> List[Dict[str, An
     return out
 
 
+# Generic quantifier words that must not sway metric matching. They appear in
+# metric names ("Total Queries") and questions ("total number of users") alike,
+# so counting them makes "users" tie with "total" and the wrong metric win.
+_GENERIC_METRIC_TOKENS = {"sum", "avg", "average", "mean", "count", "total",
+                         "number", "num", "amount", "overall", "all", "of", "the"}
+
+
 def _match_metric(qset: set, metrics: List[dict]) -> Optional[dict]:
     """Pick the metric whose name/expression/synonym tokens best overlap the
-    question. Falls back to the first metric when nothing matches."""
+    question, ignoring generic quantifier words so a distinctive term like
+    "users" wins over a generic one like "total". Falls back to the first metric
+    when nothing distinctive matches."""
     if not metrics:
         return None
+    q = qset - _GENERIC_METRIC_TOKENS
     best, best_score = None, 0
     for m in metrics:
         name = m.get("name") or m.get("metric_name") or ""
         expr = m.get("expression") or ""
-        toks = set(_tokenize(name)) | set(_tokenize(expr)) | set(_synonyms_for(name))
-        toks.discard("sum"); toks.discard("avg"); toks.discard("count")
-        score = len(qset & toks)
+        toks = (set(_tokenize(name)) | set(_tokenize(expr)) | set(_synonyms_for(name))) - _GENERIC_METRIC_TOKENS
+        score = len(q & toks)
         if score > best_score:
             best, best_score = m, score
     return best or metrics[0]
