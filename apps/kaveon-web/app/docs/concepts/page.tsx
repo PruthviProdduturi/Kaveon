@@ -50,8 +50,10 @@ export default function ConceptsDocs() {
 
       <h2>Ask, don&rsquo;t query</h2>
       <p>
-        The home page turns plain-English questions into charts with a deterministic, in-browser parser — no LLM, no
-        latency. It picks the best dataset, matches your phrasing to a query pattern, and renders a chart. See{" "}
+        The home page turns plain-English questions into charts with <strong>no hosted LLM</strong>. The primary engine
+        is the <strong>DLM (Data Language Model)</strong> — a compiled per-dataset context artifact that answers the
+        common questions from precomputed context with <strong>no database scan</strong> (badged &ldquo;From
+        context&rdquo; vs &ldquo;Live query&rdquo;); a deterministic in-browser parser is the fallback. See{" "}
         <a href="/docs/nl-to-sql">AI · NL→SQL</a>.
       </p>
 
