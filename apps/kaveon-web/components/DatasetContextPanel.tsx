@@ -3,13 +3,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { msalFetch } from "../utils/msalFetch";
 
-/**
- * Dataset-page "Context" panel — the compiled DLM for this dataset: when it was
- * last generated, how long that took (and why), what got indexed, and a button
- * to regenerate. Transparent about the one-time generation cost so the instant
- * answer-from-context tradeoff is clear.
- */
-
 interface DLM {
   status?: string;
   built_at?: string;
@@ -71,70 +64,45 @@ export function DatasetContextPanel({ datasetId }: { datasetId?: string }) {
   const cols = dlm?.manifest?.columns ?? [];
   const dims = cols.filter((c) => c.is_dimension).map((c) => c.name).filter(Boolean) as string[];
   const metrics = (dlm?.manifest?.metrics ?? []).map((m) => m.name).filter(Boolean) as string[];
+  const hasContext = state === "ready" || state === "generating";
 
-  const card: React.CSSProperties = { flexShrink: 0, border: "1px solid var(--border)", borderRadius: 12, padding: 20 };
-  const h3: React.CSSProperties = { fontSize: 13, fontWeight: 700, color: "var(--text-muted)", margin: 0, textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: 8 };
-  const chip: React.CSSProperties = { display: "inline-block", padding: "2px 9px", borderRadius: 999, marginRight: 5, marginBottom: 5, background: "rgba(var(--accent-rgb),0.08)", color: "var(--text-primary)", fontSize: 12 };
-  const stat = (label: string, value: React.ReactNode) => (
-    <div><div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</div><div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)", marginTop: 2 }}>{value}</div></div>
-  );
-
-  const genBtn = (
-    <button
-      onClick={generate}
-      disabled={state === "generating" || state === "loading"}
-      className="card"
-      style={{ marginLeft: "auto", padding: "6px 14px", background: "var(--accent)", color: "#fff", border: "none", borderRadius: 8, cursor: state === "generating" ? "default" : "pointer", fontSize: 12.5, fontWeight: 600, opacity: state === "generating" ? 0.7 : 1, display: "flex", alignItems: "center", gap: 6 }}
-    >
-      <i className={`fas ${state === "generating" ? "fa-spinner fa-spin" : "fa-bolt"}`} style={{ fontSize: 11 }} />
-      {state === "generating" ? "Generating…" : dlm ? "Regenerate context" : "Generate context"}
-    </button>
-  );
+  const chip: React.CSSProperties = { display: "inline-block", padding: "3px 10px", borderRadius: 6, marginRight: 6, marginBottom: 6, background: "rgba(var(--accent-rgb),0.08)", color: "var(--text-primary)", fontSize: 12, fontWeight: 500 };
 
   return (
-    <div className="card" style={card}>
-      <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
-        <h3 style={h3}><i className="fas fa-bolt" style={{ fontSize: 12, color: "var(--accent)", opacity: 0.8 }} /> Context (DLM)</h3>
-        {genBtn}
+    <div className="card" style={{ flexShrink: 0, border: "1px solid var(--border)", borderRadius: 12, padding: "16px 20px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <i className="fas fa-bolt" style={{ fontSize: 12, color: "var(--accent)" }} />
+        <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>
+          Context
+        </span>
+        {hasContext && dlm && (
+          <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 400 }}>
+            Built {ago(gen?.built_at || dlm.built_at)} · {compact(dlm.values_indexed)} values · {compact(gen?.answers_precomputed)} precomputed answers
+          </span>
+        )}
+        <button
+          onClick={generate}
+          disabled={state === "generating" || state === "loading"}
+          style={{ marginLeft: "auto", padding: "5px 12px", background: "var(--accent)", color: "#fff", border: "none", borderRadius: 7, cursor: state === "generating" ? "default" : "pointer", fontSize: 12, fontWeight: 600, opacity: state === "generating" ? 0.7 : 1, display: "flex", alignItems: "center", gap: 5 }}
+        >
+          <i className={`fas ${state === "generating" ? "fa-spinner fa-spin" : "fa-bolt"}`} style={{ fontSize: 10 }} />
+          {state === "generating" ? "Generating…" : hasContext ? "Regenerate" : "Generate"}
+        </button>
       </div>
 
-      {state === "loading" && <div style={{ fontSize: 13, color: "var(--text-muted)" }}>Loading…</div>}
+      {state === "loading" && <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 10 }}>Loading…</div>}
 
-      {(state === "none") && (
-        <div style={{ fontSize: 13, color: "var(--text-muted)" }}>
-          No context compiled yet. Generate it to answer questions about this dataset instantly, with no database scan.
+      {state === "none" && (
+        <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 10 }}>
+          No context yet. Generate to enable instant answers from precomputed results — no live database query needed.
         </div>
       )}
 
-      {(state === "ready" || state === "generating") && dlm && (
-        <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 14 }}>
-            {stat("Last generated", ago(gen?.built_at || dlm.built_at))}
-            {stat("Took", fmtMs(gen?.duration_ms))}
-            {stat("Indexed values", compact(dlm.values_indexed))}
-            {stat("Precomputed answers", compact(gen?.answers_precomputed))}
-          </div>
-
-          <div style={{ fontSize: 12.5, color: "var(--text-secondary)", background: "rgba(var(--accent-rgb),0.05)", border: "1px solid var(--border)", borderRadius: 8, padding: "9px 12px", marginBottom: 14 }}>
-            <i className="fas fa-circle-info" style={{ color: "var(--accent)", marginRight: 7 }} />
-            Generation scanned {compact(gen?.rows_scanned)} rows across {gen?.scans ?? "—"} passes ({fmtMs(gen?.duration_ms)}).
-            That&apos;s a <b>one-time cost</b> — every matching question afterwards is answered <b>instantly from context, with no database scan</b>.
-            It runs longer here because of the shared Postgres tier; a dedicated context tier makes it fast.
-          </div>
-
-          {dims.length > 0 && (
-            <div style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>Indexed dimensions ({dims.length})</div>
-              <div>{dims.map((d) => <span key={d} style={chip}>{d}</span>)}</div>
-            </div>
-          )}
-          {metrics.length > 0 && (
-            <div>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>Precomputed metrics ({metrics.length})</div>
-              <div>{metrics.map((m) => <span key={m} style={chip}>{m}</span>)}</div>
-            </div>
-          )}
-        </>
+      {hasContext && dlm && (dims.length > 0 || metrics.length > 0) && (
+        <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 4 }}>
+          {dims.map((d) => <span key={d} style={chip}>{d}</span>)}
+          {metrics.map((m) => <span key={m} style={{ ...chip, background: "rgba(var(--success-rgb, 34,197,94),0.08)", color: "var(--success)" }}>{m}</span>)}
+        </div>
       )}
     </div>
   );

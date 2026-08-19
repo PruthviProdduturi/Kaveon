@@ -981,201 +981,22 @@ export default function DatasetDetailPage() {
 
       {!isLoading && !error && dataset && (
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", gap: 12, minHeight: 0 }}>
+        <style>{`
+          details.ds-section summary::-webkit-details-marker { display: none; }
+          details.ds-section[open] .ds-chevron { transform: rotate(180deg); }
+          details.ds-section summary:hover { background: var(--bg-hover); }
+        `}</style>
+
+        {/* ── Context — top ── */}
         <DatasetContextPanel datasetId={datasetId} />
         <DatasetContextEditor datasetId={datasetId} />
-        <div className="card" style={{ flexShrink: 0, border: "1px solid var(--border)", borderRadius: 12, padding: "20px" }}>
-          {/* Key Info and Metrics */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, flexShrink: 0, marginBottom: 12 }}>
-            {/* Dataset Info */}
-            <div style={{ padding: 0 }}>
-              <h3 style={{ fontSize: 13, fontWeight: 700, color: "var(--text-muted)", margin: "0 0 14px 0", textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: 8 }}>
-                <i className="fas fa-database" style={{ fontSize: 12, color: "var(--accent)", opacity: 0.7 }} />
-                Connection
-              </h3>
-              <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
-                <thead>
-                  <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                    <th align="left" style={{ padding: "0 12px 8px 0", color: "var(--text-muted)", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Property</th>
-                    <th align="left" style={{ padding: "0 0 8px 0", color: "var(--text-muted)", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Value</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[
-                    { label: "Database", value: dataset.database_name || "(default)" },
-                    { label: "Schema", value: dataset.schema_name || "(default)" },
-                    { label: "Table", value: dataset.table_name || (dataset.sql_text ? "Virtual (SQL)" : "(none)") },
-                    { label: "Date column", value: dataset.date_column || "(none)" },
-                  ].map(({ label, value }, idx) => (
-                    <tr key={label} style={{ borderBottom: idx < 3 ? "1px solid var(--border)" : "none" }}>
-                      <td style={{ padding: "10px 12px 10px 0", fontWeight: 500, fontSize: 13, color: "var(--text-primary)" }}>{label}</td>
-                      <td style={{ padding: "10px 0", fontSize: 13, color: "var(--text-secondary)", fontFamily: "var(--font-mono, monospace)" }}>{value}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
 
-            {/* Metrics */}
-            <div style={{ padding: 0 }}>
-              <h3 style={{ fontSize: 13, fontWeight: 700, color: "var(--text-muted)", margin: "0 0 14px 0", textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: 8 }}>
-                <i className="fas fa-calculator" style={{ fontSize: 12, color: "var(--accent)", opacity: 0.7 }} />
-                Metrics {dataset.metrics && dataset.metrics.length > 0 && <span style={{ fontWeight: 500, fontSize: 12 }}>({dataset.metrics.length})</span>}
-              </h3>
-              {dataset.metrics && dataset.metrics.length > 0 ? (
-                <div style={{ overflowY: "auto", maxHeight: 320 }}>
-                  <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
-                    <thead>
-                      <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                        <th align="left" style={{ padding: "0 12px 8px 0", color: "var(--text-muted)", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Name</th>
-                        <th align="left" style={{ padding: "0 12px 8px 0", color: "var(--text-muted)", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Type</th>
-                        <th align="left" style={{ padding: "0 0 8px 0", color: "var(--text-muted)", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Expression</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {dataset.metrics.map((m, idx) => (
-                        <tr key={`${m.name}-${idx}`} style={{ borderBottom: idx < dataset.metrics!.length - 1 ? "1px solid var(--border)" : "none" }}>
-                          <td style={{ padding: "10px 12px 10px 0", fontWeight: 500, fontSize: 13, color: "var(--text-primary)", verticalAlign: "top" }}>{m.name}</td>
-                          <td style={{ padding: "10px 12px 10px 0", fontSize: 11, color: "var(--success)", fontWeight: 600, textTransform: "uppercase", verticalAlign: "top" }}>{m.metric_type}</td>
-                          <td style={{ padding: "10px 0", fontFamily: "monospace", fontSize: 12, color: "var(--text-secondary)", verticalAlign: "top" }}>{m.expression}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <p style={{ margin: 0, fontSize: 13, color: "var(--text-muted)" }}>No metrics defined</p>
-              )}
-            </div>
+        {/* ── Data Preview ── */}
+        <div className="card" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 20px", minHeight: 300, marginBottom: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)", marginBottom: 10, flexShrink: 0, display: "flex", alignItems: "center", gap: 8 }}>
+            <i className="fas fa-table" style={{ fontSize: 12, color: "var(--accent)", opacity: 0.7 }} />
+            Data Preview <span style={{ fontWeight: 400, color: "var(--text-muted)", fontSize: 12 }}>(top 100 rows)</span>
           </div>
-
-          {/* Schema and Dimensions - Collapsible */}
-          <style>{`
-            details.schema-card summary::-webkit-details-marker { display: none; }
-            details.schema-card[open] .schema-chevron { transform: rotate(180deg); }
-            details.schema-card summary:hover { background: var(--bg-hover); }
-            details.schema-card summary:hover .schema-chevron-box { border-color: var(--accent); color: var(--accent); }
-          `}</style>
-          <details className="schema-card" style={{ flexShrink: 0, borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 4 }}>
-            <summary style={{
-              padding: "14px 16px",
-              cursor: "pointer",
-              listStyle: "none",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              fontWeight: 700,
-              fontSize: 15,
-              color: "var(--text-primary)",
-              userSelect: "none",
-              letterSpacing: "-0.01em",
-              borderRadius: 10,
-              transition: "background 0.15s",
-            }}>
-              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <i className="fas fa-table" style={{ fontSize: 13, color: "var(--accent)", opacity: 0.7 }} />
-                Schema & Dimensions
-                <span style={{ color: "var(--text-muted)", fontWeight: 500, fontSize: 13 }}>({schemaColumns?.length || 0} columns, {dataset.dimensions?.length || 0} joins)</span>
-              </span>
-              <div className="schema-chevron-box" style={{
-                width: 26, height: 26, borderRadius: 6,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                background: "var(--bg-primary)", border: "1px solid var(--border)",
-                transition: "border-color 0.15s, color 0.15s",
-              }}>
-                <i className="fas fa-chevron-down schema-chevron" style={{ fontSize: 10, color: "inherit", transition: "transform 0.2s" }} />
-              </div>
-            </summary>
-
-            <div style={{ borderTop: "1px solid var(--border)", padding: 16 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-                {/* Schema */}
-                <div>
-                  <h4 style={{ fontSize: 13, fontWeight: 600, color: "var(--text-muted)", margin: "0 0 10px 0", textTransform: "uppercase", letterSpacing: "0.05em" }}>Schema</h4>
-                  {schemaColumns && schemaColumns.length > 0 ? (
-                    <div style={{ overflowY: "auto", maxHeight: 320 }}>
-                      <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
-                        <thead>
-                          <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                            <th align="left" style={{ padding: "0 12px 8px 0", color: "var(--text-muted)", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Column</th>
-                            <th align="left" style={{ padding: "0 12px 8px 0", color: "var(--text-muted)", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Type</th>
-                            <th align="left" style={{ padding: "0 0 8px 0", color: "var(--text-muted)", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Role</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {schemaColumns.map((col, idx) => {
-                            const label = col.column_name;
-                            let role = "";
-                            let roleColor = "var(--text-muted)";
-                            if (col.is_dimension) {
-                              role = "Dimension";
-                              roleColor = "var(--accent)";
-                            } else if (col.is_metric) {
-                              role = "Metric";
-                              roleColor = "var(--success)";
-                            } else if ((col.semantic_type || "").toLowerCase() === "time") {
-                              role = "Time";
-                              roleColor = "#8b5cf6";
-                            }
-                            return (
-                              <tr key={`${col.column_name}-${idx}`} style={{ borderBottom: idx < schemaColumns.length - 1 ? "1px solid var(--border)" : "none" }}>
-                                <td style={{ padding: "10px 12px 10px 0", fontWeight: 500, fontSize: 13, color: "var(--text-primary)", verticalAlign: "top" }}>{label}</td>
-                                <td style={{ padding: "10px 12px 10px 0", fontSize: 12, color: "var(--text-secondary)", verticalAlign: "top" }}>{col.data_type}</td>
-                                <td style={{ padding: "10px 0", fontSize: 11, fontWeight: 600, color: roleColor, textTransform: "uppercase", verticalAlign: "top" }}>{role}</td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <p style={{ margin: 0, fontSize: 13, color: "var(--text-muted)" }}>No columns</p>
-                  )}
-                </div>
-
-                {/* Dimensions */}
-                <div>
-                  <h4 style={{ fontSize: 13, fontWeight: 600, color: "var(--text-muted)", margin: "0 0 10px 0", textTransform: "uppercase", letterSpacing: "0.05em" }}>Dimensions</h4>
-                  {dataset.dimensions && dataset.dimensions.length > 0 ? (
-                    <div style={{ overflowY: "auto", maxHeight: 320 }}>
-                      <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
-                        <thead>
-                          <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                            <th align="left" style={{ padding: "0 12px 8px 0", color: "var(--text-muted)", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Table</th>
-                            <th align="left" style={{ padding: "0 0 8px 0", color: "var(--text-muted)", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Join</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {dataset.dimensions.map((dim, idx) => {
-                            const parsed = parseJoinCondition(dim.join_condition || "");
-                            const tableDisplay = parsed.dimTable ? (parsed.dimSchema ? `${parsed.dimSchema}.${parsed.dimTable}` : parsed.dimTable) : dim.dimension_table;
-                            let joinDisplay = dim.join_condition || "";
-                            if (parsed.factTable && parsed.factKey && parsed.dimTable && parsed.dimKey) {
-                              joinDisplay = `${parsed.factTable}.${parsed.factKey} = ${parsed.dimTable}.${parsed.dimKey}`;
-                            }
-                            return (
-                              <tr key={`${dim.dimension_table}-${idx}`} style={{ borderBottom: idx < (dataset.dimensions?.length ?? 0) - 1 ? "1px solid var(--border)" : "none" }}>
-                                <td style={{ padding: "10px 12px 10px 0", fontWeight: 500, fontSize: 13, verticalAlign: "top" }}>{tableDisplay}</td>
-                                <td style={{ padding: "10px 0", fontSize: 12, fontFamily: "monospace", color: "var(--text-muted)", verticalAlign: "top" }} title={dim.join_condition}>{joinDisplay}</td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <p style={{ margin: 0, fontSize: 13, color: "var(--text-muted)" }}>No dimensions</p>
-                  )}
-                </div>
-              </div>
-            </div>
-          </details>
-        </div>
-
-        {/* Data Preview — separate card */}
-          <div className="card" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 20px", minHeight: 0 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 8, flexShrink: 0 }}>
-              Data Preview <span style={{ fontWeight: 400 }}>(top 100 rows)</span>
-            </div>
             {isLoadingPreview && <p className="muted">Loading preview…</p>}
             {previewError && !isLoadingPreview && (
               <p className="page-empty-body">{previewError}</p>
@@ -1224,6 +1045,139 @@ export default function DatasetDetailPage() {
               </div>
             )}
           </div>
+
+        {/* ── Detail panels below the data ── */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, flexShrink: 0, paddingBottom: 16 }}>
+
+        {/* Connection & Metrics */}
+        <details className="ds-section" style={{ border: "1px solid var(--border)", borderRadius: 12, background: "var(--bg-surface)" }}>
+          <summary style={{ padding: "12px 16px", cursor: "pointer", listStyle: "none", display: "flex", alignItems: "center", justifyContent: "space-between", fontWeight: 600, fontSize: 13, color: "var(--text-primary)", userSelect: "none", borderRadius: 12, transition: "background 0.15s" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <i className="fas fa-database" style={{ fontSize: 12, color: "var(--accent)", opacity: 0.7 }} />
+              Connection & Metrics
+              <span style={{ fontWeight: 400, color: "var(--text-muted)", fontSize: 12 }}>
+                {dataset.database_name || "default"} · {dataset.schema_name || "default"} · {dataset.table_name}{dataset.metrics?.length ? ` · ${dataset.metrics.length} metrics` : ""}
+              </span>
+            </span>
+            <i className="fas fa-chevron-down ds-chevron" style={{ fontSize: 10, color: "var(--text-muted)", transition: "transform 0.2s" }} />
+          </summary>
+          <div style={{ padding: "16px", borderTop: "1px solid var(--border)" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+              <div>
+                <h4 style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", margin: "0 0 12px 0", textTransform: "uppercase", letterSpacing: "0.05em" }}>Connection</h4>
+                <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
+                  <tbody>
+                    {[
+                      { label: "Database", value: dataset.database_name || "(default)" },
+                      { label: "Schema", value: dataset.schema_name || "(default)" },
+                      { label: "Table", value: dataset.table_name || (dataset.sql_text ? "Virtual (SQL)" : "(none)") },
+                      { label: "Date column", value: dataset.date_column || "(none)" },
+                    ].map(({ label, value }, idx) => (
+                      <tr key={label} style={{ borderBottom: idx < 3 ? "1px solid var(--border)" : "none" }}>
+                        <td style={{ padding: "8px 12px 8px 0", fontWeight: 500, fontSize: 13, color: "var(--text-primary)" }}>{label}</td>
+                        <td style={{ padding: "8px 0", fontSize: 13, color: "var(--text-secondary)", fontFamily: "var(--font-mono, monospace)" }}>{value}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div>
+                <h4 style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", margin: "0 0 12px 0", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                  Metrics {dataset.metrics && dataset.metrics.length > 0 && `(${dataset.metrics.length})`}
+                </h4>
+                {dataset.metrics && dataset.metrics.length > 0 ? (
+                  <div style={{ overflowY: "auto", maxHeight: 280 }}>
+                    <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
+                      <tbody>
+                        {dataset.metrics.map((m, idx) => (
+                          <tr key={`${m.name}-${idx}`} style={{ borderBottom: idx < dataset.metrics!.length - 1 ? "1px solid var(--border)" : "none" }}>
+                            <td style={{ padding: "8px 12px 8px 0", fontWeight: 500, fontSize: 13, color: "var(--text-primary)" }}>{m.name}</td>
+                            <td style={{ padding: "8px 8px 8px 0", fontSize: 11, color: "var(--success)", fontWeight: 600, textTransform: "uppercase" }}>{m.metric_type}</td>
+                            <td style={{ padding: "8px 0", fontFamily: "monospace", fontSize: 12, color: "var(--text-secondary)" }}>{m.expression}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p style={{ margin: 0, fontSize: 13, color: "var(--text-muted)" }}>No metrics defined</p>
+                )}
+              </div>
+            </div>
+          </div>
+        </details>
+
+        {/* Schema & Dimensions */}
+        <details className="ds-section" style={{ border: "1px solid var(--border)", borderRadius: 12, background: "var(--bg-surface)" }}>
+          <summary style={{ padding: "12px 16px", cursor: "pointer", listStyle: "none", display: "flex", alignItems: "center", justifyContent: "space-between", fontWeight: 600, fontSize: 13, color: "var(--text-primary)", userSelect: "none", borderRadius: 12, transition: "background 0.15s" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <i className="fas fa-columns" style={{ fontSize: 12, color: "var(--accent)", opacity: 0.7 }} />
+              Schema & Dimensions
+              <span style={{ fontWeight: 400, color: "var(--text-muted)", fontSize: 12 }}>({schemaColumns?.length || 0} columns, {dataset.dimensions?.length || 0} joins)</span>
+            </span>
+            <i className="fas fa-chevron-down ds-chevron" style={{ fontSize: 10, color: "var(--text-muted)", transition: "transform 0.2s" }} />
+          </summary>
+          <div style={{ padding: "16px", borderTop: "1px solid var(--border)" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+              <div>
+                <h4 style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", margin: "0 0 10px 0", textTransform: "uppercase", letterSpacing: "0.05em" }}>Columns</h4>
+                {schemaColumns && schemaColumns.length > 0 ? (
+                  <div style={{ overflowY: "auto", maxHeight: 320 }}>
+                    <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
+                      <tbody>
+                        {schemaColumns.map((col, idx) => {
+                          let role = "";
+                          let roleColor = "var(--text-muted)";
+                          if (col.is_dimension) { role = "DIM"; roleColor = "var(--accent)"; }
+                          else if (col.is_metric) { role = "METRIC"; roleColor = "var(--success)"; }
+                          else if ((col.semantic_type || "").toLowerCase() === "time") { role = "TIME"; roleColor = "#8b5cf6"; }
+                          return (
+                            <tr key={`${col.column_name}-${idx}`} style={{ borderBottom: idx < schemaColumns.length - 1 ? "1px solid var(--border)" : "none" }}>
+                              <td style={{ padding: "8px 12px 8px 0", fontWeight: 500, fontSize: 13, color: "var(--text-primary)" }}>{col.column_name}</td>
+                              <td style={{ padding: "8px 8px 8px 0", fontSize: 12, color: "var(--text-secondary)" }}>{col.data_type}</td>
+                              <td style={{ padding: "8px 0", fontSize: 10, fontWeight: 700, color: roleColor, textTransform: "uppercase" }}>{role}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p style={{ margin: 0, fontSize: 13, color: "var(--text-muted)" }}>No columns</p>
+                )}
+              </div>
+              <div>
+                <h4 style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", margin: "0 0 10px 0", textTransform: "uppercase", letterSpacing: "0.05em" }}>Joins</h4>
+                {dataset.dimensions && dataset.dimensions.length > 0 ? (
+                  <div style={{ overflowY: "auto", maxHeight: 320 }}>
+                    <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
+                      <tbody>
+                        {dataset.dimensions.map((dim, idx) => {
+                          const parsed = parseJoinCondition(dim.join_condition || "");
+                          const tableDisplay = parsed.dimTable ? (parsed.dimSchema ? `${parsed.dimSchema}.${parsed.dimTable}` : parsed.dimTable) : dim.dimension_table;
+                          let joinDisplay = dim.join_condition || "";
+                          if (parsed.factTable && parsed.factKey && parsed.dimTable && parsed.dimKey) {
+                            joinDisplay = `${parsed.factTable}.${parsed.factKey} = ${parsed.dimTable}.${parsed.dimKey}`;
+                          }
+                          return (
+                            <tr key={`${dim.dimension_table}-${idx}`} style={{ borderBottom: idx < (dataset.dimensions?.length ?? 0) - 1 ? "1px solid var(--border)" : "none" }}>
+                              <td style={{ padding: "8px 12px 8px 0", fontWeight: 500, fontSize: 13 }}>{tableDisplay}</td>
+                              <td style={{ padding: "8px 0", fontSize: 12, fontFamily: "monospace", color: "var(--text-muted)" }} title={dim.join_condition}>{joinDisplay}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p style={{ margin: 0, fontSize: 13, color: "var(--text-muted)" }}>No dimension joins</p>
+                )}
+              </div>
+            </div>
+          </div>
+        </details>
+
+        </div>
         </div>
       )}
     </div>
