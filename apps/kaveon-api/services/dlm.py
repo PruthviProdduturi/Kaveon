@@ -94,10 +94,12 @@ CREATE TABLE IF NOT EXISTS dlm_artifact (
     usage_rollup   TEXT,                   -- JSON: per-table usage from query_history
     embeds         TEXT,                   -- v1 (reserved): packed dense element vectors
     codes          TEXT,                   -- v2 (reserved): RQ-VAE discrete codes
+    curation       TEXT,                   -- JSON: per-dataset human overrides (aliases, breakdowns, additivity...)
     source_hash    TEXT NOT NULL,          -- schema+snapshot fingerprint for change-detection
     built_at       TEXT NOT NULL,
     status         TEXT NOT NULL DEFAULT 'ready'   -- building | ready | stale | error | unsupported
 );
+ALTER TABLE dlm_artifact ADD COLUMN IF NOT EXISTS curation TEXT;
 
 CREATE TABLE IF NOT EXISTS dlm_value_index (
     id            TEXT PRIMARY KEY,
@@ -223,12 +225,17 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
                      source_hash, "ready" if stats_supported else "unsupported")
     _upsert_router(str(dataset_id), ds, columns, metrics, value_rows)
 
+    # refresh the cached effective spec so precompute (and serving) see the freshly
+    # written suggestions overlaid with any persisted human curation.
+    _SPEC_CACHE.pop(str(dataset_id), None)
+    spec = _effective_spec(str(dataset_id))
+
     # 8) precompute the common answers (each metric's total + per-dimension
-    #    breakdown) so those questions serve from context with no live query.
-    #    A handful of scans now; every matching question is a lookup forever after.
+    #    breakdown the spec marks for precompute) so those questions serve from
+    #    context with no live query. A handful of scans now; a lookup forever after.
     answers = _precompute_answers(str(dataset_id), database, schema,
                                   ds.get("table_name") or ds.get("fact_table"),
-                                  columns, dimensions, metrics)
+                                  columns, dimensions, metrics, spec)
     _ANSWER_CACHE.pop(str(dataset_id), None)  # invalidate in-memory caches after regen
     _RANGE_CACHE.pop(str(dataset_id), None)
 
@@ -264,11 +271,12 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
 
 
 def _precompute_answers(dataset_id: str, database: str, schema: str, fact: Optional[str],
-                        columns: List[dict], dimensions: List[dict], metrics: List[dict]) -> int:
+                        columns: List[dict], dimensions: List[dict], metrics: List[dict],
+                        spec: Optional[dict] = None) -> int:
     """Compute + store the common answers for this dataset: every metric's grand
-    total (one scan for all metrics) and every metric grouped by each low-card
-    dimension (one scan per dimension). Stored in dlm_answers for instant,
-    no-DB-trip serving. Returns how many answers were stored."""
+    total (one scan for all metrics) and every metric grouped by each dimension the
+    curated spec marks for precompute, to its configured depth. Stored in dlm_answers
+    for instant, no-DB-trip serving. Returns how many answers were stored."""
     import database.pool as pool
     meta.execute("DELETE FROM dlm_answers WHERE dataset_id = @param0", [dataset_id])
     if not fact or not metrics:
@@ -300,12 +308,18 @@ def _precompute_answers(dataset_id: str, database: str, schema: str, fact: Optio
     except Exception:
         pass
 
-    # 2) per low-card dimension — one scan per dim computes all metrics grouped
+    # 2) per dimension — one scan per dim computes all metrics grouped. Honor the
+    #    curated spec: skip dims marked precompute=false/hidden; use the curated depth.
+    dspec = (spec or {}).get("dimensions") or {}
     dim_cols = [(_c.get("column_name") or _c.get("name") or "").strip()
                 for _c in columns if _c.get("is_dimension")]
     for dim in dim_cols:
         if not dim:
             continue
+        cfg = dspec.get(dim) or {}
+        if cfg.get("precompute") is False or cfg.get("hidden"):
+            continue
+        depth = int(cfg.get("top_n") or 500)
         gsel = ", ".join(f"{expr} AS {alias}" for alias, _n, expr in mdefs)
         # order by the first metric desc so top-N questions can slice the head
         order = mdefs[0][0]
@@ -313,7 +327,7 @@ def _precompute_answers(dataset_id: str, database: str, schema: str, fact: Optio
             res = pool.execute_query(
                 f"SELECT {_qid(dim)} AS grp, {gsel} FROM {tbl} "
                 f"WHERE {_qid(dim)} IS NOT NULL GROUP BY {_qid(dim)} "
-                f"ORDER BY {order} DESC LIMIT 500", database)
+                f"ORDER BY {order} DESC LIMIT {int(depth)}", database)
             rows = res.get("rows") or res.get("rows_objects") or []
             if not rows:
                 continue
@@ -610,6 +624,7 @@ def _manifest(ds: dict, columns: List[dict], dimensions: List[dict],
         "columns": cols,
         "joins": joins,
         "metrics": mets,
+        "context_spec": _suggest_spec(columns, metrics),
     }
 
 
@@ -792,16 +807,26 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
     metrics = ds.get("metrics") or []
     dims = [c for c in columns if c.get("is_dimension")]
 
+    # per-dataset curated context: aliases, default metric, hidden items
+    spec = _effective_spec(dataset_id)
+    m_alias = _alias_index(spec, "metrics")
+    d_alias = _alias_index(spec, "dimensions")
+    _mspec, _dspec = spec.get("metrics") or {}, spec.get("dimensions") or {}
+    metrics = [m for m in metrics
+               if not _mspec.get(m.get("name") or m.get("metric_name"), {}).get("hidden")]
+    dims = [d for d in dims
+            if not _dspec.get(d.get("column_name") or d.get("name"), {}).get("hidden")]
+
     qset = set(_tokenize(question))
 
     # 1) entity filters from the value index (e.g. "india" -> country='India')
     filters = _resolve_entity_filters(dataset_id, question)
 
-    # 2) metric — match by name/expression/synonym tokens, else first metric
-    metric = _match_metric(qset, metrics)
+    # 2) metric — curated aliases + default metric; generic quantifier words ignored
+    metric = _match_metric(qset, metrics, m_alias, spec.get("default_metric"))
 
     # 3) group-by dimension ("... by country")
-    group_col = _match_group_by(question, dims)
+    group_col = _match_group_by(question, dims, d_alias)
 
     # 3b) top-N ("top 10 countries by consumption") — sets the row limit and, if
     #     no explicit "by <dim>", groups by the dimension named in the question.
@@ -813,11 +838,11 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
         top_n = 10  # "top models" without a number → default 10
     if top_n:
         if not group_col:
-            group_col = _match_any_dim(question, dims)
+            group_col = _match_any_dim(question, dims, d_alias)
     # If "by <metric>" was parsed but didn't match a dimension, also try
     # matching a dimension anywhere in the question (e.g. "top models by ELO")
     if not group_col and re.search(r"\b(?:by|per)\b", question, re.I):
-        group_col = _match_any_dim(question, dims)
+        group_col = _match_any_dim(question, dims, d_alias)
     limit_n = top_n or limit
 
     # 4) year filter
@@ -1079,6 +1104,7 @@ def _resolve_entity_filters(dataset_id: str, question: str) -> List[Dict[str, An
     out: List[Dict[str, Any]] = []
     used_cols: set = set()
     used_spans: set = set()
+    va = _effective_spec(dataset_id).get("value_aliases") or {}   # curated e.g. "smb" -> "Team"
     n = len(words)
     for size in (3, 2, 1):
         for i in range(0, n - size + 1):
@@ -1090,7 +1116,7 @@ def _resolve_entity_filters(dataset_id: str, question: str) -> List[Dict[str, An
             # single stop/short words never denote a value ("in" != India)
             if size == 1 and (phrase.lower() in _STOPWORDS or len(phrase) < 3):
                 continue
-            hits = resolve_value(dataset_id, phrase, limit=1, exact_only=True)
+            hits = resolve_value(dataset_id, va.get(phrase.lower(), phrase), limit=1, exact_only=True)
             if not hits:
                 continue
             h = hits[0]
@@ -1112,11 +1138,12 @@ _GENERIC_METRIC_TOKENS = {"sum", "avg", "average", "mean", "count", "total",
                          "number", "num", "amount", "overall", "all", "of", "the"}
 
 
-def _match_metric(qset: set, metrics: List[dict]) -> Optional[dict]:
-    """Pick the metric whose name/expression/synonym tokens best overlap the
-    question, ignoring generic quantifier words so a distinctive term like
-    "users" wins over a generic one like "total". Falls back to the first metric
-    when nothing distinctive matches."""
+def _match_metric(qset: set, metrics: List[dict], extra: Optional[Dict[str, List[str]]] = None,
+                  default_metric: Optional[str] = None) -> Optional[dict]:
+    """Pick the metric whose name/expression/alias tokens best overlap the question,
+    ignoring generic quantifier words so a distinctive term like "users" wins over a
+    generic one like "total". *extra* is the dataset's curated alias index. Falls back
+    to the curated default metric, else the first."""
     if not metrics:
         return None
     q = qset - _GENERIC_METRIC_TOKENS
@@ -1124,16 +1151,23 @@ def _match_metric(qset: set, metrics: List[dict]) -> Optional[dict]:
     for m in metrics:
         name = m.get("name") or m.get("metric_name") or ""
         expr = m.get("expression") or ""
-        toks = (set(_tokenize(name)) | set(_tokenize(expr)) | set(_synonyms_for(name))) - _GENERIC_METRIC_TOKENS
+        toks = (set(_tokenize(name)) | set(_tokenize(expr)) | set(_syn(name, extra))) - _GENERIC_METRIC_TOKENS
         score = len(q & toks)
         if score > best_score:
             best, best_score = m, score
-    return best or metrics[0]
+    if best:
+        return best
+    if default_metric:
+        for m in metrics:
+            if (m.get("name") or m.get("metric_name")) == default_metric:
+                return m
+    return metrics[0]
 
 
-def _match_group_by(question: str, dims: List[dict]) -> Optional[str]:
+def _match_group_by(question: str, dims: List[dict],
+                    extra: Optional[Dict[str, List[str]]] = None) -> Optional[str]:
     """Detect a 'by <dimension>' / 'per <dimension>' grouping and map it to a
-    dimension column."""
+    dimension column, using per-dataset curated aliases."""
     m = re.search(r"\b(?:by|per|across|for each)\s+([A-Za-z][A-Za-z ]*)", question, re.I)
     if not m:
         return None
@@ -1142,13 +1176,14 @@ def _match_group_by(question: str, dims: List[dict]) -> Optional[str]:
         return None
     for d in dims:
         col = d.get("column_name") or d.get("name") or ""
-        ctoks = set(_tokenize(col)) | set(_synonyms_for(col))
+        ctoks = set(_tokenize(col)) | set(_syn(col, extra))
         if set(target) & ctoks:
             return col
     return None
 
 
-def _match_any_dim(question: str, dims: List[dict]) -> Optional[str]:
+def _match_any_dim(question: str, dims: List[dict],
+                   extra: Optional[Dict[str, List[str]]] = None) -> Optional[str]:
     """Find a dimension named anywhere in the question. Handles plurals ('orgs'
     -> org, 'countries' -> country) and typos via singular-strip + 4-char prefix."""
     qt = [_normalize(t) for t in _tokenize(question)]
@@ -1162,7 +1197,7 @@ def _match_any_dim(question: str, dims: List[dict]) -> Optional[str]:
                 return col
             if len(cn) >= 4 and len(tn) >= 4 and tn[:4] == cn[:4]:
                 return col
-        if set(_synonyms_for(col)) & set(qt):
+        if set(_syn(col, extra)) & set(qt):
             return col
     return None
 
@@ -1409,6 +1444,207 @@ def _synonyms_for(name: str) -> List[str]:
         if head in n or n in syns:
             return sorted(set([head, *syns]) - {n})
     return []
+
+
+# --------------------------------------------------------------------------- #
+# per-dataset context spec — the curatable "model context"                     #
+#   suggested  (auto, in manifest)  ⊕  curation (human overrides, own column)   #
+#   = effective spec used by the matchers, precompute, and the editor UI.       #
+# --------------------------------------------------------------------------- #
+
+_SPEC_CACHE: Dict[str, dict] = {}
+
+
+def _suggest_spec(columns: List[dict], metrics: List[dict]) -> dict:
+    """Auto-derive a starter context spec at generate time: aliases from the seed
+    lexicon, additivity inferred from the aggregate, every dimension precomputed
+    by default. The user edits this on the context page; edits persist separately."""
+    ms: Dict[str, dict] = {}
+    for i, m in enumerate(metrics):
+        name = m.get("name") or m.get("metric_name")
+        if not name:
+            continue
+        expr = (m.get("expression") or "")
+        # non-additive: distinct counts and averages can't be summed across a breakdown
+        additive = not (re.search(r"\bDISTINCT\b", expr, re.I) or re.search(r"\bAVG\s*\(", expr, re.I))
+        ms[name] = {
+            "display_name": name,
+            "aliases": _synonyms_for(name),
+            "additive": additive,
+            "default": (i == 0),
+        }
+    ds: Dict[str, dict] = {}
+    for c in columns:
+        if not c.get("is_dimension"):
+            continue
+        col = (c.get("column_name") or c.get("name") or "").strip()
+        if not col:
+            continue
+        ds[col] = {
+            "display_name": c.get("display_name") or col,
+            "aliases": _synonyms_for(col),
+            "precompute": True,
+            "top_n": 500,
+        }
+    return {"metrics": ms, "dimensions": ds, "value_aliases": {}}
+
+
+def _merge_spec(suggested: dict, curation: dict) -> dict:
+    """Overlay human curation on the auto-suggested spec. Aliases union (users add,
+    never silently lose a suggestion); scalar flags override; value_aliases merge."""
+    out: Dict[str, Any] = {"metrics": {}, "dimensions": {}, "value_aliases": {}}
+    for kind in ("metrics", "dimensions"):
+        base = suggested.get(kind) or {}
+        over = curation.get(kind) or {}
+        for key, val in base.items():
+            entry = dict(val)
+            o = over.get(key) or {}
+            if "aliases" in o:
+                entry["aliases"] = sorted(set(entry.get("aliases", [])) | set(o.get("aliases") or []))
+            for f in ("display_name", "additive", "default", "precompute", "top_n", "hidden"):
+                if f in o:
+                    entry[f] = o[f]
+            out[kind][key] = entry
+    va = dict(suggested.get("value_aliases") or {})
+    va.update(curation.get("value_aliases") or {})
+    out["value_aliases"] = va
+    # default metric: explicit curation wins, else the one flagged default, else first
+    dflt = curation.get("default_metric")
+    if not dflt:
+        for k, v in out["metrics"].items():
+            if v.get("default"):
+                dflt = k
+                break
+    out["default_metric"] = dflt or (next(iter(out["metrics"]), None))
+    return out
+
+
+def _effective_spec(dataset_id: str) -> dict:
+    """Suggested ⊕ curation for a dataset, cached in-memory (invalidated on regen
+    and on save). Empty spec when no artifact exists."""
+    if dataset_id in _SPEC_CACHE:
+        return _SPEC_CACHE[dataset_id]
+    ensure_tables()
+    row = meta.query_one(
+        "SELECT manifest, curation FROM dlm_artifact WHERE dataset_id = @param0", [dataset_id]) or {}
+    manifest = _loads(row.get("manifest")) or {}
+    suggested = manifest.get("context_spec") or {}
+    curation = _loads(row.get("curation")) or {}
+    eff = _merge_spec(suggested, curation)
+    _SPEC_CACHE[dataset_id] = eff
+    return eff
+
+
+def _alias_index(spec: dict, kind: str) -> Dict[str, List[str]]:
+    """normalized name -> curated aliases, for the ask-time matchers."""
+    idx: Dict[str, List[str]] = {}
+    for name, v in (spec.get(kind) or {}).items():
+        al = v.get("aliases") or []
+        if al:
+            idx[_normalize(name)] = al
+    return idx
+
+
+def _syn(name: str, extra: Optional[Dict[str, List[str]]] = None) -> List[str]:
+    """Global seed synonyms for a column/metric name, plus any per-dataset curated
+    aliases for it. This is what makes the lexicon dataset-specific."""
+    base = set(_synonyms_for(name))
+    if extra:
+        base |= set(extra.get(_normalize(name), []))
+    return list(base)
+
+
+def get_context_spec(dataset_id: str) -> Dict[str, Any]:
+    """Effective context spec (suggested ⊕ curation) for the curation editor, with
+    the raw pieces so the UI can show default vs edited and offer a reset."""
+    ensure_tables()
+    row = meta.query_one(
+        "SELECT manifest, curation, status, built_at FROM dlm_artifact WHERE dataset_id = @param0",
+        [str(dataset_id)])
+    if not row:
+        return {"ok": False, "reason": "no_artifact", "dataset_id": str(dataset_id)}
+    manifest = _loads(row.get("manifest")) or {}
+    suggested = manifest.get("context_spec") or {}
+    curation = _loads(row.get("curation")) or {}
+    return {
+        "ok": True,
+        "dataset_id": str(dataset_id),
+        "dataset_name": manifest.get("name"),
+        "status": row.get("status"),
+        "built_at": row.get("built_at"),
+        "suggested": suggested,
+        "curation": curation,
+        "effective": _merge_spec(suggested, curation),
+    }
+
+
+def save_curation(dataset_id: str, curation: Any) -> Dict[str, Any]:
+    """Persist human curation overrides. Alias / display / default / value-alias edits
+    take effect immediately (caches invalidated). Breakdown / depth edits change what
+    is precomputed, so those need a regenerate — flagged as ``needs_regenerate``."""
+    ensure_tables()
+    row = meta.query_one(
+        "SELECT curation FROM dlm_artifact WHERE dataset_id = @param0", [str(dataset_id)])
+    if not row:
+        return {"ok": False, "reason": "no_artifact"}
+    clean = _sanitize_curation(curation)
+    prev = _loads(row.get("curation")) or {}
+    meta.execute("UPDATE dlm_artifact SET curation = @param0 WHERE dataset_id = @param1",
+                 [json.dumps(clean, default=str), str(dataset_id)])
+    _SPEC_CACHE.pop(str(dataset_id), None)
+    _ANSWER_CACHE.pop(str(dataset_id), None)
+    return {"ok": True, "dataset_id": str(dataset_id),
+            "needs_regenerate": _curation_affects_precompute(prev, clean),
+            "effective": _effective_spec(str(dataset_id))}
+
+
+def _sanitize_curation(c: Any) -> Dict[str, Any]:
+    """Whitelist + coerce a curation payload so only known shapes are persisted."""
+    c = c if isinstance(c, dict) else {}
+    out: Dict[str, Any] = {}
+    for kind in ("metrics", "dimensions"):
+        src = c.get(kind)
+        if not isinstance(src, dict):
+            continue
+        d: Dict[str, Any] = {}
+        for key, v in src.items():
+            if not isinstance(v, dict):
+                continue
+            e: Dict[str, Any] = {}
+            if isinstance(v.get("aliases"), list):
+                e["aliases"] = [str(a).strip().lower() for a in v["aliases"] if str(a).strip()][:50]
+            if v.get("display_name") is not None:
+                e["display_name"] = str(v["display_name"])[:120]
+            for f in ("additive", "default", "precompute", "hidden"):
+                if f in v:
+                    e[f] = bool(v[f])
+            if "top_n" in v:
+                try:
+                    e["top_n"] = max(1, min(5000, int(v["top_n"])))
+                except Exception:
+                    pass
+            if e:
+                d[str(key)] = e
+        if d:
+            out[kind] = d
+    va = c.get("value_aliases")
+    if isinstance(va, dict):
+        cleaned = {str(k).strip().lower(): str(val) for k, val in va.items()
+                   if str(k).strip() and val is not None}
+        if cleaned:
+            out["value_aliases"] = cleaned
+    if c.get("default_metric"):
+        out["default_metric"] = str(c["default_metric"])
+    return out
+
+
+def _curation_affects_precompute(prev: dict, new: dict) -> bool:
+    """True when a dimension's precompute/depth/hidden changed — the only edits that
+    require re-running the (scanning) precompute step."""
+    def _shape(spec):
+        return {k: (v.get("precompute"), v.get("top_n"), v.get("hidden"))
+                for k, v in ((spec or {}).get("dimensions") or {}).items()}
+    return _shape(prev) != _shape(new)
 
 
 def _fingerprint(ds: dict, columns: List[dict], dimensions: List[dict], metrics: List[dict]) -> str:

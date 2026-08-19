@@ -10,6 +10,8 @@ that resolves natural-language terms to columns/filters with no hosted LLM.
   GET  /dlm/route                    cross-dataset router: question -> which dataset(s)
 """
 
+from typing import Any, Dict, Optional
+
 from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 
@@ -23,6 +25,14 @@ router = APIRouter()
 class AskBody(BaseModel):
     question: str
     limit: int = 50
+
+
+class CurationBody(BaseModel):
+    """Human overrides on a dataset's context spec. Any subset may be sent."""
+    metrics: Dict[str, Any] = {}
+    dimensions: Dict[str, Any] = {}
+    value_aliases: Dict[str, str] = {}
+    default_metric: Optional[str] = None
 
 
 @router.post("/datasets/{dataset_id}/dlm/generate")
@@ -42,6 +52,28 @@ def status(dataset_id: str, ctx: UserContext = Depends(require_user_context)):
     if not art:
         raise HTTPException(status_code=404, detail="DLM not generated for this dataset")
     return art
+
+
+@router.get("/datasets/{dataset_id}/dlm/context")
+def get_context(dataset_id: str, ctx: UserContext = Depends(require_user_context)):
+    """The dataset's curatable context spec — auto-suggested defaults overlaid with
+    human curation — for the context editor."""
+    spec = dlm.get_context_spec(dataset_id)
+    if not spec.get("ok"):
+        raise HTTPException(status_code=404, detail=spec.get("reason", "no_artifact"))
+    return spec
+
+
+@router.put("/datasets/{dataset_id}/dlm/context")
+def put_context(dataset_id: str, body: CurationBody,
+                ctx: UserContext = Depends(require_min_role("Analyst"))):
+    """Save human curation overrides (aliases, breakdowns, additivity, value aliases,
+    default metric). Returns needs_regenerate=true when a breakdown/depth change means
+    the precomputed answers must be rebuilt."""
+    result = dlm.save_curation(dataset_id, body.dict())
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("reason", "save_failed"))
+    return result
 
 
 @router.get("/datasets/{dataset_id}/dlm/resolve")
