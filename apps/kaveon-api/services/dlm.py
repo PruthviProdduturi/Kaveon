@@ -156,6 +156,8 @@ def ensure_tables() -> None:
 def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
     """Compile (or refresh) the DLM artifact for one dataset. Idempotent: a
     matching ``source_hash`` short-circuits unless *force*. Returns a summary."""
+    import time as _time
+    _gen_t0 = _time.time()
     ensure_tables()
 
     ds = datasets_svc.get_dataset_by_id(str(dataset_id))
@@ -227,6 +229,23 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
                                   ds.get("table_name") or ds.get("fact_table"),
                                   columns, dimensions, metrics)
     _ANSWER_CACHE.pop(str(dataset_id), None)  # invalidate in-memory cache after regen
+
+    # record generation timing (+ what drove it) into the stored stats rollup so
+    # the dataset page can be transparent about how long it took and why.
+    duration_ms = int((_time.time() - _gen_t0) * 1000)
+    stats_rollup["generation"] = {
+        "duration_ms": duration_ms,
+        "built_at": _now_iso(),
+        "answers_precomputed": answers,
+        "values_indexed": len(value_rows),
+        "rows_scanned": max((stats_rollup.get("row_counts") or {}).values(), default=None),
+        "scans": 1 + len([c for c in columns if c.get("is_dimension")]),  # totals + per-dim
+    }
+    try:
+        meta.execute("UPDATE dlm_artifact SET stats_rollup = @param0 WHERE dataset_id = @param1",
+                     [json.dumps(stats_rollup, default=str), str(dataset_id)])
+    except Exception:
+        pass
 
     return {
         "ok": True,
