@@ -21,7 +21,7 @@ Live at kaveon.vercel.app over a **10.1M-row** synthetic usage dataset.
 | Robustness (47-case adversarial battery) | **0 crashes, 0 SQL errors, 0 injection leaks** |
 | Hosted LLM calls per question | **0** · data egress: **0** |
 
-**Compute-once, answer-many:** at generate time we precompute **every metric's grand total + each per-dimension breakdown** (a handful of scans). After that, totals, breakdowns, and single-dimension filters all serve from context — the DB is touched only when the data changes.
+**Compute-once, answer-many:** at generate time Kaveon precomputes **every metric's grand total + each per-dimension breakdown** (a handful of scans). After that, totals, breakdowns, and single-dimension filters all serve from context — the DB is touched only when the data changes.
 
 **Non-additive metrics are safe:** `COUNT DISTINCT` / `AVG` are computed *independently per shape* — never derived by summing a breakdown — so "Active Users for Enterprise" is exact, not an illegal roll-up.
 
@@ -33,11 +33,11 @@ Live at kaveon.vercel.app over a **10.1M-row** synthetic usage dataset.
 
 ## See it for yourself — [kaveon.vercel.app](https://kaveon.vercel.app)
 
-Open the homepage (over the 10.1M-row demo dataset) and type these — each answer shows its source and timing, so you can check the numbers above without taking our word for it:
+On the homepage (over the 10.1M-row demo dataset), these questions each return an answer badged with its source and timing — so the numbers above are verifiable, not asserted:
 
 1. **"What is current Kaveon usage?"** → **⚡ From context · ~1.5s · no DB scan** — 53M queries across 10.1M rows.
 2. **"queries by plan"**, **"active users by region"**, **"top 10 orgs by dashboard views"** → instant breakdowns, still from context.
-3. **"queries by plan in 2026"** (a slice we didn't precompute) → **Live query · Xs** — one warehouse trip, honestly labeled, then cached.
+3. **"queries by plan in 2026"** (a slice that was not precomputed) → **Live query · Xs** — one warehouse trip, honestly labeled, then cached.
 4. Open the dataset's **Context panel** to see when context was last generated, how long it took, and how many answers were precomputed — the one-time cost that buys everything above.
 
 ---
@@ -46,20 +46,20 @@ Open the homepage (over the 10.1M-row demo dataset) and type these — each answ
 
 | Fabric capability | What it does | Relation to DLM |
 |---|---|---|
-| **Fast query** (Direct Lake, VertiPaq, result cache, MVs) | makes *executing a known query* fast | **Complementary, different layer.** It never touches "given this English, *which* query." Our live-data fallback is fast *because* of it. |
-| **Proactive / automatic statistics** | histograms + distinct counts for the **query optimizer** | **Same raw material, different product** — we consume it for *retrieval + answer-validity*, not plan selection. |
+| **Fast query** (Direct Lake, VertiPaq, result cache, MVs) | makes *executing a known query* fast | **Complementary, different layer.** It never touches "given this English, *which* query." Kaveon's live-data fallback is fast *because* of it. |
+| **Proactive / automatic statistics** | histograms + distinct counts for the **query optimizer** | **Same raw material, different product** — Kaveon consumes it for *retrieval + answer-validity*, not plan selection. |
 | **Fabric IQ / Copilot / Data Agents** | NL → DAX/SQL via a **hosted LLM** | **The real comparison** (below). |
 
-**"Isn't this just proactive stats?"** — pre-empt it: *"Yes, we consume exactly that signal — but Fabric maintains it to pick a query plan; we repurpose the same cheap catalog to (1) resolve NL terms to columns/values (`anthropic` → `provider='Anthropic'`, zero scan) and (2) decide whether a cached answer is still valid. A second use for a signal Fabric already pays to maintain — a strength, not a gap."*
+**Isn't this just proactive stats?** No. Fabric maintains that signal to pick a query plan; Kaveon repurposes the same cheap catalog to (1) resolve NL terms to columns/values (`anthropic` → `provider='Anthropic'`, zero scan) and (2) decide whether a cached answer is still valid — a second use for a signal Fabric already pays to maintain, a strength rather than a gap.
 
 ---
 
-## Where we win vs. Fabric IQ — and where we don't (be honest)
+## Where Kaveon wins vs. Fabric IQ — and where it doesn't
 
-**Don't** claim to beat Fabric IQ on open-ended *reasoning* ("why did revenue drop"). It's a frontier LLM + a big team; it wins there. We win on economics and constraints:
+Kaveon does not beat Fabric IQ on open-ended *reasoning* ("why did revenue drop") — that is a frontier LLM plus a large team, and Fabric IQ wins there. Kaveon wins on economics and constraints:
 
 - **No hosted LLM / no data egress** — answered on-box. Privacy, compliance, air-gap, cost, latency.
-- **Compute-once, answer-many** — Fabric IQ makes an LLM call *per question*; we amortize to a precompute + a lookup. Proven: 10M rows in ~1.5s, **no per-query scan or LLM**.
+- **Compute-once, answer-many** — Fabric IQ makes an LLM call *per question*; Kaveon amortizes to a precompute + a lookup. Proven: 10M rows in ~1.5s, **no per-query scan or LLM**.
 - **Portable & open** — runs over Postgres, MySQL, StarRocks, Azure SQL, **and** Fabric. Fabric IQ is Fabric-only.
 - **Deterministic & auditable** — same question → same answer, with an explainable trace. Injection-safe by construction (SQL is assembled only from escaped index values + defined expressions + quoted identifiers).
 
@@ -81,4 +81,4 @@ Open the homepage (over the 10.1M-row demo dataset) and type these — each answ
         └── novel slice/combo ──▶ deterministic assembler → ONE warehouse query → cache   (Live query, honest)
 ```
 
-**Bottom line:** we sit **above** fast query and **beside** Fabric IQ — the deterministic, private, **zero-scan-for-the-common-case** path for the 80% "fetch the right data" question. It's not a slide; it's answering 10 million rows in ~1.5 seconds in prod today.
+**Bottom line:** Kaveon sits **above** fast query and **beside** Fabric IQ — the deterministic, private, **zero-scan-for-the-common-case** path for the 80% "fetch the right data" question. It is not a slide; it is answering 10 million rows in ~1.5 seconds in prod today.
