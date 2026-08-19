@@ -84,7 +84,7 @@ pip install -r requirements.txt
 python main.py                         # localhost:8080
 ```
 
-Configure `.env` at the repo root with your database connection. See [Setup Guide](docs/guides/deploy-vercel-azure-neon.md) for full deployment.
+Configure `.env` at the repo root with your database connection. See [Setup Guide](docs/guides/deploy-vercel-azure-postgres.md) for full deployment.
 
 ---
 
@@ -98,7 +98,7 @@ Configure `.env` at the repo root with your database connection. See [Setup Guid
 | [Dashboards](docs/guide-dashboards.md) | Builder, filters, cross-filtering, publishing |
 | [SQL Lab](docs/guide-sql-lab.md) | Monaco editor, query execution, caching |
 | [Data Sources](docs/guide-data-sources.md) | Connecting databases |
-| [Deployment](docs/guides/deploy-vercel-azure-neon.md) | Vercel + Azure + Neon setup |
+| [Deployment](docs/guides/deploy-vercel-azure-postgres.md) | Vercel + Azure Container Apps + Azure PostgreSQL setup |
 
 ---
 

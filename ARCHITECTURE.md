@@ -13,16 +13,16 @@
 3. [Architecture Layers](#architecture-layers)
 4. [Data Flow](#data-flow)
 5. [Authentication](#authentication)
-6. [Authorization / RBAC](#authorization--rbac)
+6. [Authorization / RBAC](#authorization--role-based-access-control-rbac)
 7. [Middleware](#middleware)
-8. [Database Schema](#database-schema)
+8. [Database](#database)
 9. [Feature Architecture](#feature-architecture)
    - [Datasets: The Semantic Layer](#1-datasets-the-semantic-layer)
    - [Charts: Visualization Engine](#2-charts-visualization-engine)
    - [Dashboards: Multi-Chart Composition](#3-dashboards-multi-chart-composition)
    - [SQL Lab: Direct Query Interface](#4-sql-lab-direct-query-interface)
    - [How Everything Connects](#how-everything-connects)
-10. [Adaptive Context Routing](#adaptive-context-routing)
+10. [DLM — Data Language Model](#dlm--data-language-model)
 11. [Caching Strategy](#caching-strategy)
 12. [Component Architecture](#component-architecture)
 13. [API Design](#api-design)
@@ -33,43 +33,28 @@
 
 ## System Overview
 
-Kaveon is a modern data exploration platform built with a clean, two-tier service architecture. The system consists of two main services:
+Kaveon is a modern data exploration platform built with a clean, two-tier service architecture. The browser talks only to the Next.js app; the API is never exposed to the browser directly.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                         Browser                              │
-│  ┌──────────────────────────────────────────────────────────┐ │
-│  │        kaveon-web · Next.js 15 (Vercel)                  │ │
-│  │   - React 19, App Router, sidebar navigation             │ │
-│  │   - NextAuth (Auth.js v5) — GitHub / Microsoft Entra     │ │
-│  │   - NL→SQL engine (template-based, no LLM)               │ │
-│  │   - ECharts with dark mode, Monaco SQL Editor             │ │
-│  │   - Inline chart rendering in chat                        │ │
-│  └──────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
-              ↓ /api/kaveon/* (proxy, X-User-* identity headers)
-┌─────────────────────────────────────────────────────────────┐
-│       kaveon-api · FastAPI (Azure Container Apps)             │
-│  ┌──────────────────────────────────────────────────────────┐ │
-│  │  Routers → Services → Database Layer                     │ │
-│  │  - Proxy-injected identity (X-User-* + X-Proxy-Secret)   │ │
-│  │  - Semantic SQL generation (star-schema aware)            │ │
-│  │  - Dataset / chart / dashboard CRUD                       │ │
-│  │  - AI service (Claude/GPT fallback if keys configured)    │ │
-│  │  - psycopg2 (Postgres), pyodbc (Fabric/Azure SQL),       │ │
-│  │    pymysql (MySQL) connection pools                       │ │
-│  └──────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
-              ↓ SQL/ODBC (TLS)
-┌─────────────────────────────────────────────────────────────┐
-│                    Data Sources                               │
-│  ┌──────────────┐ ┌──────────────┐ ┌──────────────────────┐ │
-│  │ Azure Postgres │ │ Azure SQL /  │ │ MySQL / StarRocks    │ │
-│  │  Flexible     │ │ Fabric SQL   │ │                      │ │
-│  │ (metadata +   │ │              │ │                      │ │
-│  │  data tables) │ │              │ │                      │ │
-│  └──────────────┘ └──────────────┘ └──────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    B["🌐 Browser<br/><small>session cookie · same-origin</small>"]
+    W["▲ kaveon-web · Next.js 15 (Vercel)<br/><small>React 19 · App Router · NextAuth (Auth.js v5)<br/>NL→SQL chat · ECharts · Monaco SQL editor</small>"]
+    P{{"/api/kaveon/[...path] proxy<br/><small>stamps X-User-* + X-Proxy-Secret</small>"}}
+    A["⚙️ kaveon-api · FastAPI (Azure Container Apps)<br/><small>routers → services → database layer<br/>DLM engine · semantic SQL · dataset/chart/dashboard CRUD</small>"]
+    M[("🗄️ kaveonmeta<br/><small>control + context plane<br/>platform tables · dlm_* · context_*</small>")]
+    D[("📊 kaveon<br/><small>data warehouse — the rows</small>")]
+    X[("🔌 External data sources<br/><small>Fabric SQL · Azure SQL · MySQL · StarRocks</small>")]
+    B ==> W ==> P ==>|"trust boundary"| A
+    A -->|"metadata + DLM answers"| M
+    A -->|"live query fallback"| D
+    A -->|"registered sources"| X
+
+    classDef web fill:#4A9EE8,stroke:#2b6cb0,color:#fff;
+    classDef api fill:#38a169,stroke:#276749,color:#fff;
+    classDef store fill:#2d3748,stroke:#1a202c,color:#fff;
+    class W,P web;
+    class A api;
+    class M,D,X store;
 ```
 
 ### Why Python/FastAPI?
@@ -91,22 +76,27 @@ Kaveon/
 │   ├── kaveon-api/
 │   │   └── config.py              → Loads ../../.env via python-dotenv
 │   └── kaveon-web/
-│       └── next.config.ts         → Reads NEXT_PUBLIC_* env vars at build time
+│       └── auth.ts / next.config  → Reads AUTH_* + NEXT_PUBLIC_* env vars
 ```
 
 ### Environment Variable Ownership
 
 | Variable | Read by | Purpose |
 |---|---|---|
-| `AZURE_CLIENT_ID` | API | JWT audience verification (RS256) |
-| `AZURE_TENANT_ID` | API | JWKS endpoint construction |
-| `AZURE_CLIENT_ID` | Web | MSAL browser sign-in |
-| `AZURE_TENANT_ID` | Web | MSAL browser sign-in |
-| `FABRIC_METADATA_ENDPOINT` | API | ODBC hostname for metadata DB |
-| `FABRIC_METADATA_DATABASE` | API | Database name for metadata DB |
+| `AUTH_SECRET` | Web | NextAuth session encryption |
+| `GITHUB_ID` / `GITHUB_SECRET` | Web | GitHub OAuth provider (activates when set) |
+| `GOOGLE_ID` / `GOOGLE_SECRET` | Web | Google OAuth provider (activates when set) |
+| `AUTH_MICROSOFT_ENTRA_ID_ID` / `_SECRET` / `_ISSUER` | Web | Microsoft Entra ID OAuth provider |
+| `AUTH_ADMIN_EMAILS` | Web | Comma-separated emails granted the Admin role |
+| `KAVEON_PROXY_SECRET` | Web + API | Shared secret signing `X-User-*` proxy headers |
+| `API_URL` | Web | Base URL the proxy forwards to |
+| `METADATA_HOST` / `METADATA_PORT` / `METADATA_SSLMODE` | API | Azure PG connection |
+| `METADATA_DATABASE` | API | Control + context DB (`kaveonmeta`) |
+| `AAD_DATABASES` | API | Databases (e.g. `kaveon`) routed through Managed-Identity token auth |
+| `METADATA_DB_TYPE` | API | `postgresql` |
 | `WEB_URL` | API | CORS allowed origin |
-| `API_URL` | Web | Base URL for all API calls |
-| `API_PORT` | API | Uvicorn/Gunicorn listen port |
+
+`KAVEON_PROXY_SECRET` **must match** on web and api. In production `METADATA_USER`/`METADATA_PASSWORD` are unset — Postgres auth is via Managed Identity.
 
 ---
 
@@ -114,93 +104,31 @@ Kaveon/
 
 ### Backend Layers
 
-```
-HTTP Request
-     │
-     ▼
-┌─────────────────────────────────────────────────────────┐
-│  FastAPI Middleware Stack (main.py)                      │
-│  1. security_headers — adds X-Frame-Options, HSTS, etc.  │
-│  2. log_requests — logs method, path, status, duration   │
-│  3. CORSMiddleware — allow_origins=[WEB_URL] only        │
-└─────────────────────────────────────────────────────────┘
-     │
-     ▼
-┌─────────────────────────────────────────────────────────┐
-│  Auth Dependency (middleware/auth.py)                    │
-│  get_current_user() → require_auth() Depends injection  │
-│  - Extracts Bearer token from Authorization header       │
-│  - Verifies RS256 signature via JWKS (PyJWKClient)       │
-│  - Extracts email from preferred_username / email / upn  │
-│  - Returns 401 if token missing/invalid/expired          │
-└─────────────────────────────────────────────────────────┘
-     │
-     ▼
-┌─────────────────────────────────────────────────────────┐
-│  Routers (routers/*.py)                                  │
-│  12 route modules, all mounted under /api or /api/v1     │
-│  - auth, health, setup                                   │
-│  - datasets, charts, dashboards                          │
-│  - data_sources, favorites, theme                        │
-│  - lab, sql, metadata_summary                            │
-└─────────────────────────────────────────────────────────┘
-     │
-     ▼
-┌─────────────────────────────────────────────────────────┐
-│  Services (services/*.py)                                │
-│  Business logic layer — no direct HTTP awareness         │
-│  - datasets, charts, dashboards, favorites               │
-│  - query_generator (star-schema SQL builder)             │
-│  - saved_queries, query_history, theme                   │
-│  - sql_table_extractor                                   │
-└─────────────────────────────────────────────────────────┘
-     │
-     ▼
-┌─────────────────────────────────────────────────────────┐
-│  Database Layer (database/*.py)                          │
-│  - pool.py: pyodbc connection pool, one per database     │
-│    FabricSQLConnection → ConnectionPool → global registry│
-│    Token auth via SQL_COPT_SS_ACCESS_TOKEN               │
-│    Retry-once on stale connections (08S01 / 10054)       │
-│  - metadata.py: parameterized @paramN query helpers      │
-│  - warmup.py: startup warmup + 5-min heartbeat thread    │
-└─────────────────────────────────────────────────────────┘
-     │
-     ▼
-Microsoft Fabric SQL (ODBC / TDS)
+```mermaid
+flowchart TD
+    R["HTTP request"]
+    MW["FastAPI middleware stack (main.py)<br/><small>1. security_headers · 2. log_requests · 3. CORS (WEB_URL only)</small>"]
+    AU["Auth dependency (middleware/auth.py)<br/><small>reads X-User-Email/Name/Role · validates X-Proxy-Secret == KAVEON_PROXY_SECRET<br/>401 if the proxy secret is missing/wrong</small>"]
+    RT["Routers (routers/*.py)<br/><small>auth · health · setup · datasets · charts · dashboards<br/>data_sources · favorites · theme · lab · sql · dlm · context</small>"]
+    SV["Services (services/*.py)<br/><small>datasets · charts · dashboards · query_generator (star-schema SQL)<br/>dlm · context_profiler / context_validity / context_router · query_history</small>"]
+    DB["Database layer (database/*.py)<br/><small>pool.py: per-database connection pools (psycopg2 / pyodbc / pymysql)<br/>metadata pool (kaveonmeta) sized separately from warehouse pools<br/>AAD token auth for metadata + AAD_DATABASES · retry-once on stale sockets</small>"]
+    OUT[("Azure PostgreSQL · Fabric/Azure SQL · MySQL/StarRocks")]
+    R --> MW --> AU --> RT --> SV --> DB --> OUT
 ```
 
 ### Frontend Layers
 
+```mermaid
+flowchart TD
+    BR["Browser request"]
+    L["Next.js App Router (app/layout.tsx)<br/><small>SessionProvider (NextAuth) · ThemeProvider · sidebar nav</small>"]
+    PG["Page components (app/**/page.tsx)<br/><small>charts · dashboards · datasets · data-sources · lab · settings</small>"]
+    PX["Proxy client<br/><small>fetch → /api/kaveon/[...path] (same-origin, session cookie)<br/>no bearer token ever handled in the browser</small>"]
+    API["kaveon-api (identity via signed X-User-* headers)"]
+    BR --> L --> PG --> PX --> API
 ```
-Browser Request
-     │
-     ▼
-┌─────────────────────────────────────────────────────────┐
-│  Next.js App Router (app/layout.tsx)                     │
-│  - MsalProvider — MSAL context for all pages             │
-│  - ThemeProvider — per-user colour theme context         │
-│  - Navbar — authenticated user display, nav links        │
-└─────────────────────────────────────────────────────────┘
-     │
-     ▼
-┌─────────────────────────────────────────────────────────┐
-│  Page Components (app/**/ page.tsx)                      │
-│  - charts/, dashboards/, datasets/, data-sources/        │
-│  - lab/ (Monaco SQL editor)                              │
-│  - favorites/, workspace-activity/                       │
-└─────────────────────────────────────────────────────────┘
-     │
-     ▼
-┌─────────────────────────────────────────────────────────┐
-│  Services Layer (services/*.ts)                          │
-│  API client layer — wraps msalFetch with base URL        │
-│  All calls include Authorization: Bearer <AAD token>     │
-└─────────────────────────────────────────────────────────┘
-     │
-     ▼
-Kaveon FastAPI (Bearer token authenticated)
-```
+
+The browser never holds an API token. All API calls go same-origin to the Next.js proxy route, which attaches identity server-side.
 
 ---
 
@@ -208,116 +136,76 @@ Kaveon FastAPI (Bearer token authenticated)
 
 ### Query Execution Flow (SQL Lab)
 
-```
-1. User writes SQL in Monaco editor
-2. Frontend calls POST /api/v1/lab/query with {query, database}
-3. require_auth extracts and verifies the Bearer JWT
-4. lab.py router calls pool.execute_query(sql, database)
-5. pool.get_connection_pool(database) looks up the pool:
-   - If first time: resolves endpoint from data_sources table
-   - Creates ConnectionPool if not exists
-6. FabricSQLConnection.connect() if not already connected:
-   - DefaultAzureCredential.get_token("https://database.windows.net/.default")
-   - Injects token via SQL_COPT_SS_ACCESS_TOKEN attribute
-7. cursor.execute(sql, params) → fetchall()
-8. Results serialized: datetime → ISO string, large int → string
-9. history_svc.create_history() logs the execution
-10. Response returned with columns, rows, rowCount, executionTime
+```mermaid
+flowchart TD
+    A["User writes SQL in Monaco"]
+    B["fetch → /api/kaveon/v1/lab/query {query, database}"]
+    C["Proxy reads NextAuth session → stamps X-User-* + X-Proxy-Secret"]
+    D["lab.py → pool.execute_query(sql, database)"]
+    E["get_connection_pool(database)<br/><small>resolves endpoint from data_sources on first use</small>"]
+    F["Connection.connect()<br/><small>Postgres/Fabric/Azure SQL: DefaultAzureCredential token, else stored creds</small>"]
+    G["cursor.execute(sql, params) → fetchall()<br/><small>datetime → ISO, large int → string</small>"]
+    H["query_history logged → response {columns, rows, rowCount, executionTime}"]
+    A --> B --> C --> D --> E --> F --> G --> H
 ```
 
 ### Chart Render Flow
 
-```
-1. Dashboard/chart page loads
-2. Frontend calls POST /api/v1/sql/execute with {sql_text, database, source, ...}
-3. require_auth validates Bearer JWT
-4. sql.py calls pool.execute_query(sql_text, database)
-5. Results returned as {columns, rows}
-6. Frontend renders results via ECharts
-7. Execution logged to query_history with trigger_source, dataset_id
+```mermaid
+flowchart TD
+    A["Dashboard/chart page loads"]
+    B["POST /api/v1/sql/execute {sql_text, database, source, dataset_id}"]
+    C["sql.py → pool.execute_query()"]
+    D["{columns, rows} → ECharts render"]
+    E["Execution logged to query_history (trigger_source, dataset_id)"]
+    A --> B --> C --> D --> E
 ```
 
 ### Semantic SQL Generation Flow
 
-```
-1. Chart builder calls POST /api/v1/sql/generate
-2. sql.py loads dataset from datasets_svc.get_dataset_by_id()
-3. Dataset includes: fact table, dimensions, columns, metrics
-4. build_chart_preview_query(params) in query_generator.py:
-   a. Builds SELECT clause: metrics with aggregation functions
-   b. Builds GROUP BY: dimension display columns
-   c. Builds JOINs: fact table LEFT JOIN each dimension table
-      - COALESCE for role-playing dimensions (shared fact key)
-   d. Builds WHERE: time range + active filters
-   e. Builds ORDER BY: sorted metric or dimension
-   f. Wraps in SELECT TOP <limit>
-5. Generated SQL returned to frontend
-6. Frontend calls /api/v1/sql/execute to run it
+```mermaid
+flowchart TD
+    A["Chart builder → POST /api/v1/sql/generate"]
+    B["Load dataset (fact table, dimensions, columns, metrics)"]
+    C["build_chart_preview_query() in query_generator.py<br/><small>SELECT metrics · GROUP BY dims · LEFT JOIN dims (COALESCE role-playing)<br/>WHERE time range + filters · ORDER BY · SELECT TOP limit</small>"]
+    D["Generated SQL → frontend"]
+    E["Frontend → /api/v1/sql/execute to run it"]
+    A --> B --> C --> D --> E
 ```
 
 ---
 
 ## Authentication
 
-### Token Verification Flow
+Kaveon is **OAuth-only** via **NextAuth (Auth.js v5)** — there are no local passwords, no MSAL, and no in-browser token handling. Each provider activates when its env vars are set: **GitHub**, **Google**, **Microsoft Entra ID**.
 
-```
-Browser (MSAL)
-    │
-    │  GET/POST /api/v1/...
-    │  Authorization: Bearer eyJ...  (Azure AD access token)
-    ▼
-FastAPI — get_current_user() (middleware/auth.py)
-    │
-    ├─ When AZURE_CLIENT_ID + AZURE_TENANT_ID are set (production):
-    │   │
-    │   ├─ PyJWKClient.get_signing_key_from_jwt(token)
-    │   │    → Fetches JWKS from:
-    │   │      https://login.microsoftonline.com/{tenant}/discovery/v2.0/keys
-    │   │    → Keys are cached in memory
-    │   │
-    │   └─ jwt.decode(token, key, algorithms=["RS256"],
-    │                 audience=AZURE_CLIENT_ID,
-    │                 options={"verify_exp": True})
-    │         → Verifies: signature, expiry, audience
-    │         → Extracts: preferred_username / email / upn
-    │
-    └─ When AAD not configured (first-run setup mode only):
-          → Unverified JWT decode (no signature check)
-          → x-user-email header accepted as fallback
-          → This path is only reachable before metadata DB is configured
+### Proxy identity model (the trust boundary)
 
-result: user email string or None
-    │
-    ▼
-require_auth(user) dependency
-    → Returns user email if present
-    → Raises HTTP 401 if None
+The Next.js proxy route (`/api/kaveon/[...path]/route.ts`) is where identity is established. The browser cannot forge it because it cannot produce the proxy secret.
+
+```mermaid
+flowchart TD
+    B["🌐 Browser<br/><small>NextAuth session cookie (same-origin)</small>"]
+    R["/api/kaveon/[...path] route handler<br/><small>calls auth() server-side to read the verified session</small>"]
+    S["Stamps the API request:<br/><small>X-User-Email · X-User-Name · X-User-Role<br/>X-Proxy-Secret = KAVEON_PROXY_SECRET</small>"]
+    A["kaveon-api · middleware/auth.py<br/><small>trusts X-User-* only when X-Proxy-Secret matches<br/>→ UserContext(email, name, role)</small>"]
+    B --> R --> S --> A
 ```
+
+The API rejects any request whose `X-Proxy-Secret` is missing or wrong, so no identity is spoofable and no token is ever exposed to the browser.
 
 ### Authorization — Role-Based Access Control (RBAC)
 
-Role resolution happens after token verification, on every request:
+Through sign-in, a user resolves to **Admin or Viewer**: emails listed in `AUTH_ADMIN_EMAILS` (comma-separated) get `Admin`; everyone else gets `Viewer`. The API's role ladder (`require_min_role`) still defines four levels for finer server-side gating:
 
-```
-JWT verified → email + jwt_roles extracted
-    │
-    ▼
-users_svc.resolve_role(email, jwt_roles)
-    │
-    ├─ 1. JWT claim: if roles[] in token contains Kaveon.Viewer/Analyst/Editor/Admin
-    │        → use highest matching role
-    │
-    ├─ 2. azure_ad / google with no JWT role → None (403 NoAccess)
-    │
-    └─ 3. local auth with no JWT role → "Viewer" default
-
-result: UserContext(email, role, jwt_roles)
-    │
-    ▼
-require_min_role("Analyst") dependency (middleware/permissions.py)
-    → Returns UserContext if role level ≥ minimum
-    → Raises HTTP 403 if below minimum
+```mermaid
+flowchart TD
+    A["Verified proxy identity (email + role header)"]
+    B["require_min_role('Analyst') dependency<br/><small>middleware/permissions.py</small>"]
+    C{"role level ≥ minimum?"}
+    C -->|yes| OK["UserContext returned"]
+    C -->|no| NO["HTTP 403"]
+    A --> B --> C
 ```
 
 #### Role levels
@@ -345,28 +233,20 @@ Each dataset, chart, and dashboard has a `visibility` column:
 - `can_publish(ctx)` — Editor+ check
 - `can_admin(ctx)` — Admin check
 
----
+### Managed Identity — database & Fabric SQL access
 
-### Managed Identity — Fabric SQL Access
+In production the Container App's Managed Identity authenticates to Postgres (both `kaveonmeta` and `kaveon`) and to Fabric/Azure SQL — **no SQL username/password is stored**.
 
+```mermaid
+flowchart TD
+    A["FastAPI container (Azure Container Apps)"]
+    T["DefaultAzureCredential.get_token(...)<br/><small>Postgres: ossrdbms scope · Fabric/Azure SQL: database.windows.net scope<br/>token cached + auto-refreshed</small>"]
+    C["Connection with token<br/><small>psycopg2 (PG) · pyodbc SQL_COPT_SS_ACCESS_TOKEN (Fabric/Azure SQL)</small>"]
+    D[("Azure PostgreSQL / Microsoft Fabric SQL")]
+    A --> T --> C --> D
 ```
-FastAPI container (Azure Container Apps)
-    │
-    ├─ DefaultAzureCredential.get_token(
-    │      "https://database.windows.net/.default"
-    │  )
-    │  → Automatically uses User-Assigned Managed Identity
-    │  → Token cached and refreshed automatically
-    │
-    ▼
-pyodbc.connect(
-    conn_str,
-    attrs_before={SQL_COPT_SS_ACCESS_TOKEN: token_struct}
-)
-    │
-    ▼
-Microsoft Fabric SQL (no SQL username/password ever used)
-```
+
+`database/pool.py` routes the metadata DB and any database named in `AAD_DATABASES` (e.g. `kaveon`) through this token path.
 
 ---
 
@@ -391,13 +271,13 @@ CORSMiddleware(
     allow_origins=[settings.WEB_URL],        # exact origin only, no wildcard
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "x-user-email", "Cache-Control"],
+    allow_headers=["Content-Type", "X-User-Email", "X-User-Name", "X-User-Role", "X-Proxy-Secret", "Cache-Control"],
 )
 ```
 
 ### Rate Limiting (middleware/rate_limit.py)
 
-`RateLimitMiddleware` enforces a per-user sliding-window limit using an in-memory counter keyed on the authenticated user's email. Requests that exceed the limit receive HTTP 429. The limit applies only to authenticated routes — unauthenticated setup/health endpoints are excluded.
+Per-user sliding-window limit (120 SQL executions/min per user), keyed on the authenticated email. Requests over the limit get HTTP 429. In-memory by default; **Redis-backed when `REDIS_URL` is set** (shared across replicas). Unauthenticated setup/health endpoints are excluded.
 
 ### Error Handling (middleware/errors.py)
 
@@ -406,9 +286,18 @@ CORSMiddleware(
 
 ---
 
-## Database Schema
+## Database
 
-The metadata database stores all Kaveon application state. Schema is in `apps/kaveon-api/schema.sql`.
+Kaveon runs on **Azure Database for PostgreSQL Flexible Server (PG 18)**, split into two databases on the same server:
+
+| Database | Plane | Contents |
+|----------|-------|----------|
+| `kaveonmeta` | **control + context** | `datasets`, `dataset_columns/dimensions/metrics`, `charts`, `dashboards`, `saved_queries`, `query_history`, `favorites`, `activity`, `user_themes`, `user_recents`, `local_users`, `data_sources`, **and** the DLM tables (`dlm_artifact`, `dlm_value_index`, `dlm_router`, `dlm_answers`, `context_snapshots`) |
+| `kaveon` | **data warehouse** | the actual rows (`kaveon_usage_daily`, `climate_energy.*`, `ai_benchmarks.*`, `covid_global`, …) |
+
+Splitting the planes means DLM/context answers are served from a small, fast store that never contends with a multi-million-row scan. Primary schema is `apps/kaveon-api/schema_postgresql.sql` (`schema.sql` / `schema_mysql.sql` are legacy SQL Server / MySQL variants).
+
+### Core platform tables
 
 | Table | Key Columns | Purpose |
 |---|---|---|
@@ -420,13 +309,14 @@ The metadata database stores all Kaveon application state. Schema is in `apps/ka
 | `saved_queries` | `id`, `name`, `sql_text`, `database`, `user_id` | User-saved SQL queries |
 | `query_history` | `id`, `sql_text`, `duration_ms`, `status`, `trigger_source`, `executed_by` | Full execution audit log |
 | `favorites` | `id`, `user_email`, `object_type`, `object_id`, `object_name` | Per-user favourites |
-| `data_sources` | `id`, `name`, `type`, `connection_string`, `database_name`, `region`, `is_active` | Registered Fabric endpoints |
+| `data_sources` | `id`, `name`, `type`, `connection_string`, `database_name`, `region`, `is_active` | Registered data sources |
 | `user_themes` | `id`, `user_email`, `primary_color`, `theme_config` | Per-user colour themes |
-| `local_users` | includes `role` column | Role for local auth users (dev only); azure_ad roles come from JWT |
 
-> `visibility NVARCHAR(20) DEFAULT 'internal'` is present on `datasets`, `charts`, and `dashboards`.
+> `visibility` (`private`/`internal`/`published`, default `internal`) is present on `datasets`, `charts`, and `dashboards`.
 
-> `connection_string` in `data_sources` is never returned in API responses — it is excluded from all SELECT queries via the `_PUBLIC_FIELDS` constant in `routers/data_sources.py`.
+> `connection_string` in `data_sources` is never returned in API responses — excluded via the `_PUBLIC_FIELDS` constant in `routers/data_sources.py`.
+
+See [DLM — Data Language Model](#dlm--data-language-model) for the `dlm_*` / `context_*` tables.
 
 ---
 
@@ -457,6 +347,8 @@ LEFT JOIN [dim_date] AS [dim_date_1]
 
 ### 2. Charts: Visualization Engine
 
+Kaveon ships **37 chart types** (ECharts 5 + echarts-gl, including a 3D WebGL globe).
+
 #### Query Generation (`services/query_generator.py`)
 
 `build_chart_preview_query(params)` accepts:
@@ -468,8 +360,8 @@ LEFT JOIN [dim_date] AS [dim_date_1]
 - `timeRange`, `timeColumn`: optional date range
 - `limit`: row cap (default 500)
 
-Output: a complete T-SQL SELECT statement with:
-- `SELECT TOP <limit>` with `[bracket-quoted]` identifiers
+Output: a complete SELECT statement with:
+- `SELECT TOP <limit>` with `[bracket-quoted]` identifiers (translated for Postgres/MySQL by `adapt_sql()`)
 - Star-schema LEFT JOINs per dimension
 - Date formatting for Month/Quarter/Year/Week time columns
 - WHERE clause from time range + filter values
@@ -535,29 +427,34 @@ All dashboard state lives in `DashboardContext` (React context + `useState`):
 
 `DashboardItem` is the type router — it receives a `DashboardLayoutItem` and delegates rendering:
 
-```
-DashboardItem
- ├── 'chart'   → DashboardChartComponent (chart card with ⋯ menu)
- ├── 'text'    → DashboardTextComponent  (self-managed, no card wrapper)
- ├── 'header'  → DashboardHeaderComponent (self-managed, no card wrapper)
- ├── 'divider' → DashboardDividerComponent (self-managed, no card wrapper)
- ├── 'row'     → DashboardRowComponent    (self-managed container)
- ├── 'column'  → DashboardColumnComponent (self-managed container)
- └── 'tabs'    → DashboardTabsComponent   (tabbed container)
+```mermaid
+flowchart LR
+    DI["DashboardItem"]
+    DI --> chart["'chart' → DashboardChartComponent (card + ⋯ menu)"]
+    DI --> text["'text' → DashboardTextComponent (self-managed)"]
+    DI --> header["'header' → DashboardHeaderComponent (self-managed)"]
+    DI --> divider["'divider' → DashboardDividerComponent (self-managed)"]
+    DI --> row["'row' → DashboardRowComponent (container)"]
+    DI --> col["'column' → DashboardColumnComponent (container)"]
+    DI --> tabs["'tabs' → DashboardTabsComponent (tabbed container)"]
 ```
 
 **Self-managed components** (`text`, `header`, `divider`, `row`, `column`) bypass the default card wrapper — they render borderless with their own hover toolbars, inline editing, and confirm dialogs. They receive `onRemove` as a **direct removal function** (not a re-open-confirm wrapper) because they own their own confirm modals.
 
 **Chart cards** (`chart` type) get a card wrapper (border, shadow) and are rendered via:
 
-```
-DashboardChartComponent
-  └── DashboardChartLoader
-        └── ChartBuilderProvider       (scoped context for this chart)
-              ├── ChartHydrator        (populates context from config — renders null)
-              └── <div flex:1>
-                    ├── ChartPreview   (ECharts / table / KPI / map renderer)
-                    └── ChartActionsOverlay  (⋯ button + dropdown menu)
+```mermaid
+flowchart TD
+    A["DashboardChartComponent"]
+    B["DashboardChartLoader"]
+    C["ChartBuilderProvider (scoped context for this chart)"]
+    D["ChartHydrator (populates context from config — renders null)"]
+    E["ChartPreview (ECharts / table / KPI / map)"]
+    F["ChartActionsOverlay (⋯ button + dropdown)"]
+    A --> B --> C
+    C --> D
+    C --> E
+    C --> F
 ```
 
 `ChartBuilderProvider` is scoped **per chart card** so `ChartActionsOverlay` can access `useChartBuilder()` for the "View Query" and "View as Table" features.
@@ -589,12 +486,14 @@ onRegisterExports?.({ downloadPng, downloadCsv })
 
 Clicking a chart element (bar, pie slice, etc.) in view mode emits a cross-filter:
 
-```
-User clicks chart element
-  → ChartPreview.onCrossFilter(value)
-  → DashboardChartComponent.handleCrossFilter(column, value)
-  → DashboardContext.setCrossFilter(itemId, column, value)
-  → All other charts re-render with the new filter injected into their WHERE clause
+```mermaid
+flowchart TD
+    A["User clicks chart element"]
+    B["ChartPreview.onCrossFilter(value)"]
+    C["DashboardChartComponent.handleCrossFilter(column, value)"]
+    D["DashboardContext.setCrossFilter(itemId, column, value)"]
+    E["Other charts re-render with the filter injected into their WHERE clause"]
+    A --> B --> C --> D --> E
 ```
 
 Each chart uses `getCrossFilterFilters(itemId)` to get filters emitted by **other** charts. Only filters whose column matches this chart's time column or groupby columns are applied — preventing nonsensical filter application across unrelated charts.
@@ -616,101 +515,89 @@ Each `DashboardChartLoader` checks `getChartConfig(chartId)` first — if cached
 
 SQL Lab is a developer-focused interface:
 - Monaco Editor with SQL syntax highlighting and auto-complete
-- Database selector (populated from `data_sources` table)
+- Multi-tab editing; database selector (populated from `data_sources`)
+- Synchronous execution (`POST /api/v1/lab/execute`) and cancellable execution (`POST /api/v1/lab/query`) for interactive queries
+- **Detached async jobs** for long-running queries: `POST /api/v1/sql/execute-async` → poll `GET /api/v1/sql/async/{job_id}`; backs the SHA-256 result cache and CTAS (`CREATE TABLE AS`)
 - Results grid with column sorting, search, and CSV export
-- Save queries → stored in `saved_queries` table
-- Query history → every execution logged with duration, row count, status, and trigger source
+- Save queries → `saved_queries`; every execution logged to `query_history` (duration, row count, status, trigger source)
 
-All Lab endpoints enforce `require_auth`. SQL size is capped at 64 KB.
+All Lab endpoints enforce authenticated identity. SQL size is capped at 64 KB.
 
 ---
 
 ### How Everything Connects
 
-```
-data_sources table
-    │
-    ├─ provides endpoint + database_name
-    │
-    └─► ConnectionPool (database/pool.py)
-            │
-            └─► datasets (query against user's warehouse)
-                    │
-                    ├─► query_generator.py → SQL text
-                    │
-                    └─► /sql/execute → results → ECharts
+```mermaid
+flowchart TD
+    A["data_sources table<br/><small>endpoint + database_name</small>"]
+    B["ConnectionPool (database/pool.py)"]
+    C["datasets (query against the warehouse)"]
+    D["query_generator.py → SQL text"]
+    E["/sql/execute → results → ECharts"]
+    A --> B --> C --> D --> E
 ```
 
 ---
 
-## Adaptive Context Routing
+## DLM — Data Language Model
 
-> **Patent-pending** — see `docs/patent-adaptive-context-routing.md` for the full claim set.
+> **Patent-pending** — see `docs/patent-adaptive-context-routing.md` for the full claim set, and `docs/dlm-positioning.md` for positioning.
 
-Kaveon's core differentiator: route natural-language questions between cached context answers and live database queries using **per-element data-staleness scoring** — without a large language model.
+The **DLM** is Kaveon's core differentiator and the **primary** NL→SQL path on the homepage: a per-dataset compiled context artifact that answers natural-language questions **with no hosted LLM**, and — for the common cases — **with no database scan at all**. The in-browser template parser (`utils/nlToSql.ts`) is the fallback for shapes the DLM can't yet build (mainly time-series trends).
 
 ### How It Works
 
+```mermaid
+flowchart TD
+    Q["❓ NL question → POST /api/v1/dlm/ask"]
+    R["🧭 Route + resolve<br/><small>which dataset · value index: terms → columns/values<br/>('anthropic' → provider='Anthropic')</small>"]
+    C{"Precomputed answer shape?"}
+    CTX["⚡ Answer from context<br/><small>in-memory dict hit · no fact-table scan</small>"]
+    LIVE["🗄️ Assemble ONE live query<br/><small>execute on warehouse → cache</small>"]
+    Q --> R --> C
+    C -->|"total · by-dim · single-dim filter"| CTX
+    C -->|"year-slice · multi-filter combo"| LIVE
+
+    classDef ctx fill:#38a169,stroke:#276749,color:#fff;
+    classDef live fill:#d69e2e,stroke:#975a16,color:#fff;
+    class CTX ctx;
+    class LIVE live;
 ```
-User: "How many COVID deaths in the US?"
-         │
-         ▼
-┌─────────────────────────────────────────────────────┐
-│  1. Context Profiler                                 │
-│     Reads pg_stats, pg_stat_user_tables,             │
-│     pg_constraint, query_history — NO data scan      │
-│     Builds per-table + per-column context elements   │
-│     File: services/context_profiler.py               │
-└──────────────────────┬──────────────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────────────┐
-│  2. Validity Scorer                                  │
-│     Per-element score = f(time, change, usage)       │
-│     - Time: exponential decay (6h half-life)         │
-│     - Change: n_mod_since_analyze delta / row_count  │
-│     - Usage: hot elements decay faster (log-scaled)  │
-│     File: services/context_validity.py               │
-└──────────────────────┬──────────────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────────────┐
-│  3. Question Router                                  │
-│     NL question → deterministic token matching →     │
-│     identify relevant context elements               │
-│     Route decision based on MIN(relevant scores):    │
-│     ┌────────────┬────────────┬────────────────────┐ │
-│     │  All ≥ 0.7 │  Mixed     │  All < 0.7         │ │
-│     │  CONTEXT   │  HYBRID    │  LIVE QUERY        │ │
-│     └────────────┴────────────┴────────────────────┘ │
-│     File: services/context_router.py                 │
-└──────────────────────┬──────────────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────────────┐
-│  4. Answer Paths                                     │
-│     Context: profile-synthesized (row count, distinct │
-│       count, null rate) OR dependency-valid cache     │
-│     Live: execute SQL → refresh elements → cache →   │
-│       self-healing loop (same question now serves     │
-│       from context until data moves again)            │
-└─────────────────────────────────────────────────────┘
-```
+
+The DLM is built **on top of** the statistics-based context engine (`context_profiler` reads `pg_stats` / `pg_stat_user_tables` / `pg_constraint` / `query_history` — no data scan). Self-migrating tables in `kaveonmeta`:
+
+| Table | Holds |
+|-------|-------|
+| `dlm_artifact` | per-dataset compiled manifest + stats/usage rollups (generation timing) |
+| `dlm_value_index` | value → column/filter resolution |
+| `dlm_router` | cross-dataset routing summary/terms |
+| `dlm_answers` | **precomputed answers** — each metric's grand total + per-dimension breakdown |
+| `context_snapshots` | per-element profile + captured change counters (staleness signal) |
+
+`generate_dlm()` precomputes all answers at build time (one scan for totals, one per dimension). `ask()` serves totals, per-dimension breakdowns, and single-dimension equality filters from an in-memory cache warmed once per dataset — microsecond dict hits, no scan. Every answer is badged **"⚡ From context · no DB scan"** or **"Live query · Xs"** with real timing. Non-additive metrics (`COUNT DISTINCT`, `AVG`) are exact because each shape is computed independently at build time.
+
+**Measured:** over a 10.1M-row usage dataset, "current usage" drops from **~15 s live to ~1.5 s from context** (the scan is eliminated; the residual is routing).
 
 ### Key Design Decisions
 
 | Decision | Rationale |
 |---|---|
 | No LLM anywhere in the routing path | Deterministic, zero-cost, no API keys, no latency, patentable |
+| Precompute answers at build time | Compute-once/answer-many — the common question needs no scan |
 | Staleness from DBMS counters, not re-query | `n_mod_since_analyze` is free; re-querying defeats the purpose |
 | Per-element, not per-dataset | Table A fresh + Table B stale → only re-query Table B's data |
-| Profile-synthesized answers | "How many rows?" returns `n_live_tup` directly — no query ever |
-| Dependency-valid cache | Cached result served only while ALL its element dependencies are fresh |
+| Physical control/context vs. warehouse split | Context answers never contend with a 10M-row scan |
 
 ### API Endpoints
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /api/v1/context/build` | Build/refresh context for a database (reads DBMS statistics) |
-| `GET /api/v1/context/validity` | Report validity scores for all context elements |
-| `POST /api/v1/context/ask` | Route a NL question → context answer or live query |
+| `POST /api/v1/dlm/ask` | Route a NL question → context answer or one live query |
+| `GET /api/v1/dlm/route` | Which dataset(s) a question routes to |
+| `GET /api/v1/dlm/coverage` | What a dataset's DLM can answer (dims, metrics, sample values) |
+| `POST /api/v1/datasets/{id}/dlm/generate` | (Re)compile the DLM + precompute answers |
+| `GET /api/v1/datasets/{id}/dlm` | DLM status: last generated, duration, indexed dims/metrics |
+| `POST /api/v1/context/build` · `GET /context/validity` · `POST /context/ask` | Lower-level context engine (staleness scoring) |
 
 ### Implementation Status
 
@@ -718,26 +605,25 @@ User: "How many COVID deaths in the US?"
 |---|---|---|
 | Context profiler (pg_stats reader) | Complete | `services/context_profiler.py` |
 | Validity scorer (3-factor decay) | Complete | `services/context_validity.py` |
-| Question router (deterministic) | Complete | `services/context_router.py` |
-| Profile-synthesized answers | Complete | `context_router.py:109-159` |
-| Dependency-valid cache | Complete | `context_router.py:172-203` |
-| Self-healing feedback loop | Complete | `context_profiler.py:304-333` |
-| Hybrid path (partial decomposition) | Routing only | SQL not decomposed; full query re-run |
-| FK heuristic inference | Declared FK only | `<t>_id` name matching not yet implemented |
-| Frontend integration (`/context/ask`) | Not wired | Chat uses `nlToSql` directly; routing engine is backend-only |
+| Question router (deterministic, weighted) | Complete | `services/context_router.py`, `services/dlm.py` |
+| Precomputed answer store (`dlm_answers`) | Complete | `services/dlm.py` |
+| Answer-from-context (in-memory cache) | Complete | `services/dlm.py` |
+| Profile-synthesized answers | Complete | `context_router.py` |
+| Frontend integration (homepage) | **Complete — DLM is the primary path** | `app/page.tsx`, `ContextBanner.tsx`, `DatasetContextPanel.tsx` |
+| Hybrid path (partial decomposition) | Single-dim filters served from breakdown; deeper decomposition open | `services/dlm.py` |
 
 ---
 
 ## Caching Strategy
 
-Kaveon intentionally avoids server-side caching of query results — all data is fetched live from Fabric SQL on every request. This ensures users always see the most current data.
+Warehouse queries are **live by default** — Kaveon does not cache arbitrary result sets server-side, so users see current data. The exceptions are deliberate:
 
-What IS cached:
-- **JWKS public keys**: `PyJWKClient(cache_keys=True)` — avoids repeated HTTPS calls to Azure AD
-- **Azure AD tokens**: `DefaultAzureCredential` caches tokens internally with automatic refresh
-- **Connection pool**: each `(endpoint, database)` pair has a persistent pool of up to N reusable ODBC connections — avoids per-request TLS handshakes and auth overhead
+- **DLM answer cache**: precomputed metric totals + per-dimension breakdowns (`dlm_answers`) served from an in-memory cache (`_ANSWER_CACHE`, warmed once per dataset) — the answer-from-context path, no scan.
+- **SQL Lab result cache**: async-job results keyed by SHA-256 of the query, with a TTL.
+- **Managed Identity tokens**: `DefaultAzureCredential` caches tokens with automatic refresh.
+- **Connection pools**: each `(endpoint, database)` pair keeps a persistent pool of reusable connections — avoids per-request TLS handshakes and auth overhead.
 
-All API responses that return mutable data include:
+Mutable API responses include:
 ```
 Cache-Control: no-cache, no-store, must-revalidate
 Pragma: no-cache
@@ -752,44 +638,40 @@ Expires: 0
 
 | Component | File | Responsibility |
 |---|---|---|
-| `ConnectionPool` | `database/pool.py` | Thread-safe queue-based ODBC pool per database |
-| `FabricSQLConnection` | `database/pool.py` | Single pyodbc connection with Azure AD token auth |
+| `ConnectionPool` | `database/pool.py` | Thread-safe pool per `(endpoint, database)`; separate sizing for metadata vs warehouse |
+| `PostgreSQLConnection` | `database/pool.py` | psycopg2 connection; password or Managed-Identity token auth |
+| `FabricSQLConnection` | `database/pool.py` | pyodbc connection with Azure AD token (`SQL_COPT_SS_ACCESS_TOKEN`) |
+| `MySQLConnection` | `database/pool.py` | pymysql connection (MySQL / StarRocks) |
 | `LargeIntResponse` | `database/pool.py` | FastAPI response class: `datetime→ISO`, large `int→str` |
-| `get_current_user` | `middleware/auth.py` | JWT verification dependency |
-| `require_auth` | `middleware/auth.py` | Enforcing dependency — 401 if unauthenticated |
-| `UserContext` | `middleware/auth.py` | Dataclass: email, role, jwt_roles — passed through role-aware endpoints |
-| `require_user_context` | `middleware/auth.py` | Like `require_auth` but returns `UserContext` with resolved role |
-| `resolve_role` | `services/users.py` | JWT-only role resolution; None for oauth with no App Role (→ 403) |
+| proxy-identity auth | `middleware/auth.py` | Reads `X-User-*`, validates `X-Proxy-Secret`; returns `UserContext(email, name, role)` |
 | `require_min_role` | `middleware/permissions.py` | Dependency factory for role-gated endpoints |
-| `RateLimitMiddleware` | `middleware/rate_limit.py` | Per-user in-memory sliding-window rate limiter |
-| `require_min_role` | `middleware/permissions.py` | FastAPI dependency factory — returns UserContext or 403 |
-| `build_chart_preview_query` | `services/query_generator.py` | Star-schema T-SQL generation |
-| `build_distinct_filter_values_query` | `services/query_generator.py` | Filter dropdown query generation |
-| `quote_identifier` | `services/query_generator.py` | SQL identifier sanitization |
+| `resolve_role` | `services/users.py` | Admin if email ∈ `AUTH_ADMIN_EMAILS`, else Viewer |
+| `RateLimitMiddleware` | `middleware/rate_limit.py` | Per-user sliding-window limiter (Redis-backed if `REDIS_URL`) |
+| DLM engine | `services/dlm.py` | Value index, router, precompute, answer cache, live assembler |
+| context engine | `services/context_profiler.py` · `context_validity.py` · `context_router.py` | Statistics profile, staleness scoring, routing |
+| `build_chart_preview_query` | `services/query_generator.py` | Star-schema SQL generation |
+| `adapt_sql` | `database/pool.py` | T-SQL → Postgres/MySQL dialect translation |
 | `start_warmup_and_heartbeat` | `database/warmup.py` | Background warmup + 5-min keepalive |
 
 ### Key Frontend Components
 
 | Component | File | Responsibility |
 |---|---|---|
-| `MsalProvider` | `auth/` | Azure AD MSAL browser context |
-| `msalFetch` | `utils/` | Authenticated fetch wrapper (injects Bearer token) |
+| `SessionProvider` (NextAuth) | `app/layout.tsx` | Auth session context |
+| proxy `fetch` | `app/api/kaveon/[...path]/route.ts` | Same-origin API proxy; stamps `X-User-*` server-side |
+| `ContextBanner` | `components/ContextBanner.tsx` | Homepage banner: DLM coverage + hover detail |
+| `DatasetContextPanel` | `components/DatasetContextPanel.tsx` | Dataset page: last-generated, duration, indexed dims/metrics, Regenerate |
 | `ThemeContext` | `contexts/` | Per-user colour theme state |
-| `ConfirmModal` | `components/ConfirmModal.tsx` | Portal-based confirm dialog — renders at `document.body` via `ReactDOM.createPortal` to avoid clipping |
-| Chart Builder | `app/charts/new/` | Drag-drop chart config UI |
-| `ChartPreview` | `components/charts/ChartPreview.tsx` | Renders ECharts, table, KPI, world map; exposes `onRegisterExports` for download callbacks |
-| `ChartBuilderProvider` | `components/charts/ChartBuilderContext.tsx` | Per-chart scoped context — runs query, holds results, exposes `sqlPreview` |
-| Dashboard Canvas | `components/dashboards/DashboardCanvas.tsx` | react-grid-layout grid with row drag handles (small draggable strip + `dataTransfer`) |
-| `DashboardContext` | `components/dashboards/DashboardContext.tsx` | Flat layout state, cross-filter map, preload cache, filter merging |
-| `DashboardItem` | `components/dashboards/DashboardItem.tsx` | Routes each layout item to the correct component; chart items get card wrapper |
-| `ChartActionsOverlay` | `components/dashboards/components/ChartActionsOverlay.tsx` | Always-visible ⋯ button + dropdown; uses `useChartBuilder()` for query/table modals |
-| `DashboardChartComponent` | `components/dashboards/components/DashboardChartComponent.tsx` | Scopes `ChartBuilderProvider`, wires preload cache, cross-filter emission, refresh key |
-| `DashboardTextComponent` | `components/dashboards/components/DashboardTextComponent.tsx` | Markdown renderer + formatting toolbar (B/I/code/link/lists/quote); inline edit with Markdown/Preview tabs |
-| `DashboardHeaderComponent` | `components/dashboards/components/DashboardHeaderComponent.tsx` | H1/H2/H3 inline-editable header with alignment and `react-colorful` colour picker |
-| `DashboardColumnComponent` | `components/dashboards/components/DashboardColumnComponent.tsx` | Vertical container with child drag-to-reorder and add-block dropdown (Chart/Text/Header/Divider) |
-| Monaco Editor | `app/lab/` | SQL editor with syntax highlighting |
-| `useRole` | `hooks/useRole.ts` | Returns `{role, isViewer, isAnalyst, isEditor, isAdmin, canCreate, canPublish}` |
-| `RoleGate` | `components/RoleGate.tsx` | Conditionally renders children based on `minRole` prop |
+| `ConfirmModal` | `components/ConfirmModal.tsx` | Portal-based confirm dialog (`ReactDOM.createPortal`) |
+| `ChartPreview` | `components/charts/ChartPreview.tsx` | Renders ECharts, table, KPI, world map; `onRegisterExports` |
+| `ChartBuilderProvider` | `components/charts/ChartBuilderContext.tsx` | Per-chart scoped context — runs query, holds results, `sqlPreview` |
+| `DashboardCanvas` | `components/dashboards/DashboardCanvas.tsx` | react-grid-layout grid with row drag handles |
+| `DashboardContext` | `components/dashboards/DashboardContext.tsx` | Flat layout state, cross-filter map, preload cache |
+| `DashboardItem` | `components/dashboards/DashboardItem.tsx` | Routes each layout item to the correct component |
+| `ChartActionsOverlay` | `components/dashboards/components/ChartActionsOverlay.tsx` | ⋯ button + dropdown; `useChartBuilder()` for query/table modals |
+| `DashboardTextComponent` | `components/dashboards/components/DashboardTextComponent.tsx` | Markdown renderer + formatting toolbar + `react-colorful` colour picker |
+| `useRole` | `hooks/useRole.ts` | `{role, isViewer, isAnalyst, isEditor, isAdmin, canCreate, canPublish}` |
+| `RoleGate` | `components/RoleGate.tsx` | Conditionally renders children based on `minRole` |
 
 ---
 
@@ -798,25 +680,25 @@ Expires: 0
 ### URL Structure
 
 ```
-/api/health                      — health check (unauthenticated)
-/api/connect                     — connect (noop, for MSAL compat)
-/api/v1/setup/status             — setup wizard status (unauthenticated)
-/api/v1/setup/test               — test connection (setup mode only)
-/api/v1/setup/initialize         — apply schema.sql (setup mode only)
-/api/v1/datasets                 — datasets CRUD
-/api/v1/charts                   — charts CRUD
-/api/v1/dashboards               — dashboards CRUD
-/api/v1/data-sources             — data sources CRUD
-/api/v1/favorites                — user favourites
-/api/v1/theme                    — user colour theme
-/api/v1/lab/*                    — SQL Lab (queries, history, tables, execute)
-/api/v1/sql/generate             — semantic SQL generation
-/api/v1/sql/distinct-filter-values — filter dropdown values
-/api/v1/sql/execute              — SQL execution with history logging
-/api/v1/metadata/summary         — parallel metadata summary
-/api/v1/users/me                 — current user's email + resolved role
-/api/v1/users                    — list role assignments (Admin only)
-/api/v1/users/{email}/role       — assign / remove role (Admin only)
+/api/health                         — health check (unauthenticated)
+/api/v1/setup/*                     — first-run setup wizard (setup mode only)
+/api/v1/datasets                    — datasets CRUD
+/api/v1/charts                      — charts CRUD
+/api/v1/dashboards                  — dashboards CRUD
+/api/v1/data-sources                — data sources CRUD
+/api/v1/favorites                   — user favourites
+/api/v1/theme                       — user colour theme
+/api/v1/lab/*                       — SQL Lab (execute, query, history, tables)
+/api/v1/sql/generate                — semantic SQL generation
+/api/v1/sql/distinct-filter-values  — filter dropdown values
+/api/v1/sql/execute                 — SQL execution with history logging
+/api/v1/sql/execute-async · /sql/async/{job_id} — detached async jobs + result cache
+/api/v1/dlm/*                       — DLM: ask, route, coverage, generate, status
+/api/v1/context/*                   — context engine: build, validity, ask
+/api/v1/metadata/summary            — parallel metadata summary
+/api/v1/users/me                    — current user's email + resolved role
+/api/v1/users                       — list role assignments (Admin only)
+/api/v1/users/{email}/role          — assign / remove role (Admin only)
 ```
 
 ### Response Conventions
@@ -828,13 +710,13 @@ Expires: 0
 
 ### Parameterized Query Convention
 
-All metadata DB queries use `@param0`, `@param1`, ... placeholders which are replaced with `?` by `database/metadata.py` before execution:
+Metadata DB queries use `@param0`, `@param1`, ... placeholders which are replaced with `%s`/`?` by `database/metadata.py` before execution:
 
 ```python
 db.query("SELECT * FROM datasets WHERE created_by = @param0", [user_email])
 ```
 
-Direct pool queries use native `?` placeholders:
+Direct pool queries use native placeholders:
 
 ```python
 conn.execute_query("SELECT * FROM table WHERE id = ?", [record_id])
@@ -846,46 +728,45 @@ conn.execute_query("SELECT * FROM table WHERE id = ?", [record_id])
 
 ### Next.js App Router
 
-Kaveon uses the **Next.js 15 App Router** with all interactive pages rendered client-side (no SSR data fetching — all data comes from the authenticated API).
+Kaveon uses the **Next.js 15 App Router** with interactive pages rendered client-side (data comes from the authenticated proxy API).
 
 ```
 app/
-├── layout.tsx              — Root: MsalProvider + ThemeProvider + Navbar
-├── page.tsx                — Home: recent activity, quick links
+├── layout.tsx              — Root: SessionProvider (NextAuth) + ThemeProvider + sidebar
+├── page.tsx                — Home: DLM chat (NL→SQL) + context banner + quick links
 ├── charts/
 │   ├── page.tsx            — Charts list
 │   ├── [id]/page.tsx       — Chart detail / inline rename
 │   └── new/page.tsx        — Chart builder (drag-drop config + live preview)
 ├── dashboards/
 │   ├── page.tsx            — Dashboards list
-│   ├── [id]/
-│   │   ├── edit/page.tsx   — Dashboard editor (react-grid-layout, edit mode)
-│   │   └── view/page.tsx   — Dashboard viewer (read-only, filter bar, publish)
+│   ├── [id]/edit/page.tsx  — Dashboard editor (react-grid-layout)
+│   └── [id]/view/page.tsx  — Dashboard viewer (read-only, filter bar, publish)
 ├── datasets/
 │   ├── page.tsx            — Datasets list
-│   └── [id]/page.tsx       — Dataset detail + inline rename
+│   └── [id]/page.tsx       — Dataset detail + DLM context panel
 ├── data-sources/page.tsx   — Data source registration
 ├── lab/
 │   ├── page.tsx            — SQL Lab (Monaco + multi-tab + results grid)
 │   └── queries/page.tsx    — Saved queries + query history
-├── favorites/page.tsx      — Favourites list
-├── settings/
-│   └── users/page.tsx      — User role management (Admin only)
-└── workspace-activity/     — Team query history
+├── settings/users/page.tsx — User role management (Admin only)
+├── login/page.tsx          — Sign-in (OAuth providers)
+└── api/
+    ├── kaveon/[...path]/    — API proxy (stamps X-User-*)
+    └── auth/               — NextAuth (Auth.js v5) handlers
 ```
 
-### MSAL Authentication Flow
+### Sign-in Flow (NextAuth + proxy)
 
-```
-1. User visits any page
-2. MsalProvider checks for active account
-3. If no account → redirect to Azure AD login (PKCE flow)
-4. After login → Azure AD redirects back to /
-5. MSAL stores access token in sessionStorage
-6. Every API call uses msalFetch():
-   a. acquireTokenSilent() — get token from cache or refresh
-   b. If silent fails → acquireTokenRedirect()
-   c. Adds Authorization: Bearer <token> header
+```mermaid
+flowchart TD
+    A["User visits a protected page"]
+    B["middleware.ts → no session → redirect to /login"]
+    C["OAuth provider (GitHub / Google / Entra) → callback"]
+    D["NextAuth sets an encrypted session cookie"]
+    E["API calls → /api/kaveon/* proxy reads session server-side"]
+    F["Proxy stamps X-User-* + X-Proxy-Secret → kaveon-api"]
+    A --> B --> C --> D --> E --> F
 ```
 
 ---
@@ -898,11 +779,11 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for the deployment guide.
 
 | Concern | Approach |
 |---|---|
-| Frontend hosting | Vercel — auto-deploy from `dev` branch |
+| Frontend hosting | Vercel — auto-deploy from `dev` branch; `npm install --legacy-peer-deps` (pnpm fails in Vercel's sandbox) |
 | API hosting | Azure Container Apps — image from `kaveonacr.azurecr.io`, IaC in `infra/bicep/` |
-| Database | Azure PostgreSQL Flexible Server (`kaveon-db.postgres.database.azure.com/kaveon`) — metadata; auth via Managed Identity |
-| Auth | NextAuth (GitHub / Microsoft Entra ID) |
-| API auth | Proxy secret (`KAVEON_PROXY_SECRET`) — Vercel injects `X-User-*` headers |
-| API runtime | Gunicorn + Uvicorn workers (4 workers × 8 threads) |
+| Database | Azure PostgreSQL Flexible Server (PG 18): `kaveonmeta` (metadata + context) + `kaveon` (warehouse) — Managed Identity auth |
+| Auth | NextAuth (GitHub / Google / Microsoft Entra ID) |
+| API auth | Proxy secret (`KAVEON_PROXY_SECRET`) — the Next.js proxy injects `X-User-*` headers |
+| API runtime | Gunicorn + Uvicorn workers |
 | Cold starts | Connection pool warmup at startup; 5-min heartbeat |
 | First run | Setup wizard at `/api/v1/setup/*` — disabled once configured |
