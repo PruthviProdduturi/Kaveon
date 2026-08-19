@@ -39,9 +39,17 @@ def chart(name, ctype, qc, vc=None):
     return cid
 
 
+DISCLAIMER = "⚠️ _This is synthetic data generated to test the platform — not real usage._"
+
+
+def text_box(content, x, y, w, h):
+    return {"i": cell(), "type": "text", "textConfig": {"content": content},
+            "x": x, "y": y, "w": w, "h": h, "minW": 2, "minH": 1, "maxW": 12, "maxH": 40}
+
+
 def dash(name, desc, layout):
     did = uuid.uuid4().hex
-    cids = [b["chartId"] for b in layout]
+    cids = [b["chartId"] for b in layout if "chartId" in b]
     pool.execute_query(
         "INSERT INTO dashboards (id, name, description, layout, charts, theme, "
         "is_published, visibility, created_by) VALUES (%s,%s,%s,%s,%s,'dark',true,'published',%s)",
@@ -106,7 +114,8 @@ def main():
          [box(a1, 0, 0, 3, 4), box(a2, 3, 0, 3, 4), box(a3, 6, 0, 3, 4), box(a4, 9, 0, 3, 4),
           box(a5, 0, 4, 12, 7),
           box(a6, 0, 11, 6, 7), box(a7, 6, 11, 6, 7),
-          box(a8, 0, 18, 12, 7)])
+          box(a8, 0, 18, 12, 7),
+          text_box(DISCLAIMER, 0, 25, 12, 2)])
 
     # ── Dashboard 2: Adoption & engagement ───────────────────────────────────
     b1 = kpi("Total NL Queries", "nl_queries", "SUM", "NL")
@@ -123,7 +132,8 @@ def main():
          "and the most active organizations. Synthetic.",
          [box(b1, 0, 0, 3, 4), box(b2, 3, 0, 3, 4), box(b3, 6, 0, 3, 4), box(b4, 9, 0, 3, 4),
           box(b5, 0, 4, 6, 8), box(b6, 6, 4, 6, 8),
-          box(b7, 0, 12, 6, 7), box(b8, 6, 12, 6, 7)])
+          box(b7, 0, 12, 6, 7), box(b8, 6, 12, 6, 7),
+          text_box(DISCLAIMER, 0, 19, 12, 2)])
 
     n = pool.execute_query(
         "SELECT COUNT(*) FROM dashboards WHERE name LIKE 'Kaveon %'", DB)["rows"][0][0]

@@ -34,6 +34,11 @@ _PLATFORM_TABLE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A platform name that is an OUTPUT ALIAS (… AS "Charts") is never a table read,
+# so it must not trip the guard. This lets a dataset legitimately have a metric
+# labelled "Charts" or a column like charts_created (already excluded by \b).
+_ALIAS_PREFIX_RE = re.compile(r"\bas\s+[\"\[`]?\s*$", re.IGNORECASE)
+
 # A read-only statement starts with SELECT or a WITH … SELECT CTE.
 _READONLY_RE = re.compile(r"^\s*(?:select|with)\b", re.IGNORECASE)
 
@@ -48,8 +53,11 @@ def assert_no_platform_tables(sql: str, database: Optional[str]) -> None:
     """Raise 403 if `sql` references a platform table while targeting the metadata DB."""
     if not is_metadata_db(database):
         return
-    m = _PLATFORM_TABLE_RE.search(sql or "")
-    if m:
+    text = sql or ""
+    for m in _PLATFORM_TABLE_RE.finditer(text):
+        # Skip output aliases (e.g. SUM(charts_created) AS "Charts") — not a table read.
+        if _ALIAS_PREFIX_RE.search(text[:m.start()]):
+            continue
         raise HTTPException(
             status_code=403,
             detail={
