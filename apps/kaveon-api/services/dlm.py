@@ -1500,7 +1500,9 @@ def _merge_spec(suggested: dict, curation: dict) -> dict:
             entry = dict(val)
             o = over.get(key) or {}
             if "aliases" in o:
-                entry["aliases"] = sorted(set(entry.get("aliases", [])) | set(o.get("aliases") or []))
+                # curated list is authoritative (WYSIWYG editor pre-fills from
+                # effective, so this supports removing a suggested alias too)
+                entry["aliases"] = sorted(set(o.get("aliases") or []))
             for f in ("display_name", "additive", "default", "precompute", "top_n", "hidden"):
                 if f in o:
                     entry[f] = o[f]
