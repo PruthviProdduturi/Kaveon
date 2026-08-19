@@ -2,7 +2,7 @@
 
 > Branch: `dev` (default)
 > Module: Analyze module of the Kaveon suite
-> Deploy: Vercel (kaveon-web) + Azure Container Apps (kaveon-api) + Neon (Postgres) · [kaveon.vercel.app](https://kaveon.vercel.app)
+> Deploy: Vercel (kaveon-web) + Azure Container Apps (kaveon-api) + Azure PostgreSQL (`kaveonmeta` + `kaveon`) · [kaveon.vercel.app](https://kaveon.vercel.app)
 
 ---
 
@@ -24,7 +24,8 @@
 | Core analytics (datasets, charts, dashboards, SQL Lab) | ✅ Done |
 | OAuth auth (GitHub / Google / Microsoft Entra) + RBAC | ✅ Done |
 | Multi-source connectors | 🔄 In Progress |
-| AI assistant (NL→SQL — homepage chat) | ✅ Done |
+| DLM (no-LLM NL→SQL, answer-from-context) — primary homepage path | ✅ Done |
+| Metadata/data DB split (`kaveonmeta` + `kaveon`) | ✅ Done |
 | CI/CD + repo standards | ✅ Done |
 | Superset-parity gaps | 📋 Planning |
 
@@ -35,7 +36,8 @@
 | Item | Status | Notes |
 |------|--------|-------|
 | Semantic datasets — star schema, dimensions, metrics, role-playing dims (COALESCE) | ✅ Done | |
-| Chart builder — 20+ ECharts types incl. 3D WebGL globe | ✅ Done | |
+| Chart builder — 37 ECharts types incl. 3D WebGL globe | ✅ Done | |
+| DLM — no-LLM NL→SQL, precomputed answer-from-context (10M rows → ~1.5s, no scan) | ✅ Done | Primary homepage path; `nlToSql` is fallback |
 | Dashboard builder — drag-drop, rows/columns/tabs/text/headers/dividers | ✅ Done | Flat layout |
 | Cross-filtering (click chart → filters others) | ✅ Done | |
 | SQL Lab — Monaco, multi-tab, history, saved queries | ✅ Done | |
@@ -65,8 +67,8 @@
 | Azure SQL | ✅ Done |
 | PostgreSQL | ✅ Done |
 | MySQL | ✅ Done |
-| Trino | 📋 Planning |
-| StarRocks | 📋 Planning |
+| StarRocks (MySQL protocol) | ✅ Done |
+| Trino | 📋 Planning (no driver yet) |
 
 ## Repo Standards (Forge parity)
 
@@ -103,5 +105,4 @@
 5. Jinja SQL templating
 6. Dataset certification / governance
 7. Advanced filters (multi-select, range, cascading)
-8. More chart types (Sankey, Treemap, Waterfall, Mixed time-series)
-9. Non-Azure connectors (Snowflake, BigQuery, Databricks, Redshift)
+8. Non-Azure connectors (Snowflake, BigQuery, Databricks, Redshift)
