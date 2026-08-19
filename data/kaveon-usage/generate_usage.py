@@ -26,14 +26,14 @@ INSERT INTO public.kaveon_users
 SELECT g,
   'user' || g || '@' || lower(replace(org, ' ', '')) || '.com',
   org, plan, region, role,
-  (date '2023-01-01' + (random() * 640)::int)
+  (date '2024-01-01' + (random() * 940)::int)
 FROM (
   SELECT g,
     split_part('Acme Corp,Globex,Initech,Umbrella,Stark Industries,Wayne Enterprises,Hooli,Pied Piper,Vandelay,Wonka Industries,Cyberdyne,Soylent,Massive Dynamic,Tyrell Corp,Aperture Labs', ',', 1 + floor(random()*15)::int) AS org,
     split_part('Free,Free,Free,Pro,Pro,Team,Team,Enterprise', ',', 1 + floor(random()*8)::int) AS plan,
     split_part('North America,North America,Europe,Europe,Asia,Asia,South America,Africa,Oceania', ',', 1 + floor(random()*9)::int) AS region,
     split_part('Viewer,Viewer,Viewer,Analyst,Analyst,Editor,Admin', ',', 1 + floor(random()*7)::int) AS role
-  FROM generate_series(1, 3000) g
+  FROM generate_series(1, 44000) g
 ) t
 """
 
@@ -52,15 +52,16 @@ SELECT
   greatest(0, round(pw * wf * random()*1.5)::int) AS charts_created,
   greatest(0, round(pw * wf * (1 + random()*3))::int) AS datasets_accessed,
   greatest(0, round(pw * wf * random()*1.2)::int) AS exports,
-  round((pw * wf * (5 + random()*40))::numeric, 1) AS active_minutes
+  round((pw * wf * (5 + random()*40))::numeric, 1) AS active_minutes,
+  u.org, u.plan, u.region, u.role, u.signup_date
 FROM public.kaveon_users u
-CROSS JOIN LATERAL generate_series(0, 339) AS s(day_off)
-CROSS JOIN LATERAL (SELECT (date '2024-01-01' + s.day_off) AS ud) dd
+CROSS JOIN LATERAL generate_series(0, 229) AS s(day_off)
+CROSS JOIN LATERAL (SELECT (date '2026-01-01' + s.day_off) AS ud) dd
 CROSS JOIN LATERAL (
   SELECT
     (CASE u.plan WHEN 'Enterprise' THEN 8 WHEN 'Team' THEN 4 WHEN 'Pro' THEN 2 ELSE 1 END)::numeric
-      * (0.7 + 0.6 * (s.day_off / 339.0)) AS pw,               -- +growth over the year
-    (CASE WHEN extract(dow FROM (date '2024-01-01' + s.day_off)) IN (0, 6) THEN 0.35 ELSE 1.0 END)::numeric AS wf
+      * (0.7 + 0.6 * (s.day_off / 229.0)) AS pw,               -- +growth over the period
+    (CASE WHEN extract(dow FROM (date '2026-01-01' + s.day_off)) IN (0, 6) THEN 0.35 ELSE 1.0 END)::numeric AS wf
 ) w
 CROSS JOIN LATERAL (SELECT greatest(0, round(pw * wf * (0.5 + random()*3.5))::int) AS q) qq
 """
@@ -97,7 +98,12 @@ def main():
           charts_created INT NOT NULL,
           datasets_accessed INT NOT NULL,
           exports INT NOT NULL,
-          active_minutes NUMERIC(6,1) NOT NULL
+          active_minutes NUMERIC(6,1) NOT NULL,
+          org VARCHAR(60) NOT NULL,
+          plan VARCHAR(20) NOT NULL,
+          region VARCHAR(30) NOT NULL,
+          role VARCHAR(20) NOT NULL,
+          signup_date DATE NOT NULL
         )""", DB)
     t0 = time.time()
     pool.execute_query(USAGE_SQL, DB)
