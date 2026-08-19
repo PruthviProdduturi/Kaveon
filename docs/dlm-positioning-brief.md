@@ -13,10 +13,10 @@
 
 **How it sits next to Fabric:**
 
-- **Fast query** (Direct Lake / VertiPaq / result cache) — complementary. That's *executing* a known query; we sit above it, on deciding *which* query.
-- **Proactive statistics** — same raw signal, different use: we repurpose it for retrieval + answer-validity, not query-plan selection.
-- **Fabric IQ / Copilot** — the real comparison. It calls a hosted LLM *per question*; we amortize to a one-time precompute + a lookup. It wins on open-ended reasoning; we win on cost, privacy, determinism, and portability (runs over Postgres, MySQL, StarRocks, Azure SQL — **and** Fabric).
+- **Fast query** (Direct Lake / VertiPaq / result cache) — complementary. That's *executing* a known query; Kaveon sits above it, on deciding *which* query.
+- **Proactive statistics** — same raw signal, different use: Kaveon repurposes it for retrieval + answer-validity, not query-plan selection.
+- **Fabric IQ / Copilot** — the real comparison. It calls a hosted LLM *per question*; Kaveon amortizes to a one-time precompute + a lookup. Fabric IQ wins on open-ended reasoning; Kaveon wins on cost, privacy, determinism, and portability (runs over Postgres, MySQL, StarRocks, Azure SQL — **and** Fabric).
 
 **See it:** open [kaveon.vercel.app](https://kaveon.vercel.app) and ask *"what is current Kaveon usage?"* then *"queries by plan in 2026."* Every answer shows its source (context vs live) and its timing — so the numbers above are verifiable, not asserted.
 
-**Where we don't win:** open-ended reasoning ("why did revenue drop") is Fabric IQ's frontier-LLM turf. We own the 80% "fetch the right data" question — deterministically, privately, and at near-zero marginal cost.
+**Where it doesn't win:** open-ended reasoning ("why did revenue drop") is Fabric IQ's frontier-LLM turf. Kaveon owns the 80% "fetch the right data" question — deterministically, privately, and at near-zero marginal cost.
