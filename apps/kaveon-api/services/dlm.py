@@ -883,16 +883,19 @@ def _match_group_by(question: str, dims: List[dict]) -> Optional[str]:
 
 
 def _match_any_dim(question: str, dims: List[dict]) -> Optional[str]:
-    """Find a dimension named anywhere in the question (handles plurals/typos via
-    a 4-char prefix match, e.g. 'countries'/'counties' -> country)."""
-    qt = _tokenize(question)
+    """Find a dimension named anywhere in the question. Handles plurals ('orgs'
+    -> org, 'countries' -> country) and typos via singular-strip + 4-char prefix."""
+    qt = [_normalize(t) for t in _tokenize(question)]
     for d in dims:
         col = (d.get("column_name") or d.get("name") or "").strip()
-        if not col:
+        cn = _normalize(col)
+        if not cn:
             continue
-        c4 = _normalize(col)[:4]
-        if c4 and len(c4) >= 4 and any(_normalize(t)[:4] == c4 for t in qt):
-            return col
+        for tn in qt:
+            if tn == cn or tn.rstrip("s") == cn or cn.rstrip("s") == tn.rstrip("s"):
+                return col
+            if len(cn) >= 4 and len(tn) >= 4 and tn[:4] == cn[:4]:
+                return col
         if set(_synonyms_for(col)) & set(qt):
             return col
     return None
