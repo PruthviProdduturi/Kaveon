@@ -1,6 +1,11 @@
 # NL→SQL: How Natural Language Queries Work
 
-Kaveon's homepage lets you ask questions in plain English and get back charts. There is **no LLM dependency** — it runs entirely in the browser using a template-based keyword parser defined in `apps/kaveon-web/utils/nlToSql.ts`.
+Kaveon's homepage lets you ask questions in plain English and get back charts, with **no LLM dependency**. Two engines sit behind it:
+
+1. **DLM (Data Language Model) — the primary path.** A per-dataset compiled context artifact in the API (`apps/kaveon-api/services/dlm.py`). It resolves the question deterministically and, for the common cases, **answers from precomputed context with no database scan at all** — returning a result badged **"⚡ From context · no DB scan"**. Only novel slices fall through to a single live query, badged **"Live query · Xs"**.
+2. **The in-browser template parser — the fallback.** A template-based keyword parser (`apps/kaveon-web/utils/nlToSql.ts`) that runs entirely in the browser. It handles shapes the DLM can't yet build (mainly time-series trends) and is documented in detail below.
+
+Both are deterministic — same question, same answer — and neither calls a hosted model. See `docs/dlm-positioning.md` and `docs/whitepaper-adaptive-context-routing.md` for the DLM design.
 
 ---
 
@@ -10,24 +15,26 @@ Kaveon's homepage lets you ask questions in plain English and get back charts. T
 User types question
        │
        ▼
-Dataset auto-detection
-  Score each loaded dataset schema against the query text
-  Pick the highest-scoring schema
+DLM route (POST /api/v1/dlm/ask)   ── PRIMARY
+  Route → which dataset(s)
+  Resolve NL terms → columns/values (value index)
+  Match a precomputed answer shape?
+       ├─ yes → ANSWER FROM CONTEXT   (in-memory dict hit, no DB scan)  ⚡
+       └─ no  → assemble ONE live query → execute → cache
        │
-       ▼
-nlToSql(query, schema)
-  Pattern matching against 7 built-in patterns
-  Fuzzy column/metric resolution
-  SQL string construction
-       │
-       ▼
-POST /api/v1/lab/query
-  kaveon-api executes the SQL against the data source
+       ▼  (only if DLM can't build the shape — e.g. trends)
+Template fallback
+  Dataset auto-detection: score each loaded schema against the query
+  nlToSql(query, schema): 7 patterns, fuzzy resolution, SQL string
+  POST /api/v1/lab/query → execute
        │
        ▼
 InlineChart renders ECharts in the conversation
+  Route badge (context vs live) + timing shown on every answer
   Chart type picked automatically based on result shape
 ```
+
+The rest of this guide documents the **template fallback** in detail (patterns, fuzzy matching, chart selection). For the DLM primary path — the value index, precomputed answers, and answer-from-context routing — see the whitepaper and positioning doc referenced above.
 
 ---
 

@@ -361,19 +361,24 @@ deliberately source-agnostic to allow this.
 `innodb_metrics`), and DuckDB expose analogous catalogs; the method transfers, the
 catalog names do not.
 
-**Profile-synthesised answer coverage.** Today the profile directly answers row
-counts, approximate distinct counts, and null rates. Most-common-value and
-histogram-based answers ("most common category", "median fare band") are natural
-extensions already present in the captured profile.
+**Profile-synthesised answer coverage.** *(Largely shipped — see the Addendum.)*
+The profile directly answers row counts, approximate distinct counts, and null
+rates. The DLM productization goes further: at build time it **precomputes every
+metric's grand total and each per-dimension breakdown** into a dedicated answer
+store, so "total X", "X by dimension", and single-dimension filters are served from
+context with no scan — not just the statistic-derived answers.
 
 **Threshold policy.** A single global threshold (0.7) drives the route today. A
 cost/accuracy policy — cheaper to serve a slightly-stale answer for an exploratory
 question than for a board report — would make the threshold context-dependent.
 
-**Hybrid decomposition.** The hybrid route currently re-runs the query when any
-dependency is stale. A finer decomposition — answer the valid columns from the
-profile and query only the stale table — is the strongest remaining extension and
-maps directly onto the per-element dependency graph the method already tracks.
+**Hybrid decomposition.** *(Partially shipped.)* The hybrid route re-runs the query
+when any dependency is stale. The DLM answer store realizes one concrete case of
+finer decomposition: a single-dimension equality filter ("queries for Enterprise")
+is served by selecting the matching row from the precomputed by-dimension
+breakdown — context-only, no scan — while genuinely novel slices (year-windows,
+multi-filter combinations) still fall to one live query. Fuller column-level
+decomposition over the dependency graph remains the strongest open extension.
 
 ---
 
@@ -395,6 +400,59 @@ doesn't query when it doesn't have to.
 
 ---
 
-*See also: `patent-adaptive-context-routing.md` for the filing-ready claim set, and
+## Addendum — Productization: the DLM (Data Language Model)
+
+The method above is the research core. In production it ships as the **DLM**: a
+per-dataset compiled context artifact that is now the **primary** query path on the
+Kaveon homepage (the template translator of the companion paper became the
+fallback). Three additions turned the method into a product, all live in prod today.
+
+### A.1 Precomputed answer store (compute-once, answer-many)
+
+Rather than only synthesising answers from `pg_stats`, the DLM **precomputes** the
+answerable shapes at build time. `generate_dlm()` runs one scan for all metric grand
+totals and one scan per dimension for its breakdown, and persists them to a
+`dlm_answers` table (metric × group-column → columns/rows). At query time,
+`ask()` serves totals, per-dimension breakdowns, **and** single-dimension equality
+filters straight from an **in-memory answer cache** (`_ANSWER_CACHE`, warmed once per
+dataset) — a microsecond dict hit with **no fact-table scan**. Only year-slices and
+multi-filter combinations fall through to one live query. Non-additive metrics
+(`COUNT(DISTINCT …)`, `AVG`) are exact because each shape is computed independently
+at build time — never derived by summing a breakdown.
+
+**Measured:** over a 10.1M-row synthetic usage dataset, "what is current usage?"
+(a `SUM` across all rows) drops from **~15 s live to ~1.5 s from context**, the
+residual being routing/resolution rather than the eliminated scan.
+
+### A.2 Physical separation of control/context from the warehouse
+
+The method distinguishes a metadata plane (the context representation + counters +
+caches) from the data plane (the rows). Production now separates them **physically**:
+a small **control+context database** (`kaveonmeta` — holds `dlm_*`, `context_*`, and
+the platform tables) is distinct from the **data warehouse** (`kaveon` — the actual
+rows), on the same server but reached over independent pools. This makes the
+economic claim literal: context answers are served from a tiny, fast store that
+never contends with a multi-million-row scan, so the common case is answered from a
+"$20/month box" while the warehouse scales on its own.
+
+### A.3 Honest source labelling
+
+Every answer is returned with the route it took and its timing, surfaced in the UI as
+**"⚡ From context · no DB scan"** versus **"Live query · Xs"**. The system never
+hides which plane served an answer or what it cost — the transparency the method's
+per-factor validity breakdown was designed for, made visible to the end user.
+
+### A.4 Where it lives
+
+`services/dlm.py` (engine: value index, router, precompute, answer cache, live
+assembler) and `routers/dlm.py` (`/dlm/ask`, `/dlm/route`, `/dlm/coverage`,
+`/datasets/{id}/dlm[/generate]`). The self-migrating tables `dlm_artifact`,
+`dlm_value_index`, `dlm_router`, and `dlm_answers` sit alongside the
+`context_snapshots` store this paper describes — the DLM is built **on top of** the
+context engine, not instead of it.
+
+---
+
+*See also: `patent-adaptive-context-routing.md` for the filing-ready claim set,
 `whitepaper-nl-to-sql.md` for the deterministic translation layer this router sits
-behind.*
+behind, and `dlm-positioning.md` for the product positioning (DLM vs Fabric).*

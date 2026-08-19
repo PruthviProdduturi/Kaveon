@@ -201,6 +201,71 @@ by one or more processors, cause the processors to perform the method of claim 1
 
 ---
 
+## Dependent Claims — Productization (precomputed answer store & separated planes)
+
+> These claims were added after reduction to practice. They capture two elements
+> that shipped in the productized embodiment (the "DLM"): a **precomputed
+> per-metric/per-dimension answer store** that answers common questions with no
+> query at all, and **physical separation** of the context/answer store from the
+> data warehouse. Numbered from 16 to avoid disturbing claims 1–15.
+
+**16.** The method of claim 1, wherein generating the context representation further
+comprises precomputing, without a live user query and for each of a plurality of
+predefined aggregate metrics of the dataset, (i) a grand aggregate value of the
+metric over the dataset and (ii) a set of per-dimension breakdown values grouping
+the metric by each of one or more dimension columns, and storing said precomputed
+values in an answer store keyed by metric and by dimension; and wherein answering
+from the context representation comprises returning one of said precomputed values
+without executing a query.
+
+> Claims compute-once/answer-many. This is a distinct no-query path from the
+> statistic-synthesised answers of claim 7: it precomputes *defined-metric*
+> aggregates and breakdowns at build time, not just DBMS-maintained statistics.
+
+**17.** The method of claim 16, wherein answering a question that specifies an
+equality filter on a single dimension comprises selecting, from the stored
+per-dimension breakdown for that dimension, a row matching the filter value, and
+returning the selected value without executing a query.
+
+> The single-dimension-filter-from-breakdown path: a filtered answer served with no
+> scan, by indexing into a precomputed breakdown.
+
+**18.** The method of claim 16, wherein each of the grand aggregate value and the
+per-dimension breakdown values is computed independently at generation time, such
+that a non-additive metric comprising one of a count of distinct values or an
+average is returned exactly and is not derived by aggregating the per-dimension
+breakdown values.
+
+> Forecloses the incorrect-roll-up failure mode and claims correctness for
+> non-additive metrics — a limitation a naive precompute would violate.
+
+**19.** The method of claim 16, wherein the precomputed values for a dataset are
+loaded into an in-memory cache upon first access and subsequent answers for that
+dataset are served from the in-memory cache, the in-memory cache being invalidated
+upon re-generation of the context representation for that dataset.
+
+> Claims the warmed in-memory answer cache and its invalidation on regeneration.
+
+**20.** The method of claim 1, wherein the context representation, the captured
+data-change indicators, and any precomputed answer store are stored in a first
+database that is physically separate from a second database storing the underlying
+rows of the dataset, such that answering from the context representation reads only
+the first database and does not contend with the second database.
+
+> Claims the physical control/context-vs-warehouse separation: the reason a
+> common-case answer is served from a small, fast store while the warehouse scales
+> independently. Distinct from any single-store cache.
+
+**21.** The method of claim 1, further comprising returning, with each answer, an
+indicator of whether the answer was produced from the context representation
+without executing a query or from a live database query, together with a measured
+time taken to produce the answer.
+
+> Claims the honest source/latency labelling surfaced to the user — a per-answer
+> provenance signal the prior-art caches do not expose.
+
+---
+
 ## Prior-Art Delta (summary for prosecution)
 
 | Reference class | What it teaches | What claim 1 adds |
@@ -210,6 +275,7 @@ by one or more processors, cause the processors to perform the method of claim 1
 | Query-plan statistics (`pg_stats`, histograms) | help the optimizer choose plans | repurpose the statistics as a **user-facing context representation** and as a **staleness signal** |
 | LLM RAG over embeddings | retrieve context by semantic similarity | context built **without an LLM**; freshness by **counter**, not similarity; routes to live SQL |
 | Cache invalidation via triggers/CDC | invalidate on write events | **score** staleness continuously and **per element relevant to a question**, and answer partially (hybrid) |
+| Precomputed aggregate / OLAP cube | precompute aggregates for fast reads | precompute is **gated and invalidated by the measured per-element staleness score** and served from a **plane physically separate** from the rows; answers a NL question with **no query**, with per-answer provenance (claims 16–21) |
 
 The defensible core is the **combination**: a per-element validity score whose
 change term is read from a DBMS-maintained modification counter (not a re-query),

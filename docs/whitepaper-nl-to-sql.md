@@ -3,6 +3,16 @@
 **Pruthvi Prodduturi**
 August 2026
 
+> **Status note (current).** This paper describes Kaveon's original client-side
+> template parser. It is now the **fallback** layer, not the primary path. The
+> primary path is the **DLM (Data Language Model)** — a per-dataset compiled
+> context artifact in the API that resolves the question deterministically and, for
+> the common cases, answers from *precomputed context with no database query at
+> all*. The template parser documented here handles the shapes the DLM does not yet
+> build (mainly time-series trends). Everything below remains an accurate account of
+> that fallback layer; for the primary engine see
+> `whitepaper-adaptive-context-routing.md` and `dlm-positioning.md`.
+
 ---
 
 ## Abstract
@@ -353,7 +363,7 @@ The template-based approach has clear boundaries.
 
 ### Planned improvements:
 
-- **Conversation context.** Carry forward the previous query's schema bindings so "now show that by month" resolves correctly.
+- **Conversation context.** *(Shipped.)* Follow-ups now carry forward the previous query's context — "what about India" reuses the prior query and swaps the entity, and the resolver walks back through a follow-up chain to find the last real query rather than the previous follow-up.
 - **User correction learning.** When a user modifies the generated SQL in SQL Lab and re-runs it, capture the correction as a training signal for pattern refinement.
 - **Hybrid LLM fallback.** When the template parser returns `null` or a confidence below 0.3, optionally route to an LLM with the schema as context. The LLM handles the 20% case; the template engine handles the 80% case at zero cost.
 - **Additional patterns.** Year-over-year comparison, percentile queries, conditional aggregation.
