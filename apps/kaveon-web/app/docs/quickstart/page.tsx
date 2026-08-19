@@ -55,7 +55,7 @@ ORDER  BY revenue DESC;`}</Code>
 
       <h2>5 · Build a chart</h2>
       <p>
-        <strong>Charts → + New Chart</strong>. Choose the dataset, pick a chart type (20+, from bars to a 3D globe),
+        <strong>Charts → + New Chart</strong>. Choose the dataset, pick a chart type (37, from bars to a 3D globe),
         and drag dimensions and metrics into place. Kaveon generates the JOINs and aggregation for you and renders live.
       </p>
 

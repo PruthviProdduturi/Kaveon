@@ -8,25 +8,28 @@ export default function DeploymentDocs() {
       <PageHeader
         eyebrow="Platform"
         title="Deployment"
-        lead="Kaveon deploys as three tiers — the Next.js frontend, the FastAPI backend, and a Postgres database. CI builds and ships on every push. Every tier has a free tier for demos."
+        lead="Kaveon deploys as three tiers — the Next.js frontend on Vercel, the FastAPI backend on Azure Container Apps, and Azure PostgreSQL. CI builds and ships on every push."
       />
 
       <h2>Topology</h2>
       <Code lang="text">{`Browser ──► Vercel  (kaveon-web · NextAuth: GitHub / Google / Microsoft)
                │  same-origin /api/kaveon proxy (injects X-User-* + secret)
                ▼
-            Render  (kaveon-api · FastAPI, Docker)
-               │  psycopg2 (user/password + SSL)
+            Azure Container Apps  (kaveon-api · FastAPI · image from kaveonacr)
+               │  psycopg2 / DefaultAzureCredential (Managed Identity)
                ▼
-            Postgres  (metadata + demo data)`}</Code>
+            Azure PostgreSQL Flexible Server (PG 18)
+               ├── kaveonmeta  (control plane + DLM/context)
+               └── kaveon      (data warehouse — the rows)`}</Code>
       <p>
-        The browser only talks to Vercel; the proxy forwards to Render with <code>X-User-*</code> headers stamped by
-        <code> KAVEON_PROXY_SECRET</code>, which the API validates (see <a href="/docs/auth">Auth &amp; RBAC</a>).
+        The browser only talks to Vercel; the proxy forwards to the Container App with <code>X-User-*</code> headers
+        stamped by <code>KAVEON_PROXY_SECRET</code>, which the API validates (see <a href="/docs/auth">Auth &amp; RBAC</a>).
       </p>
       <Callout type="note">
-        The Postgres tier is portable — the reference demo runs on <strong>Neon</strong> (serverless), and production can
-        run on <strong>Azure Database for PostgreSQL Flexible Server</strong>. Migrating between them is a schema + data
-        copy (<code>scripts/migrate-neon-to-azure.py</code>); only the <code>METADATA_*</code> connection settings change.
+        Both databases live on one <strong>Azure Database for PostgreSQL Flexible Server (PG 18)</strong>:{" "}
+        <code>kaveonmeta</code> holds Kaveon&rsquo;s own state plus the DLM context, and <code>kaveon</code> is the data
+        warehouse. In production both authenticate via <strong>Managed Identity</strong> — no stored password. Self-hosting
+        elsewhere only needs the <code>METADATA_*</code> connection settings changed.
       </Callout>
 
       <h2>CI/CD</h2>
@@ -37,10 +40,14 @@ export default function DeploymentDocs() {
         <li><strong>web</strong> — install, type-check shared types, lint, tsc, and build <code>kaveon-web</code>.</li>
         <li><strong>api</strong> — install, <code>compileall</code>, and run pytest if tests exist.</li>
         <li><strong>secrets</strong> — a gitleaks scan.</li>
-        <li><strong>deploy</strong> — on push to <code>dev</code> (after web passes), <code>vercel deploy --prod</code> using
-          the <code>VERCEL_TOKEN</code> / <code>VERCEL_ORG_ID</code> / <code>VERCEL_PROJECT_ID</code> secrets.</li>
+        <li><strong>deploy (web)</strong> — on push to <code>dev</code> (after web passes), <code>vercel deploy --prod</code>
+          using the <code>VERCEL_TOKEN</code> / <code>VERCEL_ORG_ID</code> / <code>VERCEL_PROJECT_ID</code> secrets.</li>
       </ul>
-      <p>Render auto-deploys the API from its own Git integration (<code>render.yaml</code> Blueprint).</p>
+      <p>
+        <code>.github/workflows/deploy.yml</code> ships the API on push to <code>dev</code>: it builds and pushes the
+        image to <code>kaveonacr.azurecr.io</code> and runs <code>az containerapp update</code> to roll it out. The Vercel
+        build installs with <code>npm install --legacy-peer-deps</code> (pnpm fails in Vercel&rsquo;s build sandbox).
+      </p>
 
       <h2>Key environment variables</h2>
       <table>
@@ -48,7 +55,7 @@ export default function DeploymentDocs() {
         <tbody>
           <tr><td>Both tiers</td><td><code>KAVEON_PROXY_SECRET</code> (must match)</td></tr>
           <tr><td>Web (Vercel)</td><td><code>AUTH_SECRET</code>, <code>AUTH_URL</code>, provider IDs/secrets, <code>API_URL</code></td></tr>
-          <tr><td>API (Render)</td><td><code>METADATA_*</code> (DB connection), <code>KAVEON_PROXY_SECRET</code></td></tr>
+          <tr><td>API (Azure Container Apps)</td><td><code>METADATA_DATABASE</code> (=<code>kaveonmeta</code>), <code>AAD_DATABASES</code> (=<code>kaveon</code>), <code>METADATA_HOST</code>/<code>PORT</code>/<code>SSLMODE</code>, <code>KAVEON_PROXY_SECRET</code></td></tr>
         </tbody>
       </table>
       <Callout type="tip">
