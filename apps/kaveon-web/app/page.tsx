@@ -66,10 +66,10 @@ interface ChatSession {
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const DEFAULT_SUGGESTIONS = [
+  "What is current Kaveon usage?",
+  "Total queries by plan",
+  "Active users by region",
   "Top 10 countries by energy consumption",
-  "Renewables share trend over time",
-  "Total taxi trips by borough",
-  "Top models by Arena ELO",
 ];
 
 const EMPTY_SUGGESTIONS = [
@@ -1084,7 +1084,8 @@ export default function Home() {
                               <i className={`fas ${m.routeMeta.route === "context" ? "fa-bolt" : m.routeMeta.route === "direct" ? "fa-database" : "fa-route"}`} style={{ fontSize: 8 }} />
                               {m.routeMeta.route === "context" ? "From context" : m.routeMeta.route === "direct" ? "Live query" : m.routeMeta.route === "hybrid" ? "Hybrid" : "Live query"}
                             </span>
-                            {m.routeMeta.durationMs != null && <span>{m.routeMeta.durationMs}ms</span>}
+                            {m.routeMeta.durationMs != null && <span>{m.routeMeta.durationMs >= 1000 ? (m.routeMeta.durationMs / 1000).toFixed(1) + "s" : m.routeMeta.durationMs + "ms"}</span>}
+                            {m.routeMeta.route === "context" && <span style={{ color: "#10b981" }}>&middot; no DB scan</span>}
                             {m.routeMeta.elementsChecked != null && <span>&middot; {m.routeMeta.elementsChecked} elements</span>}
                           </div>
                         )}
