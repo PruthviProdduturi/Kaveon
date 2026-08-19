@@ -8,17 +8,43 @@ export default function NlToSqlDocs() {
       <PageHeader
         eyebrow="Features"
         title="AI · NL→SQL"
-        lead="The home page turns plain-English questions into charts. It runs entirely in the browser — no LLM dependency — via a template-based keyword parser in utils/nlToSql.ts. Deterministic, fast, and inspectable."
+        lead="The home page turns plain-English questions into charts with no hosted LLM. The primary engine is the DLM — a compiled per-dataset context artifact that answers the common questions from precomputed context with no database scan. A browser-side template parser is the fallback. Both are deterministic, fast, and inspectable."
       />
 
       <Callout type="note">
-        Because there&rsquo;s no model call, NL→SQL is instant, free, and produces the same SQL every time for the same
-        question. The separate <a href="/docs/sql-lab">SQL Lab inline AI</a> is where LLM providers (Claude, GPT-4o,
-        GitHub Models) come in for open-ended generation.
+        There is no model call in either path, so NL→SQL is instant, free, and produces the same answer every time for
+        the same question. The separate <a href="/docs/sql-lab">SQL Lab inline AI</a> is where LLM providers (Claude,
+        GPT-4o, GitHub Models) come in for open-ended generation.
       </Callout>
 
-      <h2>How it works end to end</h2>
-      <Code lang="text">{`User types a question
+      <h2>The DLM — primary path</h2>
+      <p>
+        The primary engine is the <strong>DLM (Data Language Model)</strong>: a per-dataset compiled context artifact in
+        the API (<code>services/dlm.py</code>). It routes the question to a dataset, resolves the natural-language terms
+        to columns and values, and — for the common shapes — returns a{" "}
+        <strong>precomputed answer with no database scan at all</strong>. Only novel slices touch the warehouse.
+      </p>
+      <Code lang="text">{`Question  →  POST /api/v1/dlm/ask
+   route → which dataset · resolve terms → columns/values (value index)
+        │
+        ├─ precomputed shape?  →  ⚡ From context · no DB scan   (in-memory dict hit)
+        │      totals · by-dimension · single-dimension filter
+        │
+        └─ novel slice/combo   →  Live query · Xs   (assemble ONE warehouse query → cache)`}</Code>
+      <p>
+        Every answer is badged honestly — <strong>⚡ From context · no DB scan</strong> or{" "}
+        <strong>Live query · Xs</strong> — with the real timing. Because the <code>kaveonmeta</code> context plane is
+        physically separate from the <code>kaveon</code> warehouse, context answers never wait behind a big scan. See{" "}
+        <a href="/docs/architecture">Architecture</a> for the plane split.
+      </p>
+
+      <h2>The fallback — template parser</h2>
+      <p>
+        For shapes the DLM does not yet build (mainly time-series trends), the home page falls back to a template-based
+        keyword parser that runs entirely in the browser (<code>utils/nlToSql.ts</code>). The rest of this page
+        documents that fallback engine.
+      </p>
+      <Code lang="text">{`Fallback:  User question
       │
       ▼
 Dataset auto-detection      → score every loaded schema, pick the best
