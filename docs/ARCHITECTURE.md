@@ -11,6 +11,8 @@ Kaveon is a monorepo containing two applications:
 
 The package manager is **pnpm workspaces**. Shared packages live under `packages/`.
 
+The conversational layer is the **DLM (Data Language Model)** — a per-dataset compiled context artifact that answers natural-language questions deterministically, with no hosted LLM, and for common questions **from precomputed context with no database scan** (see [DLM](#dlm-conversational-layer)). Metadata + context live in a small `kaveonmeta` plane, physically separate from the `kaveon` data warehouse.
+
 ---
 
 ## Request Flow
@@ -74,9 +76,11 @@ graph LR
 
 | File | Purpose |
 |------|---------|
-| `utils/nlToSql.ts` | Template-based NL→SQL engine |
+| `utils/nlToSql.ts` | Template-based NL→SQL engine — **fallback** path (the DLM is primary) |
+| `components/ContextBanner.tsx` | Homepage banner: what context/DLM coverage exists, with hover detail |
+| `components/DatasetContextPanel.tsx` | Dataset page: last-generated, duration, indexed dims/metrics, Regenerate |
 | `utils/echartsTheme.ts` | Dark/light theme application for ECharts |
-| `utils/msalFetch.ts` | Authenticated fetch wrapper |
+| `utils/msalFetch.ts` | Authenticated fetch wrapper (legacy MSAL name; auth is NextAuth) |
 | `utils/querySemaphore.ts` | Client-side query concurrency control |
 | `components/charts/ChartBuilderContext.tsx` | Chart type registry, SQL generation, builder state |
 | `components/charts/chartPluginRegistry.ts` | Plugin system for custom chart types |
@@ -152,6 +156,49 @@ SQL generated in T-SQL dialect is translated for PostgreSQL/MySQL targets by `ad
 
 ---
 
+## DLM: Conversational Layer
+
+The **DLM (Data Language Model)** is the primary NL→SQL path on the homepage. It is a
+per-dataset compiled context artifact, built with **no hosted LLM**, on top of the
+statistics-based context engine. For common questions it answers **from precomputed
+context with no fact-table scan**; only novel slices fall to a single live query.
+
+```mermaid
+flowchart TD
+    Q["❓ NL question<br/><small>POST /api/v1/dlm/ask</small>"]
+    R["🧭 Route + resolve<br/><small>which dataset · value index<br/>terms → columns/values</small>"]
+    C{"Precomputed<br/>answer shape?"}
+    CTX["⚡ Answer from context<br/><small>in-memory dict hit · no DB scan</small>"]
+    LIVE["🗄️ Assemble ONE live query<br/><small>execute on warehouse → cache</small>"]
+    Q --> R --> C
+    C -->|"total · by-dim · single-dim filter"| CTX
+    C -->|"year-slice · multi-filter combo"| LIVE
+    classDef ctx fill:#38a169,stroke:#276749,color:#fff;
+    classDef live fill:#d69e2e,stroke:#975a16,color:#fff;
+    class CTX ctx;
+    class LIVE live;
+```
+
+**Engine** (`services/dlm.py`, router `routers/dlm.py`; built on `services/context_profiler.py`
++ `context_validity.py` + `context_router.py`, router `routers/context.py`). Self-migrating
+tables in the `kaveonmeta` plane:
+
+| Table | Holds |
+|-------|-------|
+| `dlm_artifact` | per-dataset compiled manifest + stats/usage rollups (generation timing) |
+| `dlm_value_index` | value → column/filter resolution (`"anthropic"` → `provider='Anthropic'`) |
+| `dlm_router` | cross-dataset routing summary/terms |
+| `dlm_answers` | **precomputed answers** — each metric's grand total + per-dimension breakdown |
+| `context_snapshots` | per-element profile + captured change counters (staleness signal) |
+
+`generate_dlm()` precomputes all answers at build time (one scan for totals, one per
+dimension). `ask()` serves totals, per-dimension breakdowns, and single-dimension equality
+filters from an in-memory cache warmed once per dataset — microsecond dict hits, no scan.
+Every answer is badged **"⚡ From context · no DB scan"** or **"Live query · Xs"** with real
+timing. Endpoints: `/dlm/ask`, `/dlm/route`, `/dlm/coverage`, `/datasets/{id}/dlm[/generate]`.
+
+---
+
 ## Auth: Identity Layer
 
 ### NextAuth (Auth.js v5)
@@ -185,16 +232,30 @@ The browser cannot forge identity because it cannot set the proxy secret, and ka
 
 ---
 
-## Database: Neon Postgres (Metadata)
+## Database: Azure PostgreSQL — two planes
 
-Neon Postgres stores all application metadata: users, data sources, datasets, charts, dashboards, favorites, query history, saved queries.
+The platform runs on **Azure Database for PostgreSQL Flexible Server (PG 18)**, split into
+two databases on the same server (Neon has been retired):
 
-Schema files:
-- `apps/kaveon-api/schema.sql` — primary (SQL Server syntax for Azure SQL metadata variant)
-- `apps/kaveon-api/schema_postgresql.sql` — Postgres/Neon variant
-- `apps/kaveon-api/schema_mysql.sql` — MySQL variant
+| Database | Plane | Contents |
+|----------|-------|----------|
+| `kaveonmeta` | **control + context** | users, data sources, datasets, charts, dashboards, favorites, query history, saved queries, **and** the `dlm_*` + `context_*` tables |
+| `kaveon` | **data warehouse** | the actual rows (`kaveon_usage_daily` 10M, `climate_energy.*`, `ai_benchmarks.*`, `covid_global`, …) |
 
-The metadata DB is configured via `METADATA_DATABASE`, `METADATA_ENDPOINT`/`METADATA_HOST`, and `METADATA_DB_TYPE` environment variables. Connection credentials flow through `METADATA_USER` / `METADATA_PASSWORD` for Postgres/MySQL, or via `DefaultAzureCredential` for Fabric/Azure SQL.
+The split means context/DLM answers are served from a small, fast store that never contends
+with a multi-million-row scan. Both databases authenticate over **Entra ID / Managed Identity
+tokens — no stored password in production** (prod role `kaveon_api`; local dev uses the
+az-login user). `database/pool.py` routes the metadata DB and any database listed in
+`AAD_DATABASES` through the token-auth path, and sizes the metadata pool independently from the
+warehouse pool.
+
+Schema files (all Postgres now):
+- `apps/kaveon-api/schema_postgresql.sql` — Postgres platform schema (primary)
+- `apps/kaveon-api/schema.sql`, `schema_mysql.sql` — legacy SQL Server / MySQL variants
+
+Configured via `METADATA_DATABASE` (= `kaveonmeta`), `AAD_DATABASES` (= `kaveon`),
+`METADATA_HOST`, `METADATA_PORT`, `METADATA_SSLMODE`, `METADATA_DB_TYPE=postgresql`. In prod
+`METADATA_USER`/`METADATA_PASSWORD` are unset — auth is via `DefaultAzureCredential`.
 
 ---
 
@@ -204,7 +265,7 @@ The metadata DB is configured via `METADATA_DATABASE`, `METADATA_ENDPOINT`/`META
 |---------|----------|--------|
 | `kaveon-web` | Vercel (kaveon.vercel.app) | `apps/kaveon-web/vercel.json` |
 | `kaveon-api` | Azure Container Apps (kaveon-api.calmbeach-fe7df67b.westus2.azurecontainerapps.io) | `infra/bicep/` |
-| Metadata DB | Neon Postgres | External managed service |
+| Database | Azure PostgreSQL Flexible Server (PG 18) — `kaveonmeta` + `kaveon` | Entra ID / Managed Identity auth |
 | Container Registry | Azure Container Registry (kaveonacr.azurecr.io) | `infra/bicep/` |
 
 ### Key environment variables
@@ -224,14 +285,13 @@ KAVEON_PROXY_SECRET      # shared secret with kaveon-api
 
 ```
 KAVEON_PROXY_SECRET
-METADATA_DATABASE
-METADATA_ENDPOINT        # Fabric/Azure SQL: ODBC server endpoint
-METADATA_HOST            # Postgres/MySQL: hostname
+METADATA_DATABASE        # kaveonmeta (control + context plane)
+AAD_DATABASES            # kaveon — route the warehouse through token auth
+METADATA_HOST            # Azure PG hostname
 METADATA_PORT
-METADATA_USER
-METADATA_PASSWORD
-METADATA_SSLMODE
-METADATA_DB_TYPE         # fabric_sql | azure_sql | postgresql | mysql
+METADATA_SSLMODE         # require
+METADATA_DB_TYPE         # postgresql
+# METADATA_USER / METADATA_PASSWORD — unset in prod; auth via Managed Identity
 DATAWAREHOUSE_ENDPOINT   # fallback for unregistered data sources
 REDIS_URL                # optional: enables Redis-backed rate limiting
 ```
