@@ -2,6 +2,8 @@
 
 **DLM = Data Language Model.** A per-dataset compiled context artifact that answers natural-language questions **with no hosted LLM — and, for the common cases, no database scan at all.** Compile once; answer from context until the data changes.
 
+*Need the email-length version to paste into a note? See [dlm-positioning-brief.md](dlm-positioning-brief.md).*
+
 > **In one line:** Fabric makes the query fast; Fabric IQ makes it conversational with an LLM in the loop. Kaveon makes it conversational with **no LLM in the loop — and, for the common questions, no database query either.** It answers **10 million rows in ~1.5 seconds from precompiled context**, on a tiny box, and only touches the warehouse when the question is genuinely novel — and it's running in production today.
 
 ---
