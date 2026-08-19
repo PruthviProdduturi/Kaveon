@@ -15,24 +15,32 @@ The package manager is **pnpm workspaces**. Shared packages live under `packages
 
 ## Request Flow
 
-```
-Browser
-  │
-  │  (session cookie — same-origin)
-  ▼
-kaveon-web  (Next.js 15, Vercel)
-  │  /app routes — React Server Components by default
-  │  /api/kaveon/[...path]  — proxy route
-  │
-  │  stamps X-User-Email, X-User-Name, X-User-Role, X-Proxy-Secret
-  ▼
-kaveon-api  (FastAPI, Azure Container Apps)
-  │
-  ├── Neon Postgres  (metadata: users, datasets, charts, dashboards)
-  └── Data Sources   (Microsoft Fabric SQL, Azure SQL, PostgreSQL, MySQL)
+```mermaid
+flowchart TD
+    B["🌐 Browser<br/><small>session cookie · same-origin</small>"]
+    W["▲ kaveon-web<br/><small>Next.js 15 · React 19 · Vercel</small>"]
+    P{{"/api/kaveon/[...path] proxy<br/><small>stamps X-User-* + X-Proxy-Secret</small>"}}
+    A["⚙️ kaveon-api<br/><small>FastAPI · Azure Container Apps</small>"]
+    M[("🗄️ kaveonmeta<br/><small>control + context plane<br/>users · datasets · charts · dashboards<br/>dlm_* · context_*</small>")]
+    D[("📊 kaveon warehouse<br/><small>the rows<br/>usage 10M · climate · ai_benchmarks…</small>")]
+    X[("🔌 External sources<br/><small>Fabric SQL · Azure SQL<br/>PostgreSQL · MySQL · StarRocks</small>")]
+
+    B ==>|"React Server Components"| W
+    W ==> P
+    P ==>|"trust boundary"| A
+    A -->|"metadata + DLM answers"| M
+    A -->|"live query fallback"| D
+    A -->|"registered data sources"| X
+
+    classDef web fill:#4A9EE8,stroke:#2b6cb0,color:#fff;
+    classDef api fill:#38a169,stroke:#276749,color:#fff;
+    classDef store fill:#2d3748,stroke:#1a202c,color:#fff;
+    class W,P web;
+    class A api;
+    class M,D,X store;
 ```
 
-All browser traffic hits the Next.js app. The API is never exposed to the browser directly; the proxy route is the only ingress.
+All browser traffic hits the Next.js app. The API is never exposed to the browser directly; the proxy route is the only ingress. Metadata and precomputed **DLM** answers live in the small `kaveonmeta` plane; the `kaveon` warehouse holds the rows and is touched only on a live-query fallback.
 
 ---
 
@@ -42,20 +50,24 @@ All browser traffic hits the Next.js app. The API is never exposed to the browse
 
 ### App Router structure
 
-```
-app/
-  page.tsx              — Homepage / NL→SQL chat interface
-  lab/                  — SQL Lab (Monaco editor)
-  charts/               — Chart list + builder
-  dashboards/           — Dashboard list + builder
-  data-sources/         — Data source management
-  datasets/             — Dataset management
-  workspace/            — Workspace activity
-  settings/             — User / admin settings
-  login/                — Sign-in page
-  api/
-    kaveon/[...path]/   — API proxy (route.ts)
-    auth/               — NextAuth (Auth.js v5) handlers
+```mermaid
+graph LR
+    root["📁 app/"]
+    root --> page["page.tsx<br/><small>Homepage · NL→SQL chat</small>"]
+    root --> lab["lab/<br/><small>SQL Lab · Monaco</small>"]
+    root --> charts["charts/<br/><small>Chart list + builder</small>"]
+    root --> dash["dashboards/<br/><small>Dashboard builder</small>"]
+    root --> dsrc["data-sources/"]
+    root --> dsets["datasets/"]
+    root --> ws["workspace/"]
+    root --> settings["settings/"]
+    root --> login["login/"]
+    root --> api["📁 api/"]
+    api --> proxy["kaveon/[...path]/<br/><small>API proxy · route.ts</small>"]
+    api --> auth["auth/<br/><small>NextAuth (Auth.js v5)</small>"]
+
+    classDef dir fill:#4A9EE8,stroke:#2b6cb0,color:#fff;
+    class root,api dir;
 ```
 
 ### Key utilities
@@ -95,20 +107,27 @@ ECharts charts receive theme tokens through `applyChartTheme(option, isDark)` in
 
 ### Router layout
 
-```
-routers/
-  ai.py             — AI / NL→SQL assist endpoints
-  auth.py           — Auth info (proxy-verified)
-  charts.py         — Chart CRUD
-  dashboards.py     — Dashboard CRUD
-  data_sources.py   — Data source CRUD + test + favorites
-  datasets.py       — Dataset CRUD + schema
-  favorites.py      — Favorites (generic)
-  health.py         — /health, /ready
-  lab.py            — SQL Lab: execute, history, saved queries
-  sql.py            — Generic SQL execution
-  users.py          — User management
-  setup.py          — First-run setup wizard
+```mermaid
+graph LR
+    r["📁 routers/"]
+    r --> dlm["dlm.py<br/><small>DLM · ask / route / coverage / generate</small>"]
+    r --> ai["ai.py<br/><small>AI / NL→SQL assist</small>"]
+    r --> auth["auth.py<br/><small>Auth info · proxy-verified</small>"]
+    r --> charts["charts.py<br/><small>Chart CRUD</small>"]
+    r --> dash["dashboards.py<br/><small>Dashboard CRUD</small>"]
+    r --> dsrc["data_sources.py<br/><small>CRUD + test + favorites</small>"]
+    r --> dsets["datasets.py<br/><small>CRUD + schema</small>"]
+    r --> fav["favorites.py"]
+    r --> health["health.py<br/><small>/health · /ready</small>"]
+    r --> lab["lab.py<br/><small>SQL Lab · execute / history / saved</small>"]
+    r --> sql["sql.py<br/><small>execute + execute-async</small>"]
+    r --> users["users.py"]
+    r --> setup["setup.py<br/><small>First-run wizard</small>"]
+
+    classDef dir fill:#38a169,stroke:#276749,color:#fff;
+    classDef hot fill:#d69e2e,stroke:#975a16,color:#fff;
+    class r dir;
+    class dlm hot;
 ```
 
 ### Middleware
