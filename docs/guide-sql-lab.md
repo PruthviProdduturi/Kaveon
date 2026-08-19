@@ -52,6 +52,14 @@ Used by the primary Run button. The backend wraps the query in an executor threa
 
 This means long-running queries do not keep accumulating on the database server when the user abandons them.
 
+### Detached async jobs (`POST /api/v1/sql/execute-async` → `GET /api/v1/sql/async/{job_id}`)
+
+For heavy queries that outlive an HTTP request, the `sql.py` router runs the query as a
+background job: `execute-async` returns a `job_id` immediately, and the client polls
+`/sql/async/{job_id}` for status/results. This path also backs the result cache and CTAS
+(`CREATE TABLE AS`) flows. Use it when a query may run for minutes; use the `/lab/*` endpoints
+above for interactive queries expected to return within the request window.
+
 ### Execution response
 
 ```json

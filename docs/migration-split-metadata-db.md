@@ -1,9 +1,22 @@
 # Migration: split platform metadata onto its own database
 
-**Status:** runbook (not yet executed). The *visible* half — hiding platform
-tables from SQL Lab — is already shipped. This document covers the *physical*
-split, which needs a maintenance window and direct DB access, so it is deliberately
-not run blind against production.
+**Status: ✅ DONE — executed in prod 2026-08-19.** Metadata + DLM/context now live in
+`kaveonmeta`; the rows live in the `kaveon` warehouse; both on the same Azure PG 18 server,
+both over Entra/MI token auth (no stored password). Cutover was a Container App env change
+(`METADATA_DATABASE=kaveonmeta` + `AAD_DATABASES=kaveon`, rev 213). Row counts verified 0/23
+mismatches. **Cleanup pending:** the old platform-table copies still soak in `kaveon` as an
+instant-rollback net (flip env `METADATA_DATABASE` back to `kaveon`); DROP them once confident.
+
+> What actually shipped deviated from the runbook below in three ways worth recording:
+> - **23 platform tables**, not 17 (the table list grew — `dlm_*` added, `local_users`,
+>   `user_recents`, `user_themes`, `activity`, etc.).
+> - Dump/restore ran via **`docker run postgres:18`** (no local `pg_dump`; server is PG18, so
+>   the :18 image is required) — run the docker commands from **PowerShell**, not Git-Bash,
+>   to avoid `/dump` path mangling.
+> - Auth is **Entra/MI tokens**, not admin password: `AAD_DATABASES=kaveon` makes
+>   `database/pool.py` route the warehouse pool through the same token path as the metadata DB.
+>
+> The runbook below is retained as the historical plan / self-host reference.
 
 ## Why
 

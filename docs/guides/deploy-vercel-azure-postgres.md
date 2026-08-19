@@ -1,29 +1,46 @@
-# Deploy Kaveon — Vercel + Azure Container Apps + Neon
+# Deploy Kaveon — Vercel + Azure Container Apps + Azure PostgreSQL
 
 The production cloud stack:
 
-```
-Browser ──► Vercel (kaveon-web, NextAuth: GitHub / Microsoft Entra)
-               │  same-origin /api/kaveon proxy (injects X-User-* + secret)
-               ▼
-            Azure Container Apps (kaveon-api, FastAPI)
-               │  psycopg2 (Neon) or DefaultAzureCredential (Fabric/Azure SQL)
-               ▼
-            Neon Postgres (metadata) + your registered data sources
+```mermaid
+flowchart TD
+    B["🌐 Browser"]
+    V["▲ Vercel · kaveon-web<br/><small>NextAuth: GitHub / Google / Entra</small>"]
+    P{{"/api/kaveon proxy<br/><small>injects X-User-* + KAVEON_PROXY_SECRET</small>"}}
+    A["⚙️ Azure Container Apps · kaveon-api<br/><small>FastAPI · psycopg2 / DefaultAzureCredential</small>"]
+    M[("🗄️ kaveonmeta<br/><small>metadata + DLM context</small>")]
+    D[("📊 kaveon<br/><small>data warehouse</small>")]
+    X[("🔌 registered data sources")]
+    B --> V --> P --> A
+    A --> M
+    A --> D
+    A --> X
 ```
 
-IaC for all Azure resources lives in `infra/bicep/`. The Container App pulls its image from `kaveonacr.azurecr.io`.
+Both `kaveonmeta` (metadata + DLM/context) and `kaveon` (warehouse) live on one **Azure
+Database for PostgreSQL Flexible Server (PG 18)**. IaC for all Azure resources lives in
+`infra/bicep/`. The Container App pulls its image from `kaveonacr.azurecr.io`.
+
+> **Note:** production authenticates to Postgres with **Entra ID / Managed Identity tokens —
+> no stored password** (Container App MI granted the `kaveon_api` role). The `METADATA_USER` /
+> `METADATA_PASSWORD` path below is for a password-auth deployment (e.g. a fresh self-host);
+> for MI auth, leave both unset and grant the Container App's identity DB access instead.
 
 ---
 
-## 1 · Neon — metadata database
+## 1 · Azure PostgreSQL — metadata + warehouse
 
-1. Create a project at **https://neon.tech** → note the connection string from the console.
-2. Apply the schema via the Neon SQL Editor or `psql`:
+1. Create an **Azure Database for PostgreSQL Flexible Server** (PG 18), then two databases on
+   it: `kaveonmeta` (control plane + DLM context) and `kaveon` (data warehouse).
+2. Apply the schema to the metadata DB via `psql`:
    ```
    \i apps/kaveon-api/schema_postgresql.sql
    ```
-3. Set `METADATA_SSLMODE=require` (already the default).
+3. Set `METADATA_SSLMODE=require` (already the default). For MI auth, grant the Container App's
+   managed identity access and add `AAD_DATABASES=kaveon` so the warehouse pool uses tokens too.
+
+*(Self-hosting elsewhere? Any managed Postgres works as the metadata store — point `METADATA_HOST`
+at it. The two-database split is recommended but a single DB also works.)*
 
 ---
 
@@ -58,10 +75,10 @@ Set the required secrets on the Container App:
 | Secret / env var | Value |
 |---|---|
 | `KAVEON_PROXY_SECRET` | `openssl rand -hex 24` |
-| `METADATA_HOST` | Neon host (e.g. `ep-xxx.neon.tech`) |
-| `METADATA_DATABASE` | Neon database name |
-| `METADATA_USER` | Neon role |
-| `METADATA_PASSWORD` | Neon password |
+| `METADATA_HOST` | Azure PG host (e.g. `kaveon-db.postgres.database.azure.com`) |
+| `METADATA_DATABASE` | `kaveonmeta` |
+| `AAD_DATABASES` | `kaveon` (route the warehouse pool through token auth) |
+| `METADATA_USER` / `METADATA_PASSWORD` | *(omit for Managed Identity auth; set for password auth)* |
 | `METADATA_DB_TYPE` | `postgresql` |
 | `METADATA_SSLMODE` | `require` |
 | `WEB_URL` | your Vercel URL (CORS) |
@@ -99,7 +116,7 @@ Health check: `GET https://kaveon-api.calmbeach-fe7df67b.westus2.azurecontainera
 ## 6 · Verify
 
 1. Open your Vercel URL → sign in → land as Admin.
-2. **Data Sources → + Add Data Source** → add your Neon DB as a PostgreSQL source.
+2. **Data Sources → + Add Data Source** → add a PostgreSQL/MySQL/StarRocks/Fabric/Azure SQL source.
 3. **SQL Lab** → pick the source → `SELECT 1` to confirm connectivity.
 4. **Homepage** → type a question → confirm NL→SQL chart renders.
 
