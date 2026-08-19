@@ -19,6 +19,8 @@ interface DateRange {
   approx?: boolean;
 }
 
+interface DimInfo { column?: string | null; values?: string[]; }
+
 interface CoverageItem {
   dataset_id: string;
   name?: string | null;
@@ -26,6 +28,8 @@ interface CoverageItem {
   date_range?: DateRange | null;
   row_count?: number | null;
   values_indexed?: number;
+  columns_count?: number;
+  dimensions?: DimInfo[];
   metrics?: string[];
   status?: string;
   built_at?: string;
@@ -50,6 +54,7 @@ function shortDate(s?: string | null): string | null {
 export function ContextBanner() {
   const [items, setItems] = useState<CoverageItem[] | null>(null);
   const [dismissed, setDismissed] = useState(false);
+  const [hover, setHover] = useState<{ item: CoverageItem; x: number; y: number } | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -122,9 +127,15 @@ export function ContextBanner() {
         const min = shortDate(d.date_range?.min);
         const max = shortDate(d.date_range?.max);
         return (
-          <span key={d.dataset_id} style={pill} title={
-            `${d.name ?? "dataset"}${d.metrics?.length ? " · metrics: " + d.metrics.join(", ") : ""}`
-          }>
+          <span
+            key={d.dataset_id}
+            style={{ ...pill, cursor: "help" }}
+            onMouseEnter={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setHover({ item: d, x: r.left, y: r.bottom + 6 });
+            }}
+            onMouseLeave={() => setHover(null)}
+          >
             <span style={dot(d.status === "ready")} />
             <b style={{ color: "var(--text-primary)" }}>{d.name ?? `#${d.dataset_id}`}</b>
             {min && max && (
@@ -138,6 +149,54 @@ export function ContextBanner() {
       <button style={closeBtn} title="Dismiss" onClick={() => setDismissed(true)}>
         <i className="fas fa-times" />
       </button>
+
+      {hover && <HoverCard item={hover.item} x={hover.x} y={hover.y} />}
+    </div>
+  );
+}
+
+function HoverCard({ item, x, y }: { item: CoverageItem; x: number; y: number }) {
+  const dr = item.date_range;
+  const dims = (item.dimensions ?? []).filter((d) => (d.values?.length ?? 0) > 0);
+  const card: React.CSSProperties = {
+    position: "fixed", left: Math.min(x, (typeof window !== "undefined" ? window.innerWidth : 1200) - 340), top: y,
+    zIndex: 60, width: 320, maxWidth: "92vw",
+    background: "var(--bg-elevated, #1a1a1a)", border: "1px solid var(--border)",
+    borderRadius: 10, boxShadow: "0 12px 32px rgba(0,0,0,0.4)",
+    padding: 12, fontSize: 12, color: "var(--text-secondary)",
+    textAlign: "left", whiteSpace: "normal", cursor: "default",
+  };
+  const chip: React.CSSProperties = {
+    display: "inline-block", padding: "1px 7px", borderRadius: 999, marginRight: 4, marginBottom: 4,
+    background: "rgba(var(--accent-rgb),0.1)", color: "var(--text-primary)", fontSize: 11,
+  };
+  const head: React.CSSProperties = { fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, color: "var(--text-faint)", margin: "10px 0 4px" };
+  return (
+    <div style={card}>
+      <div style={{ fontWeight: 700, color: "var(--text-primary)", fontSize: 13 }}>{item.name}</div>
+      <div style={{ marginTop: 3, color: "var(--text-faint)" }}>
+        {compact(item.row_count)} rows · {item.columns_count ?? "—"} columns · {compact(item.values_indexed)} indexed values
+        {dr?.min && dr?.max ? ` · ${shortDate(dr.min)} → ${shortDate(dr.max)}` : ""}
+      </div>
+
+      {dims.length > 0 && (
+        <>
+          <div style={head}>Filter by</div>
+          {dims.map((d) => (
+            <div key={d.column} style={{ marginBottom: 5 }}>
+              <span style={{ color: "var(--text-primary)", fontWeight: 600 }}>{d.column}: </span>
+              <span>{(d.values ?? []).slice(0, 6).join(", ")}{(d.values?.length ?? 0) >= 6 ? "…" : ""}</span>
+            </div>
+          ))}
+        </>
+      )}
+
+      {(item.metrics?.length ?? 0) > 0 && (
+        <>
+          <div style={head}>Metrics</div>
+          <div>{item.metrics!.map((m) => <span key={m} style={chip}>{m}</span>)}</div>
+        </>
+      )}
     </div>
   );
 }

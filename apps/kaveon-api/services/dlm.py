@@ -1127,21 +1127,48 @@ def coverage() -> List[Dict[str, Any]]:
     )
     out: List[Dict[str, Any]] = []
     for r in res.get("rows_objects", res.get("rows", [])):
+        did = str(r.get("dataset_id"))
         manifest = _loads(r.get("manifest")) or {}
         stats = _loads(r.get("stats_rollup")) or {}
         row_counts = stats.get("row_counts") or {}
         max_rows = max(row_counts.values()) if row_counts else None
+        cols = manifest.get("columns") or []
+        samples = _sample_values(did)
         out.append({
-            "dataset_id": r.get("dataset_id"),
+            "dataset_id": did,
             "name": manifest.get("name"),
             "date_column": manifest.get("date_column"),
             "date_range": stats.get("date_range"),
             "row_count": max_rows,
-            "values_indexed": _value_count(str(r.get("dataset_id"))),
+            "values_indexed": _value_count(did),
+            "columns_count": len(cols),
+            "dimensions": [
+                {"column": c.get("name"), "values": samples.get(c.get("name"), [])}
+                for c in cols if c.get("is_dimension")
+            ],
             "metrics": [m.get("name") for m in (manifest.get("metrics") or []) if m.get("name")],
             "status": r.get("status"),
             "built_at": r.get("built_at"),
         })
+    return out
+
+
+def _sample_values(dataset_id: str, per_col: int = 6) -> Dict[str, List[str]]:
+    """A few example indexed values per dimension column — for the banner hover."""
+    res = meta.query(
+        "SELECT element_key, value_text, freq FROM dlm_value_index "
+        "WHERE dataset_id = @param0 ORDER BY freq DESC", [dataset_id])
+    out: Dict[str, List[str]] = {}
+    for r in res.get("rows_objects", res.get("rows", [])):
+        if not isinstance(r, dict):
+            continue
+        col = (r.get("element_key") or "").split(".")[-1]
+        v = r.get("value_text")
+        if not col or v is None:
+            continue
+        lst = out.setdefault(col, [])
+        if len(lst) < per_col and v not in lst:
+            lst.append(v)
     return out
 
 
