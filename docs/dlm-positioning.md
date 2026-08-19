@@ -2,8 +2,7 @@
 
 **DLM = Data Language Model.** A per-dataset compiled context artifact that answers natural-language questions **with no hosted LLM — and, for the common cases, no database scan at all.** Compile once; answer from context until the data changes.
 
-> **Opening line for the room:**
-> *"Fabric makes the query fast; Fabric IQ makes it conversational with an LLM in the loop. We make it conversational with **no LLM in the loop — and for the common questions, no database query either.** We answer **10 million rows in ~1.5 seconds from precompiled context**, on a tiny box, and only touch the warehouse when the question is genuinely novel."*
+> **In one line:** Fabric makes the query fast; Fabric IQ makes it conversational with an LLM in the loop. Kaveon makes it conversational with **no LLM in the loop — and, for the common questions, no database query either.** It answers **10 million rows in ~1.5 seconds from precompiled context**, on a tiny box, and only touches the warehouse when the question is genuinely novel — and it's running in production today.
 
 ---
 
@@ -30,12 +29,14 @@ Live at kaveon.vercel.app over a **10.1M-row** synthetic usage dataset.
 
 ---
 
-## 60-second live demo (what to click)
+## See it for yourself — [kaveon.vercel.app](https://kaveon.vercel.app)
 
-1. *"What is current Kaveon usage?"* → **⚡ From context · ~1.5s · no DB scan** — 53M queries across 10.1M rows.
-2. *"queries by plan"*, *"active users by region"*, *"top 10 orgs by dashboard views"* → instant breakdowns, still from context.
-3. *"queries by plan **in 2026**"* (a slice we didn't precompute) → **Live query · Xs**, one warehouse trip, then cached. Honest about the cost.
-4. Open the dataset's **Context panel**: *"last generated · took Xs · N precomputed answers"* — the one-time cost that buys everything above (and it's transparent about *why* it took that long).
+Open the homepage (over the 10.1M-row demo dataset) and type these — each answer shows its source and timing, so you can check the numbers above without taking our word for it:
+
+1. **"What is current Kaveon usage?"** → **⚡ From context · ~1.5s · no DB scan** — 53M queries across 10.1M rows.
+2. **"queries by plan"**, **"active users by region"**, **"top 10 orgs by dashboard views"** → instant breakdowns, still from context.
+3. **"queries by plan in 2026"** (a slice we didn't precompute) → **Live query · Xs** — one warehouse trip, honestly labeled, then cached.
+4. Open the dataset's **Context panel** to see when context was last generated, how long it took, and how many answers were precomputed — the one-time cost that buys everything above.
 
 ---
 
