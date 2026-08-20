@@ -33,8 +33,20 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   loading?: boolean;
+  liveSince?: number;   // epoch ms — set once a loading message is running a live query
   chart?: ChartData;
   routeMeta?: RouteMeta;
+}
+
+/** Ticking elapsed-seconds readout while a live query runs. */
+function LiveTimer({ since }: { since: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 100);
+    return () => clearInterval(id);
+  }, []);
+  const s = Math.max(0, (now - since) / 1000);
+  return <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{s.toFixed(1)}s</span>;
 }
 
 interface PageData {
@@ -665,6 +677,14 @@ export default function Home() {
               columns = dlm.columns || [];
               got = true;
             } else {
+              // Going live — surface it immediately with a running timer so the
+              // user knows a live query is executing (not stuck) during the wait.
+              setMessages(prev => {
+                const copy = [...prev];
+                const last = copy[copy.length - 1];
+                if (last && last.loading) copy[copy.length - 1] = { ...last, liveSince: Date.now() };
+                return copy;
+              });
               const execRes = await msalFetch("/api/v1/sql/execute", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -1048,12 +1068,21 @@ export default function Home() {
                     overflow: "hidden",
                   }}>
                     {m.loading ? (
-                      <div style={{ display: "flex", gap: 4, padding: "8px 14px" }}>
-                        {[0, 1, 2].map(d => (
-                          <div key={d} style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", animation: `bounce 1.2s ease-in-out ${d * 0.2}s infinite` }} />
-                        ))}
-                        <style>{`@keyframes bounce { 0%,80%,100% { transform:translateY(0) } 40% { transform:translateY(-6px) } }`}</style>
-                      </div>
+                      m.liveSince ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", fontSize: 12.5, color: "var(--text-secondary)" }}>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "2px 9px", borderRadius: 999, background: "rgba(74,158,232,0.12)", color: "#4A9EE8", fontSize: 11, fontWeight: 600 }}>
+                            <i className="fas fa-database" style={{ fontSize: 8 }} /> Live query
+                          </span>
+                          <span>running the warehouse query&hellip; <LiveTimer since={m.liveSince} /></span>
+                        </div>
+                      ) : (
+                        <div style={{ display: "flex", gap: 4, padding: "8px 14px" }}>
+                          {[0, 1, 2].map(d => (
+                            <div key={d} style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", animation: `bounce 1.2s ease-in-out ${d * 0.2}s infinite` }} />
+                          ))}
+                          <style>{`@keyframes bounce { 0%,80%,100% { transform:translateY(0) } 40% { transform:translateY(-6px) } }`}</style>
+                        </div>
+                      )
                     ) : (
                       <>
                         {m.content && (
