@@ -65,9 +65,11 @@ _STOPWORDS = frozenset({
 # manifest later; this is the cold-start floor.
 _SEED_SYNONYMS: Dict[str, List[str]] = {
     "revenue": ["sales", "turnover", "top line", "income"],
-    "cost": ["spend", "expense", "expenditure"],
+    "cost": ["spend", "expense", "expenditure", "pricing", "price", "cheap", "cheapest", "expensive"],
     "profit": ["margin", "earnings", "net income", "bottom line"],
     "count": ["number", "total", "volume", "qty", "quantity"],
+    "deaths": ["mortality", "fatality", "fatalities", "died", "killed"],
+    "cases": ["infections", "infected", "positive", "confirmed"],
     "customer": ["client", "account", "user", "buyer"],
     "provider": ["vendor", "supplier", "publisher", "maker"],
     "model": ["variant", "version", "sku"],
@@ -487,16 +489,21 @@ def route(question: str, limit: int = 3) -> List[Dict[str, Any]]:
         # Name hits are the strongest signal — a question containing "taxi"
         # should route to the taxi dataset even if other datasets have matching
         # entity values (like "india" appearing in climate data).
-        score = 3 * len(m_hit) + 2 * v_hit + 4 * len(n_hit) + 1 * len(c_hit)
+        # Cap column hits at 3 so broad datasets (14 columns) don't dominate
+        # narrow ones (3 columns) on generic tokens.
+        score = 3 * len(m_hit) + 2 * v_hit + 4 * len(n_hit) + min(len(c_hit), 3)
         if score >= _ROUTE_FLOOR:
+            # Tiebreaker: prefer narrower datasets (fewer columns → more focused)
+            col_count = len(manifest.get("columns") or [])
             ranked.append({
                 "dataset_id": did,
                 "score": score,
+                "specificity": 1000 - col_count,  # higher = narrower
                 "matched": sorted(m_hit | n_hit | c_hit),
                 "value_matches": v_hit,
                 "summary": manifest.get("name"),
             })
-    ranked.sort(key=lambda x: x["score"], reverse=True)
+    ranked.sort(key=lambda x: (x["score"], x.get("specificity", 0)), reverse=True)
     return ranked[:limit]
 
 
