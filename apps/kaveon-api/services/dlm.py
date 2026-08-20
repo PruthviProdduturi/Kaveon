@@ -315,6 +315,7 @@ def _precompute_answers(dataset_id: str, database: str, schema: str, fact: Optio
     dspec = (spec or {}).get("dimensions") or {}
     dim_cols = [(_c.get("column_name") or _c.get("name") or "").strip()
                 for _c in columns if _c.get("is_dimension")]
+    card: Dict[str, int] = {}   # per-dim breakdown row count — drives low-card pair selection
     for dim in dim_cols:
         if not dim:
             continue
@@ -334,9 +335,46 @@ def _precompute_answers(dataset_id: str, database: str, schema: str, fact: Optio
             if not rows:
                 continue
             norm = [(_row_vals(r)) for r in rows]   # [grp, m0, m1, ...]
+            card[dim] = len(norm)
             for j, (_a, name, _e) in enumerate(mdefs):
                 out = [[_json_scalar(rv[0]), _json_scalar(rv[j + 1] if j + 1 < len(rv) else None)] for rv in norm]
                 _store_answer(dataset_id, name, dim, [dim, name], out, now)
+                stored += 1
+        except Exception:
+            continue
+
+    # 3) common 2-dim combos — so a two-filter question ("... in Asia Enterprise")
+    #    serves from context instead of a live scan. Non-additive metrics stay exact:
+    #    COUNT(DISTINCT) is computed independently per (d1,d2) cell. Bounded to low-card
+    #    pairs (both dims fully enumerated, cell product under a cap) and a max pair
+    #    count, so generation time + storage stay sane.
+    CELL_CAP, MAX_PAIRS, HIGH_CARD = 5000, 12, 500
+    lowcard = [d for d in card if 0 < card[d] < HIGH_CARD]
+    pairs: List[tuple] = []
+    for i in range(len(lowcard)):
+        for k in range(i + 1, len(lowcard)):
+            d1, d2 = sorted((lowcard[i], lowcard[k]))
+            prod = card[d1] * card[d2]
+            if prod <= CELL_CAP:
+                pairs.append((prod, d1, d2))
+    pairs.sort()   # cheapest / smallest cell-count pairs first
+    for _prod, d1, d2 in pairs[:MAX_PAIRS]:
+        gsel = ", ".join(f"{expr} AS {alias}" for alias, _n, expr in mdefs)
+        order = mdefs[0][0]
+        try:
+            res = pool.execute_query(
+                f"SELECT {_qid(d1)} AS g1, {_qid(d2)} AS g2, {gsel} FROM {tbl} "
+                f"WHERE {_qid(d1)} IS NOT NULL AND {_qid(d2)} IS NOT NULL "
+                f"GROUP BY {_qid(d1)}, {_qid(d2)} ORDER BY {order} DESC LIMIT {int(CELL_CAP)}", database)
+            rows = res.get("rows") or res.get("rows_objects") or []
+            if not rows:
+                continue
+            norm = [_row_vals(r) for r in rows]   # [g1, g2, m0, m1, ...]
+            key = f"{d1}|{d2}"   # canonical (lexicographic) pair key
+            for j, (_a, name, _e) in enumerate(mdefs):
+                out = [[_json_scalar(rv[0]), _json_scalar(rv[1]),
+                        _json_scalar(rv[j + 2] if j + 2 < len(rv) else None)] for rv in norm]
+                _store_answer(dataset_id, name, key, [d1, d2, name], out, now)
                 stored += 1
         except Exception:
             continue
@@ -1083,6 +1121,23 @@ def _serve_from_context(dataset_id: str, ds: dict, metric_name: str, group_col: 
             if r and _normalize(r[0]) == want:
                 return _ctx_response(dataset_id, dataset_name, metric_name, None,
                                      [metric_name], [[r[1]]], conf, subtitle=str(f.get("value")))
+
+    # two single-dimension equality filters, no group-by → pick the cell from the
+    # precomputed 2-dim combo (if that pair was precomputed). Exact, no DB trip.
+    if len(filters) == 2 and not group_col:
+        by_col = {f["column"]: f for f in filters}
+        cols = sorted(by_col.keys())               # canonical pair order, matches storage
+        if len(cols) == 2:
+            ctx = _context_answer(dataset_id, metric_name, f"{cols[0]}|{cols[1]}")
+            if ctx is None:
+                return None
+            w0 = _normalize(by_col[cols[0]].get("value"))
+            w1 = _normalize(by_col[cols[1]].get("value"))
+            for r in ctx["rows"]:
+                if r and len(r) >= 3 and _normalize(r[0]) == w0 and _normalize(r[1]) == w1:
+                    label = ", ".join(str(f.get("value")) for f in filters)
+                    return _ctx_response(dataset_id, dataset_name, metric_name, None,
+                                         [metric_name], [[r[2]]], conf, subtitle=label)
     return None
 
 
