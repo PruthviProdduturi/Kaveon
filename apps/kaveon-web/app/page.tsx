@@ -29,13 +29,27 @@ interface RouteMeta {
   elementsChecked?: number;
 }
 
+interface ContextHint { label: string; value: number | string | null }
+
 interface Message {
   role: "user" | "assistant";
   content: string;
   loading?: boolean;
   liveSince?: number;   // epoch ms — set once a loading message is running a live query
+  contextHints?: ContextHint[];   // relevant precomputed slices shown while live runs
   chart?: ChartData;
   routeMeta?: RouteMeta;
+}
+
+/** Compact number format for context hints (3.9M / 12.4K / 1,234). */
+function fmtNum(v: number | string | null): string {
+  if (v == null) return "—";
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n)) return String(v);
+  const a = Math.abs(n);
+  if (a >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+  if (a >= 1_000) return (n / 1_000).toFixed(1) + "K";
+  return n.toLocaleString();
 }
 
 /** Ticking elapsed-seconds readout while a live query runs. */
@@ -677,12 +691,13 @@ export default function Home() {
               columns = dlm.columns || [];
               got = true;
             } else {
-              // Going live — surface it immediately with a running timer so the
-              // user knows a live query is executing (not stuck) during the wait.
+              // Going live — surface it immediately with a running timer AND what we
+              // already know from context (single-dim slices), so the user isn't
+              // staring at a blank spinner while the exact combo is fetched.
               setMessages(prev => {
                 const copy = [...prev];
                 const last = copy[copy.length - 1];
-                if (last && last.loading) copy[copy.length - 1] = { ...last, liveSince: Date.now() };
+                if (last && last.loading) copy[copy.length - 1] = { ...last, liveSince: Date.now(), contextHints: dlm.context_hints || [] };
                 return copy;
               });
               const execRes = await msalFetch("/api/v1/sql/execute", {
@@ -1069,11 +1084,26 @@ export default function Home() {
                   }}>
                     {m.loading ? (
                       m.liveSince ? (
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", fontSize: 12.5, color: "var(--text-secondary)" }}>
-                          <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "2px 9px", borderRadius: 999, background: "rgba(74,158,232,0.12)", color: "#4A9EE8", fontSize: 11, fontWeight: 600 }}>
-                            <i className="fas fa-database" style={{ fontSize: 8 }} /> Live query
-                          </span>
-                          <span>running the warehouse query&hellip; <LiveTimer since={m.liveSince} /></span>
+                        <div style={{ padding: "8px 14px", fontSize: 12.5, color: "var(--text-secondary)" }}>
+                          {m.contextHints && m.contextHints.length > 0 && (
+                            <div style={{ marginBottom: 8 }}>
+                              <div style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "2px 9px", borderRadius: 999, background: "rgba(16,185,129,0.1)", color: "#10b981", fontSize: 11, fontWeight: 600, marginBottom: 6 }}>
+                                <i className="fas fa-bolt" style={{ fontSize: 8 }} /> From context
+                              </div>
+                              <div style={{ color: "var(--text-muted)", marginBottom: 4 }}>What we already know, instantly:</div>
+                              {m.contextHints.map((h, i) => (
+                                <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 16, padding: "2px 0", maxWidth: 320 }}>
+                                  <span>{h.label}</span><strong style={{ color: "var(--text-primary)" }}>{fmtNum(h.value)}</strong>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "2px 9px", borderRadius: 999, background: "rgba(74,158,232,0.12)", color: "#4A9EE8", fontSize: 11, fontWeight: 600 }}>
+                              <i className="fas fa-database" style={{ fontSize: 8 }} /> Live query
+                            </span>
+                            <span>fetching the exact figure&hellip; <LiveTimer since={m.liveSince} /></span>
+                          </div>
                         </div>
                       ) : (
                         <div style={{ display: "flex", gap: 4, padding: "8px 14px" }}>
