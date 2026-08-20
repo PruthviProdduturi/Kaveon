@@ -27,6 +27,7 @@ interface RouteMeta {
   route: "context" | "hybrid" | "query" | "direct" | "dlm";
   durationMs?: number;
   elementsChecked?: number;
+  approx?: boolean;   // answered from an HLL sketch cuboid — estimate, not exact
 }
 
 interface ContextHint { label: string; value: number | string | null }
@@ -725,7 +726,7 @@ export default function Home() {
                 role: "assistant",
                 content: summary,
                 ...(wantsChart ? { chart: { rows, columns, chartType: dlm.chartType, xAxis: dlm.xAxis, yAxis: dlm.yAxis, title: dlm.title, sql: dlm.sql } } : {}),
-                routeMeta: { route, durationMs: Math.round(performance.now() - dlmT0) },
+                routeMeta: { route, durationMs: Math.round(performance.now() - dlmT0), approx: !!dlm.approx },
               }]);
               return;
             }
@@ -1141,10 +1142,11 @@ export default function Home() {
                               fontWeight: 600,
                             }}>
                               <i className={`fas ${m.routeMeta.route === "context" ? "fa-bolt" : m.routeMeta.route === "direct" ? "fa-database" : "fa-route"}`} style={{ fontSize: 8 }} />
-                              {m.routeMeta.route === "context" ? "From context" : m.routeMeta.route === "direct" ? "Live query" : m.routeMeta.route === "hybrid" ? "Hybrid" : "Live query"}
+                              {m.routeMeta.route === "context" ? (m.routeMeta.approx ? "From sketch" : "From context") : m.routeMeta.route === "direct" ? "Live query" : m.routeMeta.route === "hybrid" ? "Hybrid" : "Live query"}
                             </span>
                             {m.routeMeta.durationMs != null && <span>{m.routeMeta.durationMs >= 1000 ? (m.routeMeta.durationMs / 1000).toFixed(1) + "s" : m.routeMeta.durationMs + "ms"}</span>}
-                            {m.routeMeta.route === "context" && <span style={{ color: "#10b981" }}>&middot; no DB scan</span>}
+                            {m.routeMeta.route === "context" && !m.routeMeta.approx && <span style={{ color: "#10b981" }}>&middot; no DB scan</span>}
+                            {m.routeMeta.route === "context" && m.routeMeta.approx && <span style={{ color: "#10b981" }} title="HyperLogLog sketch estimate (~1-2% error), no database scan">&middot; ≈ estimate &middot; no DB scan</span>}
                             {m.routeMeta.elementsChecked != null && <span>&middot; {m.routeMeta.elementsChecked} elements</span>}
                           </div>
                         )}
