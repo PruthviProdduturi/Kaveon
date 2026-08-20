@@ -146,8 +146,8 @@ CREATE TABLE IF NOT EXISTS dlm_sketch (
     dataset_id   TEXT NOT NULL,
     metric_name  TEXT NOT NULL,             -- the non-additive COUNT(DISTINCT) metric
     dims         TEXT NOT NULL,              -- JSON: cuboid dim columns (canonical order)
-    cell_key     TEXT NOT NULL,             -- JSON: [normalized value per dim]; '' = header row
-    registers    TEXT NOT NULL,             -- JSON sparse {regIndex: rho}; header carries {p, dims}
+    cell_key     TEXT NOT NULL,             -- JSON array of values per dim (empty string = header row)
+    registers    TEXT NOT NULL,             -- sparse JSON registers (header row carries p + dims)
     computed_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_dlm_sketch ON dlm_sketch (dataset_id, metric_name);
