@@ -36,6 +36,7 @@ from typing import Any, Dict, List, Optional
 import database.metadata as meta
 import services.context_profiler as profiler
 import services.datasets as datasets_svc
+import services.hll as hll
 
 # Low-cardinality dimensions get a value index; high-card columns (ids, free
 # text) are matched structurally, never by value.
@@ -139,6 +140,17 @@ CREATE TABLE IF NOT EXISTS dlm_answers (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_dlm_answers
     ON dlm_answers (dataset_id, metric_name, group_col);
+
+CREATE TABLE IF NOT EXISTS dlm_sketch (
+    id           TEXT PRIMARY KEY,
+    dataset_id   TEXT NOT NULL,
+    metric_name  TEXT NOT NULL,             -- the non-additive COUNT(DISTINCT) metric
+    dims         TEXT NOT NULL,              -- JSON: cuboid dim columns (canonical order)
+    cell_key     TEXT NOT NULL,             -- JSON: [normalized value per dim]; '' = header row
+    registers    TEXT NOT NULL,             -- JSON sparse {regIndex: rho}; header carries {p, dims}
+    computed_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dlm_sketch ON dlm_sketch (dataset_id, metric_name);
 """
 
 _tables_ready = False
@@ -239,6 +251,7 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
                                   ds.get("table_name") or ds.get("fact_table"),
                                   columns, dimensions, metrics, spec)
     _ANSWER_CACHE.pop(str(dataset_id), None)  # invalidate in-memory caches after regen
+    _SKETCH_CACHE.pop(str(dataset_id), None)
     _RANGE_CACHE.pop(str(dataset_id), None)
 
     # record generation timing (+ what drove it) into the stored stats rollup so
@@ -378,6 +391,17 @@ def _precompute_answers(dataset_id: str, database: str, schema: str, fact: Optio
                 stored += 1
         except Exception:
             continue
+
+    # 4) sketch cuboid — for non-additive COUNT(DISTINCT) metrics, build ONE base
+    #    HyperLogLog cuboid over the low-card dims. Any sub-combo of those dims
+    #    (all 2^k filter subsets — including the 3+ filter cases the exact combos
+    #    above don't materialize) is then answered by unioning register vectors in
+    #    Python: ~1-2% error, no live scan. This is the "big-dataset grain" story.
+    try:
+        stored += _build_sketch_cuboids(dataset_id, database, schema, fact,
+                                        columns, metrics, card, spec)
+    except Exception:
+        pass
     return stored
 
 
@@ -402,6 +426,141 @@ def _json_scalar(v: Any) -> Any:
     if isinstance(v, (_dt.date, _dt.datetime)):
         return v.isoformat()
     return v
+
+
+# --------------------------------------------------------------------------- #
+# sketch cuboids — mergeable HLL for non-additive COUNT(DISTINCT)              #
+# --------------------------------------------------------------------------- #
+
+def _distinct_col(expr: str) -> Optional[str]:
+    """The single column inside a ``COUNT(DISTINCT <col>)`` metric, or None if the
+    metric isn't a plain distinct-count (only a bare column can be hashed per-row
+    into a sketch; distinct-of-an-expression is left to the live path)."""
+    m = re.search(r"count\s*\(\s*distinct\s+(.+?)\s*\)", expr or "", re.I)
+    if not m:
+        return None
+    col = m.group(1).strip().strip('"').strip('`').strip("[]")
+    if "." in col:                      # strip a table/alias qualifier: t.user_id
+        col = col.split(".")[-1].strip('"').strip('`').strip("[]")
+    return col if re.match(r"^[A-Za-z_][A-Za-z0-9_ ]*$", col) else None
+
+
+def _pg_register_sql(tbl: str, dims: List[str], dcol: str) -> str:
+    """Postgres SQL that extracts per-cell HLL registers in ONE scan: hash each
+    row's distinct-column value, take the top P bits as the register index and the
+    run of leading zeros in the rest as rho, then MAX(rho) per (cell, register).
+    Pure SQL — no `hll` extension (Azure Flexible Server doesn't ship it)."""
+    dim_sel = ", ".join(_qid(d) for d in dims)
+    dc = _qid(dcol)
+    p, rb = hll.P, hll.RBITS
+    return (
+        f"WITH h AS (SELECT {dim_sel}, "
+        f"hashtextextended(CAST({dc} AS text), 0)::bit(64) AS b "
+        f"FROM {tbl} WHERE {dc} IS NOT NULL), "
+        f"e AS (SELECT {dim_sel}, "
+        f"substring(b from 1 for {p})::text AS reg, "
+        f"CASE WHEN position('1' in substring(b from {p + 1} for {rb})::text) = 0 "
+        f"THEN {rb + 1} ELSE position('1' in substring(b from {p + 1} for {rb})::text) END AS rho "
+        f"FROM h) "
+        f"SELECT {dim_sel}, reg, MAX(rho) AS rho FROM e GROUP BY {dim_sel}, reg"
+    )
+
+
+def _store_sketch(dataset_id: str, metric_name: str, dims: List[str],
+                  cell_key: str, registers: str, now: str) -> None:
+    meta.execute(
+        "INSERT INTO dlm_sketch (id, dataset_id, metric_name, dims, cell_key, registers, computed_at) "
+        "VALUES (@param0,@param1,@param2,@param3,@param4,@param5,@param6)",
+        [str(uuid.uuid4()), dataset_id, metric_name, json.dumps(dims), cell_key, registers, now])
+
+
+def _build_sketch_cuboids(dataset_id: str, database: str, schema: str, fact: Optional[str],
+                          columns: List[dict], metrics: List[dict],
+                          card: Dict[str, int], spec: Optional[dict]) -> int:
+    """Build + store a base HLL sketch cuboid per non-additive COUNT(DISTINCT)
+    metric, at the grain of the low-card precomputed dims. Returns the number of
+    cuboids built. Postgres-only (register SQL is dialect-specific); other engines
+    skip cleanly — the live path is unchanged for them."""
+    import database.pool as pool
+    if not fact:
+        return 0
+    try:
+        engine = pool.get_connection_pool(database).db_type
+    except Exception:
+        engine = None
+    if engine != "postgresql":
+        return 0
+
+    dmetrics = []
+    for m in metrics:
+        name = m.get("name") or m.get("metric_name")
+        dcol = _distinct_col(m.get("expression") or "")
+        if name and dcol:
+            dmetrics.append((name, dcol))
+    if not dmetrics:
+        return 0
+
+    # Cuboid grain = low-card precomputed dims, greedily smallest-first until the
+    # cell product hits the cap. High-card dims (ids, city, user) are never axes —
+    # they're what you count-distinct or filter live. Needs >=2 dims: single-dim
+    # distincts are already served exactly from the per-dim breakdowns.
+    # Only genuinely low-card dims are axes. card[d] is the (LIMIT-capped) breakdown
+    # row count; requiring < HIGH_CARD both keeps the cuboid small AND guarantees the
+    # breakdown wasn't truncated, so a high-card dim can't slip in with a capped count.
+    SKETCH_MAX_CELLS, SKETCH_MAX_DIMS, HIGH_CARD = 8000, 6, 500
+    dspec = (spec or {}).get("dimensions") or {}
+    lowcard = sorted((d for d in card if 0 < card[d] < HIGH_CARD), key=lambda d: card[d])
+    dims: List[str] = []
+    prod = 1
+    for d in lowcard:
+        if len(dims) >= SKETCH_MAX_DIMS or (dspec.get(d) or {}).get("hidden"):
+            continue
+        if prod * card[d] > SKETCH_MAX_CELLS:
+            continue
+        dims.append(d)
+        prod *= card[d]
+    if len(dims) < 2:
+        return 0
+
+    tbl = f"{_qid(schema)}.{_qid(fact)}" if schema else _qid(fact)
+    now = _now_iso()
+    built = 0
+    ndim = len(dims)
+    for name, dcol in dmetrics:
+        try:
+            res = pool.execute_query(_pg_register_sql(tbl, dims, dcol), database)
+        except Exception:
+            continue
+        rows = res.get("rows") or res.get("rows_objects") or []
+        if not rows:
+            continue
+        # fold (cell, register) -> max rho into a full register vector per cell
+        cells: Dict[str, bytearray] = {}
+        for r in rows:
+            rv = _row_vals(r)
+            if len(rv) < ndim + 2:
+                continue
+            ck = json.dumps([_json_scalar(v) for v in rv[:ndim]], default=str)
+            try:
+                reg = int(str(rv[ndim]), 2)      # register-index bits -> int
+                rho = int(rv[ndim + 1])
+            except (ValueError, TypeError):
+                continue
+            buf = cells.get(ck)
+            if buf is None:
+                buf = hll.empty()
+                cells[ck] = buf
+            if 0 <= reg < hll.M and rho > buf[reg]:
+                buf[reg] = rho
+        if not cells:
+            continue
+        meta.execute("DELETE FROM dlm_sketch WHERE dataset_id = @param0 AND metric_name = @param1",
+                     [dataset_id, name])
+        _store_sketch(dataset_id, name, dims, "", json.dumps({"p": hll.P, "dims": dims}), now)
+        for ck, buf in cells.items():
+            _store_sketch(dataset_id, name, dims, ck, hll.to_sparse(buf), now)
+        built += 1
+    return built
 
 
 def get_dlm(dataset_id: str) -> Optional[Dict[str, Any]]:
@@ -942,6 +1101,15 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
                 served["note"] = note
             return served
 
+        # exact combo not materialized → for a non-additive COUNT(DISTINCT) metric,
+        # answer approximately from the HLL sketch cuboid (register union, no scan)
+        # before falling to a live query.
+        if metric and _distinct_col((metric or {}).get("expression") or ""):
+            sketched = _serve_sketch(dataset_id, ds, metric_name, group_col, top_n,
+                                     filters, routed[0])
+            if sketched is not None:
+                return sketched
+
     # ── assemble (live query path) ───────────────────────────────────────────
     metric_expr = (metric or {}).get("expression") or "COUNT(*)"
 
@@ -1061,6 +1229,41 @@ def _context_answer(dataset_id: str, metric_name: str, group_col: str) -> Option
     return _load_answers(dataset_id).get((metric_name, group_col or ""))
 
 
+# Per-dataset HLL sketch cuboids: {metric_name: {"dims":[...], "cells": {raw-value
+# tuple: sparse-registers}}}. Warmed once per dataset, invalidated on regen/save.
+_SKETCH_CACHE: Dict[str, Dict[str, dict]] = {}
+
+
+def _load_sketches(dataset_id: str) -> Dict[str, dict]:
+    cached = _SKETCH_CACHE.get(dataset_id)
+    if cached is not None:
+        return cached
+    ensure_tables()
+    res = meta.query(
+        "SELECT metric_name, cell_key, registers FROM dlm_sketch WHERE dataset_id = @param0",
+        [dataset_id])
+    out: Dict[str, dict] = {}
+    for r in res.get("rows_objects", res.get("rows", [])):
+        if not isinstance(r, dict):
+            continue
+        mn = r.get("metric_name")
+        ck = r.get("cell_key")
+        reg = r.get("registers")
+        m = out.setdefault(mn, {"dims": [], "cells": {}})
+        if not ck:                          # header row carries the dim list
+            try:
+                m["dims"] = (_loads(reg) or {}).get("dims") or []
+            except Exception:
+                m["dims"] = []
+        else:
+            try:
+                m["cells"][tuple(_loads(ck) or [])] = reg
+            except Exception:
+                continue
+    _SKETCH_CACHE[dataset_id] = out
+    return out
+
+
 # Per-dataset (min_year, max_year) from the precomputed stats_rollup.date_range —
 # warmed once, invalidated on regen. Lets ask() tell whether a requested year
 # spans the whole dataset (a no-op filter) with ZERO database trip.
@@ -1152,6 +1355,71 @@ def _ctx_response(dataset_id, dataset_name, metric_name, group_col, columns, row
         "chartType": "bar" if group_col else "kpi",
         "xAxis": group_col, "yAxis": metric_name, "title": title,
         "note": None, "confidence": conf,
+    }
+
+
+def _serve_sketch(dataset_id: str, ds: dict, metric_name: str, group_col: Optional[str],
+                  top_n: Optional[int], filters: List[Dict[str, Any]],
+                  routed: dict) -> Optional[Dict[str, Any]]:
+    """Answer a non-additive COUNT(DISTINCT) question from the HLL sketch cuboid by
+    unioning the matching cells' registers in memory — no live scan. Covers ANY
+    filter subset (and single group-by) over the cuboid dims, including the 3+ filter
+    combos the exact precomputed answers don't materialize. Returns None (→ live)
+    when the metric has no cuboid or a filter/group-by lands off the cuboid dims."""
+    sk = _load_sketches(dataset_id).get(metric_name)
+    if not sk or not sk.get("cells"):
+        return None
+    dims = sk.get("dims") or []
+    pos = {d: i for i, d in enumerate(dims)}
+    if any(f["column"] not in pos for f in filters):
+        return None
+    if group_col and group_col not in pos:
+        return None
+    cons = {pos[f["column"]]: _normalize(f.get("value")) for f in filters}
+    cells = sk["cells"]
+
+    def _match(key: tuple) -> bool:
+        return all(len(key) > p and _normalize(key[p]) == v for p, v in cons.items())
+
+    dataset_name = ds.get("dataset_name") or ds.get("name")
+    conf = round(routed.get("score", 0.0), 3)
+
+    if not group_col:
+        sel = [reg for key, reg in cells.items() if _match(key)]
+        if not sel:
+            return None
+        est = hll.union_estimate(sel)
+        label = ", ".join(str(f.get("value")) for f in filters) or None
+        return _sketch_response(dataset_id, dataset_name, metric_name, None,
+                                [metric_name], [[est]], conf, subtitle=label)
+
+    gp = pos[group_col]
+    groups: Dict[Any, List[str]] = {}
+    for key, reg in cells.items():
+        if _match(key) and len(key) > gp:
+            groups.setdefault(key[gp], []).append(reg)
+    if not groups:
+        return None
+    rows = [[g, hll.union_estimate(regs)] for g, regs in groups.items()]
+    rows.sort(key=lambda r: (r[1] is None, -(r[1] or 0)))
+    if top_n:
+        rows = rows[:int(top_n)]
+    return _sketch_response(dataset_id, dataset_name, metric_name, group_col,
+                            [group_col, metric_name], rows, conf)
+
+
+def _sketch_response(dataset_id, dataset_name, metric_name, group_col, columns, rows, conf, subtitle=None):
+    title = metric_name + (f" by {group_col}" if group_col else "")
+    if subtitle:
+        title += f" — {subtitle}"
+    return {
+        "ok": True, "dataset_id": dataset_id, "dataset_name": dataset_name,
+        "from_context": True, "route": "context", "approx": True,
+        "columns": columns, "rows": rows,
+        "chartType": "bar" if group_col else "kpi",
+        "xAxis": group_col, "yAxis": metric_name, "title": title,
+        "note": "≈ estimated from a HyperLogLog sketch (~1-2% error) · no DB scan",
+        "confidence": conf,
     }
 
 
@@ -1693,6 +1961,7 @@ def save_curation(dataset_id: str, curation: Any) -> Dict[str, Any]:
                  [json.dumps(clean, default=str), str(dataset_id)])
     _SPEC_CACHE.pop(str(dataset_id), None)
     _ANSWER_CACHE.pop(str(dataset_id), None)
+    _SKETCH_CACHE.pop(str(dataset_id), None)
     return {"ok": True, "dataset_id": str(dataset_id),
             "needs_regenerate": _curation_affects_precompute(prev, clean),
             "effective": _effective_spec(str(dataset_id))}
