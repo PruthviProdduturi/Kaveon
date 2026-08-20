@@ -962,8 +962,35 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
         "filters": filters,
         "year": year,
         "note": note,
+        # what we already know from context — shown instantly while the live
+        # query fetches the exact (multi-filter / combo) figure.
+        "context_hints": _context_hints(dataset_id, metric_name, filters),
         "confidence": round(routed[0].get("score", 0.0), 3),
     }
+
+
+def _context_hints(dataset_id: str, metric_name: str,
+                   filters: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Relevant precomputed slices to surface while a live query runs: the metric's
+    grand total and its value for each single-dimension filter (pulled from the
+    by-that-dimension breakdown). All in-memory dict hits — no database trip."""
+    hints: List[Dict[str, Any]] = []
+    total = _context_answer(dataset_id, metric_name, "")
+    if total and total.get("rows"):
+        try:
+            hints.append({"label": f"{metric_name}, overall", "value": total["rows"][0][0]})
+        except Exception:
+            pass
+    for f in filters or []:
+        ctx = _context_answer(dataset_id, metric_name, f.get("column"))
+        if not ctx:
+            continue
+        want = _normalize(f.get("value"))
+        for r in ctx.get("rows", []):
+            if r and _normalize(r[0]) == want:
+                hints.append({"label": f"{metric_name} in {f.get('value')}", "value": r[1]})
+                break
+    return hints
 
 
 # In-memory answer cache: {dataset_id: {(metric_name, group_col): {columns, rows}}}.
