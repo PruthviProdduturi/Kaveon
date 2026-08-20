@@ -853,6 +853,7 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
         group_col = _match_any_dim(question, dims, d_alias)
     limit_n = top_n or limit
 
+    note = None
     # If the user asked for a breakdown but no dimension matched, note it
     if wanted_groupby and not group_col:
         dim_names = [d.get("column_name") or d.get("name") for d in dims if d.get("column_name") or d.get("name")]
@@ -874,7 +875,6 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
     # 4b) if the requested year is beyond where this metric actually has data
     #     (for these entity filters), answer with the latest available year and
     #     say so, instead of returning an empty result for a future/missing year.
-    note = None
     metric_name = (metric or {}).get("name") or "Count"
     if year and metric:
         lo, hi = _metric_year_bounds(database, schema, fact, date_column, metric, columns, filters)
