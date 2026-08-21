@@ -3103,76 +3103,73 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
       const validMetrics = (config.metrics || []).filter((m: any) => m.column && m.aggregate);
       if (isDashboardCtx && !forceRegenerate && validMetrics.length > 0) {
         const groupBy = config.groupby?.[0] || null;
-          // Map dashboard filter format to the serve-chart filter format
-          const serveFilters = (extraFilters || [])
-            .filter((f: any) => f.column && f.value && f.value !== "AllUp"
-                    && (f.filterType || "value") !== "date_range")
-            .map((f: any) => ({
-              column: f.column,
-              operator: f.operator || "=",
-              value: String(f.value),
+        const serveFilters = (extraFilters || [])
+          .filter((f: any) => f.column && f.value && f.value !== "AllUp"
+                  && (f.filterType || "value") !== "date_range")
+          .map((f: any) => ({
+            column: f.column,
+            operator: f.operator || "=",
+            value: String(f.value),
+          }));
+        try {
+          const serveBody: any = {
+            dataset_id: selectedDatasetId,
+            group_by: groupBy,
+            filters: serveFilters,
+          };
+          if (validMetrics.length === 1) {
+            serveBody.metric_column = validMetrics[0].column;
+            serveBody.aggregation = validMetrics[0].aggregate;
+          } else {
+            serveBody.metrics = validMetrics.map((m: any) => ({
+              column: m.column,
+              aggregation: m.aggregate,
             }));
-          try {
-            const serveBody: any = {
-              dataset_id: selectedDatasetId,
-              group_by: groupBy,
-              filters: serveFilters,
-            };
-            if (validMetrics.length === 1) {
-              serveBody.metric_column = validMetrics[0].column;
-              serveBody.aggregation = validMetrics[0].aggregate;
-            } else {
-              serveBody.metrics = validMetrics.map((m: any) => ({
-                column: m.column,
-                aggregation: m.aggregate,
-              }));
-            }
-            const serveRes = await msalFetch(`${API_BASE}/api/v1/dlm/serve-chart`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(serveBody),
-            });
-            if (serveRes.ok) {
-              const serveJson = await serveRes.json();
-              if (serveJson.served) {
-                // Context hit — build the chart option from the served data
-                const executeJson = {
-                  columns: serveJson.columns || [],
-                  rows: serveJson.rows || [],
-                  from_context: true,
-                };
-                const totalDurationMs = performance.now() - start;
-                const rows = executeJson.rows;
-                let option = buildEchartsOptionFromPreview(selectedTemplate.id, executeJson, config) || {};
-                option = applyNumberAbbreviation(option);
-                setPreviewOptions(option);
-
-                // Populate client-side cache so repeat views are instant
-                const filterSig = serveFilters.map((f: any) => `${f.column}=${f.value}`).sort().join("|");
-                const metricSig = validMetrics.map((m: any) => `${m.column}:${m.aggregate}`).join("+");
-                const contextCacheKey = `ctx:${selectedDatasetId}:${metricSig}:${groupBy || ""}:${filterSig}`;
-                clientCacheSet(contextCacheKey, executeJson);
-
-                setSqlPreview({
-                  lastSql: "(served from DLM context)",
-                  lastConfigJson: config,
-                  dataColumns: executeJson.columns,
-                  dataRows: rows,
-                  isRunning: false,
-                  error: null,
-                  durationMs: totalDurationMs,
-                  fabricDurationMs: null,
-                  rowCount: rows.length,
-                  savedSql: sqlPreview.savedSql,
-                });
-                isQueryRunningRef.current = false;
-                releaseSlot();
-                return;
-              }
-            }
-          } catch {
-            // Context serve failed — fall through to SQL path silently
           }
+          const serveRes = await msalFetch(`${API_BASE}/api/v1/dlm/serve-chart`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(serveBody),
+          });
+          if (serveRes.ok) {
+            const serveJson = await serveRes.json();
+            if (serveJson.served) {
+              const executeJson = {
+                columns: serveJson.columns || [],
+                rows: serveJson.rows || [],
+                from_context: true,
+              };
+              const totalDurationMs = performance.now() - start;
+              const rows = executeJson.rows;
+              let option = buildEchartsOptionFromPreview(selectedTemplate.id, executeJson, config) || {};
+              option = applyNumberAbbreviation(option);
+              setPreviewOptions(option);
+
+              const filterSig = serveFilters.map((f: any) => `${f.column}=${f.value}`).sort().join("|");
+              const metricSig = validMetrics.map((m: any) => `${m.column}:${m.aggregate}`).join("+");
+              const contextCacheKey = `ctx:${selectedDatasetId}:${metricSig}:${groupBy || ""}:${filterSig}`;
+              clientCacheSet(contextCacheKey, executeJson);
+
+              setSqlPreview({
+                lastSql: "(served from DLM context)",
+                lastConfigJson: config,
+                dataColumns: executeJson.columns,
+                dataRows: rows,
+                isRunning: false,
+                error: null,
+                durationMs: totalDurationMs,
+                fabricDurationMs: null,
+                rowCount: rows.length,
+                savedSql: sqlPreview.savedSql,
+              });
+              isQueryRunningRef.current = false;
+              releaseSlot();
+              return;
+            }
+          }
+        } catch {
+          // Context serve failed — fall through to SQL path silently
+        }
       }
 
       let sqlText: string;

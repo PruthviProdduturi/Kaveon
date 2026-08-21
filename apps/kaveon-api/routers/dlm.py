@@ -154,8 +154,11 @@ def serve_chart(body: ServeChartBody, ctx: UserContext = Depends(require_user_co
     elif body.metric_column and body.aggregation:
         metric_list = [{"column": body.metric_column, "aggregation": body.aggregation}]
 
-    if len(metric_list) <= 1:
-        mc = metric_list[0] if metric_list else {"column": body.metric_column, "aggregation": body.aggregation}
+    if not metric_list:
+        raise HTTPException(status_code=422, detail="No metric specified")
+
+    if len(metric_list) == 1:
+        mc = metric_list[0]
         return dlm.serve_chart(
             dataset_id=str(body.dataset_id),
             metric_column=mc["column"],
