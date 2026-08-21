@@ -865,7 +865,7 @@ export default function DatasetDetailPage() {
                   padding: "2px 6px", margin: 0,
                   border: "2px solid var(--accent)", borderRadius: 6,
                   outline: "none", background: "var(--bg-surface)",
-                  fontFamily: "inherit", minWidth: 260,
+                  fontFamily: "inherit", minWidth: 0,
                 }}
               />
             )}
@@ -985,6 +985,9 @@ export default function DatasetDetailPage() {
           details.ds-section summary::-webkit-details-marker { display: none; }
           details.ds-section[open] .ds-chevron { transform: rotate(180deg); }
           details.ds-section summary:hover { background: var(--bg-hover); }
+          @media (max-width: 768px) {
+            .ds-detail-grid { grid-template-columns: 1fr !important; }
+          }
         `}</style>
 
         {/* ── Context — top ── */}
@@ -1062,7 +1065,7 @@ export default function DatasetDetailPage() {
             <i className="fas fa-chevron-down ds-chevron" style={{ fontSize: 10, color: "var(--text-muted)", transition: "transform 0.2s" }} />
           </summary>
           <div style={{ padding: "16px", borderTop: "1px solid var(--border)" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+            <div className="ds-detail-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
               <div>
                 <h4 style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", margin: "0 0 12px 0", textTransform: "uppercase", letterSpacing: "0.05em" }}>Connection</h4>
                 <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
@@ -1118,7 +1121,7 @@ export default function DatasetDetailPage() {
             <i className="fas fa-chevron-down ds-chevron" style={{ fontSize: 10, color: "var(--text-muted)", transition: "transform 0.2s" }} />
           </summary>
           <div style={{ padding: "16px", borderTop: "1px solid var(--border)" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+            <div className="ds-detail-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
               <div>
                 <h4 style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", margin: "0 0 10px 0", textTransform: "uppercase", letterSpacing: "0.05em" }}>Columns</h4>
                 {schemaColumns && schemaColumns.length > 0 ? (

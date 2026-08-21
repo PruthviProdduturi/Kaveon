@@ -2442,6 +2442,15 @@ main.main-lab {
   padding-bottom: 20px;
 }
 
+@media (max-width: 768px) {
+  .chart-builder-layout {
+    grid-template-columns: 1fr !important;
+    min-width: 0 !important;
+    height: auto !important;
+    min-height: calc(100vh - 150px);
+  }
+}
+
 .chart-builder-layout-source-collapsed {
   grid-template-columns: 1px minmax(0, 360px) minmax(0, 1fr);
   column-gap: 1.25rem;

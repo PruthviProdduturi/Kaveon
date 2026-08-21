@@ -242,7 +242,7 @@ export default function SystemSettingsPage() {
                 {/* Connection details grid */}
                 <div style={{
                   display: "grid",
-                  gridTemplateColumns: `repeat(${Math.min(connDetails.length, 3)}, 1fr)`,
+                  gridTemplateColumns: `repeat(auto-fit, minmax(200px, 1fr))`,
                   gap: 1,
                   borderRadius: 12,
                   overflow: "hidden",
@@ -352,6 +352,9 @@ export default function SystemSettingsPage() {
           </div>
         </div>
 
+        {/* ── Display Preferences ─────────────────────────────────────────── */}
+        <DisplayPreferences isDark={isDark} primaryColor={primaryColor} />
+
         {/* ── Azure Key Vault — coming soon ────────────────────────────────── */}
         <div className="card" style={{
           overflow: "hidden",
@@ -392,7 +395,7 @@ export default function SystemSettingsPage() {
             </div>
 
             <div style={{
-              display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10,
+              display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10,
             }}>
               {[
                 { icon: "fa-key", title: "Secret References", desc: "Connection strings stored as Key Vault references, never as plain text" },
@@ -417,6 +420,65 @@ export default function SystemSettingsPage() {
 
       </div>
     </ListPageShell>
+  );
+}
+
+// ── Display Preferences ────────────────────────────────────────────────────────
+
+function DisplayPreferences({ isDark, primaryColor }: { isDark: boolean; primaryColor: string }) {
+  const [showContextBanner, setShowContextBanner] = useState(() => {
+    if (typeof window === "undefined") return true;
+    return localStorage.getItem("kaveon-context-banner") !== "hidden";
+  });
+
+  const toggle = (key: string, value: boolean, setter: (v: boolean) => void) => {
+    setter(value);
+    if (value) localStorage.removeItem(key);
+    else localStorage.setItem(key, "hidden");
+  };
+
+  return (
+    <div className="card" style={{ overflow: "hidden", border: "1px solid var(--border)" }}>
+      <div style={{ height: 3, background: `linear-gradient(90deg, ${primaryColor}, var(--accent))` }} />
+      <div style={{ padding: "1.5rem" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: "1.25rem" }}>
+          <div style={{
+            width: 44, height: 44, borderRadius: 12, flexShrink: 0,
+            background: isDark ? "rgba(var(--accent-rgb),0.1)" : "rgba(var(--accent-rgb),0.06)",
+            border: "1px solid rgba(var(--accent-rgb),0.15)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}>
+            <i className="fas fa-sliders" style={{ fontSize: 18, color: "var(--accent)" }} />
+          </div>
+          <div>
+            <span style={{ fontSize: 15, fontWeight: 700 }}>Display</span>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>Configure what appears on the chat page</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderTop: "1px solid var(--border)" }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600 }}>Context banner</div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>Show compiled DLM coverage at the top of the chat page</div>
+          </div>
+          <button
+            type="button"
+            onClick={() => toggle("kaveon-context-banner", !showContextBanner, setShowContextBanner)}
+            style={{
+              width: 44, height: 24, borderRadius: 12, border: "none", cursor: "pointer", position: "relative",
+              background: showContextBanner ? "var(--accent)" : "var(--border)",
+              transition: "background 0.2s",
+            }}
+          >
+            <div style={{
+              width: 18, height: 18, borderRadius: 9, background: "#fff",
+              position: "absolute", top: 3,
+              left: showContextBanner ? 23 : 3,
+              transition: "left 0.2s",
+            }} />
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

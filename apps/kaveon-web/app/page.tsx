@@ -10,6 +10,7 @@ import { nlToSql, DatasetSchema } from "../utils/nlToSql";
 import { InlineChart } from "../components/chat/InlineChart";
 import { API_BASE } from "../config";
 import { useRecents } from "../hooks/useRecents";
+import { useSearchParams } from "next/navigation";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -310,15 +311,14 @@ export default function Home() {
     }
   }, []);
 
-  // Resume a chat deep-linked from Recents (?session=<id>). Runs once on mount.
+  // Resume a chat deep-linked from Recents (?session=<id>). Reacts to URL changes.
+  const searchParams = useSearchParams();
+  const sessionParam = searchParams.get("session");
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const sid = new URLSearchParams(window.location.search).get("session");
-    if (!sid) return;
-    const n = parseInt(sid, 10);
+    if (!sessionParam) return;
+    const n = parseInt(sessionParam, 10);
     if (!Number.isNaN(n)) void loadSession(n);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [sessionParam, loadSession]);
 
   const deleteSession = useCallback(async (sessionId: number) => {
     try {
@@ -653,9 +653,10 @@ export default function Home() {
         const entityMatch = followUpPattern.test(queryText)
           ? queryText.match(/(?:what about|how about|and|show me|now|same for)\s+(.+)/i)
           : null;
-        const entity = entityMatch
+        const rawEntity = entityMatch
           ? entityMatch[1].replace(/[?.!]$/, "").trim()
           : queryText.replace(/[?.!]$/, "").trim();
+        const entity = rawEntity.replace(/^(?:in|for|of)\s+/i, "").trim();
         if (entity) {
           const prev = prevUser.content;
           // Remove any existing entity from previous query (capitalized words that aren't keywords)
@@ -663,7 +664,8 @@ export default function Home() {
             const lower = match.toLowerCase();
             const isKeyword = /^(energy|carbon|total|show|top|get|what|how|consumption|emissions|temperature|renewable|global|trend|arena|benchmark|model)$/i.test(lower);
             return isKeyword ? match : "";
-          }).replace(/\s+/g, " ").replace(/\b(in|for|of)\s*$/i, "").trim();
+          }).replace(/\s+/g, " ").replace(/\b(in|for|of)\s*$/i, "").trim()
+            .replace(/\b(?:by|per|across)\s+\w+/i, "").replace(/\s+/g, " ").trim();
           queryText = cleaned ? `${cleaned} in ${entity}` : `${entity} energy`;
         }
       }
@@ -1011,7 +1013,7 @@ export default function Home() {
           >
             <div style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: "1rem", width: "100%", maxWidth: 680, padding: "0 1.5rem" }}>
               {/* Greeting — with Guardian O inline like Claude's */}
-              <h1 style={{ margin: "0 0 8px", fontSize: 32, fontWeight: 500, color: "var(--text-primary)", textAlign: "center", letterSpacing: "-0.5px", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+              <h1 style={{ margin: "0 0 8px", fontSize: "clamp(22px, 5vw, 32px)", fontWeight: 500, color: "var(--text-primary)", textAlign: "center", letterSpacing: "-0.5px", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
                 <KaveonMark size={52} useDirectColor />
                 {isEmpty ? heroText : `${new Date().getHours() < 12 ? "Morning" : new Date().getHours() < 17 ? "Afternoon" : "Evening"}, ${(account?.name || "there").replace(/\w\S*/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase())}`}
               </h1>
