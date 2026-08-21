@@ -6,6 +6,7 @@ import { DashboardProvider, DashboardConfig, useDashboard } from "../../../../co
 import DashboardCanvas from "../../../../components/dashboards/DashboardCanvas";
 import DashboardFilterBarReadOnly from "../../../../components/dashboards/DashboardFilterBarReadOnly";
 import { LoadingOverlay } from "../../../../components/LoadingOverlay";
+import { KaveonLoading } from "../../../../components/KaveonLoading";
 import { msalFetch } from "../../../../utils/msalFetch";
 import { useRecents } from "../../../../hooks/useRecents";
 import { resetQuerySemaphore, isQueryIdle } from "../../../../utils/querySemaphore";
@@ -336,10 +337,7 @@ const DashboardViewContent: React.FC<{
       {/* Page-shell already provides the outer padding — don't double-inset here. */}
       <div style={{ flex: 1, overflow: 'auto', background: 'var(--bg-primary)' }}>
         {!chartsReady ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 60, gap: 12, color: 'var(--text-muted)', fontSize: 13 }}>
-            <i className="fas fa-spinner fa-spin" style={{ fontSize: 22, color: 'var(--accent)' }} />
-            <span>Loading dashboard…</span>
-          </div>
+          <KaveonLoading message="Loading dashboard" />
         ) : (
           <div ref={canvasRef}>
             <DashboardCanvas />
