@@ -43,12 +43,21 @@ class ChartFilter(BaseModel):
     value: Any
 
 
-class ServeChartBody(BaseModel):
-    """A dashboard chart query: one metric aggregation, optional group-by and
-    equality filters. Served from precomputed context when possible."""
-    dataset_id: int
-    metric_column: str
+class ServeChartMetric(BaseModel):
+    column: str
     aggregation: str
+
+
+class ServeChartBody(BaseModel):
+    """A dashboard chart query: one or more metric aggregations, optional
+    group-by and equality filters. Served from precomputed context when
+    possible.  Send ``metrics`` for multi-metric charts (stacked bar, combo);
+    ``metric_column``/``aggregation`` is kept for single-metric backward
+    compat."""
+    dataset_id: int
+    metric_column: Optional[str] = None
+    aggregation: Optional[str] = None
+    metrics: Optional[List[ServeChartMetric]] = None
     group_by: Optional[str] = None
     filters: List[ChartFilter] = []
 
@@ -137,14 +146,30 @@ def serve_chart(body: ServeChartBody, ctx: UserContext = Depends(require_user_co
     """Serve a dashboard chart from precomputed DLM context — no live SQL.
     Returns served=true with columns/rows on a hit, served=false when the
     precomputed context can't answer (caller should fall back to /sql/execute)."""
-    result = dlm.serve_chart(
+    raw_filters = [f.dict() for f in body.filters] if body.filters else []
+
+    metric_list = []
+    if body.metrics:
+        metric_list = [{"column": m.column, "aggregation": m.aggregation} for m in body.metrics]
+    elif body.metric_column and body.aggregation:
+        metric_list = [{"column": body.metric_column, "aggregation": body.aggregation}]
+
+    if len(metric_list) <= 1:
+        mc = metric_list[0] if metric_list else {"column": body.metric_column, "aggregation": body.aggregation}
+        return dlm.serve_chart(
+            dataset_id=str(body.dataset_id),
+            metric_column=mc["column"],
+            aggregation=mc["aggregation"],
+            group_by=body.group_by,
+            filters=raw_filters,
+        )
+
+    return dlm.serve_chart_multi(
         dataset_id=str(body.dataset_id),
-        metric_column=body.metric_column,
-        aggregation=body.aggregation,
+        metric_specs=metric_list,
         group_by=body.group_by,
-        filters=[f.dict() for f in body.filters] if body.filters else [],
+        filters=raw_filters,
     )
-    return result
 
 
 @router.get("/dlm/coverage")
