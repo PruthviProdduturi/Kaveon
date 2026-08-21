@@ -1698,6 +1698,122 @@ def serve_chart(dataset_id: str, metric_column: str, aggregation: str,
     }
 
 
+def _resolve_metric(metric_column: str, aggregation: str,
+                    ds_metrics: List[dict]) -> tuple:
+    """Map (column, aggregation) to (metric_name, metric_obj) or (None, None)."""
+    agg_upper = aggregation.strip().upper()
+    if agg_upper == "COUNT_DISTINCT":
+        target_expr = _normalize(f"COUNT(DISTINCT {metric_column})")
+    else:
+        target_expr = _normalize(f"{agg_upper}({metric_column})")
+    for m in ds_metrics:
+        name = m.get("name") or m.get("metric_name") or ""
+        expr = m.get("expression") or ""
+        if _normalize(expr) == target_expr:
+            return (name, m)
+    mc_norm = _normalize(metric_column)
+    agg_base = agg_upper.split("_")[0]
+    for m in ds_metrics:
+        name = m.get("name") or m.get("metric_name") or ""
+        expr = m.get("expression") or ""
+        for ident in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", expr):
+            if _normalize(ident) == mc_norm and agg_base in expr.upper():
+                return (name, m)
+    return (None, None)
+
+
+def serve_chart_multi(dataset_id: str,
+                      metric_specs: List[Dict[str, str]],
+                      group_by: Optional[str] = None,
+                      filters: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """Serve a multi-metric dashboard chart (stacked bar, combo) by merging
+    precomputed per-metric answers. Returns served=True only when ALL metrics
+    are answered from context."""
+    dataset_id = str(dataset_id)
+    ds = datasets_svc.get_dataset_by_id(dataset_id)
+    if not ds:
+        return {"served": False, "reason": "dataset_not_found"}
+
+    ds_metrics = ds.get("metrics") or []
+    filters = filters or []
+
+    clean_filters: List[Dict[str, Any]] = []
+    for f in filters:
+        if f.get("operator", "=") != "=":
+            return {"served": False, "reason": "non_equality_filter"}
+        clean_filters.append({"column": f["column"], "value": f["value"]})
+
+    group_col: Optional[str] = None
+    if group_by:
+        spec = _effective_spec(dataset_id)
+        dim_spec = spec.get("dimensions") or {}
+        if group_by in dim_spec:
+            group_col = group_by
+        else:
+            gb_norm = _normalize(group_by)
+            for dk in dim_spec:
+                if _normalize(dk) == gb_norm:
+                    group_col = dk
+                    break
+        if not group_col:
+            return {"served": False, "reason": "dimension_not_found"}
+
+    resolved = []
+    for ms in metric_specs:
+        mname, mobj = _resolve_metric(ms["column"], ms["aggregation"], ds_metrics)
+        if not mname:
+            return {"served": False, "reason": "metric_not_found",
+                    "detail": f"{ms['aggregation']}({ms['column']})"}
+        resolved.append((mname, mobj, ms))
+
+    dummy_routed = {"score": 1.0}
+    per_metric = []
+    for mname, mobj, ms in resolved:
+        served = _serve_from_context(dataset_id, ds, mname, group_col, None,
+                                      clean_filters, dummy_routed)
+        if served is None and mobj:
+            expr = (mobj.get("expression") or "")
+            if _distinct_col(expr):
+                served = _serve_sketch(dataset_id, ds, mname, group_col, None,
+                                        clean_filters, dummy_routed)
+        if served is None:
+            return {"served": False, "reason": "no_precomputed_answer",
+                    "detail": mname}
+        per_metric.append((mname, served))
+
+    if not group_col:
+        columns = [mn for mn, _ in per_metric]
+        row = [s["rows"][0][0] if s.get("rows") and s["rows"][0] else None
+               for _, s in per_metric]
+        rows = [row]
+    else:
+        metric_names = [mn for mn, _ in per_metric]
+        columns = [group_col] + metric_names
+        merged: Dict[str, list] = {}
+        for idx, (mn, s) in enumerate(per_metric):
+            for r in s.get("rows") or []:
+                if not r:
+                    continue
+                key = _normalize(str(r[0]))
+                if key not in merged:
+                    merged[key] = [r[0]] + [None] * len(metric_names)
+                merged[key][idx + 1] = r[1] if len(r) > 1 else None
+        rows = list(merged.values())
+
+    fresh = check_freshness(dataset_id)
+    return {
+        "served": True,
+        "columns": columns,
+        "rows": rows,
+        "from_context": True,
+        "freshness": {
+            "score": fresh.get("score", 0.0),
+            "recommendation": fresh.get("recommendation"),
+        },
+        "approx": any(s.get("approx") for _, s in per_metric),
+    }
+
+
 def _metric_year_bounds(database: str, schema: str, table: str, date_column: Optional[str],
                         metric: dict, columns: List[dict], filters: List[Dict[str, Any]]) -> tuple:
     """(earliest, latest) year for which *metric* actually has data under the

@@ -3100,11 +3100,9 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
       // breakdowns (the vast majority of dashboard charts) are answered
       // instantly from dlm_answers with zero database trip.
       const isDashboardCtx = (runContext || "").startsWith("dashboard");
-      const isSingleMetric = (config.metrics?.length || 0) === 1;
-      if (isDashboardCtx && !forceRegenerate && isSingleMetric) {
-        const primaryMetric = config.metrics?.[0];
+      const validMetrics = (config.metrics || []).filter((m: any) => m.column && m.aggregate);
+      if (isDashboardCtx && !forceRegenerate && validMetrics.length > 0) {
         const groupBy = config.groupby?.[0] || null;
-        if (primaryMetric?.column && primaryMetric?.aggregate) {
           // Map dashboard filter format to the serve-chart filter format
           const serveFilters = (extraFilters || [])
             .filter((f: any) => f.column && f.value && f.value !== "AllUp"
@@ -3115,16 +3113,24 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
               value: String(f.value),
             }));
           try {
+            const serveBody: any = {
+              dataset_id: selectedDatasetId,
+              group_by: groupBy,
+              filters: serveFilters,
+            };
+            if (validMetrics.length === 1) {
+              serveBody.metric_column = validMetrics[0].column;
+              serveBody.aggregation = validMetrics[0].aggregate;
+            } else {
+              serveBody.metrics = validMetrics.map((m: any) => ({
+                column: m.column,
+                aggregation: m.aggregate,
+              }));
+            }
             const serveRes = await msalFetch(`${API_BASE}/api/v1/dlm/serve-chart`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                dataset_id: selectedDatasetId,
-                metric_column: primaryMetric.column,
-                aggregation: primaryMetric.aggregate,
-                group_by: groupBy,
-                filters: serveFilters,
-              }),
+              body: JSON.stringify(serveBody),
             });
             if (serveRes.ok) {
               const serveJson = await serveRes.json();
@@ -3143,7 +3149,8 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
 
                 // Populate client-side cache so repeat views are instant
                 const filterSig = serveFilters.map((f: any) => `${f.column}=${f.value}`).sort().join("|");
-                const contextCacheKey = `ctx:${selectedDatasetId}:${primaryMetric.column}:${primaryMetric.aggregate}:${groupBy || ""}:${filterSig}`;
+                const metricSig = validMetrics.map((m: any) => `${m.column}:${m.aggregate}`).join("+");
+                const contextCacheKey = `ctx:${selectedDatasetId}:${metricSig}:${groupBy || ""}:${filterSig}`;
                 clientCacheSet(contextCacheKey, executeJson);
 
                 setSqlPreview({
@@ -3166,7 +3173,6 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
           } catch {
             // Context serve failed — fall through to SQL path silently
           }
-        }
       }
 
       let sqlText: string;
