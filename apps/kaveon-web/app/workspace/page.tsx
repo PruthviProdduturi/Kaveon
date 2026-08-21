@@ -472,7 +472,7 @@ export default function WorkspacePage() {
 
   const gridStyle: React.CSSProperties = {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
+    gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
     gap: 18,
   };
 
@@ -588,7 +588,7 @@ export default function WorkspacePage() {
   };
 
   return (
-    <div style={{ maxWidth: 1400, margin: "0 auto", padding: "32px 40px 64px" }}>
+    <div className="workspace-root" style={{ maxWidth: 1400, margin: "0 auto", padding: "32px 40px 64px" }}>
       {/* Jump back in — recents strip */}
       {showRecents && (
         <div style={{ marginBottom: 28 }}>
@@ -663,13 +663,13 @@ export default function WorkspacePage() {
         </div>
 
         {/* Search */}
-        <div style={{ position: "relative" }}>
+        <div style={{ position: "relative", flex: 1, minWidth: 0, maxWidth: 200 }}>
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search..."
             style={{
-              width: 200, padding: "9px 12px 9px 34px", fontSize: 13,
+              width: "100%", padding: "9px 12px 9px 34px", fontSize: 13,
               border: "1px solid var(--border)", borderRadius: 10,
               background: "var(--bg-surface)", color: "var(--text-primary)", outline: "none",
             }}
@@ -865,6 +865,12 @@ export default function WorkspacePage() {
         @keyframes workspaceModalIn {
           from { opacity: 0; transform: translateY(8px) scale(0.98); }
           to   { opacity: 1; transform: translateY(0)   scale(1); }
+        }
+        @media (max-width: 768px) {
+          .workspace-root {
+            padding-left: 16px !important;
+            padding-right: 16px !important;
+          }
         }
       `}</style>
     </div>

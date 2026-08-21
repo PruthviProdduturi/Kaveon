@@ -131,10 +131,21 @@ export default function AboutPage() {
         .about-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(74,158,232,0.4) !important; }
         .dash-frame:hover { transform: scale(1.02); box-shadow: 0 24px 80px rgba(0,0,0,0.6), 0 0 40px rgba(74,158,232,0.08) !important; }
         .dash-frame:hover .dash-label { opacity: 1 !important; }
+        @media (max-width: 768px) {
+          .about-nav { padding: 14px 16px !important; }
+          .about-nav-links { flex-wrap: wrap; gap: 16px !important; }
+          .about-grid-3 { grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)) !important; }
+          .about-grid-3 > * { grid-column: span 1 !important; }
+          .about-grid-2 { grid-template-columns: 1fr !important; }
+          .about-compare { grid-template-columns: 1fr !important; }
+          .about-grid-sql { grid-template-columns: 1fr !important; }
+          .about-tech { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)) !important; }
+          .about-footer { padding: 20px 16px !important; flex-wrap: wrap; gap: 12px !important; }
+        }
       `}</style>
 
       {/* ─── Nav ─── */}
-      <nav style={{
+      <nav className="about-nav" style={{
         position: "fixed", top: 0, left: 0, right: 0, zIndex: 100,
         display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "14px 48px",
@@ -160,7 +171,7 @@ export default function AboutPage() {
             <path d="M 966.25 215.29 A 72.5 72.5 0 1 0 893.75 215.29" fill="none" stroke={B} strokeWidth="24" strokeLinecap="butt" />
           </svg>
         </a>
-        <div style={{ display: "flex", alignItems: "center", gap: 36 }}>
+        <div className="about-nav-links" style={{ display: "flex", alignItems: "center", gap: 36 }}>
           <a href="#features" className="about-link" style={{ fontSize: 13, color: "#ccc", textDecoration: "none", transition: "color 0.2s" }}>Features</a>
           <a href="/docs" target="_blank" className="about-link" style={{ fontSize: 13, color: "#ccc", textDecoration: "none", transition: "color 0.2s" }}>Docs</a>
           <a href="https://github.com/PruthviProdduturi/Kaveon" target="_blank" rel="noopener noreferrer" className="about-link" style={{ fontSize: 13, color: "#ccc", textDecoration: "none", transition: "color 0.2s" }}>GitHub</a>
@@ -425,7 +436,7 @@ export default function AboutPage() {
             <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: B, marginBottom: 12 }}>How It Works</div>
             <h2 style={{ fontSize: "clamp(28px, 4vw, 40px)", fontWeight: 700, letterSpacing: "-1px" }}>Three steps. Zero complexity.</h2>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 24 }}>
+          <div className="about-grid-3" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 24 }}>
             {[
               { n: "01", title: "You ask", desc: "Type a question in natural language. No syntax. No training.", color: B, icon: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" },
               { n: "02", title: "We parse", desc: "A deterministic engine matches your words to schema metadata and generates SQL. No LLM. Instant.", color: "#8b5cf6", icon: "M13 2L3 14h9l-1 8 10-12h-9l1-8z" },
@@ -465,7 +476,7 @@ export default function AboutPage() {
             </p>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20 }}>
+          <div className="about-grid-3" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20 }}>
             {[
               {
                 icon: "fa-shield-halved",
@@ -517,7 +528,7 @@ export default function AboutPage() {
           </div>
 
           {/* Comparison row */}
-          <div style={{
+          <div className="about-compare" style={{
             display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 20, alignItems: "center",
             marginTop: 40, padding: "28px 32px", borderRadius: 16,
             background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)",
@@ -647,7 +658,7 @@ export default function AboutPage() {
 
       {/* ─── SQL Lab Showcase ─── */}
       <Section style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0a0a0a 0%, #0f1520 50%, #0a0a0a 100%)" }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto", display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 48, alignItems: "center" }}>
+        <div className="about-grid-sql" style={{ maxWidth: 1100, margin: "0 auto", display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 48, alignItems: "center" }}>
           <Anim dir="left" style={{ background: "#111", borderRadius: 16, border: "1px solid rgba(255,255,255,0.05)", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
             <div style={{ padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", display: "flex", gap: 12 }}>
               <span style={{ fontSize: 12, color: B, borderBottom: `2px solid ${B}`, paddingBottom: 8 }}>Query 1</span>
@@ -706,7 +717,7 @@ export default function AboutPage() {
 
       {/* ─── Adaptive Context Routing ─── */}
       <Section style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0a0a0a 0%, #0f1520 50%, #0a0a0a 100%)" }}>
-        <div style={{ maxWidth: 1000, margin: "0 auto", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 60, alignItems: "center" }}>
+        <div className="about-grid-2" style={{ maxWidth: 1000, margin: "0 auto", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 60, alignItems: "center" }}>
           <Anim dir="left">
             <h3 style={{ fontSize: 32, fontWeight: 700, lineHeight: 1.2, marginBottom: 16, letterSpacing: "-0.5px", color: "#e2e8f0" }}>
               Adaptive Context Routing
@@ -765,7 +776,7 @@ export default function AboutPage() {
             <h2 style={{ fontSize: "clamp(28px, 4vw, 40px)", fontWeight: 700, letterSpacing: "-1px" }}>Everything you need</h2>
             <p style={{ fontSize: 16, color: "#666", marginTop: 12 }}>One platform. Ask questions, build charts, create dashboards, write SQL.</p>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gridAutoRows: "auto", gap: 14 }}>
+          <div className="about-grid-3" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gridAutoRows: "auto", gap: 14 }}>
             <Anim dir="up" delay={0} style={{ gridColumn: "span 2" }}>
               <div className="about-card" style={{ padding: 40, borderRadius: 16, background: `linear-gradient(135deg, ${B}06 0%, transparent 100%)`, border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: B, textTransform: "uppercase", letterSpacing: "2px", marginBottom: 12 }}>Core</div>
@@ -819,7 +830,7 @@ export default function AboutPage() {
             <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: B, marginBottom: 12 }}>Stack</div>
             <h2 style={{ fontSize: "clamp(28px, 4vw, 40px)", fontWeight: 700, letterSpacing: "-1px" }}>Built with</h2>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
+          <div className="about-tech" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
             {[
               { name: "Next.js", version: "15", color: "#fff" },
               { name: "React", version: "19", color: "#61dafb" },
@@ -864,7 +875,7 @@ export default function AboutPage() {
       </section>
 
       {/* ─── Footer ─── */}
-      <footer style={{ borderTop: "1px solid rgba(255,255,255,0.06)", padding: "20px 48px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <footer className="about-footer" style={{ borderTop: "1px solid rgba(255,255,255,0.06)", padding: "20px 48px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <KaveonMark size={16} useDirectColor />
           <span style={{ fontSize: 12, color: "#e2e8f0" }}>&copy; {new Date().getFullYear()} Kaveon</span>

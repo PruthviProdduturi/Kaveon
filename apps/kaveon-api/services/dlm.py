@@ -1026,6 +1026,17 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
     # 1) entity filters from the value index (e.g. "india" -> country='India')
     filters = _resolve_entity_filters(dataset_id, question)
 
+    # 1b) detect unresolved entity phrases — if the question says "in <X>" or
+    #     "for <X>" but <X> didn't match any value, warn the user instead of
+    #     silently ignoring the filter and returning unfiltered results.
+    unresolved_entity = None
+    if not filters:
+        ent_m = re.search(r"\b(?:in|for)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b", question)
+        if ent_m:
+            candidate = ent_m.group(1)
+            if candidate.lower() not in _STOPWORDS and len(candidate) >= 3:
+                unresolved_entity = candidate
+
     # 2) metric — curated aliases + default metric; generic quantifier words ignored
     metric = _match_metric(qset, metrics, m_alias, spec.get("default_metric"))
 
@@ -1051,6 +1062,10 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
     limit_n = top_n or limit
 
     note = None
+    if unresolved_entity:
+        dim_names = [d.get("column_name") or d.get("name") for d in dims if d.get("column_name") or d.get("name")]
+        note = f'"{unresolved_entity}" not found in this dataset\'s values.' + (
+            f" Available dimensions: {', '.join(dim_names)}." if dim_names else "")
     # If the user asked for a breakdown but no dimension matched, note it
     if wanted_groupby and not group_col:
         dim_names = [d.get("column_name") or d.get("name") for d in dims if d.get("column_name") or d.get("name")]

@@ -51,9 +51,14 @@ function shortDate(s?: string | null): string | null {
   return m ? m[1] : String(s).trim().slice(0, 12);
 }
 
+const PREF_KEY = "kaveon-context-banner";
+
 export function ContextBanner() {
   const [items, setItems] = useState<CoverageItem[] | null>(null);
-  const [dismissed, setDismissed] = useState(false);
+  const [dismissed, setDismissed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem(PREF_KEY) === "hidden";
+  });
   const [hover, setHover] = useState<{ item: CoverageItem; x: number; y: number } | null>(null);
 
   useEffect(() => {
@@ -111,7 +116,7 @@ export function ContextBanner() {
       <div style={wrap}>
         <span style={label}><i className="fas fa-database" /> Context</span>
         <span>No context compiled yet — open a dataset and <b>Generate DLM</b> to make it queryable here.</span>
-        <button style={closeBtn} title="Dismiss" onClick={() => setDismissed(true)}>
+        <button style={closeBtn} title="Dismiss" onClick={() => { setDismissed(true); localStorage.setItem(PREF_KEY, "hidden"); }}>
           <i className="fas fa-times" />
         </button>
       </div>
@@ -146,7 +151,7 @@ export function ContextBanner() {
           </span>
         );
       })}
-      <button style={closeBtn} title="Dismiss" onClick={() => setDismissed(true)}>
+      <button style={closeBtn} title="Dismiss" onClick={() => { setDismissed(true); localStorage.setItem(PREF_KEY, "hidden"); }}>
         <i className="fas fa-times" />
       </button>
 

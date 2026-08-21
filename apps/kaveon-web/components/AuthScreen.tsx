@@ -17,7 +17,6 @@ export function AuthScreen() {
 	const [toast, setToast] = useState<string | null>(null);
 	const [promptIdx, setPromptIdx] = useState(0);
 
-	// Force dark mode on login page
 	useEffect(() => {
 		document.documentElement.setAttribute("data-theme", "dark");
 		return () => {
@@ -27,7 +26,6 @@ export function AuthScreen() {
 		};
 	}, []);
 
-	// Rotate prompts
 	useEffect(() => {
 		const t = setInterval(() => setPromptIdx((i) => (i + 1) % PROMPTS.length), 4000);
 		return () => clearInterval(t);
@@ -67,46 +65,85 @@ export function AuthScreen() {
 	};
 
 	return (
-		<div
-			style={{
-				position: "fixed",
-				inset: 0,
-				display: "flex",
-				background: "#171717",
-			}}
-		>
-			{/* ─── LEFT PANEL — Brand + rotating prompt ─── */}
-			<div
-				style={{
-					flex: 1,
-					display: "flex",
-					flexDirection: "column",
-					justifyContent: "center",
-					alignItems: "flex-start",
-					padding: "0 80px",
-					paddingBottom: "6vh",
-					position: "relative",
-					overflow: "hidden",
-				}}
-			>
-				{/* Background glow — centered on content */}
-				<div
-					style={{
-						position: "absolute",
-						top: "50%",
-						left: "35%",
-						transform: "translate(-50%, -50%)",
-						width: 700,
-						height: 500,
-						borderRadius: "50%",
-						background: "radial-gradient(ellipse, rgba(74, 158, 232, 0.06) 0%, transparent 70%)",
-						pointerEvents: "none",
-					}}
-				/>
+		<div className="auth-root">
+			<style>{`
+				@keyframes loginFade {
+					from { opacity: 0; transform: translateY(8px); }
+					to { opacity: 1; transform: translateY(0); }
+				}
+				.auth-root {
+					position: fixed; inset: 0;
+					display: flex; background: #171717;
+				}
+				.auth-brand {
+					flex: 1;
+					display: flex; flex-direction: column;
+					justify-content: center; align-items: flex-start;
+					padding: 0 80px; padding-bottom: 6vh;
+					position: relative; overflow: hidden;
+				}
+				.auth-brand-glow {
+					position: absolute; top: 50%; left: 35%;
+					transform: translate(-50%, -50%);
+					width: 700px; height: 500px; border-radius: 50%;
+					background: radial-gradient(ellipse, rgba(74,158,232,0.06) 0%, transparent 70%);
+					pointer-events: none;
+				}
+				.auth-logo svg { width: 340px; height: auto; }
+				.auth-prompt {
+					font-size: 34px; font-weight: 300; color: #e2e8f0;
+					line-height: 1.35; letter-spacing: -0.3px;
+					margin: 0; animation: loginFade 0.6s ease-out;
+				}
+				.auth-sub {
+					font-size: 16px; color: #536175; margin-top: 16px;
+					font-weight: 400; letter-spacing: 0.2px;
+				}
+				.auth-signin {
+					width: 420px;
+					display: flex; flex-direction: column;
+					justify-content: center; align-items: center;
+					padding: 40px;
+					border-left: 1px solid rgba(255,255,255,0.08);
+					background: #171717;
+				}
+				.auth-signin-inner { width: 100%; max-width: 320px; }
+				.auth-dots { display: flex; gap: 6px; margin-top: 28px; }
 
-				{/* Logo + wordmark */}
-				<div style={{ position: "relative", marginBottom: 36 }}>
-					<svg width="340" height="98" viewBox="60 50 1180 320" fill="none" xmlns="http://www.w3.org/2000/svg">
+				@media (max-width: 768px) {
+					.auth-root { flex-direction: column; overflow-y: auto; }
+					.auth-brand {
+						flex: none; padding: 48px 24px 32px;
+						align-items: center; text-align: center;
+					}
+					.auth-brand-glow { display: none; }
+					.auth-logo svg { width: 220px; }
+					.auth-prompt { font-size: 22px; }
+					.auth-sub { font-size: 14px; margin-top: 12px; }
+					.auth-signin {
+						width: 100%; flex: 1;
+						border-left: none;
+						border-top: 1px solid rgba(255,255,255,0.08);
+						padding: 32px 24px 40px;
+					}
+					.auth-signin-inner { max-width: 100%; }
+					.auth-dots { margin-top: 20px; justify-content: center; }
+				}
+
+				@media (max-width: 380px) {
+					.auth-brand { padding: 36px 16px 24px; }
+					.auth-logo svg { width: 180px; }
+					.auth-prompt { font-size: 19px; }
+					.auth-signin { padding: 24px 16px 32px; }
+				}
+			`}</style>
+
+			{/* ─── LEFT PANEL — Brand + rotating prompt ─── */}
+			<div className="auth-brand">
+				<div className="auth-brand-glow" />
+
+				<div className="auth-logo" style={{ position: "relative", marginBottom: 36 }}>
+					<svg viewBox="60 50 1180 320" fill="none" xmlns="http://www.w3.org/2000/svg">
 						<g fill="#e2e8f0">
 							<rect x="90" y="70" width="20" height="165" />
 							<polygon points="108.73,161.20 215.73,86.39 204.27,70 97.27,144.80" />
@@ -126,37 +163,16 @@ export function AuthScreen() {
 					</svg>
 				</div>
 
-				{/* Big rotating prompt */}
 				<div style={{ position: "relative", maxWidth: 480 }}>
-					<p
-						key={promptIdx}
-						style={{
-							fontSize: 34,
-							fontWeight: 300,
-							color: "#e2e8f0",
-							lineHeight: 1.35,
-							letterSpacing: "-0.3px",
-							margin: 0,
-							animation: "loginFade 0.6s ease-out",
-						}}
-					>
+					<p key={promptIdx} className="auth-prompt">
 						&ldquo;{PROMPTS[promptIdx]}&rdquo;
 					</p>
-					<p
-						style={{
-							fontSize: 16,
-							color: "#536175",
-							marginTop: 16,
-							fontWeight: 400,
-							letterSpacing: "0.2px",
-						}}
-					>
+					<p className="auth-sub">
 						Your data has answers. Just ask.
 					</p>
 				</div>
 
-				{/* Prompt dots */}
-				<div style={{ display: "flex", gap: 6, marginTop: 28 }}>
+				<div className="auth-dots">
 					{PROMPTS.map((_, i) => (
 						<div
 							key={i}
@@ -173,56 +189,22 @@ export function AuthScreen() {
 			</div>
 
 			{/* ─── RIGHT PANEL — Sign-in ─── */}
-			<div
-				style={{
-					width: 420,
-					display: "flex",
-					flexDirection: "column",
-					justifyContent: "center",
-					alignItems: "center",
-					padding: "40px",
-					borderLeft: "1px solid rgba(255,255,255,0.08)",
-					background: "#171717",
-				}}
-			>
-				<div style={{ width: "100%", maxWidth: 320 }}>
-					{/* Header */}
-					<h2
-						style={{
-							fontSize: 26,
-							fontWeight: 600,
-							color: "#f0f0f2",
-							marginBottom: 6,
-							letterSpacing: "-0.3px",
-						}}
-					>
+			<div className="auth-signin">
+				<div className="auth-signin-inner">
+					<h2 style={{ fontSize: 26, fontWeight: 600, color: "#f0f0f2", marginBottom: 6, letterSpacing: "-0.3px" }}>
 						Sign in
 					</h2>
-					<p
-						style={{
-							fontSize: 15,
-							color: "#64748b",
-							marginBottom: 32,
-						}}
-					>
+					<p style={{ fontSize: 15, color: "#64748b", marginBottom: 32 }}>
 						to talk to your data
 					</p>
 
-					{/* OAuth buttons — all same style */}
 					<div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-						{/* GitHub */}
 						<button
 							type="button"
 							onClick={() => start("github")}
 							style={btnBase}
-							onMouseEnter={(e) => {
-								e.currentTarget.style.background = "rgba(255,255,255,0.06)";
-								e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)";
-							}}
-							onMouseLeave={(e) => {
-								e.currentTarget.style.background = "transparent";
-								e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)";
-							}}
+							onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)"; }}
+							onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; }}
 						>
 							<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
 								<path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
@@ -230,19 +212,12 @@ export function AuthScreen() {
 							Continue with GitHub
 						</button>
 
-						{/* Google */}
 						<button
 							type="button"
 							onClick={() => showComingSoon("google")}
 							style={btnBase}
-							onMouseEnter={(e) => {
-								e.currentTarget.style.background = "rgba(255,255,255,0.06)";
-								e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)";
-							}}
-							onMouseLeave={(e) => {
-								e.currentTarget.style.background = "transparent";
-								e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)";
-							}}
+							onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)"; }}
+							onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; }}
 						>
 							<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
 								<path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4" />
@@ -253,19 +228,12 @@ export function AuthScreen() {
 							Continue with Google
 						</button>
 
-						{/* Microsoft */}
 						<button
 							type="button"
 							onClick={() => start("microsoft-entra-id")}
 							style={btnBase}
-							onMouseEnter={(e) => {
-								e.currentTarget.style.background = "rgba(255,255,255,0.06)";
-								e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)";
-							}}
-							onMouseLeave={(e) => {
-								e.currentTarget.style.background = "transparent";
-								e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)";
-							}}
+							onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)"; }}
+							onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; }}
 						>
 							<svg width="16" height="16" viewBox="0 0 21 21" aria-hidden="true">
 								<rect x="1" y="1" width="9" height="9" fill="#f25022" />
@@ -277,20 +245,11 @@ export function AuthScreen() {
 						</button>
 					</div>
 
-					{/* Footer */}
 					<p style={{ fontSize: 11, color: "#334155", textAlign: "center", marginTop: 32, letterSpacing: "0.3px" }}>
-						Open source · Self-hosted · MIT License
+						Open source &middot; Self-hosted &middot; MIT License
 					</p>
 				</div>
 			</div>
-
-			{/* Keyframes */}
-			<style>{`
-				@keyframes loginFade {
-					from { opacity: 0; transform: translateY(8px); }
-					to { opacity: 1; transform: translateY(0); }
-				}
-			`}</style>
 
 			{/* Coming-soon modal */}
 			{toast && (
@@ -298,8 +257,7 @@ export function AuthScreen() {
 					<div
 						onClick={dismissToast}
 						style={{
-							position: "fixed",
-							inset: 0,
+							position: "fixed", inset: 0,
 							background: "rgba(0,0,0,0.5)",
 							backdropFilter: "blur(4px)",
 							zIndex: 99,
@@ -307,19 +265,14 @@ export function AuthScreen() {
 					/>
 					<div
 						style={{
-							position: "fixed",
-							top: "50%",
-							left: "50%",
+							position: "fixed", top: "50%", left: "50%",
 							transform: "translate(-50%, -50%)",
-							maxWidth: 380,
-							width: "calc(100% - 40px)",
+							maxWidth: 380, width: "calc(100% - 40px)",
 							background: "#252525",
 							border: "1px solid rgba(255,255,255,0.08)",
-							borderRadius: 14,
-							padding: "32px 28px 24px",
+							borderRadius: 14, padding: "32px 28px 24px",
 							boxShadow: "0 24px 64px rgba(0,0,0,0.5)",
-							zIndex: 100,
-							textAlign: "center",
+							zIndex: 100, textAlign: "center",
 						}}
 					>
 						<div style={{ fontSize: 15, fontWeight: 600, color: "#f0f0f2", marginBottom: 8 }}>
@@ -333,14 +286,9 @@ export function AuthScreen() {
 								type="button"
 								onClick={() => { setToast(null); start("github"); }}
 								style={{
-									padding: "10px 20px",
-									borderRadius: 8,
-									background: "#f0f0f2",
-									color: "#171717",
-									border: "none",
-									fontSize: 13,
-									fontWeight: 500,
-									cursor: "pointer",
+									padding: "10px 20px", borderRadius: 8,
+									background: "#f0f0f2", color: "#171717",
+									border: "none", fontSize: 13, fontWeight: 500, cursor: "pointer",
 								}}
 							>
 								Use GitHub
@@ -349,13 +297,10 @@ export function AuthScreen() {
 								type="button"
 								onClick={dismissToast}
 								style={{
-									padding: "10px 20px",
-									borderRadius: 8,
-									background: "transparent",
-									color: "#64748b",
+									padding: "10px 20px", borderRadius: 8,
+									background: "transparent", color: "#64748b",
 									border: "1px solid rgba(255,255,255,0.08)",
-									fontSize: 13,
-									cursor: "pointer",
+									fontSize: 13, cursor: "pointer",
 								}}
 							>
 								Cancel

@@ -349,6 +349,20 @@ export function Sidebar({ children }: SidebarProps) {
     return false;
   });
 
+  const [isMobile, setIsMobile] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 768px)");
+    const handler = (e: MediaQueryListEvent | MediaQueryList) => setIsMobile(e.matches);
+    handler(mq);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+
+  // Close mobile sidebar on navigation
+  useEffect(() => { setMobileOpen(false); }, [pathname]);
+
   // Persist collapse state
   useEffect(() => {
     localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(collapsed));
@@ -390,7 +404,23 @@ export function Sidebar({ children }: SidebarProps) {
     return pathname?.startsWith(item.href) ?? false;
   }
 
-  const sidebarStyle: React.CSSProperties = {
+  const sidebarStyle: React.CSSProperties = isMobile ? {
+    position: "fixed",
+    top: 0,
+    left: 0,
+    bottom: 0,
+    width: EXPANDED_WIDTH,
+    minWidth: EXPANDED_WIDTH,
+    maxWidth: EXPANDED_WIDTH,
+    background: "var(--bg-primary)",
+    borderRight: "1px solid var(--border)",
+    display: "flex",
+    flexDirection: "column",
+    transform: mobileOpen ? "translateX(0)" : "translateX(-100%)",
+    transition: `transform ${TRANSITION}`,
+    overflow: "hidden",
+    zIndex: 200,
+  } : {
     position: "fixed",
     top: 0,
     left: 0,
@@ -430,6 +460,34 @@ export function Sidebar({ children }: SidebarProps) {
 
   return (
     <div style={{ display: "flex", minHeight: "100vh", background: "var(--bg-primary)" }}>
+      {/* Mobile hamburger */}
+      {isMobile && !mobileOpen && (
+        <button
+          type="button"
+          onClick={() => setMobileOpen(true)}
+          style={{
+            position: "fixed", top: 12, left: 12, zIndex: 150,
+            width: 36, height: 36, borderRadius: 8,
+            background: "var(--bg-surface)", border: "1px solid var(--border)",
+            cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+            color: "var(--text-secondary)", boxShadow: "var(--shadow-md)", padding: 0,
+          }}
+        >
+          <i className="fas fa-bars" style={{ fontSize: 14 }} />
+        </button>
+      )}
+
+      {/* Mobile backdrop */}
+      {isMobile && mobileOpen && (
+        <div
+          onClick={() => setMobileOpen(false)}
+          style={{
+            position: "fixed", inset: 0, zIndex: 190,
+            background: "rgba(0,0,0,0.5)", backdropFilter: "blur(2px)",
+          }}
+        />
+      )}
+
       {/* Sidebar */}
       <aside style={sidebarStyle}>
 
@@ -737,8 +795,8 @@ export function Sidebar({ children }: SidebarProps) {
       {/* Main content */}
       <div style={{
         flex: 1,
-        marginLeft: width,
-        transition: `margin-left ${TRANSITION}`,
+        marginLeft: isMobile ? 0 : width,
+        transition: isMobile ? "none" : `margin-left ${TRANSITION}`,
         minWidth: 0,
         overflow: "auto",
       }}>
