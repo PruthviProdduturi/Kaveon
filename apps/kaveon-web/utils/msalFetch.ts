@@ -24,7 +24,7 @@ export async function msalFetch(input: RequestInfo, init: RequestInit = {}): Pro
 			? `/api/kaveon${path}`
 			: input;
 
-	return fetch(target, { ...init, credentials: "include" });
+	return fetch(target, { ...init, credentials: "include", cache: "no-store" });
 }
 
 /**
