@@ -5,6 +5,7 @@ import { useAuth } from "../auth/useAuth";
 import { useSetup } from "../components/ClientLayout";
 import { msalFetch } from "../utils/msalFetch";
 import { KaveonMark } from "../components/KaveonMark";
+import { KaveonLoading } from "../components/KaveonLoading";
 import { ContextBanner } from "../components/ContextBanner";
 import { nlToSql, DatasetSchema } from "../utils/nlToSql";
 import { InlineChart } from "../components/chat/InlineChart";
@@ -222,6 +223,7 @@ export default function Home() {
   // Chat history state
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
+  const [loadingSession, setLoadingSession] = useState(false);
 
   // Load chat history sessions
   const loadSessions = useCallback(async () => {
@@ -284,6 +286,7 @@ export default function Home() {
 
   // Load messages from a past session
   const loadSession = useCallback(async (sessionId: number) => {
+    setLoadingSession(true);
     try {
       const res = await msalFetch(`/api/v1/chat/history/${sessionId}`);
       if (!res.ok) return;
@@ -308,6 +311,8 @@ export default function Home() {
       setActiveSessionId(sessionId);
     } catch {
       // Failed to load session
+    } finally {
+      setLoadingSession(false);
     }
   }, []);
 
@@ -999,7 +1004,7 @@ export default function Home() {
         <ContextBanner />
 
         {/* Hero section — collapses when in conversation */}
-        {!inConversation && (
+        {!inConversation && !loadingSession && (
           <div
             style={{
               flex: 1,
@@ -1057,7 +1062,9 @@ export default function Home() {
         )}
 
         {/* Conversation view — appears after first message */}
-        {inConversation && (
+        {loadingSession && <KaveonLoading message="Loading conversation" />}
+
+        {inConversation && !loadingSession && (
           <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
 
             {/* Messages */}
