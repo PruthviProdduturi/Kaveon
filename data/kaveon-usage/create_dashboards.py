@@ -47,13 +47,14 @@ def text_box(content, x, y, w, h):
             "x": x, "y": y, "w": w, "h": h, "minW": 2, "minH": 1, "maxW": 12, "maxH": 40}
 
 
-def dash(name, desc, layout):
+def dash(name, desc, layout, filters=None):
     did = uuid.uuid4().hex
     cids = [b["chartId"] for b in layout if "chartId" in b]
     pool.execute_query(
-        "INSERT INTO dashboards (id, name, description, layout, charts, theme, "
-        "is_published, visibility, created_by) VALUES (%s,%s,%s,%s,%s,'dark',true,'published',%s)",
-        DB, [did, name, desc, json.dumps(layout), json.dumps(cids), OWNER])
+        "INSERT INTO dashboards (id, name, description, layout, charts, filters, theme, "
+        "is_published, visibility, created_by) VALUES (%s,%s,%s,%s,%s,%s,'dark',true,'published',%s)",
+        DB, [did, name, desc, json.dumps(layout), json.dumps(cids),
+             json.dumps(filters or []), OWNER])
     sys.stderr.write("Dashboard: %s (%d charts)\n" % (name, len(cids)))
 
 
@@ -75,6 +76,21 @@ def bar(name, col, agg, label, groupby, limit=None, horizontal=False, color="#63
     if horizontal:
         vc["chartTypeOptions"] = {"horizontal": True}
     return chart(name, "bar", qc, vc)
+
+
+DEFAULT_FILTERS = [
+    {"id": "f-org",    "column": "org",    "label": "Organization", "operator": "=", "value": "AllUp",
+     "enabled": True, "appliesTo": "all", "datasetId": DS},
+    {"id": "f-plan",   "column": "plan",   "label": "Plan",         "operator": "=", "value": "AllUp",
+     "enabled": True, "appliesTo": "all", "datasetId": DS},
+    {"id": "f-region", "column": "region", "label": "Region",       "operator": "=", "value": "AllUp",
+     "enabled": True, "appliesTo": "all", "datasetId": DS},
+    {"id": "f-role",   "column": "role",   "label": "Role",         "operator": "=", "value": "AllUp",
+     "enabled": True, "appliesTo": "all", "datasetId": DS},
+    {"id": "f-date",   "column": "usage_date", "label": "Date Range", "operator": "=", "value": "",
+     "filterType": "date_range", "dateFrom": "", "dateTo": "",
+     "enabled": True, "appliesTo": "all", "datasetId": DS},
+]
 
 
 def main():
@@ -115,7 +131,8 @@ def main():
           box(a5, 0, 4, 12, 7),
           box(a6, 0, 11, 6, 7), box(a7, 6, 11, 6, 7),
           box(a8, 0, 18, 12, 7),
-          text_box(DISCLAIMER, 0, 25, 12, 2)])
+          text_box(DISCLAIMER, 0, 25, 12, 2)],
+         DEFAULT_FILTERS)
 
     # ── Dashboard 2: Adoption & engagement ───────────────────────────────────
     b1 = kpi("Total NL Queries", "nl_queries", "SUM", "NL")
@@ -133,7 +150,8 @@ def main():
          [box(b1, 0, 0, 3, 4), box(b2, 3, 0, 3, 4), box(b3, 6, 0, 3, 4), box(b4, 9, 0, 3, 4),
           box(b5, 0, 4, 6, 8), box(b6, 6, 4, 6, 8),
           box(b7, 0, 12, 6, 7), box(b8, 6, 12, 6, 7),
-          text_box(DISCLAIMER, 0, 19, 12, 2)])
+          text_box(DISCLAIMER, 0, 19, 12, 2)],
+         DEFAULT_FILTERS)
 
     n = pool.execute_query(
         "SELECT COUNT(*) FROM dashboards WHERE name LIKE 'Kaveon %'", DB)["rows"][0][0]

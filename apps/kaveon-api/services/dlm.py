@@ -27,16 +27,22 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
+import threading
+import time as _time_mod
 import unicodedata
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import database.metadata as meta
+import database.pool as pool
 import services.context_profiler as profiler
 import services.datasets as datasets_svc
 import services.hll as hll
+
+logger = logging.getLogger(__name__)
 
 # Low-cardinality dimensions get a value index; high-card columns (ids, free
 # text) are matched structurally, never by value.
@@ -1311,6 +1317,133 @@ def _dataset_year_bounds(dataset_id: str) -> tuple:
     return (lo, hi)
 
 
+# --------------------------------------------------------------------------- #
+# freshness scoring + background auto-rebuild                                  #
+# --------------------------------------------------------------------------- #
+
+# Tracks in-flight rebuilds: dataset_id -> timestamp when the rebuild started.
+# Prevents concurrent rebuilds of the same dataset and acts as a cooldown so a
+# stale dataset doesn't spam rebuilds on every request.
+_REBUILD_IN_PROGRESS: Dict[str, float] = {}
+_REBUILD_LOCK = threading.Lock()
+
+# Minimum seconds between rebuild attempts for the same dataset. Prevents
+# hammering: once a rebuild starts (or recently finished), no new one kicks off.
+_REBUILD_COOLDOWN_SECONDS = 300.0  # 5 minutes
+
+# Freshness score below which auto-rebuild triggers.
+_STALE_THRESHOLD = 0.5
+
+
+def check_freshness(dataset_id: str) -> Dict[str, Any]:
+    """Compute how fresh a dataset's DLM context is, combining time decay since
+    the artifact was built with the data-change signal from pg_stat_user_tables.
+    Returns a recommendation: use_context / rebuild / no_context."""
+    ensure_tables()
+
+    # 1) load artifact metadata
+    art = meta.query_one(
+        "SELECT built_at, status, stats_rollup, manifest FROM dlm_artifact "
+        "WHERE dataset_id = @param0", [str(dataset_id)])
+    if not art:
+        return {
+            "fresh": False, "score": 0.0, "computed_at": None,
+            "data_modified": False, "recommendation": "no_context",
+        }
+
+    built_at = art.get("built_at")
+    manifest = _loads(art.get("manifest")) or {}
+    stats = _loads(art.get("stats_rollup")) or {}
+    fact_table = manifest.get("fact_table")
+    schema = manifest.get("schema") or "public"
+
+    # 2) time factor — exponential decay from built_at
+    from services.context_validity import _parse_dt, _time_factor, BASE_HALF_LIFE_SECONDS
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    refreshed = _parse_dt(built_at) or now
+    age_seconds = max(0.0, (now - refreshed).total_seconds())
+    t_factor = _time_factor(age_seconds, BASE_HALF_LIFE_SECONDS)
+
+    # 3) change factor — row modifications since the artifact was built
+    c_factor = 1.0
+    data_modified = False
+    if fact_table:
+        ds = datasets_svc.get_dataset_by_id(str(dataset_id))
+        database = (ds.get("database_name") or _metadata_database()) if ds else _metadata_database()
+        try:
+            from services.context_validity import _live_change, _change_factor, CHANGE_HALF_FRACTION
+            live = _live_change(database, schema)
+            live_stats = live.get(fact_table)
+            if live_stats:
+                mods_now = int(live_stats.get("mods_since_analyze") or 0)
+                # row count at build time from stats_rollup
+                row_counts = stats.get("row_counts") or {}
+                rows_at_build = int(row_counts.get(fact_table) or 0) or 1
+                # treat any non-zero mod count as potential data change
+                data_modified = mods_now > 0
+                c_factor = _change_factor(rows_at_build, mods_now, 0, False)
+        except Exception:
+            pass
+
+    score = round(t_factor * c_factor, 4)
+    fresh = score >= _STALE_THRESHOLD
+
+    if score >= 0.7:
+        recommendation = "use_context"
+    elif art.get("status") == "ready":
+        recommendation = "rebuild"
+    else:
+        recommendation = "no_context"
+
+    return {
+        "fresh": fresh,
+        "score": score,
+        "computed_at": built_at,
+        "data_modified": data_modified,
+        "recommendation": recommendation,
+    }
+
+
+def _trigger_background_rebuild(dataset_id: str) -> bool:
+    """Kick off a background thread to rebuild the DLM for a dataset if one isn't
+    already in progress (or recently completed). Returns True if a rebuild was
+    started, False if skipped (cooldown / already running)."""
+    now = _time_mod.time()
+    with _REBUILD_LOCK:
+        last = _REBUILD_IN_PROGRESS.get(dataset_id)
+        if last is not None and (now - last) < _REBUILD_COOLDOWN_SECONDS:
+            return False
+        _REBUILD_IN_PROGRESS[dataset_id] = now
+
+    def _do_rebuild():
+        try:
+            logger.info("Auto-rebuild started for dataset %s", dataset_id)
+            generate_dlm(dataset_id, force=True)
+            logger.info("Auto-rebuild completed for dataset %s", dataset_id)
+        except Exception:
+            logger.exception("Auto-rebuild failed for dataset %s", dataset_id)
+        finally:
+            # Update timestamp so cooldown runs from completion, not start.
+            with _REBUILD_LOCK:
+                _REBUILD_IN_PROGRESS[dataset_id] = _time_mod.time()
+
+    threading.Thread(target=_do_rebuild, daemon=True, name=f"dlm-rebuild-{dataset_id}").start()
+    return True
+
+
+def maybe_auto_rebuild(dataset_id: str) -> Optional[bool]:
+    """Check freshness and trigger a background rebuild when stale. Called from
+    the ask/serve path so context stays current without manual intervention.
+    Returns True if rebuild was triggered, False if skipped, None if context is
+    fresh (no action needed)."""
+    freshness = check_freshness(dataset_id)
+    if freshness["fresh"]:
+        return None
+    if freshness["recommendation"] != "rebuild":
+        return None
+    return _trigger_background_rebuild(dataset_id)
+
+
 def _serve_from_context(dataset_id: str, ds: dict, metric_name: str, group_col: Optional[str],
                         top_n: Optional[int], filters: List[Dict[str, Any]],
                         routed: dict) -> Optional[Dict[str, Any]]:
@@ -1435,6 +1568,110 @@ def _sketch_response(dataset_id, dataset_name, metric_name, group_col, columns, 
         "xAxis": group_col, "yAxis": metric_name, "title": title,
         "note": "≈ estimated from a HyperLogLog sketch (~1-2% error) · no DB scan",
         "confidence": conf,
+    }
+
+
+def serve_chart(dataset_id: str, metric_column: str, aggregation: str,
+                group_by: Optional[str] = None,
+                filters: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """Serve a dashboard chart query from precomputed context (dlm_answers / HLL
+    sketches) without touching the live database.  Returns ``served=True`` with
+    columns/rows on a hit, or ``served=False`` when context can't answer."""
+    dataset_id = str(dataset_id)
+    ds = datasets_svc.get_dataset_by_id(dataset_id)
+    if not ds:
+        return {"served": False, "reason": "dataset_not_found"}
+
+    metrics = ds.get("metrics") or []
+    filters = filters or []
+
+    # ── map metric_column + aggregation to a metric name ──────────────────
+    agg_upper = aggregation.strip().upper()
+    target_expr = _normalize(f"{agg_upper}({metric_column})")
+    metric_name: Optional[str] = None
+    metric_obj: Optional[dict] = None
+    for m in metrics:
+        name = m.get("name") or m.get("metric_name") or ""
+        expr = m.get("expression") or ""
+        if _normalize(expr) == target_expr:
+            metric_name = name
+            metric_obj = m
+            break
+    # fallback: match by column name inside the expression
+    if not metric_name:
+        mc_norm = _normalize(metric_column)
+        for m in metrics:
+            name = m.get("name") or m.get("metric_name") or ""
+            expr = m.get("expression") or ""
+            # e.g. expression "SUM(primary_energy_consumption)" contains the column
+            for ident in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", expr):
+                if _normalize(ident) == mc_norm and agg_upper in expr.upper():
+                    metric_name = name
+                    metric_obj = m
+                    break
+            if metric_name:
+                break
+    if not metric_name:
+        return {"served": False, "reason": "metric_not_found"}
+
+    # ── validate filters — context serving supports equality only ─────────
+    clean_filters: List[Dict[str, Any]] = []
+    for f in filters:
+        op = f.get("operator", "=")
+        if op != "=":
+            return {"served": False, "reason": "non_equality_filter"}
+        clean_filters.append({"column": f["column"], "value": f["value"]})
+
+    # ── validate group_by against known dimensions ────────────────────────
+    group_col: Optional[str] = None
+    if group_by:
+        spec = _effective_spec(dataset_id)
+        dim_spec = spec.get("dimensions") or {}
+        if group_by in dim_spec:
+            group_col = group_by
+        else:
+            # try case-insensitive match
+            gb_norm = _normalize(group_by)
+            for dk in dim_spec:
+                if _normalize(dk) == gb_norm:
+                    group_col = dk
+                    break
+        if not group_col:
+            return {"served": False, "reason": "dimension_not_found"}
+
+    # ── try precomputed exact answers ─────────────────────────────────────
+    dummy_routed = {"score": 1.0}
+    served = _serve_from_context(dataset_id, ds, metric_name, group_col, None,
+                                  clean_filters, dummy_routed)
+
+    # ── fallback: HLL sketch for COUNT(DISTINCT) metrics ──────────────────
+    if served is None and metric_obj:
+        expr = (metric_obj.get("expression") or "")
+        if _distinct_col(expr):
+            served = _serve_sketch(dataset_id, ds, metric_name, group_col, None,
+                                    clean_filters, dummy_routed)
+
+    if served is None:
+        return {"served": False}
+
+    # ── freshness score ───────────────────────────────────────────────────
+    fresh = check_freshness(dataset_id)
+
+    return {
+        "served": True,
+        "columns": served.get("columns", []),
+        "rows": served.get("rows", []),
+        "from_context": True,
+        "freshness": {
+            "score": fresh.get("score", 0.0),
+            "recommendation": fresh.get("recommendation"),
+        },
+        "chartType": served.get("chartType"),
+        "xAxis": served.get("xAxis"),
+        "yAxis": served.get("yAxis"),
+        "title": served.get("title"),
+        "approx": served.get("approx", False),
+        "note": served.get("note"),
     }
 
 

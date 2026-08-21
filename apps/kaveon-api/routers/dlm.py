@@ -6,11 +6,13 @@ that resolves natural-language terms to columns/filters with no hosted LLM.
 
   POST /datasets/{id}/dlm/generate   compile (or refresh) the artifact
   GET  /datasets/{id}/dlm            artifact status + manifest/rollups
+  GET  /datasets/{id}/freshness      data-change freshness score + rebuild recommendation
   GET  /datasets/{id}/dlm/resolve    term -> column/filter resolution (retrieval probe)
   GET  /dlm/route                    cross-dataset router: question -> which dataset(s)
+  POST /dlm/serve-chart              dashboard chart from precomputed context (no live SQL)
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
@@ -33,6 +35,22 @@ class CurationBody(BaseModel):
     dimensions: Dict[str, Any] = {}
     value_aliases: Dict[str, str] = {}
     default_metric: Optional[str] = None
+
+
+class ChartFilter(BaseModel):
+    column: str
+    operator: str = "="
+    value: Any
+
+
+class ServeChartBody(BaseModel):
+    """A dashboard chart query: one metric aggregation, optional group-by and
+    equality filters. Served from precomputed context when possible."""
+    dataset_id: int
+    metric_column: str
+    aggregation: str
+    group_by: Optional[str] = None
+    filters: List[ChartFilter] = []
 
 
 @router.post("/datasets/{dataset_id}/dlm/generate")
@@ -76,6 +94,14 @@ def put_context(dataset_id: str, body: CurationBody,
     return result
 
 
+@router.get("/datasets/{dataset_id}/freshness")
+def freshness(dataset_id: str, ctx: UserContext = Depends(require_user_context)):
+    """How fresh is this dataset's DLM context? Combines time decay since the
+    artifact was built with live data-change signals from pg_stat_user_tables.
+    Returns a score in [0,1] and a recommendation: use_context / rebuild / no_context."""
+    return dlm.check_freshness(dataset_id)
+
+
 @router.get("/datasets/{dataset_id}/dlm/resolve")
 def resolve(dataset_id: str, term: str = Query(..., min_length=1),
             limit: int = Query(default=5, ge=1, le=50),
@@ -95,8 +121,30 @@ def route(question: str = Query(..., min_length=1),
 @router.post("/dlm/ask")
 def ask(body: AskBody, ctx: UserContext = Depends(require_user_context)):
     """Deterministic NL -> SQL via the DLM (no LLM). Returns the routed dataset,
-    assembled SQL, and chart hints — or ok=false if nothing matched."""
-    return dlm.ask(body.question, limit=body.limit)
+    assembled SQL, and chart hints — or ok=false if nothing matched.
+    Triggers a background rebuild when the serving dataset's context is stale."""
+    result = dlm.ask(body.question, limit=body.limit)
+    dataset_id = result.get("dataset_id")
+    if dataset_id and result.get("ok"):
+        rebuilt = dlm.maybe_auto_rebuild(dataset_id)
+        if rebuilt is True:
+            result["_rebuild_triggered"] = True
+    return result
+
+
+@router.post("/dlm/serve-chart")
+def serve_chart(body: ServeChartBody, ctx: UserContext = Depends(require_user_context)):
+    """Serve a dashboard chart from precomputed DLM context — no live SQL.
+    Returns served=true with columns/rows on a hit, served=false when the
+    precomputed context can't answer (caller should fall back to /sql/execute)."""
+    result = dlm.serve_chart(
+        dataset_id=str(body.dataset_id),
+        metric_column=body.metric_column,
+        aggregation=body.aggregation,
+        group_by=body.group_by,
+        filters=[f.dict() for f in body.filters] if body.filters else [],
+    )
+    return result
 
 
 @router.get("/dlm/coverage")

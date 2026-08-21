@@ -62,14 +62,15 @@ const DashboardViewContent: React.FC<{
       try {
         const node = canvasRef.current;
         if (!node) return;
-        const dataUrl = await toJpeg(node, {
-          // skipFonts avoids html-to-image reading cssRules from cross-origin
-          // stylesheets (FontAwesome/fonts CDN) which throws a SecurityError.
-          // Match the active theme so a dark-mode dashboard doesn't get a light
-          // thumbnail (and vice-versa). Re-captured on each view, so switching
-          // theme and reopening refreshes the thumbnail to match.
-          quality: 0.55, pixelRatio: 0.4, backgroundColor: isDark ? "#0b1220" : "#f8fafc", cacheBust: true, skipFonts: true,
+        const bg = isDark ? "#0b1220" : "#f8fafc";
+        let dataUrl = await toJpeg(node, {
+          quality: 0.55, pixelRatio: 0.4, backgroundColor: bg, cacheBust: true, skipFonts: true,
         });
+        if (dataUrl && dataUrl.length > 3_500_000) {
+          dataUrl = await toJpeg(node, {
+            quality: 0.35, pixelRatio: 0.25, backgroundColor: bg, cacheBust: true, skipFonts: true,
+          });
+        }
         if (!dataUrl || dataUrl.length > 3_500_000) {
           notifyParentDone();
           return;
@@ -105,7 +106,7 @@ const DashboardViewContent: React.FC<{
       if (cancelled || capturedRef.current) return;
       if (!isQueryIdle()) sawActivity = true;
       const elapsed = Date.now() - started;
-      const ready = (sawActivity && isQueryIdle()) || elapsed > 12000;
+      const ready = (sawActivity && isQueryIdle()) || elapsed > 20000;
       if (ready) {
         setTimeout(() => {
           const ric = (window as any).requestIdleCallback as undefined | ((cb: () => void) => void);
