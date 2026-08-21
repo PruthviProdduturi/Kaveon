@@ -3100,7 +3100,8 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
       // breakdowns (the vast majority of dashboard charts) are answered
       // instantly from dlm_answers with zero database trip.
       const isDashboardCtx = (runContext || "").startsWith("dashboard");
-      if (isDashboardCtx && !forceRegenerate) {
+      const isSingleMetric = (config.metrics?.length || 0) === 1;
+      if (isDashboardCtx && !forceRegenerate && isSingleMetric) {
         const primaryMetric = config.metrics?.[0];
         const groupBy = config.groupby?.[0] || null;
         if (primaryMetric?.column && primaryMetric?.aggregate) {
