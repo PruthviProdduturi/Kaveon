@@ -23,6 +23,16 @@ DS = 142
 SRC = "kaveon.public.kaveon_usage_daily"
 OWNER = "pruthvi.prodduturi@gmail.com"
 
+# Kaveon brand palette — accent + complementary
+C_ACCENT = "#4A9EE8"
+C_ACCENT_DARK = "#2d7dd2"
+C_TEAL = "#22d3ee"
+C_EMERALD = "#10b981"
+C_AMBER = "#f59e0b"
+C_ROSE = "#f43f5e"
+C_VIOLET = "#8b5cf6"
+C_SLATE = "#64748b"
+
 
 def cell():
     return "u" + "".join(random.choices(string.hexdigits[:16], k=8))
@@ -39,7 +49,7 @@ def chart(name, ctype, qc, vc=None):
     return cid
 
 
-DISCLAIMER = "⚠️ _This is synthetic data generated to test the platform — not real usage._"
+DISCLAIMER = "⚠️ _This is synthetic data generated to showcase the platform — not real usage._"
 
 
 def text_box(content, x, y, w, h):
@@ -65,7 +75,7 @@ def kpi(name, col, agg, label, filt=None):
     return chart(name, "big_number", qc)
 
 
-def bar(name, col, agg, label, groupby, limit=None, horizontal=False, color="#6366f1", sort_desc=True):
+def bar(name, col, agg, label, groupby, limit=None, horizontal=False, color=C_ACCENT, sort_desc=True):
     qc = {"query_mode": "aggregate",
           "metrics": [{"column": col, "aggregate": agg, "label": label}],
           "groupby": [groupby],
@@ -79,15 +89,25 @@ def bar(name, col, agg, label, groupby, limit=None, horizontal=False, color="#63
 
 
 DEFAULT_FILTERS = [
-    {"id": "f-org",    "column": "org",    "label": "Organization", "operator": "=", "value": "AllUp",
+    {"id": "f-segment", "column": "segment", "label": "Segment",     "operator": "=", "value": "AllUp",
      "enabled": True, "appliesTo": "all", "datasetId": DS},
-    {"id": "f-plan",   "column": "plan",   "label": "Plan",         "operator": "=", "value": "AllUp",
+    {"id": "f-sub",     "column": "sub_segment", "label": "Sub-Segment", "operator": "=", "value": "AllUp",
      "enabled": True, "appliesTo": "all", "datasetId": DS},
-    {"id": "f-region", "column": "region", "label": "Region",       "operator": "=", "value": "AllUp",
+    {"id": "f-industry","column": "industry","label": "Industry",    "operator": "=", "value": "AllUp",
      "enabled": True, "appliesTo": "all", "datasetId": DS},
-    {"id": "f-role",   "column": "role",   "label": "Role",         "operator": "=", "value": "AllUp",
+    {"id": "f-plan",    "column": "plan",    "label": "Plan",         "operator": "=", "value": "AllUp",
      "enabled": True, "appliesTo": "all", "datasetId": DS},
-    {"id": "f-date",   "column": "usage_date", "label": "Date Range", "operator": "=", "value": "",
+    {"id": "f-region",  "column": "region",  "label": "Region",       "operator": "=", "value": "AllUp",
+     "enabled": True, "appliesTo": "all", "datasetId": DS},
+    {"id": "f-country", "column": "country", "label": "Country",      "operator": "=", "value": "AllUp",
+     "enabled": True, "appliesTo": "all", "datasetId": DS},
+    {"id": "f-org",     "column": "org",     "label": "Organization", "operator": "=", "value": "AllUp",
+     "enabled": True, "appliesTo": "all", "datasetId": DS},
+    {"id": "f-role",    "column": "role",    "label": "Role",         "operator": "=", "value": "AllUp",
+     "enabled": True, "appliesTo": "all", "datasetId": DS},
+    {"id": "f-acq",     "column": "acquisition_channel", "label": "Channel", "operator": "=", "value": "AllUp",
+     "enabled": True, "appliesTo": "all", "datasetId": DS},
+    {"id": "f-date",    "column": "usage_date", "label": "Date Range", "operator": "=", "value": "",
      "filterType": "date_range", "dateFrom": "", "dateTo": "",
      "enabled": True, "appliesTo": "all", "datasetId": DS},
 ]
@@ -95,7 +115,6 @@ DEFAULT_FILTERS = [
 
 def main():
     pool.execute_query("SELECT 1", DB)
-    # clear prior usage dashboards/charts (charts for ds 142 identified via query_config)
     pool.execute_query(
         "DELETE FROM dashboards WHERE name IN ('Kaveon Product Usage','Kaveon Adoption & Engagement')", DB)
     pool.execute_query("DELETE FROM charts WHERE query_config LIKE '%\"dataset_id\": 142%'", DB)
@@ -108,49 +127,74 @@ def main():
     a1 = kpi("Total Queries", "queries_run", "SUM", "Queries")
     a2 = kpi("Active Users", "user_id", "COUNT_DISTINCT", "Users")
     a3 = kpi("Dashboard Views", "dashboards_viewed", "SUM", "Views")
-    a4 = kpi("Avg Active Minutes", "active_minutes", "AVG", "Min")
+    a4 = kpi("Avg Active Minutes", "active_minutes", "AVG", "Min/User")
+
     a5 = chart("Daily Query Trend", "line",
                {"query_mode": "aggregate",
                 "metrics": [{"column": "queries_run", "aggregate": "SUM", "label": "Queries"}],
                 "groupby": ["usage_date"], "sort_by": {"column": "usage_date", "direction": "asc"}},
-               {"echarts_option": {"color": ["#6366f1"]}})
-    a6 = bar("Queries by Plan", "queries_run", "SUM", "Queries", "plan", color="#8b5cf6")
-    a7 = bar("Active Users by Region", "user_id", "COUNT_DISTINCT", "Users", "region", color="#22d3ee")
-    a8 = chart("Feature Mix by Plan", "stacked_bar",
+               {"echarts_option": {"color": [C_ACCENT]}})
+
+    a6 = chart("Global Users by Country", "world_map",
                {"query_mode": "aggregate",
-                "metrics": [{"column": "nl_queries", "aggregate": "SUM", "label": "NL"},
+                "metrics": [{"column": "user_id", "aggregate": "COUNT_DISTINCT", "label": "Active Users"}],
+                "groupby": ["country"]})
+
+    a7 = bar("Queries by Segment", "queries_run", "SUM", "Queries", "segment", color=C_ACCENT_DARK)
+    a8 = bar("Users by Industry", "user_id", "COUNT_DISTINCT", "Users", "industry",
+             limit=10, horizontal=True, color=C_TEAL)
+
+    a9 = chart("Engagement by Plan", "stacked_bar",
+               {"query_mode": "aggregate",
+                "metrics": [{"column": "nl_queries", "aggregate": "SUM", "label": "NL Queries"},
                             {"column": "sql_lab_runs", "aggregate": "SUM", "label": "SQL Lab"},
                             {"column": "dashboards_viewed", "aggregate": "SUM", "label": "Dashboards"},
                             {"column": "charts_created", "aggregate": "SUM", "label": "Charts"}],
                 "groupby": ["plan"]},
-               {"echarts_option": {"color": ["#6366f1", "#22d3ee", "#8b5cf6", "#f59e0b"]}})
+               {"echarts_option": {"color": [C_ACCENT, C_TEAL, C_EMERALD, C_AMBER]}})
+
+    a10 = bar("Users by Acquisition Channel", "user_id", "COUNT_DISTINCT", "Users",
+              "acquisition_channel", color=C_VIOLET)
+
     dash("Kaveon Product Usage",
-         "How the Kaveon platform is used — queries, dashboard views, active users and "
-         "engagement by plan and region. Synthetic, daily 2026-01-01..current, 10M rows.",
+         "Kaveon platform usage across segments, industries, and geographies — "
+         "queries, engagement, adoption by plan and channel.",
          [box(a1, 0, 0, 3, 4), box(a2, 3, 0, 3, 4), box(a3, 6, 0, 3, 4), box(a4, 9, 0, 3, 4),
           box(a5, 0, 4, 12, 7),
-          box(a6, 0, 11, 6, 7), box(a7, 6, 11, 6, 7),
-          box(a8, 0, 18, 12, 7),
-          text_box(DISCLAIMER, 0, 25, 12, 2)],
+          box(a6, 0, 11, 12, 9),
+          box(a7, 0, 20, 6, 7), box(a8, 6, 20, 6, 7),
+          box(a9, 0, 27, 6, 7), box(a10, 6, 27, 6, 7),
+          text_box(DISCLAIMER, 0, 34, 12, 2)],
          DEFAULT_FILTERS)
 
-    # ── Dashboard 2: Adoption & engagement ───────────────────────────────────
-    b1 = kpi("Total NL Queries", "nl_queries", "SUM", "NL")
-    b2 = kpi("SQL Lab Runs", "sql_lab_runs", "SUM", "Runs")
+    # ── Dashboard 2: Adoption & Engagement ───────────────────────────────────
+    b1 = kpi("Total NL Queries", "nl_queries", "SUM", "NL Queries")
+    b2 = kpi("SQL Lab Runs", "sql_lab_runs", "SUM", "SQL Lab")
     b3 = kpi("Charts Created", "charts_created", "SUM", "Charts")
     b4 = kpi("Total Exports", "exports", "SUM", "Exports")
-    b5 = bar("Top 10 Orgs by Dashboard Views", "dashboards_viewed", "SUM", "Views", "org",
-             limit=10, horizontal=True, color="#f59e0b")
-    b6 = bar("Charts Created by Role", "charts_created", "SUM", "Charts", "role", color="#ec4899")
-    b7 = bar("Active Users by Plan", "user_id", "COUNT_DISTINCT", "Users", "plan", color="#10b981")
-    b8 = bar("Avg Active Minutes by Role", "active_minutes", "AVG", "Min", "role", color="#3b82f6")
+
+    b5 = bar("Top 10 Orgs by Queries", "queries_run", "SUM", "Queries", "org",
+             limit=10, horizontal=True, color=C_AMBER)
+    b6 = bar("Charts by Role", "charts_created", "SUM", "Charts", "role", color=C_ROSE)
+
+    b7 = bar("Users by Sub-Segment", "user_id", "COUNT_DISTINCT", "Users", "sub_segment",
+             limit=10, horizontal=True, color=C_EMERALD)
+    b8 = bar("Avg Minutes by Segment", "active_minutes", "AVG", "Avg Min", "segment", color=C_ACCENT)
+
+    b9 = chart("Daily Active Users Trend", "line",
+               {"query_mode": "aggregate",
+                "metrics": [{"column": "user_id", "aggregate": "COUNT_DISTINCT", "label": "DAU"}],
+                "groupby": ["usage_date"], "sort_by": {"column": "usage_date", "direction": "asc"}},
+               {"echarts_option": {"color": [C_EMERALD]}})
+
     dash("Kaveon Adoption & Engagement",
-         "Adoption depth — NL vs SQL Lab usage, charts and exports, engagement by role, "
-         "and the most active organizations. Synthetic.",
+         "Adoption depth — NL vs SQL Lab usage, charts and exports, engagement by role and segment, "
+         "top organizations.",
          [box(b1, 0, 0, 3, 4), box(b2, 3, 0, 3, 4), box(b3, 6, 0, 3, 4), box(b4, 9, 0, 3, 4),
           box(b5, 0, 4, 6, 8), box(b6, 6, 4, 6, 8),
           box(b7, 0, 12, 6, 7), box(b8, 6, 12, 6, 7),
-          text_box(DISCLAIMER, 0, 19, 12, 2)],
+          box(b9, 0, 19, 12, 7),
+          text_box(DISCLAIMER, 0, 26, 12, 2)],
          DEFAULT_FILTERS)
 
     n = pool.execute_query(
