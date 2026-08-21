@@ -84,10 +84,14 @@ def main():
           END AS event_name,
           e.duration_sec,
           e.event_ts::date AS event_date,
-          u.org, u.plan, u.region, u.country, u.role,
-          u.segment, u.sub_segment, u.industry, u.acquisition_channel
+          u.license, u.audience, u.segment, u.industry,
+          u.team_size, u.deployment, u.acquisition_channel,
+          u.locale, g.country, g.region,
+          u.platform_key, p.platform, p.os
         FROM public.kaveon_events e
         JOIN public.kaveon_users u ON e.user_id = u.user_id
+        JOIN public.dim_geography g ON u.locale = g.locale
+        JOIN public.dim_platform p ON u.platform_key = p.platform_key
     """, DB)
 
     stats = pool.execute_query(
