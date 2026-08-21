@@ -1473,6 +1473,24 @@ def _serve_from_context(dataset_id: str, ds: dict, metric_name: str, group_col: 
                 return _ctx_response(dataset_id, dataset_name, metric_name, None,
                                      [metric_name], [[r[1]]], conf, subtitle=str(f.get("value")))
 
+    # one filter WITH group_by → 2-dim combo lookup, filter one dim, return the other
+    if len(filters) == 1 and group_col:
+        f = filters[0]
+        pair = sorted([f["column"], group_col])
+        ctx = _context_answer(dataset_id, metric_name, f"{pair[0]}|{pair[1]}")
+        if ctx is not None:
+            want = _normalize(f.get("value"))
+            fi = 0 if _normalize(pair[0]) == _normalize(f["column"]) else 1
+            gi = 1 - fi
+            matched = [[r[gi], r[2]] for r in ctx["rows"]
+                       if r and len(r) >= 3 and _normalize(r[fi]) == want]
+            if matched:
+                label = str(f.get("value"))
+                if top_n:
+                    matched = matched[:int(top_n)]
+                return _ctx_response(dataset_id, dataset_name, metric_name, group_col,
+                                     [group_col, metric_name], matched, conf, subtitle=label)
+
     # two single-dimension equality filters, no group-by → pick the cell from the
     # precomputed 2-dim combo (if that pair was precomputed). Exact, no DB trip.
     if len(filters) == 2 and not group_col:
@@ -1489,6 +1507,8 @@ def _serve_from_context(dataset_id: str, ds: dict, metric_name: str, group_col: 
                     label = ", ".join(str(f.get("value")) for f in filters)
                     return _ctx_response(dataset_id, dataset_name, metric_name, None,
                                          [metric_name], [[r[2]]], conf, subtitle=label)
+
+    # two filters WITH group_by → not covered by precomputed context
     return None
 
 

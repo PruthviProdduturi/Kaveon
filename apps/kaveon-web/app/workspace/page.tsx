@@ -6,6 +6,7 @@ import { useAuth } from "../../auth/useAuth";
 import { msalFetch } from "../../utils/msalFetch";
 import { useRecents } from "../../hooks/useRecents";
 import { useTheme } from "../../contexts/ThemeContext";
+import { KaveonLoading } from "../../components/KaveonLoading";
 
 type TabKey = "dashboards" | "charts" | "datasets" | "queries";
 
@@ -694,9 +695,7 @@ export default function WorkspacePage() {
       {/* Loading — also covers the gap right after a tab switch, before the new
           tab's data has arrived, so the previous tab never flashes through. */}
       {(loading || (!error && !ready)) && (
-        <div style={{ display: "flex", justifyContent: "center", padding: "80px 0", color: "var(--text-muted)" }}>
-          <div className="spinner" style={{ width: 24, height: 24, borderWidth: 2 }} />
-        </div>
+        <KaveonLoading message="Loading library" fullScreen={false} />
       )}
 
       {/* Error */}

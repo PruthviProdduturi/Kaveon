@@ -1622,7 +1622,8 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         });
 
     const extraFiltersPayload = extraFilters
-      .filter((f: any) => f.column && f.value !== '' && f.value !== null && f.value !== undefined)
+      .filter((f: any) => f.column && f.value !== '' && f.value !== null && f.value !== undefined
+              && f.value !== 'AllUp' && (f.filterType || 'value') !== 'date_range')
       .map((f: any) => ({
         column: f.column,
         keyColumn: f.keyColumn ?? null,
@@ -3140,7 +3141,8 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
                 setPreviewOptions(option);
 
                 // Populate client-side cache so repeat views are instant
-                const contextCacheKey = `ctx:${selectedDatasetId}:${primaryMetric.column}:${primaryMetric.aggregate}:${groupBy || ""}`;
+                const filterSig = serveFilters.map((f: any) => `${f.column}=${f.value}`).sort().join("|");
+                const contextCacheKey = `ctx:${selectedDatasetId}:${primaryMetric.column}:${primaryMetric.aggregate}:${groupBy || ""}:${filterSig}`;
                 clientCacheSet(contextCacheKey, executeJson);
 
                 setSqlPreview({

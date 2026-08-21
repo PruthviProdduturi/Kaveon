@@ -5,7 +5,6 @@ import { useRouter, useParams } from "next/navigation";
 import { DashboardProvider, DashboardConfig, useDashboard } from "../../../../components/dashboards/DashboardContext";
 import DashboardCanvas from "../../../../components/dashboards/DashboardCanvas";
 import DashboardFilterBarReadOnly from "../../../../components/dashboards/DashboardFilterBarReadOnly";
-import { LoadingOverlay } from "../../../../components/LoadingOverlay";
 import { KaveonLoading } from "../../../../components/KaveonLoading";
 import { msalFetch } from "../../../../utils/msalFetch";
 import { useRecents } from "../../../../hooks/useRecents";
@@ -338,7 +337,7 @@ const DashboardViewContent: React.FC<{
       {/* Page-shell already provides the outer padding — don't double-inset here. */}
       <div style={{ flex: 1, overflow: 'auto', background: 'var(--bg-primary)' }}>
         {!chartsReady ? (
-          <KaveonLoading message="Loading dashboard" />
+          <KaveonLoading message="Loading dashboard" fullScreen={false} />
         ) : (
           <div ref={canvasRef}>
             <DashboardCanvas />
@@ -370,13 +369,62 @@ const DashboardViewPage: React.FC = () => {
         const res = await msalFetch(`${API_BASE}/api/v1/dashboards/${id}`);
         if (!res.ok) throw new Error(`Failed to load dashboard: ${res.status}`);
         const d = await res.json();
+        const layout: any[] = (() => { const p = JSON.parse(d.layout || "[]"); return Array.isArray(p) ? p : []; })();
+        let filters = JSON.parse(d.filters || "[]");
+
+        // Auto-discover filters from dataset dimensions when none are saved
+        if (!filters.length && layout.length) {
+          try {
+            const chartIds = layout.filter((it: any) => it.type === "chart" && it.chartId).map((it: any) => it.chartId);
+            if (chartIds.length) {
+              const chartResps = await Promise.all(chartIds.map((cid: number) => msalFetch(`${API_BASE}/api/v1/charts/${cid}`)));
+              const charts: { id: number; dataset_id: number }[] = await Promise.all(chartResps.map((r: Response) => r.json()));
+              const dsIds = Array.from(new Set(charts.map((c) => c.dataset_id)));
+              const colResps = await Promise.all(dsIds.map((dsId) => msalFetch(`${API_BASE}/api/v1/datasets/${dsId}/columns`)));
+              const allCols: { table_name: string; column_name: string; is_dimension: boolean; semantic_type?: string }[][] =
+                await Promise.all(colResps.map((r: Response) => r.json()));
+
+              const seen = new Set<string>();
+              const autoFilters: any[] = [];
+              const isDate = (col: any) => {
+                const st = (col.semantic_type || "").toLowerCase();
+                return st === "time" || st.includes("date") || st.includes("time");
+              };
+              allCols.forEach((cols, idx) => {
+                cols.filter((c) => c.is_dimension || isDate(c)).forEach((col) => {
+                  if (seen.has(col.column_name)) return;
+                  seen.add(col.column_name);
+                  if (isDate(col)) {
+                    autoFilters.push({
+                      id: `auto-${col.column_name}`, column: col.column_name,
+                      label: col.semantic_type || col.column_name, operator: "=", value: "",
+                      filterType: "date_range", dateFrom: "", dateTo: "",
+                      enabled: true, appliesTo: "all", datasetId: dsIds[idx],
+                    });
+                  } else {
+                    autoFilters.push({
+                      id: `auto-${col.column_name}`, column: col.column_name,
+                      label: col.column_name.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase()),
+                      operator: "=", value: "AllUp",
+                      enabled: true, appliesTo: "all", datasetId: dsIds[idx],
+                    });
+                  }
+                });
+              });
+              if (autoFilters.length) filters = autoFilters;
+            }
+          } catch {
+            // Non-fatal — dashboard works without filters
+          }
+        }
+
         setInitialConfig({
           id: d.id,
           name: d.name,
           description: d.description || "",
           theme: d.theme || "default",
-          layout: (() => { const p = JSON.parse(d.layout || "[]"); return Array.isArray(p) ? p : []; })(),
-          filters: JSON.parse(d.filters || "[]"),
+          layout,
+          filters,
           filterLogic: "AND",
           chartIds: JSON.parse(d.charts || "[]"),
         });
@@ -429,7 +477,11 @@ const DashboardViewPage: React.FC = () => {
     }
   };
 
-  if (loading) return <LoadingOverlay />;
+  if (loading) return (
+    <div className="page-shell page-shell-wide">
+      <KaveonLoading message="Loading dashboard" fullScreen={false} />
+    </div>
+  );
 
   if (error) {
     return (
