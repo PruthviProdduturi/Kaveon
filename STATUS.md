@@ -38,8 +38,14 @@
 | Semantic datasets — star schema, dimensions, metrics, role-playing dims (COALESCE) | ✅ Done | |
 | Chart builder — 37 ECharts types incl. 3D WebGL globe | ✅ Done | |
 | DLM — no-LLM NL→SQL, precomputed answer-from-context (10M rows → ~1.5s, no scan) | ✅ Done | Primary homepage path; `nlToSql` is fallback |
+| DLM serve-chart — single + multi-metric from precomputed context (stacked bars, combos) | ✅ Done | All 26 Kaveon dashboard charts served from context |
+| DLM filter values — dimension dropdown values from context (no SQL scan) | ✅ Done | Instant filter population on B1ms |
+| HLL sketch cuboids — mergeable COUNT(DISTINCT) at arbitrary dimension slices | ✅ Done | Exact-like NDV without full scan |
+| Star schema — dim_geography (26), dim_platform (9), kaveon_users (44K), kaveon_usage_daily (10.12M L2 fact) | ✅ Done | |
 | Dashboard builder — drag-drop, rows/columns/tabs/text/headers/dividers | ✅ Done | Flat layout |
 | Cross-filtering (click chart → filters others) | ✅ Done | |
+| Dashboard filter bar — DLM-powered dropdowns, cascading filters, click-outside close | ✅ Done | 9 dimensions per Kaveon dashboard |
+| Client-side query cache — SHA-based dedup of repeated dashboard chart queries | ✅ Done | |
 | SQL Lab — Monaco, multi-tab, history, saved queries | ✅ Done | |
 | Async query execution + result caching (SHA-256, TTL) | ✅ Done | Async job store not cleaned on restart |
 | CTAS endpoint | ✅ Done | |
@@ -104,5 +110,5 @@
 4. Import/export dashboards/charts/datasets
 5. Jinja SQL templating
 6. Dataset certification / governance
-7. Advanced filters (multi-select, range, cascading)
+7. ~~Advanced filters (multi-select, range, cascading)~~ → ✅ Done (multi-select, cascading from DLM context)
 8. Non-Azure connectors (Snowflake, BigQuery, Databricks, Redshift)

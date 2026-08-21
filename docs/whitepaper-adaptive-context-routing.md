@@ -442,12 +442,46 @@ Every answer is returned with the route it took and its timing, surfaced in the 
 hides which plane served an answer or what it cost — the transparency the method's
 per-factor validity breakdown was designed for, made visible to the end user.
 
-### A.4 Where it lives
+### A.4 Context-powered dashboard charts (serve-chart)
 
-`services/dlm.py` (engine: value index, router, precompute, answer cache, live
-assembler) and `routers/dlm.py` (`/dlm/ask`, `/dlm/route`, `/dlm/coverage`,
+The DLM's precomputed answers extend beyond the NL→SQL path to power **dashboard
+charts directly**. `serve_chart()` (single metric) and `serve_chart_multi()` (stacked
+bars, combo charts) resolve the chart's metric/group-by/filter specification against
+precomputed answers and return `{columns, rows}` instantly — the warehouse is never
+touched. The frontend tries DLM first (`POST /dlm/serve-chart`) and falls through to
+SQL only when the context can't answer. On a B1ms instance (1 vCore, 2 GB), this
+eliminates the 2-7 minute VIEW scans that caused 500 timeouts, replacing them with
+~5 ms context lookups.
+
+Multi-metric support merges per-metric answers by normalized group key, producing a
+unified result only when ALL requested metrics can be served from context — no partial
+results that would produce misleading charts.
+
+### A.5 DLM filter values
+
+Dashboard filter dropdowns also serve from context. `filter_values()` extracts
+distinct dimension values from any precomputed GROUP BY answer for that dimension —
+the same answer cache that powers `serve_chart`. This eliminates the
+`SELECT DISTINCT` scan on the fact table, which is critical on resource-constrained
+instances where a 10M-row distinct scan would timeout.
+
+### A.6 HLL sketch cuboids
+
+Non-additive `COUNT(DISTINCT …)` metrics cannot be derived by summing precomputed
+breakdowns. The DLM addresses this with **HyperLogLog sketch cuboids**: at build time,
+each fact-table row is hashed into per-cell sparse registers stored in `dlm_sketch`.
+At query time, registers merge in-memory to produce approximate NDV at arbitrary
+dimension slices — no fact-table scan. Typical relative error is < 2% at the default
+precision (p=14, 16384 registers). This is the only approximate answer path; all
+other DLM answers are exact.
+
+### A.7 Where it lives
+
+`services/dlm.py` (engine: value index, router, precompute, answer cache, serve-chart,
+filter-values, HLL sketches, live assembler) and `routers/dlm.py` (`/dlm/ask`,
+`/dlm/route`, `/dlm/coverage`, `/dlm/serve-chart`, `/dlm/filter-values`,
 `/datasets/{id}/dlm[/generate]`). The self-migrating tables `dlm_artifact`,
-`dlm_value_index`, `dlm_router`, and `dlm_answers` sit alongside the
+`dlm_value_index`, `dlm_router`, `dlm_answers`, and `dlm_sketch` sit alongside the
 `context_snapshots` store this paper describes — the DLM is built **on top of** the
 context engine, not instead of it.
 
