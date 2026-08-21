@@ -149,16 +149,62 @@ flowchart TD
     A --> B --> C --> D --> E --> F --> G --> H
 ```
 
-### Chart Render Flow
+### Chart Render Flow (Dashboard — Context-Powered)
+
+Dashboard charts try the DLM first. Only if the precomputed context can't answer does the frontend fall through to SQL.
 
 ```mermaid
 flowchart TD
-    A["Dashboard/chart page loads"]
+    A["Dashboard page loads"]
+    B["POST /api/v1/dlm/serve-chart<br/><small>{dataset_id, metric_column, aggregation, group_by, filters}<br/>or {dataset_id, metrics: [{column, aggregation}...], group_by, filters}</small>"]
+    C{"served == true?"}
+    CTX["⚡ Instant render from context<br/><small>in-memory dict hit · no DB trip · ~5ms</small>"]
+    SQL["Fallback: POST /api/v1/sql/execute<br/><small>live query on warehouse</small>"]
+    D["{columns, rows} → ECharts render"]
+    CACHE["Client-side SHA cache<br/><small>repeat views are instant</small>"]
+    A --> B --> C
+    C -->|yes| CTX --> D
+    C -->|no| SQL --> D
+    D --> CACHE
+
+    classDef ctx fill:#38a169,stroke:#276749,color:#fff;
+    classDef live fill:#d69e2e,stroke:#975a16,color:#fff;
+    class CTX ctx;
+    class SQL live;
+```
+
+Multi-metric charts (stacked bar, combo) send a `metrics` array. `serve_chart_multi` resolves each metric independently, merges rows by group key, and returns a unified result — only when ALL metrics can be answered from context.
+
+### Chart Render Flow (Standalone)
+
+```mermaid
+flowchart TD
+    A["Chart page loads"]
     B["POST /api/v1/sql/execute {sql_text, database, source, dataset_id}"]
     C["sql.py → pool.execute_query()"]
     D["{columns, rows} → ECharts render"]
     E["Execution logged to query_history (trigger_source, dataset_id)"]
     A --> B --> C --> D --> E
+```
+
+### Dashboard Filter Values Flow
+
+```mermaid
+flowchart TD
+    A["User clicks filter pill"]
+    B["GET /api/v1/dlm/filter-values<br/><small>?dataset_id=142&column=region</small>"]
+    C{"ok == true?"}
+    CTX["⚡ Values from context<br/><small>extracted from precomputed GROUP BY answers</small>"]
+    SQL["Fallback: GET /sql/distinct-filter-values<br/><small>SELECT DISTINCT on warehouse</small>"]
+    D["Dropdown populated with values"]
+    A --> B --> C
+    C -->|yes| CTX --> D
+    C -->|no| SQL --> D
+
+    classDef ctx fill:#38a169,stroke:#276749,color:#fff;
+    classDef live fill:#d69e2e,stroke:#975a16,color:#fff;
+    class CTX ctx;
+    class SQL live;
 ```
 
 ### Semantic SQL Generation Flow
@@ -571,12 +617,13 @@ The DLM is built **on top of** the statistics-based context engine (`context_pro
 | `dlm_artifact` | per-dataset compiled manifest + stats/usage rollups (generation timing) |
 | `dlm_value_index` | value → column/filter resolution |
 | `dlm_router` | cross-dataset routing summary/terms |
-| `dlm_answers` | **precomputed answers** — each metric's grand total + per-dimension breakdown |
+| `dlm_answers` | **precomputed answers** — each metric's grand total + per-dimension breakdown + 2-dim combos |
+| `dlm_sketch` | **HLL sketch cuboids** — mergeable COUNT(DISTINCT) registers at arbitrary dimension slices |
 | `context_snapshots` | per-element profile + captured change counters (staleness signal) |
 
-`generate_dlm()` precomputes all answers at build time (one scan for totals, one per dimension). `ask()` serves totals, per-dimension breakdowns, and single-dimension equality filters from an in-memory cache warmed once per dataset — microsecond dict hits, no scan. Every answer is badged **"⚡ From context · no DB scan"** or **"Live query · Xs"** with real timing. Non-additive metrics (`COUNT DISTINCT`, `AVG`) are exact because each shape is computed independently at build time.
+`generate_dlm()` precomputes all answers at build time (one scan for totals, one per dimension, common 2-dim combos). `ask()` serves totals, per-dimension breakdowns, and single-dimension equality filters from an in-memory cache warmed once per dataset — microsecond dict hits, no scan. `serve_chart()` and `serve_chart_multi()` power dashboard charts entirely from context. `filter_values()` extracts dimension dropdown values from precomputed GROUP BY answers. Every answer is badged **"⚡ From context · no DB scan"** or **"Live query · Xs"** with real timing. Non-additive metrics (`COUNT DISTINCT`, `AVG`) are exact because each shape is computed independently at build time; HLL sketch cuboids enable mergeable approximate COUNT(DISTINCT) at arbitrary dimension slices when exact answers are unavailable.
 
-**Measured:** over a 10.1M-row usage dataset, "current usage" drops from **~15 s live to ~1.5 s from context** (the scan is eliminated; the residual is routing).
+**Measured:** over a 10.1M-row usage dataset, "current usage" drops from **~15 s live to ~1.5 s from context** (the scan is eliminated; the residual is routing). Dashboard charts render from context in **~5 ms** end-to-end on Azure B1ms — no warehouse load.
 
 ### Key Design Decisions
 
@@ -595,8 +642,11 @@ The DLM is built **on top of** the statistics-based context engine (`context_pro
 | `POST /api/v1/dlm/ask` | Route a NL question → context answer or one live query |
 | `GET /api/v1/dlm/route` | Which dataset(s) a question routes to |
 | `GET /api/v1/dlm/coverage` | What a dataset's DLM can answer (dims, metrics, sample values) |
+| `POST /api/v1/dlm/serve-chart` | Dashboard chart from precomputed context — single or multi-metric |
+| `GET /api/v1/dlm/filter-values` | Dimension dropdown values from precomputed answers (no SQL scan) |
 | `POST /api/v1/datasets/{id}/dlm/generate` | (Re)compile the DLM + precompute answers |
 | `GET /api/v1/datasets/{id}/dlm` | DLM status: last generated, duration, indexed dims/metrics |
+| `GET /api/v1/datasets/{id}/columns` | Column metadata for a dataset (filter builders, chart config) |
 | `POST /api/v1/context/build` · `GET /context/validity` · `POST /context/ask` | Lower-level context engine (staleness scoring) |
 
 ### Implementation Status
@@ -610,6 +660,9 @@ The DLM is built **on top of** the statistics-based context engine (`context_pro
 | Answer-from-context (in-memory cache) | Complete | `services/dlm.py` |
 | Profile-synthesized answers | Complete | `context_router.py` |
 | Frontend integration (homepage) | **Complete — DLM is the primary path** | `app/page.tsx`, `ContextBanner.tsx`, `DatasetContextPanel.tsx` |
+| Context-powered dashboard charts | **Complete — serve-chart (single + multi-metric)** | `services/dlm.py`, `ChartBuilderContext.tsx` |
+| DLM filter values | **Complete — dimension dropdowns from context** | `services/dlm.py`, `DashboardFilterBarReadOnly.tsx` |
+| HLL sketch cuboids | **Complete — mergeable COUNT(DISTINCT) at arbitrary grain** | `services/dlm.py` (`dlm_sketch` table) |
 | Hybrid path (partial decomposition) | Single-dim filters served from breakdown; deeper decomposition open | `services/dlm.py` |
 
 ---
@@ -619,6 +672,7 @@ The DLM is built **on top of** the statistics-based context engine (`context_pro
 Warehouse queries are **live by default** — Kaveon does not cache arbitrary result sets server-side, so users see current data. The exceptions are deliberate:
 
 - **DLM answer cache**: precomputed metric totals + per-dimension breakdowns (`dlm_answers`) served from an in-memory cache (`_ANSWER_CACHE`, warmed once per dataset) — the answer-from-context path, no scan.
+- **Client-side query cache**: dashboard chart results cached in-browser by SHA key (`dataset:metric:groupby:filters`), so tab switches and filter toggles are instant.
 - **SQL Lab result cache**: async-job results keyed by SHA-256 of the query, with a TTL.
 - **Managed Identity tokens**: `DefaultAzureCredential` caches tokens with automatic refresh.
 - **Connection pools**: each `(endpoint, database)` pair keeps a persistent pool of reusable connections — avoids per-request TLS handshakes and auth overhead.
@@ -693,7 +747,7 @@ Expires: 0
 /api/v1/sql/distinct-filter-values  — filter dropdown values
 /api/v1/sql/execute                 — SQL execution with history logging
 /api/v1/sql/execute-async · /sql/async/{job_id} — detached async jobs + result cache
-/api/v1/dlm/*                       — DLM: ask, route, coverage, generate, status
+/api/v1/dlm/*                       — DLM: ask, route, coverage, generate, serve-chart, filter-values
 /api/v1/context/*                   — context engine: build, validity, ask
 /api/v1/metadata/summary            — parallel metadata summary
 /api/v1/users/me                    — current user's email + resolved role
