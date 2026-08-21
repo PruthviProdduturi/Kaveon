@@ -11,8 +11,8 @@ Kaveon ships 37 built-in chart types across 18 categories. All are powered by [A
 | Category | Chart types |
 |----------|-------------|
 | **Line** | Time-series line, Time-series line share, Multi-series line, Time-series area, Time-series area share, Stacked area |
-| **Bar** | Vertical bar, Horizontal bar, Grouped bar, Stacked bar, Stacked horizontal bar, Mixed line + bar, Waterfall |
-| **Pie** | Pie chart, Donut chart |
+| **Bar** | Vertical bar, Horizontal bar, Grouped bar, Stacked bar, Stacked horizontal bar, Mixed line + bar, Waterfall, Histogram |
+| **Pie** | Pie chart, Donut chart, Nightingale rose |
 | **Scatter** | Scatter, Bubble |
 | **Heatmap** | Heatmap, Calendar heatmap |
 | **Treemap** | Treemap |
@@ -24,9 +24,9 @@ Kaveon ships 37 built-in chart types across 18 categories. All are powered by [A
 | **Candlestick** | Candlestick |
 | **Pictorial** | Pictorial bar |
 | **Stream** | Theme river |
-| **Flow** | Sankey, Parallel coordinates |
+| **Flow** | Sankey |
 | **Map** | World map (WebGL globe) |
-| **Custom** | Big number, Big number with trend |
+| **Custom** | Big number, Big number with trend, Parallel coordinates |
 | **Table** | Table, Pivot table |
 
 Chart types are registered in `TEMPLATES` in `components/charts/ChartBuilderContext.tsx`. Custom chart types can be added via the plugin registry without modifying that file — see [Extending with Plugins](#extending-with-plugins).
@@ -57,7 +57,7 @@ Shows available datasets. Changing the dataset resets column and metric selectio
 
 ### Chart Type Picker (`ChartTypePicker.tsx`)
 
-Organized by category. Each entry shows a name, description, and thumbnail (PNG served from `/public/chart-thumbnails/`). The search box filters all chart types by name or description.
+Organized by category. Each entry shows a name, description, and an inline SVG icon rendered by the `ChartIcon` component. The search box filters all chart types by name or description.
 
 ### Column Browser (`ColumnBrowser.tsx`)
 
@@ -162,6 +162,43 @@ const option = applyChartTheme(rawOption, isDark);
 ```
 
 When the user toggles the theme, charts re-render because `ReactECharts` receives a new `option` with `notMerge` set to `true`.
+
+---
+
+## DLM-Powered Chart Serving
+
+Dashboard charts attempt to resolve data through the DLM (Data Language Model) before falling back to raw SQL execution. When a chart is rendered on a dashboard, the frontend issues `POST /dlm/serve-chart` with the chart's metric and dimension configuration.
+
+Two request shapes are supported:
+
+- **Single-metric** — sends `metric_column`, `aggregation`, and `group_by` fields.
+- **Multi-metric** — sends a `metrics` array, each entry containing its own column and aggregation.
+
+If the DLM can answer from its learned context, the response is returned directly. If the context is insufficient, the endpoint returns a fallback signal and the chart runner issues the generated SQL query instead. This path keeps dashboard loads fast for common metrics while preserving full SQL flexibility for complex or ad-hoc charts.
+
+---
+
+## Client-Side Query Cache
+
+Chart query results are cached in the browser using a SHA-based content-addressed cache. The cache key is derived from the SQL text and parameters. Entries expire after a 5-minute TTL and the cache holds a maximum of 200 entries, evicting least-recently-used entries when full. This avoids redundant server round-trips when switching between dashboard tabs or re-rendering charts that share the same underlying query.
+
+---
+
+## Cross-Filtering
+
+`ChartPreview` accepts an `onCrossFilter` callback prop. When a user clicks a data point in a chart, the callback fires with the selected dimension value, allowing parent components (such as dashboards) to propagate the selection as a filter to other charts on the same page.
+
+---
+
+## Number Formatting
+
+Numeric values in charts are abbreviated using K/M/B/T formatting (e.g., 1,500 becomes "1.5K", 2,300,000 becomes "2.3M"). This applies to axis labels, tooltips, and KPI displays.
+
+---
+
+## Chart Downloads
+
+From the chart view, users can download the current visualization as a **PNG** image or export the underlying data as a **CSV** file.
 
 ---
 

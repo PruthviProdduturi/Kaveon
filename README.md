@@ -27,7 +27,7 @@ Kaveon: Found 195 results. Top 3: United States (103.8M),
         [bar chart rendered inline]
 ```
 
-No LLM. No API key. A deterministic [template-based NL→SQL engine](docs/whitepaper-nl-to-sql.md) that parses natural language patterns, matches them against your schema metadata, and builds SQL from templates. Instant, free, works offline.
+No LLM. No API key. The **[DLM (Data Language Model)](docs/whitepaper-adaptive-context-routing.md)** — a per-dataset compiled context artifact that routes questions deterministically, answers the common cases from precomputed context with **no database scan at all**, and falls back to a single live query for the rest. Dashboard charts, filter dropdowns, and NL questions all serve from the same instant context layer.
 
 ---
 
@@ -35,7 +35,8 @@ No LLM. No API key. A deterministic [template-based NL→SQL engine](docs/whitep
 
 | | |
 |---|---|
-| **Conversational querying** | Type questions in plain English. Kaveon generates SQL, executes it, renders charts inline, and explains the results. |
+| **DLM — Data Language Model** | Per-dataset compiled context artifact. Answers NL questions, powers dashboard charts, and populates filter dropdowns — all from precomputed context with no DB scan. [White paper](docs/whitepaper-adaptive-context-routing.md). |
+| **Conversational querying** | Type questions in plain English. The DLM routes, resolves, and renders charts inline with intelligent summaries. |
 | **37 chart types** | Bar, line, area, pie, scatter, heatmap, funnel, gauge, treemap, waterfall, calendar, 3D globe, and more. All interactive, all dark-mode aware. |
 | **Dashboard builder** | Drag-and-drop canvas with resizable tiles, cross-chart filtering, shared filter bar, auto-refresh, and publishing. |
 | **SQL Lab** | Monaco editor (VS Code-grade) with autocomplete, multi-tab sessions, query history, result caching, and inline AI. |
@@ -62,7 +63,7 @@ Two services. One monorepo.
 | **kaveon-web** | Next.js 15, React 19, TypeScript, ECharts | Vercel |
 | **kaveon-api** | FastAPI, Python 3.11, psycopg2, pyodbc | Azure Container Apps |
 
-Auth is NextAuth (Auth.js v5) — GitHub and Microsoft Entra ID. Role-based access: Viewer → Analyst → Editor → Admin.
+Auth is NextAuth (Auth.js v5) — GitHub, Google, and Microsoft Entra ID. Role-based access: Viewer → Analyst → Editor → Admin.
 
 Infrastructure as code: [Bicep templates](infra/bicep/) for Azure resources.
 
