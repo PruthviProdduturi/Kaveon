@@ -129,10 +129,10 @@ def main():
     a3 = kpi("Dashboard Views", "dashboards_viewed", "SUM", "Views")
     a4 = kpi("Avg Active Minutes", "active_minutes", "AVG", "Min/User")
 
-    a5 = chart("Daily Query Trend", "line",
+    a5 = chart("Queries by Platform", "bar",
                {"query_mode": "aggregate",
                 "metrics": [{"column": "queries_run", "aggregate": "SUM", "label": "Queries"}],
-                "groupby": ["usage_date"], "sort_by": {"column": "usage_date", "direction": "asc"}},
+                "groupby": ["platform"], "sort_by": {"column": "queries_run", "direction": "desc"}},
                {"echarts_option": {"color": [C_ACCENT]}})
 
     a6 = chart("Global Users by Country", "world_map",
@@ -144,12 +144,9 @@ def main():
     a8 = bar("Users by Industry", "user_id", "COUNT_DISTINCT", "Users", "industry",
              limit=10, horizontal=True, color=C_TEAL)
 
-    a9 = chart("Engagement by License", "stacked_bar",
+    a9 = chart("NL Queries by License", "bar",
                {"query_mode": "aggregate",
-                "metrics": [{"column": "nl_queries", "aggregate": "SUM", "label": "NL Queries"},
-                            {"column": "sql_lab_runs", "aggregate": "SUM", "label": "SQL Lab"},
-                            {"column": "dashboards_viewed", "aggregate": "SUM", "label": "Dashboards"},
-                            {"column": "charts_created", "aggregate": "SUM", "label": "Charts"}],
+                "metrics": [{"column": "nl_queries", "aggregate": "SUM", "label": "NL Queries"}],
                 "groupby": ["license"]},
                {"echarts_option": {"color": [C_ACCENT, C_TEAL, C_EMERALD, C_AMBER]}})
 
@@ -172,22 +169,21 @@ def main():
     b3 = kpi("API Calls", "api_calls", "SUM", "API Calls")
     b4 = kpi("Data Processed (MB)", "data_processed_mb", "SUM", "MB Processed")
 
-    b5 = chart("Daily Active Users", "line",
+    b5 = chart("Active Users by Segment", "bar",
                {"query_mode": "aggregate",
-                "metrics": [{"column": "user_id", "aggregate": "COUNT_DISTINCT", "label": "DAU"}],
-                "groupby": ["usage_date"], "sort_by": {"column": "usage_date", "direction": "asc"}},
+                "metrics": [{"column": "user_id", "aggregate": "COUNT_DISTINCT", "label": "Active Users"}],
+                "groupby": ["segment"], "sort_by": {"column": "user_id", "direction": "desc"}},
                {"echarts_option": {"color": [C_EMERALD]}})
 
     b6 = bar("Sessions by License", "sessions", "SUM", "Sessions", "license", color=C_AMBER)
     b7 = bar("API Calls by Platform", "api_calls", "SUM", "API Calls", "platform", color=C_ROSE)
     b8 = bar("Avg Minutes by Segment", "active_minutes", "AVG", "Avg Min", "segment", color=C_ACCENT)
 
-    b9 = chart("Feedback by Audience", "stacked_bar",
+    b9 = chart("Positive Feedback by Audience", "bar",
                {"query_mode": "aggregate",
-                "metrics": [{"column": "feedback_positive", "aggregate": "SUM", "label": "Positive"},
-                            {"column": "feedback_negative", "aggregate": "SUM", "label": "Negative"}],
-                "groupby": ["audience"]},
-               {"echarts_option": {"color": [C_EMERALD, C_ROSE]}})
+                "metrics": [{"column": "feedback_positive", "aggregate": "SUM", "label": "Positive Feedback"}],
+                "groupby": ["audience"], "sort_by": {"column": "feedback_positive", "direction": "desc"}},
+               {"echarts_option": {"color": [C_EMERALD]}})
 
     b10 = bar("Errors by OS", "errors", "SUM", "Errors", "os", color=C_SLATE)
 
