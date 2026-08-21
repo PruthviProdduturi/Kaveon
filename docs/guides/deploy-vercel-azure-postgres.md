@@ -55,7 +55,7 @@ az acr build \
   apps/kaveon-api
 ```
 
-Or push via GitHub Actions (see `.github/workflows/ci.yml`).
+Or push via GitHub Actions (see `.github/workflows/deploy.yml`).
 
 ---
 
@@ -66,8 +66,8 @@ Deploy the Bicep environment:
 ```bash
 az deployment group create \
   --resource-group kaveon-rg \
-  --template-file infra/bicep/environments/prod.bicep \
-  --parameters @infra/bicep/environments/prod.parameters.json
+  --template-file infra/bicep/environments/production.bicep \
+  --parameters @infra/bicep/environments/production.parameters.json
 ```
 
 Set the required secrets on the Container App:
@@ -101,6 +101,7 @@ Health check: `GET https://kaveon-api.calmbeach-fe7df67b.westus2.azurecontainera
    | `AUTH_URL` | your Vercel URL |
    | `AUTH_ADMIN_EMAILS` | your email (gets Admin) |
    | `GITHUB_ID` / `GITHUB_SECRET` | GitHub OAuth App (callback `https://<vercel-url>/api/auth/callback/github`) |
+   | `GOOGLE_ID` / `GOOGLE_SECRET` | Google OAuth (callback `https://<vercel-url>/api/auth/callback/google`) |
    | `AUTH_MICROSOFT_ENTRA_ID_ID` / `_SECRET` / `_ISSUER` | Microsoft Entra App Registration |
 
 ---
