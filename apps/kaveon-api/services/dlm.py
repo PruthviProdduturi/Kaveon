@@ -1607,7 +1607,10 @@ def serve_chart(dataset_id: str, metric_column: str, aggregation: str,
 
     # ── map metric_column + aggregation to a metric name ──────────────────
     agg_upper = aggregation.strip().upper()
-    target_expr = _normalize(f"{agg_upper}({metric_column})")
+    if agg_upper == "COUNT_DISTINCT":
+        target_expr = _normalize(f"COUNT(DISTINCT {metric_column})")
+    else:
+        target_expr = _normalize(f"{agg_upper}({metric_column})")
     metric_name: Optional[str] = None
     metric_obj: Optional[dict] = None
     for m in metrics:
@@ -1620,12 +1623,12 @@ def serve_chart(dataset_id: str, metric_column: str, aggregation: str,
     # fallback: match by column name inside the expression
     if not metric_name:
         mc_norm = _normalize(metric_column)
+        agg_base = agg_upper.split("_")[0]
         for m in metrics:
             name = m.get("name") or m.get("metric_name") or ""
             expr = m.get("expression") or ""
-            # e.g. expression "SUM(primary_energy_consumption)" contains the column
             for ident in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", expr):
-                if _normalize(ident) == mc_norm and agg_upper in expr.upper():
+                if _normalize(ident) == mc_norm and agg_base in expr.upper():
                     metric_name = name
                     metric_obj = m
                     break
