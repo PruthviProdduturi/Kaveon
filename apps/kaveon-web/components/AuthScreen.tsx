@@ -91,12 +91,12 @@ export function AuthScreen() {
 				}
 				.auth-logo svg { width: 340px; height: auto; }
 				.auth-prompt {
-					font-size: 34px; font-weight: 300; color: #e2e8f0;
+					font-size: 34px; font-weight: 300; color: #f1f5f9;
 					line-height: 1.35; letter-spacing: -0.3px;
 					margin: 0; animation: loginFade 0.6s ease-out;
 				}
 				.auth-sub {
-					font-size: 16px; color: #536175; margin-top: 16px;
+					font-size: 16px; color: #94a3b8; margin-top: 16px;
 					font-weight: 400; letter-spacing: 0.2px;
 				}
 				.auth-signin {
@@ -111,31 +111,39 @@ export function AuthScreen() {
 				.auth-dots { display: flex; gap: 6px; margin-top: 28px; }
 
 				@media (max-width: 768px) {
-					.auth-root { flex-direction: column; overflow-y: auto; }
+					.auth-root {
+						flex-direction: column;
+						overflow-y: auto;
+					}
 					.auth-brand {
-						flex: none; padding: 40px 24px 24px;
-						align-items: center; text-align: center;
+						flex: none;
+						padding: 40px 24px 20px !important;
+						padding-bottom: 20px !important;
+						align-items: center;
+						text-align: center;
+						min-height: 0;
 					}
 					.auth-brand-glow { display: none; }
-					.auth-logo svg { width: 200px; }
-					.auth-logo { margin-bottom: 16px !important; }
-					.auth-prompt { font-size: 18px; }
-					.auth-sub { font-size: 13px; margin-top: 8px; }
-					.auth-dots { margin-top: 14px; justify-content: center; }
+					.auth-logo svg { width: 180px; }
+					.auth-logo { margin-bottom: 12px !important; }
+					.auth-prompt { font-size: 16px; line-height: 1.3; }
+					.auth-sub { display: none; }
+					.auth-dots { margin-top: 10px; justify-content: center; }
 					.auth-signin {
-						width: 100%; flex: 1;
+						width: 100%;
+						flex: none;
 						border-left: none;
 						border-top: 1px solid rgba(255,255,255,0.08);
 						padding: 28px 24px 40px;
+						justify-content: flex-start;
 					}
 					.auth-signin-inner { max-width: 100%; }
 				}
 
 				@media (max-width: 380px) {
-					.auth-brand { padding: 32px 16px 16px; }
-					.auth-logo svg { width: 160px; }
-					.auth-prompt { font-size: 16px; }
-					.auth-sub { font-size: 12px; }
+					.auth-brand { padding: 28px 16px 12px; }
+					.auth-logo svg { width: 150px; }
+					.auth-prompt { font-size: 14px; }
 					.auth-signin { padding: 20px 16px 32px; }
 				}
 			`}</style>
@@ -161,15 +169,15 @@ export function AuthScreen() {
 							<polygon points="1062.53,83.30 1197.53,235 1212.47,221.70 1077.47,70" />
 						</g>
 						<path d="M 966.25 215.29 A 72.5 72.5 0 1 0 893.75 215.29" fill="none" stroke="#4A9EE8" strokeWidth="20" strokeLinecap="butt" />
-						<text x="90" y="325" fontFamily="Inter, system-ui, sans-serif" fontSize="65" fontWeight="400" letterSpacing="1.5" fill="#536175">Talk to your data</text>
+						<text x="90" y="325" fontFamily="Inter, system-ui, sans-serif" fontSize="65" fontWeight="400" letterSpacing="1.5" fill="#94a3b8">Talk to your data</text>
 					</svg>
 				</div>
 
 				<div style={{ position: "relative", maxWidth: 480 }}>
-					<p key={promptIdx} className="auth-prompt">
+					<p key={promptIdx} className="auth-prompt" style={{ color: "#f1f5f9" }}>
 						&ldquo;{PROMPTS[promptIdx]}&rdquo;
 					</p>
-					<p className="auth-sub">
+					<p className="auth-sub" style={{ color: "#94a3b8" }}>
 						Your data has answers. Just ask.
 					</p>
 				</div>
@@ -182,7 +190,7 @@ export function AuthScreen() {
 								width: i === promptIdx ? 20 : 6,
 								height: 6,
 								borderRadius: 3,
-								background: i === promptIdx ? "#4A9EE8" : "rgba(255,255,255,0.06)",
+								background: i === promptIdx ? "#4A9EE8" : "rgba(255,255,255,0.15)",
 								transition: "all 0.4s cubic-bezier(0.4, 0, 0.2, 1)",
 							}}
 						/>
@@ -196,7 +204,7 @@ export function AuthScreen() {
 					<h2 style={{ fontSize: 26, fontWeight: 600, color: "#f0f0f2", marginBottom: 6, letterSpacing: "-0.3px" }}>
 						Sign in
 					</h2>
-					<p style={{ fontSize: 15, color: "#64748b", marginBottom: 32 }}>
+					<p style={{ fontSize: 15, color: "#94a3b8", marginBottom: 32 }}>
 						to talk to your data
 					</p>
 
@@ -216,22 +224,6 @@ export function AuthScreen() {
 
 						<button
 							type="button"
-							onClick={() => showComingSoon("google")}
-							style={btnBase}
-							onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)"; }}
-							onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; }}
-						>
-							<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
-								<path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4" />
-								<path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
-								<path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05" />
-								<path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
-							</svg>
-							Continue with Google
-						</button>
-
-						<button
-							type="button"
 							onClick={() => start("microsoft-entra-id")}
 							style={btnBase}
 							onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)"; }}
@@ -245,9 +237,25 @@ export function AuthScreen() {
 							</svg>
 							Continue with Microsoft
 						</button>
+
+						<button
+							type="button"
+							onClick={() => showComingSoon("google")}
+							style={btnBase}
+							onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)"; }}
+							onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; }}
+						>
+							<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+								<path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4" />
+								<path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
+								<path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05" />
+								<path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
+							</svg>
+							Continue with Google
+						</button>
 					</div>
 
-					<p style={{ fontSize: 11, color: "#334155", textAlign: "center", marginTop: 32, letterSpacing: "0.3px" }}>
+					<p style={{ fontSize: 11, color: "#64748b", textAlign: "center", marginTop: 32, letterSpacing: "0.3px" }}>
 						Open source &middot; Self-hosted &middot; MIT License
 					</p>
 				</div>

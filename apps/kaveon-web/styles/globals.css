@@ -1838,7 +1838,7 @@ main.main-lab {
   }
 }
 
-.auth-brand {
+.auth-brand-legacy {
   font-size: 3rem;
   font-weight: 800;
   background: linear-gradient(135deg, #000000 0%, #374151 100%);
@@ -2098,7 +2098,7 @@ main.main-lab {
     margin-bottom: 1.5rem;
   }
 
-  .auth-brand {
+  .auth-brand-legacy {
     font-size: 2.5rem;
   }
 
