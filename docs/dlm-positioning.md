@@ -18,7 +18,7 @@ Live at kaveon.vercel.app over a **10.1M-row** synthetic usage dataset.
 | Where the answer comes from | a **precomputed lookup** (sub-ms); the residual ~1.5s is routing/resolution, now isolated on its own DB |
 | Single-dimension filters ("queries for Enterprise") | served from the by-plan breakdown — **still no DB trip** |
 | Novel slice ("queries by plan **in 2026**") | falls to **one** warehouse query, honestly labeled "Live query", then cached |
-| Robustness (47-case adversarial battery) | **0 crashes, 0 SQL errors, 0 injection leaks** |
+| Robustness | Injection-safe by construction (SQL assembled from escaped index values + defined expressions + quoted identifiers) |
 | Hosted LLM calls per question | **0** · data egress: **0** |
 
 **Compute-once, answer-many:** at generate time Kaveon precomputes **every metric's grand total + each per-dimension breakdown** (a handful of scans). After that, totals, breakdowns, and single-dimension filters all serve from context — the DB is touched only when the data changes.
@@ -36,7 +36,7 @@ Live at kaveon.vercel.app over a **10.1M-row** synthetic usage dataset.
 On the homepage (over the 10.1M-row demo dataset), these questions each return an answer badged with its source and timing — so the numbers above are verifiable, not asserted:
 
 1. **"What is current Kaveon usage?"** → **⚡ From context · ~1.5s · no DB scan** — 53M queries across 10.1M rows.
-2. **"queries by plan"**, **"active users by region"**, **"top 10 orgs by dashboard views"** → instant breakdowns, still from context.
+2. **"queries by plan"**, **"active users by role"**, **"top 10 countries by energy consumption"** → instant breakdowns, still from context.
 3. **"queries by plan in 2026"** (a slice that was not precomputed) → **Live query · Xs** — one warehouse trip, honestly labeled, then cached.
 4. Open the dataset's **Context panel** to see when context was last generated, how long it took, and how many answers were precomputed — the one-time cost that buys everything above.
 

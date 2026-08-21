@@ -9,7 +9,7 @@
 - "Current usage" (a SUM over 10.1M rows): **15s live → ~1.5s from context** — the scan is eliminated.
 - Totals, per-dimension breakdowns, and single-dimension filters: **served from context, zero DB trip.**
 - Only genuinely novel slices hit the warehouse — **one** query, honestly labeled "Live query," then cached.
-- **0** hosted-LLM calls per question · **0** data egress · 47-case adversarial battery: **0 crashes, 0 injection leaks.**
+- **0** hosted-LLM calls per question · **0** data egress · injection-safe by construction (SQL assembled from escaped values + defined expressions + quoted identifiers).
 
 **How it sits next to Fabric:**
 

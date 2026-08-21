@@ -6,7 +6,7 @@
 
 - Vercel account linked to the `Kaveon` GitHub repo
 - A reachable `kaveon-api` over HTTPS (Azure Container Apps)
-- At least one OAuth provider configured (GitHub and/or Microsoft Entra ID)
+- At least one OAuth provider configured (GitHub, Google, and/or Microsoft Entra ID)
 
 ## 1 · Link the project
 
@@ -28,6 +28,8 @@ vercel env add AUTH_ADMIN_EMAILS production         # comma-separated
 # OAuth providers (configure at least one)
 vercel env add GITHUB_ID production
 vercel env add GITHUB_SECRET production
+vercel env add GOOGLE_ID production
+vercel env add GOOGLE_SECRET production
 vercel env add AUTH_MICROSOFT_ENTRA_ID_ID production
 vercel env add AUTH_MICROSOFT_ENTRA_ID_SECRET production
 vercel env add AUTH_MICROSOFT_ENTRA_ID_ISSUER production  # https://login.microsoftonline.com/<tenant>/v2.0
@@ -46,13 +48,11 @@ cd apps/kaveon-web
 vercel --prod
 ```
 
-### Auto-deploy from GitHub
+### Auto-deploy via GitHub Actions
 
-1. Vercel dashboard → **Settings → Git → Connect Git Repository** → select `Kaveon`
-2. **Root Directory:** `apps/kaveon-web`
-3. **Production Branch:** `dev`
+Production deploys are triggered by GitHub Actions (`.github/workflows/deploy.yml`), not Vercel's native Git integration. Every push to `dev` runs the deploy job, which executes `vercel deploy --prod --yes --token=...`.
 
-Every push to `dev` triggers a production deploy. Pull requests get preview deployments.
+Pull requests get preview deployments via `vercel deploy` (without `--prod`).
 
 Config: [`apps/kaveon-web/vercel.json`](../../apps/kaveon-web/vercel.json).
 
@@ -61,6 +61,11 @@ Config: [`apps/kaveon-web/vercel.json`](../../apps/kaveon-web/vercel.json).
 **GitHub OAuth App:**
 ```
 https://<your-project>.vercel.app/api/auth/callback/github
+```
+
+**Google OAuth → Authorized redirect URIs:**
+```
+https://<your-project>.vercel.app/api/auth/callback/google
 ```
 
 **Microsoft Entra App Registration → Authentication → Web → Redirect URIs:**

@@ -23,7 +23,8 @@ from config import settings
 PLATFORM_METADATA_TABLES = frozenset({
     "activity", "auth_config", "charts", "context_answer_cache", "context_snapshots",
     "dashboards", "data_sources", "dataset_columns", "dataset_dimensions",
-    "dataset_metrics", "datasets", "favorites", "local_users", "query_history",
+    "dataset_metrics", "datasets", "dlm_answers", "dlm_artifact", "dlm_router",
+    "dlm_sketch", "dlm_value_index", "favorites", "local_users", "query_history",
     "saved_queries", "user_recents", "user_themes",
 })
 

@@ -400,11 +400,11 @@ The complete NL-to-SQL engine is implemented in three files:
 
 | File | Lines | Responsibility |
 |---|---|---|
-| `utils/nlToSql.ts` | ~475 | Pattern matching, fuzzy resolution, SQL generation, chart type selection |
-| `components/chat/InlineChart.tsx` | ~320 | Chart rendering (ECharts), KPI display, table display, SQL footer |
-| `app/page.tsx` | ~600 | Multi-dataset auto-detection, schema caching, insight generation, chat UI |
+| `utils/nlToSql.ts` | ~614 | Pattern matching, fuzzy resolution, SQL generation, chart type selection |
+| `components/chat/InlineChart.tsx` | ~321 | Chart rendering (ECharts), KPI display, table display, SQL footer |
+| `app/page.tsx` | ~1195 | DLM ask, multi-dataset auto-detection, schema caching, insight generation, chat UI |
 
-Total: approximately 1,400 lines of TypeScript across all three files. The core parsing logic in `nlToSql.ts` has zero external dependencies -- no NLP libraries, no ML models, no training data. It's pure TypeScript operating on strings and arrays.
+Total: approximately 2,130 lines of TypeScript across all three files. The core parsing logic in `nlToSql.ts` has zero external dependencies -- no NLP libraries, no ML models, no training data. It's pure TypeScript operating on strings and arrays. `page.tsx` has grown significantly with the addition of the DLM integration (three-tier execution: DLM → ACR → template parser), follow-up detection, and context hints.
 
 ### Core API
 
@@ -439,4 +439,4 @@ Template-based NL-to-SQL is a viable, production-ready approach for conversation
 
 The approach is not a replacement for LLM-based text-to-SQL. It is a complement. The template engine handles the fast path; an LLM handles the long tail. Together, they provide a system that is responsive by default and capable when needed.
 
-"Talk to your data" doesn't require a $20/month API key. For most questions, it requires about 475 lines of TypeScript and a schema.
+"Talk to your data" doesn't require a $20/month API key. For most questions, it requires a deterministic engine and a schema — the DLM handles the common case from precomputed context with no database scan at all, and the template parser covers the long tail.
