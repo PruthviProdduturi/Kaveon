@@ -221,7 +221,6 @@ export default function WorkspacePage() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const arr: WorkspaceItem[] = Array.isArray(data) ? data : Array.isArray(data.result) ? data.result : Array.isArray(data.items) ? data.items : [];
-      if (typeof window !== "undefined") console.log(`[workspace] ${tabKey}: ${arr.length} items`, arr.map((i) => i.name ?? i.title));
       setItems(arr);
       setLoadedTab(tabKey);
     } catch {
