@@ -1606,34 +1606,7 @@ def serve_chart(dataset_id: str, metric_column: str, aggregation: str,
     filters = filters or []
 
     # ── map metric_column + aggregation to a metric name ──────────────────
-    agg_upper = aggregation.strip().upper()
-    if agg_upper == "COUNT_DISTINCT":
-        target_expr = _normalize(f"COUNT(DISTINCT {metric_column})")
-    else:
-        target_expr = _normalize(f"{agg_upper}({metric_column})")
-    metric_name: Optional[str] = None
-    metric_obj: Optional[dict] = None
-    for m in metrics:
-        name = m.get("name") or m.get("metric_name") or ""
-        expr = m.get("expression") or ""
-        if _normalize(expr) == target_expr:
-            metric_name = name
-            metric_obj = m
-            break
-    # fallback: match by column name inside the expression
-    if not metric_name:
-        mc_norm = _normalize(metric_column)
-        agg_base = agg_upper.split("_")[0]
-        for m in metrics:
-            name = m.get("name") or m.get("metric_name") or ""
-            expr = m.get("expression") or ""
-            for ident in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", expr):
-                if _normalize(ident) == mc_norm and agg_base in expr.upper():
-                    metric_name = name
-                    metric_obj = m
-                    break
-            if metric_name:
-                break
+    metric_name, metric_obj = _resolve_metric(metric_column, aggregation, metrics)
     if not metric_name:
         return {"served": False, "reason": "metric_not_found"}
 
@@ -1810,7 +1783,12 @@ def serve_chart_multi(dataset_id: str,
             "score": fresh.get("score", 0.0),
             "recommendation": fresh.get("recommendation"),
         },
+        "chartType": per_metric[0][1].get("chartType") if per_metric else None,
+        "xAxis": group_col,
+        "yAxis": [mn for mn, _ in per_metric],
+        "title": None,
         "approx": any(s.get("approx") for _, s in per_metric),
+        "note": None,
     }
 
 
