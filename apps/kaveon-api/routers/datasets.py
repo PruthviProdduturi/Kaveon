@@ -37,6 +37,15 @@ def get_dataset(dataset_id: str, response: Response, ctx: UserContext = Depends(
     return dataset
 
 
+@router.get("/datasets/{dataset_id}/columns")
+def get_columns(dataset_id: str, response: Response, ctx: UserContext = Depends(require_user_context)):
+    response.headers.update(NO_CACHE)
+    dataset = svc.get_dataset_by_id(dataset_id, ctx.email, ctx.role)
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    return dataset.get("columns") or []
+
+
 @router.post("/datasets", status_code=201)
 def create_dataset(
     data: DatasetCreate,

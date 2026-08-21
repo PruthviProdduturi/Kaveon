@@ -175,6 +175,14 @@ def serve_chart(body: ServeChartBody, ctx: UserContext = Depends(require_user_co
     )
 
 
+@router.get("/dlm/filter-values")
+def filter_values(dataset_id: int = Query(...), column: str = Query(...),
+                  limit: int = Query(default=200, ge=1, le=1000),
+                  ctx: UserContext = Depends(require_user_context)):
+    """Distinct values for a dimension column, served from DLM context — no SQL."""
+    return dlm.filter_values(str(dataset_id), column, limit=limit)
+
+
 @router.get("/dlm/coverage")
 def coverage(ctx: UserContext = Depends(require_user_context)):
     """What context is compiled and testable — datasets, date ranges, row counts,

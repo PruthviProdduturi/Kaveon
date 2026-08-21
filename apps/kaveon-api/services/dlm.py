@@ -1792,6 +1792,41 @@ def serve_chart_multi(dataset_id: str,
     }
 
 
+def filter_values(dataset_id: str, column: str, limit: int = 200) -> Dict[str, Any]:
+    """Return distinct values for a dimension column from precomputed DLM answers.
+    No live SQL — instant on any hardware."""
+    dataset_id = str(dataset_id)
+    ds = datasets_svc.get_dataset_by_id(dataset_id)
+    if not ds:
+        return {"ok": False, "reason": "dataset_not_found", "values": []}
+
+    spec = _effective_spec(dataset_id)
+    dim_spec = spec.get("dimensions") or {}
+    col_norm = _normalize(column)
+    matched_col = None
+    for dk in dim_spec:
+        if _normalize(dk) == col_norm:
+            matched_col = dk
+            break
+    if not matched_col:
+        return {"ok": False, "reason": "dimension_not_found", "values": []}
+
+    answers = _load_answers(dataset_id)
+    for (metric_name, group_col), entry in answers.items():
+        if _normalize(group_col) == col_norm and entry.get("rows"):
+            vals = sorted(set(
+                str(r[0]) for r in entry["rows"] if r and r[0] is not None
+            ))[:limit]
+            return {
+                "ok": True,
+                "column": matched_col,
+                "values": [{"key": v, "value": v} for v in vals],
+                "from_context": True,
+            }
+
+    return {"ok": False, "reason": "no_precomputed_values", "values": []}
+
+
 def _metric_year_bounds(database: str, schema: str, table: str, date_column: Optional[str],
                         metric: dict, columns: List[dict], filters: List[Dict[str, Any]]) -> tuple:
     """(earliest, latest) year for which *metric* actually has data under the

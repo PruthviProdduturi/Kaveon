@@ -61,6 +61,9 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
   const [colKeyColumn, setColKeyColumn] = useState<Record<string, string | null>>({});
   const [loadingCol, setLoadingCol] = useState<string | null>(null);
 
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const filterBarRef = useRef<HTMLDivElement>(null);
+
   // column → dataset_id mapping, built once on mount from layout charts
   const [colDatasetMap, setColDatasetMap] = useState<Record<string, number>>({});
   const colDatasetMapRef = useRef(colDatasetMap);
@@ -106,6 +109,19 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layout.length]);
+
+  useEffect(() => {
+    if (!editingFilterId) return;
+    const handler = (e: MouseEvent) => {
+      if (popoverRef.current?.contains(e.target as Node)) return;
+      if (filterBarRef.current?.contains(e.target as Node)) return;
+      setEditingFilterId(null);
+      setEditValue(''); setEditValueKey(''); setEditValues([]); setOptSearch('');
+      setEditDateFrom(''); setEditDateTo('');
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [editingFilterId]);
 
   /** Resolve dataset_id for a filter: use stored datasetId first, then the map */
   const getDatasetId = (filter: DashboardFilter): number | null => {
@@ -163,6 +179,24 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
 
     setLoadingCol(col);
     try {
+      const dlmParams = new URLSearchParams({
+        dataset_id: String(datasetId),
+        column: col,
+        limit: '200',
+      });
+      const dlmRes = await msalFetch(`${API_BASE}/api/v1/dlm/filter-values?${dlmParams}`);
+      const dlmData = await dlmRes.json();
+      if (dlmRes.ok && dlmData.ok && Array.isArray(dlmData.values) && dlmData.values.length > 0) {
+        const values: FilterOption[] = dlmData.values
+          .map((v: any) => ({ key: String(v.key ?? ''), value: String(v.value ?? '') }))
+          .filter((x: FilterOption) => x.value !== '');
+        optionsCache[cacheKey] = { options: values, keyColumn: null };
+        colNarrowSigRef.current[col] = sig;
+        setColOptions((prev) => ({ ...prev, [col]: values }));
+        setColKeyColumn((prev) => ({ ...prev, [col]: null }));
+        return;
+      }
+
       const params = new URLSearchParams({
         dataset_id: String(datasetId),
         column: col,
@@ -312,7 +346,7 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
   const isEditingLoading = editingFilter && loadingCol === editingFilter.column;
 
   return (
-    <div className="chart-filter-card">
+    <div className="chart-filter-card" ref={filterBarRef}>
       {activeCount > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 12px' }}>
           <span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>
@@ -365,7 +399,7 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
       </div>
 
       {editingFilter && (
-        <div className="chart-filter-popover">
+        <div className="chart-filter-popover" ref={popoverRef}>
           <div className="chart-filter-popover-header">Edit filter value</div>
 
           <div style={{ marginTop: '0.5rem' }}>
