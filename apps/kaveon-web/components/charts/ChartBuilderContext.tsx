@@ -8,6 +8,36 @@ import { useRouter } from "next/navigation";
 import { getRegisteredPlugins, getPlugin } from "./chartPluginRegistry";
 import { acquireQuerySlot } from "../../utils/querySemaphore";
 
+// ── Client-side query result cache ──────────────────────────────────────────
+// Module-level so it survives component unmounts (navigation).
+// Dashboard charts hit this before the API — instant repeat views.
+const _CLIENT_CACHE = new Map<string, { result: any; ts: number }>();
+const CLIENT_CACHE_TTL = 300_000; // 5 min, matches server TTL
+
+function clientCacheKey(database: string, sql: string): string {
+  let h = 0;
+  const s = `${database}\0${sql}`;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  return h.toString(36);
+}
+
+function clientCacheGet(key: string): any | null {
+  const entry = _CLIENT_CACHE.get(key);
+  if (entry && Date.now() - entry.ts < CLIENT_CACHE_TTL) return entry.result;
+  if (entry) _CLIENT_CACHE.delete(key);
+  return null;
+}
+
+function clientCacheSet(key: string, result: any): void {
+  if (_CLIENT_CACHE.size > 200) {
+    const now = Date.now();
+    for (const [k, v] of _CLIENT_CACHE) {
+      if (now - v.ts > CLIENT_CACHE_TTL) _CLIENT_CACHE.delete(k);
+    }
+  }
+  _CLIENT_CACHE.set(key, { result, ts: Date.now() });
+}
+
 // Default advanced chart options for merging with loaded config
 export const DEFAULT_ADVANCED_OPTIONS = {
   title: "",
@@ -3119,21 +3149,27 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
 
       let executeJson: any;
 
-      // Synchronous execution for all charts (dashboard + builder).
-      // The global semaphore (max 3 concurrent) prevents backend overload.
-      // Async polling was unreliable on Render free tier (job store clears on restart → 404 loops).
-      // Idempotent read (SELECT) — retry transient 5xx/network blips so a single
-      // pool hiccup doesn't surface as a hard chart error on dashboards.
-      const executeRes = await msalFetchRetry(`${API_BASE}/api/v1/sql/execute`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(executeBody),
-      });
-      if (!executeRes.ok) {
-        const text = await executeRes.text();
-        throw new Error(`Query execution failed: ${executeRes.status} ${text}`);
+      // Client-side cache: skip the HTTP round-trip entirely on repeat views.
+      const cck = isDashboard && datasetDetail?.database_name
+        ? clientCacheKey(datasetDetail.database_name, sqlText)
+        : null;
+      const clientCached = cck ? clientCacheGet(cck) : null;
+
+      if (clientCached) {
+        executeJson = clientCached;
+      } else {
+        const executeRes = await msalFetchRetry(`${API_BASE}/api/v1/sql/execute`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(executeBody),
+        });
+        if (!executeRes.ok) {
+          const text = await executeRes.text();
+          throw new Error(`Query execution failed: ${executeRes.status} ${text}`);
+        }
+        executeJson = await executeRes.json();
+        if (cck) clientCacheSet(cck, executeJson);
       }
-      executeJson = await executeRes.json();
 
       const totalDurationMs = performance.now() - start;
       const fabricDurationMs =
