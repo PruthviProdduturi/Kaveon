@@ -50,21 +50,6 @@ prisma/migrations/*/steps.json
 generated/
 
 # ---------------------------------------------------------
-# Next.js (Lens Web)
-# ---------------------------------------------------------
-apps/lens-web/.next/
-apps/lens-web/out/
-apps/lens-web/.vercel/
-apps/lens-web/.cache/
-
-# ---------------------------------------------------------
-# API (Lens API)
-# ---------------------------------------------------------
-apps/lens-api/dist/
-apps/lens-api/build/
-apps/lens-api/.cache/
-
-# ---------------------------------------------------------
 # OS / Editor Junk
 # ---------------------------------------------------------
 .DS_Store
