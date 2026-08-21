@@ -13,7 +13,7 @@ The editor is [Monaco Editor](https://microsoft.github.io/monaco-editor/) — th
 | Action | Shortcut |
 |--------|----------|
 | Run query | `Ctrl+Enter` / `Cmd+Enter` |
-| Format SQL | `Shift+Alt+F` |
+| Format SQL | `Ctrl+Shift+F` |
 | Comment line | `Ctrl+/` / `Cmd+/` |
 | Find | `Ctrl+F` / `Cmd+F` |
 | Go to line | `Ctrl+G` / `Cmd+G` |
@@ -26,9 +26,9 @@ Monaco provides autocomplete for SQL keywords. Column and table names are popula
 
 ## Multi-Tab Support
 
-Each query runs in its own tab. Open additional tabs with the `+` button in the tab bar. Tabs persist their query text during the session.
+Each query runs in its own tab. Open additional tabs with the `+` button in the tab bar. Tabs are persisted across page reloads via `localStorage` (key prefix `lens_lab_tabs_v1_`), so your open tabs and their query text survive browser refreshes and session restarts.
 
-Tabs are not persisted across page reloads — use **Save Query** to keep a query across sessions.
+Double-click a tab title to rename it.
 
 ---
 
@@ -82,11 +82,15 @@ Results are displayed below the editor in a scrollable table. Columns are sortab
 
 ### Export
 
-The result panel provides a **Download CSV** button. The export is generated client-side from the in-memory result rows (no additional server request).
+The result panel provides download buttons for **CSV**, **Excel (.xls)**, and **JSON** formats. Exports are generated client-side from the in-memory result rows (no additional server request).
 
-### Truncation
+### Row Limit
 
-The API returns up to the row count the database sends — there is no server-side row limit beyond what the SQL itself specifies. For safety, use `LIMIT` / `TOP` in your queries. Very large result sets (> 10,000 rows) will slow the browser table render.
+A row limit dropdown above the result table lets you choose between **100**, **1,000**, **5,000**, and **All** rows. The selected limit is appended to the query before execution. Very large result sets (> 10,000 rows) will slow the browser table render.
+
+### Visualize Results
+
+Click the **Visualize** button in the result panel to create a virtual dataset from the query result and navigate to the chart builder, where you can build a chart directly from the returned data.
 
 ---
 
@@ -103,7 +107,7 @@ History records include:
 - Timestamp
 - Trigger source (`lab`, `dataset-preview`, `dataset-filter-values`)
 
-History is shared across users by default (admins can see all queries; analysts see their own). To clear your history, click **Clear History** in the History panel.
+Query history is scoped to the requesting user — the backend filters by the authenticated user, so each person only sees their own queries regardless of role. To clear your history, click **Clear History** in the History panel.
 
 ### API endpoints
 
@@ -111,6 +115,40 @@ History is shared across users by default (admins can see all queries; analysts 
 GET  /api/v1/lab/query-history?limit=50
 DELETE /api/v1/lab/query-history
 ```
+
+---
+
+## Multi-Statement Execution
+
+The editor supports multiple SQL statements separated by semicolons. When you click **Run**, the editor splits the input on `;` boundaries and executes each statement sequentially. The result panel shows the output of the last statement that returns rows.
+
+---
+
+## Query Templates
+
+The toolbar provides snippet buttons for common query patterns:
+
+- **Sample** — generates a `SELECT * FROM <table> LIMIT 100` for the selected table.
+- **Count** — generates a `SELECT COUNT(*) FROM <table>`.
+- **Schema** — generates a metadata query that returns column names and types for the selected table.
+
+---
+
+## Shareable Permalinks
+
+Click the **Share** button in the toolbar to generate a permalink. The current SQL text and selected database are encoded as a Base64 string and appended as a `?q=` URL parameter. Anyone with the link can open SQL Lab with the query pre-populated.
+
+---
+
+## Deep Links
+
+SQL Lab supports URL parameters for deep linking:
+
+| Parameter | Effect |
+|-----------|--------|
+| `?savedQueryId=N` | Opens the saved query with id N |
+| `?datasetId=N` | Opens with the dataset's default query pre-loaded |
+| `?q=<base64>` | Decodes a Base64-encoded payload containing SQL and database selection |
 
 ---
 

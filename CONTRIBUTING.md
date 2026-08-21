@@ -51,7 +51,7 @@ Both services read the single `.env` at the repo root. Copy `.env.example` to `.
 - **Linter**: ESLint (`eslint-config-next`)
 - **Type checker**: `tsc --noEmit` (strict mode)
 - **Framework**: Next.js 15 App Router, React 19
-- State-changing fetches use `msalFetch`, never bare `fetch`.
+- State-changing fetches use `msalFetch` (legacy name — no MSAL dependency), never bare `fetch`.
 
 ### Python
 - **Type**: FastAPI + Pydantic v2, Python 3.11
@@ -95,7 +95,6 @@ Check [open issues](https://github.com/PruthviProdduturi/Kaveon/issues) for thin
 
 - Additional chart types (Sankey, mixed time-series, network graph)
 - Non-Azure connectors (Snowflake, BigQuery, Databricks, Redshift)
-- Advanced filters (multi-select, range, cascading)
 - Dashboard import/export
 - Alerts & scheduled reports
-- Documentation and examples
+- Dashboard embedding (guest tokens)
