@@ -8,7 +8,7 @@ interface KaveonLoadingProps {
   fullScreen?: boolean;
 }
 
-export function KaveonLoading({ message = "Loading" }: KaveonLoadingProps) {
+export function KaveonLoading({ message = "Loading", fullScreen = true }: KaveonLoadingProps) {
   const [dots, setDots] = useState("");
 
   useEffect(() => {
@@ -21,13 +21,13 @@ export function KaveonLoading({ message = "Loading" }: KaveonLoadingProps) {
   return (
     <div
       style={{
-        position: "fixed",
-        inset: 0,
+        ...(fullScreen
+          ? { position: "fixed", inset: 0, zIndex: 9999 }
+          : { width: "100%", minHeight: 320 }),
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         background: "var(--bg-primary)",
-        zIndex: 9999,
       }}
     >
       <div
