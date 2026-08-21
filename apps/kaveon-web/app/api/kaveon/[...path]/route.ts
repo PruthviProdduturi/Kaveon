@@ -10,6 +10,8 @@
  * Client calls:  /api/lens/api/v1/...   →  {API_URL}/api/v1/...
  */
 
+export const dynamic = "force-dynamic";
+
 import { NextRequest } from "next/server";
 import { auth } from "../../../../auth";
 
