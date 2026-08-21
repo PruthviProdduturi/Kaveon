@@ -221,6 +221,7 @@ export default function WorkspacePage() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const arr: WorkspaceItem[] = Array.isArray(data) ? data : Array.isArray(data.result) ? data.result : Array.isArray(data.items) ? data.items : [];
+      if (typeof window !== "undefined") console.log(`[workspace] ${tabKey}: ${arr.length} items`, arr.map((i) => i.name ?? i.title));
       setItems(arr);
       setLoadedTab(tabKey);
     } catch {
@@ -644,6 +645,9 @@ export default function WorkspacePage() {
             }}>
               <t.Icon size={15} color={active ? "var(--accent)" : "var(--text-muted)"} />
               {t.label}
+              {active && ready && items.length > 0 && (
+                <span style={{ fontSize: 11, fontWeight: 500, color: "var(--text-muted)", background: "rgba(255,255,255,0.06)", borderRadius: 6, padding: "1px 6px" }}>{items.length}</span>
+              )}
             </button>
           );
         })}
