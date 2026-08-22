@@ -12,25 +12,41 @@ sys.path.insert(0, os.path.abspath(_API))
 
 import database.pool as pool  # noqa: E402
 
-DB = "kaveon"
+DB = os.environ.get("METADATA_DATABASE", "kaveonmeta")
+
+VIEW = "kaveon_product_analytics"
 
 # (table, column, data_type, is_dimension, is_metric)
 COLUMNS = [
-    ("kaveon_usage_daily", "usage_date", "date", False, False),
-    ("kaveon_usage_daily", "user_id", "integer", False, False),
-    ("kaveon_usage_daily", "queries_run", "integer", False, True),
-    ("kaveon_usage_daily", "nl_queries", "integer", False, True),
-    ("kaveon_usage_daily", "sql_lab_runs", "integer", False, True),
-    ("kaveon_usage_daily", "dashboards_viewed", "integer", False, True),
-    ("kaveon_usage_daily", "charts_created", "integer", False, True),
-    ("kaveon_usage_daily", "datasets_accessed", "integer", False, True),
-    ("kaveon_usage_daily", "exports", "integer", False, True),
-    ("kaveon_usage_daily", "active_minutes", "numeric", False, True),
-    ("kaveon_usage_daily", "org", "varchar", True, False),
-    ("kaveon_usage_daily", "plan", "varchar", True, False),
-    ("kaveon_usage_daily", "region", "varchar", True, False),
-    ("kaveon_usage_daily", "role", "varchar", True, False),
-    ("kaveon_usage_daily", "signup_date", "date", False, False),
+    (VIEW, "usage_date", "date", False, False),
+    (VIEW, "user_id", "integer", False, False),
+    (VIEW, "queries_run", "integer", False, True),
+    (VIEW, "nl_queries", "integer", False, True),
+    (VIEW, "sql_lab_runs", "integer", False, True),
+    (VIEW, "dashboards_viewed", "integer", False, True),
+    (VIEW, "charts_created", "integer", False, True),
+    (VIEW, "datasets_accessed", "integer", False, True),
+    (VIEW, "exports", "integer", False, True),
+    (VIEW, "active_minutes", "numeric", False, True),
+    (VIEW, "sessions", "integer", False, True),
+    (VIEW, "api_calls", "integer", False, True),
+    (VIEW, "data_processed_mb", "numeric", False, True),
+    (VIEW, "errors", "integer", False, True),
+    (VIEW, "feedback_positive", "integer", False, True),
+    (VIEW, "feedback_negative", "integer", False, True),
+    (VIEW, "license", "varchar", True, False),
+    (VIEW, "audience", "varchar", True, False),
+    (VIEW, "segment", "varchar", True, False),
+    (VIEW, "industry", "varchar", True, False),
+    (VIEW, "team_size", "varchar", True, False),
+    (VIEW, "deployment", "varchar", True, False),
+    (VIEW, "acquisition_channel", "varchar", True, False),
+    (VIEW, "locale", "varchar", True, False),
+    (VIEW, "country", "varchar", True, False),
+    (VIEW, "region", "varchar", True, False),
+    (VIEW, "platform_key", "varchar", True, False),
+    (VIEW, "platform", "varchar", True, False),
+    (VIEW, "os", "varchar", True, False),
 ]
 
 # (name, expression, type, format)
@@ -44,6 +60,12 @@ METRICS = [
     ("Total Exports", "SUM(exports)", "sum", "#,##0"),
     ("Avg Active Minutes", "AVG(active_minutes)", "avg", "#,##0.0"),
     ("Active Users", "COUNT(DISTINCT user_id)", "count", "#,##0"),
+    ("Sessions", "SUM(sessions)", "sum", "#,##0"),
+    ("API Calls", "SUM(api_calls)", "sum", "#,##0"),
+    ("Data Processed MB", "SUM(data_processed_mb)", "sum", "#,##0.0"),
+    ("Errors", "SUM(errors)", "sum", "#,##0"),
+    ("Positive Feedback", "SUM(feedback_positive)", "sum", "#,##0"),
+    ("Negative Feedback", "SUM(feedback_negative)", "sum", "#,##0"),
 ]
 
 
@@ -57,18 +79,18 @@ def main():
     pool.execute_query("DELETE FROM datasets WHERE dataset_name = 'Kaveon Product Usage'", DB)
 
     desc = ("Daily per-user product usage of the Kaveon platform — queries run, "
-            "NL vs SQL Lab, dashboards viewed, charts created, exports and active "
-            "minutes, by plan, region, role and org. Synthetic.")
+            "NL vs SQL Lab, dashboards viewed, charts created, exports, sessions, "
+            "API calls, and active minutes, by license, segment, platform, country "
+            "and more. Synthetic.")
     ins = pool.execute_query(
         "INSERT INTO datasets (dataset_name, description, fact_table, schema_name, "
         "database_name, date_column, visibility, created_by) VALUES "
-        "('Kaveon Product Usage', '%s', 'kaveon_usage_daily', 'public', 'kaveon', "
-        "'usage_date', 'published', 'system') RETURNING id" % q(desc), DB)
+        "('Kaveon Product Usage', '%s', '%s', 'public', 'kaveon', "
+        "'usage_date', 'published', 'system') RETURNING id" % (q(desc), VIEW), DB)
     did = ins["rows"][0][0]
     sys.stderr.write("dataset id=%s\n" % did)
 
-    # Dims are denormalized onto the fact table (flat/wide) — no join dimension,
-    # matching how the DLM assembler queries (single fact table).
+    # The VIEW kaveon_product_analytics joins fact + dims into a flat/wide table.
     for tbl, col, dt, is_dim, is_met in COLUMNS:
         pool.execute_query(
             "INSERT INTO dataset_columns (dataset_id, table_name, column_name, "
