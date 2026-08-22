@@ -1591,6 +1591,11 @@ def _sketch_response(dataset_id, dataset_name, metric_name, group_col, columns, 
     }
 
 
+def _strip_table_prefix(col: str) -> str:
+    """'kaveon_usage_daily.queries_run' → 'queries_run'."""
+    return col.rsplit(".", 1)[-1] if "." in col else col
+
+
 def serve_chart(dataset_id: str, metric_column: str, aggregation: str,
                 group_by: Optional[str] = None,
                 filters: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
@@ -1598,6 +1603,9 @@ def serve_chart(dataset_id: str, metric_column: str, aggregation: str,
     sketches) without touching the live database.  Returns ``served=True`` with
     columns/rows on a hit, or ``served=False`` when context can't answer."""
     dataset_id = str(dataset_id)
+    metric_column = _strip_table_prefix(metric_column)
+    if group_by:
+        group_by = _strip_table_prefix(group_by)
     ds = datasets_svc.get_dataset_by_id(dataset_id)
     if not ds:
         return {"served": False, "reason": "dataset_not_found"}
@@ -1616,7 +1624,7 @@ def serve_chart(dataset_id: str, metric_column: str, aggregation: str,
         op = f.get("operator", "=")
         if op != "=":
             return {"served": False, "reason": "non_equality_filter"}
-        clean_filters.append({"column": f["column"], "value": f["value"]})
+        clean_filters.append({"column": _strip_table_prefix(f["column"]), "value": f["value"]})
 
     # ── validate group_by against known dimensions ────────────────────────
     group_col: Optional[str] = None
@@ -1703,6 +1711,12 @@ def serve_chart_multi(dataset_id: str,
     precomputed per-metric answers. Returns served=True only when ALL metrics
     are answered from context."""
     dataset_id = str(dataset_id)
+    if group_by:
+        group_by = _strip_table_prefix(group_by)
+    metric_specs = [
+        {**s, "column": _strip_table_prefix(s.get("column", ""))}
+        for s in metric_specs
+    ]
     ds = datasets_svc.get_dataset_by_id(dataset_id)
     if not ds:
         return {"served": False, "reason": "dataset_not_found"}
@@ -1714,7 +1728,7 @@ def serve_chart_multi(dataset_id: str,
     for f in filters:
         if f.get("operator", "=") != "=":
             return {"served": False, "reason": "non_equality_filter"}
-        clean_filters.append({"column": f["column"], "value": f["value"]})
+        clean_filters.append({"column": _strip_table_prefix(f["column"]), "value": f["value"]})
 
     group_col: Optional[str] = None
     if group_by:
@@ -1796,6 +1810,7 @@ def filter_values(dataset_id: str, column: str, limit: int = 200) -> Dict[str, A
     """Return distinct values for a dimension column from precomputed DLM answers.
     No live SQL — instant on any hardware."""
     dataset_id = str(dataset_id)
+    column = _strip_table_prefix(column)
     ds = datasets_svc.get_dataset_by_id(dataset_id)
     if not ds:
         return {"ok": False, "reason": "dataset_not_found", "values": []}
