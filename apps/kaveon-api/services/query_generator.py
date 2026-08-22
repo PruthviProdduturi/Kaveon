@@ -1,8 +1,11 @@
 """Query Generator — port of queryGenerator.service.ts."""
 
 import re
+import threading
 import warnings
 from typing import Dict, List, Optional, Tuple
+
+_dialect = threading.local()
 
 
 def normalize_column_name(raw: str) -> str:
@@ -13,11 +16,15 @@ def normalize_column_name(raw: str) -> str:
 
 
 def quote_identifier(identifier: str) -> str:
-    """Quote SQL identifier with brackets. Handles dot-separated parts."""
+    """Quote SQL identifier for the current dialect. Handles dot-separated parts.
+    PostgreSQL/MySQL use double-quote quoting; SQL Server/Fabric use brackets."""
     if not identifier:
         return ""
-    clean = identifier.replace("[", "").replace("]", "")
+    db_type = getattr(_dialect, "db_type", "fabric_sql")
+    clean = identifier.replace("[", "").replace("]", "").replace('"', "")
     parts = clean.split(".")
+    if db_type in ("postgresql", "mysql"):
+        return ".".join(f'"{p}"' for p in parts)
     return ".".join(f"[{p.replace(']', ']]')}]" for p in parts)
 
 
@@ -480,7 +487,8 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
         query_mode = (params.get("query_mode") or "aggregate").lower()
         rolling_calc = (params.get("rolling_calc") or "none").lower()  # "none", "rolling_avg", "cumulative_sum"
         rolling_window = max(2, int(params.get("rolling_window") or 3))
-        db_type = (params.get("db_type") or "fabric_sql").lower()  # dialect for date grain/format
+        db_type = (params.get("db_type") or "fabric_sql").lower()
+        _dialect.db_type = db_type
 
         datasource = normalize_column_name(raw_datasource)
 
@@ -798,24 +806,25 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
             # PARTITION BY per dimension so window runs per series, not across all data
             partition_by = f"PARTITION BY {', '.join(dim_aliases)} " if dim_aliases else ""
 
+            qt = quote_identifier("__time__")
             window_selects = []
             for alias in metric_aliases:
                 if rolling_calc == "rolling_avg":
                     window_selects.append(
-                        f"AVG({alias}) OVER ({partition_by}ORDER BY [__time__] ROWS BETWEEN {rolling_window - 1} PRECEDING AND CURRENT ROW) AS {alias}"
+                        f"AVG({alias}) OVER ({partition_by}ORDER BY {qt} ROWS BETWEEN {rolling_window - 1} PRECEDING AND CURRENT ROW) AS {alias}"
                     )
                 elif rolling_calc == "cumulative_sum":
                     window_selects.append(
-                        f"SUM({alias}) OVER ({partition_by}ORDER BY [__time__] ROWS UNBOUNDED PRECEDING) AS {alias}"
+                        f"SUM({alias}) OVER ({partition_by}ORDER BY {qt} ROWS UNBOUNDED PRECEDING) AS {alias}"
                     )
 
             if window_selects:
-                outer_dims = ", ".join(dim_aliases + ["[__time__]"])
+                outer_dims = ", ".join(dim_aliases + [qt])
                 window_query = (
                     f"WITH base AS ({cte_body}) "
                     f"SELECT {outer_top}{outer_dims}, {', '.join(window_selects)} "
                     f"FROM base "
-                    f"ORDER BY {', '.join(dim_aliases + ['[__time__]'])} ASC"
+                    f"ORDER BY {', '.join(dim_aliases + [qt])} ASC"
                 )
                 return window_query
 
@@ -826,14 +835,16 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
         return None
 
 
-def _dim_direct_subquery(dim_entry: dict, col_name: str, limit: int) -> Optional[str]:
-    """
-    Build a query that reads directly from a single dimension table — no fact table,
-    no join.  Returns None if the dim entry lacks the required metadata.
+def _distinct_kv_sql(limit: int, cols: str, from_clause: str, where_clause: str) -> str:
+    """Build a SELECT DISTINCT with TOP (SQL Server) or LIMIT (PostgreSQL)."""
+    db_type = getattr(_dialect, "db_type", "fabric_sql")
+    qv = quote_identifier("value")
+    if db_type in ("postgresql", "mysql"):
+        return f"SELECT DISTINCT {cols} {from_clause} {where_clause} ORDER BY {qv} LIMIT {int(limit)}"
+    return f"SELECT DISTINCT TOP {int(limit)} {cols} {from_clause} {where_clause} ORDER BY {qv}"
 
-    For ID-based dimKey columns the real stored ID is returned as [key].
-    For Key-based dimKey columns key == value so the frontend can apply mmh3 as usual.
-    """
+
+def _dim_direct_subquery(dim_entry: dict, col_name: str, limit: int) -> Optional[str]:
     table_raw = normalize_column_name(dim_entry.get("table") or "")
     if not table_raw:
         return None
@@ -843,19 +854,22 @@ def _dim_direct_subquery(dim_entry: dict, col_name: str, limit: int) -> Optional
 
     dim_table = quote_identifier(table_raw)
     quoted_display = quote_identifier(col_name)
+    qk = quote_identifier("key")
+    qv = quote_identifier("value")
+
+    db_type = getattr(_dialect, "db_type", "fabric_sql")
+    cast_type = "TEXT" if db_type in ("postgresql", "mysql") else "NVARCHAR(MAX)"
 
     if dk and (dk.endswith("ID") or dk.endswith("Id")):
-        # Return the actual stored ID from the dim table as [key]
-        key_select = f"CAST({quote_identifier(dk)} AS NVARCHAR(MAX))"
+        key_select = f"CAST({quote_identifier(dk)} AS {cast_type})"
     else:
-        # Key/hash columns: key == value so the frontend hashes client-side
         key_select = quoted_display
 
-    return (
-        f"SELECT DISTINCT TOP {int(limit)} {key_select} AS [key], {quoted_display} AS [value] "
-        f"FROM {dim_table} "
-        f"WHERE {quoted_display} IS NOT NULL "
-        f"ORDER BY [value]"
+    return _distinct_kv_sql(
+        limit,
+        f"{key_select} AS {qk}, {quoted_display} AS {qv}",
+        f"FROM {dim_table}",
+        f"WHERE {quoted_display} IS NOT NULL",
     )
 
 
@@ -867,6 +881,7 @@ def build_distinct_filter_values_query(params: dict) -> Optional[dict]:
         dimensions = params.get("dimensions") or []
         columns = params.get("columns") or []
         limit = params.get("limit") or 100
+        _dialect.db_type = (params.get("db_type") or "fabric_sql").lower()
 
         datasource = normalize_column_name(raw_datasource)
         column = normalize_column_name(raw_column)
@@ -907,6 +922,9 @@ def build_distinct_filter_values_query(params: dict) -> Optional[dict]:
 
         # When cascading filters are present, always take the fact+join path with a
         # WHERE — the fast dim-direct path can't relate two different columns.
+        qk = quote_identifier("key")
+        qv = quote_identifier("value")
+
         if narrow_filters:
             target_quoted = f"{alias}.{quote_identifier(col_name)}"
             where_parts = [f"{target_quoted} IS NOT NULL"]
@@ -915,13 +933,13 @@ def build_distinct_filter_values_query(params: dict) -> Optional[dict]:
                 if clause:
                     where_parts.append(clause)
             join_clause = " ".join(join_clauses)
-            sql = " ".join(p for p in [
-                f"SELECT DISTINCT TOP {int(limit)} {target_quoted} AS [key], {target_quoted} AS [value]",
-                f"FROM {fact_table} AS {fact_alias}",
-                join_clause,
+            from_parts = f"FROM {fact_table} AS {fact_alias}" + (f" {join_clause}" if join_clause else "")
+            sql = _distinct_kv_sql(
+                limit,
+                f"{target_quoted} AS {qk}, {target_quoted} AS {qv}",
+                from_parts,
                 f"WHERE {' AND '.join(where_parts)}",
-                "ORDER BY [value]",
-            ] if p)
+            )
             return {"sql": sql, "keyColumn": key_column, "filteringTier": tier}
 
         # ── Fast path: column lives in a dim table ────────────────────────────
@@ -945,12 +963,14 @@ def build_distinct_filter_values_query(params: dict) -> Optional[dict]:
                     if sub:
                         subqueries.append(sub)
                 if len(subqueries) >= 2:
-                    # Strip ORDER BY from each sub before UNIONing, add one at the end
-                    stripped = [s.rsplit(" ORDER BY [value]", 1)[0] for s in subqueries]
-                    sql = (
-                        f"SELECT DISTINCT TOP {int(limit)} [key], [value] "
-                        f"FROM ({' UNION '.join(stripped)}) AS [combined_vals] "
-                        f"ORDER BY [value]"
+                    order_token = f"ORDER BY {qv}"
+                    stripped = [s.rsplit(order_token, 1)[0].rsplit("LIMIT", 1)[0].rstrip() for s in subqueries]
+                    combined = quote_identifier("combined_vals")
+                    sql = _distinct_kv_sql(
+                        limit,
+                        f"{qk}, {qv}",
+                        f"FROM ({' UNION '.join(stripped)}) AS {combined}",
+                        "",
                     )
                     return {"sql": sql, "keyColumn": key_column, "filteringTier": tier}
 
@@ -964,23 +984,23 @@ def build_distinct_filter_values_query(params: dict) -> Optional[dict]:
             # Fallback: dim entry missing metadata — use fact+join query
             quoted_col = f"{alias}.{quote_identifier(col_name)}"
             join_clause = " ".join(join_clauses)
-            sql = " ".join(p for p in [
-                f"SELECT DISTINCT TOP {int(limit)} {quoted_col} AS [key], {quoted_col} AS [value]",
-                f"FROM {fact_table} AS {fact_alias}",
-                join_clause,
+            from_parts = f"FROM {fact_table} AS {fact_alias}" + (f" {join_clause}" if join_clause else "")
+            sql = _distinct_kv_sql(
+                limit,
+                f"{quoted_col} AS {qk}, {quoted_col} AS {qv}",
+                from_parts,
                 f"WHERE {quoted_col} IS NOT NULL",
-                "ORDER BY [value]",
-            ] if p)
+            )
             return {"sql": sql, "keyColumn": key_column, "filteringTier": tier}
 
         # ── Column is on the fact table itself — query it directly ────────────
         quoted_col = f"{fact_alias}.{quote_identifier(col_name)}"
-        sql = " ".join([
-            f"SELECT DISTINCT TOP {int(limit)} {quoted_col} AS [key], {quoted_col} AS [value]",
+        sql = _distinct_kv_sql(
+            limit,
+            f"{quoted_col} AS {qk}, {quoted_col} AS {qv}",
             f"FROM {fact_table} AS {fact_alias}",
             f"WHERE {quoted_col} IS NOT NULL",
-            "ORDER BY [value]",
-        ])
+        )
         return {"sql": sql, "keyColumn": key_column, "filteringTier": tier}
 
     except Exception:
