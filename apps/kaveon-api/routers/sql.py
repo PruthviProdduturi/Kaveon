@@ -202,11 +202,16 @@ def distinct_filter_values(
     if hint_fk:
         raw_dims.sort(key=lambda d: 0 if (d.get("factKey") or "").lower() == hint_fk else 1)
 
+    try:
+        db_type = pool.get_connection_pool(dataset.get("database_name")).db_type
+    except Exception:
+        db_type = "fabric_sql"
     query_result = build_distinct_filter_values_query({
         "datasource": datasource, "column": column,
         "dimensions": raw_dims, "columns": dataset.get("columns") or [],
         "limit": row_limit,
         "filters": narrow_filters,
+        "db_type": db_type,
     })
     if not query_result:
         raise HTTPException(status_code=400, detail="Failed to generate distinct values query")
