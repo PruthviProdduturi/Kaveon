@@ -62,8 +62,8 @@ class Settings(BaseSettings):
     SQL_TRUST_SERVER_CERT: bool = True
 
     # ── Connection pool ───────────────────────────────────────────────────────
-    MAX_POOL_SIZE_METADATA: int = 20
-    MAX_POOL_SIZE_DATAWAREHOUSE: int = 10
+    MAX_POOL_SIZE_METADATA: int = 10
+    MAX_POOL_SIZE_DATAWAREHOUSE: int = 5
     CONNECTION_TIMEOUT_METADATA: int = 30
     CONNECTION_TIMEOUT_DATAWAREHOUSE: int = 60
 

@@ -54,7 +54,7 @@ def start_warmup_and_heartbeat():
     """
     from database.pool import _live_meta_db
     meta_db = _live_meta_db()
-    meta_ok = _warm_pool(meta_db, 6, "metadata")
+    meta_ok = _warm_pool(meta_db, 3, "metadata")
 
     if not meta_ok:
         print("[Warmup] Metadata unavailable — cannot discover other data sources.")
