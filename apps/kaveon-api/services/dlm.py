@@ -286,9 +286,10 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
     row_count = max((stats_rollup.get("row_counts") or {}).values(), default=0)
     max_date = None
     date_col = ds.get("date_column")
-    if date_col and database and fact:
+    fact_tbl = ds.get("table_name") or ds.get("fact_table")
+    if date_col and database and fact_tbl:
         try:
-            tbl = f"{_qid(schema)}.{_qid(fact)}" if schema else _qid(fact)
+            tbl = f"{_qid(schema)}.{_qid(fact_tbl)}" if schema else _qid(fact_tbl)
             dr = pool.execute_query(
                 f"SELECT MAX({_qid(date_col)}) AS mx FROM {tbl}", database)
             drow = (dr.get("rows") or dr.get("rows_objects") or [{}])[0]
