@@ -271,6 +271,37 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
         "rows_scanned": max((stats_rollup.get("row_counts") or {}).values(), default=None),
         "scans": 1 + len([c for c in columns if c.get("is_dimension")]),  # totals + per-dim
     }
+    # 9) dashboard-level curation — precompute N-dim combos for any dashboards
+    #    that reference this dataset, so multi-filter interactions serve instantly.
+    dash_answers = 0
+    try:
+        dash_answers = _curate_linked_dashboards(str(dataset_id))
+        if dash_answers:
+            answers += dash_answers
+            _ANSWER_CACHE.pop(str(dataset_id), None)
+    except Exception:
+        pass
+
+    # 10) watermark — track row count + max date for incremental refresh
+    row_count = max((stats_rollup.get("row_counts") or {}).values(), default=0)
+    max_date = None
+    date_col = ds.get("date_column")
+    if date_col and database and fact:
+        try:
+            tbl = f"{_qid(schema)}.{_qid(fact)}" if schema else _qid(fact)
+            dr = pool.execute_query(
+                f"SELECT MAX({_qid(date_col)}) AS mx FROM {tbl}", database)
+            drow = (dr.get("rows") or dr.get("rows_objects") or [{}])[0]
+            max_date = str(drow.get("mx") if isinstance(drow, dict) else drow[0])
+        except Exception:
+            pass
+    stats_rollup["watermark"] = {
+        "row_count": int(row_count) if row_count else 0,
+        "max_date": max_date,
+        "built_at": _now_iso(),
+        "method": "full_rebuild",
+    }
+
     try:
         meta.execute("UPDATE dlm_artifact SET stats_rollup = @param0 WHERE dataset_id = @param1",
                      [json.dumps(stats_rollup, default=str), str(dataset_id)])
@@ -286,6 +317,7 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
         "columns": len(columns),
         "values_indexed": len(value_rows),
         "answers_precomputed": answers,
+        "dashboard_answers": dash_answers,
         "built_at": _now_iso(),
         "method": "manifest + pg_stats value inventory + query_history usage (no LLM, no data scan)",
     }
@@ -415,7 +447,9 @@ def _store_answer(dataset_id: str, metric_name: str, group_col: str,
                   cols: List[str], rows: List[list], now: str) -> None:
     meta.execute(
         "INSERT INTO dlm_answers (id, dataset_id, metric_name, group_col, columns, rows, computed_at) "
-        "VALUES (@param0,@param1,@param2,@param3,@param4,@param5,@param6)",
+        "VALUES (@param0,@param1,@param2,@param3,@param4,@param5,@param6) "
+        "ON CONFLICT (dataset_id, metric_name, group_col) DO UPDATE SET "
+        "columns = EXCLUDED.columns, rows = EXCLUDED.rows, computed_at = EXCLUDED.computed_at",
         [str(uuid.uuid4()), dataset_id, metric_name, group_col,
          json.dumps(cols), json.dumps(rows, default=str), now])
 
@@ -1508,7 +1542,51 @@ def _serve_from_context(dataset_id: str, ds: dict, metric_name: str, group_col: 
                     return _ctx_response(dataset_id, dataset_name, metric_name, None,
                                          [metric_name], [[r[2]]], conf, subtitle=label)
 
-    # two filters WITH group_by → not covered by precomputed context
+    # ── generalized N-dim handler: N filters ± groupby ────────────────────
+    # Covers 2+ filters + groupby, 3+ filters no groupby — any combo that was
+    # precomputed by dashboard-level curation.
+    filter_cols = sorted(f["column"] for f in filters)
+    if group_col:
+        all_dims = sorted(set(filter_cols + [group_col]))
+        key = "|".join(all_dims)
+        ctx = _context_answer(dataset_id, metric_name, key)
+        if ctx is not None and ctx.get("columns") and ctx.get("rows"):
+            cols_list = ctx["columns"]
+            dim_count = len(all_dims)
+            by_col = {f["column"]: _normalize(f.get("value")) for f in filters}
+            col_idx = {c: i for i, c in enumerate(cols_list) if i < dim_count}
+            gb_idx = col_idx.get(group_col)
+            if gb_idx is not None:
+                matched = []
+                for r in ctx["rows"]:
+                    if not r or len(r) < dim_count + 1:
+                        continue
+                    if all(_normalize(r[col_idx[fc]]) == by_col[fc]
+                           for fc in by_col if fc in col_idx):
+                        matched.append([r[gb_idx], r[dim_count]])
+                if matched:
+                    label = ", ".join(str(f.get("value")) for f in filters)
+                    if top_n:
+                        matched = matched[:int(top_n)]
+                    return _ctx_response(dataset_id, dataset_name, metric_name, group_col,
+                                         [group_col, metric_name], matched, conf, subtitle=label)
+    elif len(filters) >= 3:
+        key = "|".join(filter_cols)
+        ctx = _context_answer(dataset_id, metric_name, key)
+        if ctx is not None and ctx.get("columns") and ctx.get("rows"):
+            cols_list = ctx["columns"]
+            n = len(filter_cols)
+            by_col = {f["column"]: _normalize(f.get("value")) for f in filters}
+            col_idx = {c: i for i, c in enumerate(cols_list) if i < n}
+            for r in ctx["rows"]:
+                if not r or len(r) < n + 1:
+                    continue
+                if all(_normalize(r[col_idx[fc]]) == by_col[fc]
+                       for fc in by_col if fc in col_idx):
+                    label = ", ".join(str(f.get("value")) for f in filters)
+                    return _ctx_response(dataset_id, dataset_name, metric_name, None,
+                                         [metric_name], [[r[n]]], conf, subtitle=label)
+
     return None
 
 
@@ -1840,6 +1918,368 @@ def filter_values(dataset_id: str, column: str, limit: int = 200) -> Dict[str, A
             }
 
     return {"ok": False, "reason": "no_precomputed_values", "values": []}
+
+
+# --------------------------------------------------------------------------- #
+# dashboard-level curation — N-dim combos from filters × chart groupbys        #
+# --------------------------------------------------------------------------- #
+
+MAX_CURATION_DIM = 4
+CURATION_CELL_CAP = 5000
+
+
+def _precompute_n_dim(dataset_id: str, database: str, schema: str, fact: str,
+                      combo: tuple, mdefs: list, now: str) -> int:
+    """Precompute a single N-dim GROUP BY combo for all metrics. Returns stored count."""
+    n = len(combo)
+    key = "|".join(combo)
+    dim_sel = ", ".join(f"{_qid(d)} AS g{j}" for j, d in enumerate(combo))
+    met_sel = ", ".join(f"{expr} AS {alias}" for alias, _, expr in mdefs)
+    where = " AND ".join(f"{_qid(d)} IS NOT NULL" for d in combo)
+    tbl = f"{_qid(schema)}.{_qid(fact)}" if schema else _qid(fact)
+    order = mdefs[0][0]
+    try:
+        res = pool.execute_query(
+            f"SELECT {dim_sel}, {met_sel} FROM {tbl} "
+            f"WHERE {where} GROUP BY {', '.join(_qid(d) for d in combo)} "
+            f"ORDER BY {order} DESC LIMIT {CURATION_CELL_CAP}", database)
+        rows = res.get("rows") or res.get("rows_objects") or []
+        if not rows:
+            return 0
+        norm = [_row_vals(r) for r in rows]
+        stored = 0
+        for j, (_, name, _) in enumerate(mdefs):
+            out = []
+            for rv in norm:
+                row = [_json_scalar(rv[k]) for k in range(n)]
+                row.append(_json_scalar(rv[n + j] if n + j < len(rv) else None))
+                out.append(row)
+            _store_answer(dataset_id, name, key, list(combo) + [name], out, now)
+            stored += 1
+        return stored
+    except Exception:
+        return 0
+
+
+def _dashboard_combos(dashboard_id: str) -> Dict[str, set]:
+    """Derive per-dataset N-dim combos from a dashboard's filters × chart groupbys.
+    Returns {dataset_id: set of dim tuples (sorted, 3+ dims)}."""
+    from itertools import combinations as _combs
+    import services.charts as chart_svc
+    import services.dashboards as dash_svc
+
+    dash = dash_svc.get_dashboard_by_id(dashboard_id)
+    if not dash:
+        return {}
+
+    filters_raw = _loads(dash.get("filters")) or []
+    chart_ids = _loads(dash.get("charts")) or []
+
+    ds_filters: Dict[str, set] = {}
+    for f in filters_raw:
+        col = _strip_table_prefix(f.get("column") or "")
+        ds_id = str(f.get("datasetId") or "")
+        if col and ds_id:
+            ds_filters.setdefault(ds_id, set()).add(col)
+
+    ds_groupbys: Dict[str, set] = {}
+    for cid in chart_ids:
+        chart = chart_svc.get_chart_by_id(str(cid))
+        if not chart:
+            continue
+        qc = _loads(chart.get("query_config")) or {}
+        ds_id = str(qc.get("dataset_id") or "")
+        if not ds_id:
+            continue
+        for gb in qc.get("groupby") or []:
+            ds_groupbys.setdefault(ds_id, set()).add(_strip_table_prefix(gb))
+
+    result: Dict[str, set] = {}
+    for ds_id in set(ds_filters) | set(ds_groupbys):
+        f_dims = sorted(ds_filters.get(ds_id, set()))
+        g_dims = sorted(ds_groupbys.get(ds_id, set()))
+        combos: set = set()
+
+        for nf in range(2, min(len(f_dims) + 1, MAX_CURATION_DIM + 1)):
+            for f_sub in _combs(f_dims, nf):
+                if len(f_sub) >= 3:
+                    combos.add(tuple(sorted(f_sub)))
+                for gb in g_dims:
+                    if gb not in f_sub:
+                        c = tuple(sorted(list(f_sub) + [gb]))
+                        if len(c) <= MAX_CURATION_DIM:
+                            combos.add(c)
+
+        if combos:
+            result[ds_id] = combos
+    return result
+
+
+def curate_dashboard(dashboard_id: str) -> Dict[str, Any]:
+    """Precompute N-dim answer combos driven by a dashboard's filter×chart definitions.
+    Stores in the same dlm_answers table — serve_chart picks them up transparently."""
+    ensure_tables()
+    combo_map = _dashboard_combos(dashboard_id)
+    if not combo_map:
+        return {"ok": False, "reason": "no_combos_needed"}
+
+    total_stored = 0
+    total_combos = 0
+    now = _now_iso()
+
+    for ds_id, combos in combo_map.items():
+        ds = datasets_svc.get_dataset_by_id(ds_id)
+        if not ds:
+            continue
+        database = ds.get("database_name") or ds.get("database")
+        schema_name = ds.get("schema_name") or ds.get("schema")
+        fact = ds.get("table_name") or ds.get("fact_table")
+        metrics = ds.get("metrics") or []
+        if not fact or not metrics:
+            continue
+
+        mdefs = []
+        for i, m in enumerate(metrics):
+            name = m.get("name") or m.get("metric_name")
+            expr = m.get("expression")
+            if name and expr:
+                mdefs.append((f"m{i}", name, expr))
+        if not mdefs:
+            continue
+
+        for combo in sorted(combos):
+            n = _precompute_n_dim(ds_id, database, schema_name, fact,
+                                  combo, mdefs, now)
+            total_stored += n
+            if n:
+                total_combos += 1
+
+        _ANSWER_CACHE.pop(ds_id, None)
+
+    return {
+        "ok": True,
+        "dashboard_id": dashboard_id,
+        "combos_computed": total_combos,
+        "answers_stored": total_stored,
+    }
+
+
+def _curate_linked_dashboards(dataset_id: str) -> int:
+    """Find dashboards that reference this dataset and curate their N-dim combos.
+    Called at the end of generate_dlm to keep dashboard curation in sync."""
+    try:
+        rows = meta.query(
+            "SELECT id, charts, filters FROM dashboards", [])
+        all_dashes = rows.get("rows_objects", rows.get("rows", []))
+    except Exception:
+        return 0
+
+    curated = 0
+    for dash in all_dashes:
+        if not isinstance(dash, dict):
+            continue
+        dash_id = dash.get("id")
+        filters_raw = _loads(dash.get("filters")) or []
+        charts_raw = _loads(dash.get("charts")) or []
+
+        ds_ids = set()
+        for f in filters_raw:
+            ds_id = str(f.get("datasetId") or "")
+            if ds_id:
+                ds_ids.add(ds_id)
+
+        if str(dataset_id) not in ds_ids:
+            for cid in charts_raw:
+                try:
+                    import services.charts as chart_svc
+                    chart = chart_svc.get_chart_by_id(str(cid))
+                    if chart:
+                        qc = _loads(chart.get("query_config")) or {}
+                        cds = str(qc.get("dataset_id") or "")
+                        if cds == str(dataset_id):
+                            ds_ids.add(cds)
+                            break
+                except Exception:
+                    continue
+
+        if str(dataset_id) in ds_ids and dash_id:
+            result = curate_dashboard(str(dash_id))
+            if result.get("ok"):
+                curated += result.get("answers_stored", 0)
+    return curated
+
+
+# --------------------------------------------------------------------------- #
+# incremental refresh — delta processing for new data                          #
+# --------------------------------------------------------------------------- #
+
+def _metric_agg_type(expr: str) -> str:
+    """Classify metric additivity from its expression."""
+    e = (expr or "").strip().upper()
+    if e.startswith("SUM("):
+        return "additive"
+    if e.startswith("COUNT(") and "DISTINCT" not in e:
+        return "additive"
+    if e.startswith("MIN(") or e.startswith("MAX("):
+        return "semi_additive"
+    return "non_additive"
+
+
+def incremental_refresh(dataset_id: str) -> Dict[str, Any]:
+    """Refresh DLM answers using delta processing when possible.
+    Additive metrics (SUM, COUNT) merge deltas from new rows.
+    Non-additive metrics trigger a full recompute of that answer."""
+    dataset_id = str(dataset_id)
+    ensure_tables()
+
+    ds = datasets_svc.get_dataset_by_id(dataset_id)
+    if not ds:
+        return {"ok": False, "reason": "dataset_not_found"}
+
+    art = get_dlm(dataset_id)
+    if not art:
+        return generate_dlm(dataset_id)
+
+    stats = _loads(art.get("stats_rollup")) or {}
+    watermark = stats.get("watermark") or {}
+    prev_count = watermark.get("row_count", 0)
+
+    database = ds.get("database_name") or ds.get("database")
+    schema_name = ds.get("schema_name") or ds.get("schema")
+    fact = ds.get("table_name") or ds.get("fact_table")
+    date_col = ds.get("date_column")
+    if not fact:
+        return {"ok": False, "reason": "no_fact_table"}
+
+    tbl = f"{_qid(schema_name)}.{_qid(fact)}" if schema_name else _qid(fact)
+    try:
+        cr = pool.execute_query(f"SELECT COUNT(*) AS cnt FROM {tbl}", database)
+        row = (cr.get("rows") or cr.get("rows_objects") or [{}])[0]
+        cur_count = int(row.get("cnt") if isinstance(row, dict) else row[0])
+    except Exception:
+        cur_count = 0
+
+    if cur_count <= prev_count and prev_count > 0:
+        return {"ok": True, "no_new_data": True, "row_count": cur_count}
+
+    new_rows = cur_count - prev_count
+    prev_date = watermark.get("max_date")
+
+    metrics = ds.get("metrics") or []
+    additive_metrics = [m for m in metrics
+                        if _metric_agg_type(m.get("expression", "")) == "additive"]
+
+    if date_col and prev_date and additive_metrics and new_rows < cur_count * 0.5:
+        merged = _delta_merge(dataset_id, database, schema_name, fact, tbl,
+                              date_col, prev_date, metrics)
+    else:
+        result = generate_dlm(dataset_id, force=True)
+        merged = result.get("answers_precomputed", 0)
+
+    max_date = None
+    if date_col:
+        try:
+            dr = pool.execute_query(
+                f"SELECT MAX({_qid(date_col)}) AS mx FROM {tbl}", database)
+            drow = (dr.get("rows") or dr.get("rows_objects") or [{}])[0]
+            max_date = str(drow.get("mx") if isinstance(drow, dict) else drow[0])
+        except Exception:
+            pass
+
+    stats["watermark"] = {
+        "row_count": cur_count,
+        "max_date": max_date,
+        "built_at": _now_iso(),
+        "method": "incremental" if new_rows < cur_count * 0.5 else "full_rebuild",
+        "delta_rows": new_rows,
+    }
+    try:
+        meta.execute("UPDATE dlm_artifact SET stats_rollup = @param0 WHERE dataset_id = @param1",
+                     [json.dumps(stats, default=str), str(dataset_id)])
+    except Exception:
+        pass
+
+    _ANSWER_CACHE.pop(dataset_id, None)
+    _SKETCH_CACHE.pop(dataset_id, None)
+    _RANGE_CACHE.pop(dataset_id, None)
+
+    return {"ok": True, "method": stats["watermark"]["method"],
+            "delta_rows": new_rows, "answers_refreshed": merged}
+
+
+def _delta_merge(dataset_id: str, database: str, schema: str, fact: str,
+                 tbl: str, date_col: str, prev_date: str,
+                 metrics: List[dict]) -> int:
+    """Compute deltas for rows added since prev_date and merge into existing answers.
+    Returns count of answers updated."""
+    answers = _load_answers(dataset_id)
+    if not answers:
+        return 0
+
+    where_new = f"{_qid(date_col)} > '{str(prev_date).replace(chr(39), chr(39)*2)}'"
+    now = _now_iso()
+    updated = 0
+
+    for (metric_name, group_col), entry in list(answers.items()):
+        m = next((m for m in metrics
+                  if (m.get("name") or m.get("metric_name")) == metric_name), None)
+        if not m:
+            continue
+        expr = m.get("expression", "")
+        agg = _metric_agg_type(expr)
+
+        if not group_col:
+            if agg != "additive":
+                continue
+            try:
+                dr = pool.execute_query(
+                    f"SELECT {expr} AS v FROM {tbl} WHERE {where_new}", database)
+                drow = (dr.get("rows") or dr.get("rows_objects") or [{}])[0]
+                delta = float(drow.get("v") if isinstance(drow, dict) else drow[0] or 0)
+            except Exception:
+                continue
+            old_val = float(entry["rows"][0][0]) if entry["rows"] and entry["rows"][0] else 0
+            _store_answer(dataset_id, metric_name, "", [metric_name],
+                          [[_json_scalar(old_val + delta)]], now)
+            updated += 1
+            continue
+
+        dims = group_col.split("|")
+        if agg != "additive":
+            continue
+
+        dim_sel = ", ".join(_qid(d) for d in dims)
+        try:
+            dr = pool.execute_query(
+                f"SELECT {dim_sel}, {expr} AS v FROM {tbl} "
+                f"WHERE {where_new} AND {' AND '.join(_qid(d) + ' IS NOT NULL' for d in dims)} "
+                f"GROUP BY {dim_sel}", database)
+            delta_rows = dr.get("rows") or dr.get("rows_objects") or []
+        except Exception:
+            continue
+        if not delta_rows:
+            continue
+
+        existing = {tuple(_normalize(r[k]) for k in range(len(dims))): r
+                    for r in entry["rows"] if r and len(r) > len(dims)}
+        for drow in delta_rows:
+            rv = _row_vals(drow)
+            dim_key = tuple(_normalize(rv[k]) for k in range(len(dims)))
+            delta_val = float(rv[len(dims)] or 0)
+            if dim_key in existing:
+                old = existing[dim_key]
+                old[len(dims)] = _json_scalar(float(old[len(dims)] or 0) + delta_val)
+            else:
+                new_row = [_json_scalar(rv[k]) for k in range(len(dims))]
+                new_row.append(_json_scalar(delta_val))
+                entry["rows"].append(new_row)
+                existing[dim_key] = new_row
+
+        _store_answer(dataset_id, metric_name, group_col,
+                      entry["columns"], entry["rows"], now)
+        updated += 1
+
+    return updated
 
 
 def _metric_year_bounds(database: str, schema: str, table: str, date_column: Optional[str],

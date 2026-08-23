@@ -183,6 +183,28 @@ def filter_values(dataset_id: int = Query(...), column: str = Query(...),
     return dlm.filter_values(str(dataset_id), column, limit=limit)
 
 
+@router.post("/dashboards/{dashboard_id}/dlm/curate")
+def curate_dashboard(dashboard_id: str,
+                     ctx: UserContext = Depends(require_min_role("Analyst"))):
+    """Precompute N-dim answer combos for a dashboard's filter×chart definitions.
+    Multi-filter interactions serve instantly from context after curation."""
+    result = dlm.curate_dashboard(dashboard_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("reason", "curation_failed"))
+    return result
+
+
+@router.post("/datasets/{dataset_id}/dlm/refresh")
+def incremental_refresh(dataset_id: str,
+                        ctx: UserContext = Depends(require_min_role("Analyst"))):
+    """Incrementally refresh DLM answers for new data — delta-merge for additive
+    metrics, full recompute when delta is too large or metrics are non-additive."""
+    result = dlm.incremental_refresh(dataset_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("reason", "refresh_failed"))
+    return result
+
+
 @router.get("/dlm/coverage")
 def coverage(ctx: UserContext = Depends(require_user_context)):
     """What context is compiled and testable — datasets, date ranges, row counts,
