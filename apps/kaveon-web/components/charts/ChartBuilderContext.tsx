@@ -3101,7 +3101,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
       // instantly from dlm_answers with zero database trip.
       const isDashboardCtx = (runContext || "").startsWith("dashboard");
       const validMetrics = (config.metrics || []).filter((m: any) => m.column && m.aggregate);
-      if (isDashboardCtx && !forceRegenerate && validMetrics.length > 0) {
+      if (isDashboardCtx && validMetrics.length > 0) {
         const groupBy = config.groupby?.[0] || null;
         const serveFilters = (extraFilters || [])
           .filter((f: any) => f.column && f.value && f.value !== "AllUp"
