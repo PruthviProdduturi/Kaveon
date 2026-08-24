@@ -71,18 +71,70 @@ _STOPWORDS = frozenset({
 # line" hit the same element with no model. Admin-editable overrides land in the
 # manifest later; this is the cold-start floor.
 _SEED_SYNONYMS: Dict[str, List[str]] = {
-    "revenue": ["sales", "turnover", "top line", "income"],
-    "cost": ["spend", "expense", "expenditure", "pricing", "price", "cheap", "cheapest", "expensive"],
-    "profit": ["margin", "earnings", "net income", "bottom line"],
-    "count": ["number", "total", "volume", "qty", "quantity"],
-    "deaths": ["mortality", "fatality", "fatalities", "died", "killed"],
-    "cases": ["infections", "infected", "positive", "confirmed"],
-    "customer": ["client", "account", "user", "buyer"],
-    "provider": ["vendor", "supplier", "publisher", "maker"],
-    "model": ["variant", "version", "sku"],
-    "plan": ["tier", "segment", "segments", "subscription", "package"],
-    "region": ["geography", "geo", "area", "territory"],
-    "date": ["day", "time", "period", "when"],
+    # finance / business
+    "revenue":      ["sales", "turnover", "top line", "income", "sell", "sold", "selling", "earned"],
+    "cost":         ["spend", "expense", "expenditure", "pricing", "price", "cheap", "expensive", "paid"],
+    "profit":       ["margin", "earnings", "net income", "bottom line", "gain", "surplus"],
+    "loss":         ["deficit", "shortfall", "negative"],
+    "budget":       ["allocation", "funding", "appropriation"],
+    "transaction":  ["order", "purchase", "deal", "payment", "checkout"],
+    "export":       ["exports", "exported", "outbound", "shipment"],
+    "import":       ["imports", "imported", "inbound"],
+    "gdp":          ["gross domestic product", "output", "economic output"],
+    # counts / quantities
+    "count":        ["number", "total", "volume", "qty", "quantity", "how many", "tally"],
+    "rate":         ["ratio", "percentage", "pct", "percent", "fraction", "share", "proportion"],
+    "average":      ["avg", "mean", "typical", "per capita"],
+    "maximum":      ["max", "highest", "peak", "top", "most", "largest", "biggest", "greatest"],
+    "minimum":      ["min", "lowest", "bottom", "least", "smallest", "fewest"],
+    # people / users
+    "customer":     ["client", "account", "user", "buyer", "subscriber", "member", "person"],
+    "employee":     ["staff", "worker", "headcount", "hc", "fte", "personnel", "team member"],
+    "population":   ["people", "inhabitants", "residents", "citizens"],
+    # health / epidemiology
+    "deaths":       ["mortality", "fatality", "fatalities", "died", "killed", "deceased"],
+    "cases":        ["infections", "infected", "positive", "confirmed", "diagnosed"],
+    "vaccination":  ["vaccine", "vaccinated", "immunization", "jab", "dose", "inoculation"],
+    "hospitalization": ["admitted", "hospital", "icu", "inpatient"],
+    "recovery":     ["recovered", "healed", "cured", "discharged"],
+    # energy / climate
+    "emission":     ["emissions", "co2", "carbon", "ghg", "greenhouse", "pollution"],
+    "generation":   ["produced", "output", "supply", "capacity"],
+    "consumption":  ["usage", "demand", "consumed", "utilized", "utilization"],
+    "renewable":    ["solar", "wind", "hydro", "clean", "green"],
+    "fossil":       ["coal", "oil", "gas", "petroleum", "nonrenewable"],
+    "temperature":  ["temp", "warming", "heat", "degrees"],
+    # product / tech
+    "provider":     ["vendor", "supplier", "publisher", "maker", "manufacturer"],
+    "model":        ["variant", "version", "sku", "product"],
+    "plan":         ["tier", "segment", "segments", "subscription", "package", "license"],
+    "score":        ["rating", "grade", "benchmark", "performance", "rank"],
+    "accuracy":     ["precision", "quality", "correctness", "fidelity"],
+    "latency":      ["response time", "delay", "lag", "speed"],
+    "session":      ["visit", "pageview", "interaction", "engagement"],
+    "churn":        ["attrition", "turnover", "cancellation", "lost"],
+    "retention":    ["kept", "renewed", "sticky", "loyalty"],
+    "acquisition":  ["signup", "registration", "onboarding", "new user", "conversion"],
+    "active":       ["engaged", "dau", "mau", "wau", "live"],
+    # geography / dimensions
+    "region":       ["geography", "geo", "area", "territory", "zone", "continent"],
+    "country":      ["nation", "state", "sovereign"],
+    "city":         ["town", "municipality", "metro", "urban"],
+    "industry":     ["sector", "vertical", "field", "domain"],
+    "category":     ["type", "class", "group", "kind", "classification"],
+    "channel":      ["source", "medium", "origin", "referral", "touchpoint"],
+    # time
+    "date":         ["day", "time", "period", "when", "timestamp"],
+    "year":         ["annual", "yearly", "yr"],
+    "month":        ["monthly", "mo"],
+    "quarter":      ["quarterly", "qtr", "q1", "q2", "q3", "q4"],
+    "week":         ["weekly", "wk"],
+    # transport
+    "trip":         ["ride", "journey", "fare", "travel", "commute"],
+    "distance":     ["miles", "km", "kilometers", "length", "mileage"],
+    "duration":     ["time", "minutes", "hours", "elapsed"],
+    "passenger":    ["rider", "traveler", "occupant"],
+    "fare":         ["charge", "fee", "toll", "cost"],
 }
 
 
@@ -2510,16 +2562,17 @@ def _match_metric(qset: set, metrics: List[dict], extra: Optional[Dict[str, List
                   default_metric: Optional[str] = None) -> Optional[dict]:
     """Pick the metric whose name/expression/alias tokens best overlap the question,
     ignoring generic quantifier words so a distinctive term like "users" wins over a
-    generic one like "total". *extra* is the dataset's curated alias index. Falls back
-    to the curated default metric, else the first."""
+    generic one like "total". Uses stem expansion so "selling" matches "sales",
+    "exported" matches "exports", etc. Falls back to the curated default metric,
+    else the first."""
     if not metrics:
         return None
-    q = qset - _GENERIC_METRIC_TOKENS
+    q = _expand_tokens(qset) - _GENERIC_METRIC_TOKENS
     best, best_score = None, 0
     for m in metrics:
         name = m.get("name") or m.get("metric_name") or ""
         expr = m.get("expression") or ""
-        toks = (set(_tokenize(name)) | set(_tokenize(expr)) | set(_syn(name, extra))) - _GENERIC_METRIC_TOKENS
+        toks = _expand_tokens(set(_tokenize(name)) | set(_tokenize(expr)) | set(_syn(name, extra))) - _GENERIC_METRIC_TOKENS
         score = len(q & toks)
         if score > best_score:
             best, best_score = m, score
@@ -2539,13 +2592,13 @@ def _match_group_by(question: str, dims: List[dict],
     m = re.search(r"\b(?:by|per|across|for each)\s+([A-Za-z][A-Za-z ]*)", question, re.I)
     if not m:
         return None
-    target = _tokenize(m.group(1))
+    target = _expand_tokens(set(_tokenize(m.group(1))))
     if not target:
         return None
     for d in dims:
         col = d.get("column_name") or d.get("name") or ""
-        ctoks = set(_tokenize(col)) | set(_syn(col, extra))
-        if set(target) & ctoks:
+        ctoks = _expand_tokens(set(_tokenize(col)) | set(_syn(col, extra)))
+        if target & ctoks:
             return col
     return None
 
@@ -2554,19 +2607,19 @@ def _match_any_dim(question: str, dims: List[dict],
                    extra: Optional[Dict[str, List[str]]] = None) -> Optional[str]:
     """Find a dimension named anywhere in the question. Handles plurals ('orgs'
     -> org, 'countries' -> country) and typos via singular-strip + 4-char prefix."""
-    qt = [_normalize(t) for t in _tokenize(question)]
+    qt = _expand_tokens(set(_normalize(t) for t in _tokenize(question)))
     for d in dims:
         col = (d.get("column_name") or d.get("name") or "").strip()
         cn = _normalize(col)
         if not cn:
             continue
-        for tn in qt:
-            if tn == cn or tn.rstrip("s") == cn or cn.rstrip("s") == tn.rstrip("s"):
-                return col
-            if len(cn) >= 4 and len(tn) >= 4 and tn[:4] == cn[:4]:
-                return col
-        if set(_syn(col, extra)) & set(qt):
+        col_toks = _expand_tokens({cn} | set(_syn(col, extra)))
+        if qt & col_toks:
             return col
+        if len(cn) >= 4:
+            for tn in qt:
+                if len(tn) >= 4 and tn[:4] == cn[:4]:
+                    return col
     return None
 
 
@@ -3073,6 +3126,48 @@ _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 def _tokenize(s: Any) -> List[str]:
     return [t for t in _TOKEN_RE.findall(_normalize(s)) if len(t) > 1]
+
+
+def _stem(word: str) -> str:
+    """Lightweight suffix stripper — no dependencies. Covers the common English
+    inflections that cause misses in token matching (exports→export, selling→sell)."""
+    w = word.lower()
+    if len(w) <= 3:
+        return w
+    if w.endswith("ies") and len(w) > 4:
+        return w[:-3] + "y"
+    if w.endswith("tion") or w.endswith("sion"):
+        return w[:-3] + "e" if len(w) > 6 else w[:-4]
+    for suffix in ("ment", "ness", "able", "ible", "ful", "less", "ous", "ive",
+                    "ity", "ing", "ation"):
+        if w.endswith(suffix) and len(w) - len(suffix) >= 3:
+            root = w[:-len(suffix)]
+            if suffix == "ing" and root.endswith(root[-1]) and len(root) > 2:
+                root = root[:-1]  # selling -> sell
+            return root
+    if w.endswith("ed") and len(w) > 4:
+        return w[:-2] if not w[-3] == w[-4] else w[:-3]
+    if w.endswith("er") and len(w) > 4:
+        return w[:-2]
+    if w.endswith("es") and len(w) > 4:
+        return w[:-2]
+    if w.endswith("s") and not w.endswith("ss") and len(w) > 3:
+        return w[:-1]
+    return w
+
+
+def _expand_tokens(tokens: set) -> set:
+    """Expand a token set with stems and seed synonyms for broader matching."""
+    expanded = set(tokens)
+    for t in tokens:
+        st = _stem(t)
+        expanded.add(st)
+        syns = _synonyms_for(t)
+        if not syns:
+            syns = _synonyms_for(st)
+        for s in syns:
+            expanded.update(_tokenize(s))
+    return expanded
 
 
 def _loads(v: Any) -> Any:
