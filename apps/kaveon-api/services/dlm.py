@@ -1675,6 +1675,118 @@ def _strip_table_prefix(col: str) -> str:
     return col.rsplit(".", 1)[-1] if "." in col else col
 
 
+def _serve_in_filter(dataset_id: str, ds: dict, metric_name: str, metric_obj: Optional[dict],
+                     group_col: Optional[str], filters: List[Dict[str, Any]],
+                     routed: dict) -> Optional[Dict[str, Any]]:
+    """Handle IN-operator filters by looking up the precomputed 1-dim answer and
+    filtering/aggregating across the matching values. For additive metrics (SUM,
+    COUNT), sums across IN values. Falls back to None for non-additive."""
+    in_filters = [f for f in filters if f.get("_in")]
+    eq_filters = [f for f in filters if not f.get("_in")]
+
+    if len(in_filters) != 1:
+        return None
+
+    inf = in_filters[0]
+    in_col = inf["column"]
+    in_vals = set(_normalize(v) for v in inf["value"])
+    dataset_name = ds.get("dataset_name") or ds.get("name")
+    conf = round(routed.get("score", 0.0), 3)
+
+    if not eq_filters and not group_col:
+        ctx = _context_answer(dataset_id, metric_name, in_col)
+        if ctx is None:
+            return None
+        total = 0
+        matched = 0
+        for r in ctx["rows"]:
+            if r and _normalize(r[0]) in in_vals:
+                try:
+                    total += float(r[1] or 0)
+                    matched += 1
+                except (ValueError, TypeError):
+                    pass
+        if matched:
+            label = ", ".join(str(v) for v in inf["value"])
+            return _ctx_response(dataset_id, dataset_name, metric_name, None,
+                                 [metric_name], [[_json_scalar(total)]], conf, subtitle=label)
+
+    if not eq_filters and group_col:
+        pair = sorted([in_col, group_col])
+        ctx = _context_answer(dataset_id, metric_name, f"{pair[0]}|{pair[1]}")
+        if ctx is not None:
+            fi = 0 if _normalize(pair[0]) == _normalize(in_col) else 1
+            gi = 1 - fi
+            grouped: Dict[str, float] = {}
+            for r in ctx["rows"]:
+                if r and len(r) >= 3 and _normalize(r[fi]) in in_vals:
+                    gk = r[gi]
+                    try:
+                        grouped[gk] = grouped.get(gk, 0) + float(r[2] or 0)
+                    except (ValueError, TypeError):
+                        pass
+            if grouped:
+                rows = [[k, _json_scalar(v)] for k, v in sorted(grouped.items(),
+                        key=lambda x: -(x[1] or 0))]
+                label = ", ".join(str(v) for v in inf["value"])
+                return _ctx_response(dataset_id, dataset_name, metric_name, group_col,
+                                     [group_col, metric_name], rows, conf, subtitle=label)
+
+    if len(eq_filters) >= 1:
+        filter_cols = sorted(f["column"] for f in eq_filters)
+        all_dims = sorted(set(filter_cols + [in_col] + ([group_col] if group_col else [])))
+        key = "|".join(all_dims)
+        ctx = _context_answer(dataset_id, metric_name, key)
+        if ctx is not None and ctx.get("columns") and ctx.get("rows"):
+            cols_list = ctx["columns"]
+            dim_count = len(all_dims)
+            col_idx = {c: i for i, c in enumerate(cols_list) if i < dim_count}
+            in_idx = col_idx.get(in_col)
+            if in_idx is not None:
+                eq_match = {f["column"]: _normalize(f.get("value")) for f in eq_filters}
+                if group_col and group_col in col_idx:
+                    gb_idx = col_idx[group_col]
+                    grouped_r: Dict[str, float] = {}
+                    for r in ctx["rows"]:
+                        if not r or len(r) < dim_count + 1:
+                            continue
+                        if _normalize(r[in_idx]) not in in_vals:
+                            continue
+                        if all(_normalize(r[col_idx[fc]]) == eq_match[fc]
+                               for fc in eq_match if fc in col_idx):
+                            gk = r[gb_idx]
+                            try:
+                                grouped_r[gk] = grouped_r.get(gk, 0) + float(r[dim_count] or 0)
+                            except (ValueError, TypeError):
+                                pass
+                    if grouped_r:
+                        rows = [[k, _json_scalar(v)] for k, v in sorted(grouped_r.items(),
+                                key=lambda x: -(x[1] or 0))]
+                        label = ", ".join(str(f.get("value")) for f in eq_filters) + ", " + ", ".join(str(v) for v in inf["value"])
+                        return _ctx_response(dataset_id, dataset_name, metric_name, group_col,
+                                             [group_col, metric_name], rows, conf, subtitle=label)
+                else:
+                    total = 0
+                    matched_count = 0
+                    for r in ctx["rows"]:
+                        if not r or len(r) < dim_count + 1:
+                            continue
+                        if _normalize(r[in_idx]) not in in_vals:
+                            continue
+                        if all(_normalize(r[col_idx[fc]]) == eq_match[fc]
+                               for fc in eq_match if fc in col_idx):
+                            try:
+                                total += float(r[dim_count] or 0)
+                                matched_count += 1
+                            except (ValueError, TypeError):
+                                pass
+                    if matched_count:
+                        label = ", ".join(str(f.get("value")) for f in eq_filters) + ", " + ", ".join(str(v) for v in inf["value"])
+                        return _ctx_response(dataset_id, dataset_name, metric_name, None,
+                                             [metric_name], [[_json_scalar(total)]], conf, subtitle=label)
+    return None
+
+
 def serve_chart(dataset_id: str, metric_column: str, aggregation: str,
                 group_by: Optional[str] = None,
                 filters: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
@@ -1697,13 +1809,23 @@ def serve_chart(dataset_id: str, metric_column: str, aggregation: str,
     if not metric_name:
         return {"served": False, "reason": "metric_not_found"}
 
-    # ── validate filters — context serving supports equality only ─────────
+    # ── validate + normalize filters ────────────────────────────────────
     clean_filters: List[Dict[str, Any]] = []
+    has_in = False
     for f in filters:
-        op = f.get("operator", "=")
-        if op != "=":
+        op = (f.get("operator") or "=").upper()
+        col = _strip_table_prefix(f["column"])
+        if op == "IN":
+            has_in = True
+            vals = [v.strip() for v in str(f["value"]).split(",") if v.strip()]
+            if len(vals) == 1:
+                clean_filters.append({"column": col, "value": vals[0]})
+            else:
+                clean_filters.append({"column": col, "value": vals, "_in": True})
+        elif op == "=":
+            clean_filters.append({"column": col, "value": f["value"]})
+        else:
             return {"served": False, "reason": "non_equality_filter"}
-        clean_filters.append({"column": _strip_table_prefix(f["column"]), "value": f["value"]})
 
     # ── validate group_by against known dimensions ────────────────────────
     group_col: Optional[str] = None
@@ -1722,17 +1844,19 @@ def serve_chart(dataset_id: str, metric_column: str, aggregation: str,
         if not group_col:
             return {"served": False, "reason": "dimension_not_found"}
 
-    # ── try precomputed exact answers ─────────────────────────────────────
+    # ── IN-filter expansion: serve per-value and merge ──────────────────
     dummy_routed = {"score": 1.0}
-    served = _serve_from_context(dataset_id, ds, metric_name, group_col, None,
-                                  clean_filters, dummy_routed)
-
-    # ── fallback: HLL sketch for COUNT(DISTINCT) metrics ──────────────────
-    if served is None and metric_obj:
-        expr = (metric_obj.get("expression") or "")
-        if _distinct_col(expr):
-            served = _serve_sketch(dataset_id, ds, metric_name, group_col, None,
-                                    clean_filters, dummy_routed)
+    if has_in:
+        served = _serve_in_filter(dataset_id, ds, metric_name, metric_obj,
+                                   group_col, clean_filters, dummy_routed)
+    else:
+        served = _serve_from_context(dataset_id, ds, metric_name, group_col, None,
+                                      clean_filters, dummy_routed)
+        if served is None and metric_obj:
+            expr = (metric_obj.get("expression") or "")
+            if _distinct_col(expr):
+                served = _serve_sketch(dataset_id, ds, metric_name, group_col, None,
+                                        clean_filters, dummy_routed)
 
     if served is None:
         return {"served": False}
