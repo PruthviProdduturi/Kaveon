@@ -1370,6 +1370,24 @@ _REBUILD_COOLDOWN_SECONDS = 300.0  # 5 minutes
 _STALE_THRESHOLD = 0.5
 
 
+def invalidate_caches(dataset_id: Optional[str] = None) -> int:
+    """Clear in-memory caches. Returns count of datasets cleared."""
+    if dataset_id:
+        ds_id = str(dataset_id)
+        cleared = int(ds_id in _ANSWER_CACHE)
+        _ANSWER_CACHE.pop(ds_id, None)
+        _SKETCH_CACHE.pop(ds_id, None)
+        _RANGE_CACHE.pop(ds_id, None)
+        _SPEC_CACHE.pop(ds_id, None)
+        return cleared
+    n = len(_ANSWER_CACHE)
+    _ANSWER_CACHE.clear()
+    _SKETCH_CACHE.clear()
+    _RANGE_CACHE.clear()
+    _SPEC_CACHE.clear()
+    return n
+
+
 def check_freshness(dataset_id: str) -> Dict[str, Any]:
     """Compute how fresh a dataset's DLM context is, combining time decay since
     the artifact was built with the data-change signal from pg_stat_user_tables.
