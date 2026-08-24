@@ -205,6 +205,15 @@ def incremental_refresh(dataset_id: str,
     return result
 
 
+@router.post("/dlm/cache/invalidate")
+def invalidate_cache(
+    dataset_id: Optional[str] = None,
+    ctx: UserContext = Depends(require_min_role("Admin")),
+):
+    cleared = dlm.invalidate_caches(dataset_id)
+    return {"ok": True, "cleared": cleared}
+
+
 @router.get("/dlm/coverage")
 def coverage(ctx: UserContext = Depends(require_user_context)):
     """What context is compiled and testable — datasets, date ranges, row counts,
