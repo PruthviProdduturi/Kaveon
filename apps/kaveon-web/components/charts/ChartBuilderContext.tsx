@@ -3106,11 +3106,14 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         const serveFilters = (extraFilters || [])
           .filter((f: any) => f.column && f.value && f.value !== "AllUp"
                   && (f.filterType || "value") !== "date_range")
-          .map((f: any) => ({
-            column: f.column,
-            operator: f.operator || "=",
-            value: String(f.value),
-          }));
+          .map((f: any) => {
+            let val = String(f.value);
+            if ((f.operator || "=").toUpperCase() === "IN") {
+              val = val.split(",").map((v: string) => v.trim()).filter((v: string) => v && v !== "AllUp").join(", ");
+            }
+            return { column: f.column, operator: f.operator || "=", value: val };
+          })
+          .filter((f: any) => f.value);
         try {
           const serveBody: any = {
             dataset_id: selectedDatasetId,
