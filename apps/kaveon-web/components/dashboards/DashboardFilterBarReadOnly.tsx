@@ -55,6 +55,7 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
   const [optSearch, setOptSearch] = useState<string>('');       // dropdown search box
   const [editDateFrom, setEditDateFrom] = useState<string>('');
   const [editDateTo, setEditDateTo] = useState<string>('');
+  const [popoverPos, setPopoverPos] = useState<{ left: number; top: number } | null>(null);
 
   // Per-column options state (loaded on demand)
   const [colOptions, setColOptions] = useState<Record<string, FilterOption[]>>({});
@@ -253,8 +254,21 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
     return selectedValue;
   };
 
-  const handleFilterClick = (filter: DashboardFilter) => {
+  const handleFilterClick = (filter: DashboardFilter, event?: React.MouseEvent) => {
     if (!filter.enabled) return;
+    if (event) {
+      const chipEl = event.currentTarget as HTMLElement;
+      const barRect = filterBarRef.current?.getBoundingClientRect();
+      if (barRect) {
+        const chipRect = chipEl.getBoundingClientRect();
+        const rawLeft = chipRect.left - barRect.left;
+        const maxLeft = Math.max(0, barRect.width - 320);
+        setPopoverPos({
+          left: Math.max(0, Math.min(rawLeft, maxLeft)),
+          top: chipRect.bottom - barRect.top + 4,
+        });
+      }
+    }
     setEditingFilterId(filter.id);
     if (filter.filterType === 'date_range') {
       setEditDateFrom(filter.dateFrom ?? '');
@@ -262,14 +276,19 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
     } else {
       setEditValue(filter.value);
       setEditValueKey(filter.valueKey ?? filter.value);
-      setEditValues(filter.value ? filter.value.split(',').map((s) => s.trim()).filter(Boolean) : []);
+      const vals = filter.value ? filter.value.split(',').map((s) => s.trim()).filter(Boolean) : [];
+      setEditValues(vals.filter((v) => v !== 'AllUp'));
       setOptSearch('');
       loadOptions(filter);
     }
   };
 
   const toggleEditValue = (v: string) => {
-    setEditValues((prev) => prev.includes(v) ? prev.filter((x) => x !== v) : [...prev, v]);
+    setEditValues((prev) => {
+      if (prev.includes(v)) return prev.filter((x) => x !== v);
+      if (v === 'AllUp') return [v];
+      return [...prev.filter((x) => x !== 'AllUp'), v];
+    });
   };
 
   const handleSaveValue = (filterId: string) => {
@@ -294,6 +313,7 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
     setEditingFilterId(null);
     setEditValue(''); setEditValueKey(''); setEditValues([]); setOptSearch('');
     setEditDateFrom(''); setEditDateTo('');
+    setPopoverPos(null);
   };
 
   const handleCancelEdit = () => resetEdit();
@@ -347,18 +367,6 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
 
   return (
     <div className="chart-filter-card" ref={filterBarRef}>
-      {activeCount > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 12px' }}>
-          <span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>
-            {activeCount} active filter{activeCount === 1 ? '' : 's'}
-          </span>
-          <button type="button" onClick={clearAll}
-            style={{ background: 'none', border: 'none', color: '#2563eb', cursor: 'pointer', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
-            <i className="fas fa-times-circle" style={{ fontSize: 11 }} /> Clear all
-          </button>
-        </div>
-      )}
-
       <div className="chart-filter-body">
         <div className="chart-filter-list" style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center', justifyContent: 'flex-start' }}>
           {dashboardFilters.map((filter) => {
@@ -382,12 +390,12 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
 
                   <button
                     className="chart-filter-chip"
-                    onClick={() => !isEditing && handleFilterClick(filter)}
+                    onClick={(e) => !isEditing && handleFilterClick(filter, e)}
                     disabled={isDisabled}
                     style={{ cursor: isDisabled ? 'default' : 'pointer' }}
                   >
                     <span className="chart-filter-chip-label">{getFilterLabel(filter)}</span>
-                    {!isDisabled && <span className="chart-filter-chip-arrow">›</span>}
+                    {!isDisabled && <i className="fas fa-chevron-down" style={{ fontSize: 9, opacity: 0.5, marginLeft: 2 }} />}
                   </button>
                 </div>
 
@@ -395,11 +403,18 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
               </div>
             );
           })}
+          {activeCount > 0 && (
+            <button type="button" onClick={clearAll}
+              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, padding: '4px 8px', flexShrink: 0 }}>
+              <i className="fas fa-times" style={{ fontSize: 10 }} /> Clear
+            </button>
+          )}
         </div>
       </div>
 
       {editingFilter && (
-        <div className="chart-filter-popover" ref={popoverRef}>
+        <div className="chart-filter-popover" ref={popoverRef}
+          style={popoverPos ? { left: popoverPos.left, top: popoverPos.top } : undefined}>
           <div className="chart-filter-popover-header">Edit filter value</div>
 
           <div style={{ marginTop: '0.5rem' }}>
