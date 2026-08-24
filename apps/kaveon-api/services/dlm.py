@@ -2125,7 +2125,7 @@ def _dashboard_combos(dashboard_id: str) -> Dict[str, set]:
         g_dims = sorted(ds_groupbys.get(ds_id, set()))
         combos: set = set()
 
-        for nf in range(2, min(len(f_dims) + 1, MAX_CURATION_DIM + 1)):
+        for nf in range(1, min(len(f_dims) + 1, MAX_CURATION_DIM + 1)):
             for f_sub in _combs(f_dims, nf):
                 if len(f_sub) >= 3:
                     combos.add(tuple(sorted(f_sub)))
