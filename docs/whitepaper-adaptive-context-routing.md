@@ -238,9 +238,11 @@ Routing per-element requires knowing *which* elements a question depends on. Thi
 is done deterministically, reusing the philosophy of the NL-to-SQL fuzzy resolver:
 
 1. Tokenize the question; drop stopwords and sub-3-character tokens.
-2. Match tokens against every element's name (table or column), by word overlap
-   and substring containment (so "cases" matches `new_cases`).
-3. Include a **table** element whenever its name matches or any of its columns
+2. Expand tokens with stems and synonyms (`_expand_tokens`) — "carbon" expands to
+   include "emission", "selling" stems to "sell" which expands to "revenue", etc.
+3. Match expanded tokens against every element's name (table or column), by word
+   overlap and substring containment (so "cases" matches `new_cases`).
+4. Include a **table** element whenever its name matches or any of its columns
    match; include a **column** element whenever its name matches.
 
 For "deaths by country" against a COVID dataset, the mapping returns exactly
@@ -397,6 +399,20 @@ curation** — custom display names, value aliases, hidden dimensions, default m
 selection — stored in a separate `curation` column on `dlm_artifact`. The effective
 spec merges both (`_merge_spec`), giving the auto-generated profile a human editorial
 layer without losing the ability to regenerate the base.
+
+**Robust intent resolution.** *(Shipped.)* The token-based matchers that map a
+question to a metric, group-by dimension, and filter value now use **symmetric
+stem+synonym expansion**. A 50-concept seed synonym lexicon (finance, health, energy,
+transport, geography, time, tech) provides cross-domain vocabulary coverage. A
+lightweight suffix stemmer handles common English inflections ("selling" → "sell",
+"exported" → "export", "hospitalization" → "hospital") with no external NLP
+dependencies. `_expand_tokens` stems every token, looks up its synonym group (falling
+back to the stemmed form), and produces the expanded set — applied symmetrically to
+both the question tokens and the metric/dimension candidate tokens. This closes the
+gap between how users phrase questions ("what are the carbon outputs?") and how
+metrics are stored (`total_emissions`), without adding a model dependency. The
+`route()` dataset selector also benefits from the enhanced stemmer, as both stemmer
+definitions share the same runtime function.
 
 ---
 

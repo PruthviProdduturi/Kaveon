@@ -361,13 +361,17 @@ The template-based approach has clear boundaries.
 
 **Limited aggregation.** The engine supports SUM, COUNT, AVG, MIN, and MAX. Window functions, HAVING clauses, and nested aggregations are out of scope.
 
+### Shipped improvements:
+
+- **Conversation context.** Follow-ups carry forward the previous query's context — "what about India" reuses the prior query and swaps the entity, and the resolver walks back through a follow-up chain to find the last real query rather than the previous follow-up.
+- **Staleness-scored execution.** The companion work *Adaptive Context-Based Query Routing Using Data Staleness Scoring* (`whitepaper-adaptive-context-routing.md`) sits behind this translation layer and routes each translated question to an instant context-based answer or a live query, based on a per-element validity score measured from the database's own change counters — so the system re-queries only when, and only where, the data has actually moved.
+- **DLM intent resolution hardening.** The DLM's token-based matchers (`_match_metric`, `_match_group_by`, `_match_any_dim`) now use symmetric stem+synonym expansion on both question tokens and candidate tokens. A 50-concept seed synonym lexicon covers finance, health, energy, transport, geography, time, and tech domains. A lightweight suffix stemmer handles common English inflections ("selling" → "sell", "exported" → "export", "hospitalization" → "hospital") with no external dependencies. The `_expand_tokens` pipeline stems each token, looks up its synonym group (falling back to the stemmed form), and expands the full set — so "what are the carbon outputs?" matches a metric named `total_emissions` via emission→carbon and generation→output.
+
 ### Planned improvements:
 
-- **Conversation context.** *(Shipped.)* Follow-ups now carry forward the previous query's context — "what about India" reuses the prior query and swaps the entity, and the resolver walks back through a follow-up chain to find the last real query rather than the previous follow-up.
 - **User correction learning.** When a user modifies the generated SQL in SQL Lab and re-runs it, capture the correction as a training signal for pattern refinement.
 - **Hybrid LLM fallback.** When the template parser returns `null` or a confidence below 0.3, optionally route to an LLM with the schema as context. The LLM handles the 20% case; the template engine handles the 80% case at zero cost.
 - **Additional patterns.** Year-over-year comparison, percentile queries, conditional aggregation.
-- **Staleness-scored execution.** Once a question is translated, it still hits the database every time. The companion work *Adaptive Context-Based Query Routing Using Data Staleness Scoring* (`whitepaper-adaptive-context-routing.md`) sits behind this translation layer and routes each translated question to an instant context-based answer or a live query, based on a per-element validity score measured from the database's own change counters — so the system re-queries only when, and only where, the data has actually moved.
 
 ---
 
@@ -403,8 +407,9 @@ The complete NL-to-SQL engine is implemented in three files:
 | `utils/nlToSql.ts` | ~614 | Pattern matching, fuzzy resolution, SQL generation, chart type selection |
 | `components/chat/InlineChart.tsx` | ~321 | Chart rendering (ECharts), KPI display, table display, SQL footer |
 | `app/page.tsx` | ~1195 | DLM ask, multi-dataset auto-detection, schema caching, insight generation, chat UI |
+| `services/dlm.py` (API) | ~3,217 | DLM engine: value index, router, precompute, answer cache, serve-chart, intent resolution, stemming, synonym expansion |
 
-Total: approximately 2,130 lines of TypeScript across all three files. The core parsing logic in `nlToSql.ts` has zero external dependencies -- no NLP libraries, no ML models, no training data. It's pure TypeScript operating on strings and arrays. `page.tsx` has grown significantly with the addition of the DLM integration (three-tier execution: DLM → ACR → template parser), follow-up detection, and context hints.
+Total: approximately 5,350 lines across the client template parser and the server-side DLM engine. The client-side parsing logic in `nlToSql.ts` has zero external dependencies — no NLP libraries, no ML models, no training data. It's pure TypeScript operating on strings and arrays. The server-side DLM in `dlm.py` is pure Python with no ML dependencies — intent resolution uses a 50-concept seed synonym lexicon and a lightweight suffix stemmer, both hand-written. `page.tsx` orchestrates three-tier execution: DLM → ACR → template parser, with follow-up detection and context hints.
 
 ### Core API
 
@@ -439,4 +444,4 @@ Template-based NL-to-SQL is a viable, production-ready approach for conversation
 
 The approach is not a replacement for LLM-based text-to-SQL. It is a complement. The template engine handles the fast path; an LLM handles the long tail. Together, they provide a system that is responsive by default and capable when needed.
 
-"Talk to your data" doesn't require a $20/month API key. For most questions, it requires a deterministic engine and a schema — the DLM handles the common case from precomputed context with no database scan at all, and the template parser covers the long tail.
+"Talk to your data" doesn't require a $20/month API key. For most questions, it requires a deterministic engine and a schema — the DLM handles the common case from precomputed context with no database scan at all, the intent resolution layer bridges the gap between how users phrase questions and how metrics are named (via stemming and synonym expansion, not ML), and the template parser covers the long tail.
