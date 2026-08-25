@@ -1658,10 +1658,65 @@ def _serve_from_context(dataset_id: str, ds: dict, metric_name: str, group_col: 
                     return _ctx_response(dataset_id, dataset_name, metric_name, None,
                                          [metric_name], [[r[n]]], conf, subtitle=label)
 
+    # ── proportional multi-filter fallback ──────────────────────────────
+    # When exact N-dim combos aren't precomputed, approximate by scaling
+    # single-dim breakdowns with each filter's proportional weight.
+    if len(filters) >= 2:
+        grand = _context_answer(dataset_id, metric_name, "")
+        if grand is not None and grand["rows"]:
+            grand_total = grand["rows"][0][0] if grand["rows"][0] else None
+            if grand_total is not None:
+                _mm = next((m for m in (ds.get("metrics") or [])
+                            if (m.get("name") or m.get("metric_name")) == metric_name), None)
+                is_intensive = (_mm.get("metric_type") or "") in ("avg", "ratio") if _mm else False
+                weights = []
+                for f in filters:
+                    if f.get("column") == group_col:
+                        continue
+                    dim_ctx = _context_answer(dataset_id, metric_name, f["column"])
+                    if dim_ctx is None:
+                        break
+                    want = _normalize(f.get("value"))
+                    dim_total = sum(r[1] for r in dim_ctx["rows"] if r and len(r) >= 2)
+                    for r in dim_ctx["rows"]:
+                        if r and _normalize(r[0]) == want and dim_total:
+                            weights.append(r[1] / dim_total)
+                            break
+                    else:
+                        break
+                else:
+                    label = ", ".join(str(f.get("value")) for f in filters)
+                    if not group_col:
+                        scaled = grand_total
+                        if not is_intensive:
+                            for w in weights:
+                                scaled *= w
+                        return _ctx_response(dataset_id, dataset_name, metric_name, None,
+                                             [metric_name], [[round(scaled, 1)]], conf,
+                                             subtitle=label, approx=True)
+                    else:
+                        gb_ctx = _context_answer(dataset_id, metric_name, group_col)
+                        if gb_ctx is not None:
+                            scaled_rows = []
+                            for r in gb_ctx["rows"]:
+                                if r and len(r) >= 2:
+                                    val = r[1]
+                                    if not is_intensive:
+                                        for w in weights:
+                                            val *= w
+                                    scaled_rows.append([r[0], round(val, 1)])
+                            scaled_rows.sort(key=lambda x: -(x[1] or 0))
+                            if top_n:
+                                scaled_rows = scaled_rows[:int(top_n)]
+                            return _ctx_response(dataset_id, dataset_name, metric_name,
+                                                 group_col, [group_col, metric_name],
+                                                 scaled_rows, conf, subtitle=label,
+                                                 approx=True)
+
     return None
 
 
-def _ctx_response(dataset_id, dataset_name, metric_name, group_col, columns, rows, conf, subtitle=None):
+def _ctx_response(dataset_id, dataset_name, metric_name, group_col, columns, rows, conf, subtitle=None, approx=False):
     title = metric_name + (f" by {group_col}" if group_col else "")
     if subtitle:
         title += f" — {subtitle}"
@@ -1671,7 +1726,7 @@ def _ctx_response(dataset_id, dataset_name, metric_name, group_col, columns, row
         "columns": columns, "rows": rows,
         "chartType": "bar" if group_col else "kpi",
         "xAxis": group_col, "yAxis": metric_name, "title": title,
-        "note": None, "confidence": conf,
+        "note": None, "confidence": conf, "approx": approx,
     }
 
 
