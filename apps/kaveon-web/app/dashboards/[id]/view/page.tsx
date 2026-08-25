@@ -324,8 +324,10 @@ const DashboardViewContent: React.FC<{
       {hasFilters && filtersOpen && (
         <div style={{
           background: 'var(--bg-surface)',
-          borderBottom: '1px solid var(--border)',
+          border: '1px solid var(--border)',
+          borderRadius: 12,
           padding: '12px 24px',
+          margin: '0 24px 8px',
         }}>
           <DashboardFilterBarReadOnly />
         </div>
