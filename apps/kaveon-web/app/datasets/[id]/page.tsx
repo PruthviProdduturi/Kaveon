@@ -58,6 +58,14 @@ interface DatasetDetail {
   filters?: DatasetFilter[];
 }
 
+function compactNum(n: number): string {
+  const a = Math.abs(n);
+  if (a >= 1_000_000_000) return (n / 1_000_000_000).toFixed(1) + "B";
+  if (a >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+  if (a >= 1_000) return (n / 1_000).toFixed(1) + "K";
+  return String(n);
+}
+
 function quoteIdentifier(name: string): string {
   if (!name) return "";
   const safe = name.replace(/]/g, "]]" );
@@ -448,6 +456,9 @@ export default function DatasetDetailPage() {
   const [previewSortDirection, setPreviewSortDirection] = useState<"asc" | "desc">("asc");
   const [buildingContext, setBuildingContext] = useState(false);
   const [contextStatus, setContextStatus] = useState<{ ok: boolean; message: string } | null>(null);
+  const [rowCount, setRowCount] = useState<number | null>(null);
+  const [previewSql, setPreviewSql] = useState<string>("");
+  const [sqlCopied, setSqlCopied] = useState(false);
 
   // For the Schema card we want to show ALL columns, even when
   // multiple fact columns map to the same dimension table.
@@ -545,6 +556,23 @@ export default function DatasetDetailPage() {
   }, [isAuthenticated, datasetId, accessToken, account]);
 
   useEffect(() => {
+    if (!datasetId || !isAuthenticated) return;
+    (async () => {
+      try {
+        const res = await msalFetch(`/api/v1/datasets/${datasetId}/dlm`);
+        if (res.ok) {
+          const dlm = await res.json();
+          const counts = dlm?.stats_rollup?.row_counts;
+          if (counts) {
+            const max = Math.max(0, ...Object.values(counts).map(Number));
+            if (max > 0) setRowCount(max);
+          }
+        }
+      } catch { /* ignore */ }
+    })();
+  }, [datasetId, isAuthenticated]);
+
+  useEffect(() => {
     if (!isAuthenticated) return;
     if (!dataset) return;
 
@@ -578,6 +606,7 @@ export default function DatasetDetailPage() {
           : isPg
             ? `SELECT * FROM ${qualifiedTable} LIMIT 100`
             : buildDatasetPreviewSql(dataset, 100);
+        setPreviewSql(sql);
 
         // Build list of tables used in this query for query history
         const tablesUsed = dataset.sql_text && !dataset.table_name
@@ -869,6 +898,34 @@ export default function DatasetDetailPage() {
                 }}
               />
             )}
+            {dataset && (
+              <div style={{ display: "flex", gap: 10, marginTop: 4, marginLeft: 6, flexWrap: "wrap" }}>
+                {rowCount != null && (
+                  <span style={{ fontSize: 11.5, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
+                    <i className="fas fa-table-rows" style={{ fontSize: 10, opacity: 0.6 }} />
+                    {compactNum(rowCount)} rows
+                  </span>
+                )}
+                {schemaColumns.length > 0 && (
+                  <span style={{ fontSize: 11.5, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
+                    <i className="fas fa-columns" style={{ fontSize: 10, opacity: 0.6 }} />
+                    {schemaColumns.length} columns
+                  </span>
+                )}
+                {(dataset.dimensions?.length ?? 0) > 0 && (
+                  <span style={{ fontSize: 11.5, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
+                    <i className="fas fa-link" style={{ fontSize: 10, opacity: 0.6 }} />
+                    {dataset.dimensions!.length} joins
+                  </span>
+                )}
+                {(dataset.metrics?.length ?? 0) > 0 && (
+                  <span style={{ fontSize: 11.5, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
+                    <i className="fas fa-chart-line" style={{ fontSize: 10, opacity: 0.6 }} />
+                    {dataset.metrics!.length} metrics
+                  </span>
+                )}
+              </div>
+            )}
             {dataset?.description && (
               <p style={{ fontSize: 12.5, color: "var(--text-muted)", margin: "2px 0 0 6px", lineHeight: 1.4 }}>
                 {dataset.description}
@@ -996,9 +1053,47 @@ export default function DatasetDetailPage() {
 
         {/* ── Data Preview ── */}
         <div className="card" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 20px", minHeight: 300, marginBottom: 12 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)", marginBottom: 10, flexShrink: 0, display: "flex", alignItems: "center", gap: 8 }}>
-            <i className="fas fa-table" style={{ fontSize: 12, color: "var(--accent)", opacity: 0.7 }} />
-            Data Preview <span style={{ fontWeight: 400, color: "var(--text-muted)", fontSize: 12 }}>(top 100 rows)</span>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)", marginBottom: 10, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <i className="fas fa-table" style={{ fontSize: 12, color: "var(--accent)", opacity: 0.7 }} />
+              Data Preview <span style={{ fontWeight: 400, color: "var(--text-muted)", fontSize: 12 }}>(top 100 rows)</span>
+            </span>
+            {previewSql && (
+              <div style={{ display: "flex", gap: 6 }}>
+                <button
+                  type="button"
+                  onClick={() => { navigator.clipboard.writeText(previewSql); setSqlCopied(true); setTimeout(() => setSqlCopied(false), 2000); }}
+                  style={{
+                    fontSize: 11.5, padding: "4px 10px", borderRadius: 6,
+                    border: "1px solid var(--border)", background: "var(--bg-surface)",
+                    color: sqlCopied ? "var(--success)" : "var(--text-secondary)",
+                    cursor: "pointer", display: "flex", alignItems: "center", gap: 5,
+                    transition: "all 0.15s",
+                  }}
+                >
+                  <i className={sqlCopied ? "fas fa-check" : "fas fa-copy"} style={{ fontSize: 10 }} />
+                  {sqlCopied ? "Copied" : "Copy SQL"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const encoded = encodeURIComponent(previewSql);
+                    const db = dataset.database_name ? `&db=${encodeURIComponent(dataset.database_name)}` : "";
+                    router.push(`/lab?query=${encoded}${db}`);
+                  }}
+                  style={{
+                    fontSize: 11.5, padding: "4px 10px", borderRadius: 6,
+                    border: "1px solid var(--border)", background: "var(--bg-surface)",
+                    color: "var(--text-secondary)", cursor: "pointer",
+                    display: "flex", alignItems: "center", gap: 5,
+                    transition: "all 0.15s",
+                  }}
+                >
+                  <i className="fas fa-terminal" style={{ fontSize: 10 }} />
+                  Execute in Lab
+                </button>
+              </div>
+            )}
           </div>
             {isLoadingPreview && <p className="muted">Loading preview…</p>}
             {previewError && !isLoadingPreview && (

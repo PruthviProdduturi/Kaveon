@@ -2714,6 +2714,9 @@ def coverage() -> List[Dict[str, Any]]:
         stats = _loads(r.get("stats_rollup")) or {}
         row_counts = stats.get("row_counts") or {}
         max_rows = max(row_counts.values()) if row_counts else None
+        if max_rows is None:
+            wm = stats.get("watermark") or {}
+            max_rows = wm.get("row_count") or None
         cols = manifest.get("columns") or []
         samples = _sample_values(did)
         out.append({

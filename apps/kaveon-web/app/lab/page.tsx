@@ -416,6 +416,23 @@ export default function LabPage() {
     }
   }, [isAuthenticated, pendingHistoryLoaded, savedQueryId]);
 
+  // When navigated with ?query= param (e.g. from dataset "Execute in Lab"),
+  // open a new tab pre-filled with the SQL.
+  const [urlQueryLoaded, setUrlQueryLoaded] = useState(false);
+  useEffect(() => {
+    if (!isAuthenticated || urlQueryLoaded) return;
+    const sql = searchParams.get("query");
+    if (!sql) return;
+    setUrlQueryLoaded(true);
+    const db = searchParams.get("db");
+    if (db) {
+      setCurrentDatabase(db);
+    }
+    const newId = `url-${Date.now()}`;
+    setQueries((prev) => [...prev, { id: newId, name: "Dataset Query", text: sql }]);
+    setActiveQueryId(newId);
+  }, [isAuthenticated, urlQueryLoaded, searchParams]);
+
   // When navigated from a dataset detail page with datasetId, open a
   // new Lab tab pre-populated with a simple SELECT preview for that
   // dataset, including any dataset-level filters.
