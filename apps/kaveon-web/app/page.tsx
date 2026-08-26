@@ -66,6 +66,50 @@ function LiveTimer({ since }: { since: number }) {
   return <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{s.toFixed(1)}s</span>;
 }
 
+const THINKING_PHASES = [
+  "Understanding your question",
+  "Analyzing the data model",
+  "Finding the right approach",
+  "Building the query",
+];
+
+function ThinkingBubble() {
+  const [phase, setPhase] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
+  const startRef = useRef(Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setElapsed(Math.floor((Date.now() - startRef.current) / 1000)), 1000);
+    const phaser = setInterval(() => setPhase(p => (p + 1) % THINKING_PHASES.length), 2400);
+    return () => { clearInterval(timer); clearInterval(phaser); };
+  }, []);
+
+  return (
+    <div style={{ padding: "10px 14px", fontSize: 12.5 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <div style={{ width: 18, height: 18, borderRadius: 9, background: "linear-gradient(135deg, #4A9EE8, #8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", animation: "kaveon-breathe 2s ease-in-out infinite" }}>
+          <div style={{ width: 6, height: 6, borderRadius: 3, background: "#fff" }} />
+        </div>
+        <span style={{ color: "var(--text-secondary)", fontWeight: 500, animation: "thinkFade 2.4s ease-in-out infinite" }}>
+          {THINKING_PHASES[phase]}
+        </span>
+        {elapsed > 0 && (
+          <span style={{ color: "var(--text-faint)", fontSize: 11, fontVariantNumeric: "tabular-nums", marginLeft: "auto" }}>
+            {elapsed}s
+          </span>
+        )}
+      </div>
+      <div style={{ width: 120, height: 2, borderRadius: 1, background: "var(--border)", overflow: "hidden" }}>
+        <div style={{ width: "40%", height: "100%", background: "linear-gradient(90deg, transparent, #4A9EE8, transparent)", animation: "loadSlide 1.8s ease-in-out infinite" }} />
+      </div>
+      <style>{`
+        @keyframes thinkFade { 0%,100% { opacity:0.6 } 50% { opacity:1 } }
+        @keyframes loadSlide { 0% { transform:translateX(-300%) } 100% { transform:translateX(600%) } }
+      `}</style>
+    </div>
+  );
+}
+
 interface PageData {
   datasetCount: number;
   sourceCount: number;
@@ -1116,12 +1160,7 @@ export default function Home() {
                           </div>
                         </div>
                       ) : (
-                        <div style={{ display: "flex", gap: 4, padding: "8px 14px" }}>
-                          {[0, 1, 2].map(d => (
-                            <div key={d} style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", animation: `bounce 1.2s ease-in-out ${d * 0.2}s infinite` }} />
-                          ))}
-                          <style>{`@keyframes bounce { 0%,80%,100% { transform:translateY(0) } 40% { transform:translateY(-6px) } }`}</style>
-                        </div>
+                        <ThinkingBubble />
                       )
                     ) : (
                       <>
