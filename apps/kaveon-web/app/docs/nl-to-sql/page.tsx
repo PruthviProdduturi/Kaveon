@@ -143,7 +143,10 @@ score += confidence   from the NL→SQL parser for this schema`}</Code>
         conversation.
       </p>
 
-      <Pager prev={{ href: "/docs/sql-lab", title: "SQL Lab" }} />
+      <Pager
+        prev={{ href: "/docs/sql-lab", title: "SQL Lab" }}
+        next={{ href: "/docs/dlm", title: "Data Language Model" }}
+      />
     </div>
   );
 }

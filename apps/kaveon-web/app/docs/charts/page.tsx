@@ -77,7 +77,7 @@ const option = applyChartTheme(buildEChartsOptions(/* … */), isDark);
 return <ReactECharts option={option} style={{ height: 400 }} notMerge lazyUpdate />;`}</Code>
 
       <Pager
-        prev={{ href: "/docs/nl-to-sql", title: "AI · NL→SQL" }}
+        prev={{ href: "/docs/freshness", title: "Freshness Algorithm" }}
         next={{ href: "/docs/dashboards", title: "Dashboards" }}
       />
     </div>

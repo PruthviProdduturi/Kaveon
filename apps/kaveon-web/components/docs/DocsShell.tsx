@@ -22,6 +22,8 @@ const NAV: NavGroup[] = [
     items: [
       { title: "SQL Lab", href: "/docs/sql-lab" },
       { title: "AI · NL→SQL", href: "/docs/nl-to-sql" },
+      { title: "Data Language Model", href: "/docs/dlm" },
+      { title: "Freshness Algorithm", href: "/docs/freshness" },
       { title: "Chart Builder", href: "/docs/charts" }, // soon
       { title: "Dashboards", href: "/docs/dashboards" }, // soon
       { title: "Semantic Datasets", href: "/docs/datasets" }, // soon
@@ -41,7 +43,8 @@ const NAV: NavGroup[] = [
 // Pages that actually exist yet — everything else renders as "soon".
 const BUILT = new Set([
   "/docs", "/docs/quickstart", "/docs/concepts",
-  "/docs/sql-lab", "/docs/nl-to-sql", "/docs/charts", "/docs/dashboards",
+  "/docs/sql-lab", "/docs/nl-to-sql", "/docs/dlm", "/docs/freshness",
+  "/docs/charts", "/docs/dashboards",
   "/docs/datasets", "/docs/data-sources",
   "/docs/architecture", "/docs/auth", "/docs/deployment",
 ]);
