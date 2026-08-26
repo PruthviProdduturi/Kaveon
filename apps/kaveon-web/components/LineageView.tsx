@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { msalFetch } from "../utils/msalFetch";
+import { KaveonLoading } from "./KaveonLoading";
 
 interface DataSource { id: string | number; name: string; engine?: string; database_name?: string; }
 interface Dataset { id: string | number; name?: string; database_name?: string; table_name?: string; description?: string | null; }
@@ -175,12 +176,7 @@ export function LineageView() {
   };
 
   if (loading) {
-    return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "80px 0", color: "var(--text-muted)", fontSize: 14 }}>
-        <i className="fas fa-spinner fa-spin" style={{ marginRight: 8 }} />
-        Building lineage graph...
-      </div>
-    );
+    return <KaveonLoading message="Building lineage" fullScreen={false} />;
   }
 
   if (nodes.length === 0) {
