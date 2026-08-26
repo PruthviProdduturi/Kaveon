@@ -3153,8 +3153,22 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
               const contextCacheKey = `ctx:${selectedDatasetId}:${metricSig}:${groupBy || ""}:${filterSig}`;
               clientCacheSet(contextCacheKey, executeJson);
 
+              // Generate the SQL that DLM replaced — show what would have run
+              let dlmSql = `-- Served from DLM context in ${totalDurationMs.toFixed(0)}ms\n-- Query below was NOT executed\n`;
+              try {
+                const genRes = await msalFetch(`${API_BASE}/api/v1/sql/generate`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ dataset_id: selectedDatasetId, chart_type: selectedTemplate.id, config }),
+                });
+                if (genRes.ok) {
+                  const genJson = await genRes.json();
+                  dlmSql += genJson.sql_text || "";
+                }
+              } catch { /* SQL generation is best-effort */ }
+
               setSqlPreview({
-                lastSql: "(served from DLM context)",
+                lastSql: dlmSql,
                 lastConfigJson: config,
                 dataColumns: executeJson.columns,
                 dataRows: rows,
