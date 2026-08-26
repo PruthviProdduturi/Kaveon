@@ -78,7 +78,7 @@ export default function DlmDocs() {
         <li><strong>Filtered slices</strong> — single-dimension-filter answers (e.g. Total Actions where country = &lsquo;US&rsquo;)</li>
       </ul>
       <p>
-        At runtime, these answers are loaded into an in-memory <code>_ANSWER_CACHE</code> dict and served in
+        At runtime, these answers are loaded into the in-memory DLM context (<code>_ANSWER_CACHE</code> dict) and served in
         microseconds — no database query at all.
       </p>
 
@@ -189,7 +189,7 @@ Tie-break: dataset with the most metrics wins.`}</Code>
       <h3>Context path — microseconds</h3>
       <p>
         When the question maps to a precomputed shape (metric total, per-dimension breakdown, or single-dimension filter),
-        the answer is served from the in-memory <code>_ANSWER_CACHE</code> dict with no database query.
+        the answer is served from the in-memory DLM context (<code>_ANSWER_CACHE</code> dict) with no database query.
         The response is tagged <strong>⚡ From context · no DB scan</strong>.
       </p>
       <Code lang="text">{`Precomputed shapes that serve from context:
@@ -255,7 +255,7 @@ Tie-break: dataset with the most metrics wins.`}</Code>
           <tr><td><code>/dlm/serve-chart</code></td><td>POST</td><td>Dashboard chart from precomputed context</td></tr>
           <tr><td><code>/dlm/filter-values</code></td><td>GET</td><td>Distinct dimension values from DLM context</td></tr>
           <tr><td><code>/dlm/coverage</code></td><td>GET</td><td>What context is compiled — datasets, date ranges, value coverage</td></tr>
-          <tr><td><code>/dlm/cache/invalidate</code></td><td>POST</td><td>Clear in-memory answer cache (Admin only)</td></tr>
+          <tr><td><code>/dlm/cache/invalidate</code></td><td>POST</td><td>Clear in-memory DLM answer context (Admin only)</td></tr>
           <tr><td><code>/dlm/sweep</code></td><td>POST</td><td>Manual freshness sweep trigger (Admin only)</td></tr>
           <tr><td><code>/dlm/notify-data-change</code></td><td>POST</td><td>Pipeline webhook — invalidate + rebuild after ETL</td></tr>
           <tr><td><code>/dashboards/{"{id}"}/dlm/curate</code></td><td>POST</td><td>Precompute multi-filter dashboard combinations</td></tr>

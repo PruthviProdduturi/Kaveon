@@ -439,7 +439,7 @@ export default function AboutPage() {
           <div className="about-grid-3" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 24 }}>
             {[
               { n: "01", title: "You ask", desc: "Type a question in natural language. No syntax. No training.", color: B, icon: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" },
-              { n: "02", title: "We parse", desc: "A deterministic engine matches your words to schema metadata and generates SQL. No LLM. Instant.", color: "#8b5cf6", icon: "M13 2L3 14h9l-1 8 10-12h-9l1-8z" },
+              { n: "02", title: "We parse", desc: "The Data Language Model matches your words to schema metadata and generates SQL. No LLM. Instant.", color: "#8b5cf6", icon: "M13 2L3 14h9l-1 8 10-12h-9l1-8z" },
               { n: "03", title: "Data answers", desc: "SQL executes, the right visualization is selected, and you see data with an intelligent summary.", color: "#10b981", icon: "M22 12h-4l-3 9L9 3l-3 9H2" },
             ].map((s, idx) => (
               <Anim key={s.n} dir="up" delay={idx * 150} style={{
@@ -541,7 +541,7 @@ export default function AboutPage() {
             </div>
             <div style={{ fontSize: 20, color: "#333", fontWeight: 300 }}>vs</div>
             <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#10b981", marginBottom: 8 }}>Kaveon Deterministic Engine</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#10b981", marginBottom: 8 }}>Kaveon Data Language Model</div>
               <div style={{ fontSize: 12, color: "#666", lineHeight: 1.7 }}>
                 &lt;10ms latency &middot; $0/query &middot; Data never leaves network &middot; Zero hallucination &middot; No limits
               </div>
@@ -630,7 +630,7 @@ export default function AboutPage() {
               Zero-scan change detection
             </h2>
             <p style={{ fontSize: 16, color: "#666", maxWidth: 600, margin: "12px auto 0" }}>
-              Every cached answer carries a validity score in [0, 1]. The algorithm detects data drift from database catalog counters — never by re-querying your tables.
+              Every precomputed answer carries a validity score in [0, 1]. The algorithm detects data drift from database catalog counters — never by re-querying your tables.
             </p>
           </Anim>
 
@@ -708,7 +708,7 @@ export default function AboutPage() {
                 {[
                   { title: "On Ask", desc: "Every question checks freshness. Stale context triggers a background rebuild while the live query answers.", icon: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" },
                   { title: "Proactive Sweep", desc: "A background loop checks all datasets every 30 minutes. Stale artifacts rebuild before anyone asks.", icon: "M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" },
-                  { title: "Pipeline Webhook", desc: "POST /dlm/notify-data-change after ETL completes. Instant cache invalidation and rebuild.", icon: "M13 2L3 14h9l-1 8 10-12h-9l1-8z" },
+                  { title: "Pipeline Webhook", desc: "POST /dlm/notify-data-change after ETL completes. Instant DLM context invalidation and rebuild.", icon: "M13 2L3 14h9l-1 8 10-12h-9l1-8z" },
                 ].map(({ title, desc, icon }) => (
                   <div key={title} style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
                     <div style={{

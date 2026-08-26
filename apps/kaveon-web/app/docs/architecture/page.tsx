@@ -83,7 +83,7 @@ kaveon-api  (FastAPI)
         Only novel slices fall through to a single live query. Every answer is labelled honestly:
       </p>
       <ul>
-        <li><strong>⚡ From context · no DB scan</strong> — a totals / by-dimension / single-dimension-filter answer served from an in-memory cache warmed from the precomputed <code>dlm_answers</code> store.</li>
+        <li><strong>⚡ From context · no DB scan</strong> — a totals / by-dimension / single-dimension-filter answer served from in-memory DLM context loaded from the precomputed <code>dlm_answers</code> store.</li>
         <li><strong>Live query · Xs</strong> — a year-slice or multi-filter combination assembled into one warehouse query, then cached.</li>
       </ul>
       <p>

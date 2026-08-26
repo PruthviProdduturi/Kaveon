@@ -197,13 +197,13 @@ All elements below threshold
       <h3>3. Pipeline webhook</h3>
       <p>
         Data pipelines can call <code>POST /dlm/notify-data-change?dataset_id=X</code> after loading new data. This
-        immediately invalidates the in-memory cache and triggers a background rebuild — no waiting for the next
+        immediately invalidates the in-memory DLM context and triggers a background rebuild — no waiting for the next
         sweep or user query.
       </p>
       <Code lang="text">{`ETL pipeline completes
   │
   └── POST /dlm/notify-data-change?dataset_id=144
-        ├── invalidate_caches(dataset_id)    — clear in-memory answer cache
+        ├── invalidate_caches(dataset_id)    — clear in-memory DLM answer context
         └── _trigger_background_rebuild()    — recompile the DLM artifact`}</Code>
 
       <h2>The zero-scan trick</h2>
