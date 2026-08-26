@@ -214,6 +214,23 @@ def invalidate_cache(
     return {"ok": True, "cleared": cleared}
 
 
+@router.post("/dlm/sweep")
+def sweep(ctx: UserContext = Depends(require_min_role("Admin"))):
+    """Check all datasets for freshness and trigger rebuilds for stale ones.
+    Runs automatically every 30 minutes; this endpoint triggers it manually."""
+    return dlm.freshness_sweep()
+
+
+@router.post("/dlm/notify-data-change")
+def notify_data_change(dataset_id: str = Query(...),
+                       ctx: UserContext = Depends(require_min_role("Analyst"))):
+    """Webhook for data pipelines: call after loading new data to trigger an
+    immediate DLM rebuild instead of waiting for the next sweep or user ask."""
+    dlm.invalidate_caches(dataset_id)
+    triggered = dlm._trigger_background_rebuild(dataset_id)
+    return {"ok": True, "dataset_id": dataset_id, "rebuild_triggered": triggered}
+
+
 @router.get("/dlm/coverage")
 def coverage(ctx: UserContext = Depends(require_user_context)):
     """What context is compiled and testable — datasets, date ranges, row counts,
