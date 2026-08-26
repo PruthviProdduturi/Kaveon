@@ -1145,6 +1145,9 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
         top_n = int(mtop.group(1))
     elif re.search(r"\btop\b", question, re.I):
         top_n = 10  # "top models" without a number → default 10
+    # Superlative → top 1 ("which country has the most", "highest scoring model")
+    if not top_n and re.search(r"\b(which|what)\b.*\b(most|highest|largest|biggest|greatest|lowest|least|fewest|smallest)\b", question, re.I):
+        top_n = 1
     if top_n:
         if not group_col:
             group_col = _match_any_dim(question, dims, d_alias)
@@ -1154,6 +1157,7 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
     if not group_col and wanted_groupby:
         group_col = _match_any_dim(question, dims, d_alias)
     limit_n = top_n or limit
+    sort_asc = bool(re.search(r"\b(lowest|least|fewest|smallest|bottom)\b", question, re.I))
 
     note = None
     if unresolved_entity:
@@ -1209,7 +1213,7 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
     # fall through to a live query below (which we then cache).
     if not time_group and not year and not relative_time:
         served = _serve_from_context(dataset_id, ds, metric_name, group_col, top_n,
-                                     filters, routed[0])
+                                     filters, routed[0], sort_asc=sort_asc)
         if served is not None:
             if note:
                 served["note"] = note
@@ -1251,7 +1255,8 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
             gb += f", {_qid(group_col)}"
         sql += f" GROUP BY {gb} ORDER BY {_qid(time_group)} LIMIT 1000"
     elif group_col:
-        sql += f" GROUP BY {_qid(group_col)} ORDER BY {_qid(metric_name)} DESC LIMIT {int(limit_n)}"
+        order_dir = "ASC" if sort_asc else "DESC"
+        sql += f" GROUP BY {_qid(group_col)} ORDER BY {_qid(metric_name)} {order_dir} LIMIT {int(limit_n)}"
 
     chart_type = "line" if time_group else ("bar" if group_col else "kpi")
     x_axis = time_group or group_col
@@ -1563,7 +1568,7 @@ def maybe_auto_rebuild(dataset_id: str) -> Optional[bool]:
 
 def _serve_from_context(dataset_id: str, ds: dict, metric_name: str, group_col: Optional[str],
                         top_n: Optional[int], filters: List[Dict[str, Any]],
-                        routed: dict) -> Optional[Dict[str, Any]]:
+                        routed: dict, sort_asc: bool = False) -> Optional[Dict[str, Any]]:
     """Serve totals / single-dim breakdowns / single-dim equality filters straight
     from the precomputed answers — no live query."""
     dataset_name = ds.get("dataset_name") or ds.get("name")
@@ -1574,6 +1579,8 @@ def _serve_from_context(dataset_id: str, ds: dict, metric_name: str, group_col: 
         if ctx is None:
             return None
         rows = ctx["rows"]
+        if group_col and sort_asc:
+            rows = list(reversed(rows))
         if group_col and top_n:
             rows = rows[:int(top_n)]
         return _ctx_response(dataset_id, dataset_name, metric_name, group_col, ctx["columns"], rows, conf)

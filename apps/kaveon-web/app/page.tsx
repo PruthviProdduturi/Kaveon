@@ -29,7 +29,8 @@ interface RouteMeta {
   route: "context" | "hybrid" | "query" | "direct" | "dlm";
   durationMs?: number;
   elementsChecked?: number;
-  approx?: boolean;   // answered from an HLL sketch cuboid — estimate, not exact
+  approx?: boolean;
+  datasetName?: string;
 }
 
 interface ContextHint { label: string; value: number | string | null }
@@ -777,7 +778,7 @@ export default function Home() {
                 role: "assistant",
                 content: summary,
                 ...(wantsChart ? { chart: { rows, columns, chartType: dlm.chartType, xAxis: dlm.xAxis, yAxis: dlm.yAxis, title: dlm.title, sql: dlm.sql } } : {}),
-                routeMeta: { route, durationMs: Math.round(performance.now() - dlmT0), approx: !!dlm.approx },
+                routeMeta: { route, durationMs: Math.round(performance.now() - dlmT0), approx: !!dlm.approx, datasetName: dlm.dataset_name },
               }]);
               return;
             }
@@ -1196,6 +1197,7 @@ export default function Home() {
                             {m.routeMeta.route === "context" && !m.routeMeta.approx && <span style={{ color: "#10b981" }}>&middot; no DB scan</span>}
                             {m.routeMeta.route === "context" && m.routeMeta.approx && <span style={{ color: "#10b981" }} title="HyperLogLog sketch estimate (~1-2% error), no database scan">&middot; ≈ estimate &middot; no DB scan</span>}
                             {m.routeMeta.elementsChecked != null && <span>&middot; {m.routeMeta.elementsChecked} elements</span>}
+                            {m.routeMeta.datasetName && <span>&middot; {m.routeMeta.datasetName}</span>}
                           </div>
                         )}
                       </>
