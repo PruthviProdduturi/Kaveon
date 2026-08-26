@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { msalFetch } from "../utils/msalFetch";
 
-interface DataSource { id: string | number; name: string; engine?: string; }
+interface DataSource { id: string | number; name: string; engine?: string; database_name?: string; }
 interface Dataset { id: string | number; name?: string; database_name?: string; table_name?: string; description?: string | null; }
 interface Dashboard { id: string | number; name?: string; charts?: string; description?: string | null; }
 interface DlmCoverage { dataset_id: string; dataset_name?: string; row_count?: number; values_indexed?: number; answers_precomputed?: number; }
@@ -59,7 +59,7 @@ export function LineageView() {
         msalFetch("/api/v1/dlm/coverage"),
       ]);
 
-      const sources: DataSource[] = srcRes.ok ? await srcRes.json().then((d: { result?: DataSource[] } | DataSource[]) => Array.isArray(d) ? d : d.result || []) : [];
+      const sources: DataSource[] = srcRes.ok ? await srcRes.json().then((d: { dataSources?: DataSource[]; result?: DataSource[] } | DataSource[]) => Array.isArray(d) ? d : d.dataSources || d.result || []) : [];
       const datasets: Dataset[] = dsRes.ok ? await dsRes.json().then((d: { result?: Dataset[] } | Dataset[]) => Array.isArray(d) ? d : d.result || []) : [];
       const dashboards: Dashboard[] = dashRes.ok ? await dashRes.json().then((d: { result?: Dashboard[] } | Dashboard[]) => Array.isArray(d) ? d : d.result || []) : [];
       const dlmCoverage: DlmCoverage[] = dlmRes.ok ? await dlmRes.json().then((d: { datasets?: DlmCoverage[] } | DlmCoverage[]) => Array.isArray(d) ? d : d.datasets || []) : [];
@@ -73,6 +73,7 @@ export function LineageView() {
       sources.forEach((s, i) => {
         const id = `src-${s.id}`;
         srcMap.set(s.name, i);
+        if (s.database_name) srcMap.set(s.database_name, i);
         ns.push({ id, type: "source", label: s.name, sublabel: s.engine || "", col: 0, row: i, meta: s as unknown as Record<string, unknown> });
       });
 
