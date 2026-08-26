@@ -1566,6 +1566,50 @@ def maybe_auto_rebuild(dataset_id: str) -> Optional[bool]:
     return _trigger_background_rebuild(dataset_id)
 
 
+_SWEEP_INTERVAL_SECONDS = 1800.0  # 30 minutes
+
+
+def freshness_sweep() -> Dict[str, Any]:
+    """Check all datasets and trigger rebuilds for any that are stale. Returns
+    a summary of what was found and triggered — useful for cron/health checks."""
+    ensure_tables()
+    arts = meta.query("SELECT dataset_id FROM dlm_artifact WHERE status = 'ready'", [])
+    results: Dict[str, Any] = {"checked": 0, "stale": 0, "triggered": 0, "datasets": []}
+    for a in arts.get("rows_objects", arts.get("rows", [])):
+        did = str(a.get("dataset_id"))
+        results["checked"] += 1
+        freshness = check_freshness(did)
+        if not freshness["fresh"] and freshness["recommendation"] == "rebuild":
+            results["stale"] += 1
+            triggered = _trigger_background_rebuild(did)
+            if triggered:
+                results["triggered"] += 1
+            results["datasets"].append({"dataset_id": did, "score": freshness["score"], "triggered": triggered})
+    return results
+
+
+def _start_sweep_loop():
+    """Background loop that runs freshness_sweep periodically. Started once at
+    import time so DLM context stays fresh without requiring user traffic."""
+    def _loop():
+        import time as _t
+        _t.sleep(30)  # let the app finish startup
+        while True:
+            try:
+                summary = freshness_sweep()
+                if summary["triggered"]:
+                    logger.info("DLM sweep: checked=%d stale=%d triggered=%d",
+                                summary["checked"], summary["stale"], summary["triggered"])
+            except Exception:
+                logger.exception("DLM sweep failed")
+            _t.sleep(_SWEEP_INTERVAL_SECONDS)
+
+    threading.Thread(target=_loop, daemon=True, name="dlm-sweep").start()
+
+
+_start_sweep_loop()
+
+
 def _serve_from_context(dataset_id: str, ds: dict, metric_name: str, group_col: Optional[str],
                         top_n: Optional[int], filters: List[Dict[str, Any]],
                         routed: dict, sort_asc: bool = False) -> Optional[Dict[str, Any]]:
