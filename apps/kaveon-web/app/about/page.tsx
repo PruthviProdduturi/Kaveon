@@ -279,7 +279,7 @@ export default function AboutPage() {
             maxWidth: 640, margin: "0 auto 20px", fontWeight: 400,
             animation: "hero-sub-drop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 0.5s both",
           }}>
-            Connect your databases. Ask anything. Get instant answers with interactive charts — powered by a Data Language Model (DLM), not LLM.
+            Connect your databases. Ask anything. Get instant answers with interactive charts.<br />Powered by a Data Language Model (DLM), not LLM.
           </p>
 
           {/* Subtle accent line */}
