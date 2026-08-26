@@ -2919,8 +2919,9 @@ def _synonyms_for(name: str) -> List[str]:
     n = (name or "").lower().strip()
     if not n:
         return []
+    tokens = set(n.split())
     for head, syns in _SEED_SYNONYMS.items():
-        if head in n or n in syns:
+        if head in tokens or n in syns:
             return sorted(set([head, *syns]) - {n})
     return []
 
