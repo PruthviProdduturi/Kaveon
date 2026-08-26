@@ -109,7 +109,7 @@ export default function SqlLabDocs() {
       </p>
 
       <Pager
-        prev={{ href: "/docs/quickstart", title: "Quickstart" }}
+        prev={{ href: "/docs/concepts", title: "Core Concepts" }}
         next={{ href: "/docs/nl-to-sql", title: "AI · NL→SQL" }}
       />
     </div>

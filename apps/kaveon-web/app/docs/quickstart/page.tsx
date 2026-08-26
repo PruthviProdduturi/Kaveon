@@ -75,7 +75,7 @@ ORDER  BY revenue DESC;`}</Code>
 
       <Pager
         prev={{ href: "/docs", title: "Introduction" }}
-        next={{ href: "/docs/sql-lab", title: "SQL Lab" }}
+        next={{ href: "/docs/concepts", title: "Core Concepts" }}
       />
     </div>
   );
