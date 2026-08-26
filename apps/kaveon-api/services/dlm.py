@@ -111,6 +111,7 @@ _SEED_SYNONYMS: Dict[str, List[str]] = {
     "score":        ["rating", "grade", "benchmark", "performance", "rank"],
     "accuracy":     ["precision", "quality", "correctness", "fidelity"],
     "latency":      ["response time", "delay", "lag", "speed"],
+    "event":        ["action", "activity", "occurrence", "log", "record", "entry"],
     "session":      ["visit", "pageview", "interaction", "engagement"],
     "churn":        ["attrition", "turnover", "cancellation", "lost"],
     "retention":    ["kept", "renewed", "sticky", "loyalty"],
@@ -1168,6 +1169,11 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
     # 4) year filter
     year = _extract_year(question)
 
+    # 4-rel) relative time filter ("last 7 days", "this month", "yesterday")
+    relative_time = _extract_relative_time(question) if not year else None
+    if relative_time and not date_column:
+        relative_time = None  # dataset has no date column — can't filter by time
+
     # 4a) if the requested year spans the dataset's ENTIRE date range, the filter
     #     is a no-op — e.g. a single-year dataset (2026-only) asked "... in 2026".
     #     Drop it (zero DB trip via the cached range) so the answer serves from
@@ -1199,9 +1205,9 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
 
     # ── answer from context (precomputed) — NO database trip ─────────────────
     # Totals, single-dimension breakdowns, and single-dimension equality filters
-    # are all already in dlm_answers. Only trends/year-slices/combos fall through
-    # to a live query below (which we then cache).
-    if not time_group and not year:
+    # are all already in dlm_answers. Only trends/year-slices/combos/relative-time
+    # fall through to a live query below (which we then cache).
+    if not time_group and not year and not relative_time:
         served = _serve_from_context(dataset_id, ds, metric_name, group_col, top_n,
                                      filters, routed[0])
         if served is not None:
@@ -1233,6 +1239,8 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
         where.append(f"{_qid(f['column'])} = '{str(f['value']).replace(chr(39), chr(39) * 2)}'")
     if year and date_column:
         where.append(_year_clause(date_column, year, columns))
+    elif relative_time and date_column:
+        where.append(f"{_qid(date_column)} >= {relative_time}")
 
     sql = f"SELECT {', '.join(select_parts)} FROM {_qid(schema)}.{_qid(fact)}"
     if where:
@@ -1254,6 +1262,10 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
     elif group_col:
         title += f" by {group_col}"
     ctx_bits = [f["value"] for f in filters] + ([str(year)] if year else [])
+    if relative_time:
+        rt_m = _RELATIVE_TIME_RE.search(question) or _RELATIVE_NAMED_RE.search(question)
+        rt_label = rt_m.group(0).strip() if rt_m else ("today" if _TODAY_RE.search(question) else "yesterday")
+        ctx_bits.append(rt_label)
     if ctx_bits:
         title += " — " + ", ".join(str(b) for b in ctx_bits)
     if note:
@@ -2619,7 +2631,7 @@ def _match_metric(qset: set, metrics: List[dict], extra: Optional[Dict[str, List
     ignoring generic quantifier words so a distinctive term like "users" wins over a
     generic one like "total". Uses stem expansion so "selling" matches "sales",
     "exported" matches "exports", etc. Falls back to the curated default metric,
-    else the first."""
+    else the simplest additive metric (COUNT(*)), else the first."""
     if not metrics:
         return None
     q = _expand_tokens(qset) - _GENERIC_METRIC_TOKENS
@@ -2637,6 +2649,19 @@ def _match_metric(qset: set, metrics: List[dict], extra: Optional[Dict[str, List
         for m in metrics:
             if (m.get("name") or m.get("metric_name")) == default_metric:
                 return m
+    # Prefer the simplest additive metric (COUNT(*) / SUM) over non-additive ones
+    # (COUNT(DISTINCT ...)) when the question didn't name a specific metric — a
+    # generic "how many" / "total number" question wants the row count, not an
+    # arbitrary first metric like "Countries Tracked".
+    for m in metrics:
+        expr = (m.get("expression") or "").upper().strip()
+        if expr in ("COUNT(*)", "COUNT(1)") or (expr.startswith("SUM(") and "DISTINCT" not in expr):
+            return m
+    # Among remaining, prefer additive (no DISTINCT / AVG) over non-additive
+    for m in metrics:
+        expr = (m.get("expression") or "").upper()
+        if "DISTINCT" not in expr and "AVG" not in expr:
+            return m
     return metrics[0]
 
 
@@ -2681,6 +2706,33 @@ def _match_any_dim(question: str, dims: List[dict],
 def _extract_year(question: str) -> Optional[int]:
     m = re.search(r"\b(19|20)\d{2}\b", question)
     return int(m.group(0)) if m else None
+
+
+_RELATIVE_TIME_RE = re.compile(
+    r"\b(?:(?:in|from|over)\s+)?(?:the\s+)?last\s+(\d+)\s+(day|week|month|year)s?\b", re.I)
+_RELATIVE_NAMED_RE = re.compile(
+    r"\b(?:(?:in|from|over)\s+)?(?:the\s+)?(this|last|past)\s+(week|month|quarter|year)\b", re.I)
+_TODAY_RE = re.compile(r"\btoday\b", re.I)
+_YESTERDAY_RE = re.compile(r"\byesterday\b", re.I)
+
+
+def _extract_relative_time(question: str) -> Optional[str]:
+    """Parse relative time expressions into a SQL-embeddable interval clause.
+    Returns an expression like ``CURRENT_DATE - INTERVAL '7 days'`` or None."""
+    m = _RELATIVE_TIME_RE.search(question)
+    if m:
+        n, unit = int(m.group(1)), m.group(2).lower()
+        return f"CURRENT_DATE - INTERVAL '{n} {unit}s'"
+    m = _RELATIVE_NAMED_RE.search(question)
+    if m:
+        _qual, unit = m.group(1).lower(), m.group(2).lower()
+        mapping = {"week": "7 days", "month": "1 month", "quarter": "3 months", "year": "1 year"}
+        return f"CURRENT_DATE - INTERVAL '{mapping[unit]}'"
+    if _TODAY_RE.search(question):
+        return "CURRENT_DATE"
+    if _YESTERDAY_RE.search(question):
+        return "CURRENT_DATE - INTERVAL '1 day'"
+    return None
 
 
 def _year_clause(date_column: str, year: int, columns: List[dict]) -> str:
