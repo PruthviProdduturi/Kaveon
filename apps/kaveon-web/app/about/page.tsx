@@ -279,7 +279,7 @@ export default function AboutPage() {
             maxWidth: 640, margin: "0 auto 20px", fontWeight: 400,
             animation: "hero-sub-drop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 0.5s both",
           }}>
-            Connect your databases. Ask anything. Get instant answers with interactive charts — powered by a deterministic engine,<br />not an LLM.
+            Connect your databases. Ask anything. Get instant answers with interactive charts — powered by a Data Language Model,<br />not an LLM.
           </p>
 
           {/* Subtle accent line */}
@@ -550,6 +550,76 @@ export default function AboutPage() {
         </div>
       </Section>
 
+      {/* ─── Data Language Model (DLM) ─── */}
+      <section style={{ padding: "100px 24px", background: "#0a0a0a", position: "relative", overflow: "hidden" }}>
+        <div style={{ position: "absolute", top: "30%", right: "-10%", width: 800, height: 800, borderRadius: "50%", background: "radial-gradient(circle, rgba(245,158,11,0.04) 0%, transparent 60%)", pointerEvents: "none" }} />
+        <div style={{ maxWidth: 1000, margin: "0 auto", position: "relative" }}>
+          <Anim dir="up" style={{ textAlign: "center", marginBottom: 56 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: "#f59e0b", marginBottom: 12 }}>Core Engine</div>
+            <h2 style={{ fontSize: "clamp(28px, 4vw, 40px)", fontWeight: 700, letterSpacing: "-1px" }}>
+              The Data Language Model
+            </h2>
+            <p style={{ fontSize: 16, color: "#666", maxWidth: 620, margin: "12px auto 0" }}>
+              A self-compiling semantic layer that turns your schema into a deterministic question-answering engine — no training, no fine-tuning, no LLM.
+            </p>
+          </Anim>
+
+          <div className="about-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 60, alignItems: "center" }}>
+            <Anim dir="left" style={{ padding: 32, borderRadius: 16, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {[
+                  { label: "Register", sub: "Define metrics, dimensions, and joins on your tables", color: "#f59e0b" },
+                  { label: "Compile", sub: "Auto-index every distinct value, build synonym maps", color: "#8b5cf6" },
+                  { label: "Precompute", sub: "Metric totals + per-dimension breakdowns with HLL sketches", color: "#10b981" },
+                  { label: "Route", sub: "Weighted lexical scoring ranks datasets per question", color: B },
+                  { label: "Answer", sub: "Context hit in microseconds · live SQL in sub-second", color: "#ec4899" },
+                ].map((step, i) => (
+                  <div key={step.label}>
+                    <div style={{ padding: "12px 16px", borderRadius: 10, background: `${step.color}08`, border: `1px solid ${step.color}15` }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
+                        <div style={{ width: 20, height: 20, borderRadius: 6, background: `${step.color}18`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 800, color: step.color }}>{i + 1}</div>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: step.color, textTransform: "uppercase", letterSpacing: "0.06em" }}>{step.label}</div>
+                      </div>
+                      <div style={{ fontSize: 12, color: "#888", fontFamily: "var(--font-mono, monospace)", paddingLeft: 28 }}>{step.sub}</div>
+                    </div>
+                    {i < 4 && (
+                      <div style={{ display: "flex", justifyContent: "center", padding: "4px 0" }}>
+                        <div style={{ width: 1, height: 10, background: "rgba(255,255,255,0.08)" }} />
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </Anim>
+
+            <Anim dir="right" delay={200}>
+              <h3 style={{ fontSize: 28, fontWeight: 700, lineHeight: 1.2, marginBottom: 16, letterSpacing: "-0.5px", color: "#e2e8f0" }}>
+                Schema in, answers out
+              </h3>
+              <p style={{ fontSize: 15, color: "#777", lineHeight: 1.8, marginBottom: 24 }}>
+                Register a dataset and the DLM compiles itself — indexing every column value, mapping synonyms, and precomputing metric rollups across every dimension. Questions resolve to SQL through deterministic pattern matching, not token prediction.
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {[
+                  { text: "Precomputed context serves answers in microseconds", color: "#10b981" },
+                  { text: "HLL sketches for COUNT(DISTINCT) without full scans", color: "#8b5cf6" },
+                  { text: "Value index resolves entity filters from natural language", color: "#f59e0b" },
+                  { text: "Multi-dataset routing scores each question across all DLMs", color: B },
+                  { text: "Self-healing — stale context auto-rebuilds on next ask", color: "#ec4899" },
+                ].map(({ text, color }) => (
+                  <div key={text} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ width: 18, height: 18, borderRadius: 5, background: `${color}14`, border: `1px solid ${color}25`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="3"><polyline points="20 6 9 17 4 12" /></svg>
+                    </div>
+                    <span style={{ fontSize: 13.5, color: "#999" }}>{text}</span>
+                  </div>
+                ))}
+              </div>
+            </Anim>
+          </div>
+        </div>
+      </section>
+
       {/* ─── Dashboard Showcase — Apple-style horizontal scroll ─────── */}
       <section id="dashboards" ref={r7} style={{ padding: "60px 0 100px", background: "#0a0a0a", position: "relative", overflow: "hidden" }}>
         <div style={{ position: "absolute", top: "20%", left: "50%", transform: "translateX(-50%)", width: 1200, height: 600, borderRadius: "50%", background: `radial-gradient(circle, ${B}06 0%, transparent 60%)`, pointerEvents: "none" }} />
@@ -715,20 +785,129 @@ export default function AboutPage() {
         </div>
       </Section>
 
+      {/* ─── Freshness Algorithm ─── */}
+      <section style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0a0a0a 0%, #0f1520 50%, #0a0a0a 100%)", position: "relative", overflow: "hidden" }}>
+        <div style={{ position: "absolute", bottom: "10%", left: "-5%", width: 700, height: 700, borderRadius: "50%", background: "radial-gradient(circle, rgba(16,185,129,0.04) 0%, transparent 60%)", pointerEvents: "none" }} />
+        <div style={{ maxWidth: 1000, margin: "0 auto", position: "relative" }}>
+          <Anim dir="up" style={{ textAlign: "center", marginBottom: 56 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: "#10b981", marginBottom: 12 }}>Freshness Algorithm</div>
+            <h2 style={{ fontSize: "clamp(28px, 4vw, 40px)", fontWeight: 700, letterSpacing: "-1px" }}>
+              Zero-scan change detection
+            </h2>
+            <p style={{ fontSize: 16, color: "#666", maxWidth: 600, margin: "12px auto 0" }}>
+              Every cached answer carries a validity score in [0, 1]. The algorithm detects data drift from database catalog counters — never by re-querying your tables.
+            </p>
+          </Anim>
+
+          {/* Formula */}
+          <Anim dir="scale" style={{ textAlign: "center", marginBottom: 48 }}>
+            <div style={{
+              display: "inline-block", padding: "20px 40px", borderRadius: 14,
+              background: "rgba(16,185,129,0.04)", border: "1px solid rgba(16,185,129,0.12)",
+            }}>
+              <div style={{ fontFamily: "var(--font-mono, monospace)", fontSize: "clamp(16px, 2.5vw, 22px)", color: "#e2e8f0", letterSpacing: "0.02em" }}>
+                <span style={{ color: "#10b981", fontWeight: 700 }}>score</span>
+                <span style={{ color: "#555", margin: "0 8px" }}>=</span>
+                <span style={{ color: "#f59e0b" }}>time_decay</span>
+                <span style={{ color: "#555", margin: "0 8px" }}>&times;</span>
+                <span style={{ color: "#8b5cf6" }}>change_factor</span>
+              </div>
+              <div style={{ fontSize: 11, color: "#555", marginTop: 6 }}>
+                score &lt; 0.5 triggers rebuild &middot; per-element, not per-dataset
+              </div>
+            </div>
+          </Anim>
+
+          {/* Three factors */}
+          <div className="about-grid-3" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20, marginBottom: 40 }}>
+            {[
+              {
+                label: "Time Decay",
+                color: "#f59e0b",
+                formula: "e^(-ln2 · age / half_life)",
+                desc: "Exponential decay with a 6-hour base half-life. Unused context ages out gracefully; heavily-used context decays faster so your most-relied-upon answers stay freshest.",
+                detail: "6h base · 10min floor",
+              },
+              {
+                label: "Change Factor",
+                color: "#8b5cf6",
+                formula: "e^(-ln2 · Δrows / threshold)",
+                desc: "Reads pg_stat_user_tables.n_mod_since_analyze — a counter the database maintains for free. Detects data drift without scanning a single row.",
+                detail: "5% churn = half stale",
+              },
+              {
+                label: "Usage Weight",
+                color: "#10b981",
+                formula: "hl / (1 + 0.35 · ln(usage))",
+                desc: "Hot elements get a shorter effective half-life. The answers your team relies on most are kept the freshest — the algorithm learns from access patterns.",
+                detail: "Modulates time decay",
+              },
+            ].map(({ label, color, formula, desc, detail }, idx) => (
+              <Anim key={label} dir="up" delay={idx * 120}>
+                <div className="about-card" style={{
+                  padding: "32px 24px", borderRadius: 16,
+                  background: `${color}06`, border: `1px solid ${color}12`,
+                  transition: "all 0.3s", height: "100%",
+                }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 12 }}>{label}</div>
+                  <div style={{
+                    fontFamily: "var(--font-mono, monospace)", fontSize: 12, color: "#ccc",
+                    padding: "8px 12px", borderRadius: 8, background: "rgba(0,0,0,0.3)",
+                    marginBottom: 14, textAlign: "center",
+                  }}>{formula}</div>
+                  <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.7, margin: "0 0 12px" }}>{desc}</p>
+                  <div style={{ fontSize: 11, color: "#555", fontWeight: 600 }}>{detail}</div>
+                </div>
+              </Anim>
+            ))}
+          </div>
+
+          {/* Three trigger paths */}
+          <Anim dir="up" delay={200}>
+            <div style={{
+              padding: "28px 32px", borderRadius: 16,
+              background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)",
+            }}>
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "3px", color: "#10b981", marginBottom: 16 }}>Three Rebuild Triggers</div>
+              <div className="about-grid-3" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
+                {[
+                  { title: "On Ask", desc: "Every question checks freshness. Stale context triggers a background rebuild while the live query answers.", icon: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" },
+                  { title: "Proactive Sweep", desc: "A background loop checks all datasets every 30 minutes. Stale artifacts rebuild before anyone asks.", icon: "M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" },
+                  { title: "Pipeline Webhook", desc: "POST /dlm/notify-data-change after ETL completes. Instant cache invalidation and rebuild.", icon: "M13 2L3 14h9l-1 8 10-12h-9l1-8z" },
+                ].map(({ title, desc, icon }) => (
+                  <div key={title} style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+                    <div style={{
+                      width: 32, height: 32, borderRadius: 8, background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.15)",
+                      display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 2,
+                    }}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={icon} /></svg>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: "#e2e8f0", marginBottom: 4 }}>{title}</div>
+                      <div style={{ fontSize: 12.5, color: "#777", lineHeight: 1.6 }}>{desc}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </Anim>
+        </div>
+      </section>
+
       {/* ─── Adaptive Context Routing ─── */}
-      <Section style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0a0a0a 0%, #0f1520 50%, #0a0a0a 100%)" }}>
+      <Section style={{ padding: "100px 24px", background: "#0a0a0a" }}>
         <div className="about-grid-2" style={{ maxWidth: 1000, margin: "0 auto", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 60, alignItems: "center" }}>
           <Anim dir="left">
             <h3 style={{ fontSize: 32, fontWeight: 700, lineHeight: 1.2, marginBottom: 16, letterSpacing: "-0.5px", color: "#e2e8f0" }}>
               Adaptive Context Routing
             </h3>
             <p style={{ fontSize: 15, color: "#777", lineHeight: 1.8, marginBottom: 24 }}>
-              Every question is routed through a per-element staleness scorer that reads database modification counters — not re-queries. Fresh data answers instantly from context. Stale elements trigger targeted live queries and self-heal for next time.
+              Every question is routed through a per-element staleness scorer that reads database modification counters — not re-queries. Fresh data answers instantly from DLM context. Stale elements trigger targeted live queries and self-heal for next time.
             </p>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {[
                 "Per-element validity scoring from DBMS statistics",
-                "Zero-query answers from profiled column distributions",
+                "Zero-query answers from precomputed DLM context",
                 "Self-healing feedback loop after each live query",
                 "No LLM, no API keys, no latency",
               ].map(t => (
@@ -746,9 +925,9 @@ export default function AboutPage() {
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               {[
                 { label: "Question", sub: "\"How many deaths in the US?\"", color: "#e2e8f0", bg: "rgba(255,255,255,0.04)" },
-                { label: "Element Matching", sub: "leaderboard.arena_elo, leaderboard.provider", color: "#8b5cf6", bg: "rgba(139,92,246,0.06)" },
+                { label: "Element Matching", sub: "deaths → metric, US → country filter", color: "#8b5cf6", bg: "rgba(139,92,246,0.06)" },
                 { label: "Validity Check", sub: "deaths: 0.92  ·  country: 0.88  ·  min: 0.88", color: "#10b981", bg: "rgba(16,185,129,0.06)" },
-                { label: "Route: Context", sub: "Score 0.88 ≥ 0.70 threshold — answer from cache", color: B, bg: `${B}08` },
+                { label: "Route: DLM Context", sub: "Score 0.88 ≥ 0.70 threshold — answer from precomputed context", color: B, bg: `${B}08` },
                 { label: "Answer", sub: "1,127,152 deaths · 42ms · no query executed", color: "#f59e0b", bg: "rgba(245,158,11,0.06)" },
               ].map((step, i) => (
                 <div key={step.label}>
