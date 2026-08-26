@@ -7,8 +7,9 @@ import { msalFetch } from "../../utils/msalFetch";
 import { useRecents } from "../../hooks/useRecents";
 import { useTheme } from "../../contexts/ThemeContext";
 import { KaveonLoading } from "../../components/KaveonLoading";
+import { LineageView } from "../../components/LineageView";
 
-type TabKey = "dashboards" | "charts" | "datasets" | "queries";
+type TabKey = "lineage" | "dashboards" | "charts" | "datasets" | "queries";
 
 interface WorkspaceItem {
   id: string | number;
@@ -32,6 +33,7 @@ interface WorkspaceItem {
 
 // Singular object_type used by the per-user favorites/pin store.
 const PIN_TYPE: Record<TabKey, string> = {
+  lineage: "lineage",
   dashboards: "dashboard",
   charts: "chart",
   datasets: "dataset",
@@ -51,8 +53,12 @@ function DatasetIcon({ size = 16, color = "currentColor" }: { size?: number; col
 function QueryIcon({ size = 16, color = "currentColor" }: { size?: number; color?: string }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>;
 }
+function LineageIcon({ size = 16, color = "currentColor" }: { size?: number; color?: string }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="5" cy="6" r="3"/><circle cx="19" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><path d="M7.5 7.5L10.5 15.5"/><path d="M16.5 7.5L13.5 15.5"/></svg>;
+}
 
 const TABS: { key: TabKey; label: string; endpoint: string; newRoute: string; Icon: typeof DashboardIcon }[] = [
+  { key: "lineage", label: "Lineage", endpoint: "", newRoute: "", Icon: LineageIcon },
   { key: "dashboards", label: "Dashboards", endpoint: "/api/v1/dashboards", newRoute: "/dashboards/new", Icon: DashboardIcon },
   { key: "charts", label: "Charts", endpoint: "/api/v1/charts", newRoute: "/charts/new", Icon: ChartIcon },
   { key: "datasets", label: "Datasets", endpoint: "/api/v1/datasets", newRoute: "/datasets/new", Icon: DatasetIcon },
@@ -61,6 +67,7 @@ const TABS: { key: TabKey; label: string; endpoint: string; newRoute: string; Ic
 
 function itemNav(tab: TabKey, id: string | number): string {
   switch (tab) {
+    case "lineage": return `/workspace?tab=lineage`;
     case "dashboards": return `/dashboards/${id}/view`;
     case "charts": return `/charts/${id}`;
     case "datasets": return `/datasets/${id}`;
@@ -98,7 +105,8 @@ const GROUP_ACCENTS = ["#3b82f6", "#10b981", "#8b5cf6", "#f59e0b", "#ec4899", "#
 const NEUTRAL_ACCENT = "#64748b";
 
 // Layout per tab: visual objects → cards; data/text objects → dense rows.
-const TAB_LAYOUT: Record<TabKey, "cards" | "rows"> = {
+const TAB_LAYOUT: Record<TabKey, "cards" | "rows" | "custom"> = {
+  lineage: "custom",
   dashboards: "cards",
   charts: "cards",
   datasets: "rows",
@@ -213,6 +221,7 @@ export default function WorkspacePage() {
 
   const load = useCallback(async () => {
     if (!isAuthenticated) return;
+    if (tab.key === "lineage") { setLoading(false); setLoadedTab("lineage"); return; }
     const tabKey = tab.key; // the tab this load belongs to
     setLoading(true);
     setError(null);
@@ -652,6 +661,7 @@ export default function WorkspacePage() {
         })}
         </div>
 
+        {activeTab !== "lineage" && (<>
         {/* Scope toggle */}
         <div style={{ display: "flex", gap: 0, background: "rgba(255,255,255,0.04)", borderRadius: 8, border: "1px solid var(--border)", overflow: "hidden" }}>
           {(["mine", "all"] as const).map((s) => (
@@ -703,18 +713,22 @@ export default function WorkspacePage() {
         }}>
           + New
         </button>
+        </>)}
       </div>
 
       <div style={{ height: 1, background: "var(--border)", marginBottom: 4 }} />
 
+      {/* Lineage — custom full-width visualization */}
+      {activeTab === "lineage" && <LineageView />}
+
       {/* Loading — also covers the gap right after a tab switch, before the new
           tab's data has arrived, so the previous tab never flashes through. */}
-      {(loading || (!error && !ready)) && (
+      {activeTab !== "lineage" && (loading || (!error && !ready)) && (
         <KaveonLoading message="Loading library" fullScreen={false} />
       )}
 
       {/* Error */}
-      {!loading && error && (
+      {activeTab !== "lineage" && !loading && error && (
         <div style={{ textAlign: "center", padding: "80px 0", color: "var(--text-muted)" }}>
           <p style={{ fontSize: 14 }}>{error}</p>
           <button type="button" onClick={load} style={{
@@ -726,7 +740,7 @@ export default function WorkspacePage() {
       )}
 
       {/* Empty */}
-      {ready && !error && filtered.length === 0 && (
+      {activeTab !== "lineage" && ready && !error && filtered.length === 0 && (
         <div style={{ textAlign: "center", padding: "80px 0", color: "var(--text-muted)" }}>
           <p style={{ fontSize: 15, marginBottom: 16 }}>No {tab.label.toLowerCase()} yet</p>
           <button type="button" onClick={() => router.push(tab.newRoute)} style={{
