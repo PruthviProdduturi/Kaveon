@@ -94,7 +94,7 @@ export function LineageView() {
           const dlmId = `dlm-${d.id}`;
           ns.push({
             id: dlmId, type: "dlm",
-            label: compact(dlm.answers_precomputed) + " answers",
+            label: compact(dlm.values_indexed) + " values",
             sublabel: compact(dlm.row_count) + " rows",
             col: 2, row: i,
           });
