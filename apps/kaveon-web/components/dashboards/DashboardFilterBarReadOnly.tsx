@@ -298,13 +298,15 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
       updateDashboardFilter(filterId, { dateFrom: editDateFrom, dateTo: editDateTo, value: `${editDateFrom} – ${editDateTo}`, enabled: true });
     } else {
       const vals = editValues.filter(Boolean);
-      if (!vals.length) return;
-      // Multi-select → IN; single → =. Applying auto-enables the filter.
-      updateDashboardFilter(filterId, {
-        value: vals.join(', '),
-        operator: vals.length > 1 ? 'IN' : '=',
-        enabled: true,
-      });
+      if (!vals.length) {
+        updateDashboardFilter(filterId, { value: 'AllUp', operator: '=', enabled: true });
+      } else {
+        updateDashboardFilter(filterId, {
+          value: vals.join(', '),
+          operator: vals.length > 1 ? 'IN' : '=',
+          enabled: true,
+        });
+      }
     }
     resetEdit();
   };
@@ -325,10 +327,10 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
 
   const clearAll = () => {
     dashboardFilters.forEach((f) => {
-      if (f.value || f.dateFrom || f.dateTo) {
-        // Clear the value but keep the filter enabled/visible so it stays usable
-        // (disabling it grays the chip out and blocks reopening).
+      if (f.filterType === 'date_range') {
         updateDashboardFilter(f.id, { value: '', valueKey: '', dateFrom: '', dateTo: '' });
+      } else {
+        updateDashboardFilter(f.id, { value: 'AllUp', valueKey: '', operator: '=' });
       }
     });
     resetEdit();
