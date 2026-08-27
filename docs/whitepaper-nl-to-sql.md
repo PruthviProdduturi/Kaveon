@@ -11,7 +11,7 @@ August 2026
 > all*. The template parser documented here handles the shapes the DLM does not yet
 > build (mainly time-series trends). Everything below remains an accurate account of
 > that fallback layer; for the primary engine see
-> `whitepaper-adaptive-context-routing.md` and `dlm-positioning.md`.
+> `whitepaper-dlm.md` and `whitepaper-adaptive-context-routing.md`.
 
 ---
 

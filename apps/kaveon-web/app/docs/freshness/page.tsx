@@ -108,8 +108,8 @@ where effective_half_life = base_half_life / (1 + usage_gain × ln(1 + usage_cou
         shorten it.
       </p>
       <Code lang="python">{`def _effective_half_life(usage_count: int) -> float:
-    hl = BASE_HALF_LIFE / (1.0 + USAGE_GAIN * math.log1p(max(0, usage_count)))
-    return max(MIN_HALF_LIFE, hl)`}</Code>
+    hl = BASE_HALF_LIFE_SECONDS / (1.0 + USAGE_GAIN * math.log1p(max(0, usage_count)))
+    return max(MIN_HALF_LIFE_SECONDS, hl)`}</Code>
       <table>
         <thead><tr><th>Usage count</th><th>Effective half-life</th></tr></thead>
         <tbody>
