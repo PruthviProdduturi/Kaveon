@@ -587,7 +587,7 @@ flowchart TD
 
 ## DLM — Data Language Model
 
-> **Patent-pending** — see `docs/patent-adaptive-context-routing.md` for the full claim set, and `docs/dlm-positioning.md` for positioning.
+> **Patent-pending** — see `docs/patent-adaptive-context-routing.md` for the full claim set, `docs/whitepaper-dlm.md` for the DLM deep dive, and `docs/whitepaper-dlm-curation.md` for curation at scale.
 
 The **DLM** is Kaveon's core differentiator and the **primary** NL→SQL path on the homepage: a per-dataset compiled context artifact that answers natural-language questions **with no hosted LLM**, and — for the common cases — **with no database scan at all**. The in-browser template parser (`utils/nlToSql.ts`) is the fallback for shapes the DLM can't yet build (mainly time-series trends).
 

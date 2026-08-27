@@ -561,4 +561,5 @@ context engine, not instead of it.
 
 *See also: `patent-adaptive-context-routing.md` for the filing-ready claim set,
 `whitepaper-nl-to-sql.md` for the deterministic translation layer this router sits
-behind, and `dlm-positioning.md` for the product positioning (DLM vs Fabric).*
+behind, `whitepaper-dlm.md` for the standalone DLM deep dive, and
+`whitepaper-dlm-curation.md` for curation at scale with production numbers.*

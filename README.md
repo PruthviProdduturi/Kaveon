@@ -94,11 +94,15 @@ Configure `.env` at the repo root with your database connection. See [Setup Guid
 | Guide | Description |
 |-------|-------------|
 | [Architecture](ARCHITECTURE.md) | System design, data flow, auth model |
-| [NL→SQL White Paper](docs/whitepaper-nl-to-sql.md) | How the conversational engine works |
-| [Charts](docs/guide-charts.md) | 37 chart types, dark mode, ECharts config |
-| [Dashboards](docs/guide-dashboards.md) | Builder, filters, cross-filtering, publishing |
-| [SQL Lab](docs/guide-sql-lab.md) | Monaco editor, query execution, caching |
-| [Data Sources](docs/guide-data-sources.md) | Connecting databases |
+| [DLM White Paper](docs/whitepaper-dlm.md) | The Data Language Model — compilation, intent resolution, freshness |
+| [DLM Curation White Paper](docs/whitepaper-dlm-curation.md) | How Kaveon precomputes 375 answers across 10M rows |
+| [Adaptive Context Routing](docs/whitepaper-adaptive-context-routing.md) | Per-element staleness scoring and query routing |
+| [NL→SQL White Paper](docs/whitepaper-nl-to-sql.md) | Template-based deterministic translation (fallback layer) |
+| [Patent Claims](docs/patent-adaptive-context-routing.md) | 21-claim filing-ready patent draft |
+| [Charts](docs/guides/charts.md) | 37 chart types, dark mode, ECharts config |
+| [Dashboards](docs/guides/dashboards.md) | Builder, filters, cross-filtering, publishing |
+| [SQL Lab](docs/guides/sql-lab.md) | Monaco editor, query execution, caching |
+| [Data Sources](docs/guides/data-sources.md) | Connecting databases |
 | [Deployment](docs/guides/deploy-vercel-azure-postgres.md) | Vercel + Azure Container Apps + Azure PostgreSQL setup |
 
 ---

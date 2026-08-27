@@ -746,9 +746,10 @@ def _stem_set(tokens: set) -> set:
 
 def route(question: str, limit: int = 3) -> List[Dict[str, Any]]:
     """CLM-over-CLMs (weighted lexical): rank datasets by how strongly the
-    question matches each dataset's metrics (x3), indexed values (x2), name (x2)
-    and columns (x1). A floor prevents a single generic word from routing (which
-    sent 'USA consumption' to the AI leaderboard). Discrete-code routing at v2."""
+    question matches each dataset's metrics (x3), indexed values (x2), name (x4)
+    and columns (min(hits,3)). A floor prevents a single generic word from routing
+    (which sent 'USA consumption' to the AI leaderboard). Discrete-code routing
+    at v2."""
     ensure_tables()
     q_tokens = set(_tokenize(question))
     if not q_tokens:

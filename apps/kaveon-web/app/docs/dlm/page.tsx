@@ -110,7 +110,7 @@ Merge: HLL(country=US) ∪ HLL(platform=iOS) → ~5,012 unique users
       + min(col_hits, 3)     (column names, capped at 3 to prevent generic matches)
 
 Floor: score must be ≥ 2 to prevent stray single-word matches.
-Tie-break: dataset with the most metrics wins.`}</Code>
+Tie-break: narrowest dataset (fewest columns) wins.`}</Code>
       <p>
         The routing is deterministic — the same question always routes to the same dataset. The routed dataset ID is
         returned in the response so the frontend can display it.
