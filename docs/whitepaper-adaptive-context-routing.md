@@ -402,7 +402,7 @@ layer without losing the ability to regenerate the base.
 
 **Robust intent resolution.** *(Shipped.)* The token-based matchers that map a
 question to a metric, group-by dimension, and filter value now use **symmetric
-stem+synonym expansion**. A 50-concept seed synonym lexicon (finance, health, energy,
+stem+synonym expansion**. A 56-concept seed synonym lexicon (finance, health, energy,
 transport, geography, time, tech) provides cross-domain vocabulary coverage. A
 lightweight suffix stemmer handles common English inflections ("selling" → "sell",
 "exported" → "export", "hospitalization" → "hospital") with no external NLP
@@ -526,8 +526,8 @@ Non-additive `COUNT(DISTINCT …)` metrics cannot be derived by summing precompu
 breakdowns. The DLM addresses this with **HyperLogLog sketch cuboids**: at build time,
 each fact-table row is hashed into per-cell sparse registers stored in `dlm_sketch`.
 At query time, registers merge in-memory to produce approximate NDV at arbitrary
-dimension slices — no fact-table scan. Typical relative error is < 2% at the default
-precision (p=14, 16384 registers). This is the only approximate answer path; all
+dimension slices — no fact-table scan. Typical relative error is ~2.3% at the default
+precision (p=11, 2048 registers). This is the only approximate answer path; all
 other DLM answers are exact.
 
 ### A.7 Where it lives
@@ -550,6 +550,8 @@ context spec, live assembler) and `routers/dlm.py`:
 | `/dlm/serve-chart` | POST | Context-first chart serving (single/multi-metric, filters) |
 | `/dlm/filter-values` | GET | Distinct dimension values from context |
 | `/dlm/coverage` | GET | Coverage report across all datasets |
+| `/dlm/sweep` | POST | Manual freshness sweep trigger (Admin only) |
+| `/dlm/notify-data-change` | POST | Pipeline webhook: invalidate + rebuild after ETL |
 | `/dlm/cache/invalidate` | POST | Invalidate in-memory answer/sketch/spec caches |
 
 The self-migrating tables `dlm_artifact` (with `manifest` and `curation` columns),

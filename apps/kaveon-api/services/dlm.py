@@ -727,19 +727,6 @@ _ROUTE_NOISE = frozenset({"sum", "avg", "count", "total", "max", "min", "the", "
 _ROUTE_FLOOR = 2  # reject routing on a single stray generic-word match
 
 
-def _stem(word: str) -> str:
-    """Minimal suffix stemmer for routing (taxi/taxis, model/models, etc.)."""
-    if len(word) <= 3:
-        return word
-    if word.endswith("ies"):
-        return word[:-3] + "y"
-    if word.endswith("ses") or word.endswith("xes") or word.endswith("zes"):
-        return word[:-2]
-    if word.endswith("s") and not word.endswith("ss"):
-        return word[:-1]
-    return word
-
-
 def _stem_set(tokens: set) -> set:
     return {_stem(t) for t in tokens}
 
@@ -1082,11 +1069,8 @@ def _date_range(database: str, schema: str, columns: List[dict], snapshots: Dict
 
 
 def ask(question: str, limit: int = 50) -> Dict[str, Any]:
-    """Deterministic NL -> SQL via the DLM — no LLM. Routes to a dataset, resolves
-    entity filters from the value index, matches a metric (by name/expression/
-    synonyms), detects a group-by and a year filter, and assembles SQL against
-    the dataset's fact table. This is the homepage's fallback when the in-browser
-    template parser can't match a question."""
+    """Deterministic NL -> SQL via the DLM — no LLM."""
+    t0 = _time_mod.monotonic()
     ensure_tables()
     routed = route(question, limit=1)
     if not routed:
@@ -1218,6 +1202,7 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
         if served is not None:
             if note:
                 served["note"] = note
+            served["duration_ms"] = round((_time_mod.monotonic() - t0) * 1000, 1)
             return served
 
         # exact combo not materialized → for a non-additive COUNT(DISTINCT) metric,
@@ -1227,6 +1212,7 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
             sketched = _serve_sketch(dataset_id, ds, metric_name, group_col, top_n,
                                      filters, routed[0])
             if sketched is not None:
+                sketched["duration_ms"] = round((_time_mod.monotonic() - t0) * 1000, 1)
                 return sketched
 
     # ── assemble (live query path) ───────────────────────────────────────────
@@ -1298,6 +1284,7 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
         # query fetches the exact (multi-filter / combo) figure.
         "context_hints": _context_hints(dataset_id, metric_name, filters),
         "confidence": round(routed[0].get("score", 0.0), 3),
+        "duration_ms": round((_time_mod.monotonic() - t0) * 1000, 1),
     }
 
 

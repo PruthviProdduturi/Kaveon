@@ -187,8 +187,8 @@ def _column_distributions(database: str, schema: str) -> Dict[str, List[Dict[str
 
 
 def _inferred_relationships(database: str, schema: str) -> List[Dict[str, str]]:
-    """Declared foreign keys from pg_constraint. (Heuristic <t>_id inference is
-    layered on top by the router when a question spans tables with no FK.)"""
+    """Declared foreign keys from pg_constraint, plus heuristic <t>_id inference
+    for undeclared relationships (patent claim 10)."""
     sql = f"""
         SELECT
             tc.table_name        AS from_table,
@@ -208,8 +208,9 @@ def _inferred_relationships(database: str, schema: str) -> List[Dict[str, str]]:
     try:
         res = pool.execute_query(sql, database)
     except Exception:
-        return []
-    return [
+        res = {"rows_objects": []}
+
+    declared = [
         {
             "from": f"{schema}.{r['from_table']}.{r['from_column']}",
             "to": f"{schema}.{r['to_table']}.{r['to_column']}",
@@ -217,6 +218,42 @@ def _inferred_relationships(database: str, schema: str) -> List[Dict[str, str]]:
         }
         for r in res.get("rows_objects", [])
     ]
+
+    declared_pairs = {(r["from"], r["to"]) for r in declared}
+
+    col_sql = f"""
+        SELECT table_name, column_name
+        FROM information_schema.columns
+        WHERE table_schema = '{_esc(schema)}'
+    """
+    try:
+        col_res = pool.execute_query(col_sql, database)
+    except Exception:
+        return declared
+
+    tables = set()
+    cols_by_table: Dict[str, List[str]] = {}
+    for r in col_res.get("rows_objects", []):
+        t, c = r["table_name"], r["column_name"]
+        tables.add(t)
+        cols_by_table.setdefault(t, []).append(c)
+
+    for tbl, columns in cols_by_table.items():
+        for col in columns:
+            if not col.endswith("_id"):
+                continue
+            candidate = col[:-3]  # strip _id
+            if candidate in tables and candidate != tbl:
+                fk_from = f"{schema}.{tbl}.{col}"
+                fk_to = f"{schema}.{candidate}.id"
+                if (fk_from, fk_to) not in declared_pairs:
+                    declared.append({
+                        "from": fk_from,
+                        "to": fk_to,
+                        "kind": "heuristic_fk",
+                    })
+
+    return declared
 
 
 def _query_pattern_frequency(database: str) -> Dict[str, int]:

@@ -32,6 +32,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -138,7 +139,8 @@ def _profile_answer(question: str, snapshots: Dict[str, Dict[str, Any]],
                 val = _ndistinct_to_count(nd, _int(c.get("row_count")))
                 if val is not None:
                     return {"answer": {"metric": "approx_distinct",
-                                       "column": c.get("column_name"), "value": val},
+                                       "column": c.get("column_name"), "value": val,
+                                       "approximate": True},
                             "explanation": "approximate distinct count from pg_stats.n_distinct "
                                            "(estimate, no scan)",
                             "source_elements": [c.get("element_key")]}
@@ -153,9 +155,28 @@ def _profile_answer(question: str, snapshots: Dict[str, Dict[str, Any]],
                 if nf is not None:
                     return {"answer": {"metric": "null_fraction",
                                        "column": c.get("column_name"),
-                                       "value": round(float(nf), 4)},
-                            "explanation": "null fraction from pg_stats.null_frac",
+                                       "value": round(float(nf), 4),
+                                       "approximate": True},
+                            "explanation": "null fraction from pg_stats.null_frac (approximate)",
                             "source_elements": [c.get("element_key")]}
+
+    # most common value: "most common/popular/frequent <col>"
+    mc = re.search(r"\b(most (?:common|popular|frequent))\s+([a-z0-9_ ]+)", q)
+    if mc and cols:
+        target = _norm(mc.group(2))
+        for c in cols:
+            if _norm(c.get("column_name")) in target or target in _norm(c.get("column_name")):
+                mcv = _profile(c).get("most_common_vals")
+                if mcv:
+                    vals = mcv if isinstance(mcv, list) else [v.strip() for v in mcv.strip("{}").split(",")]
+                    if vals:
+                        return {"answer": {"metric": "most_common_value",
+                                           "column": c.get("column_name"),
+                                           "value": vals[0],
+                                           "approximate": True},
+                                "explanation": f"most common value from pg_stats.most_common_vals (approximate)",
+                                "source_elements": [c.get("element_key")]}
+
     return None
 
 
@@ -210,17 +231,23 @@ def _cache_put(database: str, sig: str, sql: str, result: Dict[str, Any],
 def ask(question: str, database: str, sql: Optional[str] = None,
         schema: str = "public", threshold: float = validity.DEFAULT_THRESHOLD) -> Dict[str, Any]:
     """Route a natural-language question. See module docstring for the contract."""
+    t0 = time.monotonic()
+
+    def _with_duration(resp: Dict[str, Any]) -> Dict[str, Any]:
+        resp["duration_ms"] = round((time.monotonic() - t0) * 1000, 1)
+        return resp
+
     if not profiler.is_supported():
-        return {"route": "query", "source": "live", "supported": False,
+        return _with_duration({"route": "query", "source": "live", "supported": False,
                 "reason": "context engine requires a Postgres metadata store",
-                "sql": sql, "result": _maybe_exec(sql, database) if sql else None}
+                "sql": sql, "result": _maybe_exec(sql, database) if sql else None})
 
     profiler.ensure_tables()
     snapshots = profiler.load_snapshots(database)
     if not snapshots:
-        return {"route": "query", "source": "live", "context_built": False,
+        return _with_duration({"route": "query", "source": "live", "context_built": False,
                 "reason": "no context representation built yet — call /context/build",
-                "sql": sql, "result": _maybe_exec(sql, database) if sql else None}
+                "sql": sql, "result": _maybe_exec(sql, database) if sql else None})
 
     # 3. map question -> relevant elements
     relevant = map_question_to_elements(question, snapshots)
@@ -241,9 +268,9 @@ def ask(question: str, database: str, sql: Optional[str] = None,
     if decision["route"] == "context":
         pa = _profile_answer(question, snapshots, relevant)
         if pa is not None:
-            return {**base, "route": "context", "source": "profile",
+            return _with_duration({**base, "route": "context", "source": "profile",
                     "answer": pa["answer"], "explanation": pa["explanation"],
-                    "executed_query": False}
+                    "executed_query": False})
 
         # 6b. serve a cached result whose dependencies are still valid
         sig = _question_sig(question)
@@ -251,37 +278,30 @@ def ask(question: str, database: str, sql: Optional[str] = None,
         if cached and _deps_valid(cached, scores, threshold):
             _cache_put(database, sig, "", _load(cached.get("result")), _load(cached.get("element_deps")),
                        decision["min_score"])
-            return {**base, "route": "context", "source": "cache",
+            return _with_duration({**base, "route": "context", "source": "cache",
                     "result": _load(cached.get("result")), "executed_query": False,
-                    "served_from": "context_answer_cache"}
+                    "served_from": "context_answer_cache"})
 
         # context is valid but we have nothing cached and can't synthesise from
         # profile — fall through to a live query and populate the cache.
 
     # 5. live path (route == query/hybrid, or context-but-cold-cache)
     if not sql:
-        return {**base, "route": decision["route"], "source": "needs_sql",
+        return _with_duration({**base, "route": decision["route"], "source": "needs_sql",
                 "executed_query": False,
-                "reason": "route requires a live query; supply generated SQL as `sql`"}
+                "reason": "route requires a live query; supply generated SQL as `sql`"})
 
     result = _maybe_exec(sql, database)
-    # Hybrid route (claim 4): only the STALE subset needed the live query — the
-    # fresh elements were already trusted from context. Refresh just the stale
-    # subset; a full query refreshes everything relevant.
     is_hybrid = decision["route"] == "hybrid"
     to_refresh = decision.get("stale_elements", []) if is_hybrid else relevant
     refreshed = profiler.refresh_elements(database, to_refresh or relevant)
-    # cache the fresh result against the question signature
     _cache_put(database, _question_sig(question), sql, result, relevant, decision["min_score"])
 
-    return {**base, "route": decision["route"],
+    return _with_duration({**base, "route": decision["route"],
             "source": "live", "sql": sql, "result": result,
             "executed_query": True, "elements_refreshed": refreshed,
-            # For a hybrid answer, report which elements were served from context
-            # vs which drove the live query (claim 4: answer the valid portion from
-            # context, query only the stale portion).
             "elements_from_context": decision.get("fresh_elements", []) if is_hybrid else [],
-            "elements_queried": to_refresh if is_hybrid else relevant}
+            "elements_queried": to_refresh if is_hybrid else relevant})
 
 
 # --------------------------------------------------------------------------- #
