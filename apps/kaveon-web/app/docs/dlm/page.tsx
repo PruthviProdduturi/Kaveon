@@ -87,7 +87,7 @@ export default function DlmDocs() {
         For non-additive metrics like <code>COUNT(DISTINCT user_id)</code>, simple precomputed totals cannot be
         combined across dimensions (you can&apos;t sum distinct counts). The DLM uses{" "}
         <strong>HyperLogLog (HLL) sketches</strong> — probabilistic data structures that approximate distinct counts
-        with ~2% error and can be merged across partitions. This means &ldquo;how many active users in the US&rdquo;
+        with ~2.3% error and can be merged across partitions. This means &ldquo;how many active users in the US&rdquo;
         can be answered from precomputed sketches without scanning the 504M-row fact table.
       </p>
       <Code lang="text">{`Metric: Active Users = COUNT(DISTINCT user_id)

@@ -15,9 +15,9 @@ import json
 import math
 from typing import Dict, Iterable, List, Optional
 
-# Register precision. p=11 -> m=2048 registers, ~1.6% standard error — the value
-# validated in the sketch proof. Changing p requires a regenerate (registers are
-# not comparable across precisions); the stored header row records the p used.
+# Register precision. p=11 -> m=2048 registers, ~2.3% standard error
+# (1.04/sqrt(2048)). Changing p requires a regenerate (registers are not
+# comparable across precisions); the stored header row records the p used.
 P = 11
 M = 1 << P
 # Bias-correction constant (Flajolet et al.); m >= 128 uses the closed form.

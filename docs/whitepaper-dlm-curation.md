@@ -223,7 +223,7 @@ vector (only non-zero registers, JSON-serialized).
 |---|---|---|
 | `P` (precision bits) | 11 | 2^11 = 2,048 registers per cell |
 | `RBITS` | 53 (= 64 - 11) | Remaining bits for rho computation |
-| Standard error | ~1.6% | Mean error at 20M rows; p95 = 4.1% |
+| Standard error | ~2.3% | Mean error at 20M rows; p95 = 4.1% |
 | `SKETCH_MAX_DIMS` | 6 | Max dimensions in a cuboid |
 | `SKETCH_MAX_CELLS` | 8,000 | Max cells before the cuboid is too expensive |
 
@@ -234,7 +234,7 @@ register vectors** — an element-wise max across the relevant cells, followed b
 the HLL cardinality estimator. This is pure Python, no database query.
 
 "Distinct users for Enterprise" → union all cells where `plan = Enterprise`,
-estimate. ~1.6% error, 15.7× smaller than raw, 20--30× faster than a live
+estimate. ~2.3% error, 15.7× smaller than raw, 20--30× faster than a live
 `COUNT(DISTINCT)`.
 
 The sketch cuboid requires at least 2 dimensions (single-dimension distinct
@@ -455,6 +455,9 @@ context — no partial results that would produce misleading charts.
 | 139 | COVID-19 Global | 51,000 | ~5 | ~6 | 30 |
 | **142** | **Kaveon Product Usage (Synth)** | **10,100,000** | **15** | **7** | **375** |
 
+*7 of 10 registered datasets have DLM compiled; the remaining 3 are registered
+but do not yet have precomputed answers.*
+
 ### 11.2 Dataset 142 Breakdown (375 Answers)
 
 The Kaveon Product Usage dataset — 10.1M rows, 15 metrics, 7 dimensions — is the
@@ -531,7 +534,7 @@ over 10 million rows, on $40/month of infrastructure.
 | `SKETCH_MAX_CELLS` | 8,000 | dlm.py | Max cells in HLL cuboid |
 | `MAX_CURATION_DIM` | 4 | dlm.py | Max dimensions in dashboard-curated combo |
 | `CURATION_CELL_CAP` | 5,000 | dlm.py | Max rows per dashboard-curated combo |
-| `P` (HLL precision) | 11 | hll.py | 2^11 = 2,048 registers, ~1.6% error |
+| `P` (HLL precision) | 11 | hll.py | 2^11 = 2,048 registers, ~2.3% error |
 | `BASE_HALF_LIFE_SECONDS` | 21,600 (6h) | context_validity.py | Time-decay base |
 | `CHANGE_HALF_FRACTION` | 0.05 (5%) | context_validity.py | Change-factor half point |
 | `USAGE_GAIN` | 0.35 | context_validity.py | Usage-weighted decay gain |

@@ -106,8 +106,8 @@ counts, null fractions, histograms) and `pg_stat_user_tables` (row counts,
 modification counters). This is O(1) per table — a 100-million-row table costs
 the same as a 100-row one.
 
-**Step 3 — Value inventory.** For each low-cardinality dimension column (fewer
-than 1,000 distinct values), scans `SELECT col, COUNT(*) GROUP BY col LIMIT
+**Step 3 — Value inventory.** For each low-cardinality dimension column (up to
+1,000 distinct values), scans `SELECT col, COUNT(*) GROUP BY col LIMIT
 1001`. Falls back to `pg_stats.most_common_vals` when the scan fails. Produces
 normalized (value, frequency) pairs for entity resolution.
 
@@ -150,14 +150,14 @@ this to a specific metric, a specific dimension, and zero or more entity filters
 The question is tokenized, stopwords are removed, and each token is expanded
 through two layers:
 
-**Suffix stemmer.** A lightweight rule-based stemmer handles common English
-inflections with no external dependencies:
+**Suffix stemmer.** A lightweight rule-based stemmer with 11 suffix rules handles
+common English inflections with no external dependencies. Representative rules:
 - `-ies` → `-y` (countries → country)
 - `-tion`/`-sion` → `-e` or strip (emission → emiss → emit)
 - `-ing` with doubled consonant (selling → sell)
 - `-ed`, `-er`, `-es`, `-s` with length guards
 
-**Seed synonym lexicon.** ~40 synonym families spanning finance, health, energy,
+**Seed synonym lexicon.** 56 synonym families spanning finance, health, energy,
 transport, geography, time, and technology domains:
 ```
 revenue: [sales, turnover, income, sell, sold, earned]
@@ -234,15 +234,15 @@ answer row with `group_col = ''`.
 ORDER BY m0 DESC LIMIT depth`. Default depth is 500, configurable per dimension
 via the curation overlay.
 
-**Tier 3 — Two-dimensional combos.** For dimension pairs where both have fewer
-than 500 distinct values and the cell product is under 5,000:
+**Tier 3 — Two-dimensional combos.** For dimension pairs where both have up to
+500 distinct values and the cell product is under 5,000:
 `SELECT d1, d2, expr0, ... FROM fact GROUP BY d1, d2 LIMIT 5000`. Maximum 12
 pairs per dataset. Stored with `group_col = "d1|d2"` (pipe-delimited,
 lexicographic). Enables two-filter questions ("queries in Asia for Enterprise")
 to serve from context.
 
 **Tier 4 — HLL sketch cuboids.** For non-additive `COUNT(DISTINCT col)` metrics.
-HyperLogLog registers (p=11, 2,048 registers, ~1.6% standard error) are computed
+HyperLogLog registers (p=11, 2,048 registers, ~2.3% standard error) are computed
 in one SQL scan using `hashtextextended()` — pure SQL, no extension required. At
 query time, register vectors merge in Python to produce approximate NDV at
 arbitrary dimension slices. Maximum 6 dimensions, 8,000 cells.
@@ -339,10 +339,10 @@ ones where a stale answer does the most damage.
 | Usage Count | Effective Half-Life |
 |-------------|-------------------|
 | 0 | 6h 00m |
-| 10 | 4h 49m |
-| 100 | 3h 18m |
-| 1,000 | 2h 22m |
-| 10,000 | 1h 47m |
+| 10 | 3h 16m |
+| 100 | 2h 18m |
+| 1,000 | 1h 45m |
+| 10,000 | 1h 25m |
 
 ### 6.5 Routing Decision
 
@@ -428,7 +428,7 @@ The DLM is implemented in pure Python with no ML dependencies:
 | `services/context_router.py` | 364 | Question→element mapping, profile answers, dependency-valid cache |
 | `routers/dlm.py` | ~300 | REST API: 16 endpoints |
 
-Total: ~4,831 lines. The intent resolution uses a 40-concept seed synonym lexicon
+Total: ~4,831 lines. The intent resolution uses a 56-family seed synonym lexicon
 and a lightweight suffix stemmer, both hand-written. No NLP library, no ML model,
 no training data. Zero external API calls.
 

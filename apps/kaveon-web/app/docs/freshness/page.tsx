@@ -114,10 +114,10 @@ where effective_half_life = base_half_life / (1 + usage_gain × ln(1 + usage_cou
         <thead><tr><th>Usage count</th><th>Effective half-life</th></tr></thead>
         <tbody>
           <tr><td>0 (never used)</td><td>6h 0min (base)</td></tr>
-          <tr><td>10</td><td>4h 49min</td></tr>
-          <tr><td>100</td><td>3h 18min</td></tr>
-          <tr><td>1,000</td><td>2h 22min</td></tr>
-          <tr><td>10,000</td><td>1h 47min</td></tr>
+          <tr><td>10</td><td>3h 16min</td></tr>
+          <tr><td>100</td><td>2h 18min</td></tr>
+          <tr><td>1,000</td><td>1h 45min</td></tr>
+          <tr><td>10,000</td><td>1h 25min</td></tr>
         </tbody>
       </table>
       <p>
