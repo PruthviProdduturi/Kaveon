@@ -429,6 +429,8 @@ class PostgreSQLConnection:
                 host=self.host, port=self.port, dbname=self.database,
                 user=user, password=password,
                 sslmode=sslmode, connect_timeout=30,
+                keepalives=1, keepalives_idle=30,
+                keepalives_interval=10, keepalives_count=5,
             )
         else:
             # Azure Entra Managed Identity (Azure Database for PostgreSQL).
@@ -442,6 +444,8 @@ class PostgreSQLConnection:
                 host=self.host, port=self.port, dbname=self.database,
                 user=aad_user, password=token,
                 sslmode="require", connect_timeout=30,
+                keepalives=1, keepalives_idle=30,
+                keepalives_interval=10, keepalives_count=5,
             )
         # autocommit avoids a failed statement poisoning the pooled connection
         # ("current transaction is aborted") — important for serverless Postgres.
