@@ -267,6 +267,16 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
     except Exception:
         stats_supported = False
 
+    if not stats_supported:
+        existing_art = meta.query_one(
+            "SELECT status FROM dlm_artifact WHERE dataset_id = @param0",
+            [str(dataset_id)],
+        )
+        if existing_art and existing_art.get("status") == "ready":
+            logger.info("Profiler unavailable for dataset %s — preserving existing ready artifact", dataset_id)
+            return {"ok": True, "dataset_id": dataset_id, "status": "ready",
+                    "rebuilt": False, "reason": "profiler_unavailable_preserved_existing"}
+
     snapshots = {}
     if stats_supported:
         try:
