@@ -2,7 +2,7 @@
 
 Dataset 142 → kaveon.public.kaveon_product_analytics (joins L2 fact + all dims).
 
-Run from apps/kaveon-api:  python ../../data/kaveon-usage/create_dashboards.py
+Run from repo root:  python data/kaveon-usage/create_dashboards.py
 """
 import os
 import sys
@@ -11,7 +11,7 @@ import uuid
 import random
 import string
 
-_API = os.path.join(os.path.dirname(__file__), "..", "..", "apps", "kaveon-api")
+_API = os.path.join(os.path.dirname(__file__), "..", "..", "api")
 sys.path.insert(0, os.path.abspath(_API))
 
 import database.pool as pool  # noqa: E402

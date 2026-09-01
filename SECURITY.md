@@ -44,7 +44,7 @@ Browser
    │  OAuth sign-in (GitHub / Google / Microsoft Entra ID) via NextAuth (Auth.js v5)
    │  session cookie, signed with AUTH_SECRET
    ▼
-kaveon-web  (Next.js)
+kaveon-studio  (Next.js)
    │  /api/kaveon/[...path] proxy — reads the session server-side and stamps:
    │     X-User-Email · X-User-Name · X-User-Role · X-Proxy-Secret (= KAVEON_PROXY_SECRET)
    ▼
@@ -56,7 +56,7 @@ kaveon-api  (FastAPI, middleware/auth.py)
          Grants/denies by role level; below minimum ⇒ 403 "forbidden"
 ```
 
-The same `KAVEON_PROXY_SECRET` must be set on both `kaveon-web` and `kaveon-api`.
+The same `KAVEON_PROXY_SECRET` must be set on both `kaveon-studio` and `kaveon-api`.
 
 > **Note:** the API retains a legacy Azure-AD/JWKS + `azure-identity` path used only when
 > connecting to **Microsoft Fabric / Azure SQL** data sources via managed identity. It is

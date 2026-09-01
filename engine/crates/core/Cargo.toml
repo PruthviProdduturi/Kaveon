@@ -1,0 +1,11 @@
+[package]
+name = "kaveon-core"
+description = "Arrow types, error types, and shared config for Kaveon Engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+arrow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }

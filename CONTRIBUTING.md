@@ -17,20 +17,20 @@ Thanks for your interest in contributing to Kaveon — the Analyze module of the
 pnpm install
 
 # Run locally (override to :3002 when running the whole Kaveon suite)
-pnpm --filter kaveon-web dev
+pnpm --filter kaveon-studio dev
 
 # Lint & type check
-pnpm --filter kaveon-web lint
-pnpm --filter kaveon-web type-check
+pnpm --filter kaveon-studio lint
+pnpm --filter kaveon-studio type-check
 
 # Build
-pnpm --filter kaveon-web build
+pnpm --filter kaveon-studio build
 ```
 
 ### API (FastAPI)
 
 ```bash
-cd apps/kaveon-api
+cd api
 python -m venv venv
 venv\Scripts\activate        # Windows
 # source venv/bin/activate   # macOS / Linux

@@ -38,7 +38,7 @@ Kaveon is a modern data exploration platform built with a clean, two-tier servic
 ```mermaid
 flowchart TD
     B["🌐 Browser<br/><small>session cookie · same-origin</small>"]
-    W["▲ kaveon-web · Next.js 15 (Vercel)<br/><small>React 19 · App Router · NextAuth (Auth.js v5)<br/>NL→SQL chat · ECharts · Monaco SQL editor</small>"]
+    W["▲ kaveon-studio · Next.js 15 (Vercel)<br/><small>React 19 · App Router · NextAuth (Auth.js v5)<br/>NL→SQL chat · ECharts · Monaco SQL editor</small>"]
     P{{"/api/kaveon/[...path] proxy<br/><small>stamps X-User-* + X-Proxy-Secret</small>"}}
     A["⚙️ kaveon-api · FastAPI (Azure Container Apps)<br/><small>routers → services → database layer<br/>DLM engine · semantic SQL · dataset/chart/dashboard CRUD</small>"]
     M[("🗄️ kaveonmeta<br/><small>control + context plane<br/>platform tables · dlm_* · context_*</small>")]
@@ -72,11 +72,10 @@ Kaveon uses a **centralized configuration approach** with a single `.env` file a
 ```
 Kaveon/
 ├── .env                           ← Single configuration file
-├── apps/
-│   ├── kaveon-api/
-│   │   └── config.py              → Loads ../../.env via python-dotenv
-│   └── kaveon-web/
-│       └── auth.ts / next.config  → Reads AUTH_* + NEXT_PUBLIC_* env vars
+├── api/
+│   └── config.py                  → Loads ../.env via python-dotenv
+├── studio/
+│   └── auth.ts / next.config      → Reads AUTH_* + NEXT_PUBLIC_* env vars
 ```
 
 ### Environment Variable Ownership
@@ -341,7 +340,7 @@ Kaveon runs on **Azure Database for PostgreSQL Flexible Server (PG 18)**, split 
 | `kaveonmeta` | **control + context** | `datasets`, `dataset_columns/dimensions/metrics`, `charts`, `dashboards`, `saved_queries`, `query_history`, `favorites`, `activity`, `user_themes`, `user_recents`, `local_users`, `data_sources`, **and** the DLM tables (`dlm_artifact`, `dlm_value_index`, `dlm_router`, `dlm_answers`, `context_snapshots`) |
 | `kaveon` | **data warehouse** | the actual rows (`kaveon_usage_daily`, `climate_energy.*`, `ai_benchmarks.*`, `covid_global`, …) |
 
-Splitting the planes means DLM/context answers are served from a small, fast store that never contends with a multi-million-row scan. Primary schema is `apps/kaveon-api/schema_postgresql.sql` (`schema.sql` / `schema_mysql.sql` are legacy SQL Server / MySQL variants).
+Splitting the planes means DLM/context answers are served from a small, fast store that never contends with a multi-million-row scan. Primary schema is `api/schema_postgresql.sql` (`schema.sql` / `schema_mysql.sql` are legacy SQL Server / MySQL variants).
 
 ### Core platform tables
 

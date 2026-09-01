@@ -1,0 +1,19 @@
+[package]
+name = "kaveon-python"
+description = "PyO3 Python bindings for Kaveon Engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "kaveon_engine"
+crate-type = ["cdylib"]
+
+[dependencies]
+kaveon-core = { path = "../core" }
+kaveon-sql = { path = "../sql" }
+kaveon-exec = { path = "../exec" }
+kaveon-storage = { path = "../storage" }
+kaveon-optim = { path = "../optim" }
+arrow = { workspace = true }
+pyo3 = { version = "0.23", features = ["extension-module"] }

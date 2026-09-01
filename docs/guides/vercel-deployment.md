@@ -1,6 +1,6 @@
-# Deploying kaveon-web to Vercel
+# Deploying kaveon-studio to Vercel
 
-`kaveon-web` (Next.js 15) deploys to Vercel. `kaveon-api` runs on Azure Container Apps, backed by Azure PostgreSQL (`kaveonmeta` + `kaveon`) — see [deploy-vercel-azure-postgres.md](deploy-vercel-azure-postgres.md) for the full two-service deploy.
+`kaveon-studio` (Next.js 15) deploys to Vercel. `kaveon-api` runs on Azure Container Apps, backed by Azure PostgreSQL (`kaveonmeta` + `kaveon`) — see [deploy-vercel-azure-postgres.md](deploy-vercel-azure-postgres.md) for the full two-service deploy.
 
 ## Prerequisites
 
@@ -11,11 +11,11 @@
 ## 1 · Link the project
 
 ```bash
-cd apps/kaveon-web
+cd studio
 vercel link --yes
 ```
 
-Set **Root Directory** to `apps/kaveon-web`. Note: `apps/kaveon-web/vercel.json` overrides the install with `npm install --legacy-peer-deps` — pnpm fails inside Vercel's build sandbox with `ERR_INVALID_THIS`, so the install is pinned to npm.
+Set **Root Directory** to `studio`. Note: `studio/vercel.json` overrides the install with `npm install --legacy-peer-deps` — pnpm fails inside Vercel's build sandbox with `ERR_INVALID_THIS`, so the install is pinned to npm.
 
 ## 2 · Set environment variables
 
@@ -44,7 +44,7 @@ vercel env add KAVEON_PROXY_SECRET production       # must match kaveon-api
 ### Manual
 
 ```bash
-cd apps/kaveon-web
+cd studio
 vercel --prod
 ```
 
@@ -54,7 +54,7 @@ Production deploys are triggered by GitHub Actions (`.github/workflows/deploy.ym
 
 Pull requests get preview deployments via `vercel deploy` (without `--prod`).
 
-Config: [`apps/kaveon-web/vercel.json`](../../apps/kaveon-web/vercel.json).
+Config: [`studio/vercel.json`](../../studio/vercel.json).
 
 ## 4 · Wire up OAuth callbacks
 
@@ -82,7 +82,7 @@ Set `WEB_URL` on the Container App to `https://<your-project>.vercel.app` and re
 ```mermaid
 flowchart TD
     B["🌐 Browser"]
-    V["▲ Vercel · kaveon-web<br/><small>NextAuth session (server-side)<br/>/api/kaveon/[...path] proxy → X-User-* + KAVEON_PROXY_SECRET</small>"]
+    V["▲ Vercel · kaveon-studio<br/><small>NextAuth session (server-side)<br/>/api/kaveon/[...path] proxy → X-User-* + KAVEON_PROXY_SECRET</small>"]
     A["⚙️ Azure Container Apps · kaveon-api"]
     B --> V --> A
 ```

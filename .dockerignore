@@ -1,9 +1,9 @@
 # =============================================================================
 # .dockerignore — repo-root build context
 #
-# Both apps/lens-api/Dockerfile and apps/lens-web/Dockerfile build from the
-# repo root (COPY needs the monorepo layout + shared packages). Everything
-# below is excluded to keep the build context small and secret-free.
+# Both api/Dockerfile and studio/Dockerfile build from the repo root (COPY
+# needs the monorepo layout + shared packages). Everything below is excluded
+# to keep the build context small and secret-free.
 # =============================================================================
 
 # Dependencies & build output

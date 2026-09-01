@@ -72,7 +72,7 @@ def create():
             "region": "oregon",
             "healthCheckPath": "/api/health",
             "envSpecificDetails": {
-                "dockerfilePath": "./apps/kaveon-api/Dockerfile",
+                "dockerfilePath": "./api/Dockerfile",
                 "dockerContext": ".",
             },
         },

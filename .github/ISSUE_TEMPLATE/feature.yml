@@ -23,8 +23,8 @@ body:
     attributes:
       label: Component
       options:
-        - Web (kaveon-web)
-        - API (kaveon-api)
+        - Studio (kaveon-studio)
+        - API
         - SQL Lab
         - Chart Builder
         - Dashboards
