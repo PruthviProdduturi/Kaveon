@@ -20,12 +20,12 @@
 |-------|-------|--------|
 | `core` — shared types, errors, traits | Shared (either can add, neither restructures without updating this doc) | Scaffold |
 | `storage` — Parquet reader, ADLS Gen 2 | **Codex** | Not started |
-| `exec/scan` — scan operator | **Claude** | Scaffold |
-| `exec/aggregate` — hash aggregate | **Claude** | Scaffold |
-| `exec/filter` — filter evaluation | **Claude** | Scaffold |
+| `exec/scan` — scan operator | **Claude** | Done |
+| `exec/aggregate` — hash aggregate | **Claude** | Done |
+| `exec/filter` — filter evaluation | **Claude** | Done |
 | `exec/sort` — sort operator | **Codex** | Not started |
 | `exec/topn` — TopN operator | **Codex** | Not started |
-| `sql` — parser, logical plan | **Claude** | Scaffold |
+| `sql` — parser, logical plan | **Claude** | Done |
 | `optim` — filter pushdown | **Codex** | Not started |
 | `python` — PyO3 bindings | **Claude** | Scaffold |
 | `benches` — Criterion benchmarks | **Codex** | Not started |
@@ -156,3 +156,4 @@ version = kaveon_engine.version()
 | Date | Engineer | What changed |
 |------|----------|-------------|
 | 2026-09-01 | Claude | Created HANDSHAKE.md, defined shared types in core (BatchSource, BatchOperator, StoragePredicate) |
+| 2026-09-01 | Claude | Added Expr/BinaryOp to core. Built production hash aggregate (GroupKey hashing, SUM/COUNT/AVG/MIN/MAX, null handling). Rewrote scan to consume BatchSource trait. Built filter operator with expression evaluator. Implemented SQL→LogicalPlan translator (SELECT/WHERE/GROUP BY/ORDER BY/LIMIT). Removed sql→exec circular dep. |
