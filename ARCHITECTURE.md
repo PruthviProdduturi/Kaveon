@@ -593,6 +593,12 @@ The **DLM** is Kaveon's core differentiator and the **primary** NL→SQL path on
 
 ### How It Works
 
+<div align="center">
+  <img src="docs/reference/kaveon-dlm-flow.svg" alt="DLM pipeline: compile once, answer instantly" width="820" />
+</div>
+
+<br/>
+
 ```mermaid
 flowchart TD
     Q["❓ NL question → POST /api/v1/dlm/ask"]
