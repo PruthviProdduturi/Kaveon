@@ -1,0 +1,142 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 440" role="img" aria-label="Kaveon DLM: compile once, answer instantly">
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0e1626"/><stop offset="1" stop-color="#0a0f18"/></linearGradient>
+  <radialGradient id="glow" cx="0.5" cy="0.12" r="0.5"><stop offset="0" stop-color="#46c7d9" stop-opacity="0.30"/><stop offset="1" stop-color="#46c7d9" stop-opacity="0"/></radialGradient>
+  <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0.08"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+  <linearGradient id="g_cyan" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7be0ef"/><stop offset="1" stop-color="#2aa6bb"/></linearGradient>
+  <linearGradient id="g_head" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0f2a30"/><stop offset="1" stop-color="#0a1c20"/></linearGradient>
+  <linearGradient id="card" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#111d2c"/><stop offset="1" stop-color="#0f2a30"/></linearGradient>
+  <linearGradient id="g_green" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4ade80"/><stop offset="1" stop-color="#22c55e"/></linearGradient>
+  <linearGradient id="g_amber" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fbbf24"/><stop offset="1" stop-color="#d97706"/></linearGradient>
+  <filter id="soft"><feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000" flood-opacity="0.40"/></filter>
+  <filter id="glow_f"><feGaussianBlur stdDeviation="5"/></filter>
+  <pattern id="dots" width="26" height="26" patternUnits="userSpaceOnUse"><circle cx="1.4" cy="1.4" r="1.2" fill="#2a3b55" fill-opacity="0.25"/></pattern>
+  <marker id="arw" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 1.5 L8 5 L0 8.5 Z" fill="#46c7d9"/></marker>
+  <marker id="arw_g" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 1.5 L8 5 L0 8.5 Z" fill="#4ade80"/></marker>
+  <marker id="arw_a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 1.5 L8 5 L0 8.5 Z" fill="#fbbf24"/></marker>
+</defs>
+
+<!-- Background -->
+<rect x="4" y="4" width="872" height="432" rx="22" fill="url(#bg)" stroke="#1c2942" stroke-width="1.5"/>
+<rect x="4" y="4" width="872" height="432" rx="22" fill="url(#dots)"/>
+<ellipse cx="440" cy="40" rx="350" ry="120" fill="url(#glow)"/>
+
+<!-- Header -->
+<rect x="40" y="24" width="800" height="56" rx="16" fill="url(#g_head)" stroke="url(#g_cyan)" stroke-width="1.5" filter="url(#soft)"/>
+<rect x="41" y="25" width="798" height="24" rx="15" fill="url(#sheen)"/>
+<text x="440" y="48" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="800" font-size="18" letter-spacing="1" fill="#eef4fb">DATA LANGUAGE MODEL</text>
+<text x="440" y="68" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="500" font-size="11" fill="#46c7d9">Compiled context artifact · No LLM · No API key · Patent pending</text>
+
+<!-- ═══ COMPILE PHASE ═══ -->
+<text x="56" y="108" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="700" font-size="11" letter-spacing="2.5" fill="#5b7290">COMPILE · ONCE PER DATASET</text>
+
+<!-- Box 1: Profile -->
+<rect x="48" y="120" width="136" height="56" rx="12" fill="url(#card)" stroke="#46c7d9" stroke-opacity="0.5" stroke-width="1.2" filter="url(#soft)"/>
+<text x="116" y="143" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="700" font-size="13" fill="#46c7d9">Profile</text>
+<text x="116" y="163" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="500" font-size="10" fill="#8aa0b8">pg_stats · constraints</text>
+
+<!-- Arrow 1→2 -->
+<path d="M 184 148 L 214 148" fill="none" stroke="#46c7d9" stroke-width="2" marker-end="url(#arw)" opacity="0.8"/>
+
+<!-- Box 2: Precompute -->
+<rect x="218" y="120" width="136" height="56" rx="12" fill="url(#card)" stroke="#46c7d9" stroke-opacity="0.5" stroke-width="1.2" filter="url(#soft)"/>
+<text x="286" y="143" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="700" font-size="13" fill="#46c7d9">Precompute</text>
+<text x="286" y="163" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="500" font-size="10" fill="#8aa0b8">totals + breakdowns</text>
+
+<!-- Arrow 2→3 -->
+<path d="M 354 148 L 384 148" fill="none" stroke="#46c7d9" stroke-width="2" marker-end="url(#arw)" opacity="0.8"/>
+
+<!-- Box 3: Index -->
+<rect x="388" y="120" width="136" height="56" rx="12" fill="url(#card)" stroke="#46c7d9" stroke-opacity="0.5" stroke-width="1.2" filter="url(#soft)"/>
+<text x="456" y="143" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="700" font-size="13" fill="#46c7d9">Value Index</text>
+<text x="456" y="163" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="500" font-size="10" fill="#8aa0b8">term → column · value</text>
+
+<!-- Arrow 3→4 -->
+<path d="M 524 148 L 554 148" fill="none" stroke="#46c7d9" stroke-width="2" marker-end="url(#arw)" opacity="0.8"/>
+
+<!-- Box 4: Store -->
+<rect x="558" y="120" width="136" height="56" rx="12" fill="url(#card)" stroke="#46c7d9" stroke-opacity="0.5" stroke-width="1.2" filter="url(#soft)"/>
+<text x="626" y="143" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="700" font-size="13" fill="#46c7d9">Store</text>
+<text x="626" y="163" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="500" font-size="10" fill="#8aa0b8">answers + sketches</text>
+
+<!-- Arrow 4→5 -->
+<path d="M 694 148 L 724 148" fill="none" stroke="#46c7d9" stroke-width="2" marker-end="url(#arw)" opacity="0.8"/>
+
+<!-- Box 5: Ready -->
+<rect x="728" y="120" width="104" height="56" rx="12" fill="#0f2a30" stroke="#4ade80" stroke-width="1.5" filter="url(#soft)"/>
+<circle cx="760" cy="142" r="8" fill="#4ade80" fill-opacity="0.2"/>
+<text x="764" y="146" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="800" font-size="11" fill="#4ade80">✓</text>
+<text x="782" y="146" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="700" font-size="13" fill="#4ade80">Ready</text>
+<text x="780" y="163" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="500" font-size="10" fill="#8aa0b8">per-dataset</text>
+
+<!-- Divider -->
+<line x1="48" y1="198" x2="832" y2="198" stroke="#2a3b55" stroke-width="1" stroke-dasharray="4 4"/>
+
+<!-- ═══ RUNTIME PHASE ═══ -->
+<text x="56" y="224" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="700" font-size="11" letter-spacing="2.5" fill="#5b7290">RUNTIME · EVERY QUESTION</text>
+
+<!-- Question bubble -->
+<rect x="48" y="240" width="200" height="60" rx="14" fill="#111d2c" stroke="#33465f" stroke-width="1.2" filter="url(#soft)"/>
+<text x="148" y="261" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="700" font-size="12" fill="#eef4fb">NL Question</text>
+<text x="148" y="280" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="400" font-size="10" font-style="italic" fill="#8aa0b8">"Show cases by country"</text>
+
+<!-- Arrow Q→R -->
+<path d="M 248 270 L 278 270" fill="none" stroke="#46c7d9" stroke-width="2" marker-end="url(#arw)" opacity="0.8"/>
+
+<!-- Route + Resolve -->
+<rect x="282" y="240" width="170" height="60" rx="14" fill="url(#card)" stroke="#46c7d9" stroke-opacity="0.5" stroke-width="1.2" filter="url(#soft)"/>
+<text x="367" y="261" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="700" font-size="12" fill="#46c7d9">Route + Resolve</text>
+<text x="367" y="280" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="500" font-size="10" fill="#8aa0b8">dataset · value matching</text>
+
+<!-- Arrow R→Diamond -->
+<path d="M 452 270 L 498 270" fill="none" stroke="#46c7d9" stroke-width="2" marker-end="url(#arw)" opacity="0.8"/>
+
+<!-- Decision Diamond -->
+<path d="M 530 240 L 560 270 L 530 300 L 500 270 Z" fill="#0f2a30" stroke="#46c7d9" stroke-width="1.4"/>
+<text x="530" y="274" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="700" font-size="9" fill="#46c7d9">match?</text>
+
+<!-- Upper branch: Context Hit -->
+<path d="M 560 270 L 602 251" fill="none" stroke="#4ade80" stroke-width="2" marker-end="url(#arw_g)" opacity="0.9"/>
+<rect x="604" y="228" width="228" height="46" rx="12" fill="#0a2a18" stroke="#4ade80" stroke-width="1.4" filter="url(#soft)"/>
+<ellipse cx="640" cy="251" rx="18" ry="18" fill="#4ade80" opacity="0.12" filter="url(#glow_f)"/>
+<text x="640" y="255" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="800" font-size="14" fill="#4ade80">⚡</text>
+<text x="660" y="247" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="700" font-size="12" fill="#4ade80">Context Hit</text>
+<text x="660" y="263" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="500" font-size="10" fill="#6ee7b7">~5ms · no DB scan · dict lookup</text>
+
+<!-- Lower branch: Live Query -->
+<path d="M 560 270 L 602 291" fill="none" stroke="#fbbf24" stroke-width="2" marker-end="url(#arw_a)" opacity="0.9"/>
+<rect x="604" y="268" width="228" height="46" rx="12" fill="#2a1f0a" stroke="#fbbf24" stroke-width="1.4" filter="url(#soft)"/>
+<text x="640" y="295" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="800" font-size="14" fill="#fbbf24">🗄</text>
+<text x="660" y="287" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="700" font-size="12" fill="#fbbf24">Live Query</text>
+<text x="660" y="303" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="500" font-size="10" fill="#fcd34d">single SQL · cached · ~1.5s</text>
+
+<!-- ═══ DASHBOARD SERVE PATH ═══ -->
+<text x="56" y="340" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="700" font-size="11" letter-spacing="2.5" fill="#5b7290">DASHBOARD CHARTS · SERVE-CHART API</text>
+
+<rect x="48" y="352" width="160" height="46" rx="12" fill="#111d2c" stroke="#33465f" stroke-width="1.2"/>
+<text x="128" y="372" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="700" font-size="12" fill="#eef4fb">Dashboard Tile</text>
+<text x="128" y="388" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="500" font-size="10" fill="#8aa0b8">metric + group_by</text>
+
+<path d="M 208 375 L 238 375" fill="none" stroke="#46c7d9" stroke-width="2" marker-end="url(#arw)" opacity="0.8"/>
+
+<rect x="242" y="352" width="140" height="46" rx="12" fill="url(#card)" stroke="#46c7d9" stroke-opacity="0.5" stroke-width="1.2"/>
+<text x="312" y="372" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="700" font-size="12" fill="#46c7d9">serve-chart</text>
+<text x="312" y="388" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="500" font-size="10" fill="#8aa0b8">single + multi-metric</text>
+
+<path d="M 382 375 L 412 375" fill="none" stroke="#4ade80" stroke-width="2" marker-end="url(#arw_g)" opacity="0.9"/>
+
+<rect x="416" y="352" width="200" height="46" rx="12" fill="#0a2a18" stroke="#4ade80" stroke-width="1.4"/>
+<text x="482" y="372" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="700" font-size="12" fill="#4ade80">⚡ Instant Render</text>
+<text x="482" y="388" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="500" font-size="10" fill="#6ee7b7">~5ms · zero warehouse load</text>
+
+<path d="M 616 375 L 646 375" fill="none" stroke="#4ade80" stroke-width="2" marker-end="url(#arw_g)" opacity="0.8"/>
+
+<rect x="650" y="352" width="182" height="46" rx="12" fill="#0a2a18" stroke="#4ade80" stroke-opacity="0.4" stroke-width="1.2"/>
+<text x="741" y="372" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="700" font-size="12" fill="#4ade80">Filter Values</text>
+<text x="741" y="388" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="500" font-size="10" fill="#6ee7b7">dropdowns from context</text>
+
+<!-- Stats footer -->
+<rect x="48" y="412" width="784" height="24" rx="12" fill="#111d2c" stroke="#1c2942" stroke-width="1"/>
+<text x="440" y="428" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="600" font-size="10.5" letter-spacing="1" fill="#5b7290">375 PRECOMPUTED ANSWERS  ·  1,635 INDEXED VALUES  ·  10 DATASETS  ·  504M ROWS  ·  HLL SKETCH CUBOIDS</text>
+
+</svg>
