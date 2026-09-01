@@ -12,7 +12,7 @@ powered by the **DLM (Data Language Model)** — not an LLM.
 
 <br/>
 
-[![Deploy](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/deploy.yml/badge.svg)](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/deploy.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Live Demo](https://img.shields.io/badge/demo-kaveon.vercel.app-4A9EE8)](https://kaveon.vercel.app) [![504M Rows](https://img.shields.io/badge/scale-504M_rows-38a169)](https://kaveon.vercel.app) [![Patent Pending](https://img.shields.io/badge/patent-pending-d69e2e)](docs/patent-adaptive-context-routing.md)
+[![Deploy](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/deploy.yml/badge.svg)](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/deploy.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Live Demo](https://img.shields.io/badge/demo-kaveon.vercel.app-4A9EE8)](https://kaveon.vercel.app) [![504M Rows](https://img.shields.io/badge/scale-504M_rows-38a169)](https://kaveon.vercel.app) [![Patent](https://img.shields.io/badge/patent-in_process-d69e2e)](docs/patent-adaptive-context-routing.md)
 
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=fff)](apps/kaveon-api/) [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=fff)](apps/kaveon-web/) [![Next.js](https://img.shields.io/badge/Next.js-15-000?logo=nextdotjs&logoColor=fff)](apps/kaveon-web/) [![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=fff)](apps/kaveon-api/) [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=fff)](infra/bicep/)
 
@@ -41,7 +41,7 @@ No LLM. No API key. The **[DLM (Data Language Model)](docs/whitepaper-adaptive-c
 
 ## DLM — Data Language Model
 
-> **Patent pending** · [White Paper](docs/whitepaper-dlm.md) · [Curation at Scale](docs/whitepaper-dlm-curation.md) · [Adaptive Context Routing](docs/whitepaper-adaptive-context-routing.md) · [Patent Claims](docs/patent-adaptive-context-routing.md)
+> [White Paper](docs/whitepaper-dlm.md) · [Curation at Scale](docs/whitepaper-dlm-curation.md) · [Adaptive Context Routing](docs/whitepaper-adaptive-context-routing.md) · [Patent Claims](docs/patent-adaptive-context-routing.md)
 
 <div align="center">
   <img src="docs/reference/kaveon-dlm-flow.svg" alt="DLM architecture: compile once, answer instantly" width="820" />

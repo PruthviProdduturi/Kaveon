@@ -25,7 +25,7 @@
 <rect x="40" y="24" width="800" height="56" rx="16" fill="url(#g_head)" stroke="url(#g_cyan)" stroke-width="1.5" filter="url(#soft)"/>
 <rect x="41" y="25" width="798" height="24" rx="15" fill="url(#sheen)"/>
 <text x="440" y="48" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="800" font-size="18" letter-spacing="1" fill="#eef4fb">DATA LANGUAGE MODEL</text>
-<text x="440" y="68" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="500" font-size="11" fill="#46c7d9">Compiled context artifact · No LLM · No API key · Patent pending</text>
+<text x="440" y="68" text-anchor="middle" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="500" font-size="11" fill="#46c7d9">Compiled context artifact · No LLM · No API key</text>
 
 <!-- ═══ COMPILE PHASE ═══ -->
 <text x="56" y="108" font-family="Inter,'Segoe UI',system-ui,sans-serif" font-weight="700" font-size="11" letter-spacing="2.5" fill="#5b7290">COMPILE · ONCE PER DATASET</text>
