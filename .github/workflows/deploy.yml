@@ -22,7 +22,7 @@ jobs:
           az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
       - name: Build and push to ACR
         run: |
-          az acr build --registry kaveonacr --image kaveon-api:latest --image kaveon-api:${{ github.sha }} --file apps/kaveon-api/Dockerfile .
+          az acr build --registry kaveonacr --image kaveon-api:latest --image kaveon-api:${{ github.sha }} --file api/Dockerfile .
       - name: Update Container App
         run: |
           az containerapp update --name kaveon-api --resource-group kaveon-rg --image kaveonacr.azurecr.io/kaveon-api:${{ github.sha }}

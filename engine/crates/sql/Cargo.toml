@@ -1,0 +1,14 @@
+[package]
+name = "kaveon-sql"
+description = "SQL parser, logical plan, and physical plan for Kaveon Engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+kaveon-core = { path = "../core" }
+kaveon-exec = { path = "../exec" }
+kaveon-storage = { path = "../storage" }
+arrow = { workspace = true }
+sqlparser = { workspace = true }
+thiserror = { workspace = true }

@@ -13,13 +13,13 @@ Target: ~500M rows on public.kaveon_events + view kaveon_events_full.
 Strategy: batch inserts (50 rounds × ~10M = ~500M), each round expands
 every user-day with generate_series(1, N) events at random timestamps.
 
-Run from apps/kaveon-api:  python ../../data/kaveon-usage/generate_events.py
+Run from repo root:  python data/kaveon-usage/generate_events.py
 """
 import os
 import sys
 import time
 
-_API = os.path.join(os.path.dirname(__file__), "..", "..", "apps", "kaveon-api")
+_API = os.path.join(os.path.dirname(__file__), "..", "..", "api")
 sys.path.insert(0, os.path.abspath(_API))
 
 import database.pool as pool  # noqa: E402

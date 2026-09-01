@@ -44,7 +44,7 @@ def create():
     body = {
         "name": PROJECT,
         "framework": "nextjs",
-        "rootDirectory": "apps/kaveon-web",
+        "rootDirectory": "studio",
         "gitRepository": {"type": "github", "repo": REPO},
     }
     r = _post("/v11/projects", body)
@@ -129,7 +129,7 @@ def pick_domain():
 
 def create_bare():
     """Create the project with no git link (token-only path)."""
-    body = {"name": PROJECT, "framework": "nextjs", "rootDirectory": "apps/kaveon-web"}
+    body = {"name": PROJECT, "framework": "nextjs", "rootDirectory": "studio"}
     r = _post("/v11/projects", body)
     if r.status_code == 409:
         print("project already exists")
@@ -159,7 +159,7 @@ def deploy_files():
         "name": PROJECT,
         "files": files_meta,
         "target": "production",
-        "projectSettings": {"framework": "nextjs", "rootDirectory": "apps/kaveon-web"},
+        "projectSettings": {"framework": "nextjs", "rootDirectory": "studio"},
     }
     r = _post("/v13/deployments?skipAutoDetectionConfirmation=1", body)
     print("deploy:", r.status_code)

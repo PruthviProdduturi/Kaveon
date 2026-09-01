@@ -2,7 +2,7 @@
 
 > Branch: `dev` (default)
 > Module: Analyze module of the Kaveon suite
-> Deploy: Vercel (kaveon-web) + Azure Container Apps (kaveon-api) + Azure PostgreSQL (`kaveonmeta` + `kaveon`) · [kaveon.vercel.app](https://kaveon.vercel.app)
+> Deploy: Vercel (kaveon-studio) + Azure Container Apps (kaveon-api) + Azure PostgreSQL (`kaveonmeta` + `kaveon`) · [kaveon.vercel.app](https://kaveon.vercel.app)
 
 ---
 
@@ -82,7 +82,7 @@
 |------|--------|
 | CI with gates (`.github/workflows/ci.yml`) — web lint/type-check/build, API syntax/tests, secret scan | ✅ Done |
 | CD — Vercel (auto-deploy `dev`) + Azure Container Apps (Bicep IaC in `infra/bicep/`) | ✅ Done |
-| Vercel app config (`apps/kaveon-web/vercel.json`) | ✅ Done |
+| Vercel app config (`studio/vercel.json`) | ✅ Done |
 | Bicep IaC (ACR, Container Apps, PostgreSQL, Key Vault, Log Analytics) | ✅ Done |
 | CONTRIBUTING.md · SECURITY.md · LICENSE · ARCHITECTURE.md · DEPLOYMENT.md | ✅ Done |
 | PR template · issue templates (bug/feature) | ✅ Done |

@@ -5,7 +5,7 @@ The production cloud stack:
 ```mermaid
 flowchart TD
     B["🌐 Browser"]
-    V["▲ Vercel · kaveon-web<br/><small>NextAuth: GitHub / Google / Entra</small>"]
+    V["▲ Vercel · kaveon-studio<br/><small>NextAuth: GitHub / Google / Entra</small>"]
     P{{"/api/kaveon proxy<br/><small>injects X-User-* + KAVEON_PROXY_SECRET</small>"}}
     A["⚙️ Azure Container Apps · kaveon-api<br/><small>FastAPI · psycopg2 / DefaultAzureCredential</small>"]
     M[("🗄️ kaveonmeta<br/><small>metadata + DLM context</small>")]
@@ -34,7 +34,7 @@ Database for PostgreSQL Flexible Server (PG 18)**. IaC for all Azure resources l
    it: `kaveonmeta` (control plane + DLM context) and `kaveon` (data warehouse).
 2. Apply the schema to the metadata DB via `psql`:
    ```
-   \i apps/kaveon-api/schema_postgresql.sql
+   \i api/schema_postgresql.sql
    ```
 3. Set `METADATA_SSLMODE=require` (already the default). For MI auth, grant the Container App's
    managed identity access and add `AAD_DATABASES=kaveon` so the warehouse pool uses tokens too.
@@ -52,7 +52,7 @@ Build and push the API image:
 az acr build \
   --registry kaveonacr \
   --image kaveon-api:latest \
-  apps/kaveon-api
+  api
 ```
 
 Or push via GitHub Actions (see `.github/workflows/deploy.yml`).
@@ -90,7 +90,7 @@ Health check: `GET https://kaveon-api.calmbeach-fe7df67b.westus2.azurecontainera
 ## 4 · Vercel — frontend
 
 1. **https://vercel.com** → **New Project** → import this repo.
-2. **Root Directory:** `apps/kaveon-web`.
+2. **Root Directory:** `studio`.
 3. **Environment Variables:**
 
    | Variable | Value |

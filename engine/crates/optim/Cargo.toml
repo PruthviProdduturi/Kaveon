@@ -1,0 +1,13 @@
+[package]
+name = "kaveon-optim"
+description = "Cost-based query optimizer for Kaveon Engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+kaveon-core = { path = "../core" }
+kaveon-sql = { path = "../sql" }
+kaveon-storage = { path = "../storage" }
+arrow = { workspace = true }
+thiserror = { workspace = true }

@@ -4,7 +4,7 @@ Kaveon's homepage lets you ask questions in plain English and get back charts, w
 
 1. **DLM (Data Language Model) — the primary path.** A per-dataset compiled context artifact in the API. It resolves the question deterministically and, for common cases, **answers from precomputed context with no database scan at all** — returning a result badged **"From context · no DB scan"**. Only novel slices fall through to a single live query, badged **"Live query · Xs"**.
 2. **ACR (Adaptive Context Routing) — the middle tier.** When the DLM can't answer (e.g. the shape doesn't match), the in-browser template parser generates SQL and ACR decides whether to serve the answer from cached context or run the query live.
-3. **Template parser — the fallback.** A keyword-based parser (`apps/kaveon-web/utils/nlToSql.ts`) that runs entirely in the browser. It handles shapes neither the DLM nor ACR can build (mainly time-series trends, comparisons, distributions).
+3. **Template parser — the fallback.** A keyword-based parser (`studio/utils/nlToSql.ts`) that runs entirely in the browser. It handles shapes neither the DLM nor ACR can build (mainly time-series trends, comparisons, distributions).
 
 All three are deterministic — same question, same answer — and none calls a hosted model.
 
@@ -265,12 +265,12 @@ Each loaded schema is scored against the query: +3 for dataset name words, +2 fo
 
 | File | Role |
 |------|------|
-| `apps/kaveon-api/services/dlm.py` | DLM engine: generate, ask, serve_chart, serve_chart_multi, filter_values, check_freshness, route, resolve_value, HLL sketches |
-| `apps/kaveon-api/routers/dlm.py` | API endpoints: /dlm/ask, /dlm/serve-chart, /dlm/filter-values, /dlm/route, /datasets/{id}/dlm/generate, /datasets/{id}/freshness |
-| `apps/kaveon-api/services/hll.py` | HyperLogLog implementation: empty, union_estimate, to_sparse |
-| `apps/kaveon-api/services/context_profiler.py` | Zero-scan statistics substrate (pg_stats snapshots) |
-| `apps/kaveon-api/services/context_validity.py` | Time/change decay factors used by freshness scoring |
-| `apps/kaveon-web/app/page.tsx` | Frontend chat flow: three-tier execution (DLM → ACR → template parser), follow-up detection, context hints display |
-| `apps/kaveon-web/utils/nlToSql.ts` | In-browser template parser: patterns, fuzzy matching, SQL builder |
-| `apps/kaveon-web/components/chat/InlineChart.tsx` | Chat-embedded chart renderer (ECharts) |
-| `apps/kaveon-web/components/ContextBanner.tsx` | Homepage banner showing compiled context coverage per dataset |
+| `api/services/dlm.py` | DLM engine: generate, ask, serve_chart, serve_chart_multi, filter_values, check_freshness, route, resolve_value, HLL sketches |
+| `api/routers/dlm.py` | API endpoints: /dlm/ask, /dlm/serve-chart, /dlm/filter-values, /dlm/route, /datasets/{id}/dlm/generate, /datasets/{id}/freshness |
+| `api/services/hll.py` | HyperLogLog implementation: empty, union_estimate, to_sparse |
+| `api/services/context_profiler.py` | Zero-scan statistics substrate (pg_stats snapshots) |
+| `api/services/context_validity.py` | Time/change decay factors used by freshness scoring |
+| `studio/app/page.tsx` | Frontend chat flow: three-tier execution (DLM → ACR → template parser), follow-up detection, context hints display |
+| `studio/utils/nlToSql.ts` | In-browser template parser: patterns, fuzzy matching, SQL builder |
+| `studio/components/chat/InlineChart.tsx` | Chat-embedded chart renderer (ECharts) |
+| `studio/components/ContextBanner.tsx` | Homepage banner showing compiled context coverage per dataset |

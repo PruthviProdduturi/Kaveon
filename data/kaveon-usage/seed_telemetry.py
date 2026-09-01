@@ -5,13 +5,13 @@ usage_rollup (which counts query_history.tables_used) reflects hot tables.
 Additive + idempotent-ish: removes prior synthetic rows (trigger_source='seed'
 / user domain @kaveon-demo.io) before inserting.
 
-Run from apps/kaveon-api:  python ../../data/kaveon-usage/seed_telemetry.py
+Run from repo root:  python data/kaveon-usage/seed_telemetry.py
 """
 import os
 import sys
 import time
 
-_API = os.path.join(os.path.dirname(__file__), "..", "..", "apps", "kaveon-api")
+_API = os.path.join(os.path.dirname(__file__), "..", "..", "api")
 sys.path.insert(0, os.path.abspath(_API))
 
 import database.pool as pool  # noqa: E402

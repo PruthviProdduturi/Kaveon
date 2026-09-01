@@ -15,13 +15,13 @@ VIEWs:
   public.kaveon_product_analytics — L2 fact + all dims joined
   public.kaveon_events_full       — L1 fact + all dims joined
 
-Run from apps/kaveon-api:  python ../../data/kaveon-usage/generate_usage.py
+Run from repo root:  python data/kaveon-usage/generate_usage.py
 """
 import os
 import sys
 import time
 
-_API = os.path.join(os.path.dirname(__file__), "..", "..", "apps", "kaveon-api")
+_API = os.path.join(os.path.dirname(__file__), "..", "..", "api")
 sys.path.insert(0, os.path.abspath(_API))
 
 import database.pool as pool  # noqa: E402

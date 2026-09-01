@@ -14,7 +14,7 @@ powered by the **DLM (Data Language Model)** — not an LLM.
 
 [![Deploy](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/deploy.yml/badge.svg)](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/deploy.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Live Demo](https://img.shields.io/badge/demo-kaveon.vercel.app-4A9EE8)](https://kaveon.vercel.app) [![504M Rows](https://img.shields.io/badge/scale-504M_rows-38a169)](https://kaveon.vercel.app) [![Patent](https://img.shields.io/badge/patent-in_process-d69e2e)](docs/patent-adaptive-context-routing.md)
 
-[![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=fff)](apps/kaveon-api/) [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=fff)](apps/kaveon-web/) [![Next.js](https://img.shields.io/badge/Next.js-15-000?logo=nextdotjs&logoColor=fff)](apps/kaveon-web/) [![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=fff)](apps/kaveon-api/) [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=fff)](infra/bicep/)
+[![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=fff)](api/) [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=fff)](studio/) [![Next.js](https://img.shields.io/badge/Next.js-15-000?logo=nextdotjs&logoColor=fff)](studio/) [![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=fff)](api/) [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=fff)](infra/bicep/)
 
 [**Try It**](https://kaveon.vercel.app) · [**Documentation**](https://kaveon.vercel.app/docs) · [**White Paper**](docs/whitepaper-dlm.md) · [**Architecture**](ARCHITECTURE.md) · [**Patent**](docs/patent-adaptive-context-routing.md)
 
@@ -72,7 +72,7 @@ Two services. One monorepo. Zero exposed tokens.
 
 | Service | Stack | Deploy |
 |---------|-------|--------|
-| **kaveon-web** | Next.js 15, React 19, TypeScript, ECharts, Monaco | Vercel |
+| **kaveon-studio** | Next.js 15, React 19, TypeScript, ECharts, Monaco | Vercel |
 | **kaveon-api** | FastAPI, Python 3.11, psycopg2, pyodbc | Azure Container Apps |
 
 The browser never holds an API token — all calls go same-origin to a Next.js proxy that stamps identity server-side via NextAuth (Auth.js v5).
@@ -151,10 +151,10 @@ cd Kaveon
 
 # Frontend
 pnpm install
-pnpm --filter kaveon-web dev          # localhost:3000
+pnpm --filter kaveon-studio dev        # localhost:3000
 
 # Backend
-cd apps/kaveon-api
+cd api
 pip install -r requirements.txt
 python main.py                         # localhost:8080
 ```
@@ -167,9 +167,8 @@ Configure `.env` at the repo root with your database connection. See [Deployment
 
 ```
 Kaveon/
-├── apps/
-│   ├── kaveon-web/          Next.js frontend
-│   └── kaveon-api/          FastAPI backend
+├── studio/                  Next.js frontend (kaveon-studio)
+├── api/                     FastAPI backend
 ├── packages/
 │   └── types/               Shared TypeScript types
 ├── infra/
