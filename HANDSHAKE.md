@@ -60,6 +60,37 @@
 
 ## Interface contracts
 
+### Catalog hierarchy (Trino-style)
+
+```rust
+// Defined in kaveon-core::catalog
+
+// Catalog → Schema → Table, configured per catalog
+pub enum StorageType {
+    Local { base_path: PathBuf },
+    AdlsGen2 { account, container, root_path },
+    S3 { bucket, region, prefix },
+}
+
+pub enum AccessPattern { Shortcut, Optimized }
+pub enum DataFormat { Parquet, Delta, Iceberg }
+
+pub struct TableMeta {
+    pub name: String,
+    pub arrow_schema: SchemaRef,
+    pub location: String,          // relative path within storage
+    pub access: AccessPattern,
+    pub format: DataFormat,
+}
+
+// TableReference::parse("catalog.schema.table") resolves through CatalogManager
+pub struct CatalogManager { catalogs, default_catalog, default_schema }
+```
+
+- **Claude** owns the catalog types, `MemoryCatalog`, and `CatalogManager`
+- **Codex** uses `ResolvedTable.full_path()` + `StorageType` to open the right storage backend
+- SQL planner resolves table names via `CatalogManager.resolve_table()` before building physical plan
+
 ### Storage → Exec boundary
 
 Storage produces batches. Exec consumes them.
@@ -157,3 +188,4 @@ version = kaveon_engine.version()
 |------|----------|-------------|
 | 2026-09-01 | Claude | Created HANDSHAKE.md, defined shared types in core (BatchSource, BatchOperator, StoragePredicate) |
 | 2026-09-01 | Claude | Added Expr/BinaryOp to core. Built production hash aggregate (GroupKey hashing, SUM/COUNT/AVG/MIN/MAX, null handling). Rewrote scan to consume BatchSource trait. Built filter operator with expression evaluator. Implemented SQL→LogicalPlan translator (SELECT/WHERE/GROUP BY/ORDER BY/LIMIT). Removed sql→exec circular dep. |
+| 2026-09-01 | Claude | Added Trino-style catalog system to core: Catalog→Schema→Table hierarchy, StorageType (Local/ADLS Gen2/S3), AccessPattern (Shortcut/Optimized), DataFormat (Parquet/Delta/Iceberg), CatalogManager with table reference resolution, MemoryCatalog implementation. |
