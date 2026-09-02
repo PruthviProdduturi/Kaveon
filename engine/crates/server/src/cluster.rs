@@ -96,10 +96,7 @@ pub async fn worker_heartbeat_loop(state: Arc<AppState>) {
         match client.post(&url).json(&info).send().await {
             Ok(resp) if resp.status().is_success() => {}
             Ok(resp) => {
-                eprintln!(
-                    "heartbeat failed: coordinator returned {}",
-                    resp.status()
-                );
+                eprintln!("heartbeat failed: coordinator returned {}", resp.status());
             }
             Err(e) => {
                 eprintln!("heartbeat failed: {e}");

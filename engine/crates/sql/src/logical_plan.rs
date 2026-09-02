@@ -68,11 +68,8 @@ fn query_to_plan(query: &ast::Query) -> Result<LogicalPlan> {
     let plan = build_from_clause(select)?;
     let plan = build_where(plan, select)?;
 
-    let has_aggregates = select
-        .projection
-        .iter()
-        .any(|item| contains_aggregate_select_item(item))
-        || !select.group_by.expressions().is_empty();
+    let has_aggregates = select.projection.iter().any(contains_aggregate_select_item)
+        || matches!(&select.group_by, ast::GroupByExpr::Expressions(exprs, _) if !exprs.is_empty());
 
     let plan = if has_aggregates {
         build_aggregate(plan, select)?
@@ -81,7 +78,10 @@ fn query_to_plan(query: &ast::Query) -> Result<LogicalPlan> {
     };
 
     let plan = build_projection(plan, select, has_aggregates)?;
-    let plan = build_order_by(plan, &query.order_by)?;
+    let plan = match &query.order_by {
+        Some(ob) => build_order_by(plan, &ob.exprs)?,
+        None => plan,
+    };
     let plan = build_limit(plan, &query.limit, &query.offset)?;
 
     Ok(plan)
@@ -124,9 +124,11 @@ fn build_where(plan: LogicalPlan, select: &ast::Select) -> Result<LogicalPlan> {
 }
 
 fn build_aggregate(plan: LogicalPlan, select: &ast::Select) -> Result<LogicalPlan> {
-    let group_by: Vec<Expr> = select
-        .group_by
-        .expressions()
+    let group_by_ast = match &select.group_by {
+        ast::GroupByExpr::Expressions(exprs, _) => exprs.clone(),
+        _ => Vec::new(),
+    };
+    let group_by: Vec<Expr> = group_by_ast
         .iter()
         .map(ast_expr_to_expr)
         .collect::<Result<_>>()?;
@@ -184,14 +186,14 @@ fn build_projection(
     })
 }
 
-fn build_order_by(plan: LogicalPlan, order_by: &ast::OrderBy) -> Result<LogicalPlan> {
-    if order_by.exprs.is_empty() {
+fn build_order_by(plan: LogicalPlan, order_by: &[ast::OrderByExpr]) -> Result<LogicalPlan> {
+    if order_by.is_empty() {
         return Ok(plan);
     }
     let mut items = Vec::new();
-    for ob in &order_by.exprs {
+    for ob in order_by {
         let expr = ast_expr_to_expr(&ob.expr)?;
-        let asc = ob.options.asc.unwrap_or(true);
+        let asc = ob.asc.unwrap_or(true);
         items.push((expr, asc));
     }
     Ok(LogicalPlan::Sort {
@@ -219,7 +221,7 @@ fn build_limit(
 
 fn ast_expr_to_usize(expr: &ast::Expr) -> Result<usize> {
     match expr {
-        ast::Expr::Value(v) => match v.as_ref() {
+        ast::Expr::Value(v) => match v {
             ast::Value::Number(n, _) => n
                 .parse::<usize>()
                 .map_err(|_| sql_err(format!("invalid limit: {n}"))),
@@ -280,14 +282,12 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
         ast::Expr::Nested(inner) => ast_expr_to_expr(inner),
         ast::Expr::Function(func) => ast_function_to_expr(func),
         ast::Expr::Wildcard(_) => Ok(Expr::Star),
-        _ => Err(sql_err(format!(
-            "unsupported expression: {expr}"
-        ))),
+        _ => Err(sql_err(format!("unsupported expression: {expr}"))),
     }
 }
 
-fn ast_value_to_expr(value: &ast::ValueWithSpan) -> Result<Expr> {
-    match value.as_ref() {
+fn ast_value_to_expr(value: &ast::Value) -> Result<Expr> {
+    match value {
         ast::Value::Number(n, _) => {
             if let Ok(i) = n.parse::<i64>() {
                 Ok(Expr::Literal(ScalarValue::Int64(i)))
@@ -378,10 +378,7 @@ fn collect_aggregates_from_select_item(
     }
 }
 
-fn collect_aggregates_from_ast_expr(
-    expr: &ast::Expr,
-    out: &mut Vec<AggregateExpr>,
-) -> Result<()> {
+fn collect_aggregates_from_ast_expr(expr: &ast::Expr, out: &mut Vec<AggregateExpr>) -> Result<()> {
     match expr {
         ast::Expr::Function(func) => {
             let name = func.name.to_string().to_uppercase();
@@ -466,13 +463,9 @@ mod tests {
 
     #[test]
     fn parses_aggregate() {
-        let plan =
-            sql_to_logical_plan("SELECT city, COUNT(*) FROM users GROUP BY city").unwrap();
+        let plan = sql_to_logical_plan("SELECT city, COUNT(*) FROM users GROUP BY city").unwrap();
         match plan {
-            LogicalPlan::Project {
-                input,
-                ..
-            } => match *input {
+            LogicalPlan::Project { input, .. } => match *input {
                 LogicalPlan::Aggregate {
                     group_by,
                     aggregates,
@@ -489,8 +482,7 @@ mod tests {
 
     #[test]
     fn parses_order_by() {
-        let plan =
-            sql_to_logical_plan("SELECT * FROM users ORDER BY name ASC, age DESC").unwrap();
+        let plan = sql_to_logical_plan("SELECT * FROM users ORDER BY name ASC, age DESC").unwrap();
         match plan {
             LogicalPlan::Sort { order_by, .. } => {
                 assert_eq!(order_by.len(), 2);

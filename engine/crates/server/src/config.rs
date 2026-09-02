@@ -1,5 +1,6 @@
 use kaveon_core::{
-    AccessPattern, CatalogManager, DataFormat, MemoryCatalog, StorageType, TableMeta,
+    AccessPattern, CatalogManager, CatalogProvider, DataFormat, MemoryCatalog, StorageType,
+    TableMeta,
 };
 use kaveon_storage::ParquetReader;
 use serde::Deserialize;
@@ -84,16 +85,14 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
                 config.coordinator = coord;
             }
         }
-        if let Some(http) = raw.http {
-            if let Some(port) = http.port {
+        if let Some(http) = raw.http
+            && let Some(port) = http.port {
                 config.http_port = port;
             }
-        }
-        if let Some(disc) = raw.discovery {
-            if let Some(uri) = disc.uri {
+        if let Some(disc) = raw.discovery
+            && let Some(uri) = disc.uri {
                 config.discovery_uri = uri;
             }
-        }
         if let Some(storage) = raw.storage {
             if let Some(dir) = storage.data_dir {
                 config.data_dir = Some(PathBuf::from(dir));
@@ -113,11 +112,10 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     if let Ok(v) = std::env::var("KAVEON_COORDINATOR") {
         config.coordinator = v == "true";
     }
-    if let Ok(v) = std::env::var("KAVEON_HTTP_PORT") {
-        if let Ok(port) = v.parse() {
+    if let Ok(v) = std::env::var("KAVEON_HTTP_PORT")
+        && let Ok(port) = v.parse() {
             config.http_port = port;
         }
-    }
     if let Ok(v) = std::env::var("KAVEON_DISCOVERY_URI") {
         config.discovery_uri = v;
     }
@@ -134,9 +132,9 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
 pub fn build_catalog_manager(config: &ServerConfig) -> CatalogManager {
     let mut mgr = CatalogManager::new("kaveon", "default");
 
-    if let Some(ref catalog_dir) = config.catalog_dir {
-        if catalog_dir.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(catalog_dir) {
+    if let Some(ref catalog_dir) = config.catalog_dir
+        && catalog_dir.is_dir()
+            && let Ok(entries) = std::fs::read_dir(catalog_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     if path.extension().is_some_and(|e| e == "toml") {
@@ -145,23 +143,19 @@ pub fn build_catalog_manager(config: &ServerConfig) -> CatalogManager {
                             .and_then(|s| s.to_str())
                             .unwrap_or("unknown")
                             .to_owned();
-                        if let Ok(content) = std::fs::read_to_string(&path) {
-                            if let Ok(cat) = build_catalog_from_toml(&name, &content) {
+                        if let Ok(content) = std::fs::read_to_string(&path)
+                            && let Ok(cat) = build_catalog_from_toml(&name, &content) {
                                 mgr.register_catalog(Box::new(cat));
                             }
-                        }
                     }
                 }
             }
-        }
-    }
 
-    if let Some(ref data_dir) = config.data_dir {
-        if data_dir.is_dir() {
+    if let Some(ref data_dir) = config.data_dir
+        && data_dir.is_dir() {
             let catalog = build_local_catalog("kaveon", data_dir);
             mgr.register_catalog(Box::new(catalog));
         }
-    }
 
     mgr
 }
@@ -178,26 +172,20 @@ fn build_local_catalog(name: &str, dir: &Path) -> MemoryCatalog {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().is_some_and(|e| e == "parquet") {
-                if let Some(table_name) = path.file_stem().and_then(|s| s.to_str()) {
-                    if let Ok(meta) = ParquetReader::new(&path).metadata() {
+            if path.extension().is_some_and(|e| e == "parquet")
+                && let Some(table_name) = path.file_stem().and_then(|s| s.to_str())
+                    && let Ok(meta) = ParquetReader::new(&path).metadata() {
                         let _ = catalog.register_table(
                             "default",
                             TableMeta {
                                 name: table_name.to_owned(),
                                 arrow_schema: meta.schema,
-                                location: path
-                                    .file_name()
-                                    .unwrap()
-                                    .to_string_lossy()
-                                    .into_owned(),
+                                location: path.file_name().unwrap().to_string_lossy().into_owned(),
                                 access: AccessPattern::Shortcut,
                                 format: DataFormat::Parquet,
                             },
                         );
                     }
-                }
-            }
         }
     }
 
@@ -290,15 +278,18 @@ fn build_catalog_from_toml(name: &str, content: &str) -> anyhow::Result<MemoryCa
 
     let mut catalog = MemoryCatalog::new(name, storage.clone()).with_schema("default");
 
-    if tables.is_empty() {
-        if let StorageType::Local { ref base_path } = storage {
+    if tables.is_empty()
+        && let StorageType::Local { ref base_path } = storage {
             let built = build_local_catalog(name, base_path);
             return Ok(built);
         }
-    }
 
     for t in &tables {
-        let schema_name = if t.schema.is_empty() { "default" } else { &t.schema };
+        let schema_name = if t.schema.is_empty() {
+            "default"
+        } else {
+            &t.schema
+        };
         catalog = catalog.with_schema(schema_name);
         let access = match t.access.as_str() {
             "optimized" => AccessPattern::Optimized,

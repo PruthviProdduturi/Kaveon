@@ -1,5 +1,5 @@
-use crate::cluster::{NodeInfo, NodeRole};
 use crate::AppState;
+use crate::cluster::{NodeInfo, NodeRole};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -22,7 +22,6 @@ struct QueryStore {
 
 struct QueryRecord {
     id: String,
-    sql: String,
     state: QueryState,
     columns: Vec<ColumnInfo>,
     rows: Vec<Vec<serde_json::Value>>,
@@ -33,25 +32,22 @@ struct QueryRecord {
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 enum QueryState {
-    Queued,
-    Running,
     Finished,
     Failed,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct ColumnInfo {
     name: String,
     #[serde(rename = "type")]
     data_type: String,
 }
 
-static QUERY_STORE: std::sync::LazyLock<RwLock<QueryStore>> =
-    std::sync::LazyLock::new(|| {
-        RwLock::new(QueryStore {
-            queries: HashMap::new(),
-        })
-    });
+static QUERY_STORE: std::sync::LazyLock<RwLock<QueryStore>> = std::sync::LazyLock::new(|| {
+    RwLock::new(QueryStore {
+        queries: HashMap::new(),
+    })
+});
 
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
@@ -126,35 +122,41 @@ async fn submit_statement(
         }
     };
 
-    let catalog = state.catalog.read().await;
-    let mut operator = match crate::planner::plan_to_operator(&plan, &catalog) {
-        Ok(op) => op,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": format!("planning error: {e}"),
-                    "code": "PLANNING_ERROR"
-                })),
-            )
-                .into_response();
-        }
+    let exec_result = {
+        let catalog = state.catalog.read().await;
+        let mut operator = match crate::planner::plan_to_operator(&plan, &catalog) {
+            Ok(op) => op,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("planning error: {e}"),
+                        "code": "PLANNING_ERROR"
+                    })),
+                )
+                    .into_response();
+            }
+        };
+        collect_batches(&mut *operator)
     };
 
-    let batches = match collect_batches(&mut *operator) {
+    let batches = match exec_result {
         Ok(b) => b,
         Err(e) => {
             let elapsed = start.elapsed().as_millis() as u64;
             let record = QueryRecord {
                 id: query_id.clone(),
-                sql,
                 state: QueryState::Failed,
                 columns: vec![],
                 rows: vec![],
                 error: Some(format!("{e}")),
                 elapsed_ms: elapsed,
             };
-            QUERY_STORE.write().await.queries.insert(query_id.clone(), record);
+            QUERY_STORE
+                .write()
+                .await
+                .queries
+                .insert(query_id.clone(), record);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({
@@ -186,14 +188,17 @@ async fn submit_statement(
 
     let record = QueryRecord {
         id: query_id.clone(),
-        sql,
         state: QueryState::Finished,
         columns: columns.clone(),
         rows: rows.clone(),
         error: None,
         elapsed_ms: elapsed,
     };
-    QUERY_STORE.write().await.queries.insert(query_id.clone(), record);
+    QUERY_STORE
+        .write()
+        .await
+        .queries
+        .insert(query_id.clone(), record);
 
     let resp = StatementResponse {
         id: query_id,
@@ -384,9 +389,7 @@ async fn ready(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
 // --- Helpers ---
 
-fn batches_to_json(
-    batches: &[arrow::record_batch::RecordBatch],
-) -> Vec<Vec<serde_json::Value>> {
+fn batches_to_json(batches: &[arrow::record_batch::RecordBatch]) -> Vec<Vec<serde_json::Value>> {
     use arrow::array::{Array, AsArray};
     use arrow::datatypes::*;
 
@@ -411,10 +414,18 @@ fn batches_to_json(
                         serde_json::Value::Bool(v)
                     }
                     DataType::Int8 => serde_json::json!(arr.as_primitive::<Int8Type>().value(row)),
-                    DataType::Int16 => serde_json::json!(arr.as_primitive::<Int16Type>().value(row)),
-                    DataType::Int32 => serde_json::json!(arr.as_primitive::<Int32Type>().value(row)),
-                    DataType::Int64 => serde_json::json!(arr.as_primitive::<Int64Type>().value(row)),
-                    DataType::UInt8 => serde_json::json!(arr.as_primitive::<UInt8Type>().value(row)),
+                    DataType::Int16 => {
+                        serde_json::json!(arr.as_primitive::<Int16Type>().value(row))
+                    }
+                    DataType::Int32 => {
+                        serde_json::json!(arr.as_primitive::<Int32Type>().value(row))
+                    }
+                    DataType::Int64 => {
+                        serde_json::json!(arr.as_primitive::<Int64Type>().value(row))
+                    }
+                    DataType::UInt8 => {
+                        serde_json::json!(arr.as_primitive::<UInt8Type>().value(row))
+                    }
                     DataType::UInt16 => {
                         serde_json::json!(arr.as_primitive::<UInt16Type>().value(row))
                     }
@@ -445,4 +456,3 @@ fn batches_to_json(
     }
     rows
 }
-

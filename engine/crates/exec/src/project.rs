@@ -8,7 +8,6 @@ use crate::expr_eval::evaluate;
 pub struct ProjectOperator {
     source: Box<dyn BatchOperator>,
     exprs: Vec<Expr>,
-    aliases: Vec<Option<String>>,
     output_schema: SchemaRef,
 }
 
@@ -17,12 +16,9 @@ impl ProjectOperator {
         let source_schema = source.schema().clone();
 
         let mut fields = Vec::with_capacity(exprs.len());
-        let mut aliases = Vec::with_capacity(exprs.len());
-
         for expr in &exprs {
-            let (field, alias) = resolve_field(expr, &source_schema)?;
+            let (field, _) = resolve_field(expr, &source_schema)?;
             fields.push(field);
-            aliases.push(alias);
         }
 
         let output_schema = Arc::new(Schema::new(fields));
@@ -30,7 +26,6 @@ impl ProjectOperator {
         Ok(Self {
             source,
             exprs,
-            aliases,
             output_schema,
         })
     }
@@ -83,10 +78,7 @@ fn resolve_field(expr: &Expr, schema: &SchemaRef) -> Result<(Field, Option<Strin
         Expr::Star => Err(KaveonError::Execution(
             "star should be expanded before projection".into(),
         )),
-        Expr::Literal(val) => Ok((
-            Field::new(format!("{val:?}"), val.data_type(), true),
-            None,
-        )),
+        Expr::Literal(val) => Ok((Field::new(format!("{val:?}"), val.data_type(), true), None)),
         Expr::BinaryOp { .. } => Ok((
             Field::new(
                 format!("{expr:?}"),

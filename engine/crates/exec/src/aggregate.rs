@@ -1,6 +1,6 @@
 use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, Float64Array, Int32Array, Int64Array,
-    StringArray, UInt64Array,
+    Array, ArrayRef, AsArray, BooleanArray, Float64Array, Int32Array, Int64Array, StringArray,
+    UInt64Array,
 };
 use arrow::datatypes::{DataType, Field, Float64Type, Int32Type, Int64Type, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -211,8 +211,10 @@ impl BatchOperator for HashAggregate {
                 .collect();
 
             for row in 0..batch.num_rows() {
-                let key: Vec<GroupKey> =
-                    group_arrays.iter().map(|arr| extract_key(arr, row)).collect();
+                let key: Vec<GroupKey> = group_arrays
+                    .iter()
+                    .map(|arr| extract_key(arr, row))
+                    .collect();
 
                 let accums = groups
                     .entry(key)
@@ -221,11 +223,11 @@ impl BatchOperator for HashAggregate {
                 for (i, agg) in self.aggregates.iter().enumerate() {
                     if matches!(agg.func, AggFunc::Count) && agg.column == "*" {
                         accums[i].count += 1;
-                    } else if let Some(arr) = agg_arrays[i] {
-                        if !arr.is_null(row) {
-                            let val = extract_f64(arr, row);
-                            accums[i].update(val);
-                        }
+                    } else if let Some(arr) = agg_arrays[i]
+                        && !arr.is_null(row)
+                    {
+                        let val = extract_f64(arr, row);
+                        accums[i].update(val);
                     }
                 }
             }
@@ -235,7 +237,6 @@ impl BatchOperator for HashAggregate {
             return Ok(Some(RecordBatch::new_empty(self.output_schema.clone())));
         }
 
-        let num_rows = if groups.is_empty() { 1 } else { groups.len() };
         let entries: Vec<(Vec<GroupKey>, Vec<Accumulator>)> = if groups.is_empty() {
             vec![(vec![], (0..num_aggs).map(|_| Accumulator::new()).collect())]
         } else {
@@ -246,17 +247,15 @@ impl BatchOperator for HashAggregate {
 
         for (gi, col_name) in self.group_by.iter().enumerate() {
             let field = self.output_schema.field_with_name(col_name).unwrap();
-            let arr = build_group_column(&entries, gi, num_rows, field.data_type());
+            let arr = build_group_column(&entries, gi, field.data_type());
             columns.push(arr);
         }
 
         for (ai, agg) in self.aggregates.iter().enumerate() {
             match agg.output_type() {
                 DataType::UInt64 => {
-                    let values: Vec<u64> = entries
-                        .iter()
-                        .map(|(_, accums)| accums[ai].count)
-                        .collect();
+                    let values: Vec<u64> =
+                        entries.iter().map(|(_, accums)| accums[ai].count).collect();
                     columns.push(Arc::new(UInt64Array::from(values)));
                 }
                 _ => {
@@ -289,9 +288,12 @@ fn extract_key(arr: &ArrayRef, row: usize) -> GroupKey {
         return GroupKey::Null;
     }
     match arr.data_type() {
-        DataType::Boolean => {
-            GroupKey::Bool(arr.as_any().downcast_ref::<BooleanArray>().unwrap().value(row))
-        }
+        DataType::Boolean => GroupKey::Bool(
+            arr.as_any()
+                .downcast_ref::<BooleanArray>()
+                .unwrap()
+                .value(row),
+        ),
         DataType::Int32 => GroupKey::Int32(arr.as_primitive::<Int32Type>().value(row)),
         DataType::Int64 => GroupKey::Int64(arr.as_primitive::<Int64Type>().value(row)),
         DataType::Float64 => {
@@ -306,14 +308,14 @@ fn extract_key(arr: &ArrayRef, row: usize) -> GroupKey {
 fn extract_f64(arr: &ArrayRef, row: usize) -> f64 {
     match arr.data_type() {
         DataType::Float64 => arr.as_primitive::<Float64Type>().value(row),
-        DataType::Float32 => {
-            arr.as_primitive::<arrow::datatypes::Float32Type>().value(row) as f64
-        }
+        DataType::Float32 => arr
+            .as_primitive::<arrow::datatypes::Float32Type>()
+            .value(row) as f64,
         DataType::Int64 => arr.as_primitive::<Int64Type>().value(row) as f64,
         DataType::Int32 => arr.as_primitive::<Int32Type>().value(row) as f64,
-        DataType::UInt64 => {
-            arr.as_primitive::<arrow::datatypes::UInt64Type>().value(row) as f64
-        }
+        DataType::UInt64 => arr
+            .as_primitive::<arrow::datatypes::UInt64Type>()
+            .value(row) as f64,
         _ => 0.0,
     }
 }
@@ -321,7 +323,6 @@ fn extract_f64(arr: &ArrayRef, row: usize) -> f64 {
 fn build_group_column(
     entries: &[(Vec<GroupKey>, Vec<Accumulator>)],
     group_index: usize,
-    num_rows: usize,
     data_type: &DataType,
 ) -> ArrayRef {
     match data_type {

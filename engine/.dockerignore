@@ -5,3 +5,5 @@ target/
 scripts/
 catalogs.example/
 kaveon.example.toml
+Dockerfile
+docker-compose.yml

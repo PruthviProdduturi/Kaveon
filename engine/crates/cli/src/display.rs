@@ -1,7 +1,7 @@
 use arrow::array::{Array, AsArray};
 use arrow::datatypes::{
-    DataType, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
-    UInt32Type, UInt64Type, UInt8Type,
+    DataType, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type,
+    UInt16Type, UInt32Type, UInt64Type,
 };
 use arrow::record_batch::RecordBatch;
 use std::cmp;
