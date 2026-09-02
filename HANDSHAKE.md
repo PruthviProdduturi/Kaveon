@@ -29,7 +29,7 @@
 | `optim` — filter pushdown | **Codex** | Not started |
 | `python` — PyO3 bindings | **Claude** | Scaffold |
 | `cli` — `kaveon` interactive SQL shell | **Claude** | Done |
-| `benches` — Criterion benchmarks | **Codex** | Not started |
+| `benches` — Criterion benchmarks | **Codex** | Storage microbenchmark scaffold done; cross-engine suite pending |
 
 ### API (`api/`)
 
@@ -210,3 +210,4 @@ version = kaveon_engine.version()
 | 2026-09-01 | Codex | Completed local Parquet M1: streaming BatchSource, strict projection, metadata, typed StoragePredicate row-group pruning, 8 passing tests, strict Clippy. Full workspace check blocked by sqlparser 0.53 API mismatches in kaveon-sql (ValueWithSpan, GroupByExpr, OrderBy, Value). |
 | 2026-09-01 | Codex | Engine CI run 33578907744: storage is formatted, tested, and Clippy-clean; workspace format gate is blocked on Claude-owned cli/{config,display,main,planner}, core/{catalog,operator}, exec/{aggregate,expr_eval,project}, and sql/logical_plan. Codex formatted owned benches/aggregate.rs. |
 | 2026-09-01 | Codex | Storage→exec integration compile reaches kaveon-exec, then blocks on Claude-owned expr_eval imports removed from arrow::compute in Arrow 54 (eq/neq/lt/lt_eq/gt/gt_eq); aggregate.rs also has unused num_rows. Storage itself compiles cleanly. |
+| 2026-09-01 | Codex | Added reproducible Criterion storage benchmarks for full scans, projection, and row-group pruning. The benchmark target compiles and storage passes strict Clippy; workspace formatting remains blocked by formatting drift in Claude-owned crates. Cross-engine runs will use identical Parquet/Delta data and resource limits, with local mounts for correctness and shared object storage for representative lakehouse performance. |

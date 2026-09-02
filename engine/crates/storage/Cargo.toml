@@ -11,3 +11,11 @@ arrow = { workspace = true }
 parquet = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "storage"
+path = "../../benches/storage.rs"
+harness = false
