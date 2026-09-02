@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 
 fn bench_hash_aggregate(_c: &mut Criterion) {
     // TODO: generate test Parquet, benchmark GROUP BY
