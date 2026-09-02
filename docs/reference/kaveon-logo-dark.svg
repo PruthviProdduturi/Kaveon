@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg"
-     viewBox="0 0 1305 390"
+     viewBox="0 35 1305 300"
      role="img"
      aria-labelledby="title desc">
 
-  <title id="title">Kaveon primary logo (dark)</title>
+  <title id="title">Kaveon logo with tagline for dark backgrounds</title>
   <desc id="desc">
-    Kaveon logo for dark backgrounds with crossbar-free A, Guardian O, and tagline.
+    Kaveon wordmark for dark backgrounds with a crossbar-free A, Guardian O, and the tagline Talk to your data.
   </desc>
 
   <!-- Wordmark — light letters -->
@@ -42,16 +42,6 @@
         stroke-width="20"
         stroke-linecap="butt"/>
 
-  <!-- Tagline -->
-  <text x="652.5"
-        y="340"
-        text-anchor="middle"
-        font-family="Inter, Avenir Next, Helvetica Neue, Arial, sans-serif"
-        font-size="46"
-        font-weight="400"
-        letter-spacing="0.8"
-        fill="#8090A0">
-    Talk to your data.
-  </text>
+  <text x="652.5" y="302" text-anchor="middle" font-family="Inter, Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="42" font-weight="400" letter-spacing="0.8" fill="#8090A0">Talk to your data.</text>
 
 </svg>

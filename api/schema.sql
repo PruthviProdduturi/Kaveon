@@ -263,54 +263,13 @@ BEGIN
 END
 GO
 
--- ── Auth Config ───────────────────────────────────────────────────────────────
-IF OBJECT_ID('auth_config', 'U') IS NULL
-BEGIN
-    CREATE TABLE auth_config (
-        id                   INT           IDENTITY(1,1) PRIMARY KEY,
-        provider             NVARCHAR(50)  NOT NULL DEFAULT 'local',
-        azure_tenant_id      NVARCHAR(255) NULL,
-        azure_client_id      NVARCHAR(255) NULL,
-        google_client_id     NVARCHAR(255) NULL,
-        google_client_secret NVARCHAR(1000) NULL,   -- Fernet-encrypted
-        jwt_secret           NVARCHAR(1000) NULL,   -- Fernet-encrypted
-        updated_at           DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
-        updated_by           NVARCHAR(255) NULL
-    );
-    PRINT 'Table auth_config created';
-END
-GO
-
--- ── Local Users ───────────────────────────────────────────────────────────────
-IF OBJECT_ID('local_users', 'U') IS NULL
-BEGIN
-    CREATE TABLE local_users (
-        id                    INT           IDENTITY(1,1) PRIMARY KEY,
-        username              NVARCHAR(255) NOT NULL,
-        email                 NVARCHAR(255) NOT NULL,
-        password_hash         NVARCHAR(255) NOT NULL,
-        role                  NVARCHAR(20)  NOT NULL DEFAULT 'Viewer'
-                              CONSTRAINT CK_local_users_role CHECK (role IN ('Viewer','Analyst','Editor','Admin')),
-        force_password_change BIT           NOT NULL DEFAULT 0,
-        is_active             BIT           NOT NULL DEFAULT 1,
-        created_at            DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
-        updated_at            DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
-        CONSTRAINT UQ_local_users_username UNIQUE (username),
-        CONSTRAINT UQ_local_users_email    UNIQUE (email)
-    );
-    CREATE INDEX idx_local_users_username ON local_users(username);
-    CREATE INDEX idx_local_users_email    ON local_users(email);
-    PRINT 'Table local_users created';
-END
-GO
-
 PRINT '';
 PRINT '============================================================';
 PRINT 'Lens schema initialised successfully.';
 PRINT 'Tables: datasets, dataset_dimensions, dataset_columns,';
 PRINT '        dataset_metrics, charts, dashboards, saved_queries,';
 PRINT '        query_history, favorites, activity, data_sources,';
-PRINT '        user_themes, auth_config, local_users';
+PRINT '        user_themes';
 PRINT '============================================================';
 GO
 

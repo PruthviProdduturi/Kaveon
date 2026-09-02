@@ -170,9 +170,10 @@ fn parse_config(content: &str) -> Result<CatalogManager> {
 
         if trimmed == "[[catalog.table]]" {
             if let Some(tbl) = current_table.take()
-                && let Some(cat) = current_catalog.as_mut() {
-                    cat.tables.push(tbl);
-                }
+                && let Some(cat) = current_catalog.as_mut()
+            {
+                cat.tables.push(tbl);
+            }
             current_table = Some(TableEntry::default());
             in_table = true;
             continue;
@@ -310,18 +311,19 @@ fn auto_discover_tables(catalog: &mut MemoryCatalog, dir: &Path) {
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "parquet")
                 && let Some(table_name) = path.file_stem().and_then(|s| s.to_str())
-                    && let Ok(meta) = ParquetReader::new(&path).metadata() {
-                        let _ = catalog.register_table(
-                            "default",
-                            TableMeta {
-                                name: table_name.to_owned(),
-                                arrow_schema: meta.schema,
-                                location: path.file_name().unwrap().to_string_lossy().into_owned(),
-                                access: AccessPattern::Shortcut,
-                                format: DataFormat::Parquet,
-                            },
-                        );
-                    }
+                && let Ok(meta) = ParquetReader::new(&path).metadata()
+            {
+                let _ = catalog.register_table(
+                    "default",
+                    TableMeta {
+                        name: table_name.to_owned(),
+                        arrow_schema: meta.schema,
+                        location: path.file_name().unwrap().to_string_lossy().into_owned(),
+                        access: AccessPattern::Shortcut,
+                        format: DataFormat::Parquet,
+                    },
+                );
+            }
         }
     }
 }

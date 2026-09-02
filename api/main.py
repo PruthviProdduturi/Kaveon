@@ -29,7 +29,6 @@ from routers import (
     data_sources,
     favorites,
     lab,
-    local_auth,
     sql,
     theme,
     setup,
@@ -72,17 +71,7 @@ async def lifespan(app: FastAPI):
         print("[API] Connection pool warmup started.")
     else:
         print("[API] No metadata database configured — starting in setup mode.")
-        print("[API] Setup wizard is available. Default login: admin / admin")
-
-    # Bootstrap local admin user (creates admin row + ensures Admin role).
-    # Skipped gracefully when no DB is configured — the hardcoded _BOOTSTRAP_HASH
-    # in services/local_auth.py handles the pre-DB admin/admin fallback instead.
-    if _db_configured:
-        try:
-            import services.local_auth as _local_auth_svc
-            _local_auth_svc.bootstrap_admin_if_needed()
-        except Exception as _e:
-            print(f"[API] bootstrap_admin_if_needed skipped (will retry on next restart): {_e}")
+        print("[API] Setup wizard is available. Configure an identity provider to continue.")
 
     yield
     # Shutdown: pools close via GC; nothing explicit needed
@@ -98,7 +87,7 @@ app = FastAPI(
 )
 
 _CORS_HEADERS = {
-    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Origin": settings.WEB_URL.rstrip("/"),
     "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Authorization, Content-Type, x-user-email, Cache-Control",
     "Access-Control-Max-Age": "600",
@@ -126,6 +115,7 @@ async def security_headers(request: Request, call_next):
         return Response(status_code=200, headers=_CORS_HEADERS)
     response = await call_next(request)
     response.headers.update(_CORS_HEADERS)
+    response.headers["Vary"] = "Origin"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
@@ -150,7 +140,6 @@ async def log_requests(request: Request, call_next):
 
 app.include_router(auth.router,             prefix="/api")
 app.include_router(auth_config.router,      prefix="/api")
-app.include_router(local_auth.router,       prefix="/api")
 app.include_router(health.router,           prefix="/api")
 app.include_router(metadata_summary.router, prefix="/api/v1")
 app.include_router(favorites.router,        prefix="/api/v1")

@@ -30,14 +30,14 @@ Think: **Microsoft Fabric** — but open-source, with a Data Language Model inst
 
 | Pillar | Identity | What it does |
 |--------|----------|-------------|
-| **Kaveon Engine** | The analytical database | Columnar query engine built in Rust. Reads Parquet, Delta, Iceberg directly from ADLS Gen 2 / S3 via shortcuts. Vectorized execution, zero external engine dependencies. Full IP ownership. |
+| **Kaveon Engine** | The analytical database | Columnar query engine built in Rust. Current: local Parquet and vectorized execution. Target: Delta and Iceberg over ADLS Gen2/S3 through the Live Lake Path. Zero external engine dependencies. |
 | **Kaveon Studio** | The intelligence layer | Dashboards (37 chart types, drag-drop canvas, cross-filtering), SQL Lab (Monaco editor), dataset management, data source registration. One surface for all analytics. |
-| **Kaveon DLM** | The Data Language Model | Deterministic NL→SQL. No LLM, no API key, no hallucination. Compiles per-dataset context, answers in ~5ms from precomputed artifacts. Patent in process. Standalone API. |
+| **Kaveon DLM** | The Data Language Model | Deterministic NL→SQL for supported question classes. Compiles per-dataset context and runs inside the shipping API; standalone API extraction is planned. Patent work is tracked privately. |
 
 ### Data model
 
-- **Shortcuts** (default): Kaveon Engine reads directly from where data lives (ADLS Gen 2, S3, GCS, local Parquet). Zero copy, instant query.
-- **Optimized ingest** (opt-in): Engine reads source data, rewrites in Kaveon-optimized format (sorted, partitioned, compressed) back to the same storage. Faster queries after a one-time rewrite. Like OneLake — but your storage, your account.
+- **Live Lake Path** (target default): Kaveon Engine reads data where it lives. Local Parquet works today; ADLS Gen2, S3, Delta Lake, and Iceberg are planned. GCS is outside the current roadmap.
+- **Optimized ingest** (post-launch target): Engine reads source data and rewrites it in a sorted, partitioned, compressed layout in the same customer-controlled storage.
 - **Legacy passthrough**: Current PostgreSQL / Fabric SQL / Azure SQL direct query. Migration path. Eventually deprecated.
 
 ---
@@ -46,10 +46,10 @@ Think: **Microsoft Fabric** — but open-source, with a Data Language Model inst
 
 | What | Kaveon | Competitors |
 |------|--------|-------------|
-| NL→SQL | DLM — deterministic, no LLM, no API key, ~5ms, patent pending | LLM-based (LangChain, Vanna.ai, Copilot) — hallucinations, latency, cost |
+| NL→SQL | DLM — deterministic resolution for compiled, supported question classes; no model call on that path | Generative approaches can cover broader language but add model latency, cost, and nondeterminism |
 | Query engine | Own engine (Rust, Parquet-native, vectorized) | Wraps DuckDB, embeds Trino, or sends SQL to external DBs |
 | Architecture | Unified monorepo — Engine + Studio + DLM as one product | Glue: Superset + Trino + LangChain + 3 deploy targets |
-| Data access | Shortcuts — direct read from cloud storage, no import | ETL pipelines, import jobs, data movement |
+| Data access | Live Lake Path — direct reads without mandatory import (local Parquet now; cloud target) | ETL pipelines, import jobs, data movement |
 | IP | Patent in process, trademark planned, full ownership | OSS with no IP moat |
 
 ---
@@ -157,9 +157,9 @@ Total: 4-6 agents working in parallel across all pillars.
 |----------|-----------|
 | DLM-led positioning | Only asset that is both unique and finished. No competitor has deterministic NL→SQL. |
 | Own engine, not DuckDB/Trino | Full IP ownership. Patentable. "Powered by Kaveon Engine" is a moat. |
-| Shortcuts over import | Direct read from cloud storage. No data movement. Like Fabric shortcuts. |
+| Live Lake Path over import | Direct reads from customer-controlled storage without mandatory movement. |
 | Optimized ingest is opt-in | Don't force a copy. Let users choose performance vs simplicity. |
-| No LLM anywhere | Deterministic answers. Zero API cost. Zero hallucination. This IS the product. |
+| Deterministic DLM core | The DLM path requires no LLM. Optional AI-assistant features may use a separately configured hosted model. |
 | Monorepo, pillars at top level | `studio/`, `api/`, `engine/`. Not nested under `apps/`. Platform-grade structure. |
 | Monetization deferred | Build the best product first. Revenue model decided by traction. |
 | MIT license | Open-source first. Community adoption. Re-evaluate after launch if needed. |

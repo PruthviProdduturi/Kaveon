@@ -3,7 +3,7 @@
 Hiding platform tables from the Lab table listing is cosmetic: a user can still
 reference them by name. These guards reject dangerous user-supplied SQL and close:
 
-  - Viewer/Analyst reading `auth_config` / `local_users` (secret + hash exposure)
+  - Queries probing reserved control-plane table names from older deployments
   - Analyst UPDATE / DELETE / DROP against Kaveon's own metadata tables
   - a sub-Analyst (Viewer) using the dashboard-source exception to run non-SELECT
     or stacked statements

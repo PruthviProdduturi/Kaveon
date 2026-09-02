@@ -345,7 +345,7 @@ const DashboardFilterBarEnhanced: React.FC = () => {
       {isAddingFilter && (
         <div className="chart-filter-body" style={{ marginTop: 8 }}>
           <label className="chart-builder-label" htmlFor="add-filter-select" style={{ fontSize: '0.75rem' }}>
-            Select column (will default to "AllUp")
+            Select column (defaults to &quot;AllUp&quot;)
           </label>
           <select
             id="add-filter-select"
@@ -367,7 +367,7 @@ const DashboardFilterBarEnhanced: React.FC = () => {
       {/* Empty state */}
       {dashboardFilters.length === 0 && !isAddingFilter && (
         <div style={{ padding: '12px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
-          No filters added. Click "+ Add filter" to get started.
+          No filters added. Click &quot;+ Add filter&quot; to get started.
         </div>
       )}
     </div>

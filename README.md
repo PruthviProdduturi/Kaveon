@@ -1,191 +1,160 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/reference/kaveon-logo-dark.svg?v=16">
-  <img src="docs/reference/kaveon-logo.svg?v=16" alt="Kaveon — Talk to your data." width="380" />
+  <source media="(prefers-color-scheme: dark)" srcset="docs/reference/kaveon-logo-dark.svg">
+  <img src="docs/reference/kaveon-logo.svg" alt="Kaveon" width="380">
 </picture>
 
-<br/>
+### One platform to ask, compute, and explore
 
-Connect your databases. Ask anything. Get instant answers with interactive charts<br/>
-powered by the **DLM (Data Language Model)** — not an LLM.
+Kaveon combines a columnar analytical engine, deterministic data intelligence, and a complete BI studio—while keeping data in the systems you own.
 
-<br/>
+[![Engine](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/engine.yml/badge.svg)](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/engine.yml)
+[![Platform](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/ci.yml/badge.svg)](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-10b981.svg)](LICENSE)
+[![Preview](https://img.shields.io/badge/live-kaveon.vercel.app-4A9EE8.svg)](https://kaveon.vercel.app)
 
-[![Deploy](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/deploy.yml/badge.svg)](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/deploy.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Live Demo](https://img.shields.io/badge/demo-kaveon.vercel.app-4A9EE8)](https://kaveon.vercel.app) [![504M Rows](https://img.shields.io/badge/scale-504M_rows-38a169)](https://kaveon.vercel.app) [![Patent](https://img.shields.io/badge/patent-in_process-d69e2e)](docs/patent-adaptive-context-routing.md)
-
-[![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=fff)](api/) [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=fff)](studio/) [![Next.js](https://img.shields.io/badge/Next.js-15-000?logo=nextdotjs&logoColor=fff)](studio/) [![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=fff)](api/) [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=fff)](infra/bicep/)
-
-[**Try It**](https://kaveon.vercel.app) · [**Documentation**](https://kaveon.vercel.app/docs) · [**White Paper**](docs/whitepaper-dlm.md) · [**Architecture**](ARCHITECTURE.md) · [**Patent**](docs/patent-adaptive-context-routing.md)
+[**Open Kaveon**](https://kaveon.vercel.app) · [**Read the docs**](https://kaveon.vercel.app/docs) · [**Architecture**](ARCHITECTURE.md) · [**Project status**](STATUS.md)
 
 </div>
-
----
-
-## How It Works
-
-You type a question. Kaveon figures out which dataset to query, generates SQL, executes it, picks the right chart type, and renders the answer inline — with an intelligent summary.
-
-```
-You: "Show confirmed cases by country"
-
-Kaveon: Found 195 results. Top 3: United States (103.8M),
-        India (45.0M), France (39.9M).
-        ⚡ From context · no DB scan
-        [bar chart rendered inline]
-```
-
-No LLM. No API key. The **[DLM (Data Language Model)](docs/whitepaper-adaptive-context-routing.md)** is a per-dataset compiled context artifact that routes questions deterministically, answers common cases from precomputed context with **no database scan at all**, and falls back to a single live query for the rest.
-
----
-
-## DLM — Data Language Model
-
-> [White Paper](docs/whitepaper-dlm.md) · [Curation at Scale](docs/whitepaper-dlm-curation.md) · [Adaptive Context Routing](docs/whitepaper-adaptive-context-routing.md) · [Patent Claims](docs/patent-adaptive-context-routing.md)
 
 <div align="center">
-  <img src="docs/reference/kaveon-dlm-flow.svg" alt="DLM architecture: compile once, answer instantly" width="820" />
+  <img src="docs/reference/kaveon-intelligence-loop.svg" alt="A question flows through Kaveon DLM, Engine, and Studio while data remains in customer-owned storage" width="960">
 </div>
 
-<br/>
+## Three pillars, one system
 
-| | |
-|:---:|---|
-| **Compile once** | Profile `pg_stats`, precompute 375 answers (totals + per-dimension breakdowns + 2-dim combos), build a value index mapping terms to columns and values |
-| **Answer instantly** | NL questions, dashboard charts, and filter dropdowns all served from an in-memory dict — **~5ms, zero warehouse load** |
-| **Fall back cleanly** | Complex shapes (time-series, multi-filter combos) assemble a single live query — one scan, cached |
-| **Stay fresh** | Per-element staleness scoring from DBMS counters (`n_mod_since_analyze`) — no re-query to check freshness |
+| Pillar | Responsibility | Current state |
+|---|---|---|
+| **Kaveon Engine** | Vectorized Rust query engine over Arrow `RecordBatch` data; direct local Parquet reads, SQL, CLI, and HTTP server | Alpha |
+| **Kaveon DLM** | Deterministic dataset context compilation and natural-language-to-SQL routing without an LLM | Integrated in the Python API |
+| **Kaveon Studio** | Next.js analytics experience for questions, SQL, datasets, charts, and dashboards | Live preview |
 
-**Measured:** Over a 10.1M-row usage dataset, "current usage" drops from **~15s live → ~1.5s from context**. Dashboard charts render from context in **~5ms** end-to-end.
+The product direction is direct lakehouse analytics: read Parquet, Delta Lake, and Iceberg from local storage, ADLS Gen2, and S3 without an import step. Today, the Rust Engine reads local Parquet; cloud object stores and table formats are planned and must not be confused with shipped support.
 
----
+## Why Kaveon
 
-## Architecture
+- **One intelligence surface.** Ask a question, inspect the generated SQL, explore the result, and publish a dashboard without changing products.
+- **Deterministic by design.** The DLM compiles dataset metadata and value context, then follows inspectable rules rather than probabilistic token generation.
+- **Data stays yours.** Kaveon queries registered databases today and is being built to read customer-owned lakehouse storage directly.
+- **Engine and platform modes.** Run the Rust Engine as a standalone analytical database, or pair it with DLM and Studio for the full experience.
+- **Honest maturity.** Implemented, experimental, and target capabilities are separated in [STATUS.md](STATUS.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
 
-<div align="center">
-  <img src="docs/reference/kaveon-architecture.svg" alt="Kaveon architecture: browser to Next.js to FastAPI to your databases" width="820" />
-</div>
+The deterministic DLM path requires no LLM. Kaveon's optional AI-assistant features can use configured hosted models; those are separate from DLM routing.
 
-<br/>
+## How a question becomes an answer
 
-Two services. One monorepo. Zero exposed tokens.
+```text
+Question or SQL
+      │
+      ├── natural language ──► DLM context resolution ──► context answer or SQL
+      │
+      └── SQL ───────────────────────────────────────────────────────┘
+                                                                       │
+                                      registered source or Kaveon Engine
+                                                                       │
+                                               result rows / Arrow batches
+                                                                       │
+                                             answer, chart, or dashboard
+```
 
-| Service | Stack | Deploy |
-|---------|-------|--------|
-| **kaveon-studio** | Next.js 15, React 19, TypeScript, ECharts, Monaco | Vercel |
-| **kaveon-api** | FastAPI, Python 3.11, psycopg2, pyodbc | Azure Container Apps |
+The shipping web path is Studio → same-origin Next.js proxy → FastAPI/DLM → one selected registered SQL source. The Rust Engine currently has separate CLI and HTTP entry points; integrating it as the platform execution backend is target architecture.
 
-The browser never holds an API token — all calls go same-origin to a Next.js proxy that stamps identity server-side via NextAuth (Auth.js v5).
+## Engine quick start
 
----
+Requires a current stable Rust toolchain.
 
-## Features
+```bash
+cd engine
+cargo run -p kaveon-cli -- --data-dir /path/to/parquet
+```
 
-| | |
-|---|---|
-| **🧠 DLM — Data Language Model** | Per-dataset compiled context artifact. Answers NL questions, powers dashboard charts, and populates filter dropdowns — all from precomputed context with no DB scan. [White paper →](docs/whitepaper-dlm.md) |
-| **💬 Conversational querying** | Type questions in plain English. The DLM routes, resolves, and renders charts inline with intelligent summaries. |
-| **📊 37 chart types** | Bar, line, area, pie, scatter, heatmap, funnel, gauge, treemap, waterfall, calendar, 3D globe, and more. All interactive, all dark-mode aware. |
-| **📋 Dashboard builder** | Drag-and-drop canvas with resizable tiles, cross-chart filtering, shared filter bar, auto-refresh, and publishing. |
-| **⌨️ SQL Lab** | Monaco editor (VS Code-grade) with autocomplete, multi-tab sessions, query history, result caching, and inline AI. |
-| **🔗 Semantic datasets** | Define dimensions, metrics, and joins once. Reuse across unlimited charts. Kaveon generates the SQL. |
-| **🗄️ Multi-source** | Microsoft Fabric SQL, Azure SQL, PostgreSQL, MySQL, StarRocks, Trino. Connect them all, query across them. |
-| **🔒 Self-hosted** | Your infrastructure, your data, your rules. MIT licensed. |
+Then query a file by its table name:
 
----
+```sql
+SELECT region, SUM(revenue)
+FROM sales
+GROUP BY region;
+```
 
-## Tech Stack
+Run the Engine quality gates:
 
-<table>
-<tr>
-<td align="center" width="100"><strong>Frontend</strong></td>
-<td>Next.js 15 · React 19 · TypeScript · ECharts + GL · Monaco Editor · NextAuth (Auth.js v5)</td>
-</tr>
-<tr>
-<td align="center" width="100"><strong>Backend</strong></td>
-<td>FastAPI · Python 3.11 · psycopg2 · pyodbc · pymysql · Gunicorn + Uvicorn</td>
-</tr>
-<tr>
-<td align="center" width="100"><strong>Database</strong></td>
-<td>Azure PostgreSQL 18 (kaveonmeta + kaveon) · Managed Identity auth · Connection pooling</td>
-</tr>
-<tr>
-<td align="center" width="100"><strong>Infra</strong></td>
-<td>Azure Container Apps · Vercel · Bicep IaC · GitHub Actions CI/CD</td>
-</tr>
-<tr>
-<td align="center" width="100"><strong>Auth</strong></td>
-<td>OAuth (GitHub · Google · Microsoft Entra ID) · RBAC (Viewer → Analyst → Editor → Admin)</td>
-</tr>
-<tr>
-<td align="center" width="100"><strong>Scale</strong></td>
-<td>504M rows · 10 datasets · 9 dashboards · 375 precomputed answers per dataset · HLL sketch cuboids</td>
-</tr>
-</table>
+```bash
+cd engine
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
 
----
+The Docker Compose topology previews coordinator/worker discovery. It does not yet distribute query fragments, shuffle data, or provide fault-tolerant execution.
 
-## Documentation
+## Platform quick start
 
-| Guide | Description |
-|-------|-------------|
-| [Architecture](ARCHITECTURE.md) | System design, data flow, auth model |
-| [DLM White Paper](docs/whitepaper-dlm.md) | The Data Language Model — compilation, intent resolution, freshness |
-| [DLM Curation](docs/whitepaper-dlm-curation.md) | How Kaveon precomputes 375 answers across 10M rows |
-| [Adaptive Context Routing](docs/whitepaper-adaptive-context-routing.md) | Per-element staleness scoring and query routing |
-| [NL→SQL White Paper](docs/whitepaper-nl-to-sql.md) | Template-based deterministic translation (fallback layer) |
-| [Patent Claims](docs/patent-adaptive-context-routing.md) | 21-claim filing-ready patent draft |
-| [Charts](docs/guides/charts.md) | 37 chart types, dark mode, ECharts config |
-| [Dashboards](docs/guides/dashboards.md) | Builder, filters, cross-filtering, publishing |
-| [SQL Lab](docs/guides/sql-lab.md) | Monaco editor, query execution, caching |
-| [Data Sources](docs/guides/data-sources.md) | Connecting databases |
-| [Deployment](docs/guides/deploy-vercel-azure-postgres.md) | Vercel + Azure Container Apps + Azure PostgreSQL setup |
-
----
-
-## Quick Start
+Requires Node.js 22, pnpm, and Python 3.11. Copy `.env.example` to `.env` and configure the required connections first.
 
 ```bash
 git clone https://github.com/PruthviProdduturi/Kaveon.git
 cd Kaveon
 
-# Frontend
 pnpm install
-pnpm --filter kaveon-studio dev        # localhost:3000
+pnpm --filter kaveon-studio dev
 
-# Backend
 cd api
 pip install -r requirements.txt
-python main.py                         # localhost:8080
+python main.py
 ```
 
-Configure `.env` at the repo root with your database connection. See [Deployment Guide](docs/guides/deploy-vercel-azure-postgres.md) for full setup.
+Studio runs on `http://localhost:3000`; the API defaults to `http://localhost:8080`. See [DEPLOYMENT.md](DEPLOYMENT.md) for production topology and configuration.
 
----
+## Architecture at a glance
 
-## Project Structure
+<div align="center">
+  <img src="docs/reference/kaveon-platform-architecture.svg" alt="Current and target Kaveon platform architecture" width="960">
+</div>
 
-```
+- [Full platform architecture](ARCHITECTURE.md)
+- [Engine execution pipeline](docs/reference/kaveon-engine-pipeline.svg)
+- [Deployment topology](docs/reference/kaveon-deployment-topology.svg)
+- [DLM flow](docs/reference/kaveon-dlm-flow.svg)
+
+## Current compatibility
+
+| Data system | Current path | State |
+|---|---|---|
+| Local Parquet | Kaveon Engine direct read | Alpha |
+| Microsoft Fabric SQL / Azure SQL | Studio + API connector | Available |
+| PostgreSQL | Studio + API connector | Available |
+| MySQL / StarRocks | Studio + API connector | Available |
+| Trino | No executable driver | Planned |
+| ADLS Gen2 / S3 | Kaveon Engine direct read | Planned |
+| Delta Lake / Iceberg | Kaveon Engine table-format reader | Planned |
+
+Each current platform query targets one selected data source; cross-source federated execution is not implemented.
+
+## Repository map
+
+```text
 Kaveon/
-├── studio/                  Next.js frontend (kaveon-studio)
-├── api/                     FastAPI backend
-├── packages/
-│   └── types/               Shared TypeScript types
-├── infra/
-│   └── bicep/               Azure IaC templates
-├── docs/                    Guides + white papers + patent
-├── scripts/                 Migration + utilities
-└── demo/                    Data loading scripts
+├── engine/       Rust analytical engine, server, CLI, Python binding, and benchmarks
+├── studio/       Next.js 15 / React 19 intelligence and BI surface
+├── api/          FastAPI platform API and deterministic DLM
+├── packages/     Shared TypeScript packages
+├── infra/        Azure infrastructure as code
+├── docs/         Guides, architecture references, and technical papers
+├── scripts/      Operational and data utilities
+└── demo/         Demonstration data tooling
 ```
 
----
+## Documentation
 
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md).
-
----
+| Start and operate | Technical depth |
+|---|---|
+| [Product architecture](ARCHITECTURE.md) | [DLM white paper](docs/whitepaper-dlm.md) |
+| [Current status](STATUS.md) | [DLM curation](docs/whitepaper-dlm-curation.md) |
+| [Deployment](DEPLOYMENT.md) | [Adaptive context routing](docs/whitepaper-adaptive-context-routing.md) |
+| [Security](SECURITY.md) | [Deterministic NL→SQL](docs/whitepaper-nl-to-sql.md) |
+| [Contributing](CONTRIBUTING.md) | [Product strategy](docs/product-strategy.md) |
 
 ## License
 
-[MIT](LICENSE) — built by [Pruthvi Prodduturi](https://github.com/PruthviProdduturi).
+Kaveon is available under the [MIT License](LICENSE). MIT permits use, modification, distribution, and commercial use subject to preserving its copyright and license notice; it does not require separate consent.

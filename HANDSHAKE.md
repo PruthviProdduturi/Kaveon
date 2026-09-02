@@ -43,19 +43,19 @@
 
 | Area | Owner | Status |
 |------|-------|--------|
-| Platform rebrand (about, landing, nav) | **Claude** | Not started |
+| Platform rebrand (about, landing, nav) | **Claude** | About page and shared wordmark redesigned; broader landing polish pending |
 | Lakehouse data source UI | **Claude** | Not started |
-| UX polish | **Claude** | Not started |
+| UX polish | **Claude** | In progress |
 
 ### Launch
 
 | Area | Owner | Status |
 |------|-------|--------|
-| README rewrite | **Claude** | Not started |
-| Docker Compose | **Claude** | Not started |
+| README rewrite | **Claude** | Done; current/alpha/target boundaries documented |
+| Docker Compose | **Claude** | Engine compose present; deployment validation ongoing |
 | Demo datasets | **Claude** | Not started |
-| White papers | **Claude** | Not started |
-| Architecture diagrams | **Claude** | Not started |
+| White papers | **Claude** | Present; evidence and maturity audit in progress |
+| Architecture diagrams | **Claude** | Unified platform set rebuilt |
 
 ---
 
@@ -168,7 +168,7 @@ pub enum LogicalPlan {
 - **Claude** owns the physical plan translation (logical → physical operators)
 - **Codex** owns the optimizer pass (rewrite logical plan before physical translation)
 
-### Engine → API boundary (PyO3)
+### Engine → API boundary (PyO3 target)
 
 ```python
 import kaveon_engine
@@ -178,12 +178,19 @@ version = kaveon_engine.version()
 ```
 
 - **Claude** owns PyO3 bindings
-- Exposes `execute(sql, data_path) -> dict` and `version() -> str`
+- Current binding is a scaffold and is not integrated into the shipping API
+- Target contract is `execute(sql, data_path) -> dict` and `version() -> str`
 
-### DLM API (standalone)
+### Engine operational API
+
+- `GET /v1/query` returns up to 100 most-recent in-memory query records for the Engine UI
+- Records include SQL, state, schema, rows, error, elapsed time, and submission time
+- History is process-local and resets when the coordinator restarts
+
+### DLM API (standalone target)
 
 - **Claude** extracts DLM into callable API endpoints independent of Studio
-- OpenAPI spec at `api/dlm/openapi.yaml`
+- Standalone extraction and its OpenAPI contract are not implemented yet
 - Auth: same proxy secret model as main API
 
 ---
@@ -212,3 +219,5 @@ version = kaveon_engine.version()
 | 2026-09-01 | Codex | Storage→exec integration compile reaches kaveon-exec, then blocks on Claude-owned expr_eval imports removed from arrow::compute in Arrow 54 (eq/neq/lt/lt_eq/gt/gt_eq); aggregate.rs also has unused num_rows. Storage itself compiles cleanly. |
 | 2026-09-01 | Codex | Added reproducible Criterion storage benchmarks for full scans, projection, and row-group pruning. The benchmark target compiles and storage passes strict Clippy; workspace formatting remains blocked by formatting drift in Claude-owned crates. Cross-engine runs will use identical Parquet/Delta data and resource limits, with local mounts for correctness and shared object storage for representative lakehouse performance. |
 | 2026-09-01 | Codex | Architect-requested documentation pass: rewrote ARCHITECTURE.md to separate shipping, alpha, and target behavior; added theme-aligned accessible SVGs for the three-pillar platform, Engine pipeline, and deployment topology. No runtime contract changed. |
+| 2026-09-02 | Codex | Rebuilt product/architecture branding and About experience, removed obsolete local-password authentication paths, restored strict Studio type checking, and aligned public documentation with current/alpha/target behavior. |
+| 2026-09-02 | Codex | Redesigned the Engine operational UI and added server-backed `GET /v1/query` history. Removed fabricated timing phases; the UI reports only measured Engine telemetry. |

@@ -13,7 +13,7 @@ export default function Quickstart() {
 
       <h2>1 · Sign in</h2>
       <p>
-        Open Kaveon and sign in. Authentication is provider-based (no local passwords by default) — GitHub, Google,
+        Open Kaveon and sign in. Authentication is provider-based with no local passwords — GitHub, Google,
         or Microsoft Entra ID light up automatically when their credentials are present. The API&rsquo;s authorization
         layer defines a four-role ladder (<code>Viewer → Analyst → Editor → Admin</code>), but the NextAuth sign-in
         resolves you to <strong>Admin</strong> (if your email is in <code>AUTH_ADMIN_EMAILS</code>) or{" "}

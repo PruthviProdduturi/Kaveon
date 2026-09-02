@@ -1724,3 +1724,6 @@ Address any console errors, broken styles, or navigation issues.
 git add -A
 git commit -m "feat: complete homepage & layout redesign — chat-first, sidebar nav, light/dark"
 ```
+# Archived implementation plan
+
+> Historical design record. Paths, line counts, and implementation-state statements may no longer match the current repository. Use `README.md`, `STATUS.md`, and `ARCHITECTURE.md` as the authoritative sources.

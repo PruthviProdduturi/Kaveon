@@ -871,7 +871,7 @@ export interface ChartCategory {
 }
 
 export interface ChartTemplate {
-  id: ChartKind;
+  id: string;
   name: string;
   description: string;
   category: string; // e.g. "Line", "Bar", "Pie" etc. aligned with ECharts examples
@@ -1250,8 +1250,8 @@ export interface ChartBuilderContextValue {
   setName: (value: string) => void;
   description: string;
   setDescription: (value: string) => void;
-  chartType: ChartKind | null;
-  setChartType: (value: ChartKind | null) => void;
+  chartType: string | null;
+  setChartType: (value: string | null) => void;
   templates: ChartTemplate[];
   categories: ChartCategory[];
   selectedTemplate: ChartTemplate | null;
@@ -1337,7 +1337,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
   const [datasetDetail, setDatasetDetail] = useState<DatasetDetailForChart | null>(null);
   const [name, setName] = useState<string>("");
   const [description, setDescription] = useState<string>("");
-  const [chartType, setChartType] = useState<ChartKind | null>(null);
+  const [chartType, setChartType] = useState<string | null>(null);
   const [metricColumn, setMetricColumn] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<MetricConfig[]>([]);
   const [timeGrain, setTimeGrain] = useState<string>("none");
@@ -1464,7 +1464,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
   // Initialize from props on mount
   useEffect(() => {
     if (initialTemplate && [...TEMPLATES, ...getRegisteredPlugins()].some((t) => t.id === initialTemplate)) {
-      setChartType(initialTemplate as ChartKind);
+      setChartType(initialTemplate);
     }
 
     if (initialDatasetId) {
@@ -1876,7 +1876,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
   };
 
   const buildEchartsOptionFromPreview = (
-    chartKind: ChartKind,
+    chartKind: string,
     executeJson: { columns?: string[]; rows?: unknown[][] },
     config: ReturnType<typeof buildQueryConfigForPreview>,
   ): any | null => {

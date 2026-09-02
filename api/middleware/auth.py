@@ -2,14 +2,10 @@
 Authentication middleware.
 
 Security model:
-  Provider is read from the auth_config table (or defaults to 'local' on first run).
+  Provider is read from configuration and defaults to Azure AD.
 
   - azure_ad  → RS256 JWKS verification against Microsoft login endpoint.
-  - local     → HS256 verification using the jwt_secret stored in auth_config.
   - google    → RS256 JWKS verification against Google's public certs endpoint.
-
-  When no DB is available (first-run / setup mode):
-      Falls back to unverified JWT decode, then x-user-email header.
 
 Dependencies exported:
     get_current_user(request)   → str | None          (email only, backward compat)
@@ -80,33 +76,12 @@ def _get_google_jwks_client() -> PyJWKClient:
 
 # ── Provider resolution ───────────────────────────────────────────────────────
 
-def _allow_unsigned_setup() -> bool:
-    """True ONLY during genuine first-run bootstrap — when nothing that could verify
-    identity is configured yet.
-
-    In production the NextAuth proxy secret (KAVEON_PROXY_SECRET) and/or Azure AD is
-    set, so this returns False and the unsigned-JWT fallback in _decode_token is
-    disabled. That closes the bypass where an attacker mints a
-    {"email": "x@y", "roles": ["Admin"]} token and has it accepted unverified.
-    """
-    if settings.KAVEON_PROXY_SECRET or _AAD_CONFIGURED:
-        return False
-    try:
-        import services.auth_config as _ac
-        if (_ac.get_config() or {}).get("google_client_id"):
-            return False
-    except Exception:
-        pass
-    return True
-
-
 def _get_active_provider() -> str:
     """
     Return the active auth provider name.
     Calls services.auth_config.get_active_provider() — that module caches
     the value and can be cleared via refresh_auth_config().
-    Falls back to 'azure_ad' if Azure AD env vars are set (legacy path),
-    or 'local' if nothing is configured.
+    Falls back to Azure AD when dynamic configuration is unavailable.
     """
     try:
         import services.auth_config as _ac
@@ -114,10 +89,7 @@ def _get_active_provider() -> str:
     except Exception:
         pass
 
-    # Env-var legacy fallback
-    if _AAD_CONFIGURED:
-        return "azure_ad"
-    return "local"
+    return "azure_ad"
 
 
 # ── UserContext ───────────────────────────────────────────────────────────────
@@ -179,27 +151,6 @@ def _decode_azure_ad(token: str) -> Optional[tuple[str, list[str]]]:
         return None
 
 
-def _decode_local_hs256(token: str) -> Optional[tuple[str, list[str]]]:
-    """Verify a local HS256 token. Returns (email, roles) or None."""
-    try:
-        import services.auth_config as _ac
-        secret = _ac.get_jwt_secret()
-        payload = jwt.decode(
-            token,
-            secret,
-            algorithms=["HS256"],
-            options={"verify_aud": False},
-        )
-        email = _email_from_payload(payload)
-        if not email:
-            return None
-        return (email, _roles_from_payload(payload))
-    except (ExpiredSignatureError, InvalidTokenError):
-        return None
-    except Exception:
-        return None
-
-
 def _decode_google(token: str) -> Optional[tuple[str, list[str]]]:
     """Verify a Google RS256 token. Returns (email, roles) or None."""
     try:
@@ -241,30 +192,10 @@ def _decode_token(token: str) -> Optional[tuple[str, list[str]]]:
     provider = _get_active_provider()
 
     if provider == "azure_ad":
-        if _aad_jwks_client is not None:
-            return _decode_azure_ad(token)
-        # AAD selected but JWKS client unavailable — fall through to setup-mode decode
-    elif provider == "local":
-        result = _decode_local_hs256(token)
-        if result:
-            return result
-        # If local secret not available yet, fall through
+        return _decode_azure_ad(token)
     elif provider == "google":
         return _decode_google(token)
-
-    # Setup/fallback mode — accept an unsigned JWT ONLY during genuine first-run
-    # bootstrap (nothing configured to verify identity yet). Once a proxy secret or
-    # provider is configured, an unverified token is rejected — no forged-Admin bypass.
-    if not _allow_unsigned_setup():
-        return None
-    try:
-        payload = jwt.decode(token, options={"verify_signature": False})
-        email = _email_from_payload(payload)
-        if not email:
-            return None
-        return (email, _roles_from_payload(payload))
-    except Exception:
-        return None
+    return None
 
 
 # ── FastAPI dependencies (email-only, backward-compatible) ────────────────────
@@ -318,7 +249,7 @@ def get_user_email(request: Request) -> str:
 def get_user_context(request: Request) -> Optional[UserContext]:
     """
     Returns a UserContext with email + resolved role, or None if unauthenticated.
-    Resolves role from: JWT claim (azure_ad/google) or JWT + Viewer fallback (local).
+    Resolves roles from verified Azure AD or Google claims.
     """
     # Trusted proxy identity (NextAuth flow) — role comes straight from the
     # header the proxy set from the NextAuth session; no DB lookup needed.

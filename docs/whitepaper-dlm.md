@@ -419,18 +419,18 @@ with ~5 ms context lookups.
 
 The DLM is implemented in pure Python with no ML dependencies:
 
-| File | Lines | Responsibility |
-|---|---|---|
-| `services/dlm.py` | 3,380 | Engine: compilation, intent resolution, answer store, serve-chart, HLL, incremental refresh, dashboard curation |
-| `services/hll.py` | 84 | HyperLogLog implementation (empty/merge/estimate/sparse serialization) |
-| `services/context_validity.py` | 248 | Three-factor validity score, routing decision |
-| `services/context_profiler.py` | 455 | Context building from `pg_stats`, change-counter capture |
-| `services/context_router.py` | 364 | Question→element mapping, profile answers, dependency-valid cache |
-| `routers/dlm.py` | ~300 | REST API: 16 endpoints |
+| File | Responsibility |
+|---|---|
+| `api/dlm/engine.py` | Compilation, intent resolution, and answer serving |
+| `api/dlm/hll.py` | HyperLogLog implementation |
+| `api/dlm/validity.py` | Validity scoring and freshness decisions |
+| `api/dlm/profiler.py` | Context building and change-counter capture |
+| `api/dlm/router.py` | Question-to-element mapping and route selection |
+| `api/routers/dlm.py` | REST API |
 
-Total: ~4,831 lines. The intent resolution uses a 56-family seed synonym lexicon
+The intent resolution uses a 56-family seed synonym lexicon
 and a lightweight suffix stemmer, both hand-written. No NLP library, no ML model,
-no training data. Zero external API calls.
+no training data. The deterministic DLM route makes no external model API calls.
 
 ---
 

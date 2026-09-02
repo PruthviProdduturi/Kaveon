@@ -729,7 +729,7 @@ const DashboardTabsComponent: React.FC<DashboardComponentProps> = ({
                 <p>This tab is empty</p>
                 {isEditMode && (
                   <p style={{ fontSize: 13, marginTop: 8 }}>
-                    Click "Add to Tab" button above to add content
+                    Click &quot;Add to Tab&quot; above to add content
                   </p>
                 )}
               </div>
