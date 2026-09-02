@@ -1,0 +1,17 @@
+# AWS S3 catalog
+# Filename becomes the catalog name: "s3"
+# Place in ~/.kaveon/catalogs/s3.toml
+
+type = "s3"
+bucket = "kaveon-data"
+region = "us-west-2"
+prefix = "warehouse"
+
+# Auth: AWS credential chain (env vars, ~/.aws/credentials, IAM role)
+
+[[table]]
+name = "transactions"
+schema = "default"
+location = "transactions/"
+access = "shortcut"
+format = "parquet"
