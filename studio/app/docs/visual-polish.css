@@ -23,7 +23,7 @@
 .docs-sidebar { overscroll-behavior: contain; }
 .docs-toc { overscroll-behavior: contain; }
 
-.docs-brand:focus-visible,
+.docs-section-title:focus-visible,
 .docs-navlink:focus-visible,
 .docs-toc a:focus-visible,
 .docs-pager a:focus-visible,
