@@ -18,7 +18,7 @@ import { auth } from "../../../../auth";
 const API_BASE = (process.env.API_URL || "http://localhost:8080").replace(/\/+$/, "");
 const PROXY_SECRET = process.env.KAVEON_PROXY_SECRET || "";
 
-const DEV_BYPASS = process.env.NODE_ENV === "development" && process.env.KAVEON_DEV_USER_EMAIL;
+const DEV_BYPASS = (process.env.NODE_ENV === "development" || process.env.KAVEON_LOCAL_MODE === "true") && process.env.KAVEON_DEV_USER_EMAIL;
 
 async function handler(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
 	let email = "";
@@ -26,7 +26,7 @@ async function handler(req: NextRequest, ctx: { params: Promise<{ path: string[]
 	let role = "Viewer";
 
 	if (DEV_BYPASS) {
-		// Local dev: skip auth() (can hang on Entra OIDC from corporate network)
+		// Explicit local mode: skip auth() and use the configured development identity.
 		email = process.env.KAVEON_DEV_USER_EMAIL!;
 		name = process.env.KAVEON_DEV_USER_NAME || "Dev User";
 		role = process.env.KAVEON_DEV_USER_ROLE || "Admin";

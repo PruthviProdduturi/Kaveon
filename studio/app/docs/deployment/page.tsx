@@ -56,15 +56,17 @@ export default function DeploymentDocs() {
 
       <h2>Engine alpha deployment</h2>
       <p>
-        <code>engine/docker-compose.yml</code> starts one coordinator and two workers for local topology validation.
+        The root <code>docker-compose.yml</code> starts Studio, API/DLM, PostgreSQL, one Engine coordinator, and two workers. <code>engine/docker-compose.yml</code> remains available for Engine-only topology validation.
         Nodes register and heartbeat, but statements execute on the receiving node: there is no fragment scheduling,
         Arrow exchange, shuffle, or cross-worker retry. Populate the mounted Parquet data path before startup and keep
         the unauthenticated Engine HTTP port behind a trusted boundary.
       </p>
-      <Code lang="bash">{`cd engine
+      <Code lang="powershell">{`$env:KAVEON_DATA_PATH='F:\\kaveon-data' # optional
 docker compose up --build
 
-# Engine operations UI: http://localhost:8080/ui`}</Code>
+# Studio:   http://localhost:3000
+# API:      http://localhost:8080
+# Engine:   http://localhost:8081/ui`}</Code>
 
       <h2>Key environment variables</h2>
       <table>

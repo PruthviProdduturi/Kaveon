@@ -1,12 +1,33 @@
-services:
+name: kaveon
 
-  # ── Engine: Coordinator ──────────────────────────────────────────────────────
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: kaveon-postgres
+    environment:
+      POSTGRES_DB: kaveonmeta
+      POSTGRES_USER: kaveon
+      POSTGRES_PASSWORD: ${KAVEON_POSTGRES_PASSWORD:-kaveon-local-only}
+    ports:
+      - "127.0.0.1:${KAVEON_POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./api/schema_postgresql.sql:/docker-entrypoint-initdb.d/10-kaveonmeta.sql:ro
+      - ./docker/postgres/20-create-data-database.sql:/docker-entrypoint-initdb.d/20-create-data-database.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kaveon -d kaveonmeta"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
   engine-coordinator:
     build:
       context: ./engine
     container_name: kaveon-engine-coordinator
     ports:
-      - "8081:8080"
+      - "127.0.0.1:8081:8080"
     environment:
       KAVEON_NODE_ID: coordinator-1
       KAVEON_ENVIRONMENT: docker
@@ -17,14 +38,17 @@ services:
     volumes:
       - ./engine/etc/coordinator.toml:/etc/kaveon/config.toml:ro
       - ./engine/etc/catalogs:/etc/kaveon/catalogs:ro
-      - engine-data:/data
+      - type: bind
+        source: ${KAVEON_DATA_PATH:-./data}
+        target: /data
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 10s
       timeout: 5s
-      retries: 3
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
 
-  # ── Engine: Worker 1 ─────────────────────────────────────────────────────────
   engine-worker-1:
     build:
       context: ./engine
@@ -32,7 +56,7 @@ services:
     depends_on:
       engine-coordinator:
         condition: service_healthy
-    environment:
+    environment: &engine-worker-environment
       KAVEON_NODE_ID: worker-1
       KAVEON_ENVIRONMENT: docker
       KAVEON_COORDINATOR: "false"
@@ -40,12 +64,14 @@ services:
       KAVEON_DISCOVERY_URI: http://engine-coordinator:8080
       KAVEON_DATA_DIR: /data
       KAVEON_CATALOG_DIR: /etc/kaveon/catalogs
-    volumes:
+    volumes: &engine-worker-volumes
       - ./engine/etc/worker.toml:/etc/kaveon/config.toml:ro
       - ./engine/etc/catalogs:/etc/kaveon/catalogs:ro
-      - engine-data:/data
+      - type: bind
+        source: ${KAVEON_DATA_PATH:-./data}
+        target: /data
+    restart: unless-stopped
 
-  # ── Engine: Worker 2 ─────────────────────────────────────────────────────────
   engine-worker-2:
     build:
       context: ./engine
@@ -54,43 +80,47 @@ services:
       engine-coordinator:
         condition: service_healthy
     environment:
+      <<: *engine-worker-environment
       KAVEON_NODE_ID: worker-2
-      KAVEON_ENVIRONMENT: docker
-      KAVEON_COORDINATOR: "false"
-      KAVEON_HTTP_PORT: "8080"
-      KAVEON_DISCOVERY_URI: http://engine-coordinator:8080
-      KAVEON_DATA_DIR: /data
-      KAVEON_CATALOG_DIR: /etc/kaveon/catalogs
-    volumes:
-      - ./engine/etc/worker.toml:/etc/kaveon/config.toml:ro
-      - ./engine/etc/catalogs:/etc/kaveon/catalogs:ro
-      - engine-data:/data
+    volumes: *engine-worker-volumes
+    restart: unless-stopped
 
-  # ── API ──────────────────────────────────────────────────────────────────────
   api:
     build:
       context: .
       dockerfile: api/Dockerfile
     container_name: kaveon-api
     ports:
-      - "8080:8080"
-    env_file:
-      - path: .env
-        required: false
+      - "127.0.0.1:8080:8080"
     environment:
-      ENV: production
-      PORT: "8080"
+      NODE_ENV: development
+      API_PORT: "8080"
+      WEB_URL: http://localhost:3000
+      METADATA_DB_TYPE: postgresql
+      METADATA_HOST: postgres
+      METADATA_PORT: "5432"
+      METADATA_DATABASE: kaveonmeta
+      METADATA_USER: kaveon
+      METADATA_PASSWORD: ${KAVEON_POSTGRES_PASSWORD:-kaveon-local-only}
+      METADATA_SSLMODE: disable
+      KAVEON_PROXY_SECRET: ${KAVEON_PROXY_SECRET:-kaveon-local-proxy}
+      KAVEON_DEV_USER_EMAIL: ${KAVEON_DEV_USER_EMAIL:-developer@localhost}
+      KAVEON_DEV_USER_NAME: ${KAVEON_DEV_USER_NAME:-Local Developer}
+      KAVEON_DEV_USER_ROLE: Admin
       KAVEON_ENGINE_URL: http://engine-coordinator:8080
     depends_on:
+      postgres:
+        condition: service_healthy
       engine-coordinator:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
-      interval: 15s
+      interval: 10s
       timeout: 5s
-      retries: 3
+      retries: 6
+      start_period: 15s
+    restart: unless-stopped
 
-  # ── Studio ───────────────────────────────────────────────────────────────────
   studio:
     build:
       context: .
@@ -100,18 +130,27 @@ services:
         WEB_URL: http://localhost:3000
     container_name: kaveon-studio
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       NODE_ENV: production
       API_URL: http://api:8080
+      AUTH_URL: http://localhost:3000
+      AUTH_SECRET: ${AUTH_SECRET:-kaveon-local-session-secret-change-outside-localhost}
+      KAVEON_LOCAL_MODE: "true"
+      KAVEON_PROXY_SECRET: ${KAVEON_PROXY_SECRET:-kaveon-local-proxy}
+      KAVEON_DEV_USER_EMAIL: ${KAVEON_DEV_USER_EMAIL:-developer@localhost}
+      KAVEON_DEV_USER_NAME: ${KAVEON_DEV_USER_NAME:-Local Developer}
+      KAVEON_DEV_USER_ROLE: Admin
     depends_on:
       api:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000"]
-      interval: 15s
+      interval: 10s
       timeout: 5s
-      retries: 3
+      retries: 6
+      start_period: 15s
+    restart: unless-stopped
 
 volumes:
-  engine-data:
+  postgres-data:
