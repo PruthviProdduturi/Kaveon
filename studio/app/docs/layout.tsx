@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { DocsShell } from "../../components/docs/DocsShell";
+import { PublicHeader } from "../../components/PublicHeader";
 import "./docs.css";
 import "./visual-polish.css";
 
@@ -9,5 +10,5 @@ export const metadata: Metadata = {
 };
 
 export default function DocsLayout({ children }: { children: React.ReactNode }) {
-  return <DocsShell>{children}</DocsShell>;
+  return <><PublicHeader active="docs" /><DocsShell>{children}</DocsShell></>;
 }

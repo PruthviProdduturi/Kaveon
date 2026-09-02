@@ -3,7 +3,8 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { KaveonMark, KaveonWordmark } from "../../components/KaveonMark";
+import { KaveonMark } from "../../components/KaveonMark";
+import { PublicHeader } from "../../components/PublicHeader";
 
 type AnimDirection = "up" | "down" | "left" | "right" | "scale" | "none";
 
@@ -134,11 +135,6 @@ export default function AboutPage() {
         .dash-frame:hover { transform: scale(1.02); box-shadow: 0 24px 80px rgba(0,0,0,0.6), 0 0 40px rgba(74,158,232,0.08) !important; }
         .dash-frame:hover .dash-label { opacity: 1 !important; }
         @media (max-width: 768px) {
-          .about-nav { padding: 14px 16px !important; }
-          .about-nav-links { gap: 10px !important; }
-          .about-nav-links .about-link { display: none !important; }
-          .about-nav-links { margin-left: auto; }
-          .about-nav-links .about-btn { padding: 8px 14px !important; white-space: nowrap; }
           .about-hero-actions { flex-direction: column; align-items: stretch !important; }
           .about-hero-actions > * { width: 100%; justify-content: center; }
           .about-chat-sidebar { display: none !important; }
@@ -161,24 +157,7 @@ export default function AboutPage() {
         }
       `}</style>
 
-      {/* ─── Nav ─── */}
-      <nav className="about-nav" style={{
-        position: "fixed", top: 0, left: 0, right: 0, zIndex: 100,
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "14px 48px",
-        background: "rgba(10,10,10,0.85)", backdropFilter: "blur(12px) saturate(180%)", WebkitBackdropFilter: "blur(12px) saturate(180%)",
-        borderBottom: "1px solid rgba(255,255,255,0.04)",
-      }}>
-        <Link href="/about" aria-label="Kaveon about" style={{ display: "flex", alignItems: "center", textDecoration: "none" }}><KaveonWordmark height={24} /></Link>
-        <div className="about-nav-links" style={{ display: "flex", alignItems: "center", gap: 36 }}>
-          <a href="#features" className="about-link" style={{ fontSize: 13, color: "#ccc", textDecoration: "none", transition: "color 0.2s" }}>Features</a>
-          <Link href="/docs" className="about-link" style={{ fontSize: 13, color: "#ccc", textDecoration: "none", transition: "color 0.2s" }}>Docs</Link>
-          <a href="https://github.com/PruthviProdduturi/Kaveon" target="_blank" rel="noopener noreferrer" className="about-link" style={{ fontSize: 13, color: "#ccc", textDecoration: "none", transition: "color 0.2s" }}>GitHub</a>
-          <Link href="/" className="about-btn" style={{ display: "inline-block", padding: "8px 20px", borderRadius: 8, background: B, color: "#fff", fontSize: 13, fontWeight: 600, textDecoration: "none", transition: "all 0.2s" }}>
-            Launch App
-          </Link>
-        </div>
-      </nav>
+      <PublicHeader active="about" />
 
       {/* Scroll indicator — travels down with scroll, fades near bottom */}
       <a

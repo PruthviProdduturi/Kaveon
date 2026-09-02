@@ -3,7 +3,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { KaveonWordmark } from "../KaveonMark";
 import { DOCS_ITEMS, DOCS_NAV, docsMeta } from "./manifest";
 
 type Section = { title: string; page: string; href: string; text: string };
@@ -100,10 +99,10 @@ export function DocsShell({ children }: { children: React.ReactNode }) {
 
   return <div className="docs-root">
     <a className="docs-skip" href="#docs-content">Skip to documentation</a>
-    <header className="docs-mobile-header"><Link href="/" className="docs-brand"><KaveonWordmark height={18} /><span className="docs-brand-badge">Docs</span></Link><button type="button" aria-expanded={mobileOpen} aria-controls="docs-mobile-panel" onClick={() => setMobileOpen((open) => !open)}>{mobileOpen ? "Close" : "Menu"}</button></header>
+    <header className="docs-mobile-header"><Link href="/docs" className="docs-section-title">Documentation</Link><button type="button" aria-expanded={mobileOpen} aria-controls="docs-mobile-panel" onClick={() => setMobileOpen((open) => !open)}>{mobileOpen ? "Close" : "Menu"}</button></header>
     {mobileOpen && <div className="docs-mobile-panel" id="docs-mobile-panel"><Search mobile /><Nav /></div>}
     <div className="docs-grid">
-      <aside className="docs-sidebar"><Link href="/" className="docs-brand"><KaveonWordmark height={18} /><span className="docs-brand-badge">Docs</span></Link><Search /><Nav /></aside>
+      <aside className="docs-sidebar"><Link href="/docs" className="docs-section-title">Documentation</Link><Search /><Nav /></aside>
       <main className="docs-main" id="docs-content">
         {meta && <div className="docs-context"><nav className="docs-breadcrumb" aria-label="Breadcrumb"><Link href="/docs">Docs</Link><span aria-hidden="true">/</span><span>{meta.group}</span><span aria-hidden="true">/</span><span aria-current="page">{meta.title}</span></nav><div className="docs-page-meta"><span className={`status ${meta.status.toLowerCase()}`}>{meta.status}</span><span>Verified {meta.lastVerified}</span></div></div>}
         <div className="docs-content" ref={contentRef}>{children}</div>
