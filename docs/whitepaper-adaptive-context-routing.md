@@ -3,6 +3,12 @@
 **Pruthvi Prodduturi**
 August 2026
 
+> **Implementation and evidence boundary.** The scoring and routing modules are
+> implemented for PostgreSQL statistics semantics. Claims about cost, latency, or
+> selective work describe the method and reference implementation, not a universal
+> guarantee across connectors. Current product integration and connector support
+> are authoritative in [`STATUS.md`](../STATUS.md).
+
 ---
 
 ## Abstract

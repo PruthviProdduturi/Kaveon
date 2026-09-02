@@ -1,4 +1,4 @@
-import { PageHeader, Callout, Pager } from "../../../components/docs/prose";
+import { PageHeader, Callout, Diagram, Pager } from "../../../components/docs/prose";
 
 export const metadata = { title: "Core concepts" };
 
@@ -11,8 +11,8 @@ export default function ConceptsDocs() {
         lead="Five ideas explain how everything in Kaveon fits together. Once these click, every page in these docs is just detail."
       />
 
-      <h2>Two kinds of database</h2>
-      <p>Kaveon always talks to two very different things — keeping them straight avoids most confusion:</p>
+      <h2>Metadata and analytical data</h2>
+      <p>The shipping Studio/API path separates Kaveon&rsquo;s metadata from the registered sources that hold analytical data:</p>
       <table>
         <thead><tr><th></th><th>Metadata database</th><th>Data sources</th></tr></thead>
         <tbody>
@@ -49,6 +49,11 @@ export default function ConceptsDocs() {
       </p>
 
       <h2>Ask, don&rsquo;t query</h2>
+      <Diagram
+        src="/docs/architecture/kaveon-intelligence-loop.svg"
+        alt="Kaveon intelligence loop separating deterministic DLM and analytical compute paths"
+        caption="Natural-language resolution and analytical execution are complementary paths. Engine integration into the shipping Studio request path is target architecture."
+      />
       <p>
         The home page turns plain-English questions into charts with <strong>no hosted LLM</strong>. The primary engine
         is the <strong>DLM (Data Language Model)</strong> — a compiled per-dataset context artifact that answers the
@@ -57,11 +62,12 @@ export default function ConceptsDocs() {
         <a href="/docs/nl-to-sql">AI · NL→SQL</a>.
       </p>
 
-      <h2>Everything is live and UI-driven</h2>
+      <h2>Freshness and configuration are explicit</h2>
       <p>
-        No stale cache — queries hit the source every time, with connection pools warmed at startup. And nearly all
-        configuration (data sources, auth provider, metadata server, AI keys) is done from the UI, no{" "}
-        <code>.env</code> edits or restarts.
+        Live SQL queries execute against the selected source, while query caches and DLM context can serve eligible
+        requests without repeating a source scan. Kaveon labels the answer path and tracks context freshness. Runtime
+        secrets, OAuth credentials, proxy trust, and deployment settings remain environment configuration; product
+        resources such as data sources, datasets, charts, dashboards, and user AI keys are managed through Studio.
       </p>
 
       <Pager

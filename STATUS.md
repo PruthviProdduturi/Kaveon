@@ -56,11 +56,11 @@
 | DLM — deterministic NL→SQL and precomputed answer context | ✅ Done | Supported question classes use the DLM; `nlToSql` is fallback |
 | DLM serve-chart — single + multi-metric from precomputed context | ✅ Done | Coverage depends on the compiled dataset context |
 | DLM filter values — dimension dropdown values from context | ✅ Done | Avoids source scans when the requested values are compiled |
-| HLL sketch cuboids — mergeable COUNT(DISTINCT) at arbitrary dimension slices | ✅ Done | Exact-like NDV without full scan |
+| HLL sketch cuboids — mergeable COUNT(DISTINCT) over compiled dimension cuboids | ✅ Done | Approximate NDV; coverage and error depend on the compiled sketch |
 | Star-schema semantic datasets | ✅ Done | Environment-specific scale belongs in reproducible benchmark manifests |
 | Dashboard builder — drag-drop, rows/columns/tabs/text/headers/dividers | ✅ Done | Flat layout |
 | Cross-filtering (click chart → filters others) | ✅ Done | |
-| Dashboard filter bar — DLM-powered dropdowns, cascading filters, click-outside close | ✅ Done | 9 dimensions per Kaveon dashboard |
+| Dashboard filter bar — DLM-powered dropdowns, cascading filters, click-outside close | ✅ Done | Dimension count is dataset- and dashboard-specific |
 | Client-side query cache — SHA-based dedup of repeated dashboard chart queries | ✅ Done | |
 | SQL Lab — Monaco, multi-tab, history, saved queries | ✅ Done | |
 | Async query execution + result caching (SHA-256, TTL) | ✅ Done | Async job store not cleaned on restart |
@@ -75,7 +75,7 @@
 | Item | Status | Notes |
 |------|--------|-------|
 | OAuth sign-in — GitHub / Google / Microsoft Entra via NextAuth (Auth.js v5) | ✅ Done | |
-| Identity forwarded to the API via signed proxy headers (KAVEON_PROXY_SECRET) | ✅ Done | |
+| Identity forwarded to the API via shared-secret-authenticated proxy headers (`KAVEON_PROXY_SECRET`) | ✅ Done | Static secret comparison, not per-request signing |
 | RBAC — Viewer < Analyst < Editor < Admin | ✅ Done | |
 | Content visibility — private / internal / published | ✅ Done | |
 | Provider secrets encrypted at rest (Fernet/AES) | 🔄 In Progress | Connection strings remain plaintext in `data_sources`; no vault yet |
@@ -98,7 +98,7 @@
 |------|--------|
 | Platform CI (`.github/workflows/ci.yml`) | 🔄 In Progress | Checks exist, but frontend type/lint failures are not yet consistently blocking |
 | Engine CI (`.github/workflows/engine.yml`) — format, Clippy, tests | ✅ Done | Rust warnings are denied |
-| CD — Azure Container Apps workflow + manual Vercel deployment | 🔄 In Progress | The checked-in workflow does not auto-deploy Studio |
+| CD — Azure Container Apps and Vercel | ✅ Done | `.github/workflows/deploy.yml` deploys API; `ci.yml` deploys Studio on `dev` pushes after the web job |
 | Vercel app config (`studio/vercel.json`) | ✅ Done |
 | Bicep IaC (ACR, Container Apps, PostgreSQL, Key Vault, Log Analytics) | ✅ Done |
 | CONTRIBUTING.md · SECURITY.md · LICENSE · ARCHITECTURE.md · DEPLOYMENT.md | ✅ Done |

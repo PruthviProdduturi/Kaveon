@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 35 1305 300"
+     role="img"
+     aria-labelledby="kaveon-logo-title kaveon-logo-desc">
+
+  <title id="kaveon-logo-title">Kaveon logo with tagline</title>
+  <desc id="kaveon-logo-desc">
+    Kaveon wordmark with a crossbar-free A, the Guardian O, and the tagline Talk to your data.
+  </desc>
+
+  <!-- Wordmark -->
+  <style>.wordmark{fill:#111318}.tagline{fill:#656B74}</style>
+  <g class="wordmark">
+
+    <!-- K -->
+    <rect x="90" y="70" width="20" height="165"/>
+    <polygon points="108.73,161.20 215.73,86.39 204.27,70 97.27,144.80"/>
+    <polygon points="97.51,161.36 209.51,235 220.49,218.29 108.49,144.64"/>
+
+    <!-- A (no crossbar) -->
+    <path d="M260 235 L330 70 L350 70 L420 235 L397 235 L340 104 L283 235 Z"/>
+
+    <!-- V -->
+    <path d="M465 70 L488 70 L545 201 L602 70 L625 70 L555 235 L535 235 Z"/>
+
+    <!-- E -->
+    <rect x="675" y="70" width="20" height="165"/>
+    <rect x="675" y="70" width="130" height="20"/>
+    <rect x="675" y="142.5" width="108" height="20"/>
+    <rect x="675" y="215" width="130" height="20"/>
+
+    <!-- N -->
+    <rect x="1060" y="70" width="20" height="165"/>
+    <rect x="1195" y="70" width="20" height="165"/>
+    <polygon points="1062.53,83.30 1197.53,235 1212.47,221.70 1077.47,70"/>
+
+  </g>
+
+  <!-- Guardian O -->
+  <path d="M966.25 215.29 A72.5 72.5 0 1 0 893.75 215.29"
+        fill="none"
+        stroke="#4A9EE8"
+        stroke-width="20"
+        stroke-linecap="butt"/>
+
+  <text x="652.5" y="302" text-anchor="middle" font-family="Inter, Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="42" font-weight="400" letter-spacing="0.8" class="tagline">Talk to your data.</text>
+
+</svg>

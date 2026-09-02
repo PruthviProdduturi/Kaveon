@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900" role="img" aria-labelledby="platform-title platform-desc">
+  <title id="platform-title">Kaveon product architecture</title>
+  <desc id="platform-desc">Kaveon combines the shipping Studio and deterministic DLM with a separate alpha Engine. Solid connectors are current; dashed connectors mark planned Engine integration and lake support.</desc>
+  <defs>
+    <marker id="platform-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#4A9EE8"/></marker>
+    <style>
+      .eyebrow{font:600 11px Inter,Segoe UI,sans-serif;letter-spacing:2px;fill:#718096}.title{font:600 28px Inter,Segoe UI,sans-serif;fill:#f8fafc}.heading{font:600 20px Inter,Segoe UI,sans-serif;fill:#f8fafc}.body{font:400 13px Inter,Segoe UI,sans-serif;fill:#9aa7b8}.note{font:500 11px Inter,Segoe UI,sans-serif;fill:#718096}.box{fill:#101620;stroke:#263244;stroke-width:1}.accent{stroke:#4A9EE8}.rule{stroke:#263244;stroke-width:1}.flow{fill:none;stroke:#4A9EE8;stroke-width:2;marker-end:url(#platform-arrow)}.target{stroke-dasharray:7 8;animation:platform-flow 3s linear infinite}@keyframes platform-flow{to{stroke-dashoffset:-30}}@media(prefers-reduced-motion:reduce){.target{animation:none}}
+    </style>
+  </defs>
+  <rect width="1440" height="900" rx="24" fill="#0b0f15"/>
+
+  <g transform="translate(622.125 20) scale(.15)" fill="#f8fafc">
+    <rect x="90" y="70" width="20" height="165"/><polygon points="108.73,161.2 215.73,86.39 204.27,70 97.27,144.8"/><polygon points="97.51,161.36 209.51,235 220.49,218.29 108.49,144.64"/><path d="M260 235 330 70h20l70 165h-23l-57-131-57 131Z"/><path d="M465 70h23l57 131 57-131h23l-70 165h-20Z"/><rect x="675" y="70" width="20" height="165"/><rect x="675" y="70" width="130" height="20"/><rect x="675" y="142.5" width="108" height="20"/><rect x="675" y="215" width="130" height="20"/><rect x="1060" y="70" width="20" height="165"/><rect x="1195" y="70" width="20" height="165"/><polygon points="1062.53,83.3 1197.53,235 1212.47,221.7 1077.47,70"/><path d="M966.25 215.29A72.5 72.5 0 1 0 893.75 215.29" fill="none" stroke="#4A9EE8" stroke-width="20"/>
+  </g>
+  <text x="720" y="76" text-anchor="middle" class="note">Talk to your data.</text>
+  <text x="720" y="112" text-anchor="middle" class="title">The Unified Data Intelligence Platform</text>
+  <line x1="64" y1="140" x2="1376" y2="140" class="rule"/>
+
+  <text x="64" y="180" class="eyebrow">PRODUCT PILLARS</text>
+  <g transform="translate(64 204)"><rect width="400" height="178" rx="16" class="box"/><rect width="4" height="178" rx="2" fill="#4A9EE8"/><text x="28" y="44" class="heading">Studio</text><text x="28" y="74" class="body">The intelligence surface</text><line x1="28" y1="98" x2="372" y2="98" class="rule"/><text x="28" y="128" class="body">Ask · SQL Lab · datasets</text><text x="28" y="154" class="body">Charts · dashboards · collaboration</text><text x="372" y="44" text-anchor="end" class="eyebrow">LIVE</text></g>
+  <g transform="translate(520 204)"><rect width="400" height="178" rx="16" class="box"/><rect width="4" height="178" rx="2" fill="#78859a"/><text x="28" y="44" class="heading">DLM</text><text x="28" y="74" class="body">Deterministic data language</text><line x1="28" y1="98" x2="372" y2="98" class="rule"/><text x="28" y="128" class="body">Compiled context · intent routing</text><text x="28" y="154" class="body">Context answers · inspectable SQL</text><text x="372" y="44" text-anchor="end" class="eyebrow">LIVE</text></g>
+  <g transform="translate(976 204)"><rect width="400" height="178" rx="16" class="box accent"/><rect width="4" height="178" rx="2" fill="#4A9EE8"/><text x="28" y="44" class="heading">Engine</text><text x="28" y="74" class="body">The analytical compute core</text><line x1="28" y1="98" x2="372" y2="98" class="rule"/><text x="28" y="128" class="body">Rust · Arrow · vectorized execution</text><text x="28" y="154" class="body">Direct Parquet · distributed target</text><text x="372" y="44" text-anchor="end" class="eyebrow">ALPHA</text></g>
+
+  <path d="M264 382v50" class="flow"/><path d="M720 382v50" class="flow"/><path d="M1176 382v50" class="flow target"/>
+  <text x="64" y="432" class="eyebrow">CONTROL PLANE</text>
+  <g transform="translate(64 456)"><rect width="1312" height="126" rx="16" class="box"/><text x="32" y="42" class="heading">Unified control plane</text><text x="32" y="72" class="body">FastAPI gateway · identity and RBAC · catalog · semantic metadata · DLM artifacts · query lifecycle</text><line x1="32" y1="94" x2="1280" y2="94" class="rule"/><text x="32" y="116" class="note">CURRENT · STUDIO + API + DLM</text><text x="1280" y="116" text-anchor="end" class="note">TARGET · ENGINE INTEGRATION</text></g>
+
+  <path d="M396 582v58" class="flow"/><path d="M1044 582v58" class="flow target"/>
+  <text x="64" y="640" class="eyebrow">CUSTOMER DATA PLANE</text>
+  <g transform="translate(64 664)"><rect width="620" height="166" rx="16" class="box"/><text x="30" y="44" class="heading">Registered SQL sources</text><text x="30" y="74" class="body">Fabric SQL · Azure SQL · PostgreSQL · StarRocks · MySQL via API</text><line x1="30" y1="100" x2="590" y2="100" class="rule"/><text x="30" y="130" class="note">CURRENT · ONE SELECTED SOURCE PER QUERY</text><text x="30" y="150" class="note">CROSS-SOURCE FEDERATION IS NOT IMPLEMENTED</text></g>
+  <g transform="translate(724 664)"><rect width="652" height="166" rx="16" class="box accent"/><text x="30" y="44" class="heading">Live Lake Path</text><text x="30" y="74" class="body">Query data in place · no mandatory import</text><line x1="30" y1="100" x2="622" y2="100" class="rule"/><text x="30" y="130" class="note">CURRENT · LOCAL PARQUET</text><text x="30" y="150" class="note">TARGET · ADLS GEN2 · S3 · DELTA LAKE · ICEBERG</text></g>
+  <text x="64" y="866" class="note">SOLID · SHIPPING CONNECTION</text><text x="242" y="866" class="note">DASHED · TARGET INTEGRATION</text><text x="1376" y="866" text-anchor="end" class="eyebrow">YOUR ACCOUNT · YOUR STORAGE · YOUR CONTROL</text>
+</svg>

@@ -34,6 +34,11 @@ See **[docs/guides/deploy-vercel-azure-postgres.md](docs/guides/deploy-vercel-az
 5. **Wire together** — configure callback URLs, proxy identity, allowed origins, and secrets
 6. **Verify** — sign in, add a data source, build a chart
 
+The checked-in automation is split across two workflows: `.github/workflows/deploy.yml`
+builds and deploys the API on pushes to `dev`, while `.github/workflows/ci.yml` deploys
+Studio to Vercel after its web job on pushes to `dev`. Both depend on repository secrets;
+see [configuration reference](docs/reference/configuration.md).
+
 ## Auth Flow
 
 The recommended production path sends browser traffic through Vercel. `kaveon-studio`'s `/api/kaveon/*` route reads the NextAuth session server-side and forwards `X-User-*` headers to the Container App, stamped with `KAVEON_PROXY_SECRET`. See [SECURITY.md](SECURITY.md) for additional local and direct-API authentication paths and current hardening gaps.
@@ -51,6 +56,18 @@ docker compose up --build
 
 See [ARCHITECTURE.md](ARCHITECTURE.md#deployment-topology) for current-versus-target behavior.
 
+## Operational gaps
+
+- The Container App Bicep module enables public ingress. Restrict ingress to the
+  trusted Studio/proxy path before treating the topology as hardened production.
+- PostgreSQL Bicep currently enables public network access and provisions an admin
+  password even though the running application can use Managed Identity. Network,
+  firewall, identity, and database-role setup remain deployment responsibilities.
+- The deployment does not provision Redis. Without `REDIS_URL`, rate limiting and
+  query/job state are process-local and do not coordinate across replicas.
+- Engine state, including query history, is process-local. Deleting an Engine query
+  record does not cancel running work.
+
 ---
 
-*See also: [ARCHITECTURE.md](ARCHITECTURE.md) · [infra/bicep/](infra/bicep/) · [studio/vercel.json](studio/vercel.json)*
+*See also: [ARCHITECTURE.md](ARCHITECTURE.md) · [API reference](docs/reference/api.md) · [configuration reference](docs/reference/configuration.md) · [infra/bicep/](infra/bicep/) · [studio/vercel.json](studio/vercel.json)*

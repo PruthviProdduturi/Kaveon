@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg"
      viewBox="0 35 1305 300"
      role="img"
-     aria-labelledby="title desc">
+     aria-labelledby="kaveon-logo-title kaveon-logo-desc">
 
-  <title id="title">Kaveon logo with tagline</title>
-  <desc id="desc">
+  <title id="kaveon-logo-title">Kaveon logo with tagline</title>
+  <desc id="kaveon-logo-desc">
     Kaveon wordmark with a crossbar-free A, the Guardian O, and the tagline Talk to your data.
   </desc>
 

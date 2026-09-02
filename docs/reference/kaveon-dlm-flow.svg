@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="dlm-title dlm-desc">
   <title id="dlm-title">Kaveon DLM architecture</title>
-  <desc id="dlm-desc">Dataset metadata compiles into a deterministic context artifact. At runtime a question resolves to a context answer or inspectable SQL for Kaveon Engine.</desc>
+  <desc id="dlm-desc">On generate or refresh, dataset metadata compiles into deterministic context. At runtime a question uses a current context answer or falls back to inspectable SQL for its selected registered source. Engine execution is a target integration.</desc>
   <defs>
     <marker id="dlm-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#4A9EE8"/></marker>
     <style>.eyebrow{font:600 11px Inter,Segoe UI,sans-serif;letter-spacing:2px;fill:#718096}.title{font:600 25px Inter,Segoe UI,sans-serif;fill:#f8fafc}.heading{font:600 18px Inter,Segoe UI,sans-serif;fill:#f8fafc}.body{font:400 13px Inter,Segoe UI,sans-serif;fill:#9aa7b8}.note{font:500 11px Inter,Segoe UI,sans-serif;fill:#718096}.box{fill:#101620;stroke:#263244;stroke-width:1}.accent{stroke:#4A9EE8}.rule{stroke:#263244}.flow{fill:none;stroke:#4A9EE8;stroke-width:2;marker-end:url(#dlm-arrow)}.motion{stroke-dasharray:7 8;animation:dlm-flow 3s linear infinite}@keyframes dlm-flow{to{stroke-dashoffset:-30}}@media(prefers-reduced-motion:reduce){.motion{animation:none}}</style>
@@ -9,19 +9,19 @@
   <g transform="translate(502.125 24) scale(.15)" fill="#f8fafc"><rect x="90" y="70" width="20" height="165"/><polygon points="108.73,161.2 215.73,86.39 204.27,70 97.27,144.8"/><polygon points="97.51,161.36 209.51,235 220.49,218.29 108.49,144.64"/><path d="M260 235 330 70h20l70 165h-23l-57-131-57 131Z"/><path d="M465 70h23l57 131 57-131h23l-70 165h-20Z"/><rect x="675" y="70" width="20" height="165"/><rect x="675" y="70" width="130" height="20"/><rect x="675" y="142.5" width="108" height="20"/><rect x="675" y="215" width="130" height="20"/><rect x="1060" y="70" width="20" height="165"/><rect x="1195" y="70" width="20" height="165"/><polygon points="1062.53,83.3 1197.53,235 1212.47,221.7 1077.47,70"/><path d="M966.25 215.29A72.5 72.5 0 1 0 893.75 215.29" fill="none" stroke="#4A9EE8" stroke-width="20"/></g>
   <text x="600" y="76" text-anchor="middle" class="note">Talk to your data.</text><text x="600" y="112" text-anchor="middle" class="title">DLM · Data Language Model</text><line x1="56" y1="140" x2="1144" y2="140" class="rule"/>
 
-  <text x="56" y="188" class="eyebrow">COMPILE · WHEN DATASET CONTEXT CHANGES</text>
+  <text x="56" y="188" class="eyebrow">COMPILE · ON GENERATE OR REFRESH</text>
   <g transform="translate(56 212)"><rect width="250" height="108" rx="14" class="box"/><text x="24" y="38" class="heading">Dataset contract</text><text x="24" y="68" class="body">Schema · metrics · dimensions</text><text x="24" y="90" class="body">values · synonyms · freshness</text></g>
-  <path d="M306 266h62" class="flow motion"/>
+  <path d="M306 266h62" class="flow"/>
   <g transform="translate(376 212)"><rect width="250" height="108" rx="14" class="box"/><text x="24" y="38" class="heading">Compile context</text><text x="24" y="68" class="body">Profile · index · precompute</text><text x="24" y="90" class="body">capture dependencies</text></g>
-  <path d="M626 266h62" class="flow motion"/>
+  <path d="M626 266h62" class="flow"/>
   <g transform="translate(696 212)"><rect width="448" height="108" rx="14" class="box accent"/><text x="24" y="38" class="heading">Versioned context artifact</text><text x="24" y="68" class="body">Intent map · value index · answer store · HLL sketches</text><text x="24" y="90" class="body">Deterministic, inspectable, refreshable</text></g>
 
   <line x1="56" y1="356" x2="1144" y2="356" class="rule"/><text x="56" y="394" class="eyebrow">RESOLVE · FOR EACH NATURAL-LANGUAGE REQUEST</text>
   <g transform="translate(56 420)"><rect width="230" height="108" rx="14" class="box"/><text x="24" y="38" class="heading">Question</text><text x="24" y="68" class="body">Dataset intent + filters</text><text x="24" y="90" class="body">requested result shape</text></g>
-  <path d="M286 474h62" class="flow motion"/>
+  <path d="M286 474h62" class="flow"/>
   <g transform="translate(356 420)"><rect width="230" height="108" rx="14" class="box"/><text x="24" y="38" class="heading">Route + resolve</text><text x="24" y="68" class="body">Match context elements</text><text x="24" y="90" class="body">validate freshness</text></g>
-  <path d="M586 450h78c24 0 40-16 40-40v-4" class="flow motion"/><path d="M586 498h78c24 0 40 16 40 40v4" class="flow motion"/>
+  <path d="M586 450h78c24 0 40-16 40-40v-4" class="flow"/><path d="M586 498h78c24 0 40 16 40 40v4" class="flow"/>
   <g transform="translate(712 378)"><rect width="432" height="104" rx="14" class="box accent"/><text x="24" y="38" class="eyebrow">CONTEXT PATH</text><text x="24" y="68" class="heading">Return compiled answer</text><text x="24" y="90" class="body">No analytical data scan</text></g>
-  <g transform="translate(712 520)"><rect width="432" height="104" rx="14" class="box"/><text x="24" y="38" class="eyebrow">COMPUTE PATH</text><text x="24" y="68" class="heading">Compile SQL for Engine</text><text x="24" y="90" class="body">Fresh detail through the analytical core</text></g>
+  <g transform="translate(712 520)"><rect width="432" height="104" rx="14" class="box"/><text x="24" y="38" class="eyebrow">COMPUTE PATH · CURRENT</text><text x="24" y="68" class="heading">Compile inspectable SQL</text><text x="24" y="90" class="body">Run on the selected registered source</text></g>
   <text x="56" y="678" class="note">DLM IS AN INTELLIGENCE ACCELERATOR, NOT A SUBSTITUTE FOR ENGINE PERFORMANCE</text><text x="1144" y="678" text-anchor="end" class="note">NO HOSTED MODEL REQUIRED FOR THE DETERMINISTIC PATH</text>
 </svg>

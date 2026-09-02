@@ -8,7 +8,7 @@ export default function AuthDocs() {
       <PageHeader
         eyebrow="Platform"
         title="Auth & RBAC"
-        lead="Sign-in is provider-based with no local passwords. Roles gate what you can do, and a visibility model gates what you can see. The recommended web path sends identity through the frontend proxy, sealed with a shared secret."
+        lead="Sign-in is provider-based with no local passwords. Roles gate what you can do, and visibility gates what you can see. The recommended web path sends identity through a shared-secret-authenticated frontend proxy."
       />
 
       <h2>Sign-in providers</h2>
@@ -62,13 +62,14 @@ export default function AuthDocs() {
 
       <h2>The proxy trust contract</h2>
       <p>The browser never holds an API token. The Next.js proxy is the only ingress and stamps identity headers server-side:</p>
-      <Code lang="text">{`kaveon-web  /api/kaveon/[...path]
+      <Code lang="text">{`Kaveon Studio  /api/kaveon/[...path]
    ├─ reads the NextAuth session (server-side)
    ├─ injects  X-User-Email · X-User-Name · X-User-Role
-   └─ signs the request with  X-Proxy-Secret = KAVEON_PROXY_SECRET
+   └─ authenticates the proxy with  X-Proxy-Secret = KAVEON_PROXY_SECRET
         ▼
 kaveon-api  trusts X-User-* ONLY when the secret matches`}</Code>
       <p>The same <code>KAVEON_PROXY_SECRET</code> must be set on both the web and API deployments.</p>
+      <p>Direct API clients can use configured provider-issued bearer tokens. They do not use local passwords or browser-supplied <code>X-User-*</code> identity headers.</p>
 
       <h2>Hardening built in</h2>
       <ul>
@@ -76,7 +77,7 @@ kaveon-api  trusts X-User-* ONLY when the secret matches`}</Code>
         <li><strong>Operator injection</strong> — filter operators are validated against a strict allowlist.</li>
         <li><strong>Credential exposure</strong> — the <code>connection_string</code> column is stripped from every API response.</li>
         <li><strong>Identity spoofing</strong> — raw <code>x-user-email</code> headers are rejected unless the proxy secret matches.</li>
-        <li><strong>Information disclosure</strong> — internal errors are logged server-side; clients get a generic message.</li>
+        <li><strong>Information disclosure</strong> — new handlers should return stable client errors; some current handlers still expose formatted exception text and remain a hardening item.</li>
       </ul>
 
       <Pager

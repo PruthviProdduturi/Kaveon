@@ -3,6 +3,13 @@
 **Pruthvi Prodduturi**
 August 2026
 
+> **Implementation and evidence boundary.** This paper combines implemented DLM
+> behavior with measurements from the named August 2026 environment and forward-
+> looking methods. Metrics are not service-level objectives or universal coverage
+> claims. Current connector and runtime support is authoritative in
+> [`STATUS.md`](../STATUS.md); comparisons require the reproducibility controls in
+> [`ARCHITECTURE.md`](../ARCHITECTURE.md#quality-invariants).
+
 ---
 
 ## Abstract

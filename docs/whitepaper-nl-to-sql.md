@@ -3,6 +3,11 @@
 **Pruthvi Prodduturi**
 August 2026
 
+> **Evidence boundary.** Performance and cost figures in this paper describe the
+> August 2026 prototype or illustrative third-party ranges; they are not current
+> service-level objectives. Reproduce any comparison with pinned data, hardware,
+> versions, cache state, concurrency, and date before using it as a product claim.
+
 > **Status note (current).** This paper describes Kaveon's original client-side
 > template parser. It is now the **fallback** layer, not the primary path. The
 > primary path is the **DLM (Data Language Model)** — a per-dataset compiled
@@ -17,7 +22,7 @@ August 2026
 
 ## Abstract
 
-This paper presents a template-based natural language to SQL (NL-to-SQL) engine built for the Kaveon data platform. Rather than relying on large language models, the system uses deterministic keyword pattern matching, fuzzy column resolution, and schema-aware scoring to translate natural language questions into executable SQL. The engine processes queries in under 1ms, requires no API keys or network calls, works fully offline, and produces identical output for identical input. On the class of analytical questions that constitute the majority of real-world data exploration -- aggregations, groupings, rankings, trends, and comparisons -- the system achieves reliable accuracy with zero inference cost.
+This paper presents a template-based natural language to SQL (NL-to-SQL) engine built for the Kaveon data platform. Rather than relying on large language models, the system uses deterministic keyword pattern matching, fuzzy column resolution, and schema-aware scoring to translate natural language questions into executable SQL. The local transformation requires no model API key or network call and produces the same SQL for the same input schema and request. It targets bounded analytical shapes such as aggregations, groupings, rankings, trends, and comparisons; broader language coverage is not implied.
 
 ---
 

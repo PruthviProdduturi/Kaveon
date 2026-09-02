@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg"
      viewBox="0 35 1305 300"
      role="img"
-     aria-labelledby="title desc">
+     aria-labelledby="kaveon-logo-dark-title kaveon-logo-dark-desc">
 
-  <title id="title">Kaveon logo with tagline for dark backgrounds</title>
-  <desc id="desc">
+  <title id="kaveon-logo-dark-title">Kaveon logo with tagline for dark backgrounds</title>
+  <desc id="kaveon-logo-dark-desc">
     Kaveon wordmark for dark backgrounds with a crossbar-free A, Guardian O, and the tagline Talk to your data.
   </desc>
 

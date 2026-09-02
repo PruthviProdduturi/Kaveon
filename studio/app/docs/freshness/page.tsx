@@ -8,7 +8,7 @@ export default function FreshnessDocs() {
       <PageHeader
         eyebrow="Core Engine"
         title="Freshness Algorithm"
-        lead="Every precomputed DLM answer carries a validity score in [0, 1], where 1 means 'trust the context' and 0 means 'it's worthless, go to the live database'. The algorithm detects data drift from database catalog counters — never by re-querying your tables. This is zero-scan change detection."
+        lead="DLM context elements carry a validity score in [0, 1]. For PostgreSQL sources, Kaveon estimates drift from catalog statistics instead of rescanning analytical tables, then routes eligible requests to context, hybrid, or live-query paths."
       />
 
       <Callout type="note">
@@ -90,7 +90,7 @@ where effective_half_life = base_half_life / (1 + usage_gain × ln(1 + usage_cou
       <Callout type="tip">
         The <code>pg_stat_user_tables</code> counters are maintained by PostgreSQL for free as part of its autovacuum
         infrastructure. Reading them is a single catalog query — no table scan, no I/O, no locks. This is what makes
-        the freshness algorithm &ldquo;zero-scan&rdquo;: detecting drift costs essentially nothing.
+        the freshness algorithm &ldquo;zero-scan&rdquo; with respect to analytical tables: it uses a small catalog query rather than rescanning source rows.
       </Callout>
 
       <h3>Autovacuum edge case</h3>
@@ -221,13 +221,12 @@ FROM pg_stat_user_tables
 WHERE schemaname = 'public'`}</Code>
       <p>
         This single catalog query returns change signals for every table in the schema — typically in under a
-        millisecond. No table scans. No I/O. No locks. The result tells the algorithm exactly how much the data
+        millisecond on the documented reference path. It avoids analytical table scans and application-level locks; catalog access still has normal database I/O and scheduling costs. The result estimates how much the data
         has drifted since the DLM was last compiled.
       </p>
 
       <Callout type="tip">
-        This approach works on any PostgreSQL-compatible database (including Azure Database for PostgreSQL, which
-        Kaveon uses). The <code>pg_stat_user_tables</code> view is part of PostgreSQL&apos;s core statistics
+        This approach requires a PostgreSQL-compatible source that exposes the expected statistics semantics (including Azure Database for PostgreSQL, which Kaveon uses). The <code>pg_stat_user_tables</code> view is part of PostgreSQL&apos;s core statistics
         collector and requires no extensions or configuration.
       </Callout>
 

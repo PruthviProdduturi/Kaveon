@@ -4,7 +4,7 @@ Thanks for your interest in contributing to Kaveon — the Analyze module of the
 
 ## Prerequisites
 
-- Node.js 22+ (the repo pins Node 20 in `.nvmrc`, but pnpm 10 needs Node ≥ 22.13 for `node:sqlite`)
+- Node.js 22.x (required by the root `package.json`; `.nvmrc` is currently stale at Node 20)
 - pnpm 10 (`corepack prepare pnpm@10 --activate`)
 - Python 3.11+
 - ODBC Driver 18 for SQL Server (Fabric SQL / Azure SQL) — see the README Prerequisites section
@@ -43,7 +43,10 @@ python main.py
 pytest -q
 ```
 
-Both services read the single `.env` at the repo root. Copy `.env.example` to `.env`; local login works with no config (`admin` / `admin` on first run).
+Both services read the single `.env` at the repo root. Copy `.env.example` to `.env`.
+There is no local-password login. Configure an OAuth provider for Studio, or set
+`KAVEON_DEV_USER_EMAIL` only for a trusted local API-development bypass. See the
+[configuration reference](docs/reference/configuration.md).
 
 ## Code Standards
 
@@ -83,7 +86,7 @@ Body should explain **why**, not what. The diff shows what. **Never add `Co-Auth
 
 1. Branch off `dev`: `feat/my-feature` or `fix/my-fix`
 2. Make your changes with tests where practical
-3. Ensure CI passes: web lint / type-check / build, API syntax / tests, secret scan
+3. Run the relevant checks. The current platform workflow hard-gates shared types, the Studio build, API syntax/tests, and secret scanning; Studio lint and type-check are reporting-only until existing debt is removed. Engine changes must pass format, Clippy, and workspace tests.
 4. Open a PR against `dev` using the PR template
 5. One approval required
 
@@ -93,7 +96,7 @@ Check [open issues](https://github.com/PruthviProdduturi/Kaveon/issues) for thin
 
 ### Areas that need help
 
-- Additional chart types (Sankey, mixed time-series, network graph)
+- Chart plugins and improvements to existing chart types
 - Non-Azure connectors (Snowflake, BigQuery, Databricks, Redshift)
 - Dashboard import/export
 - Alerts & scheduled reports
