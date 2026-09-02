@@ -19,7 +19,7 @@
 | Crate | Owner | Status |
 |-------|-------|--------|
 | `core` — shared types, errors, traits | Shared (either can add, neither restructures without updating this doc) | Scaffold |
-| `storage` — Parquet reader, ADLS Gen 2 | **Codex** | Not started |
+| `storage` — Parquet reader, ADLS Gen 2 | **Codex** | In progress: local Parquet reader verification |
 | `exec/scan` — scan operator | **Claude** | Done |
 | `exec/aggregate` — hash aggregate | **Claude** | Done |
 | `exec/filter` — filter evaluation | **Claude** | Done |
@@ -28,6 +28,7 @@
 | `sql` — parser, logical plan | **Claude** | Done |
 | `optim` — filter pushdown | **Codex** | Not started |
 | `python` — PyO3 bindings | **Claude** | Scaffold |
+| `cli` — `kaveon` interactive SQL shell | **Claude** | Done |
 | `benches` — Criterion benchmarks | **Codex** | Not started |
 
 ### API (`api/`)
@@ -187,5 +188,6 @@ version = kaveon_engine.version()
 | Date | Engineer | What changed |
 |------|----------|-------------|
 | 2026-09-01 | Claude | Created HANDSHAKE.md, defined shared types in core (BatchSource, BatchOperator, StoragePredicate) |
+| 2026-09-01 | Codex | Storage reader in progress against BatchSource/StoragePredicate contracts; fixed CatalogList::catalog_mut trait-object lifetime blocking workspace compilation |
 | 2026-09-01 | Claude | Added Expr/BinaryOp to core. Built production hash aggregate (GroupKey hashing, SUM/COUNT/AVG/MIN/MAX, null handling). Rewrote scan to consume BatchSource trait. Built filter operator with expression evaluator. Implemented SQL→LogicalPlan translator (SELECT/WHERE/GROUP BY/ORDER BY/LIMIT). Removed sql→exec circular dep. |
 | 2026-09-01 | Claude | Added Trino-style catalog system to core: Catalog→Schema→Table hierarchy, StorageType (Local/ADLS Gen2/S3), AccessPattern (Shortcut/Optimized), DataFormat (Parquet/Delta/Iceberg), CatalogManager with table reference resolution, MemoryCatalog implementation. |
