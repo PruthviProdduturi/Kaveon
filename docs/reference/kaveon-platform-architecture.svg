@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 680" role="img" aria-labelledby="title desc">
+  <title id="title">Kaveon unified platform architecture</title>
+  <desc id="desc">Studio and the deterministic Data Language Model route analytical work to Kaveon Engine, which reads customer-owned lake storage directly.</desc>
+  <defs>
+    <linearGradient id="bg" x2="0" y2="1"><stop stop-color="#0a0a0a"/><stop offset="1" stop-color="#111827"/></linearGradient>
+    <linearGradient id="cyan" x2="1" y2="1"><stop stop-color="#90c7f2"/><stop offset="1" stop-color="#2d7dd2"/></linearGradient>
+    <linearGradient id="violet" x2="1" y2="1"><stop stop-color="#b89cff"/><stop offset="1" stop-color="#7157d9"/></linearGradient>
+    <linearGradient id="green" x2="1" y2="1"><stop stop-color="#71e59b"/><stop offset="1" stop-color="#249b5c"/></linearGradient>
+    <filter id="shadow"><feDropShadow dx="0" dy="8" stdDeviation="10" flood-opacity=".35"/></filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 1l9 4-9 4z" fill="#4A9EE8"/></marker>
+    <style>
+      .label{font:700 22px Inter,Segoe UI,sans-serif;fill:#ececec}.sub{font:500 14px Inter,Segoe UI,sans-serif;fill:#a0a0a0}.cap{font:700 12px Inter,Segoe UI,sans-serif;letter-spacing:2px;fill:#7a8599}.flow{fill:none;stroke:#4A9EE8;stroke-width:3;stroke-dasharray:10 9;marker-end:url(#arrow);animation:move 4.5s linear infinite}@keyframes move{to{stroke-dashoffset:-38}}@media(prefers-reduced-motion:reduce){.flow{animation:none}}
+    </style>
+  </defs>
+  <rect x="4" y="4" width="1192" height="672" rx="28" fill="url(#bg)" stroke="#203049" stroke-width="2"/>
+  <text x="60" y="62" class="cap">APPROVED END-STATE · THREE PILLARS · CUSTOMER-OWNED DATA</text>
+  <g filter="url(#shadow)"><rect x="60" y="100" width="300" height="150" rx="22" fill="#141414" stroke="url(#cyan)" stroke-width="2"/><circle cx="112" cy="150" r="24" fill="#172638"/><path d="M99 151h26M104 140h16M107 162h10" stroke="#90c7f2" stroke-width="4" stroke-linecap="round"/><text x="150" y="148" class="label">Kaveon Studio</text><text x="90" y="195" class="sub">Dashboards · Chart builder · SQL Lab</text><text x="90" y="220" class="sub">Next.js intelligence surface</text></g>
+  <g filter="url(#shadow)"><rect x="450" y="100" width="300" height="150" rx="22" fill="#17172e" stroke="url(#violet)" stroke-width="2"/><circle cx="502" cy="150" r="24" fill="#30265a"/><path d="M490 158l12-22 12 22M495 151h14" fill="none" stroke="#b89cff" stroke-width="4" stroke-linecap="round"/><text x="540" y="148" class="label">Kaveon DLM</text><text x="480" y="195" class="sub">Deterministic language → intent → SQL</text><text x="480" y="220" class="sub">Compiled context · no hosted LLM</text></g>
+  <g filter="url(#shadow)"><rect x="840" y="100" width="300" height="150" rx="22" fill="#10271f" stroke="url(#green)" stroke-width="2"/><circle cx="892" cy="150" r="24" fill="#17452f"/><path d="M878 143h28M878 151h28M878 159h28" stroke="#71e59b" stroke-width="4" stroke-linecap="round"/><text x="930" y="148" class="label">Kaveon Engine</text><text x="870" y="195" class="sub">Rust · Arrow · vectorized operators</text><text x="870" y="220" class="sub">SQL planning · execution · coordination</text></g>
+  <path class="flow" d="M360 175h84"/><path class="flow" d="M750 175h84"/>
+  <rect x="170" y="335" width="860" height="120" rx="22" fill="#101c2c" stroke="#31445f" stroke-width="2" filter="url(#shadow)"/>
+  <text x="600" y="377" text-anchor="middle" class="label">Shortcut data path</text><text x="600" y="408" text-anchor="middle" class="sub">Catalog → snapshot/file selection → column and row-group pruning → Arrow RecordBatch stream</text><text x="600" y="433" text-anchor="middle" class="sub">No mandatory import. Optimized ingest is explicit and writes back to customer storage.</text>
+  <path class="flow" d="M990 250v79h-90"/>
+  <path class="flow" d="M600 455v73"/>
+  <g filter="url(#shadow)"><rect x="120" y="540" width="960" height="90" rx="22" fill="#141414" stroke="#4A9EE8" stroke-width="2"/><path d="M170 578c0-13 11-24 24-24h24c13 0 24 11 24 24s-11 24-24 24h-24c-13 0-24-11-24-24z" fill="#172638"/><path d="M184 570h44M184 578h44M184 586h44" stroke="#90c7f2" stroke-width="3"/><text x="280" y="575" class="label">Your lake storage</text><text x="280" y="602" class="sub">Current: local Parquet · Target: ADLS Gen2 · S3 · Delta Lake · Iceberg</text><text x="1030" y="584" text-anchor="end" class="cap">YOUR ACCOUNT · YOUR CONTROL</text></g>
+</svg>
