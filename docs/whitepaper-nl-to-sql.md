@@ -449,4 +449,4 @@ Template-based NL-to-SQL is a viable, production-ready approach for conversation
 
 The approach is not a replacement for LLM-based text-to-SQL. It is a complement. The template engine handles the fast path; an LLM handles the long tail. Together, they provide a system that is responsive by default and capable when needed.
 
-"Talk to your data" doesn't require a $20/month API key. For most questions, it requires a deterministic engine and a schema — the DLM handles the common case from precomputed context with no database scan at all, the intent resolution layer bridges the gap between how users phrase questions and how metrics are named (via stemming and synonym expansion, not ML), and the template parser covers the long tail.
+"Talk to your data" doesn't require a $20/month API key. For most questions, it requires deterministic resolution and a schema — the DLM handles the common case from precomputed context with no database scan at all, the intent resolution layer bridges the gap between how users phrase questions and how metrics are named (via stemming and synonym expansion, not ML), and the template parser covers the long tail.

@@ -27,7 +27,7 @@
 | Multi-source connectors | 🔄 In Progress |
 | DLM (no-LLM NL→SQL, answer-from-context) — primary homepage path | ✅ Done |
 | Metadata/data DB split (`kaveonmeta` + `kaveon`) | ✅ Done |
-| CI/CD + repo standards | 🔄 In Progress |
+| CI/CD + repo standards | ✅ Done |
 | Superset-parity gaps | 📋 Planning |
 
 ## Kaveon Engine
@@ -96,7 +96,7 @@
 
 | Item | Status |
 |------|--------|
-| Platform CI (`.github/workflows/ci.yml`) | 🔄 In Progress | Checks exist, but frontend type/lint failures are not yet consistently blocking |
+| Platform CI (`.github/workflows/ci.yml`) | ✅ Done | Frozen dependency install, documentation validation, type checking, linting, tests, and production build are blocking gates |
 | Engine CI (`.github/workflows/engine.yml`) — format, Clippy, tests | ✅ Done | Rust warnings are denied |
 | CD — Azure Container Apps and Vercel | ✅ Done | `.github/workflows/deploy.yml` deploys API; `ci.yml` deploys Studio on `dev` pushes after the web job |
 | Vercel app config (`studio/vercel.json`) | ✅ Done |
@@ -122,7 +122,7 @@
 
 ## Critical Gaps vs Superset (Planning)
 
-1. Multi-auth beyond Azure/Google/Local (OAuth/SAML/LDAP)
+1. Enterprise identity beyond the configured OAuth providers (SAML/LDAP)
 2. Alerts & scheduled reports
 3. Dashboard embedding (guest tokens)
 4. Import/export dashboards/charts/datasets

@@ -1,5 +1,6 @@
 import React from "react";
 import Link from "next/link";
+import { CopyCode } from "./CopyCode";
 
 export function PageHeader({ eyebrow, title, lead }: { eyebrow?: string; title: string; lead?: string }) {
   return (
@@ -25,6 +26,7 @@ export function Code({ lang, children }: { lang?: string; children: string }) {
   return (
     <div className="docs-code">
       {lang && <span className="docs-code-lang">{lang}</span>}
+      <CopyCode value={children} />
       <pre><code>{children}</code></pre>
     </div>
   );

@@ -41,7 +41,7 @@ see [configuration reference](docs/reference/configuration.md).
 
 ## Auth Flow
 
-The recommended production path sends browser traffic through Vercel. `kaveon-studio`'s `/api/kaveon/*` route reads the NextAuth session server-side and forwards `X-User-*` headers to the Container App, stamped with `KAVEON_PROXY_SECRET`. See [SECURITY.md](SECURITY.md) for additional local and direct-API authentication paths and current hardening gaps.
+The recommended production path sends browser traffic through Vercel. `kaveon-studio`'s `/api/kaveon/*` route reads the NextAuth session server-side and forwards `X-User-*` headers to the Container App, stamped with `KAVEON_PROXY_SECRET`. See [SECURITY.md](SECURITY.md) for provider bearer-token access, the explicitly configured development-only identity bypass, and current hardening gaps. Kaveon has no local-password authentication.
 
 ## Engine alpha deployment
 
@@ -54,7 +54,7 @@ cd engine
 docker compose up --build
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md#deployment-topology) for current-versus-target behavior.
+See [ARCHITECTURE.md](ARCHITECTURE.md#delivery-topology) for current-versus-target behavior.
 
 ## Operational gaps
 

@@ -76,7 +76,7 @@ export default function DocsIntro() {
       <h2>How these docs are organized</h2>
       <ul>
         <li><strong>Getting Started</strong> — what Kaveon is, a hands-on quickstart, and the core concepts you&rsquo;ll reuse everywhere.</li>
-        <li><strong>Studio</strong> — SQL Lab, AI / NL→SQL, charts, dashboards, semantic datasets, and data sources.</li>
+        <li><strong>Studio</strong> — SQL Lab, DLM / NL→SQL, charts, dashboards, semantic datasets, and data sources.</li>
         <li><strong>Intelligence</strong> — the Data Language Model and freshness-based routing.</li>
         <li><strong>Build &amp; Operate</strong> — architecture, Engine, APIs, authentication, deployment, and operations.</li>
         <li><strong>Research</strong> — long-form technical papers and the patent disclosure.</li>

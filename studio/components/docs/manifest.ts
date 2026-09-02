@@ -3,6 +3,8 @@ export type DocsItem = {
   href: `/docs${string}`;
   description: string;
   keywords?: readonly string[];
+  status?: "Stable" | "Beta" | "Alpha" | "Reference";
+  lastVerified?: string;
 };
 
 export type DocsGroup = {
@@ -23,7 +25,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
     label: "Studio",
     items: [
       { title: "SQL Lab", href: "/docs/sql-lab", description: "Explore data with the query editor." },
-      { title: "AI · NL→SQL", href: "/docs/nl-to-sql", description: "Turn questions into deterministic queries.", keywords: ["natural language", "ai"] },
+      { title: "DLM · NL→SQL", href: "/docs/nl-to-sql", description: "Turn questions into deterministic queries.", keywords: ["natural language", "dlm"] },
       { title: "Chart Builder", href: "/docs/charts", description: "Create reusable interactive visualizations." },
       { title: "Dashboards", href: "/docs/dashboards", description: "Compose and publish analytical canvases." },
       { title: "Semantic Datasets", href: "/docs/datasets", description: "Define reusable metrics and dimensions." },
@@ -46,6 +48,11 @@ export const DOCS_NAV: readonly DocsGroup[] = [
       { title: "Auth & RBAC", href: "/docs/auth", description: "Configure identity, roles, and visibility.", keywords: ["security"] },
       { title: "Deployment", href: "/docs/deployment", description: "Deploy Studio, API, and the data layer.", keywords: ["vercel", "azure"] },
       { title: "Operations", href: "/docs/operations", description: "Operate, verify, and troubleshoot Kaveon.", keywords: ["health", "ready", "backup"] },
+      { title: "SQL Compatibility", href: "/docs/sql-compatibility", description: "See what the alpha Engine can execute.", keywords: ["order by", "aggregate", "operator"] },
+      { title: "Connector Matrix", href: "/docs/connectors", description: "Compare source registration, execution, and DLM support.", keywords: ["mysql", "postgresql", "fabric", "trino"] },
+      { title: "Troubleshooting", href: "/docs/troubleshooting", description: "Diagnose authentication, database, and Engine issues.", keywords: ["cors", "proxy", "logs"] },
+      { title: "Upgrades", href: "/docs/upgrades", description: "Plan upgrades under the current pre-1.0 policy.", keywords: ["version", "migration", "rollback"] },
+      { title: "Releases", href: "/docs/releases", description: "Release channels and changelog requirements.", keywords: ["changelog", "engine-dev"] },
     ],
   },
   {
@@ -57,3 +64,15 @@ export const DOCS_NAV: readonly DocsGroup[] = [
 ] as const;
 
 export const DOCS_ITEMS = DOCS_NAV.flatMap((group) => group.items);
+
+export function docsMeta(href: string) {
+  const group = DOCS_NAV.find((candidate) => candidate.items.some((item) => item.href === href));
+  const item = group?.items.find((candidate) => candidate.href === href);
+  if (!group || !item) return undefined;
+  return {
+    group: group.label,
+    ...item,
+    status: item.status ?? (href === "/docs/engine" ? "Alpha" : href === "/docs/research" ? "Reference" : "Stable"),
+    lastVerified: item.lastVerified ?? "September 2, 2026",
+  };
+}

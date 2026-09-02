@@ -1,13 +1,13 @@
 import { PageHeader, Callout, Code, Diagram, Pager } from "../../../components/docs/prose";
 
-export const metadata = { title: "AI · NL→SQL" };
+export const metadata = { title: "DLM · NL→SQL" };
 
 export default function NlToSqlDocs() {
   return (
     <div className="docs-prose">
       <PageHeader
         eyebrow="Features"
-        title="AI · NL→SQL"
+        title="DLM · NL→SQL"
         lead="The home page turns plain-English questions into charts with no hosted LLM. The primary engine is the DLM — a compiled per-dataset context artifact that answers the common questions from precomputed context with no database scan. A browser-side template parser is the fallback. Both are deterministic, fast, and inspectable."
       />
 

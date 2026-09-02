@@ -59,7 +59,7 @@ export default function ConceptsDocs() {
         is the <strong>DLM (Data Language Model)</strong> — a compiled per-dataset context artifact that answers the
         common questions from precomputed context with <strong>no database scan</strong> (badged &ldquo;From
         context&rdquo; vs &ldquo;Live query&rdquo;); a deterministic in-browser parser is the fallback. See{" "}
-        <a href="/docs/nl-to-sql">AI · NL→SQL</a>.
+        <a href="/docs/nl-to-sql">DLM · NL→SQL</a>.
       </p>
 
       <h2>Freshness and configuration are explicit</h2>

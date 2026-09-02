@@ -218,7 +218,7 @@ The metadata plane stores product configuration, semantic definitions, DLM artif
 | State | Scope today | Requirement |
 |---|---|---|
 | Session | Cookie and Studio runtime | Identity remains server asserted |
-| DLM context | Metadata DB and process caches | Coverage and freshness are observable |
+| DLM context | Metadata DB and process-local compiled contexts | Coverage and freshness are observable |
 | Database pools | FastAPI process | Bounded pools and stale-connection recovery |
 | Engine catalog | Per Engine process | Versioned configuration and consistent snapshots |
 | Engine results | Process-global unbounded map | Limits, expiry, pagination, persistence policy, cancellation |

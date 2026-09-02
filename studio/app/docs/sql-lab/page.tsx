@@ -105,12 +105,12 @@ export default function SqlLabDocs() {
         Press the <strong>✦ wand</strong> in the toolbar, describe what you want in plain English, and the generated
         SQL is injected straight into the active tab — ready to review and run. For the full natural-language flow
         (dataset detection, pattern matching, automatic charts) see{" "}
-        <a href="/docs/nl-to-sql">AI · NL→SQL</a>.
+        <a href="/docs/nl-to-sql">DLM · NL→SQL</a>.
       </p>
 
       <Pager
         prev={{ href: "/docs/concepts", title: "Core Concepts" }}
-        next={{ href: "/docs/nl-to-sql", title: "AI · NL→SQL" }}
+        next={{ href: "/docs/nl-to-sql", title: "DLM · NL→SQL" }}
       />
     </div>
   );

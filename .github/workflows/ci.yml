@@ -22,27 +22,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: pnpm
 
-      # Note: pnpm-lock.yaml is intentionally gitignored in this repo, so
-      # setup-node's pnpm cache can't be used and install runs unfrozen.
       - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Type check — shared types
         run: pnpm --filter @kaveon/types type-check
 
-      # Soft gate: the codebase predates a committed ESLint config, so lint
-      # runs and reports but does not block (same policy as Forge's mypy step).
       - name: Lint (ESLint)
-        continue-on-error: true
         run: pnpm --filter kaveon-studio lint
 
-      # Soft gate: reports pre-existing type debt without blocking. Production
-      # builds are unblocked via next.config.ts (ignoreBuildErrors). Flip this
-      # to a hard gate once the errors are burned down.
       - name: Type check (tsc)
-        continue-on-error: true
         run: pnpm --filter kaveon-studio type-check
+
+      - name: Validate documentation integrity
+        run: node scripts/validate-docs.mjs
 
       - name: Build
         run: pnpm --filter kaveon-studio build
