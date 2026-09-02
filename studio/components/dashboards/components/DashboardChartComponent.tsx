@@ -204,7 +204,7 @@ const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({
         {/* Positioned relative to the whole tile → top:6 aligns with the title row */}
         <ChartActionsOverlay
           chartId={chartId}
-          dashboardId={dashboardId}
+          dashboardId={dashboardId === null ? null : String(dashboardId)}
           isEditMode={isEditMode}
           onRefresh={() => setRefreshKey(k => k + 1)}
           onDuplicate={onDuplicate}

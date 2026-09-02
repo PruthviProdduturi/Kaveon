@@ -319,14 +319,14 @@ exactly the elements a specific question depends on, exactly when their data mov
 
 ## 8. Implementation
 
-The engine is three services plus a router, in the Kaveon API:
+The adaptive context runtime is split across the Kaveon API:
 
 | File | Responsibility |
 |---|---|
-| `services/context_profiler.py` | Build/refresh the context representation from `pg_stats`, `pg_constraint`, `query_history`; capture change counters; persist snapshots. |
-| `services/context_validity.py` | The three-factor validity score, per-element scoring, and the route decision. |
-| `services/context_router.py` | Question→element mapping, profile-synthesised answers, dependency-valid result cache, live path + refresh. |
-| `routers/context.py` | `POST /context/build`, `GET /context/validity`, `POST /context/ask`. |
+| `api/dlm/profiler.py` | Build and refresh context representations; capture change counters; persist snapshots. |
+| `api/dlm/validity.py` | Three-factor validity scoring and freshness decisions. |
+| `api/dlm/router.py` | Question-to-element mapping, context answers, and live-path routing. |
+| `api/routers/context.py` | Context build, validity, and ask endpoints. |
 
 Two metadata tables back it: `context_snapshots` (one row per element, holding the
 profile and the captured change counters) and `context_answer_cache` (results keyed
@@ -532,9 +532,8 @@ other DLM answers are exact.
 
 ### A.7 Where it lives
 
-`services/dlm.py` (engine: value index, router, precompute, answer cache, serve-chart,
-filter-values, HLL sketches, incremental refresh, dashboard curation, curatable
-context spec, live assembler) and `routers/dlm.py`:
+The implementation is split across `api/dlm/engine.py`, `router.py`, `profiler.py`,
+`validity.py`, and `hll.py`; `api/routers/dlm.py` exposes the HTTP endpoints:
 
 | Endpoint | Verb | Purpose |
 |---|---|---|

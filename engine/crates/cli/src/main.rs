@@ -167,29 +167,26 @@ fn build_local_catalog(dir: &Path) -> MemoryCatalog {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "parquet")
-                && let Some(table_name) = path.file_stem().and_then(|s| s.to_str()) {
-                    match ParquetReader::new(&path).metadata() {
-                        Ok(meta) => {
-                            let _ = catalog.register_table(
-                                "default",
-                                TableMeta {
-                                    name: table_name.to_owned(),
-                                    arrow_schema: meta.schema,
-                                    location: path
-                                        .file_name()
-                                        .unwrap()
-                                        .to_string_lossy()
-                                        .into_owned(),
-                                    access: AccessPattern::Shortcut,
-                                    format: DataFormat::Parquet,
-                                },
-                            );
-                        }
-                        Err(e) => {
-                            eprintln!("warning: skipping {}: {e}", path.display());
-                        }
+                && let Some(table_name) = path.file_stem().and_then(|s| s.to_str())
+            {
+                match ParquetReader::new(&path).metadata() {
+                    Ok(meta) => {
+                        let _ = catalog.register_table(
+                            "default",
+                            TableMeta {
+                                name: table_name.to_owned(),
+                                arrow_schema: meta.schema,
+                                location: path.file_name().unwrap().to_string_lossy().into_owned(),
+                                access: AccessPattern::Shortcut,
+                                format: DataFormat::Parquet,
+                            },
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("warning: skipping {}: {e}", path.display());
                     }
                 }
+            }
         }
     }
 
@@ -234,10 +231,9 @@ fn repl(catalog: &mut CatalogManager) {
 
         if buffer.trim_end().ends_with(';') {
             let sql = buffer.trim().trim_end_matches(';').trim();
-            if !sql.is_empty()
-                && !try_handle_show_use(sql, catalog) {
-                    execute_query(sql, catalog);
-                }
+            if !sql.is_empty() && !try_handle_show_use(sql, catalog) {
+                execute_query(sql, catalog);
+            }
             buffer.clear();
             collecting = false;
         } else {

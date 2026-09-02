@@ -2,6 +2,7 @@ mod api;
 mod cluster;
 mod config;
 pub mod planner;
+mod ui;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;

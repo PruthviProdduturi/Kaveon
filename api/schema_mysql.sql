@@ -26,7 +26,6 @@ CREATE TABLE IF NOT EXISTS datasets (
     INDEX idx_datasets_visibility    (visibility),
     INDEX idx_datasets_modified_at   (modified_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
 -- ── Dataset Dimensions ────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS dataset_dimensions (
     id              INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -202,35 +201,4 @@ CREATE TABLE IF NOT EXISTS user_themes (
     created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_user_themes_email (user_email)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
--- ── Auth Config ───────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS auth_config (
-    id                   INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
-    provider             VARCHAR(50)  NOT NULL DEFAULT 'local',
-    azure_tenant_id      VARCHAR(255) NULL,
-    azure_client_id      VARCHAR(255) NULL,
-    google_client_id     VARCHAR(255) NULL,
-    google_client_secret VARCHAR(1000) NULL,
-    jwt_secret           VARCHAR(1000) NULL,
-    updated_at           DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    updated_by           VARCHAR(255) NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
--- ── Local Users ───────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS local_users (
-    id                    INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
-    username              VARCHAR(255) NOT NULL,
-    email                 VARCHAR(255) NOT NULL,
-    password_hash         VARCHAR(255) NOT NULL,
-    role                  VARCHAR(20)  NOT NULL DEFAULT 'Viewer',
-    force_password_change TINYINT(1)   NOT NULL DEFAULT 0,
-    is_active             TINYINT(1)   NOT NULL DEFAULT 1,
-    created_at            DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at            DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    CONSTRAINT ck_local_users_role CHECK (role IN ('Viewer','Analyst','Editor','Admin')),
-    CONSTRAINT uq_local_users_username UNIQUE (username),
-    CONSTRAINT uq_local_users_email    UNIQUE (email),
-    INDEX idx_local_users_username (username),
-    INDEX idx_local_users_email    (email)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

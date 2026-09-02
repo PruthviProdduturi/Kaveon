@@ -295,7 +295,7 @@ def execute_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Dep
         # may only run a single read-only SELECT (no INSERT/UPDATE/DELETE/DDL, no
         # stacked statements) even when the request claims a dashboard source.
         assert_read_only(data.sql_text)
-    # Never expose Kaveon's control-plane tables (auth_config, local_users, …) via Lab/API.
+    # Never expose Kaveon's current or legacy control-plane tables via Lab/API.
     assert_no_platform_tables(data.sql_text, data.database)
     sql_execute_limiter.check(ctx.email)
     response.headers.update(NO_CACHE)

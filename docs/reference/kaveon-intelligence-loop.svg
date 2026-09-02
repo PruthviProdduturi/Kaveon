@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="680" viewBox="0 0 1200 680" role="img" aria-labelledby="loop-title loop-desc">
+  <title id="loop-title">Kaveon intelligence and compute paths</title>
+  <desc id="loop-desc">A request begins in Studio. Natural language uses DLM for a context answer or compiled SQL, while SQL and BI workloads go directly to Engine. Results return to Studio.</desc>
+  <defs>
+    <marker id="loop-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#4A9EE8"/></marker>
+    <style>
+      .eyebrow{font:600 11px Inter,Segoe UI,sans-serif;letter-spacing:2px;fill:#718096}.heading{font:600 20px Inter,Segoe UI,sans-serif;fill:#f8fafc}.body{font:400 13px Inter,Segoe UI,sans-serif;fill:#9aa7b8}.note{font:500 11px Inter,Segoe UI,sans-serif;fill:#718096}.box{fill:#101620;stroke:#263244;stroke-width:1}.active{stroke:#4A9EE8}.rail{fill:none;stroke:#4A9EE8;stroke-width:2;marker-end:url(#loop-arrow)}.motion{stroke-dasharray:7 8;animation:loop-flow 2.8s linear infinite}@keyframes loop-flow{to{stroke-dashoffset:-30}}@media(prefers-reduced-motion:reduce){.motion{animation:none}}
+    </style>
+  </defs>
+  <rect width="1200" height="680" rx="20" fill="#0b0f15"/>
+
+  <text x="600" y="76" text-anchor="middle" class="note">Talk to your data.</text>
+  <text x="600" y="112" text-anchor="middle" class="heading">One platform. Two fast paths.</text>
+  <g transform="translate(502.125 20) scale(.15)" fill="#f8fafc">
+    <rect x="90" y="70" width="20" height="165"/><polygon points="108.73,161.2 215.73,86.39 204.27,70 97.27,144.8"/><polygon points="97.51,161.36 209.51,235 220.49,218.29 108.49,144.64"/>
+    <path d="M260 235 330 70h20l70 165h-23l-57-131-57 131Z"/><path d="M465 70h23l57 131 57-131h23l-70 165h-20Z"/>
+    <rect x="675" y="70" width="20" height="165"/><rect x="675" y="70" width="130" height="20"/><rect x="675" y="142.5" width="108" height="20"/><rect x="675" y="215" width="130" height="20"/>
+    <rect x="1060" y="70" width="20" height="165"/><rect x="1195" y="70" width="20" height="165"/><polygon points="1062.53,83.3 1197.53,235 1212.47,221.7 1077.47,70"/>
+    <path d="M966.25 215.29A72.5 72.5 0 1 0 893.75 215.29" fill="none" stroke="#4A9EE8" stroke-width="20"/>
+  </g>
+  <line x1="56" y1="140" x2="1144" y2="140" stroke="#263244"/>
+
+  <g transform="translate(56 302)">
+    <rect width="220" height="120" rx="14" class="box"/><rect width="4" height="120" rx="2" fill="#4A9EE8"/>
+    <text x="28" y="42" class="eyebrow">STUDIO · REQUEST</text><text x="28" y="72" class="heading">Ask or query</text><text x="28" y="98" class="body">Natural language · SQL · BI</text>
+  </g>
+
+  <g transform="translate(470 220)">
+    <rect width="260" height="120" rx="14" class="box"/>
+    <text x="28" y="40" class="eyebrow">INTELLIGENCE PATH</text><text x="28" y="70" class="heading">DLM</text><text x="28" y="96" class="body">Context answer or compiled SQL</text>
+  </g>
+  <g transform="translate(470 384)">
+    <rect width="260" height="120" rx="14" class="box active"/>
+    <text x="28" y="40" class="eyebrow">COMPUTE PATH</text><text x="28" y="70" class="heading">Engine</text><text x="28" y="96" class="body">Vectorized, sub-second analytics</text>
+  </g>
+
+  <g transform="translate(924 302)">
+    <rect width="220" height="120" rx="14" class="box"/><rect x="216" width="4" height="120" rx="2" fill="#4A9EE8"/>
+    <text x="28" y="42" class="eyebrow">STUDIO · ANSWER</text><text x="28" y="72" class="heading">Explore</text><text x="28" y="98" class="body">Answer · chart · dashboard</text>
+  </g>
+
+  <g transform="translate(470 564)">
+    <rect width="260" height="82" rx="14" class="box"/>
+    <text x="28" y="34" class="eyebrow">CUSTOMER-OWNED DATA</text><text x="28" y="62" class="heading">Live Lake Path</text>
+  </g>
+
+  <path d="M276 334h92c24 0 44-20 44-44s20-44 44-44h6" class="rail motion"/><text x="300" y="316" class="note">NATURAL LANGUAGE</text>
+  <path d="M276 390h92c24 0 44 20 44 44s20 44 44 44h6" class="rail motion"/><text x="310" y="416" class="note">DIRECT SQL + BI</text>
+  <path d="M600 340v36" class="rail motion"/><text x="618" y="363" class="note">SQL</text>
+  <path d="M738 246h6c24 0 44 20 44 44s20 44 44 44h84" class="rail motion"/><text x="782" y="274" class="note">CONTEXT ANSWER</text>
+  <path d="M738 478h6c24 0 44-20 44-44s20-44 44-44h84" class="rail motion"/><text x="810" y="462" class="note">RESULTS</text>
+  <path d="M600 556v-44" class="rail motion"/><text x="618" y="540" class="note">ARROW BATCHES</text>
+
+  <text x="56" y="646" class="note">CURRENT · ENGINE IS A SEPARATE ALPHA RUNTIME</text>
+  <text x="1144" y="646" text-anchor="end" class="note">TARGET · ONE CONTROL PLANE, DISTRIBUTED ENGINE</text>
+</svg>

@@ -8,7 +8,7 @@ export default function AuthDocs() {
       <PageHeader
         eyebrow="Platform"
         title="Auth & RBAC"
-        lead="Sign-in is provider-based (no local passwords by default), roles gate what you can do, and a visibility model gates what you can see. The API trusts identity only from the frontend proxy, sealed with a shared secret."
+        lead="Sign-in is provider-based with no local passwords. Roles gate what you can do, and a visibility model gates what you can see. The recommended web path sends identity through the frontend proxy, sealed with a shared secret."
       />
 
       <h2>Sign-in providers</h2>

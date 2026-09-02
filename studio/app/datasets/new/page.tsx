@@ -1971,7 +1971,7 @@ export default function NewDatasetPage() {
                       ) : !factColumns || factColumns.length === 0 ? (
                         <>No columns found in the selected table.</>
                       ) : (
-                        <>No key columns found in {selectedTable.schema}.{selectedTable.name}. The table should have columns ending in "Key" or "ID" to create dimension joins.</>
+                        <>No key columns found in {selectedTable.schema}.{selectedTable.name}. The table should have columns ending in &quot;Key&quot; or &quot;ID&quot; to create dimension joins.</>
                       )}
                     </p>
                   )}

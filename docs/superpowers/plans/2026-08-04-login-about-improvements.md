@@ -63,3 +63,6 @@
 - [ ] Remove `"use client"` — make it a server component (no interactive state needed in about)
 - [ ] Or if client interactivity needed (anchor links), add cache headers via route segment config
 - [ ] Commit
+# Archived implementation plan
+
+> Historical design record. Paths, line counts, and implementation-state statements may no longer match the current repository. Use `README.md`, `STATUS.md`, and `ARCHITECTURE.md` as the authoritative sources.

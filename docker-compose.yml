@@ -74,7 +74,9 @@ services:
     container_name: kaveon-api
     ports:
       - "8080:8080"
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     environment:
       ENV: production
       PORT: "8080"

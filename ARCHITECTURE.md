@@ -23,15 +23,15 @@ See [STATUS.md](STATUS.md) and [HANDSHAKE.md](HANDSHAKE.md) for volatile deliver
 |---|---|
 | **Kaveon Studio** | Dashboards, chart construction, SQL Lab, datasets, and administration |
 | **Kaveon DLM** | Deterministic dataset routing, intent resolution, compiled answers, and SQL generation without a hosted LLM |
-| **Kaveon Engine** | Rust catalog resolution, SQL planning, optimization, vectorized execution, and direct lake reads |
+| **Kaveon Engine** | Rust catalog resolution, SQL planning, and vectorized execution over local Parquet today; optimization and direct cloud lake reads are target capabilities |
 
-The defining data model is a **shortcut**: Kaveon reads data in the customer’s storage without mandatory import. **Optimized ingest** is an explicit target mode that writes sorted, partitioned, compressed data back into customer-controlled storage.
+The defining data model is the **Live Lake Path**: Kaveon reads data in the customer’s storage without mandatory import. **Optimized ingest** is an explicit target mode that writes sorted, partitioned, compressed data back into customer-controlled storage. The current internal enum still calls this access pattern `Shortcut`; that implementation name is not the product concept.
 
 ### Non-goals
 
 - Kaveon is not an LLM wrapper.
 - Kaveon Engine does not embed DuckDB, Trino, Spark, or another query engine.
-- Shortcuts do not require Kaveon to own or duplicate customer data.
+- The Live Lake Path does not require Kaveon to own or duplicate customer data.
 - Dashboards are one surface over the platform, not the product boundary.
 
 ## What runs today
@@ -211,7 +211,7 @@ This sequence is a target. API-to-Engine identity, distributed scheduling, excha
 | Client → Engine HTTP | **No authentication, TLS, or authorization** | Service identity, query authorization, TLS, quotas |
 | Engine → storage | Local filesystem access | Scoped managed/workload identity and snapshot consistency |
 
-The metadata plane stores product configuration, semantic definitions, DLM artifacts, and operational records. The customer data plane contains analytical rows. A shortcut must not silently copy customer data into Kaveon-owned persistence.
+The metadata plane stores product configuration, semantic definitions, DLM artifacts, and operational records. The customer data plane contains analytical rows. The Live Lake Path must not silently copy customer data into Kaveon-owned persistence.
 
 ## State, memory, and consistency
 
@@ -256,7 +256,7 @@ kaveon-server [config.toml]
 5. Workers start heartbeats to the coordinator.
 6. Bind Axum to `0.0.0.0:<http_port>`; default `8080`.
 
-Docker declares one coordinator and two workers. This is discovery scaffolding, not Trino-equivalent distributed execution: statements execute on the receiving node. The runtime image also lacks the `curl` binary used by its health check, and its data volume starts empty unless populated externally.
+Docker declares one coordinator and two workers. This is discovery scaffolding, not Trino-equivalent distributed execution: statements execute on the receiving node. The shared data volume starts empty unless populated externally.
 
 ## Quality invariants
 
@@ -276,7 +276,7 @@ Performance claims must name dataset, hardware, version, cache state, concurrenc
 
 | Horizon | Engine capability |
 |---|---|
-| **Now / M1** | Correct local Parquet `GROUP BY`; storage benchmarks; sort, TopN, filter pushdown |
+| **M1 in progress** | Delivered: local Parquet reads, `GROUP BY`, storage benchmarks. In progress: sort, TopN, filter pushdown |
 | **Next** | ADLS Gen2 range reads, bounded concurrency, metrics, API integration, comparative benchmarks |
 | **Then** | Delta snapshots, schema evolution, deletion vectors, time travel |
 | **Scale-out** | Fragments, exchanges, shuffle, retries, cancellation, spill, admission control |
@@ -288,7 +288,7 @@ Performance claims must name dataset, hardware, version, cache state, concurrenc
 |---|---|
 | Own the Rust Engine | Control the hot path, roadmap, performance, and intellectual property |
 | Arrow `RecordBatch` boundary | Standard columnar memory and vectorized batch execution |
-| Shortcut by default | Query customer-owned lake data without mandatory movement |
+| Live Lake Path by default | Query customer-owned lake data without mandatory movement |
 | Optimized ingest opt-in | Rewriting is explicit and remains in customer storage |
 | Deterministic DLM | No hallucination, hosted-model dependency, or per-question model cost |
 | Catalog/schema/table hierarchy | Multi-source identity independent of physical location |
@@ -303,7 +303,7 @@ Performance claims must name dataset, hardware, version, cache state, concurrenc
 - Storage pruning needs safe handling for nested columns and incomparable float statistics.
 - Engine HTTP lacks authentication, TLS, authorization, quotas, and admission control.
 - Query execution is synchronous and retains full results in an unbounded map.
-- Docker health/readiness and data initialization are not reproducible end to end.
+- Docker starts with an empty named data volume, and readiness checks catalog presence rather than validating that a table is readable.
 - The shipping application uses legacy SQL passthrough during Engine integration.
 
 ## Repository topology

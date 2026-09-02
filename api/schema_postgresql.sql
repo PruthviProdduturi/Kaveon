@@ -203,37 +203,6 @@ CREATE TABLE IF NOT EXISTS user_themes (
     updated_at  TIMESTAMP    NOT NULL DEFAULT NOW()
 );
 
--- ── Auth Config ───────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS auth_config (
-    id                   SERIAL       PRIMARY KEY,
-    provider             VARCHAR(50)  NOT NULL DEFAULT 'local',
-    azure_tenant_id      VARCHAR(255) NULL,
-    azure_client_id      VARCHAR(255) NULL,
-    google_client_id     VARCHAR(255) NULL,
-    google_client_secret VARCHAR(1000) NULL,
-    jwt_secret           VARCHAR(1000) NULL,
-    updated_at           TIMESTAMP    NOT NULL DEFAULT NOW(),
-    updated_by           VARCHAR(255) NULL
-);
-
--- ── Local Users ───────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS local_users (
-    id                    SERIAL       PRIMARY KEY,
-    username              VARCHAR(255) NOT NULL,
-    email                 VARCHAR(255) NOT NULL,
-    password_hash         VARCHAR(255) NOT NULL,
-    role                  VARCHAR(20)  NOT NULL DEFAULT 'Viewer'
-                          CONSTRAINT ck_local_users_role CHECK (role IN ('Viewer','Analyst','Editor','Admin')),
-    force_password_change BOOLEAN      NOT NULL DEFAULT FALSE,
-    is_active             BOOLEAN      NOT NULL DEFAULT TRUE,
-    created_at            TIMESTAMP    NOT NULL DEFAULT NOW(),
-    updated_at            TIMESTAMP    NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_local_users_username UNIQUE (username),
-    CONSTRAINT uq_local_users_email    UNIQUE (email)
-);
-CREATE INDEX IF NOT EXISTS idx_local_users_username ON local_users(username);
-CREATE INDEX IF NOT EXISTS idx_local_users_email    ON local_users(email);
-
 -- ── User Recents ──────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS user_recents (
     id         SERIAL        PRIMARY KEY,

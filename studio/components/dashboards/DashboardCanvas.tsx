@@ -13,7 +13,6 @@
 
 import React from 'react';
 // react-grid-layout v2 API (installed 2.2.3). @types are v1, so treat as any.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 import * as RGL from 'react-grid-layout';
 import { useDashboard } from './DashboardContext';
 import DashboardItem from './DashboardItem';

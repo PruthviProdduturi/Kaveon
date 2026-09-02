@@ -48,11 +48,9 @@ cd studio
 vercel --prod
 ```
 
-### Auto-deploy via GitHub Actions
+### Automation status
 
-Production deploys are triggered by GitHub Actions (`.github/workflows/deploy.yml`), not Vercel's native Git integration. Every push to `dev` runs the deploy job, which executes `vercel deploy --prod --yes --token=...`.
-
-Pull requests get preview deployments via `vercel deploy` (without `--prod`).
+The checked-in GitHub deployment workflow currently deploys the API only. Studio deployment remains the explicit `vercel --prod` operation above until a verified Vercel job or native Git integration is configured.
 
 Config: [`studio/vercel.json`](../../studio/vercel.json).
 

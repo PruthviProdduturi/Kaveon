@@ -433,3 +433,6 @@ Returns schema-aware suggestion prompts for the homepage chips.
 - **Mobile responsive** — desktop-first for now
 - **Animations beyond sidebar** — page transitions, skeleton loading, etc. can be added later
 - **Keyboard shortcut system** — `⌘K` and `⌘J` are hints only; implementing the command palette is a separate task
+# Archived design specification
+
+> Historical design record. Paths, line counts, and implementation-state statements may no longer match the current repository. Use `README.md`, `STATUS.md`, and `ARCHITECTURE.md` as the authoritative sources.

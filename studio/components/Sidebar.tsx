@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback, ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { KaveonMark } from "./KaveonMark";
+import { KaveonMark, KaveonWordmark } from "./KaveonMark";
 import { useAuth } from "../auth/useAuth";
 import { useTheme } from "../contexts/ThemeContext";
 import { useRole } from "../hooks/useRole";
@@ -211,7 +211,6 @@ function UserMenu({
             right: collapsed ? undefined : 8,
             width: collapsed ? 220 : undefined,
             marginBottom: collapsed ? 0 : 6,
-            zIndex: 9999,
             background: "var(--bg-surface)",
             border: "1px solid var(--border)",
             borderRadius: 10,
@@ -503,30 +502,14 @@ export function Sidebar({ children }: SidebarProps) {
         }}>
           {collapsed ? (
             <button type="button" onClick={() => setCollapsed(false)} title="Expand sidebar" style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
-              <div style={{ transform: "scale(1.15)", animation: "kaveon-breathe 3s ease-in-out infinite" }}>
-                <KaveonMark size={26} />
+              <div style={{ animation: "kaveon-breathe 3s ease-in-out infinite" }}>
+                <KaveonMark size={30} />
               </div>
             </button>
           ) : (
             <>
               <Link href="/" onClick={() => { if (pathname === "/") window.dispatchEvent(new CustomEvent("kaveon-new-chat")); }} style={{ display: "flex", alignItems: "center", textDecoration: "none" }}>
-              <svg width="140" height="24" viewBox="60 50 1180 200" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ shapeRendering: "geometricPrecision" }}>
-                <g fill="var(--text-primary)">
-                  <rect x="88" y="70" width="24" height="165" />
-                  <polygon points="110,162 218,86 206,68 98,144" />
-                  <polygon points="96,162 210,236 222,218 108,144" />
-                  <path d="M 258 235 L 328 70 L 352 70 L 422 235 L 398 235 L 340 102 L 282 235 Z" />
-                  <path d="M 463 70 L 490 70 L 545 199 L 600 70 L 627 70 L 557 235 L 533 235 Z" />
-                  <rect x="673" y="70" width="24" height="165" />
-                  <rect x="673" y="70" width="132" height="22" />
-                  <rect x="673" y="141" width="110" height="22" />
-                  <rect x="673" y="213" width="132" height="22" />
-                  <rect x="1058" y="70" width="24" height="165" />
-                  <rect x="1193" y="70" width="24" height="165" />
-                  <polygon points="1064,84 1199,235 1214,222 1079,70" />
-                </g>
-                <path d="M 966.25 215.29 A 72.5 72.5 0 1 0 893.75 215.29" fill="none" stroke="#4A9EE8" strokeWidth="24" strokeLinecap="butt" />
-              </svg>
+                <KaveonWordmark height={24} />
               </Link>
               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                 {/* Search icon */}
@@ -847,7 +830,7 @@ function SpotlightSearch({ recents, onClose, onNavigate }: {
   const [selected, setSelected] = useState(0);
   const [loading, setLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 

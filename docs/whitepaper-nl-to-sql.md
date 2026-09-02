@@ -400,16 +400,16 @@ The pragmatic position is not that template-based parsing replaces LLMs. It's th
 
 ## 10. Implementation
 
-The complete NL-to-SQL engine is implemented in three files:
+The deterministic NL-to-SQL path spans the Studio template parser and the API DLM runtime:
 
-| File | Lines | Responsibility |
-|---|---|---|
-| `utils/nlToSql.ts` | ~614 | Pattern matching, fuzzy resolution, SQL generation, chart type selection |
-| `components/chat/InlineChart.tsx` | ~321 | Chart rendering (ECharts), KPI display, table display, SQL footer |
-| `app/page.tsx` | ~1195 | DLM ask, multi-dataset auto-detection, schema caching, insight generation, chat UI |
-| `services/dlm.py` (API) | ~3,300 | DLM engine: value index, router, precompute, answer cache, serve-chart, intent resolution, stemming, synonym expansion |
+| File | Responsibility |
+|---|---|
+| `studio/utils/nlToSql.ts` | Pattern matching, fuzzy resolution, SQL generation, chart type selection |
+| `studio/components/chat/InlineChart.tsx` | Chart rendering, KPI display, table display, SQL footer |
+| `studio/app/page.tsx` | DLM requests, dataset detection, schema caching, and chat orchestration |
+| `api/dlm/` | Compilation, routing, profiling, validity, HLL, and answer serving |
 
-Total: approximately 5,350 lines across the client template parser and the server-side DLM engine. The client-side parsing logic in `nlToSql.ts` has zero external dependencies — no NLP libraries, no ML models, no training data. It's pure TypeScript operating on strings and arrays. The server-side DLM in `dlm.py` is pure Python with no ML dependencies — intent resolution uses a 56-concept seed synonym lexicon and a lightweight suffix stemmer, both hand-written. `page.tsx` orchestrates three-tier execution: DLM → ACR → template parser, with follow-up detection and context hints.
+The client template parser has no NLP or ML dependency. The API DLM runtime is pure Python and uses a hand-written synonym lexicon and lightweight suffix stemmer. `page.tsx` orchestrates DLM context routing, adaptive freshness checks, and the template fallback.
 
 ### Core API
 

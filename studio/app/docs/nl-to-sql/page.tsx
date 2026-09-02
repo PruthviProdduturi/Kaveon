@@ -20,7 +20,7 @@ export default function NlToSqlDocs() {
       <h2>The DLM — primary path</h2>
       <p>
         The primary engine is the <strong>DLM (Data Language Model)</strong>: a per-dataset compiled context artifact in
-        the API (<code>services/dlm.py</code>). It routes the question to a dataset, resolves the natural-language terms
+        the API (<code>api/dlm/</code>). It routes the question to a dataset, resolves the natural-language terms
         to columns and values, and — for the common shapes — returns a{" "}
         <strong>precomputed answer with no database scan at all</strong>. Only novel slices touch the warehouse.
       </p>

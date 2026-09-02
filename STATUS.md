@@ -12,6 +12,7 @@
 |--------|---------|
 | ✅ Done | Complete and verified |
 | 🔄 In Progress | Active work, not yet verified end-to-end |
+| 🧪 Alpha | Implemented for validation, not production-complete |
 | 📋 Planning | Not started, scoped and understood |
 | ❌ Blocked | Blocked by a dependency |
 
@@ -22,12 +23,27 @@
 | Area | Status |
 |------|--------|
 | Core analytics (datasets, charts, dashboards, SQL Lab) | ✅ Done |
-| OAuth auth (GitHub / Google / Microsoft Entra) + RBAC | ✅ Done |
+| Authentication (GitHub / Google / Entra) + RBAC | 🔄 In Progress |
 | Multi-source connectors | 🔄 In Progress |
 | DLM (no-LLM NL→SQL, answer-from-context) — primary homepage path | ✅ Done |
 | Metadata/data DB split (`kaveonmeta` + `kaveon`) | ✅ Done |
-| CI/CD + repo standards | ✅ Done |
+| CI/CD + repo standards | 🔄 In Progress |
 | Superset-parity gaps | 📋 Planning |
+
+## Kaveon Engine
+
+| Capability | Status | Notes |
+|---|---|---|
+| Local Parquet reader, projection, metadata statistics, row-group pruning | 🧪 Alpha | Synchronous Arrow `RecordBatch` stream |
+| Scan, filter, project, hash aggregate, limit | 🧪 Alpha | Vectorized node-local execution |
+| SQL parser, CLI, HTTP statement API, catalog | 🧪 Alpha | Engine is not yet wired into Studio/API |
+| Coordinator/worker discovery and heartbeats | 🧪 Alpha | Discovery only; queries still execute on the receiving node |
+| Sort and TopN | 📋 Not Started | `ORDER BY` is parsed but not physically executed |
+| Filter-pushdown optimizer pass | 📋 Not Started | Optimizer currently returns the input plan unchanged |
+| ADLS Gen2 / S3 readers | 📋 Planning | Local validation precedes cloud object storage |
+| Delta Lake / Iceberg readers | 📋 Planning | Snapshot and manifest semantics not implemented |
+| Distributed scheduling, exchange, retry | 📋 Planning | Required before Trino-class distributed claims |
+| Engine HTTP auth and TLS | 📋 Planning | Do not expose the alpha server directly to untrusted networks |
 
 ---
 
@@ -37,11 +53,11 @@
 |------|--------|-------|
 | Semantic datasets — star schema, dimensions, metrics, role-playing dims (COALESCE) | ✅ Done | |
 | Chart builder — 37 ECharts types incl. 3D WebGL globe | ✅ Done | |
-| DLM — no-LLM NL→SQL, precomputed answer-from-context (10M rows → ~1.5s, no scan) | ✅ Done | Primary homepage path; `nlToSql` is fallback |
-| DLM serve-chart — single + multi-metric from precomputed context (stacked bars, combos) | ✅ Done | All 26 Kaveon dashboard charts served from context |
-| DLM filter values — dimension dropdown values from context (no SQL scan) | ✅ Done | Instant filter population on B1ms |
+| DLM — deterministic NL→SQL and precomputed answer context | ✅ Done | Supported question classes use the DLM; `nlToSql` is fallback |
+| DLM serve-chart — single + multi-metric from precomputed context | ✅ Done | Coverage depends on the compiled dataset context |
+| DLM filter values — dimension dropdown values from context | ✅ Done | Avoids source scans when the requested values are compiled |
 | HLL sketch cuboids — mergeable COUNT(DISTINCT) at arbitrary dimension slices | ✅ Done | Exact-like NDV without full scan |
-| Star schema — dim_geography (26), dim_platform (9), kaveon_users (44K), kaveon_usage_daily (10.12M L2 fact) | ✅ Done | |
+| Star-schema semantic datasets | ✅ Done | Environment-specific scale belongs in reproducible benchmark manifests |
 | Dashboard builder — drag-drop, rows/columns/tabs/text/headers/dividers | ✅ Done | Flat layout |
 | Cross-filtering (click chart → filters others) | ✅ Done | |
 | Dashboard filter bar — DLM-powered dropdowns, cascading filters, click-outside close | ✅ Done | 9 dimensions per Kaveon dashboard |
@@ -62,8 +78,8 @@
 | Identity forwarded to the API via signed proxy headers (KAVEON_PROXY_SECRET) | ✅ Done | |
 | RBAC — Viewer < Analyst < Editor < Admin | ✅ Done | |
 | Content visibility — private / internal / published | ✅ Done | |
-| Secrets encrypted at rest (Fernet/AES) | ✅ Done | Connection strings still plaintext in `data_sources` — no vault yet |
-| S360 controls (headers, CORS, param queries, error safety) | ✅ Done | See SECURITY.md |
+| Provider secrets encrypted at rest (Fernet/AES) | 🔄 In Progress | Connection strings remain plaintext in `data_sources`; no vault yet |
+| Security headers, parameterization, proxy identity | 🔄 In Progress | Error-detail auditing remains open; see SECURITY.md |
 
 ## Connectors
 
@@ -80,8 +96,9 @@
 
 | Item | Status |
 |------|--------|
-| CI with gates (`.github/workflows/ci.yml`) — web lint/type-check/build, API syntax/tests, secret scan | ✅ Done |
-| CD — Vercel (auto-deploy `dev`) + Azure Container Apps (Bicep IaC in `infra/bicep/`) | ✅ Done |
+| Platform CI (`.github/workflows/ci.yml`) | 🔄 In Progress | Checks exist, but frontend type/lint failures are not yet consistently blocking |
+| Engine CI (`.github/workflows/engine.yml`) — format, Clippy, tests | ✅ Done | Rust warnings are denied |
+| CD — Azure Container Apps workflow + manual Vercel deployment | 🔄 In Progress | The checked-in workflow does not auto-deploy Studio |
 | Vercel app config (`studio/vercel.json`) | ✅ Done |
 | Bicep IaC (ACR, Container Apps, PostgreSQL, Key Vault, Log Analytics) | ✅ Done |
 | CONTRIBUTING.md · SECURITY.md · LICENSE · ARCHITECTURE.md · DEPLOYMENT.md | ✅ Done |
@@ -99,6 +116,7 @@
 | Async job store not cleaned on restart | Add cleanup on startup |
 | Connection strings stored plaintext in `data_sources` | Needs vault integration |
 | In-process rate limiting not shared across replicas | Redis fixes this |
+| Engine server has no auth/TLS | Keep behind a trusted local boundary during alpha |
 
 ---
 

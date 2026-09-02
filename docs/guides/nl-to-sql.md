@@ -152,14 +152,14 @@ For **non-additive COUNT(DISTINCT)** metrics (e.g. "Unique Users"), exact precom
 
 1. At generation, one SQL scan hashes every row's distinct-column value using `hashtextextended`, extracts the register index (top P bits) and rho (leading-zero run), and `MAX(rho)` per `(cell, register)` — pure SQL, no Postgres `hll` extension required
 2. The resulting register vectors are stored per cell in `dlm_sketch` as sparse JSON
-3. At query time, `_serve_sketch()` filters the matching cells and **unions the register vectors in Python** using the `services/hll` module
-4. The estimate has ~1-2% error and requires **no live scan**
+3. At query time, `_serve_sketch()` filters the matching cells and **unions the register vectors in Python** using `api/dlm/hll.py`
+4. The configured sketch has approximately 2.3% theoretical relative standard error and requires **no live scan** when the requested slice is covered
 
 ### Cuboid dimensions
 
 The cuboid's axes are the low-cardinality precomputed dimensions (< 500 distinct values), greedily selected smallest-first until the cell product hits 8,000 or 6 dimensions. This covers any sub-combo of those dims — including 3+ filter subsets that the exact 2-dim combos above don't materialize.
 
-Answers from sketches are badged with the note: "Estimated from a HyperLogLog sketch (~1-2% error) · no DB scan".
+Answers from sketches identify the result as an estimate and state when it was served without a source scan.
 
 ---
 
@@ -265,11 +265,12 @@ Each loaded schema is scored against the query: +3 for dataset name words, +2 fo
 
 | File | Role |
 |------|------|
-| `api/services/dlm.py` | DLM engine: generate, ask, serve_chart, serve_chart_multi, filter_values, check_freshness, route, resolve_value, HLL sketches |
+| `api/dlm/engine.py` | DLM runtime: compilation, deterministic resolution, and answer serving |
 | `api/routers/dlm.py` | API endpoints: /dlm/ask, /dlm/serve-chart, /dlm/filter-values, /dlm/route, /datasets/{id}/dlm/generate, /datasets/{id}/freshness |
-| `api/services/hll.py` | HyperLogLog implementation: empty, union_estimate, to_sparse |
-| `api/services/context_profiler.py` | Zero-scan statistics substrate (pg_stats snapshots) |
-| `api/services/context_validity.py` | Time/change decay factors used by freshness scoring |
+| `api/dlm/hll.py` | HyperLogLog implementation |
+| `api/dlm/profiler.py` | Statistics substrate and context profiling |
+| `api/dlm/validity.py` | Time/change decay factors used by freshness scoring |
+| `api/dlm/router.py` | Question-to-context route selection |
 | `studio/app/page.tsx` | Frontend chat flow: three-tier execution (DLM → ACR → template parser), follow-up detection, context hints display |
 | `studio/utils/nlToSql.ts` | In-browser template parser: patterns, fuzzy matching, SQL builder |
 | `studio/components/chat/InlineChart.tsx` | Chat-embedded chart renderer (ECharts) |

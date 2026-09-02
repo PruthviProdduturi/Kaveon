@@ -51,7 +51,7 @@ Both services read the single `.env` at the repo root. Copy `.env.example` to `.
 - **Linter**: ESLint (`eslint-config-next`)
 - **Type checker**: `tsc --noEmit` (strict mode)
 - **Framework**: Next.js 15 App Router, React 19
-- State-changing fetches use `msalFetch` (legacy name — no MSAL dependency), never bare `fetch`.
+- State-changing fetches use `studio/utils/msalFetch.ts`, never bare `fetch`; Studio still uses `@azure/msal-browser` for Microsoft identity integration.
 
 ### Python
 - **Type**: FastAPI + Pydantic v2, Python 3.11

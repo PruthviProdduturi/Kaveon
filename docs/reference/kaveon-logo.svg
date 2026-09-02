@@ -1,16 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg"
-     viewBox="0 0 1305 390"
+     viewBox="0 35 1305 300"
      role="img"
      aria-labelledby="title desc">
 
-  <title id="title">Kaveon primary logo</title>
+  <title id="title">Kaveon logo with tagline</title>
   <desc id="desc">
-    Polished Kaveon logo with crossbar-free A, Guardian O, and the tagline:
-    Talk to your data.
+    Kaveon wordmark with a crossbar-free A, the Guardian O, and the tagline Talk to your data.
   </desc>
 
   <!-- Wordmark -->
-  <g fill="#111318">
+  <style>.wordmark{fill:#111318}.tagline{fill:#656B74}</style>
+  <g class="wordmark">
 
     <!-- K -->
     <rect x="90" y="70" width="20" height="165"/>
@@ -43,16 +43,6 @@
         stroke-width="20"
         stroke-linecap="butt"/>
 
-  <!-- Tagline -->
-  <text x="652.5"
-        y="340"
-        text-anchor="middle"
-        font-family="Inter, Avenir Next, Helvetica Neue, Arial, sans-serif"
-        font-size="46"
-        font-weight="400"
-        letter-spacing="0.8"
-        fill="#656B74">
-    Talk to your data.
-  </text>
+  <text x="652.5" y="302" text-anchor="middle" font-family="Inter, Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="42" font-weight="400" letter-spacing="0.8" class="tagline">Talk to your data.</text>
 
 </svg>

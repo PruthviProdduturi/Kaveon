@@ -8,9 +8,10 @@ use axum::{Json, Router};
 use kaveon_core::collect_batches;
 use kaveon_sql::logical_plan::sql_to_logical_plan;
 use serde::{Deserialize, Serialize};
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
@@ -20,14 +21,19 @@ struct QueryStore {
     queries: HashMap<String, QueryRecord>,
 }
 
+#[derive(Clone, Serialize)]
 struct QueryRecord {
     id: String,
+    sql: String,
     state: QueryState,
     columns: Vec<ColumnInfo>,
     rows: Vec<Vec<serde_json::Value>>,
     error: Option<String>,
     elapsed_ms: u64,
+    submitted_at_ms: u64,
 }
+
+const QUERY_HISTORY_LIMIT: usize = 100;
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -52,6 +58,7 @@ static QUERY_STORE: std::sync::LazyLock<RwLock<QueryStore>> = std::sync::LazyLoc
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v1/statement", post(submit_statement))
+        .route("/v1/query", get(list_queries))
         .route("/v1/query/{query_id}", get(get_query))
         .route("/v1/query/{query_id}", delete(cancel_query))
         .route("/v1/cluster", get(get_cluster))
@@ -63,6 +70,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/v1/catalog/{catalog}/schema/{schema}/table",
             get(list_tables),
         )
+        .route("/ui", get(crate::ui::dashboard))
         .route("/health", get(health))
         .route("/ready", get(ready))
         .layer(CorsLayer::permissive())
@@ -106,6 +114,10 @@ async fn submit_statement(
 
     let query_id = Uuid::new_v4().to_string();
     let sql = req.query.trim().trim_end_matches(';').to_owned();
+    let submitted_at_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
     let start = Instant::now();
 
     let plan = match sql_to_logical_plan(&sql) {
@@ -146,11 +158,13 @@ async fn submit_statement(
             let elapsed = start.elapsed().as_millis() as u64;
             let record = QueryRecord {
                 id: query_id.clone(),
+                sql: sql.clone(),
                 state: QueryState::Failed,
                 columns: vec![],
                 rows: vec![],
                 error: Some(format!("{e}")),
                 elapsed_ms: elapsed,
+                submitted_at_ms,
             };
             QUERY_STORE
                 .write()
@@ -188,11 +202,13 @@ async fn submit_statement(
 
     let record = QueryRecord {
         id: query_id.clone(),
+        sql,
         state: QueryState::Finished,
         columns: columns.clone(),
         rows: rows.clone(),
         error: None,
         elapsed_ms: elapsed,
+        submitted_at_ms,
     };
     QUERY_STORE
         .write()
@@ -210,6 +226,14 @@ async fn submit_statement(
     };
 
     Json(resp).into_response()
+}
+
+async fn list_queries() -> Json<Vec<QueryRecord>> {
+    let store = QUERY_STORE.read().await;
+    let mut queries: Vec<QueryRecord> = store.queries.values().cloned().collect();
+    queries.sort_unstable_by_key(|query| Reverse(query.submitted_at_ms));
+    queries.truncate(QUERY_HISTORY_LIMIT);
+    Json(queries)
 }
 
 async fn get_query(Path(query_id): Path<String>) -> impl IntoResponse {

@@ -8,11 +8,11 @@ infrastructure and point it at your own databases; there's also a public demo at
 like — a private internal tool *or* a public site — so the security model assumes an
 untrusted internet and defends accordingly.
 
-Sign-in is **OAuth only** (GitHub, Google, Microsoft Entra ID) via NextAuth (Auth.js v5).
-There are no local passwords. The browser only ever talks to the Next.js app; the FastAPI
-backend is never exposed directly, and it trusts identity only from the web app's signed
-proxy. Kaveon queries many databases — Microsoft Fabric SQL, Azure SQL, PostgreSQL, MySQL,
-and StarRocks — not just one.
+Sign-in uses GitHub, Google, or Microsoft Entra ID through NextAuth (Auth.js v5), with
+the browser calling FastAPI through the signed Next.js proxy. Kaveon has no local-password
+login or bootstrap password. FastAPI can additionally validate provider-issued bearer
+tokens for explicit direct-API clients. Kaveon queries Microsoft Fabric SQL, Azure SQL,
+PostgreSQL, MySQL, and StarRocks one selected source at a time.
 
 ---
 
@@ -22,11 +22,11 @@ and StarRocks — not just one.
 |-------|--------|-----------|
 | Connected data sources | Unauthorized data access | Every API endpoint requires an authenticated user; per-user scoping on user-owned data |
 | User query history | Cross-user data leak | Records stored with `executed_by`; the API filters by the current user |
-| API endpoints | Direct/unauthenticated access | API accepts requests only from the web proxy, which stamps `X-User-*` headers signed with `KAVEON_PROXY_SECRET`; mismatched/missing secret ⇒ rejected |
+| API endpoints | Direct/unauthenticated access | Production deployment should restrict network access to the proxy; route authentication also supports local/direct modes, and setup/health routes have different requirements |
 | Identity spoofing | Forged `X-User-*` headers | The API trusts `X-User-*` **only** when `KAVEON_PROXY_SECRET` matches; the browser never sends them directly |
 | SQL query generation | Identifier injection | `quote_identifier()` wraps every user-supplied identifier and escapes it |
 | Filter values | Operator injection | Filter operators validated against a strict allowlist in `query_generator.py` |
-| Internal errors | Information disclosure | Exception details are logged server-side only; clients receive a generic message |
+| Internal errors | Information disclosure | Prefer stable client error codes; some current handlers still return formatted exception text and require audit |
 | Credential exposure | Connection-string leak | The `connection_string` column is excluded from every API response (`_PUBLIC_FIELDS`) |
 | Schema enumeration | Data discovery without auth | All lab, SQL, and data-source endpoints require authentication |
 | Content access | Reading others' private/internal content | Visibility model (`private` / `internal` / `published`) enforced in every list/get via `can_read()` in `middleware/permissions.py` |
@@ -36,8 +36,8 @@ and StarRocks — not just one.
 
 ## Authentication Architecture
 
-Auth runs entirely in the Next.js app (NextAuth); the API trusts a signed proxy header —
-the same pattern Forge uses. No tokens are handled in the browser.
+The preferred hosted path uses NextAuth in Studio and a signed proxy header. Verified
+provider bearer tokens are a separate, explicit direct-API trust mode.
 
 ```
 Browser
@@ -116,10 +116,10 @@ Filter operators (`=`, `<`, `LIKE`, …) are validated against a strict allowlis
 |---------|---------------|
 | **Proxy-authenticated API** | API trusts `X-User-*` only with a matching `KAVEON_PROXY_SECRET`; the browser never talks to the API directly |
 | **OAuth sessions** | NextAuth (Auth.js v5) sessions signed with `AUTH_SECRET`; providers activate only when their client id/secret are set |
-| **Authentication required** | Every non-setup endpoint requires an authenticated user |
+| **Authentication required** | Protected application routes resolve proxy, bearer-token, or local identity; setup and health routes are intentional exceptions |
 | **Security headers** | `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Strict-Transport-Security`, `Referrer-Policy` added by middleware |
-| **CORS hardening** | Explicit `allow_origins=[WEB_URL]`, explicit methods/headers — no wildcards |
-| **Error message safety** | Handlers never return exception details to clients; full tracebacks to server logs only |
+| **CORS hardening** | API responses allow only the configured `WEB_URL` origin and declare `Vary: Origin` |
+| **Error message safety** | Stable client errors are the policy; endpoint-by-endpoint auditing remains necessary because some handlers format exception text |
 | **Credential suppression** | `connection_string` excluded from all data-source responses (`_PUBLIC_FIELDS`) |
 | **SQL injection** | Parameterized queries throughout; `quote_identifier()` for dynamic identifiers; operator allowlist |
 | **Setup endpoint gating** | Setup endpoints return 403 once the app is configured |

@@ -5,19 +5,17 @@ database. This allows authentication to be configured before (or without) a
 metadata database being present.
 
 Env keys:
-    AUTH_PROVIDER               — azure_ad | google | local  (default: local)
+    AUTH_PROVIDER               — azure_ad | google  (default: azure_ad)
     AUTH_AZURE_TENANT_ID        — Azure AD tenant UUID
     AUTH_AZURE_CLIENT_ID        — Azure AD app client UUID
     AUTH_GOOGLE_CLIENT_ID       — Google OAuth2 client ID
     AUTH_GOOGLE_CLIENT_SECRET   — Fernet-encrypted Google secret
-    AUTH_JWT_SECRET             — Fernet-encrypted JWT signing secret
 """
 
 import base64
 import hashlib
 import os
 import re
-import secrets
 from pathlib import Path
 from typing import Optional
 
@@ -87,11 +85,11 @@ def refresh_auth_config() -> None:
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 def get_active_provider() -> str:
-    """Return the active auth provider. Defaults to 'local'."""
+    """Return the active auth provider. Defaults to Azure AD."""
     global _cached_provider
     if _cached_provider is not None:
         return _cached_provider
-    _cached_provider = _read_key("AUTH_PROVIDER") or "local"
+    _cached_provider = _read_key("AUTH_PROVIDER") or "azure_ad"
     return _cached_provider
 
 
@@ -100,22 +98,20 @@ def get_config() -> dict:
     """Return full auth config. Secrets are masked."""
     provider_raw = _read_key("AUTH_PROVIDER")
     return {
-        "provider":            provider_raw or "local",
+        "provider":            provider_raw or "azure_ad",
         # ui_configured is True only when AUTH_PROVIDER has been explicitly saved via
         # the admin UI. Absent/empty means the instance is still using the default
-        # local fallback and has never been configured through the settings page.
+        # Azure AD default and has never been configured through the settings page.
         "ui_configured":       bool(provider_raw),
         "azure_tenant_id":     _read_key("AUTH_AZURE_TENANT_ID"),
         "azure_client_id":     _read_key("AUTH_AZURE_CLIENT_ID"),
         "google_client_id":    _read_key("AUTH_GOOGLE_CLIENT_ID"),
         "google_client_secret": "***" if _read_key("AUTH_GOOGLE_CLIENT_SECRET") else "",
-        "jwt_secret":           "***" if _read_key("AUTH_JWT_SECRET") else "",
     }
-
 
 def upsert_config(data: dict) -> dict:
     """Write auth config to .env and update the live process environment."""
-    provider = data.get("provider", "local")
+    provider = data.get("provider", "azure_ad")
     updates: dict = {"AUTH_PROVIDER": provider}
 
     if provider == "azure_ad":
@@ -279,27 +275,3 @@ def setup_azure_app_roles(graph_token: str, client_id: str, tenant_id: str) -> d
             "Assign users in Azure AD → Enterprise Applications → your app → Users and groups."
         ),
     }
-
-
-def get_jwt_secret() -> str:
-    """
-    Return the JWT signing secret.
-    Generates, encrypts, and persists a new secret if one doesn't exist yet.
-    Falls back to a deterministic derived secret if the .env is not writable.
-    """
-    raw = _read_key("AUTH_JWT_SECRET")
-    if raw:
-        try:
-            return _decrypt(raw)
-        except Exception as e:
-            print(f"[AuthConfig] jwt_secret decrypt failed — regenerating: {e}")
-
-    new_secret = secrets.token_hex(32)
-    try:
-        enc = _encrypt(new_secret)
-        _upsert_env({"AUTH_JWT_SECRET": enc})
-        os.environ["AUTH_JWT_SECRET"] = enc
-    except Exception as e:
-        print(f"[AuthConfig] Could not persist jwt_secret to .env: {e}")
-
-    return new_secret
