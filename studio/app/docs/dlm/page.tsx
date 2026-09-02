@@ -1,4 +1,4 @@
-import { PageHeader, Callout, Code, Pager } from "../../../components/docs/prose";
+import { PageHeader, Callout, Code, Diagram, Pager } from "../../../components/docs/prose";
 
 export const metadata = { title: "Data Language Model (DLM)" };
 
@@ -6,16 +6,17 @@ export default function DlmDocs() {
   return (
     <div className="docs-prose">
       <PageHeader
-        eyebrow="Core Engine"
+        eyebrow="Data Intelligence"
         title="Data Language Model (DLM)"
-        lead="The DLM is Kaveon's core engine — a self-compiling semantic layer that turns your schema into a deterministic question-answering machine. No training, no fine-tuning, no LLM. Register a dataset and the DLM compiles itself: indexing every column value, mapping synonyms, precomputing metric rollups across every dimension, and building HLL sketches for non-additive metrics. Questions resolve to SQL through deterministic pattern matching, not token prediction."
+        lead="The Data Language Model is Kaveon's deterministic semantic compilation and resolution layer. It indexes configured dataset metadata and values, builds eligible context artifacts, and resolves supported questions without a hosted model call. It complements—not replaces—the analytical Engine."
       />
 
       <Callout type="note">
-        There is no model call in the DLM path. Every answer is deterministic — the same question always produces the
-        same SQL and the same result. The DLM is the <strong>primary</strong> NL→SQL engine; the browser-side template
+        There is no hosted model call in the deterministic DLM path. Given the same context artifact and request, resolution is reproducible; results can still change when source data or context changes. The DLM is the <strong>primary</strong> NL→SQL engine; the browser-side template
         parser (<a href="/docs/nl-to-sql">NL→SQL</a>) is the fallback for shapes not yet precomputed.
       </Callout>
+
+      <Diagram src="/docs/architecture/kaveon-dlm-flow.svg" alt="Data Language Model compilation and request-resolution paths" caption="Generate or refresh compiles a dataset context artifact. At request time, supported fresh context can answer directly; otherwise Kaveon produces an inspectable live-query path against the selected source. Engine execution is a target integration." />
 
       <h2>What is a DLM?</h2>
       <p>
@@ -23,7 +24,7 @@ export default function DlmDocs() {
         It is not a machine learning model — it is a deterministic index of your schema&apos;s metrics, dimensions, column
         values, and precomputed answers. When a user asks a question, the DLM resolves it to a specific metric, optional
         grouping dimension, and optional entity filters — then either serves the answer from precomputed context in
-        microseconds, or assembles a single live SQL query.
+        without a source query, or assembles a single live SQL query.
       </p>
 
       <h2>The compilation pipeline</h2>
@@ -79,10 +80,11 @@ export default function DlmDocs() {
       </ul>
       <p>
         At runtime, these answers are loaded into the in-memory DLM context (<code>_ANSWER_CACHE</code> dict) and served in
-        microseconds — no database query at all.
+        without issuing another source query. End-to-end latency still includes API, cache, serialization, and network overhead.
       </p>
 
       <h3>5. HLL sketches</h3>
+      <Callout type="note">HLL precomputation currently depends on PostgreSQL capabilities. Other connector types may compile a reduced context and use live queries for unsupported distinct-count shapes.</Callout>
       <p>
         For non-additive metrics like <code>COUNT(DISTINCT user_id)</code>, simple precomputed totals cannot be
         combined across dimensions (you can&apos;t sum distinct counts). The DLM uses{" "}
@@ -186,7 +188,7 @@ Tie-break: narrowest dataset (fewest columns) wins.`}</Code>
         The DLM has two answer paths, and every response is honestly labelled so the user knows which path served them:
       </p>
 
-      <h3>Context path — microseconds</h3>
+      <h3>Context path — no source scan</h3>
       <p>
         When the question maps to a precomputed shape (metric total, per-dimension breakdown, or single-dimension filter),
         the answer is served from the in-memory DLM context (<code>_ANSWER_CACHE</code> dict) with no database query.
@@ -210,7 +212,7 @@ Tie-break: narrowest dataset (fewest columns) wins.`}</Code>
       <h3>Context hints</h3>
       <p>
         While a live query is running, the DLM serves <strong>context hints</strong> — the precomputed metric total
-        and per-filter breakdowns — as an instant preview. The user sees approximate data immediately, and the live
+        and per-filter breakdowns — as a context preview. The user can see approximate data while the live
         query result replaces it when ready.
       </p>
 
@@ -222,7 +224,7 @@ Tie-break: narrowest dataset (fewest columns) wins.`}</Code>
       <h3>serve-chart</h3>
       <p>
         <code>POST /dlm/serve-chart</code> takes a metric, optional group-by, and optional filters, and returns the
-        result from DLM context. Dashboard charts load instantly from context instead of running live SQL against the
+        result from DLM context. Eligible dashboard charts load from context instead of running live SQL against the
         warehouse. When context cannot answer (e.g. a novel filter combination), the response includes{" "}
         <code>served: false</code> and the frontend falls back to <code>/sql/execute</code>.
       </p>
@@ -231,13 +233,13 @@ Tie-break: narrowest dataset (fewest columns) wins.`}</Code>
       <p>
         <code>POST /dashboards/{"{dashboard_id}"}/dlm/curate</code> precomputes the N-dimensional answer combinations
         for a dashboard&apos;s filter×chart definitions. After curation, even complex multi-filter dashboard
-        interactions serve instantly from context.
+        interactions can serve from context when those combinations have been curated and remain valid.
       </p>
 
       <h3>Filter values</h3>
       <p>
         <code>GET /dlm/filter-values</code> returns distinct values for a dimension column from DLM context — no SQL
-        query needed. Dashboard filter dropdowns populate instantly.
+        query needed when the value index is present. Otherwise the request falls back to the selected source.
       </p>
 
       <h2>API reference</h2>

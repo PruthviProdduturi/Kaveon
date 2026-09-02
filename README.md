@@ -124,7 +124,8 @@ Studio runs on `http://localhost:3000`; the API defaults to `http://localhost:80
 | Local Parquet | Kaveon Engine direct read | Alpha |
 | Microsoft Fabric SQL / Azure SQL | Studio + API connector | Available |
 | PostgreSQL | Studio + API connector | Available |
-| MySQL / StarRocks | Studio + API connector | Available |
+| MySQL | API connector; not exposed in Studio's source-type picker | Available through API |
+| StarRocks | Studio + API connector (MySQL protocol) | Available |
 | Trino | No executable driver | Planned |
 | ADLS Gen2 / S3 | Kaveon Engine direct read | Planned |
 | Delta Lake / Iceberg | Kaveon Engine table-format reader | Planned |
@@ -154,6 +155,8 @@ Kaveon/
 | [Deployment](DEPLOYMENT.md) | [Adaptive context routing](docs/whitepaper-adaptive-context-routing.md) |
 | [Security](SECURITY.md) | [Deterministic NL→SQL](docs/whitepaper-nl-to-sql.md) |
 | [Contributing](CONTRIBUTING.md) | [Product strategy](docs/product-strategy.md) |
+
+The complete documentation map, including API and configuration references, is in [docs/README.md](docs/README.md).
 
 ## License
 

@@ -4,12 +4,16 @@
 .docs-root {
   --docs-sidebar-w: 272px;
   --docs-toc-w: 232px;
-  --docs-content-max: 780px;
+  --docs-content-max: 880px;
   background: var(--bg-primary, #f5f5f7);
   min-height: 100vh;
   color: var(--text-primary, #1a1a2e);
   font-family: "Inter", "Segoe UI", system-ui, sans-serif;
 }
+.docs-skip { position: fixed; left: 16px; top: -80px; z-index: 1000; padding: 10px 14px;
+  border-radius: 8px; background: var(--accent); color: #fff; text-decoration: none; }
+.docs-skip:focus { top: 12px; }
+.docs-mobile-nav { display: none; }
 
 .docs-grid {
   display: grid;
@@ -94,6 +98,13 @@
   font-family: "Cascadia Code","Fira Code",Consolas,monospace; font-size: 12.75px; line-height: 1.65; color: #e2e8f0; }
 .docs-code pre code { background: none; color: inherit; padding: 0; font-size: inherit; }
 
+/* architecture figures */
+.docs-diagram { margin: 24px 0 28px; }
+.docs-diagram > a { display: block; overflow: hidden; border: 1px solid #263244;
+  border-radius: 14px; background: #080d14; box-shadow: 0 18px 48px rgba(15,23,42,.14); }
+.docs-diagram img { display: block; width: 100%; height: auto; }
+.docs-diagram figcaption { margin-top: 10px; color: var(--text-muted); font-size: 12.5px; line-height: 1.6; }
+
 /* callouts */
 .docs-callout { display: flex; gap: 12px; padding: 14px 16px; border-radius: 10px; margin: 0 0 20px;
   font-size: 14px; line-height: 1.65; border: 1px solid; }
@@ -130,4 +141,14 @@
 .docs-toc a.active { color: var(--accent); border-left-color: var(--accent); font-weight: 600; }
 
 @media (max-width: 1180px) { .docs-grid { grid-template-columns: var(--docs-sidebar-w) minmax(0,1fr); } .docs-toc { display: none; } }
-@media (max-width: 860px) { .docs-grid { grid-template-columns: 1fr; } .docs-sidebar { display: none; } .docs-main { padding: 28px 20px 100px; } }
+@media (max-width: 860px) {
+  .docs-grid { grid-template-columns: 1fr; }
+  .docs-sidebar { display: none; }
+  .docs-main { padding: 18px 20px 100px; }
+  .docs-mobile-nav { display: block; margin-bottom: 28px; border: 1px solid var(--border);
+    border-radius: 10px; background: var(--bg-surface); }
+  .docs-mobile-nav summary { cursor: pointer; padding: 12px 14px; color: var(--text-primary);
+    font-size: 14px; font-weight: 650; }
+  .docs-mobile-nav nav { max-height: 60vh; overflow-y: auto; padding: 4px 10px 14px; }
+  .docs-mobile-nav .docs-navgroup { margin-bottom: 14px; }
+}

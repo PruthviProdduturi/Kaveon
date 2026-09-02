@@ -30,6 +30,19 @@ export function Code({ lang, children }: { lang?: string; children: string }) {
   );
 }
 
+export function Diagram({ src, alt, caption }: { src: string; alt: string; caption: React.ReactNode }) {
+  return (
+    <figure className="docs-diagram">
+      <a href={src} target="_blank" rel="noopener noreferrer" aria-label={`${alt} — open full-size diagram`}>
+        {/* Architecture assets are authored SVGs whose intrinsic geometry must remain intact. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={src} alt={alt} />
+      </a>
+      <figcaption>{caption}</figcaption>
+    </figure>
+  );
+}
+
 export function Pager({
   prev,
   next,

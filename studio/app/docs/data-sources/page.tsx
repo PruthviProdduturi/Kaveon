@@ -13,14 +13,15 @@ export default function DataSourcesDocs() {
 
       <h2>Supported databases</h2>
       <table>
-        <thead><tr><th>Database</th><th>Type</th><th>Driver</th></tr></thead>
+        <thead><tr><th>Database</th><th>Availability</th><th>Driver</th></tr></thead>
         <tbody>
-          <tr><td>Microsoft Fabric SQL</td><td><code>fabric_sql</code></td><td>pyodbc · ODBC Driver 18</td></tr>
-          <tr><td>Azure SQL</td><td><code>azure_sql</code></td><td>pyodbc · ODBC Driver 18</td></tr>
-          <tr><td>PostgreSQL</td><td><code>postgresql</code></td><td>psycopg2</td></tr>
-          <tr><td>MySQL</td><td><code>mysql</code></td><td>pymysql</td></tr>
-          <tr><td>StarRocks</td><td>via <code>mysql</code></td><td>pymysql (MySQL protocol)</td></tr>
-          <tr><td>Trino</td><td>coming soon</td><td>—</td></tr>
+          <tr><td>Microsoft Fabric SQL</td><td>Studio + API · <code>fabric_sql</code></td><td>pyodbc · ODBC Driver 18</td></tr>
+          <tr><td>Azure SQL</td><td>Studio + API · <code>azure_sql</code></td><td>pyodbc · ODBC Driver 18</td></tr>
+          <tr><td>PostgreSQL</td><td>Studio + API · <code>postgresql</code></td><td>psycopg2</td></tr>
+          <tr><td>MySQL</td><td>API only · <code>mysql</code></td><td>pymysql</td></tr>
+          <tr><td>StarRocks</td><td>Studio + API · <code>starrocks</code></td><td>pymysql (MySQL protocol)</td></tr>
+          <tr><td>Local Parquet</td><td>Engine alpha</td><td>Arrow · Parquet</td></tr>
+          <tr><td>Trino, ADLS Gen2, S3, Delta Lake, Iceberg</td><td>Target</td><td>Not executable</td></tr>
         </tbody>
       </table>
 
@@ -31,6 +32,7 @@ export default function DataSourcesDocs() {
         connection string, region (<code>WW</code> / <code>EU</code> for residency tracking), and an optional description.
         Click <strong>Test Connection</strong>, then <strong>Save</strong>.
       </p>
+      <Callout type="note">MySQL is implemented in the API but is not currently exposed in Studio&rsquo;s source-type picker. StarRocks is exposed separately and uses the MySQL wire protocol.</Callout>
 
       <h3>Connection string formats</h3>
       <Code lang="text">{`Fabric SQL   <workspace>.database.fabric.microsoft.com     (Azure AD Managed Identity)
@@ -46,17 +48,8 @@ StarRocks    mysql://user:pass@host:9030/db`}</Code>
       </p>
 
       <h2>Testing connections</h2>
-      <p>On <strong>Test Connection</strong>, the backend opens a fresh (non-pooled) connection, runs <code>SELECT 1</code>, and creates/drops a temp table to verify write access. It returns a structured outcome:</p>
-      <table>
-        <thead><tr><th><code>error_type</code></th><th>Meaning</th></tr></thead>
-        <tbody>
-          <tr><td>(none)</td><td>Connectivity and write access both succeeded</td></tr>
-          <tr><td><code>access_denied</code></td><td>Connected, but the identity lacks permission</td></tr>
-          <tr><td><code>db_not_found</code></td><td>Server reachable, database doesn&rsquo;t exist</td></tr>
-          <tr><td><code>timeout</code></td><td>No response within 30s</td></tr>
-          <tr><td><code>connection_failed</code></td><td>TCP couldn&rsquo;t connect — check host / firewall</td></tr>
-        </tbody>
-      </table>
+      <Callout type="warn">The registered-source <code>POST /data-sources/{`{id}`}/test</code> endpoint is currently a stub and must not be treated as proof of connectivity. First-run setup probes perform real checks, but full connector-specific testing is still a product gap.</Callout>
+      <p>Until the endpoint is implemented, verify a source with a least-privilege read through SQL Lab and confirm schema discovery separately. Do not infer write permission from a successful read.</p>
 
       <h2>Managing sources</h2>
       <p>

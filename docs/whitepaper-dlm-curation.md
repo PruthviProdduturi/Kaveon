@@ -3,6 +3,12 @@
 **Pruthvi Prodduturi**
 August 2026
 
+> **Implementation and evidence boundary.** Counts and timings below are a dated
+> case study for the named datasets, dashboards, database size, and cache state;
+> they are not universal product guarantees. HLL results are approximate, and
+> compiled coverage depends on connector capabilities and the selected curation
+> budget. See [`STATUS.md`](../STATUS.md) for the current capability ledger.
+
 ---
 
 ## Abstract

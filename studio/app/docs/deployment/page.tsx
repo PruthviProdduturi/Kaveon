@@ -1,4 +1,4 @@
-import { PageHeader, Callout, Code, Pager } from "../../../components/docs/prose";
+import { PageHeader, Callout, Code, Diagram, Pager } from "../../../components/docs/prose";
 
 export const metadata = { title: "Deployment" };
 
@@ -8,11 +8,16 @@ export default function DeploymentDocs() {
       <PageHeader
         eyebrow="Platform"
         title="Deployment"
-        lead="Kaveon deploys as three tiers — the Next.js frontend on Vercel, the FastAPI backend on Azure Container Apps, and Azure PostgreSQL. CI builds and ships on every push."
+        lead="The shipping platform uses Vercel, Azure Container Apps, and PostgreSQL. The Rust Engine has a separate local/Docker alpha topology and is not yet in the production request path."
       />
 
       <h2>Topology</h2>
-      <Code lang="text">{`Browser ──► Vercel  (kaveon-web · NextAuth: GitHub / Google / Microsoft)
+      <Diagram
+        src="/docs/architecture/kaveon-deployment-topology.svg"
+        alt="Kaveon shipping platform, Engine alpha, and distributed target deployment topology"
+        caption="Shipping, alpha, and target paths are deliberately separated. Worker discovery in the alpha topology is not distributed query execution."
+      />
+      <Code lang="text">{`Browser ──► Vercel  (Kaveon Studio · Auth.js: GitHub / Google / Microsoft)
                │  same-origin /api/kaveon proxy (injects X-User-* + secret)
                ▼
             Azure Container Apps  (kaveon-api · FastAPI · image from kaveonacr)
@@ -37,7 +42,7 @@ export default function DeploymentDocs() {
         <code>.github/workflows/ci.yml</code> runs on every push and PR to <code>dev</code>:
       </p>
       <ul>
-        <li><strong>web</strong> — install, type-check shared types, lint, tsc, and build <code>kaveon-web</code>.</li>
+        <li><strong>web</strong> — install, type-check shared types, lint, tsc, and build Kaveon Studio.</li>
         <li><strong>api</strong> — install, <code>compileall</code>, and run pytest if tests exist.</li>
         <li><strong>secrets</strong> — a gitleaks scan.</li>
         <li><strong>deploy (web)</strong> — on push to <code>dev</code> (after web passes), <code>vercel deploy --prod</code>
@@ -48,6 +53,18 @@ export default function DeploymentDocs() {
         image to <code>kaveonacr.azurecr.io</code> and runs <code>az containerapp update</code> to roll it out. The Vercel
         build installs with <code>npm install --legacy-peer-deps</code> (pnpm fails in Vercel&rsquo;s build sandbox).
       </p>
+
+      <h2>Engine alpha deployment</h2>
+      <p>
+        <code>engine/docker-compose.yml</code> starts one coordinator and two workers for local topology validation.
+        Nodes register and heartbeat, but statements execute on the receiving node: there is no fragment scheduling,
+        Arrow exchange, shuffle, or cross-worker retry. Populate the mounted Parquet data path before startup and keep
+        the unauthenticated Engine HTTP port behind a trusted boundary.
+      </p>
+      <Code lang="bash">{`cd engine
+docker compose up --build
+
+# Engine operations UI: http://localhost:8080/ui`}</Code>
 
       <h2>Key environment variables</h2>
       <table>
@@ -60,7 +77,7 @@ export default function DeploymentDocs() {
       </table>
       <Callout type="tip">
         First run needs no database config — the setup wizard appears on first sign-in and initializes the metadata schema
-        for you. Data-source endpoints are always registered from the UI, never from <code>.env</code>.
+        for you. Supported Studio connector types are registered in the UI; API-only connector types use the data-source API.
       </Callout>
 
       <h2>Production notes</h2>
@@ -70,7 +87,7 @@ export default function DeploymentDocs() {
         over connection strings.
       </p>
 
-      <Pager prev={{ href: "/docs/auth", title: "Auth & RBAC" }} />
+      <Pager prev={{ href: "/docs/auth", title: "Auth & RBAC" }} next={{ href: "/docs/operations", title: "Operations" }} />
     </div>
   );
 }

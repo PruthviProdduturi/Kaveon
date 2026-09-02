@@ -223,3 +223,5 @@ version = kaveon_engine.version()
 | 2026-09-02 | Codex | Redesigned the Engine operational UI and added server-backed `GET /v1/query` history. Removed fabricated timing phases; the UI reports only measured Engine telemetry. |
 | 2026-09-02 | Codex | Added a root Vercel upload boundary so the Studio deployment excludes Engine build artifacts, backend sources, local caches, and secrets. |
 | 2026-09-02 | Codex | Restored the cinematic About presentation and integrated platform maturity as a native three-pillar block; aligned the canonical wordmark, responsive navigation, reduced-motion behavior, and accessible dashboard controls. |
+| 2026-09-02 | Codex | Audited root documentation against commit `464911f`; corrected deployment, connector, authentication, and maturity claims and added code-grounded documentation indexes for API and configuration. |
+| 2026-09-02 | Codex | Expanded Studio docs into a product-wide portal with Engine, API, Operations, and Research sections; centralized navigation, published the architecture diagram set, and aligned current/alpha/target claims with runtime behavior. No public runtime contract changed. |

@@ -3,13 +3,14 @@
 ## Overview
 
 Kaveon is an **open-source, self-hosted analytics platform**. You run it on your own
-infrastructure and point it at your own databases; there's also a public demo at
+infrastructure and point it at your own databases; there is also a hosted preview at
 [kaveon.vercel.app](https://kaveon.vercel.app). It's built to be deployed however you
-like — a private internal tool *or* a public site — so the security model assumes an
-untrusted internet and defends accordingly.
+like — a private internal tool *or* a public site. The Studio/API path includes
+application controls, but the alpha Engine HTTP server must remain behind a trusted
+boundary because it has no authentication, authorization, or TLS.
 
 Sign-in uses GitHub, Google, or Microsoft Entra ID through NextAuth (Auth.js v5), with
-the browser calling FastAPI through the signed Next.js proxy. Kaveon has no local-password
+the browser calling FastAPI through the shared-secret-authenticated Next.js proxy. Kaveon has no local-password
 login or bootstrap password. FastAPI can additionally validate provider-issued bearer
 tokens for explicit direct-API clients. Kaveon queries Microsoft Fabric SQL, Azure SQL,
 PostgreSQL, MySQL, and StarRocks one selected source at a time.
@@ -20,7 +21,7 @@ PostgreSQL, MySQL, and StarRocks one selected source at a time.
 
 | Asset | Threat | Mitigation |
 |-------|--------|-----------|
-| Connected data sources | Unauthorized data access | Every API endpoint requires an authenticated user; per-user scoping on user-owned data |
+| Connected data sources | Unauthorized data access | Application data routes require an authenticated identity; health, initial setup, and the API root are intentional exceptions |
 | User query history | Cross-user data leak | Records stored with `executed_by`; the API filters by the current user |
 | API endpoints | Direct/unauthenticated access | Production deployment should restrict network access to the proxy; route authentication also supports local/direct modes, and setup/health routes have different requirements |
 | Identity spoofing | Forged `X-User-*` headers | The API trusts `X-User-*` **only** when `KAVEON_PROXY_SECRET` matches; the browser never sends them directly |
@@ -36,7 +37,7 @@ PostgreSQL, MySQL, and StarRocks one selected source at a time.
 
 ## Authentication Architecture
 
-The preferred hosted path uses NextAuth in Studio and a signed proxy header. Verified
+The preferred hosted path uses NextAuth in Studio and shared-secret-authenticated proxy headers. Verified
 provider bearer tokens are a separate, explicit direct-API trust mode.
 
 ```
@@ -103,7 +104,7 @@ injected into every list/get query:
 
 All SQL sent to connected data sources uses one of two safe patterns:
 
-1. **Parameterized queries** — service-layer database operations bind values as parameters (`?` / `@paramN`), never as embedded string literals.
+1. **Parameterized values** — service-layer database operations bind values as parameters (`?` / `@paramN`) where the database API permits it. User-authored SQL Lab statements are passed through the SQL safety checks and are not rewritten into parameterized statements.
 2. **Quoted identifiers** — table/column/schema names in dynamic SQL pass through `quote_identifier()` in `services/query_generator.py`, which quotes each part and escapes the quote char.
 
 Filter operators (`=`, `<`, `LIKE`, …) are validated against a strict allowlist before being embedded. A 64 KB size limit is enforced on all SQL-execution endpoints.
@@ -114,18 +115,22 @@ Filter operators (`=`, `<`, `LIKE`, …) are validated against a strict allowlis
 
 | Control | Implementation |
 |---------|---------------|
-| **Proxy-authenticated API** | API trusts `X-User-*` only with a matching `KAVEON_PROXY_SECRET`; the browser never talks to the API directly |
+| **Proxy-authenticated API** | API trusts `X-User-*` only with a matching `KAVEON_PROXY_SECRET`; deployments must prevent clients from learning that shared secret and should restrict direct API ingress |
 | **OAuth sessions** | NextAuth (Auth.js v5) sessions signed with `AUTH_SECRET`; providers activate only when their client id/secret are set |
 | **Authentication required** | Protected application routes resolve proxy, bearer-token, or local identity; setup and health routes are intentional exceptions |
 | **Security headers** | `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Strict-Transport-Security`, `Referrer-Policy` added by middleware |
 | **CORS hardening** | API responses allow only the configured `WEB_URL` origin and declare `Vary: Origin` |
 | **Error message safety** | Stable client errors are the policy; endpoint-by-endpoint auditing remains necessary because some handlers format exception text |
 | **Credential suppression** | `connection_string` excluded from all data-source responses (`_PUBLIC_FIELDS`) |
-| **SQL injection** | Parameterized queries throughout; `quote_identifier()` for dynamic identifiers; operator allowlist |
+| **SQL injection** | Parameterized service values; `quote_identifier()` for generated identifiers; operator allowlist; SQL Lab guardrails for user-authored statements |
 | **Setup endpoint gating** | Setup endpoints return 403 once the app is configured |
 | **Query size limit** | 64 KB max on SQL-execution endpoints |
 | **RBAC** | `require_min_role()` on all create/update/admin endpoints |
 | **Content visibility** | `private` / `internal` / `published` enforced in every list/get query |
+
+The Engine HTTP API is outside these controls. It currently uses permissive CORS and
+has no authentication, TLS, query quotas, or authorization. Do not expose it directly
+to an untrusted network.
 
 ---
 
