@@ -241,7 +241,9 @@ fn repl(catalog: &mut CatalogManager) {
         if buffer.trim_end().ends_with(';') {
             let sql = buffer.trim().trim_end_matches(';').trim();
             if !sql.is_empty() {
-                execute_query(sql, catalog);
+                if !try_handle_show_use(sql, catalog) {
+                    execute_query(sql, catalog);
+                }
             }
             buffer.clear();
             collecting = false;
@@ -358,6 +360,132 @@ fn handle_meta_command(cmd: &str, catalog: &CatalogManager) {
             eprintln!("unknown command: {}", parts[0]);
             eprintln!("type .help for available commands");
         }
+    }
+}
+
+fn try_handle_show_use(sql: &str, catalog: &mut CatalogManager) -> bool {
+    let upper = sql.trim().to_uppercase();
+    let parts: Vec<&str> = upper.split_whitespace().collect();
+
+    match parts.as_slice() {
+        ["SHOW", "CATALOGS"] => {
+            let names = catalog.catalog_names();
+            println!("+{}+", "-".repeat(32));
+            println!("| {:<30} |", "Catalog");
+            println!("+{}+", "-".repeat(32));
+            for name in &names {
+                println!("| {:<30} |", name);
+            }
+            println!("+{}+", "-".repeat(32));
+            println!("({} rows)", names.len());
+            true
+        }
+        ["SHOW", "SCHEMAS"] => {
+            show_schemas(catalog.default_catalog(), catalog);
+            true
+        }
+        ["SHOW", "SCHEMAS", "FROM", catalog_name] | ["SHOW", "SCHEMAS", "IN", catalog_name] => {
+            let name = sql.trim().split_whitespace().last().unwrap();
+            show_schemas(name, catalog);
+            true
+        }
+        ["SHOW", "TABLES"] => {
+            show_tables(
+                catalog.default_catalog(),
+                catalog.default_schema(),
+                catalog,
+            );
+            true
+        }
+        ["SHOW", "TABLES", "FROM", qualified] | ["SHOW", "TABLES", "IN", qualified] => {
+            let name = sql.trim().split_whitespace().last().unwrap();
+            let parts: Vec<&str> = name.split('.').collect();
+            match parts.len() {
+                2 => show_tables(parts[0], parts[1], catalog),
+                1 => show_tables(parts[0], catalog.default_schema(), catalog),
+                _ => eprintln!("usage: SHOW TABLES FROM catalog.schema"),
+            }
+            true
+        }
+        ["DESCRIBE", table] | ["DESC", table] => {
+            let name = sql.trim().split_whitespace().last().unwrap();
+            let reference = TableReference::parse(name);
+            match catalog.resolve_table(&reference) {
+                Ok(resolved) => {
+                    println!("+{}+{}+{}+", "-".repeat(32), "-".repeat(17), "-".repeat(10));
+                    println!(
+                        "| {:<30} | {:<15} | {:<8} |",
+                        "Column", "Type", "Nullable"
+                    );
+                    println!("+{}+{}+{}+", "-".repeat(32), "-".repeat(17), "-".repeat(10));
+                    for field in resolved.table.arrow_schema.fields() {
+                        println!(
+                            "| {:<30} | {:<15} | {:<8} |",
+                            field.name(),
+                            format!("{}", field.data_type()),
+                            if field.is_nullable() { "YES" } else { "NO" }
+                        );
+                    }
+                    println!("+{}+{}+{}+", "-".repeat(32), "-".repeat(17), "-".repeat(10));
+                }
+                Err(e) => eprintln!("error: {e}"),
+            }
+            true
+        }
+        _ if upper.starts_with("USE ") => {
+            let target = sql.trim()[4..].trim().trim_end_matches(';');
+            let parts: Vec<&str> = target.split('.').collect();
+            match parts.len() {
+                2 => {
+                    *catalog = CatalogManager::new(parts[0], parts[1]);
+                    println!("Using catalog '{}', schema '{}'", parts[0], parts[1]);
+                }
+                1 => {
+                    let current_schema = catalog.default_schema().to_owned();
+                    *catalog = CatalogManager::new(parts[0], current_schema);
+                    println!("Using catalog '{}'", parts[0]);
+                }
+                _ => eprintln!("usage: USE catalog.schema"),
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+fn show_schemas(catalog_name: &str, catalog: &CatalogManager) {
+    match catalog.catalog(catalog_name) {
+        Some(cat) => {
+            let names = cat.schema_names();
+            println!("+{}+", "-".repeat(32));
+            println!("| {:<30} |", "Schema");
+            println!("+{}+", "-".repeat(32));
+            for name in &names {
+                println!("| {:<30} |", name);
+            }
+            println!("+{}+", "-".repeat(32));
+            println!("({} rows)", names.len());
+        }
+        None => eprintln!("error: catalog '{catalog_name}' not found"),
+    }
+}
+
+fn show_tables(catalog_name: &str, schema_name: &str, catalog: &CatalogManager) {
+    match catalog.catalog(catalog_name) {
+        Some(cat) => match cat.table_names(schema_name) {
+            Ok(names) => {
+                println!("+{}+", "-".repeat(32));
+                println!("| {:<30} |", "Table");
+                println!("+{}+", "-".repeat(32));
+                for name in &names {
+                    println!("| {:<30} |", name);
+                }
+                println!("+{}+", "-".repeat(32));
+                println!("({} rows)", names.len());
+            }
+            Err(e) => eprintln!("error: {e}"),
+        },
+        None => eprintln!("error: catalog '{catalog_name}' not found"),
     }
 }
 

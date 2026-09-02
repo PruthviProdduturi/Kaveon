@@ -1,0 +1,16 @@
+# Local filesystem catalog
+# Filename becomes the catalog name: "local"
+# Place in ~/.kaveon/catalogs/local.toml
+
+type = "local"
+base_path = "D:\\data\\warehouse"
+
+# Tables auto-discovered from .parquet files in base_path.
+# Or declare manually:
+#
+# [[table]]
+# name = "orders"
+# schema = "default"
+# location = "orders.parquet"
+# access = "shortcut"
+# format = "parquet"

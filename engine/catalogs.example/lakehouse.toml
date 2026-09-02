@@ -1,0 +1,31 @@
+# Azure ADLS Gen 2 catalog
+# Filename becomes the catalog name: "lakehouse"
+# Place in ~/.kaveon/catalogs/lakehouse.toml
+
+type = "adls_gen2"
+account = "kaveonsa"
+container = "data"
+root_path = "warehouse"
+
+# Auth: DefaultAzureCredential (az login locally, Managed Identity in prod)
+
+[[table]]
+name = "events"
+schema = "raw"
+location = "events/"
+access = "shortcut"
+format = "delta"
+
+[[table]]
+name = "users"
+schema = "raw"
+location = "users/"
+access = "shortcut"
+format = "parquet"
+
+[[table]]
+name = "daily_metrics"
+schema = "analytics"
+location = "daily_metrics/"
+access = "optimized"
+format = "parquet"
