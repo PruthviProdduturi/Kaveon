@@ -11,7 +11,7 @@
   --brand-light: #6db3ed;
   --brand-lighter: #90c7f2;
   --brand-rgb: 74, 158, 232;
-  --bg: #0b0f15;
+  --bg: #080c12;
   --bg-surface: #101620;
   --bg-elevated: #151e2b;
   --bg-hover: rgba(255,255,255,0.04);
@@ -27,12 +27,12 @@
   --error: #ef4444;
   --error-rgb: 239, 68, 68;
   --mono: 'Cascadia Code','JetBrains Mono','SF Mono','Fira Code',monospace;
-  --sans: Inter,'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,'Helvetica Neue',sans-serif;
+  --sans: 'Segoe UI',Inter,-apple-system,BlinkMacSystemFont,Roboto,'Helvetica Neue',sans-serif;
   --radius: 12px;
   --radius-sm: 8px;
 }
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:var(--sans);background:var(--bg);color:var(--text);line-height:1.5;min-height:100vh;-webkit-font-smoothing:antialiased}
+body{font-family:var(--sans);background:radial-gradient(circle at 50% -20%,rgba(var(--brand-rgb),.12),transparent 38%),var(--bg);color:var(--text);line-height:1.5;min-height:100vh;-webkit-font-smoothing:antialiased}
 
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 @keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
@@ -42,8 +42,8 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);line-height:
 .header{
   position:sticky;top:0;z-index:100;
   display:flex;align-items:center;justify-content:space-between;
-  padding:0 28px;height:52px;
-  background:rgba(17,17,19,.9);
+  padding:0 32px;height:64px;
+  background:rgba(8,12,18,.86);
   backdrop-filter:blur(20px) saturate(1.6);
   -webkit-backdrop-filter:blur(20px) saturate(1.6);
   border-bottom:1px solid var(--border);
@@ -83,7 +83,16 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);line-height:
 .gauge-label{font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.07em;white-space:nowrap;order:-1}
 
 /* ===== LAYOUT ===== */
-.main{max-width:1400px;margin:0 auto;padding:24px 28px}
+.main{max-width:1440px;margin:0 auto;padding:32px}
+.mast{display:flex;align-items:flex-end;justify-content:space-between;gap:28px;margin:4px 0 28px}
+.eyebrow{font:600 11px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--brand);margin-bottom:8px}
+.mast h1{font-size:30px;line-height:1.15;letter-spacing:-.035em;font-weight:650}
+.mast p{color:var(--text-secondary);font-size:13px;max-width:650px;margin-top:8px}
+.actions{display:flex;align-items:center;gap:10px}.read-only{font:600 10px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--text-muted);border:1px solid var(--border);border-radius:999px;padding:7px 10px}
+.refresh{color:var(--text);background:var(--brand);border:0;border-radius:8px;padding:8px 13px;font:600 12px var(--sans);cursor:pointer;box-shadow:0 8px 24px rgba(var(--brand-rgb),.2)}.refresh:hover{background:var(--brand-light)}
+.section-row{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:14px}.section-row .section-hdr{margin:0}
+.query-tools{display:flex;gap:8px}.query-tools input,.query-tools select{height:34px;color:var(--text-secondary);background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;padding:0 10px;font:12px var(--sans)}.query-tools input{width:250px}
+.catalogs{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 32px}.catalog{display:flex;align-items:center;gap:9px;background:var(--bg-surface);border:1px solid var(--border);border-radius:9px;padding:10px 13px;font:12px var(--mono);color:var(--text-secondary)}.catalog-dot{width:7px;height:7px;border-radius:50%;background:var(--brand);box-shadow:0 0 10px rgba(var(--brand-rgb),.5)}
 .section-hdr{
   font-size:12px;font-weight:600;color:var(--text-muted);
   text-transform:uppercase;letter-spacing:.06em;
@@ -125,7 +134,7 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);line-height:
 /* ===== QUERY TABLE ===== */
 .qtable{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
 table{width:100%;border-collapse:collapse;font-size:13px}
-thead{position:sticky;top:52px;z-index:10}
+thead{position:sticky;top:64px;z-index:10}
 th{text-align:left;padding:10px 16px;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);background:var(--bg-elevated);border-bottom:1px solid var(--border);white-space:nowrap}
 td{padding:9px 16px;border-bottom:1px solid var(--border);font-size:13px}
 tr:last-child td{border-bottom:none}
@@ -225,7 +234,7 @@ td.nl{color:var(--text-muted);font-style:italic}
 :focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 @media(max-width:900px){.nodes{grid-template-columns:1fr}.gauges{grid-template-columns:repeat(2,1fr)}}
-@media(max-width:540px){.main{padding:16px}.header{padding:0 16px}.gauges{padding:12px 16px}}
+@media(max-width:700px){.mast{align-items:flex-start;flex-direction:column}.section-row{align-items:flex-start;flex-direction:column}.query-tools{width:100%}.query-tools input{width:100%}.main{padding:20px}.header{padding:0 18px}.gauges{padding:12px 18px}}
 </style>
 </head>
 <body>
@@ -266,10 +275,17 @@ td.nl{color:var(--text-muted);font-style:italic}
 
 <div class="main">
   <div id="view-list">
-    <div class="section-hdr">Nodes <span class="ct" id="nc">0</span></div>
+    <div class="mast">
+      <div><div class="eyebrow">Control plane</div><h1>Engine operations</h1><p>Live coordinator, worker, catalog, and query telemetry. This console observes the Engine; analytical work belongs in Kaveon Studio.</p></div>
+      <div class="actions"><span class="read-only">Read only</span><button class="refresh" id="refresh" type="button">Refresh now</button></div>
+    </div>
+    <div class="section-hdr">Cluster nodes <span class="ct" id="nc">0</span></div>
     <div class="nodes" id="nodes"></div>
 
-    <div class="section-hdr">Query History <span class="ct" id="qc">0</span></div>
+    <div class="section-hdr">Catalog inventory <span class="ct" id="cc">0</span></div>
+    <div class="catalogs" id="catalogs"><span class="catalog">Loading catalogs…</span></div>
+
+    <div class="section-row"><div class="section-hdr">Query history <span class="ct" id="qc">0</span></div><div class="query-tools"><input id="qsearch" type="search" placeholder="Search SQL or query ID" aria-label="Search query history"><select id="qstate" aria-label="Filter query state"><option value="ALL">All states</option><option value="FINISHED">Finished</option><option value="FAILED">Failed</option></select></div></div>
     <div id="qarea">
       <div class="empty">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
@@ -454,10 +470,13 @@ function hideDetail(){
 }
 
 function renderHistory(){
-  document.getElementById('qc').textContent=qorder.length;
-  if(!qorder.length)return;
+  const term=document.getElementById('qsearch').value.trim().toLowerCase();
+  const state=document.getElementById('qstate').value;
+  const visible=qorder.filter(id=>{const q=queries[id];return q&&(state==='ALL'||q.state===state)&&(!term||q.sql.toLowerCase().includes(term)||id.toLowerCase().includes(term));});
+  document.getElementById('qc').textContent=visible.length===qorder.length?qorder.length:visible.length+' / '+qorder.length;
+  if(!visible.length){document.getElementById('qarea').innerHTML='<div class="empty"><div class="empty-t">No matching queries</div><div class="empty-s">Adjust the search or state filter</div></div>';return;}
   let h='<div class="qtable"><table><thead><tr><th>Query</th><th>State</th><th>Elapsed</th><th>Rows</th><th>Query ID</th></tr></thead><tbody>';
-  qorder.forEach(id=>{
+  visible.forEach(id=>{
     const q=queries[id];if(!q)return;
     const preview=esc(q.sql.length>90?q.sql.substring(0,90)+'…':q.sql);
     const badge=q.state==='FINISHED'?'<span class="badge badge-finished">Finished</span>':'<span class="badge badge-failed">Failed</span>';
@@ -493,8 +512,23 @@ async function fetchHistory(){
   }catch{}
 }
 
+async function fetchCatalogs(){
+  const area=document.getElementById('catalogs');
+  try{
+    const response=await fetch(API+'/v1/catalog');
+    if(!response.ok)throw new Error();
+    const data=await response.json(),names=data.catalogs||[];
+    document.getElementById('cc').textContent=names.length;
+    area.innerHTML=names.length?names.map(name=>`<span class="catalog"><span class="catalog-dot"></span>${esc(name)}</span>`).join(''):'<span class="catalog">No catalogs loaded</span>';
+  }catch{area.innerHTML='<span class="catalog">Catalog inventory unavailable</span>';}
+}
+
 fetchCluster();
 fetchHistory();
+fetchCatalogs();
+document.getElementById('qsearch').addEventListener('input',renderHistory);
+document.getElementById('qstate').addEventListener('change',renderHistory);
+document.getElementById('refresh').addEventListener('click',()=>{fetchCluster();fetchHistory();fetchCatalogs();});
 setInterval(()=>{fetchCluster();fetchHistory();},5000);
 </script>
 </body>
