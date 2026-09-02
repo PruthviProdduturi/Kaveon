@@ -1,3 +1,4 @@
+mod config;
 mod display;
 mod planner;
 
@@ -16,45 +17,86 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let data_dir = parse_args(&args);
+    let (data_dir, config_path) = parse_args(&args);
 
-    let mut catalog_mgr = CatalogManager::new("kaveon", "default");
-
-    match &data_dir {
-        Some(dir) => {
-            let catalog = build_local_catalog(dir);
-            let table_count = catalog
-                .table_names("default")
-                .map(|t| t.len())
-                .unwrap_or(0);
-            catalog_mgr.register_catalog(Box::new(catalog));
-            print_banner(Some(dir), table_count);
+    let mut catalog_mgr = if let Some(dir) = &data_dir {
+        let mut mgr = CatalogManager::new("local", "default");
+        let catalog = build_local_catalog(dir);
+        let table_count = catalog
+            .table_names("default")
+            .map(|t| t.len())
+            .unwrap_or(0);
+        mgr.register_catalog(Box::new(catalog));
+        print_banner(Some(dir), table_count);
+        mgr
+    } else {
+        let cfg_path = config_path.unwrap_or_else(config::default_config_path);
+        match config::load_config(&cfg_path) {
+            Ok(mgr) => {
+                let total_tables: usize = mgr
+                    .catalog_names()
+                    .iter()
+                    .filter_map(|name| mgr.catalog(name))
+                    .flat_map(|cat| {
+                        cat.schema_names()
+                            .into_iter()
+                            .filter_map(move |s| cat.table_names(&s).ok().map(|t| t.len()))
+                    })
+                    .sum();
+                println!("Kaveon Engine v{VERSION}");
+                println!("Talk to your data.");
+                println!();
+                println!(
+                    "Config: {} ({} catalogs, {} tables)",
+                    cfg_path.display(),
+                    mgr.catalog_names().len(),
+                    total_tables
+                );
+                println!("Type .help for commands, SQL queries end with ;");
+                println!();
+                mgr
+            }
+            Err(_) => {
+                let mut mgr = CatalogManager::new("kaveon", "default");
+                let catalog = MemoryCatalog::new(
+                    "kaveon",
+                    StorageType::Local {
+                        base_path: PathBuf::from("."),
+                    },
+                )
+                .with_schema("default");
+                mgr.register_catalog(Box::new(catalog));
+                print_banner(None, 0);
+                mgr
+            }
         }
-        None => {
-            let catalog = MemoryCatalog::new(
-                "kaveon",
-                StorageType::Local {
-                    base_path: PathBuf::from("."),
-                },
-            )
-            .with_schema("default");
-            catalog_mgr.register_catalog(Box::new(catalog));
-            print_banner(None, 0);
-        }
-    }
+    };
 
     repl(&mut catalog_mgr);
 }
 
-fn parse_args(args: &[String]) -> Option<PathBuf> {
+fn parse_args(args: &[String]) -> (Option<PathBuf>, Option<PathBuf>) {
+    let mut data_dir = None;
+    let mut config_path = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
             "--data-dir" | "-d" => {
                 if i + 1 < args.len() {
-                    return Some(PathBuf::from(&args[i + 1]));
+                    data_dir = Some(PathBuf::from(&args[i + 1]));
+                    i += 2;
+                    continue;
                 }
                 eprintln!("error: --data-dir requires a path");
+                std::process::exit(1);
+            }
+            "--config" | "-c" => {
+                if i + 1 < args.len() {
+                    config_path = Some(PathBuf::from(&args[i + 1]));
+                    i += 2;
+                    continue;
+                }
+                eprintln!("error: --config requires a path");
                 std::process::exit(1);
             }
             "--version" | "-V" => {
@@ -68,7 +110,9 @@ fn parse_args(args: &[String]) -> Option<PathBuf> {
             other => {
                 let path = PathBuf::from(other);
                 if path.is_dir() {
-                    return Some(path);
+                    data_dir = Some(path);
+                    i += 1;
+                    continue;
                 }
                 eprintln!("error: unknown argument '{other}'");
                 print_usage();
@@ -77,7 +121,7 @@ fn parse_args(args: &[String]) -> Option<PathBuf> {
         }
         i += 1;
     }
-    None
+    (data_dir, config_path)
 }
 
 fn print_usage() {
@@ -85,6 +129,7 @@ fn print_usage() {
     println!();
     println!("Options:");
     println!("  -d, --data-dir <PATH>  Directory containing Parquet files");
+    println!("  -c, --config <PATH>    Config file (default: ~/.kaveon/config.toml)");
     println!("  -V, --version          Print version");
     println!("  -h, --help             Print help");
     println!();
