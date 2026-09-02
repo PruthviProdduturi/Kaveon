@@ -1,0 +1,25 @@
+# Studio is the Vercel project root. Exclude server, engine, local caches, and
+# repository-only material while preserving the monorepo manifests and studio/.
+.claude/
+.github/
+.pytest_cache/
+.superpowers/
+.tmp-edge-profile/
+.turbo/
+.vercel/
+api/
+data/
+demo/
+docs/
+engine/
+infra/
+node_modules/
+packages/
+scripts/
+.env
+.env.local
+.tmp-*
+nul
+*.md
+docker-compose.yml
+LICENSE

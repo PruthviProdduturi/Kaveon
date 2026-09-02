@@ -221,3 +221,4 @@ version = kaveon_engine.version()
 | 2026-09-01 | Codex | Architect-requested documentation pass: rewrote ARCHITECTURE.md to separate shipping, alpha, and target behavior; added theme-aligned accessible SVGs for the three-pillar platform, Engine pipeline, and deployment topology. No runtime contract changed. |
 | 2026-09-02 | Codex | Rebuilt product/architecture branding and About experience, removed obsolete local-password authentication paths, restored strict Studio type checking, and aligned public documentation with current/alpha/target behavior. |
 | 2026-09-02 | Codex | Redesigned the Engine operational UI and added server-backed `GET /v1/query` history. Removed fabricated timing phases; the UI reports only measured Engine telemetry. |
+| 2026-09-02 | Codex | Added a root Vercel upload boundary so the Studio deployment excludes Engine build artifacts, backend sources, local caches, and secrets. |
