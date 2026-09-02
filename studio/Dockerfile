@@ -6,7 +6,8 @@ RUN npm install -g pnpm@10
 WORKDIR /app
 
 # Copy workspace manifests
-COPY pnpm-workspace.yaml pnpm-lock.yaml .npmrc ./
+COPY pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY .npmrc* ./
 COPY package.json ./
 COPY packages/types/package.json ./packages/types/
 COPY studio/package.json ./studio/
