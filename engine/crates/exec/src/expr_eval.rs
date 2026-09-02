@@ -1,6 +1,4 @@
-use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, Float64Array, Int64Array, StringArray,
-};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, Float64Array, Int64Array, StringArray};
 use arrow::compute;
 use arrow::datatypes::{DataType, Float64Type, Int64Type};
 use arrow::record_batch::RecordBatch;
@@ -59,9 +57,7 @@ pub fn evaluate_predicate(expr: &Expr, batch: &RecordBatch) -> Result<BooleanArr
 fn literal_to_array(value: &ScalarValue, len: usize) -> Result<ArrayRef> {
     match value {
         ScalarValue::Null => Ok(Arc::new(BooleanArray::new_null(len))),
-        ScalarValue::Bool(v) => {
-            Ok(Arc::new(BooleanArray::from(vec![*v; len])))
-        }
+        ScalarValue::Bool(v) => Ok(Arc::new(BooleanArray::from(vec![*v; len]))),
         ScalarValue::Int64(v) => Ok(Arc::new(Int64Array::from(vec![*v; len]))),
         ScalarValue::Float64(v) => Ok(Arc::new(Float64Array::from(vec![*v; len]))),
         ScalarValue::Utf8(v) => Ok(Arc::new(StringArray::from(vec![v.as_str(); len]))),
@@ -76,7 +72,10 @@ fn eval_binary_op(left: &ArrayRef, op: BinaryOp, right: &ArrayRef) -> Result<Arr
         BinaryOp::Le => Ok(Arc::new(comparison(left, right, CompareKind::Le)?)),
         BinaryOp::Gt => Ok(Arc::new(comparison(left, right, CompareKind::Gt)?)),
         BinaryOp::Ge => Ok(Arc::new(comparison(left, right, CompareKind::Ge)?)),
-        BinaryOp::Plus | BinaryOp::Minus | BinaryOp::Multiply | BinaryOp::Divide
+        BinaryOp::Plus
+        | BinaryOp::Minus
+        | BinaryOp::Multiply
+        | BinaryOp::Divide
         | BinaryOp::Modulo => arithmetic(left, op, right),
     }
 }
@@ -91,7 +90,7 @@ enum CompareKind {
 }
 
 fn comparison(left: &ArrayRef, right: &ArrayRef, kind: CompareKind) -> Result<BooleanArray> {
-    use arrow::compute::{eq, gt, gt_eq, lt, lt_eq, neq};
+    use arrow::compute::kernels::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
     let result = match kind {
         CompareKind::Eq => eq(left, right)?,
         CompareKind::Ne => neq(left, right)?,

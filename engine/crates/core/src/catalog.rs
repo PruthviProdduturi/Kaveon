@@ -1,5 +1,5 @@
-use arrow::datatypes::SchemaRef;
 use crate::Result;
+use arrow::datatypes::SchemaRef;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -80,9 +80,7 @@ impl TableReference {
 
     pub fn table(&self) -> &str {
         match self {
-            Self::Bare { table }
-            | Self::Partial { table, .. }
-            | Self::Full { table, .. } => table,
+            Self::Bare { table } | Self::Partial { table, .. } | Self::Full { table, .. } => table,
         }
     }
 }
@@ -146,9 +144,11 @@ impl CatalogManager {
                 schema,
                 table,
             } => (catalog.as_str(), schema.as_str(), table.as_str()),
-            TableReference::Partial { schema, table } => {
-                (self.default_catalog.as_str(), schema.as_str(), table.as_str())
-            }
+            TableReference::Partial { schema, table } => (
+                self.default_catalog.as_str(),
+                schema.as_str(),
+                table.as_str(),
+            ),
             TableReference::Bare { table } => (
                 self.default_catalog.as_str(),
                 self.default_schema.as_str(),
@@ -186,9 +186,10 @@ pub struct ResolvedTable {
 impl ResolvedTable {
     pub fn full_path(&self) -> String {
         match &self.storage {
-            StorageType::Local { base_path } => {
-                base_path.join(&self.table.location).to_string_lossy().into_owned()
-            }
+            StorageType::Local { base_path } => base_path
+                .join(&self.table.location)
+                .to_string_lossy()
+                .into_owned(),
             StorageType::AdlsGen2 {
                 account,
                 container,
@@ -197,11 +198,9 @@ impl ResolvedTable {
                 "abfss://{container}@{account}.dfs.core.windows.net/{root_path}/{}",
                 self.table.location
             ),
-            StorageType::S3 {
-                bucket,
-                prefix,
-                ..
-            } => format!("s3://{bucket}/{prefix}/{}", self.table.location),
+            StorageType::S3 { bucket, prefix, .. } => {
+                format!("s3://{bucket}/{prefix}/{}", self.table.location)
+            }
         }
     }
 }
@@ -333,9 +332,7 @@ mod tests {
         let mut mgr = CatalogManager::new("lakehouse", "default");
         mgr.register_catalog(Box::new(catalog));
 
-        let resolved = mgr
-            .resolve_table(&TableReference::parse("users"))
-            .unwrap();
+        let resolved = mgr.resolve_table(&TableReference::parse("users")).unwrap();
         assert_eq!(resolved.table.name, "users");
         assert_eq!(resolved.catalog, "lakehouse");
         assert_eq!(resolved.schema, "default");
@@ -369,9 +366,7 @@ mod tests {
         let mut mgr = CatalogManager::new("azure", "raw");
         mgr.register_catalog(Box::new(catalog));
 
-        let resolved = mgr
-            .resolve_table(&TableReference::parse("events"))
-            .unwrap();
+        let resolved = mgr.resolve_table(&TableReference::parse("events")).unwrap();
         assert_eq!(
             resolved.full_path(),
             "abfss://data@kaveonsa.dfs.core.windows.net/warehouse/events/"
@@ -383,9 +378,7 @@ mod tests {
     #[test]
     fn rejects_unknown_catalog_and_schema() {
         let mgr = CatalogManager::new("default", "public");
-        assert!(mgr
-            .resolve_table(&TableReference::parse("users"))
-            .is_err());
+        assert!(mgr.resolve_table(&TableReference::parse("users")).is_err());
     }
 
     #[test]

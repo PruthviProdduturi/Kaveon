@@ -1,9 +1,8 @@
 use kaveon_core::{
-    AccessPattern, CatalogManager, DataFormat, KaveonError, MemoryCatalog, Result, StorageType,
-    TableMeta,
+    AccessPattern, CatalogManager, CatalogProvider, DataFormat, KaveonError, MemoryCatalog, Result,
+    StorageType, TableMeta,
 };
 use kaveon_storage::ParquetReader;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -170,11 +169,10 @@ fn parse_config(content: &str) -> Result<CatalogManager> {
         }
 
         if trimmed == "[[catalog.table]]" {
-            if let Some(tbl) = current_table.take() {
-                if let Some(cat) = current_catalog.as_mut() {
+            if let Some(tbl) = current_table.take()
+                && let Some(cat) = current_catalog.as_mut() {
                     cat.tables.push(tbl);
                 }
-            }
             current_table = Some(TableEntry::default());
             in_table = true;
             continue;
@@ -310,26 +308,20 @@ fn auto_discover_tables(catalog: &mut MemoryCatalog, dir: &Path) {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().is_some_and(|e| e == "parquet") {
-                if let Some(table_name) = path.file_stem().and_then(|s| s.to_str()) {
-                    if let Ok(meta) = ParquetReader::new(&path).metadata() {
+            if path.extension().is_some_and(|e| e == "parquet")
+                && let Some(table_name) = path.file_stem().and_then(|s| s.to_str())
+                    && let Ok(meta) = ParquetReader::new(&path).metadata() {
                         let _ = catalog.register_table(
                             "default",
                             TableMeta {
                                 name: table_name.to_owned(),
                                 arrow_schema: meta.schema,
-                                location: path
-                                    .file_name()
-                                    .unwrap()
-                                    .to_string_lossy()
-                                    .into_owned(),
+                                location: path.file_name().unwrap().to_string_lossy().into_owned(),
                                 access: AccessPattern::Shortcut,
                                 format: DataFormat::Parquet,
                             },
                         );
                     }
-                }
-            }
         }
     }
 }

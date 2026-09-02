@@ -3,14 +3,13 @@ mod display;
 mod planner;
 
 use kaveon_core::{
-    AccessPattern, CatalogManager, DataFormat, MemoryCatalog, StorageType, TableMeta,
-    TableReference, collect_batches,
+    AccessPattern, CatalogManager, CatalogProvider, DataFormat, MemoryCatalog, StorageType,
+    TableMeta, TableReference, collect_batches,
 };
 use kaveon_sql::logical_plan::sql_to_logical_plan;
 use kaveon_storage::ParquetReader;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Instant;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -22,10 +21,7 @@ fn main() {
     let mut catalog_mgr = if let Some(dir) = &data_dir {
         let mut mgr = CatalogManager::new("local", "default");
         let catalog = build_local_catalog(dir);
-        let table_count = catalog
-            .table_names("default")
-            .map(|t| t.len())
-            .unwrap_or(0);
+        let table_count = catalog.table_names("default").map(|t| t.len()).unwrap_or(0);
         mgr.register_catalog(Box::new(catalog));
         print_banner(Some(dir), table_count);
         mgr
@@ -119,7 +115,6 @@ fn parse_args(args: &[String]) -> (Option<PathBuf>, Option<PathBuf>) {
                 std::process::exit(1);
             }
         }
-        i += 1;
     }
     (data_dir, config_path)
 }
@@ -171,8 +166,8 @@ fn build_local_catalog(dir: &Path) -> MemoryCatalog {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().is_some_and(|e| e == "parquet") {
-                if let Some(table_name) = path.file_stem().and_then(|s| s.to_str()) {
+            if path.extension().is_some_and(|e| e == "parquet")
+                && let Some(table_name) = path.file_stem().and_then(|s| s.to_str()) {
                     match ParquetReader::new(&path).metadata() {
                         Ok(meta) => {
                             let _ = catalog.register_table(
@@ -195,7 +190,6 @@ fn build_local_catalog(dir: &Path) -> MemoryCatalog {
                         }
                     }
                 }
-            }
         }
     }
 
@@ -240,11 +234,10 @@ fn repl(catalog: &mut CatalogManager) {
 
         if buffer.trim_end().ends_with(';') {
             let sql = buffer.trim().trim_end_matches(';').trim();
-            if !sql.is_empty() {
-                if !try_handle_show_use(sql, catalog) {
+            if !sql.is_empty()
+                && !try_handle_show_use(sql, catalog) {
                     execute_query(sql, catalog);
                 }
-            }
             buffer.clear();
             collecting = false;
         } else {
@@ -341,7 +334,11 @@ fn handle_meta_command(cmd: &str, catalog: &CatalogManager) {
                     println!();
                     println!("Columns:");
                     for field in resolved.table.arrow_schema.fields() {
-                        let nullable = if field.is_nullable() { "NULL" } else { "NOT NULL" };
+                        let nullable = if field.is_nullable() {
+                            "NULL"
+                        } else {
+                            "NOT NULL"
+                        };
                         println!(
                             "  {:<30} {:<15} {}",
                             field.name(),
@@ -384,21 +381,17 @@ fn try_handle_show_use(sql: &str, catalog: &mut CatalogManager) -> bool {
             show_schemas(catalog.default_catalog(), catalog);
             true
         }
-        ["SHOW", "SCHEMAS", "FROM", catalog_name] | ["SHOW", "SCHEMAS", "IN", catalog_name] => {
-            let name = sql.trim().split_whitespace().last().unwrap();
+        ["SHOW", "SCHEMAS", "FROM", _catalog_name] | ["SHOW", "SCHEMAS", "IN", _catalog_name] => {
+            let name = sql.split_whitespace().last().unwrap();
             show_schemas(name, catalog);
             true
         }
         ["SHOW", "TABLES"] => {
-            show_tables(
-                catalog.default_catalog(),
-                catalog.default_schema(),
-                catalog,
-            );
+            show_tables(catalog.default_catalog(), catalog.default_schema(), catalog);
             true
         }
-        ["SHOW", "TABLES", "FROM", qualified] | ["SHOW", "TABLES", "IN", qualified] => {
-            let name = sql.trim().split_whitespace().last().unwrap();
+        ["SHOW", "TABLES", "FROM", _qualified] | ["SHOW", "TABLES", "IN", _qualified] => {
+            let name = sql.split_whitespace().last().unwrap();
             let parts: Vec<&str> = name.split('.').collect();
             match parts.len() {
                 2 => show_tables(parts[0], parts[1], catalog),
@@ -407,16 +400,13 @@ fn try_handle_show_use(sql: &str, catalog: &mut CatalogManager) -> bool {
             }
             true
         }
-        ["DESCRIBE", table] | ["DESC", table] => {
-            let name = sql.trim().split_whitespace().last().unwrap();
+        ["DESCRIBE", _table] | ["DESC", _table] => {
+            let name = sql.split_whitespace().last().unwrap();
             let reference = TableReference::parse(name);
             match catalog.resolve_table(&reference) {
                 Ok(resolved) => {
                     println!("+{}+{}+{}+", "-".repeat(32), "-".repeat(17), "-".repeat(10));
-                    println!(
-                        "| {:<30} | {:<15} | {:<8} |",
-                        "Column", "Type", "Nullable"
-                    );
+                    println!("| {:<30} | {:<15} | {:<8} |", "Column", "Type", "Nullable");
                     println!("+{}+{}+{}+", "-".repeat(32), "-".repeat(17), "-".repeat(10));
                     for field in resolved.table.arrow_schema.fields() {
                         println!(

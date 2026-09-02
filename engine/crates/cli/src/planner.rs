@@ -1,6 +1,4 @@
-use kaveon_core::{
-    BatchOperator, CatalogManager, Expr, KaveonError, Result, TableReference,
-};
+use kaveon_core::{BatchOperator, CatalogManager, Expr, KaveonError, Result, TableReference};
 use kaveon_exec::aggregate::{AggExpr, AggFunc, HashAggregate};
 use kaveon_exec::filter::FilterOperator;
 use kaveon_exec::limit::LimitOperator;
@@ -23,9 +21,9 @@ pub fn plan_to_operator(
             if let Some(cols) = columns {
                 reader = reader.with_columns(cols.clone());
             }
-            let source = reader.read().map_err(|e| {
-                KaveonError::Execution(format!("failed to open '{}': {e}", path))
-            })?;
+            let source = reader
+                .read()
+                .map_err(|e| KaveonError::Execution(format!("failed to open '{}': {e}", path)))?;
             let scan = ScanOperator::new(Box::new(source), columns.as_deref())?;
             Ok(Box::new(scan))
         }
@@ -49,25 +47,22 @@ pub fn plan_to_operator(
 
             let exprs: Vec<Expr> = columns
                 .iter()
-                .filter_map(|e| match e {
+                .map(|e| match e {
                     Expr::Function { name, args } => {
                         let col = agg_output_name(name, args);
-                        Some(Expr::Column(col))
+                        Expr::Column(col)
                     }
                     Expr::Alias { expr, name } => match expr.as_ref() {
-                        Expr::Function {
-                            name: fname,
-                            args,
-                        } => {
+                        Expr::Function { name: fname, args } => {
                             let col = agg_output_name(fname, args);
-                            Some(Expr::Alias {
+                            Expr::Alias {
                                 expr: Box::new(Expr::Column(col)),
                                 name: name.clone(),
-                            })
+                            }
                         }
-                        _ => Some(e.clone()),
+                        _ => e.clone(),
                     },
-                    _ => Some(e.clone()),
+                    _ => e.clone(),
                 })
                 .collect();
 
@@ -93,7 +88,7 @@ pub fn plan_to_operator(
 
             let agg_exprs: Vec<AggExpr> = aggregates
                 .iter()
-                .map(|agg| logical_agg_to_exec(agg))
+                .map(logical_agg_to_exec)
                 .collect::<Result<_>>()?;
 
             Ok(Box::new(HashAggregate::new(source, group_cols, agg_exprs)?))
@@ -126,7 +121,7 @@ fn logical_agg_to_exec(agg: &AggregateExpr) -> Result<AggExpr> {
         _ => {
             return Err(KaveonError::Execution(
                 "only column references supported in aggregate functions".into(),
-            ))
+            ));
         }
     };
 

@@ -1,5 +1,5 @@
-use arrow::record_batch::RecordBatch;
 use crate::Result;
+use arrow::record_batch::RecordBatch;
 
 pub trait BatchSource {
     fn schema(&self) -> &arrow::datatypes::SchemaRef;

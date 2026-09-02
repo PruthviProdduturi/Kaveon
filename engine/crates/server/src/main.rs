@@ -39,7 +39,14 @@ async fn main() {
 
     println!("Kaveon Engine v{}", env!("CARGO_PKG_VERSION"));
     println!("Node:        {}", config.node_id);
-    println!("Role:        {}", if config.coordinator { "coordinator" } else { "worker" });
+    println!(
+        "Role:        {}",
+        if config.coordinator {
+            "coordinator"
+        } else {
+            "worker"
+        }
+    );
     println!("Environment: {}", config.environment);
     println!("Listening:   http://{addr}");
     if !config.coordinator {
