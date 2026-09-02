@@ -19,7 +19,7 @@
 | Crate | Owner | Status |
 |-------|-------|--------|
 | `core` — shared types, errors, traits | Shared (either can add, neither restructures without updating this doc) | Scaffold |
-| `storage` — Parquet reader, ADLS Gen 2 | **Codex** | In progress: local Parquet reader verification |
+| `storage` — Parquet reader, ADLS Gen 2 | **Codex** | Local Parquet M1 done; ADLS Gen 2 not started |
 | `exec/scan` — scan operator | **Claude** | Done |
 | `exec/aggregate` — hash aggregate | **Claude** | Done |
 | `exec/filter` — filter evaluation | **Claude** | Done |
@@ -113,6 +113,22 @@ pub trait BatchOperator {
 - **Codex** implements `BatchSource` on the Parquet reader
 - **Claude** consumes `BatchSource` in the scan operator, implements `BatchOperator` on scan/filter/aggregate/sort
 
+Local Parquet API (`kaveon-storage`):
+
+```rust
+let source = ParquetReader::new(path)
+    .with_batch_size(8_192)
+    .with_columns(vec!["region".into(), "revenue".into()])
+    .with_predicate(predicate)
+    .read()?; // ParquetBatchIterator: Iterator<Item = Result<RecordBatch>> + BatchSource
+
+let metadata = ParquetReader::new(path).metadata()?;
+```
+
+- Projection is strict: empty, duplicate, and unknown columns return `KaveonError::Storage`
+- Row-group pruning uses `kaveon_core::StoragePredicate` and is conservative when statistics are absent or inexact
+- Predicates eliminate row groups only; execution operators still apply row-level filters
+
 ### Predicate type (Storage-level)
 
 ```rust
@@ -191,3 +207,4 @@ version = kaveon_engine.version()
 | 2026-09-01 | Codex | Storage reader in progress against BatchSource/StoragePredicate contracts; fixed CatalogList::catalog_mut trait-object lifetime blocking workspace compilation |
 | 2026-09-01 | Claude | Added Expr/BinaryOp to core. Built production hash aggregate (GroupKey hashing, SUM/COUNT/AVG/MIN/MAX, null handling). Rewrote scan to consume BatchSource trait. Built filter operator with expression evaluator. Implemented SQL→LogicalPlan translator (SELECT/WHERE/GROUP BY/ORDER BY/LIMIT). Removed sql→exec circular dep. |
 | 2026-09-01 | Claude | Added Trino-style catalog system to core: Catalog→Schema→Table hierarchy, StorageType (Local/ADLS Gen2/S3), AccessPattern (Shortcut/Optimized), DataFormat (Parquet/Delta/Iceberg), CatalogManager with table reference resolution, MemoryCatalog implementation. |
+| 2026-09-01 | Codex | Completed local Parquet M1: streaming BatchSource, strict projection, metadata, typed StoragePredicate row-group pruning, 8 passing tests, strict Clippy. Full workspace check blocked by sqlparser 0.53 API mismatches in kaveon-sql (ValueWithSpan, GroupByExpr, OrderBy, Value). |

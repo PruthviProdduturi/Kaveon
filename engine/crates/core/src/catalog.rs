@@ -120,8 +120,11 @@ impl CatalogManager {
         self.catalogs.get(name).map(|c| c.as_ref())
     }
 
-    pub fn catalog_mut(&mut self, name: &str) -> Option<&mut dyn CatalogProvider> {
-        self.catalogs.get_mut(name).map(|c| c.as_mut())
+    pub fn catalog_mut(&mut self, name: &str) -> Option<&mut (dyn CatalogProvider + '_)> {
+        match self.catalogs.get_mut(name) {
+            Some(catalog) => Some(catalog.as_mut()),
+            None => None,
+        }
     }
 
     pub fn catalog_names(&self) -> Vec<String> {
