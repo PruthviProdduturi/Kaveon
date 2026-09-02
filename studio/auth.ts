@@ -69,9 +69,9 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     },
     // Route protection lives in middleware.ts; keep everything else signed-in.
     authorized({ auth: session, request: { nextUrl } }) {
-      // Local-dev bypass — mirrors the api proxy's DEV_BYPASS. Inert in prod
-      // (Vercel runs NODE_ENV=production), only active when a dev user is set.
-      if (process.env.NODE_ENV === "development" && process.env.KAVEON_DEV_USER_EMAIL) {
+      // Local-dev bypass — mirrors the API proxy. Container local mode must be
+      // opted into explicitly; hosted deployments leave KAVEON_LOCAL_MODE unset.
+      if ((process.env.NODE_ENV === "development" || process.env.KAVEON_LOCAL_MODE === "true") && process.env.KAVEON_DEV_USER_EMAIL) {
         return true;
       }
       const isLoggedIn = !!session?.user;

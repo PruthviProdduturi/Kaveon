@@ -54,6 +54,7 @@ change independently of the central settings class.
 | `KAVEON_PROXY_SECRET` | Proxy identity mode | Must match the API value |
 | `AUTH_SECRET` | Hosted OAuth | Signs/encrypts Auth.js session material |
 | `AUTH_URL` | Hosted OAuth | Canonical Studio URL |
+| `KAVEON_LOCAL_MODE` | Root Compose only | Enables the configured development identity in the loopback-bound local stack; never enable in a hosted deployment |
 | `AUTH_ADMIN_EMAILS` | Optional | Comma-separated emails assigned Admin; other signed-in users are Viewer |
 | `GITHUB_ID`, `GITHUB_SECRET` | GitHub provider enabled | GitHub OAuth credentials |
 | `GOOGLE_ID`, `GOOGLE_SECRET` | Google provider enabled | Google OAuth credentials |

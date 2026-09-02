@@ -86,7 +86,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-The Docker Compose topology previews coordinator/worker discovery. It does not yet distribute query fragments, shuffle data, or provide fault-tolerant execution.
+The root Docker Compose stack starts Studio, the API and DLM, PostgreSQL metadata and data databases, and the Engine coordinator plus two workers:
+
+```powershell
+$env:KAVEON_DATA_PATH='F:\kaveon-data' # optional; defaults to ./data
+docker compose up --build
+```
+
+Open Studio at `http://localhost:3000`, the API at `http://localhost:8080`, and the Engine UI at `http://localhost:8081/ui`. All published ports bind to localhost. The stack uses an explicit development identity and local-only secrets; it is not a production deployment configuration. The Engine topology previews coordinator/worker discovery but does not yet distribute query fragments, shuffle data, or provide fault-tolerant execution. Use `docker compose down` to stop it; add `--volumes` only when you intentionally want to delete the local PostgreSQL state.
 
 ## Platform quick start
 
