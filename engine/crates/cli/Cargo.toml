@@ -1,0 +1,17 @@
+[package]
+name = "kaveon-cli"
+description = "Kaveon Engine CLI — interactive SQL shell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "kaveon"
+path = "src/main.rs"
+
+[dependencies]
+kaveon-core = { path = "../core" }
+kaveon-exec = { path = "../exec" }
+kaveon-sql = { path = "../sql" }
+kaveon-storage = { path = "../storage" }
+arrow = { workspace = true }
