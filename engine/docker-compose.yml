@@ -1,0 +1,63 @@
+services:
+  coordinator:
+    build: .
+    container_name: kaveon-coordinator
+    ports:
+      - "8080:8080"
+    environment:
+      KAVEON_NODE_ID: coordinator-1
+      KAVEON_ENVIRONMENT: docker
+      KAVEON_COORDINATOR: "true"
+      KAVEON_HTTP_PORT: "8080"
+      KAVEON_DATA_DIR: /data
+      KAVEON_CATALOG_DIR: /etc/kaveon/catalogs
+    volumes:
+      - ./etc/coordinator.toml:/etc/kaveon/config.toml:ro
+      - ./etc/catalogs:/etc/kaveon/catalogs:ro
+      - kaveon-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  worker-1:
+    build: .
+    container_name: kaveon-worker-1
+    depends_on:
+      coordinator:
+        condition: service_healthy
+    environment:
+      KAVEON_NODE_ID: worker-1
+      KAVEON_ENVIRONMENT: docker
+      KAVEON_COORDINATOR: "false"
+      KAVEON_HTTP_PORT: "8080"
+      KAVEON_DISCOVERY_URI: http://coordinator:8080
+      KAVEON_DATA_DIR: /data
+      KAVEON_CATALOG_DIR: /etc/kaveon/catalogs
+    volumes:
+      - ./etc/worker.toml:/etc/kaveon/config.toml:ro
+      - ./etc/catalogs:/etc/kaveon/catalogs:ro
+      - kaveon-data:/data
+
+  worker-2:
+    build: .
+    container_name: kaveon-worker-2
+    depends_on:
+      coordinator:
+        condition: service_healthy
+    environment:
+      KAVEON_NODE_ID: worker-2
+      KAVEON_ENVIRONMENT: docker
+      KAVEON_COORDINATOR: "false"
+      KAVEON_HTTP_PORT: "8080"
+      KAVEON_DISCOVERY_URI: http://coordinator:8080
+      KAVEON_DATA_DIR: /data
+      KAVEON_CATALOG_DIR: /etc/kaveon/catalogs
+    volumes:
+      - ./etc/worker.toml:/etc/kaveon/config.toml:ro
+      - ./etc/catalogs:/etc/kaveon/catalogs:ro
+      - kaveon-data:/data
+
+volumes:
+  kaveon-data:

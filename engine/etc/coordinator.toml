@@ -1,0 +1,10 @@
+[node]
+environment = "docker"
+coordinator = true
+
+[http]
+port = 8080
+
+[storage]
+data_dir = "/data"
+catalog_dir = "/etc/kaveon/catalogs"

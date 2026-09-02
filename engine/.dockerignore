@@ -1,0 +1,7 @@
+target/
+*.md
+.git/
+.github/
+scripts/
+catalogs.example/
+kaveon.example.toml
