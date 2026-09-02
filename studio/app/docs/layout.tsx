@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { DocsShell } from "../../components/docs/DocsShell";
 import "./docs.css";
+import "./visual-polish.css";
 
 export const metadata: Metadata = {
   title: { default: "Kaveon Docs", template: "%s — Kaveon Docs" },

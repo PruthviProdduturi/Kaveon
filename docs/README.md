@@ -28,6 +28,11 @@ are planned rather than executable.
 
 - [HTTP API](reference/api.md)
 - [Configuration](reference/configuration.md)
+- [Engine SQL compatibility](reference/engine-sql-compatibility.md)
+- [Connector capability matrix](reference/connector-capabilities.md)
+- [Operations and troubleshooting](operations-troubleshooting.md)
+- [Upgrade and version policy](upgrade-version-policy.md)
+- [Release notes and changelog guidance](release-notes.md)
 - [Engine execution pipeline](reference/kaveon-engine-pipeline.svg)
 - [Platform architecture](reference/kaveon-platform-architecture.svg)
 - [Deployment topology](reference/kaveon-deployment-topology.svg)

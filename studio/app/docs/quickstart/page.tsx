@@ -70,7 +70,7 @@ ORDER  BY revenue DESC;`}</Code>
       <p>
         On the home page, type a question in plain English — <em>&ldquo;top regions by revenue this quarter&rdquo;</em> —
         and Kaveon detects the right dataset, builds the SQL, runs it, and renders a chart inline. How that works:{" "}
-        <a href="/docs/nl-to-sql">AI · NL→SQL</a>.
+        <a href="/docs/nl-to-sql">DLM · NL→SQL</a>.
       </p>
 
       <Pager

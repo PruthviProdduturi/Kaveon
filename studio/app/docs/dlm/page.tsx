@@ -23,7 +23,7 @@ export default function DlmDocs() {
         A DLM is a per-dataset <strong>compiled context artifact</strong> stored in the <code>kaveonmeta</code> database.
         It is not a machine learning model — it is a deterministic index of your schema&apos;s metrics, dimensions, column
         values, and precomputed answers. When a user asks a question, the DLM resolves it to a specific metric, optional
-        grouping dimension, and optional entity filters — then either serves the answer from precomputed context in
+        grouping dimension, and optional entity filters — then either serves the answer from precomputed context
         without a source query, or assembles a single live SQL query.
       </p>
 
@@ -79,8 +79,8 @@ export default function DlmDocs() {
         <li><strong>Filtered slices</strong> — single-dimension-filter answers (e.g. Total Actions where country = &lsquo;US&rsquo;)</li>
       </ul>
       <p>
-        At runtime, these answers are loaded into the in-memory DLM context (<code>_ANSWER_CACHE</code> dict) and served in
-        without issuing another source query. End-to-end latency still includes API, cache, serialization, and network overhead.
+        At runtime, these answers are loaded into the in-memory DLM context (<code>_ANSWER_CACHE</code> dict) and served
+        without issuing another source query. End-to-end latency still includes API, context lookup, serialization, and network overhead.
       </p>
 
       <h3>5. HLL sketches</h3>
@@ -266,7 +266,7 @@ Tie-break: narrowest dataset (fewest columns) wins.`}</Code>
       </table>
 
       <Pager
-        prev={{ href: "/docs/nl-to-sql", title: "AI · NL→SQL" }}
+        prev={{ href: "/docs/nl-to-sql", title: "DLM · NL→SQL" }}
         next={{ href: "/docs/freshness", title: "Freshness Algorithm" }}
       />
     </div>
