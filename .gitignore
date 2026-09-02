@@ -145,3 +145,7 @@ data/**/*.txt
 data/**/*.zip
 data/**/*.json
 data/**/*.parquet
+
+# Local visual-regression renders and disposable browser profiles
+.tmp-*.png
+.tmp-edge-profile/
