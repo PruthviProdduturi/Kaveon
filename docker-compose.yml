@@ -1,0 +1,115 @@
+services:
+
+  # ── Engine: Coordinator ──────────────────────────────────────────────────────
+  engine-coordinator:
+    build:
+      context: ./engine
+    container_name: kaveon-engine-coordinator
+    ports:
+      - "8081:8080"
+    environment:
+      KAVEON_NODE_ID: coordinator-1
+      KAVEON_ENVIRONMENT: docker
+      KAVEON_COORDINATOR: "true"
+      KAVEON_HTTP_PORT: "8080"
+      KAVEON_DATA_DIR: /data
+      KAVEON_CATALOG_DIR: /etc/kaveon/catalogs
+    volumes:
+      - ./engine/etc/coordinator.toml:/etc/kaveon/config.toml:ro
+      - ./engine/etc/catalogs:/etc/kaveon/catalogs:ro
+      - engine-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ── Engine: Worker 1 ─────────────────────────────────────────────────────────
+  engine-worker-1:
+    build:
+      context: ./engine
+    container_name: kaveon-engine-worker-1
+    depends_on:
+      engine-coordinator:
+        condition: service_healthy
+    environment:
+      KAVEON_NODE_ID: worker-1
+      KAVEON_ENVIRONMENT: docker
+      KAVEON_COORDINATOR: "false"
+      KAVEON_HTTP_PORT: "8080"
+      KAVEON_DISCOVERY_URI: http://engine-coordinator:8080
+      KAVEON_DATA_DIR: /data
+      KAVEON_CATALOG_DIR: /etc/kaveon/catalogs
+    volumes:
+      - ./engine/etc/worker.toml:/etc/kaveon/config.toml:ro
+      - ./engine/etc/catalogs:/etc/kaveon/catalogs:ro
+      - engine-data:/data
+
+  # ── Engine: Worker 2 ─────────────────────────────────────────────────────────
+  engine-worker-2:
+    build:
+      context: ./engine
+    container_name: kaveon-engine-worker-2
+    depends_on:
+      engine-coordinator:
+        condition: service_healthy
+    environment:
+      KAVEON_NODE_ID: worker-2
+      KAVEON_ENVIRONMENT: docker
+      KAVEON_COORDINATOR: "false"
+      KAVEON_HTTP_PORT: "8080"
+      KAVEON_DISCOVERY_URI: http://engine-coordinator:8080
+      KAVEON_DATA_DIR: /data
+      KAVEON_CATALOG_DIR: /etc/kaveon/catalogs
+    volumes:
+      - ./engine/etc/worker.toml:/etc/kaveon/config.toml:ro
+      - ./engine/etc/catalogs:/etc/kaveon/catalogs:ro
+      - engine-data:/data
+
+  # ── API ──────────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: kaveon-api
+    ports:
+      - "8080:8080"
+    env_file: .env
+    environment:
+      ENV: production
+      PORT: "8080"
+      KAVEON_ENGINE_URL: http://engine-coordinator:8080
+    depends_on:
+      engine-coordinator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ── Studio ───────────────────────────────────────────────────────────────────
+  studio:
+    build:
+      context: .
+      dockerfile: studio/Dockerfile
+      args:
+        API_URL: http://localhost:8080
+        WEB_URL: http://localhost:3000
+    container_name: kaveon-studio
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      API_URL: http://api:8080
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  engine-data:
