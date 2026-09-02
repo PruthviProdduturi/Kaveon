@@ -1,0 +1,57 @@
+# Kaveon Engine configuration
+# Copy to ~/.kaveon/config.toml and edit
+
+# Default catalog and schema used when table names aren't fully qualified
+# e.g. "SELECT * FROM users" resolves to <default_catalog>.<default_schema>.users
+default_catalog = "local"
+default_schema = "default"
+
+# --- Local catalog (Parquet files on disk) ---
+[[catalog]]
+name = "local"
+type = "local"
+base_path = "D:\\data\\warehouse"     # directory containing .parquet files
+
+# Tables are auto-discovered from .parquet files in base_path.
+# To register tables manually:
+# [[catalog.table]]
+# name = "orders"
+# schema = "default"
+# location = "orders.parquet"
+# access = "shortcut"                 # "shortcut" (direct read) or "optimized" (kaveon-rewritten)
+# format = "parquet"                  # "parquet", "delta", or "iceberg"
+
+# --- Azure ADLS Gen 2 catalog ---
+# [[catalog]]
+# name = "azure"
+# type = "adls_gen2"
+# account = "kaveonsa"
+# container = "data"
+# root_path = "warehouse"
+#
+# Authentication: uses DefaultAzureCredential (Managed Identity, Azure CLI, etc.)
+# No static secrets. Run `az login` locally or configure Managed Identity in prod.
+#
+# [[catalog.table]]
+# name = "events"
+# schema = "raw"
+# location = "events/"
+# access = "shortcut"
+# format = "delta"
+
+# --- AWS S3 catalog ---
+# [[catalog]]
+# name = "aws"
+# type = "s3"
+# bucket = "kaveon-data"
+# region = "us-west-2"
+# prefix = "warehouse"
+#
+# Authentication: uses AWS credential chain (env vars, ~/.aws/credentials, IAM role)
+#
+# [[catalog.table]]
+# name = "transactions"
+# schema = "raw"
+# location = "transactions/"
+# access = "optimized"
+# format = "parquet"
