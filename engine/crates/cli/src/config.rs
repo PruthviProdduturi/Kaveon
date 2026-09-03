@@ -288,8 +288,8 @@ fn build_catalog_from_entry(entry: CatalogEntry) -> Result<MemoryCatalog> {
                         "local Iceberg metadata is not implemented".into(),
                     )),
                 }
-                    .map(|m| m.schema)
-                    .unwrap_or_else(|_| Arc::new(arrow::datatypes::Schema::empty()))
+                .map(|m| m.schema)
+                .unwrap_or_else(|_| Arc::new(arrow::datatypes::Schema::empty()))
             } else {
                 Arc::new(arrow::datatypes::Schema::empty())
             };
