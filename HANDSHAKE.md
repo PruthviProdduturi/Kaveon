@@ -224,6 +224,18 @@ pub struct NodeMetrics { operator: OperatorMetrics, scan: Option<ScanMetrics> }
 - Storage attaches `ScanMetrics` to scan nodes; execution operators attach `OperatorMetrics` without depending on server or UI types.
 - Planner, operator, coordinator, and UI wiring remain separate follow-up work owned by their respective components.
 
+### Distributed exchange foundation
+
+```rust
+// Defined in kaveon-core::exchange
+pub struct StageId(pub u32);
+pub struct TaskId { query_id, stage_id, partition, attempt }
+pub enum Partitioning { Single, Hash { columns, partition_count }, Broadcast, RoundRobin { partition_count } }
+```
+
+- `HashPartitioner` uses Arrow row encoding plus fixed FNV-1a hashing so equal keys, including nulls, always reach the same partition on every worker running the same Engine version.
+- `BoundedExchangeBuffer` accounts for Arrow array memory, rejects writes beyond its byte capacity, and releases capacity when consumers pop batches. Network scheduling and asynchronous wait/wake backpressure are not wired yet.
+
 ### Sort and TopN execution
 
 ```rust
@@ -338,3 +350,4 @@ let source = DeltaTableReader::new(table_directory)
 | 2026-09-03 | Codex | Added projection pruning for scans and relation-aware join pruning. Optimized local release measurements on `F:\kaveon-data`: exact distinct over 100K rows 83 ms, filtered count over 5M rows 527 ms, TopN over 5M rows 247 ms, and 5M-row joined regional aggregate 6.09 s (improved from 15.93 s before join pruning). Results are single runs, not comparative benchmark claims. |
 | 2026-09-03 | Codex | Added the first correctness-bounded distributed execution slice: deterministic Parquet row-group and Delta-file partitions, routable worker advertisements, internal worker task execution, concurrent coordinator fan-out, and partial COUNT/SUM/MIN/MAX GROUP BY merge. AVG, DISTINCT, joins, ordering, limits, exchange, retry, and spill intentionally remain local/target. |
 | 2026-09-03 | Codex | Replaced worker-result JSON with Arrow IPC streams and added completed-stage/task telemetry to query records and the Engine UI, including worker, partition, elapsed time, rows, batches, and transport bytes. This establishes the binary exchange contract; live updates and operator CPU/memory/spill metrics remain follow-up work. |
+| 2026-09-03 | Codex | Added shared stage/task/attempt and partitioning contracts, deterministic multi-column Arrow hash partitioning, and a byte-bounded exchange queue with explicit backpressure. Correctness tests cover deterministic assignment, equal/null keys, lossless row coverage, invalid configuration, and capacity release; network shuffle is not wired yet. |

@@ -1,4 +1,5 @@
 pub mod aggregate;
+pub mod exchange;
 pub mod expr_eval;
 pub mod filter;
 pub mod join;

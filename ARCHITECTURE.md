@@ -123,6 +123,7 @@ pub trait BatchOperator {
 | Sort / TopN | **Target** | `ORDER BY` is parsed but currently passed through |
 | Filter pushdown | **Target** | Optimizer pass is a no-op and is not wired |
 | Distributed execution | **Alpha** | Deterministic scan partitions and partial COUNT/SUM/MIN/MAX GROUP BY execute across active workers; shuffle, joins, retry, spill, AVG, and DISTINCT remain local/target |
+| Exchange foundation | **Alpha** | Stable hash partitioning and bounded Arrow batch buffers are implemented; asynchronous network shuffle is not wired |
 
 ### Catalog identity
 
