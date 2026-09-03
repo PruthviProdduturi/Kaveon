@@ -43,6 +43,7 @@ struct QueryContext {
     engine_version: String,
     environment: String,
     principal: Option<String>,
+    user: Option<String>,
     source: Option<String>,
     client: Option<String>,
     catalog: String,
@@ -137,6 +138,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 struct StatementRequest {
     query: String,
     #[serde(default)]
+    catalog: Option<String>,
+    #[serde(default)]
+    schema: Option<String>,
+    #[serde(default)]
+    user: Option<String>,
+    #[serde(default)]
     source: Option<String>,
     #[serde(default)]
     client: Option<String>,
@@ -185,14 +192,49 @@ async fn submit_statement(
     let start = Instant::now();
     let context = {
         let catalog = state.catalog.read().await;
+        let catalog_name = req
+            .catalog
+            .as_deref()
+            .unwrap_or_else(|| catalog.default_catalog());
+        let schema_name = req
+            .schema
+            .as_deref()
+            .unwrap_or_else(|| catalog.default_schema());
+        let Some(selected_catalog) = catalog.catalog(catalog_name) else {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": format!("catalog '{catalog_name}' not found"),
+                    "code": "CATALOG_NOT_FOUND"
+                })),
+            )
+                .into_response();
+        };
+        if !selected_catalog
+            .schema_names()
+            .iter()
+            .any(|name| name == schema_name)
+        {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": format!(
+                        "schema '{schema_name}' not found in catalog '{catalog_name}'"
+                    ),
+                    "code": "SCHEMA_NOT_FOUND"
+                })),
+            )
+                .into_response();
+        }
         QueryContext {
             engine_version: env!("CARGO_PKG_VERSION").to_owned(),
             environment: state.config.environment.clone(),
             principal: None,
+            user: req.user.clone(),
             source: req.source,
             client: req.client,
-            catalog: catalog.default_catalog().to_owned(),
-            schema: catalog.default_schema().to_owned(),
+            catalog: catalog_name.to_owned(),
+            schema: schema_name.to_owned(),
             time_zone: req.time_zone,
             client_address: None,
             client_tags: req.client_tags,
@@ -229,7 +271,7 @@ async fn submit_statement(
     );
 
     let analysis_start = Instant::now();
-    let plan = match sql_to_logical_plan(&sql) {
+    let mut plan = match sql_to_logical_plan(&sql) {
         Ok(p) => p,
         Err(e) => {
             let message = format!("SQL parse error: {e}");
@@ -244,11 +286,18 @@ async fn submit_statement(
                 .into_response();
         }
     };
+    crate::planner::qualify_tables(&mut plan, &context.catalog, &context.schema);
     let analysis_us = elapsed_us(analysis_start);
     let logical_plan = crate::planner::logical_plan_tree(&plan);
+    let plan = kaveon_optim::rules::push_filter_down(plan);
+    let plan = kaveon_optim::rules::push_projection_down(plan);
+    let optimized_plan = crate::planner::optimized_plan_tree(&plan);
+    let physical_plan = crate::planner::physical_plan_tree(&plan);
     if let Some(record) = QUERY_STORE.write().await.queries.get_mut(&query_id) {
         record.timings.analysis_us = Some(analysis_us);
         record.plan.logical = Some(logical_plan.clone());
+        record.plan.optimized = Some(optimized_plan.clone());
+        record.plan.physical = Some(physical_plan.clone());
     }
 
     let planned_execution = {
@@ -311,8 +360,8 @@ async fn submit_statement(
                 },
                 plan: QueryPlan {
                     logical: Some(logical_plan),
-                    optimized: None,
-                    physical: None,
+                    optimized: Some(optimized_plan),
+                    physical: Some(physical_plan),
                 },
                 scans,
                 context: context.clone(),
@@ -370,8 +419,8 @@ async fn submit_statement(
         },
         plan: QueryPlan {
             logical: Some(logical_plan),
-            optimized: None,
-            physical: None,
+            optimized: Some(optimized_plan),
+            physical: Some(physical_plan),
         },
         scans,
         context,

@@ -9,9 +9,39 @@ use std::sync::Arc;
 pub fn evaluate(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
     match expr {
         Expr::Column(name) => {
-            let idx = batch.schema().index_of(name).map_err(|_| {
-                KaveonError::Execution(format!("column '{name}' not found in batch"))
-            })?;
+            let schema = batch.schema();
+            let idx = match schema.index_of(name) {
+                Ok(index) => index,
+                Err(_) => {
+                    let unqualified = name.rsplit('.').next().unwrap_or(name);
+                    let matches = schema
+                        .fields()
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, field)| {
+                            field.name() == unqualified
+                                || field
+                                    .name()
+                                    .strip_suffix(unqualified)
+                                    .is_some_and(|prefix| prefix.ends_with('.'))
+                        })
+                        .map(|(index, _)| index)
+                        .collect::<Vec<_>>();
+                    match matches.as_slice() {
+                        [index] => *index,
+                        [] => {
+                            return Err(KaveonError::Execution(format!(
+                                "column '{name}' not found in batch"
+                            )));
+                        }
+                        _ => {
+                            return Err(KaveonError::Execution(format!(
+                                "column '{name}' is ambiguous in batch"
+                            )));
+                        }
+                    }
+                }
+            };
             Ok(Arc::clone(batch.column(idx)))
         }
         Expr::Literal(value) => literal_to_array(value, batch.num_rows()),
@@ -91,18 +121,20 @@ enum CompareKind {
 
 fn comparison(left: &ArrayRef, right: &ArrayRef, kind: CompareKind) -> Result<BooleanArray> {
     use arrow::compute::kernels::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
+    let (left, right) = coerce_numeric_pair(left, right)?;
     let result = match kind {
-        CompareKind::Eq => eq(left, right)?,
-        CompareKind::Ne => neq(left, right)?,
-        CompareKind::Lt => lt(left, right)?,
-        CompareKind::Le => lt_eq(left, right)?,
-        CompareKind::Gt => gt(left, right)?,
-        CompareKind::Ge => gt_eq(left, right)?,
+        CompareKind::Eq => eq(&left, &right)?,
+        CompareKind::Ne => neq(&left, &right)?,
+        CompareKind::Lt => lt(&left, &right)?,
+        CompareKind::Le => lt_eq(&left, &right)?,
+        CompareKind::Gt => gt(&left, &right)?,
+        CompareKind::Ge => gt_eq(&left, &right)?,
     };
     Ok(result)
 }
 
 fn arithmetic(left: &ArrayRef, op: BinaryOp, right: &ArrayRef) -> Result<ArrayRef> {
+    let (left, right) = coerce_numeric_pair(left, right)?;
     let result: ArrayRef = match (left.data_type(), right.data_type()) {
         (DataType::Int64, DataType::Int64) => {
             let l = left.as_primitive::<Int64Type>();
@@ -137,8 +169,88 @@ fn arithmetic(left: &ArrayRef, op: BinaryOp, right: &ArrayRef) -> Result<ArrayRe
     Ok(result)
 }
 
+fn coerce_numeric_pair(left: &ArrayRef, right: &ArrayRef) -> Result<(ArrayRef, ArrayRef)> {
+    if left.data_type() == right.data_type() {
+        return Ok((Arc::clone(left), Arc::clone(right)));
+    }
+    if is_numeric(left.data_type()) && is_numeric(right.data_type()) {
+        return Ok((
+            compute::cast(left, &DataType::Float64)?,
+            compute::cast(right, &DataType::Float64)?,
+        ));
+    }
+    Ok((Arc::clone(left), Arc::clone(right)))
+}
+
+fn is_numeric(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Float16
+            | DataType::Float32
+            | DataType::Float64
+    )
+}
+
 fn as_boolean(arr: &ArrayRef) -> Result<&BooleanArray> {
     arr.as_any()
         .downcast_ref::<BooleanArray>()
         .ok_or_else(|| KaveonError::Execution("expected boolean array".into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::Int32Array;
+    use arrow::datatypes::{Field, Schema};
+
+    fn batch() -> RecordBatch {
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "value",
+                DataType::Int32,
+                false,
+            )])),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn compares_integer_column_with_float_literal() {
+        let expr = Expr::BinaryOp {
+            left: Box::new(Expr::Column("value".into())),
+            op: BinaryOp::Gt,
+            right: Box::new(Expr::Literal(ScalarValue::Float64(1.5))),
+        };
+        assert_eq!(
+            evaluate_predicate(&expr, &batch())
+                .unwrap()
+                .values()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![false, true, true]
+        );
+    }
+
+    #[test]
+    fn adds_integer_column_and_float_literal() {
+        let expr = Expr::BinaryOp {
+            left: Box::new(Expr::Column("value".into())),
+            op: BinaryOp::Plus,
+            right: Box::new(Expr::Literal(ScalarValue::Float64(0.5))),
+        };
+        let result = evaluate(&expr, &batch()).unwrap();
+        assert_eq!(
+            result.as_primitive::<Float64Type>().values(),
+            &[1.5, 2.5, 3.5]
+        );
+    }
 }

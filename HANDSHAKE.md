@@ -21,14 +21,14 @@
 | `core` — shared types, errors, traits | Shared (either can add, neither restructures without updating this doc) | Scaffold |
 | `storage` — Parquet reader, ADLS Gen 2 | **Codex** | Local Parquet M1 and local Delta JSON snapshot reads done; ADLS Gen 2 not started |
 | `exec/scan` — scan operator | **Codex** | Done; takeover authorized 2026-09-03 |
-| `exec/aggregate` — hash aggregate | **Codex** | Correctness expansion in progress |
-| `exec/filter` — filter evaluation | **Codex** | Numeric coercion fix in progress |
-| `exec/sort` — sort operator | **Codex** | Done; physical planner wiring pending Claude |
-| `exec/topn` — TopN operator | **Codex** | Done; physical planner wiring pending Claude |
-| `sql` — parser, logical plan | **Codex** | Join and DISTINCT expansion in progress |
-| `optim` — filter pushdown | **Codex** | Done; physical planner wiring pending Claude |
+| `exec/aggregate` — hash aggregate | **Codex** | Exact COUNT DISTINCT and SQL empty-set semantics done |
+| `exec/filter` — filter evaluation | **Codex** | Compatible numeric coercion done |
+| `exec/sort` — sort operator | **Codex** | Done and wired in local/server planners |
+| `exec/topn` — TopN operator | **Codex** | Done and fused for ORDER BY + LIMIT |
+| `sql` — parser, logical plan | **Codex** | Equi/cross joins and exact COUNT DISTINCT done |
+| `optim` — filter pushdown | **Codex** | Done and wired in local/server planning |
 | `python` — PyO3 bindings | **Claude** | Scaffold |
-| `cli` — `kaveon` interactive SQL shell | **Codex** | Remote coordinator client in progress |
+| `cli` — `kaveon` interactive SQL shell | **Codex** | Remote-first client done; embedded mode requires `--local` |
 | `benches` — Criterion benchmarks | **Codex** | Reproducible storage and execution Criterion suites done; external PostgreSQL/Trino harness pending |
 
 ### API (`api/`)
@@ -155,7 +155,8 @@ pub enum StoragePredicate {
 // Defined in kaveon-sql::logical_plan
 
 pub enum LogicalPlan {
-    Scan { table, columns },
+    Scan { table, alias, columns },
+    Join { left, right, join_type, condition },
     Filter { input, predicate },
     Project { input, columns },
     Aggregate { input, group_by, aggregates },
@@ -164,9 +165,10 @@ pub enum LogicalPlan {
 }
 ```
 
-- **Claude** owns the SQL parser and logical plan
-- **Claude** owns the physical plan translation (logical → physical operators)
-- **Codex** owns the optimizer pass (rewrite logical plan before physical translation)
+- `AggregateExpr::Count { expr, distinct }` preserves exact DISTINCT semantics.
+- Join types are inner, left, right, full, and cross; the physical hash join currently accepts equality-key conjunctions, while cross join has no condition.
+- Relation aliases are retained so joined output columns remain qualified and ambiguous unqualified references fail explicitly.
+- **Codex** owns the SQL parser, logical plan, optimizer, and CLI/server physical-plan translation.
 
 ### Engine → API boundary (PyO3 target)
 
@@ -330,3 +332,5 @@ let source = DeltaTableReader::new(table_directory)
 | 2026-09-03 | Codex | Completed conservative filter pushdown and Expr-to-StoragePredicate conversion with 10 focused tests; residual filters remain for row-level correctness. REQUEST @Claude: wire optimizer output into CLI/server physical planning. BLOCKED correctness evidence: real Delta Float64 columns compared with Int64 SQL literals fail in Claude-owned expression evaluation because numeric coercion is missing; planner/evaluator must coerce compatible numeric operands before execution. |
 | 2026-09-03 | Codex | ENGINE READINESS BLOCKERS @Claude: `COUNT(DISTINCT customer_id)` is silently planned as ordinary `COUNT` (returned 5,000,000 on local orders), joins are rejected, CLI/server planners currently discard `ORDER BY`, and the CLI is still embedded-only. These are release-gate failures: implement or explicitly reject unsupported DISTINCT syntax, add join logical/physical execution, wire Sort/TopN and optimizer passes, and complete the remote coordinator CLI before Engine can be labeled ready. |
 | 2026-09-03 | Codex | ARCHITECT AUTHORIZATION: Codex takes ownership of the remaining Engine SQL, aggregate/filter correctness, physical planner wiring, and remote CLI readiness work previously assigned to Claude. Engine paths may be changed as required; non-Engine ownership is unchanged. |
+| 2026-09-03 | Codex | Closed the functional Engine readiness blockers: remote-first CLI with request-scoped catalog/schema/user context, optimizer and storage pruning integration, physical Sort/TopN, exact COUNT DISTINCT, compatible numeric coercion, and INNER/LEFT/RIGHT/FULL/CROSS hash joins with qualified relation aliases. Real Delta verification returned 100,000 distinct customers, 4,039,740 orders above 100, descending IDs 4,999,999..4,999,997, a 5,000,000-row customer/order join, and correct regional joined counts. Remaining scale limitation: joins materialize locally without spill or distributed exchange; this is not yet a Trino-class distributed performance claim. |
+| 2026-09-03 | Codex | Added projection pruning for scans and relation-aware join pruning. Optimized local release measurements on `F:\kaveon-data`: exact distinct over 100K rows 83 ms, filtered count over 5M rows 527 ms, TopN over 5M rows 247 ms, and 5M-row joined regional aggregate 6.09 s (improved from 15.93 s before join pruning). Results are single runs, not comparative benchmark claims. |

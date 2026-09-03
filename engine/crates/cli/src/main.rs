@@ -1,6 +1,8 @@
+mod args;
 mod config;
 mod display;
 mod planner;
+mod remote;
 
 use kaveon_core::{
     AccessPattern, CatalogManager, CatalogProvider, DataFormat, MemoryCatalog, StorageType,
@@ -16,9 +18,26 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let (data_dir, config_path) = parse_args(&args);
+    match args::parse(&args) {
+        Ok(args::Command::Help) => print_usage(),
+        Ok(args::Command::Version) => println!("kaveon {VERSION}"),
+        Ok(args::Command::Run(options)) if options.local => run_local(*options),
+        Ok(args::Command::Run(mut options)) => {
+            if let Err(error) = remote::run(&mut options) {
+                eprintln!("error: {error}");
+                std::process::exit(1);
+            }
+        }
+        Err(error) => {
+            eprintln!("error: {error}");
+            eprintln!("Run 'kaveon --help' for usage.");
+            std::process::exit(2);
+        }
+    }
+}
 
-    let mut catalog_mgr = if let Some(dir) = &data_dir {
+fn run_local(options: args::Options) {
+    let mut catalog_mgr = if let Some(dir) = &options.data_dir {
         let mut mgr = CatalogManager::new("kaveon", "default");
         let catalog = build_local_catalog(dir);
         let table_count = catalog.table_names("default").map(|t| t.len()).unwrap_or(0);
@@ -26,7 +45,10 @@ fn main() {
         print_banner(Some(dir), table_count);
         mgr
     } else {
-        let cfg_path = config_path.unwrap_or_else(config::default_config_path);
+        let cfg_path = options
+            .config_path
+            .clone()
+            .unwrap_or_else(config::default_config_path);
         match config::load_config(&cfg_path) {
             Ok(mgr) => {
                 let total_tables: usize = mgr
@@ -68,71 +90,39 @@ fn main() {
         }
     };
 
-    repl(&mut catalog_mgr);
-}
-
-fn parse_args(args: &[String]) -> (Option<PathBuf>, Option<PathBuf>) {
-    let mut data_dir = None;
-    let mut config_path = None;
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--data-dir" | "-d" => {
-                if i + 1 < args.len() {
-                    data_dir = Some(PathBuf::from(&args[i + 1]));
-                    i += 2;
-                    continue;
-                }
-                eprintln!("error: --data-dir requires a path");
-                std::process::exit(1);
-            }
-            "--config" | "-c" => {
-                if i + 1 < args.len() {
-                    config_path = Some(PathBuf::from(&args[i + 1]));
-                    i += 2;
-                    continue;
-                }
-                eprintln!("error: --config requires a path");
-                std::process::exit(1);
-            }
-            "--version" | "-V" => {
-                println!("kaveon {VERSION}");
-                std::process::exit(0);
-            }
-            "--help" | "-h" => {
-                print_usage();
-                std::process::exit(0);
-            }
-            other => {
-                let path = PathBuf::from(other);
-                if path.is_dir() {
-                    data_dir = Some(path);
-                    i += 1;
-                    continue;
-                }
-                eprintln!("error: unknown argument '{other}'");
-                print_usage();
-                std::process::exit(1);
-            }
-        }
+    if let Some(sql) = options.execute {
+        execute_query(&sql, &catalog_mgr);
+    } else {
+        repl(&mut catalog_mgr);
     }
-    (data_dir, config_path)
 }
 
 fn print_usage() {
-    println!("Usage: kaveon [OPTIONS] [DATA_DIR]");
+    println!("Usage: kaveon [OPTIONS]");
+    println!();
+    println!("Remote coordinator mode is the default.");
     println!();
     println!("Options:");
-    println!("  -d, --data-dir <PATH>  Directory containing Parquet files");
-    println!("  -c, --config <PATH>    Config file (default: ~/.kaveon/config.toml)");
-    println!("  -V, --version          Print version");
-    println!("  -h, --help             Print help");
+    println!("      --server <URL>          Coordinator URL (default: http://localhost:8080)");
+    println!("      --catalog <NAME>        Session catalog (default: kaveon)");
+    println!("      --schema <NAME>         Session schema (default: default)");
+    println!("      --user <NAME>           Session user");
+    println!("      --source <NAME>         Client source (default: kaveon-cli)");
+    println!("      --client-tags <TAGS>    Comma-separated client tags");
+    println!("  -e, --execute <SQL>         Execute SQL and exit");
+    println!("      --output-format <TYPE>  table, csv, tsv, or json");
+    println!("      --timeout <SECONDS>     HTTP request timeout (default: 30)");
+    println!("      --local                 Use the embedded local engine");
+    println!("  -d, --data-dir <PATH>       Local Parquet/Delta directory (requires --local)");
+    println!("  -c, --config <PATH>         Local catalog config (requires --local)");
+    println!("  -V, --version               Print version");
+    println!("  -h, --help                  Print help");
     println!();
     println!("Meta-commands:");
     println!("  .catalogs              List catalogs");
     println!("  .schemas               List schemas in current catalog");
     println!("  .tables                List tables in current schema");
-    println!("  .describe <table>      Show table schema");
+    println!("  .describe <table>      Show table schema (local mode)");
     println!("  .use <catalog.schema>  Switch default catalog/schema");
     println!("  .quit                  Exit");
 }
@@ -518,6 +508,8 @@ fn execute_query(sql: &str, catalog: &CatalogManager) {
             return;
         }
     };
+    let plan = kaveon_optim::rules::push_filter_down(plan);
+    let plan = kaveon_optim::rules::push_projection_down(plan);
 
     let mut operator = match planner::plan_to_operator(&plan, catalog) {
         Ok(op) => op,
