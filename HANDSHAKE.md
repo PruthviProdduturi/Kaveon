@@ -28,7 +28,7 @@
 | `sql` — parser, logical plan | **Claude** | Done |
 | `optim` — filter pushdown | **Codex** | Not started |
 | `python` — PyO3 bindings | **Claude** | Scaffold |
-| `cli` — `kaveon` interactive SQL shell | **Claude** | Done |
+| `cli` — `kaveon` interactive SQL shell | **Claude** | Local embedded shell done; remote coordinator client not implemented |
 | `benches` — Criterion benchmarks | **Codex** | Storage microbenchmark scaffold done; cross-engine suite pending |
 
 ### API (`api/`)
@@ -297,3 +297,4 @@ let source = DeltaTableReader::new(table_directory)
 | 2026-09-03 | Codex | Fixed Studio's empty/unavailable dataset initialization path so the Ask input exits “Loading your data context” instead of waiting forever when no dataset schemas can be loaded. |
 | 2026-09-03 | Codex | Rebalanced the About-only public header after 1710px rendered review: enlarged the wordmark, established a 72px rail, replaced tiny theme-overridden links with deliberate navigation controls, and strengthened the primary action. Docs remains unchanged. |
 | 2026-09-03 | Codex | Removed the global-theme background leaking behind the About wordmark, tightened its left inset, removed the header/hero divider, and replaced implementation-disclaimer hero copy with the unified platform value proposition. |
+| 2026-09-03 | Codex | Audited the CLI against the remote-client contract: the current binary remains an embedded local shell and lacks `--server`, remote `--execute`, transport/auth/output options, and release packaging. Corrected the ownership status; Claude's existing remote-client request remains open. |

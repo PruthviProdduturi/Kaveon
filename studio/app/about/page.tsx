@@ -144,6 +144,7 @@ export default function AboutPage() {
           .about-grid-2 { grid-template-columns: 1fr !important; }
           .about-compare { grid-template-columns: 1fr !important; }
           .about-grid-sql { grid-template-columns: 1fr !important; }
+          .about-flow { grid-template-columns: 1fr !important; }
           .about-tech { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)) !important; }
           .about-footer { padding: 20px 16px !important; flex-wrap: wrap; gap: 12px !important; }
         }
@@ -312,13 +313,13 @@ export default function AboutPage() {
           <Anim dir="up" style={{ textAlign: "center", marginBottom: 48 }}>
             <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: B, marginBottom: 12 }}>The Unified Data Intelligence Platform</div>
             <h2 style={{ fontSize: "clamp(30px, 4vw, 44px)", fontWeight: 700, letterSpacing: "-1px", marginBottom: 14 }}>Three pillars. One governed system.</h2>
-            <p style={{ maxWidth: 720, margin: "0 auto", color: "#8b98a9", fontSize: 16, lineHeight: 1.75 }}>Studio is the intelligence surface. The Data Language Model resolves supported questions deterministically. The Rust Engine is the vectorized analytical foundation being built beneath both.</p>
+            <p style={{ maxWidth: 720, margin: "0 auto", color: "#8b98a9", fontSize: 16, lineHeight: 1.75 }}>Studio is the intelligence surface. The Data Language Model resolves supported questions deterministically. The Rust Engine provides the vectorized analytical foundation beneath both.</p>
           </Anim>
           <div className="about-grid-3" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 18 }}>
             {[
               { name: "Kaveon Studio", status: "Available", color: B, body: "Questions, SQL Lab, governed dashboards, chart building, and operational exploration." },
               { name: "Data Language Model", status: "Available", color: "#8b5cf6", body: "Compiled dataset semantics and deterministic NL→SQL for supported question classes." },
-              { name: "Kaveon Engine", status: "Alpha", color: "#f59e0b", body: "Arrow batch execution and local Parquet today; distributed lake execution is the target." },
+              { name: "Kaveon Engine", status: "Alpha", color: "#f59e0b", body: "Arrow batch execution with local Parquet and Delta reads today; cloud object storage and distributed execution are targets." },
             ].map((pillar, index) => (
               <Anim key={pillar.name} dir="up" delay={index * 120} style={{ padding: "30px 28px", borderRadius: 16, background: "rgba(255,255,255,0.022)", border: "1px solid rgba(255,255,255,0.07)", minHeight: 220 }} className="about-card">
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 28 }}>
@@ -439,30 +440,33 @@ export default function AboutPage() {
       <section ref={r3} style={{ padding: "100px 24px", background: "#0a0a0a" }}>
         <div style={{ maxWidth: 1000, margin: "0 auto" }}>
           <div style={{ textAlign: "center", marginBottom: 56 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: B, marginBottom: 12 }}>How It Works</div>
-            <h2 style={{ fontSize: "clamp(28px, 4vw, 40px)", fontWeight: 700, letterSpacing: "-1px" }}>Three steps. Zero complexity.</h2>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: B, marginBottom: 12 }}>One Governed Path</div>
+            <h2 style={{ fontSize: "clamp(28px, 4vw, 40px)", fontWeight: 700, letterSpacing: "-1px" }}>From source to decision.</h2>
+            <p style={{ maxWidth: 660, margin: "14px auto 0", color: "#718094", fontSize: 15, lineHeight: 1.7 }}>Connect once, define meaning once, then explore through natural language, SQL, and reusable visual intelligence.</p>
           </div>
-          <div className="about-grid-3" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 24 }}>
+          <div className="about-flow" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 14 }}>
             {[
-              { n: "01", title: "You ask", desc: "Type a question in natural language. No syntax. No training.", color: B, icon: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" },
-              { n: "02", title: "We parse", desc: "The Data Language Model matches your words to schema metadata and generates SQL. No LLM. Instant.", color: "#8b5cf6", icon: "M13 2L3 14h9l-1 8 10-12h-9l1-8z" },
-              { n: "03", title: "Data answers", desc: "SQL executes, the right visualization is selected, and you see data with an intelligent summary.", color: "#10b981", icon: "M22 12h-4l-3 9L9 3l-3 9H2" },
+              { n: "01", title: "Connect", desc: "Register governed sources without moving the underlying data.", color: B, icon: "M4 4h16v6H4zM4 14h16v6H4z" },
+              { n: "02", title: "Model", desc: "Define reusable dimensions, metrics, relationships, and business meaning.", color: "#06b6d4", icon: "M12 2v20M2 12h20" },
+              { n: "03", title: "Ask or query", desc: "Use deterministic DLM resolution or write SQL directly in Studio.", color: "#8b5cf6", icon: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" },
+              { n: "04", title: "Execute", desc: "Run vectorized analytical work through the Engine or a selected source.", color: "#f59e0b", icon: "M13 2L3 14h9l-1 8 10-12h-9l1-8z" },
+              { n: "05", title: "Visualize", desc: "Turn answers into charts, dashboards, and operational decisions.", color: "#10b981", icon: "M4 19V9m6 10V5m6 14v-7m4 7H2" },
             ].map((s, idx) => (
               <Anim key={s.n} dir="up" delay={idx * 150} style={{
-                padding: "40px 32px", borderRadius: 16,
+                padding: "32px 22px", borderRadius: 16,
                 background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)",
                 textAlign: "center", transition: "all 0.3s",
               }} className="about-card">
                 <div style={{
-                  width: 56, height: 56, borderRadius: 16, margin: "0 auto 20px",
+                  width: 50, height: 50, borderRadius: 14, margin: "0 auto 20px",
                   background: `${s.color}10`, border: `1px solid ${s.color}20`,
                   display: "flex", alignItems: "center", justifyContent: "center",
                 }}>
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={s.color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={s.icon} /></svg>
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={s.color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={s.icon} /></svg>
                 </div>
                 <div style={{ fontSize: 11, fontWeight: 700, color: s.color, letterSpacing: "0.08em", marginBottom: 8 }}>STEP {s.n}</div>
-                <h3 style={{ fontSize: 20, fontWeight: 700, marginBottom: 10, color: "#e2e8f0" }}>{s.title}</h3>
-                <p style={{ fontSize: 14, color: "#666", lineHeight: 1.7 }}>{s.desc}</p>
+                <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10, color: "#e2e8f0" }}>{s.title}</h3>
+                <p style={{ fontSize: 13, color: "#718094", lineHeight: 1.65 }}>{s.desc}</p>
               </Anim>
             ))}
           </div>
@@ -965,7 +969,7 @@ export default function AboutPage() {
           <div style={{ textAlign: "center", marginBottom: 56 }}>
             <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: B, marginBottom: 12 }}>Platform</div>
             <h2 style={{ fontSize: "clamp(28px, 4vw, 40px)", fontWeight: 700, letterSpacing: "-1px" }}>Everything you need</h2>
-            <p style={{ fontSize: 16, color: "#666", marginTop: 12 }}>One platform. Ask questions, build charts, create dashboards, write SQL.</p>
+            <p style={{ fontSize: 16, color: "#718094", marginTop: 12 }}>One platform for governed data, deterministic reasoning, fast analytics, and reusable intelligence.</p>
           </div>
           <div className="about-grid-3" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gridAutoRows: "auto", gap: 14 }}>
             <Anim dir="up" delay={0} style={{ gridColumn: "span 2" }}>
@@ -1001,7 +1005,8 @@ export default function AboutPage() {
             {[
               { title: "Multi-Source", desc: "Register multiple supported sources; each query targets one selected source today.", color: "rgba(236,72,153,0.05)" },
               { title: "Semantic Datasets", desc: "Define dimensions, metrics, and joins once. Reuse everywhere.", color: "rgba(6,182,212,0.05)" },
-              { title: "Self-Hosted", desc: "Your infrastructure, your data. OAuth, RBAC, MIT licensed.", color: "rgba(99,102,241,0.05)" },
+              { title: "Governed Identity", desc: "Microsoft Entra ID, role-aware access, and customer-controlled data boundaries.", color: "rgba(99,102,241,0.05)" },
+              { title: "Deploy Your Way", desc: "Run locally with Docker today; private-cloud and distributed topologies remain explicitly staged.", color: "rgba(245,158,11,0.05)" },
             ].map((f, idx) => (
               <Anim key={f.title} dir="up" delay={400 + idx * 100}>
                 <div className="about-card" style={{ padding: 36, borderRadius: 16, background: `linear-gradient(135deg, ${f.color} 0%, transparent 100%)`, border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
@@ -1021,18 +1026,22 @@ export default function AboutPage() {
             <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: B, marginBottom: 12 }}>Stack</div>
             <h2 style={{ fontSize: "clamp(28px, 4vw, 40px)", fontWeight: 700, letterSpacing: "-1px" }}>Built with</h2>
           </div>
-          <div className="about-tech" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
+          <div className="about-tech" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 12 }}>
             {[
+              { name: "Rust", version: "2024", color: "#f59e0b" },
+              { name: "Apache Arrow", version: "54", color: B },
+              { name: "Parquet", version: "Direct read", color: "#06b6d4" },
+              { name: "Delta Lake", version: "Local alpha", color: "#10b981" },
               { name: "Next.js", version: "15", color: "#fff" },
               { name: "React", version: "19", color: "#61dafb" },
               { name: "TypeScript", version: "5.x", color: "#3178c6" },
               { name: "FastAPI", version: "0.115", color: "#009688" },
-              { name: "Python", version: "3.11", color: "#ffd43b" },
+              { name: "Python", version: "3.12", color: "#ffd43b" },
               { name: "ECharts", version: "5.x", color: "#e43961" },
               { name: "PostgreSQL", version: "16", color: "#336791" },
               { name: "Azure", version: "Container Apps", color: "#0078d4" },
               { name: "Vercel", version: "Edge", color: "#fff" },
-              { name: "Bicep", version: "IaC", color: "#f7a21b" },
+              { name: "Docker", version: "Local stack", color: "#2496ed" },
             ].map((t, idx) => (
               <Anim key={t.name} dir="up" delay={idx * 50}>
                 <div className="about-card" style={{
