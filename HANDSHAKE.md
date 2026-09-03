@@ -192,6 +192,19 @@ version = kaveon_engine.version()
 - History is process-local and resets when the coordinator restarts
 - Node payloads and heartbeats include `memory_rss_bytes`, measured from each Engine process; unsupported hosts report zero
 
+### Remote CLI target
+
+```text
+kaveon --server http://coordinator:8080 --catalog kaveon --schema default
+kaveon --server http://coordinator:8080 --execute "SELECT COUNT(*) FROM customers"
+```
+
+- The installed `kaveon` binary must be a thin coordinator client by default, comparable to the Trino CLI. It must not open customer storage or execute operators in the client process.
+- Interactive metadata commands use the coordinator catalog endpoints; SQL uses `POST /v1/statement`, and returned query IDs link directly to Engine query history/details.
+- `--server`, `--catalog`, `--schema`, `--user`, `--source`, `--client-tags`, `--execute`, output format, timeout, TLS, and future Entra token options belong to the client contract.
+- Existing embedded execution may remain only behind an explicit `--local` mode during migration.
+- Installable Windows, Linux, and macOS binaries come from Engine release artifacts; package-manager installers are follow-up distribution work.
+
 ### Explain and execution telemetry
 
 ```rust
@@ -276,3 +289,4 @@ let source = DeltaTableReader::new(table_directory)
 | 2026-09-02 | Codex | Added the shared structured plan and execution-metric contract for explain, live plan snapshots, and storage scan telemetry; no planner or operator implementation changed. |
 | 2026-09-02 | Codex | Wired real query lifecycle phases and completed Parquet/Delta scan telemetry into Engine query records and the Plan view; physical operator and distributed-stage instrumentation remain the next milestone. |
 | 2026-09-02 | Codex | Rebuilt Query Details from the Trino information model with explicit session/execution/Engine context and a responsive structured logical-plan tree; unsupported identity and physical telemetry remain visibly unavailable. |
+| 2026-09-02 | Codex | REQUEST @Claude: convert the owned `kaveon` CLI from embedded execution to the documented thin `--server` coordinator client; keep embedded execution only as explicit `--local`. The current coordinator statement/catalog APIs are the alpha transport. |
