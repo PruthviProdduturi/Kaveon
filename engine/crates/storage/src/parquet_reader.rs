@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::ScanMetrics;
+use crate::{ScanMetrics, ScanPartition};
 
 const DEFAULT_BATCH_SIZE: usize = 8_192;
 
@@ -71,6 +71,7 @@ pub struct ParquetReader {
     columns: Option<Vec<String>>,
     predicate: Option<StoragePredicate>,
     metrics: Option<ScanMetrics>,
+    partition: Option<ScanPartition>,
 }
 
 impl ParquetReader {
@@ -81,6 +82,7 @@ impl ParquetReader {
             columns: None,
             predicate: None,
             metrics: None,
+            partition: None,
         }
     }
 
@@ -99,6 +101,11 @@ impl ParquetReader {
             Some(existing) => StoragePredicate::And(vec![existing, predicate]),
             None => predicate,
         });
+        self
+    }
+
+    pub fn with_partition(mut self, partition: ScanPartition) -> Self {
+        self.partition = Some(partition);
         self
     }
 
@@ -166,19 +173,22 @@ impl ParquetReader {
             builder = builder.with_projection(mask);
         }
 
-        let groups = if let Some(predicate) = &self.predicate {
+        let mut groups = if let Some(predicate) = &self.predicate {
             validate_predicate(predicate, &schema)?;
             matching_row_groups(builder.metadata().as_ref(), &schema, predicate)
         } else {
             (0..builder.metadata().num_row_groups()).collect()
         };
+        if let Some(partition) = self.partition {
+            groups.retain(|group| partition.contains(*group));
+        }
         record_selection_metrics(
             builder.metadata().as_ref(),
             &groups,
             projection.as_deref(),
             metrics,
         );
-        if self.predicate.is_some() {
+        if self.predicate.is_some() || self.partition.is_some() {
             builder = builder.with_row_groups(groups);
         }
         Ok(builder)

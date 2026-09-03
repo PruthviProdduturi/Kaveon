@@ -7,6 +7,7 @@ use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use kaveon_core::collect_batches;
 use kaveon_sql::logical_plan::sql_to_logical_plan;
+use kaveon_sql::logical_plan::{AggregateExpr, LogicalPlan};
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::HashMap;
@@ -97,7 +98,7 @@ enum QueryState {
     Failed,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct ColumnInfo {
     name: String,
     #[serde(rename = "type")]
@@ -113,6 +114,7 @@ static QUERY_STORE: std::sync::LazyLock<RwLock<QueryStore>> = std::sync::LazyLoc
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v1/statement", post(submit_statement))
+        .route("/v1/task", post(execute_task))
         .route("/v1/query", get(list_queries))
         .route("/v1/query/{query_id}", get(get_query))
         .route("/v1/query/{query_id}", delete(cancel_query))
@@ -155,6 +157,22 @@ struct StatementRequest {
     result_delivery: Option<String>,
 }
 
+#[derive(Serialize, Deserialize)]
+struct TaskRequest {
+    query: String,
+    catalog: String,
+    schema: String,
+    partition_index: usize,
+    partition_count: usize,
+}
+
+#[derive(Serialize, Deserialize)]
+struct TaskResponse {
+    columns: Vec<ColumnInfo>,
+    data: Vec<Vec<serde_json::Value>>,
+    elapsed_us: u64,
+}
+
 #[derive(Serialize)]
 struct StatementResponse {
     id: String,
@@ -166,6 +184,78 @@ struct StatementResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
     elapsed_ms: u64,
+}
+
+async fn execute_task(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<TaskRequest>,
+) -> impl IntoResponse {
+    if state.config.coordinator {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "partition tasks must be submitted to a worker",
+                "code": "NOT_WORKER"
+            })),
+        )
+            .into_response();
+    }
+    let partition =
+        match kaveon_storage::ScanPartition::new(req.partition_index, req.partition_count) {
+            Ok(partition) => partition,
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": error.to_string() })),
+                )
+                    .into_response();
+            }
+        };
+    let started = Instant::now();
+    let mut plan = match sql_to_logical_plan(req.query.trim().trim_end_matches(';')) {
+        Ok(plan) => plan,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": error.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    crate::planner::qualify_tables(&mut plan, &req.catalog, &req.schema);
+    let plan = kaveon_optim::rules::push_filter_down(plan);
+    let plan = kaveon_optim::rules::push_projection_down(plan);
+    let result = {
+        let catalog = state.catalog.read().await;
+        crate::planner::plan_partitioned_query(&plan, &catalog, partition)
+            .and_then(|mut planned| collect_batches(&mut *planned.operator))
+    };
+    match result {
+        Ok(batches) => {
+            let columns = batches.first().map_or_else(Vec::new, |batch| {
+                batch
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|field| ColumnInfo {
+                        name: field.name().clone(),
+                        data_type: field.data_type().to_string(),
+                    })
+                    .collect()
+            });
+            Json(TaskResponse {
+                columns,
+                data: batches_to_json(&batches),
+                elapsed_us: elapsed_us(started),
+            })
+            .into_response()
+        }
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 async fn submit_statement(
@@ -298,6 +388,68 @@ async fn submit_statement(
         record.plan.logical = Some(logical_plan.clone());
         record.plan.optimized = Some(optimized_plan.clone());
         record.plan.physical = Some(physical_plan.clone());
+    }
+
+    if let Some(distributed) = execute_distributed_aggregate(&state, &sql, &context, &plan).await {
+        match distributed {
+            Ok(result) => {
+                let elapsed = start.elapsed().as_millis() as u64;
+                let record = QueryRecord {
+                    id: query_id.clone(),
+                    sql,
+                    state: QueryState::Finished,
+                    columns: result.columns.clone(),
+                    rows: result.data.clone(),
+                    error: None,
+                    elapsed_ms: elapsed,
+                    submitted_at_ms,
+                    completed_at_ms: unix_time_ms(),
+                    timings: QueryTimings {
+                        analysis_us: Some(analysis_us),
+                        planning_us: None,
+                        execution_us: Some(result.elapsed_us),
+                        result_serialization_us: None,
+                    },
+                    plan: QueryPlan {
+                        logical: Some(logical_plan),
+                        optimized: Some(optimized_plan),
+                        physical: Some(physical_plan),
+                    },
+                    scans: vec![],
+                    context,
+                };
+                QUERY_STORE
+                    .write()
+                    .await
+                    .queries
+                    .insert(query_id.clone(), record);
+                return Json(StatementResponse {
+                    id: query_id,
+                    state: QueryState::Finished,
+                    columns: Some(result.columns),
+                    data: Some(result.data),
+                    error: None,
+                    elapsed_ms: elapsed,
+                })
+                .into_response();
+            }
+            Err(error) => {
+                finish_failed_query(
+                    &query_id,
+                    error.clone(),
+                    start,
+                    Some(analysis_us),
+                    None,
+                    Some(logical_plan),
+                )
+                .await;
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": error, "code": "DISTRIBUTED_EXECUTION_ERROR" })),
+                )
+                    .into_response();
+            }
+        }
     }
 
     let planned_execution = {
@@ -618,6 +770,300 @@ async fn ready(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
 // --- Helpers ---
 
+#[derive(Clone, Copy)]
+enum MergeOperation {
+    Add,
+    Min,
+    Max,
+}
+
+async fn execute_distributed_aggregate(
+    state: &Arc<AppState>,
+    sql: &str,
+    context: &QueryContext,
+    plan: &LogicalPlan,
+) -> Option<Result<TaskResponse, String>> {
+    let (group_count, operations) = aggregate_merge_contract(plan)?;
+    let mut workers = {
+        let mut cluster = state.cluster.write().await;
+        cluster.remove_stale_workers();
+        cluster.workers.values().cloned().collect::<Vec<_>>()
+    };
+    workers.sort_unstable_by(|left, right| left.node_id.cmp(&right.node_id));
+    if workers.len() < 2 {
+        return None;
+    }
+
+    let started = Instant::now();
+    let partition_count = workers.len();
+    let client = reqwest::Client::new();
+    let mut tasks = tokio::task::JoinSet::new();
+    for (partition_index, worker) in workers.into_iter().enumerate() {
+        let client = client.clone();
+        let request = TaskRequest {
+            query: sql.to_owned(),
+            catalog: context.catalog.clone(),
+            schema: context.schema.clone(),
+            partition_index,
+            partition_count,
+        };
+        tasks.spawn(async move {
+            let url = format!("{}/v1/task", worker.address.trim_end_matches('/'));
+            let response = client
+                .post(url)
+                .json(&request)
+                .send()
+                .await
+                .map_err(|error| format!("worker '{}' is unavailable: {error}", worker.node_id))?;
+            if !response.status().is_success() {
+                let status = response.status();
+                let message = response.text().await.unwrap_or_default();
+                return Err(format!(
+                    "worker '{}' failed task with {status}: {message}",
+                    worker.node_id
+                ));
+            }
+            response.json::<TaskResponse>().await.map_err(|error| {
+                format!(
+                    "worker '{}' returned an invalid result: {error}",
+                    worker.node_id
+                )
+            })
+        });
+    }
+
+    let mut partials = Vec::with_capacity(partition_count);
+    while let Some(result) = tasks.join_next().await {
+        match result {
+            Ok(Ok(response)) => partials.push(response),
+            Ok(Err(error)) => return Some(Err(error)),
+            Err(error) => return Some(Err(format!("worker task failed: {error}"))),
+        }
+    }
+    Some(merge_partial_aggregates(
+        partials,
+        group_count,
+        &operations,
+        elapsed_us(started),
+    ))
+}
+
+fn aggregate_merge_contract(plan: &LogicalPlan) -> Option<(usize, Vec<MergeOperation>)> {
+    let aggregate = match plan {
+        LogicalPlan::Aggregate { .. } => plan,
+        LogicalPlan::Project { input, columns }
+            if matches!(input.as_ref(), LogicalPlan::Aggregate { .. }) =>
+        {
+            let LogicalPlan::Aggregate {
+                group_by,
+                aggregates,
+                ..
+            } = input.as_ref()
+            else {
+                return None;
+            };
+            if columns.len() != group_by.len().saturating_add(aggregates.len()) {
+                return None;
+            }
+            if !projection_preserves_aggregate_order(columns, group_by, aggregates) {
+                return None;
+            }
+            input.as_ref()
+        }
+        _ => return None,
+    };
+    let LogicalPlan::Aggregate {
+        input,
+        group_by,
+        aggregates,
+    } = aggregate
+    else {
+        return None;
+    };
+    if !distributed_scan_input(input) {
+        return None;
+    }
+    let operations = aggregates
+        .iter()
+        .map(|aggregate| match aggregate {
+            AggregateExpr::Count {
+                distinct: false, ..
+            }
+            | AggregateExpr::Sum(_) => Some(MergeOperation::Add),
+            AggregateExpr::Min(_) => Some(MergeOperation::Min),
+            AggregateExpr::Max(_) => Some(MergeOperation::Max),
+            AggregateExpr::Avg(_) | AggregateExpr::Count { distinct: true, .. } => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some((group_by.len(), operations))
+}
+
+fn projection_preserves_aggregate_order(
+    columns: &[kaveon_core::Expr],
+    group_by: &[kaveon_core::Expr],
+    aggregates: &[AggregateExpr],
+) -> bool {
+    let groups_match = columns
+        .iter()
+        .take(group_by.len())
+        .zip(group_by)
+        .all(|(projected, grouped)| expression_column(projected) == expression_column(grouped));
+    let aggregates_match = columns
+        .iter()
+        .skip(group_by.len())
+        .zip(aggregates)
+        .all(|(projected, aggregate)| projected_aggregate_matches(projected, aggregate));
+    groups_match && aggregates_match
+}
+
+fn expression_column(expr: &kaveon_core::Expr) -> Option<&str> {
+    match expr {
+        kaveon_core::Expr::Column(name) => Some(name),
+        kaveon_core::Expr::Alias { expr, .. } => expression_column(expr),
+        _ => None,
+    }
+}
+
+fn projected_aggregate_matches(expr: &kaveon_core::Expr, aggregate: &AggregateExpr) -> bool {
+    let expr = match expr {
+        kaveon_core::Expr::Alias { expr, .. } => expr.as_ref(),
+        _ => expr,
+    };
+    let kaveon_core::Expr::Function { name, args } = expr else {
+        return false;
+    };
+    let expected_name = match aggregate {
+        AggregateExpr::Count { .. } => "count",
+        AggregateExpr::Sum(_) => "sum",
+        AggregateExpr::Avg(_) => "avg",
+        AggregateExpr::Min(_) => "min",
+        AggregateExpr::Max(_) => "max",
+    };
+    if !name.eq_ignore_ascii_case(expected_name) || args.len() != 1 {
+        return false;
+    }
+    let expected_expr = match aggregate {
+        AggregateExpr::Count { expr, .. }
+        | AggregateExpr::Sum(expr)
+        | AggregateExpr::Avg(expr)
+        | AggregateExpr::Min(expr)
+        | AggregateExpr::Max(expr) => expr,
+    };
+    match (&args[0], expected_expr) {
+        (kaveon_core::Expr::Star, kaveon_core::Expr::Star) => true,
+        (left, right) => expression_column(left) == expression_column(right),
+    }
+}
+
+fn distributed_scan_input(plan: &LogicalPlan) -> bool {
+    match plan {
+        LogicalPlan::Scan { .. } => true,
+        LogicalPlan::Filter { input, .. } | LogicalPlan::Project { input, .. } => {
+            distributed_scan_input(input)
+        }
+        LogicalPlan::Join { .. }
+        | LogicalPlan::Aggregate { .. }
+        | LogicalPlan::Sort { .. }
+        | LogicalPlan::Limit { .. } => false,
+    }
+}
+
+fn merge_partial_aggregates(
+    partials: Vec<TaskResponse>,
+    group_count: usize,
+    operations: &[MergeOperation],
+    elapsed_us: u64,
+) -> Result<TaskResponse, String> {
+    let columns = partials
+        .first()
+        .map(|partial| partial.columns.clone())
+        .unwrap_or_default();
+    let expected_columns = group_count.saturating_add(operations.len());
+    if columns.len() != expected_columns {
+        return Err(format!(
+            "partial aggregate returned {} columns; expected {expected_columns}",
+            columns.len()
+        ));
+    }
+    let mut groups = std::collections::BTreeMap::<String, Vec<serde_json::Value>>::new();
+    for partial in partials {
+        if partial.columns != columns {
+            return Err("workers returned incompatible aggregate schemas".into());
+        }
+        for row in partial.data {
+            if row.len() != expected_columns {
+                return Err("worker returned a malformed aggregate row".into());
+            }
+            let key = serde_json::to_string(&row[..group_count])
+                .map_err(|error| format!("cannot encode aggregate key: {error}"))?;
+            match groups.get_mut(&key) {
+                Some(existing) => {
+                    for (offset, operation) in operations.iter().enumerate() {
+                        let index = group_count + offset;
+                        existing[index] =
+                            merge_value(existing[index].clone(), row[index].clone(), *operation)?;
+                    }
+                }
+                None => {
+                    groups.insert(key, row);
+                }
+            }
+        }
+    }
+    Ok(TaskResponse {
+        columns,
+        data: groups.into_values().collect(),
+        elapsed_us,
+    })
+}
+
+fn merge_value(
+    left: serde_json::Value,
+    right: serde_json::Value,
+    operation: MergeOperation,
+) -> Result<serde_json::Value, String> {
+    if left.is_null() {
+        return Ok(right);
+    }
+    if right.is_null() {
+        return Ok(left);
+    }
+    match operation {
+        MergeOperation::Add => match (left.as_i64(), right.as_i64()) {
+            (Some(left), Some(right)) => Ok(serde_json::json!(left.saturating_add(right))),
+            _ => match (left.as_u64(), right.as_u64()) {
+                (Some(left), Some(right)) => Ok(serde_json::json!(left.saturating_add(right))),
+                _ => match (left.as_f64(), right.as_f64()) {
+                    (Some(left), Some(right)) => Ok(serde_json::json!(left + right)),
+                    _ => Err("additive aggregate returned a non-numeric value".into()),
+                },
+            },
+        },
+        MergeOperation::Min | MergeOperation::Max => {
+            let ordering = compare_json_scalars(&left, &right)?;
+            let take_left = matches!(operation, MergeOperation::Min)
+                && ordering != std::cmp::Ordering::Greater
+                || matches!(operation, MergeOperation::Max) && ordering != std::cmp::Ordering::Less;
+            Ok(if take_left { left } else { right })
+        }
+    }
+}
+
+fn compare_json_scalars(
+    left: &serde_json::Value,
+    right: &serde_json::Value,
+) -> Result<std::cmp::Ordering, String> {
+    if let (Some(left), Some(right)) = (left.as_f64(), right.as_f64()) {
+        return left
+            .partial_cmp(&right)
+            .ok_or_else(|| "aggregate value is not comparable".into());
+    }
+    if let (Some(left), Some(right)) = (left.as_str(), right.as_str()) {
+        return Ok(left.cmp(right));
+    }
+    Err("aggregate values have incompatible scalar types".into())
+}
+
 fn batches_to_json(batches: &[arrow::record_batch::RecordBatch]) -> Vec<Vec<serde_json::Value>> {
     use arrow::array::{Array, AsArray};
     use arrow::datatypes::*;
@@ -740,5 +1186,67 @@ async fn finish_failed_query(
         record.timings.planning_us = planning_us;
         record.plan.logical = logical_plan;
         record.scans.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ColumnInfo, MergeOperation, TaskResponse, aggregate_merge_contract,
+        merge_partial_aggregates,
+    };
+
+    fn columns() -> Vec<ColumnInfo> {
+        vec![
+            ColumnInfo {
+                name: "region".into(),
+                data_type: "Utf8".into(),
+            },
+            ColumnInfo {
+                name: "count(*)".into(),
+                data_type: "UInt64".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn merges_partial_group_counts() {
+        let partials = vec![
+            TaskResponse {
+                columns: columns(),
+                data: vec![vec![serde_json::json!("east"), serde_json::json!(2)]],
+                elapsed_us: 1,
+            },
+            TaskResponse {
+                columns: columns(),
+                data: vec![
+                    vec![serde_json::json!("east"), serde_json::json!(3)],
+                    vec![serde_json::json!("west"), serde_json::json!(4)],
+                ],
+                elapsed_us: 1,
+            },
+        ];
+        let merged = merge_partial_aggregates(partials, 1, &[MergeOperation::Add], 2).unwrap();
+        assert_eq!(
+            merged.data,
+            vec![
+                vec![serde_json::json!("east"), serde_json::json!(5)],
+                vec![serde_json::json!("west"), serde_json::json!(4)],
+            ]
+        );
+    }
+
+    #[test]
+    fn distributes_only_when_projection_preserves_merge_layout() {
+        let supported = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT region, COUNT(*) FROM orders GROUP BY region",
+        )
+        .unwrap();
+        let reordered = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT COUNT(*), region FROM orders GROUP BY region",
+        )
+        .unwrap();
+        assert!(aggregate_merge_contract(&supported).is_some());
+        assert!(aggregate_merge_contract(&reordered).is_none());
     }
 }

@@ -44,11 +44,18 @@ impl BatchOperator for ProjectOperator {
         let columns: Vec<_> = self
             .exprs
             .iter()
-            .map(|expr| evaluate(expr, &batch))
+            .map(|expr| evaluate(unaliased(expr), &batch))
             .collect::<Result<_>>()?;
 
         let projected = RecordBatch::try_new(self.output_schema.clone(), columns)?;
         Ok(Some(projected))
+    }
+}
+
+fn unaliased(expr: &Expr) -> &Expr {
+    match expr {
+        Expr::Alias { expr, .. } => unaliased(expr),
+        _ => expr,
     }
 }
 

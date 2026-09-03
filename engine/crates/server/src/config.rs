@@ -14,6 +14,7 @@ pub struct ServerConfig {
     pub coordinator: bool,
     pub http_port: u16,
     pub discovery_uri: String,
+    pub advertised_uri: Option<String>,
     pub data_dir: Option<PathBuf>,
     pub catalog_dir: Option<PathBuf>,
 }
@@ -26,6 +27,7 @@ impl Default for ServerConfig {
             coordinator: true,
             http_port: 8080,
             discovery_uri: "http://localhost:8080".into(),
+            advertised_uri: None,
             data_dir: None,
             catalog_dir: None,
         }
@@ -55,6 +57,7 @@ struct HttpConfig {
 #[derive(Deserialize)]
 struct DiscoveryConfig {
     uri: Option<String>,
+    advertised_uri: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -90,10 +93,11 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
         {
             config.http_port = port;
         }
-        if let Some(disc) = raw.discovery
-            && let Some(uri) = disc.uri
-        {
-            config.discovery_uri = uri;
+        if let Some(disc) = raw.discovery {
+            if let Some(uri) = disc.uri {
+                config.discovery_uri = uri;
+            }
+            config.advertised_uri = disc.advertised_uri;
         }
         if let Some(storage) = raw.storage {
             if let Some(dir) = storage.data_dir {
@@ -121,6 +125,9 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     }
     if let Ok(v) = std::env::var("KAVEON_DISCOVERY_URI") {
         config.discovery_uri = v;
+    }
+    if let Ok(v) = std::env::var("KAVEON_ADVERTISED_URI") {
+        config.advertised_uri = Some(v);
     }
     if let Ok(v) = std::env::var("KAVEON_DATA_DIR") {
         config.data_dir = Some(PathBuf::from(v));

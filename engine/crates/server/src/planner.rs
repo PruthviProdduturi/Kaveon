@@ -12,7 +12,7 @@ use kaveon_exec::sort::{SortExpr, SortOperator};
 use kaveon_exec::topn::TopNOperator;
 use kaveon_optim::rules::to_storage_predicate;
 use kaveon_sql::logical_plan::{AggregateExpr, JoinType, LogicalPlan};
-use kaveon_storage::{DeltaTableReader, ParquetReader};
+use kaveon_storage::{DeltaTableReader, ParquetReader, ScanPartition};
 use std::collections::BTreeMap;
 
 pub struct PlannedQuery {
@@ -28,7 +28,15 @@ pub fn plan_to_operator(
 }
 
 pub fn plan_query(plan: &LogicalPlan, catalog: &CatalogManager) -> Result<PlannedQuery> {
-    plan_query_inner(plan, catalog)
+    plan_query_inner(plan, catalog, None)
+}
+
+pub fn plan_partitioned_query(
+    plan: &LogicalPlan,
+    catalog: &CatalogManager,
+    partition: ScanPartition,
+) -> Result<PlannedQuery> {
+    plan_query_inner(plan, catalog, Some(partition))
 }
 
 pub fn qualify_tables(plan: &mut LogicalPlan, catalog: &str, schema: &str) {
@@ -156,14 +164,19 @@ fn build_plan_tree(
     node
 }
 
-fn plan_query_inner(plan: &LogicalPlan, catalog: &CatalogManager) -> Result<PlannedQuery> {
-    plan_query_with_predicate(plan, catalog, None)
+fn plan_query_inner(
+    plan: &LogicalPlan,
+    catalog: &CatalogManager,
+    partition: Option<ScanPartition>,
+) -> Result<PlannedQuery> {
+    plan_query_with_predicate(plan, catalog, None, partition)
 }
 
 fn plan_query_with_predicate(
     plan: &LogicalPlan,
     catalog: &CatalogManager,
     storage_predicate: Option<&kaveon_core::StoragePredicate>,
+    partition: Option<ScanPartition>,
 ) -> Result<PlannedQuery> {
     match plan {
         LogicalPlan::Scan { table, columns, .. } => {
@@ -180,6 +193,9 @@ fn plan_query_with_predicate(
                     if let Some(predicate) = storage_predicate {
                         reader = reader.with_predicate(predicate.clone());
                     }
+                    if let Some(partition) = partition {
+                        reader = reader.with_partition(partition);
+                    }
                     let source = reader.read().map_err(|e| {
                         KaveonError::Execution(format!("failed to open '{path}': {e}"))
                     })?;
@@ -190,6 +206,9 @@ fn plan_query_with_predicate(
                     let mut reader = DeltaTableReader::new(&path);
                     if let Some(cols) = columns {
                         reader = reader.with_columns(cols.clone());
+                    }
+                    if let Some(partition) = partition {
+                        reader = reader.with_partition(partition);
                     }
                     let source = reader.read().map_err(|e| {
                         KaveonError::Execution(format!("failed to open '{path}': {e}"))
@@ -218,8 +237,8 @@ fn plan_query_with_predicate(
         } => {
             let left_qualifier = relation_qualifier(left);
             let right_qualifier = relation_qualifier(right);
-            let left = plan_query_inner(left, catalog)?;
-            let right = plan_query_inner(right, catalog)?;
+            let left = plan_query_inner(left, catalog, partition)?;
+            let right = plan_query_inner(right, catalog, partition)?;
             let keys = join_keys(condition.as_ref())?;
             let mut scan_metrics = left.scan_metrics;
             scan_metrics.extend(right.scan_metrics);
@@ -238,7 +257,7 @@ fn plan_query_with_predicate(
 
         LogicalPlan::Filter { input, predicate } => {
             let pushed = to_storage_predicate(predicate);
-            let planned = plan_query_with_predicate(input, catalog, pushed.as_ref())?;
+            let planned = plan_query_with_predicate(input, catalog, pushed.as_ref(), partition)?;
             Ok(PlannedQuery {
                 operator: Box::new(FilterOperator::new(planned.operator, predicate.clone())),
                 scan_metrics: planned.scan_metrics,
@@ -246,7 +265,7 @@ fn plan_query_with_predicate(
         }
 
         LogicalPlan::Project { input, columns } => {
-            let planned = plan_query_inner(input, catalog)?;
+            let planned = plan_query_inner(input, catalog, partition)?;
 
             let has_star = columns.iter().any(|e| matches!(e, Expr::Star));
             if has_star {
@@ -285,7 +304,7 @@ fn plan_query_with_predicate(
             group_by,
             aggregates,
         } => {
-            let planned = plan_query_inner(input, catalog)?;
+            let planned = plan_query_inner(input, catalog, partition)?;
 
             let group_cols: Vec<String> = group_by
                 .iter()
@@ -309,7 +328,7 @@ fn plan_query_with_predicate(
         }
 
         LogicalPlan::Sort { input, order_by } => {
-            let planned = plan_query_inner(input, catalog)?;
+            let planned = plan_query_inner(input, catalog, partition)?;
             let sort_exprs = order_by
                 .iter()
                 .map(|(expr, ascending)| SortExpr::new(expr.clone(), *ascending))
@@ -326,7 +345,7 @@ fn plan_query_with_predicate(
                 order_by,
             } = input.as_ref()
             {
-                let planned = plan_query_inner(sort_input, catalog)?;
+                let planned = plan_query_inner(sort_input, catalog, partition)?;
                 let sort_exprs = order_by
                     .iter()
                     .map(|(expr, ascending)| SortExpr::new(expr.clone(), *ascending))
@@ -336,7 +355,7 @@ fn plan_query_with_predicate(
                     scan_metrics: planned.scan_metrics,
                 });
             }
-            let planned = plan_query_inner(input, catalog)?;
+            let planned = plan_query_inner(input, catalog, partition)?;
             Ok(PlannedQuery {
                 operator: Box::new(LimitOperator::new(planned.operator, *count)),
                 scan_metrics: planned.scan_metrics,

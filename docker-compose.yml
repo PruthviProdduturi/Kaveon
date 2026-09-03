@@ -60,6 +60,7 @@ services:
       KAVEON_COORDINATOR: "false"
       KAVEON_HTTP_PORT: "8080"
       KAVEON_DISCOVERY_URI: http://engine-coordinator:8080
+      KAVEON_ADVERTISED_URI: http://engine-worker-1:8080
       KAVEON_DATA_DIR: /data
     volumes: &engine-worker-volumes
       - ./engine/etc/worker.toml:/etc/kaveon/config.toml:ro
@@ -78,6 +79,7 @@ services:
     environment:
       <<: *engine-worker-environment
       KAVEON_NODE_ID: worker-2
+      KAVEON_ADVERTISED_URI: http://engine-worker-2:8080
     volumes: *engine-worker-volumes
     restart: unless-stopped
 
