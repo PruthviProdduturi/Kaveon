@@ -20,15 +20,15 @@
 |-------|-------|--------|
 | `core` — shared types, errors, traits | Shared (either can add, neither restructures without updating this doc) | Scaffold |
 | `storage` — Parquet reader, ADLS Gen 2 | **Codex** | Local Parquet M1 and local Delta JSON snapshot reads done; ADLS Gen 2 not started |
-| `exec/scan` — scan operator | **Claude** | Done |
-| `exec/aggregate` — hash aggregate | **Claude** | Done |
-| `exec/filter` — filter evaluation | **Claude** | Done |
+| `exec/scan` — scan operator | **Codex** | Done; takeover authorized 2026-09-03 |
+| `exec/aggregate` — hash aggregate | **Codex** | Correctness expansion in progress |
+| `exec/filter` — filter evaluation | **Codex** | Numeric coercion fix in progress |
 | `exec/sort` — sort operator | **Codex** | Done; physical planner wiring pending Claude |
 | `exec/topn` — TopN operator | **Codex** | Done; physical planner wiring pending Claude |
-| `sql` — parser, logical plan | **Claude** | Done |
+| `sql` — parser, logical plan | **Codex** | Join and DISTINCT expansion in progress |
 | `optim` — filter pushdown | **Codex** | Done; physical planner wiring pending Claude |
 | `python` — PyO3 bindings | **Claude** | Scaffold |
-| `cli` — `kaveon` interactive SQL shell | **Claude** | Local embedded shell done; remote coordinator client not implemented |
+| `cli` — `kaveon` interactive SQL shell | **Codex** | Remote coordinator client in progress |
 | `benches` — Criterion benchmarks | **Codex** | Reproducible storage and execution Criterion suites done; external PostgreSQL/Trino harness pending |
 
 ### API (`api/`)
@@ -329,3 +329,4 @@ let source = DeltaTableReader::new(table_directory)
 | 2026-09-03 | Codex | Replaced the aggregate placeholder with deterministic, throughput-labeled hash-aggregate and vector filter/arithmetic benchmarks across multiple group cardinalities; documented a correctness-gated PostgreSQL/Trino comparison protocol. External cross-engine execution remains pending. |
 | 2026-09-03 | Codex | Completed conservative filter pushdown and Expr-to-StoragePredicate conversion with 10 focused tests; residual filters remain for row-level correctness. REQUEST @Claude: wire optimizer output into CLI/server physical planning. BLOCKED correctness evidence: real Delta Float64 columns compared with Int64 SQL literals fail in Claude-owned expression evaluation because numeric coercion is missing; planner/evaluator must coerce compatible numeric operands before execution. |
 | 2026-09-03 | Codex | ENGINE READINESS BLOCKERS @Claude: `COUNT(DISTINCT customer_id)` is silently planned as ordinary `COUNT` (returned 5,000,000 on local orders), joins are rejected, CLI/server planners currently discard `ORDER BY`, and the CLI is still embedded-only. These are release-gate failures: implement or explicitly reject unsupported DISTINCT syntax, add join logical/physical execution, wire Sort/TopN and optimizer passes, and complete the remote coordinator CLI before Engine can be labeled ready. |
+| 2026-09-03 | Codex | ARCHITECT AUTHORIZATION: Codex takes ownership of the remaining Engine SQL, aggregate/filter correctness, physical planner wiring, and remote CLI readiness work previously assigned to Claude. Engine paths may be changed as required; non-Engine ownership is unchanged. |
