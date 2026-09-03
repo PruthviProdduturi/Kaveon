@@ -237,3 +237,4 @@ version = kaveon_engine.version()
 | 2026-09-02 | Codex | Restored the Engine summary to a balanced five-card row and added current aggregate Engine RSS alongside its session trend. Catalog inventory remains the distinct registry view for configured data sources. |
 | 2026-09-02 | Codex | Bounded Engine node rendering to 12 cards per page with node-name search, role filtering, and pagination so large clusters remain operationally useful. |
 | 2026-09-02 | Codex | Removed the root localhost stack's duplicate `local` catalog registration; `/data` now appears once under the canonical `kaveon` catalog while explicit catalog configuration remains supported. |
+| 2026-09-02 | Codex | Removed the duplicate Active Workers trend from the Engine console; current worker availability remains in the summary while the trend area is reserved for non-duplicative query and memory telemetry. |
