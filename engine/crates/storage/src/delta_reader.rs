@@ -1,4 +1,4 @@
-use crate::{ParquetBatchIterator, ParquetFileMetadata, ParquetReader};
+use crate::{ParquetBatchIterator, ParquetFileMetadata, ParquetReader, ScanMetrics};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use kaveon_core::{BatchSource, KaveonError, Result};
@@ -6,6 +6,7 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::time::Instant;
 
 const DEFAULT_BATCH_SIZE: usize = 8_192;
 const DELTA_VERSION_WIDTH: usize = 20;
@@ -66,21 +67,30 @@ impl DeltaTableReader {
         if self.batch_size == 0 {
             return Err(delta_error("batch size must be greater than zero"));
         }
+        let snapshot_started = Instant::now();
         let files = active_files(&self.path)?;
+        let snapshot_elapsed = snapshot_started.elapsed();
         let first = files
             .first()
             .ok_or_else(|| delta_error("Delta snapshot has no active files"))?;
-        let schema = configured_reader(first, self.batch_size, self.columns.as_ref())
-            .read()?
-            .schema()
-            .clone();
+        let metrics = ScanMetrics::default();
+        metrics.snapshot_time(snapshot_elapsed);
+        let first_reader = configured_reader(
+            first,
+            self.batch_size,
+            self.columns.as_ref(),
+            metrics.clone(),
+        )
+        .read()?;
+        let schema = first_reader.schema().clone();
         Ok(DeltaBatchIterator {
             files,
-            next_file: 0,
-            current: None,
+            next_file: 1,
+            current: Some(first_reader),
             schema,
             batch_size: self.batch_size,
             columns: self.columns.clone(),
+            metrics,
         })
     }
 }
@@ -92,6 +102,7 @@ pub struct DeltaBatchIterator {
     schema: SchemaRef,
     batch_size: usize,
     columns: Option<Vec<String>>,
+    metrics: ScanMetrics,
 }
 
 impl BatchSource for DeltaBatchIterator {
@@ -114,10 +125,23 @@ impl BatchSource for DeltaBatchIterator {
             let Some(path) = self.files.get(self.next_file) else {
                 return Ok(None);
             };
-            self.current =
-                Some(configured_reader(path, self.batch_size, self.columns.as_ref()).read()?);
+            self.current = Some(
+                configured_reader(
+                    path,
+                    self.batch_size,
+                    self.columns.as_ref(),
+                    self.metrics.clone(),
+                )
+                .read()?,
+            );
             self.next_file += 1;
         }
+    }
+}
+
+impl DeltaBatchIterator {
+    pub fn metrics(&self) -> ScanMetrics {
+        self.metrics.clone()
     }
 }
 
@@ -125,8 +149,11 @@ fn configured_reader(
     path: &Path,
     batch_size: usize,
     columns: Option<&Vec<String>>,
+    metrics: ScanMetrics,
 ) -> ParquetReader {
-    let reader = ParquetReader::new(path).with_batch_size(batch_size);
+    let reader = ParquetReader::new(path)
+        .with_batch_size(batch_size)
+        .with_metrics(metrics);
     match columns {
         Some(columns) => reader.with_columns(columns.clone()),
         None => reader,

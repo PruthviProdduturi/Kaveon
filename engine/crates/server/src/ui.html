@@ -109,7 +109,7 @@ body{font-family:var(--sans);background:radial-gradient(circle at 50% -20%,rgba(
 .query-card-top{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:9px 14px;background:var(--bg-elevated);border-bottom:1px solid var(--border)}
 .query-identity{display:flex;align-items:center;gap:10px;min-width:0}.query-id{font:600 11px var(--mono);color:var(--brand-light);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.query-time{font:11px var(--mono);color:var(--text-muted);white-space:nowrap}
 .query-body{display:grid;grid-template-columns:minmax(230px,28%) 1fr;min-height:112px}.query-meta{display:flex;align-content:flex-start;gap:14px 20px;flex-wrap:wrap;padding:16px;border-right:1px solid var(--border)}
-.query-main{min-width:0}.query-state{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:rgba(var(--success-rgb),.1);border-bottom:1px solid rgba(var(--success-rgb),.2);color:var(--success);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}.query-state.failed{background:rgba(var(--error-rgb),.1);border-color:rgba(var(--error-rgb),.2);color:var(--error)}
+.query-main{min-width:0}.query-state{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:rgba(var(--success-rgb),.1);border-bottom:1px solid rgba(var(--success-rgb),.2);color:var(--success);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}.query-state.running{background:rgba(var(--warning-rgb),.1);border-color:rgba(var(--warning-rgb),.2);color:var(--warning)}.query-state.failed{background:rgba(var(--error-rgb),.1);border-color:rgba(var(--error-rgb),.2);color:var(--error)}
 .query-sql{display:block;font:13px/1.65 var(--mono);color:var(--text);padding:16px 18px;white-space:pre-wrap;overflow-wrap:anywhere}
 .query-stat{display:flex;flex-direction:column;gap:2px;min-width:74px}.query-stat-label{font-size:9px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted)}.query-stat-value{font:600 12px var(--mono);color:var(--text-secondary)}
 table{width:100%;border-collapse:collapse;font-size:13px}
@@ -178,6 +178,8 @@ td.nl{color:var(--text-muted);font-style:italic}
   padding:16px 18px;font-family:var(--mono);font-size:11px;color:var(--text-secondary);
   white-space:pre-wrap;word-break:break-all;max-height:300px;overflow-y:auto;line-height:1.6;
 }
+.qd-plan-note{margin-bottom:12px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-surface);color:var(--text-secondary);font-size:12px}
+.qd-plan-note strong{color:var(--warning);font-weight:600}
 
 .qd-tabs{display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:16px}
 .qd-tab{
@@ -255,7 +257,7 @@ td.nl{color:var(--text-muted);font-style:italic}
       <div class="chart"><div class="chart-top"><span class="chart-label">Observed queries</span><span class="chart-value" id="cv-queries">0</span></div><svg class="spark" id="chart-queries" viewBox="0 0 320 72" preserveAspectRatio="none"></svg><div class="chart-note">Coordinator process history</div></div>
       <div class="chart"><div class="chart-top"><span class="chart-label">Engine memory</span><span class="chart-value" id="cv-memory">0 B</span></div><svg class="spark" id="chart-memory" viewBox="0 0 320 72" preserveAspectRatio="none"></svg><div class="chart-note">Resident memory across Engine processes</div></div>
     </div>
-    <div class="section-row"><div class="section-hdr">Query history <span class="ct" id="qc">0</span></div><div class="query-tools"><input id="qsearch" type="search" placeholder="Search SQL or query ID" aria-label="Search query history"><select id="qstate" aria-label="Filter query state"><option value="ALL">All states</option><option value="FINISHED">Finished</option><option value="FAILED">Failed</option></select></div></div>
+    <div class="section-row"><div class="section-hdr">Query history <span class="ct" id="qc">0</span></div><div class="query-tools"><input id="qsearch" type="search" placeholder="Search SQL or query ID" aria-label="Search query history"><select id="qstate" aria-label="Filter query state"><option value="ALL">All states</option><option value="RUNNING">Running</option><option value="FINISHED">Finished</option><option value="FAILED">Failed</option></select></div></div>
     <div id="qarea">
       <div class="empty">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
@@ -283,6 +285,20 @@ function fmt(s){
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
 function bytes(value){if(value<1024)return value+' B';if(value<1048576)return(value/1024).toFixed(1)+' KiB';if(value<1073741824)return(value/1048576).toFixed(1)+' MiB';return(value/1073741824).toFixed(2)+' GiB'}
 function submitted(value){return new Date(value).toLocaleString([],{month:'short',day:'numeric',hour:'numeric',minute:'2-digit',second:'2-digit'})}
+function durationUs(value){
+  if(value===undefined||value===null)return 'Not measured';
+  if(value<1000)return value+' µs';
+  if(value<1000000)return(value/1000).toFixed(2)+' ms';
+  return(value/1000000).toFixed(2)+' s';
+}
+function durationNs(value){
+  if(value===undefined||value===null)return 'Not measured';
+  if(value<1000)return value+' ns';
+  if(value<1000000)return(value/1000).toFixed(2)+' µs';
+  if(value<1000000000)return(value/1000000).toFixed(2)+' ms';
+  return(value/1000000000).toFixed(2)+' s';
+}
+function rate(value,unit){return Number.isFinite(value)?value.toLocaleString(undefined,{maximumFractionDigits:1})+' '+unit:'Not measured'}
 function spark(id,values){
   const svg=document.getElementById(id);if(!values.length)return;
   const max=Math.max(...values,1),step=values.length>1?320/(values.length-1):0;
@@ -332,7 +348,7 @@ function showDetail(id){
   const el=document.getElementById('view-detail');
   el.style.display='block';
 
-  const badge=q.state==='FINISHED'?'<span class="badge badge-finished">Finished</span>':'<span class="badge badge-failed">Failed</span>';
+  const badge=q.state==='FINISHED'?'<span class="badge badge-finished">Finished</span>':q.state==='RUNNING'?'<span class="badge badge-running">Running</span>':'<span class="badge badge-failed">Failed</span>';
   const elapsed=q.elapsed_ms||0;
 
   let h=`<div class="qd-inner">
@@ -346,6 +362,7 @@ function showDetail(id){
     </div>
     <div class="qd-tabs" id="qd-tabs">
       <div class="qd-tab active" data-t="overview">Overview</div>
+      <div class="qd-tab" data-t="plan">Plan</div>
       <div class="qd-tab" data-t="results">Results</div>
       <div class="qd-tab" data-t="json">JSON</div>
     </div>`;
@@ -358,6 +375,14 @@ function showDetail(id){
       <div class="qd-metric"><div class="qd-metric-label">Elapsed</div><div class="qd-metric-value">${elapsed}<span style="font-size:12px;color:var(--text-muted)">ms</span></div></div>
       <div class="qd-metric"><div class="qd-metric-label">Rows</div><div class="qd-metric-value">${q.rows?q.rows.length:0}</div></div>
       <div class="qd-metric"><div class="qd-metric-label">Columns</div><div class="qd-metric-value">${q.columns?q.columns.length:0}</div></div>
+      <div class="qd-metric"><div class="qd-metric-label">Submitted</div><div class="qd-metric-value" style="font-size:13px">${submitted(q.submitted_at_ms)}</div></div>
+      <div class="qd-metric"><div class="qd-metric-label">Completed</div><div class="qd-metric-value" style="font-size:13px">${q.completed_at_ms?submitted(q.completed_at_ms):'In progress'}</div></div>
+    </div></div>
+    <div class="qd-section"><div class="qd-label">Measured timeline</div><div class="qd-grid">
+      <div class="qd-metric"><div class="qd-metric-label">Analysis</div><div class="qd-metric-value">${durationUs(q.timings&&q.timings.analysis_us)}</div></div>
+      <div class="qd-metric"><div class="qd-metric-label">Physical planning</div><div class="qd-metric-value">${durationUs(q.timings&&q.timings.planning_us)}</div></div>
+      <div class="qd-metric"><div class="qd-metric-label">Execution</div><div class="qd-metric-value">${durationUs(q.timings&&q.timings.execution_us)}</div></div>
+      <div class="qd-metric"><div class="qd-metric-label">Result serialization</div><div class="qd-metric-value">${durationUs(q.timings&&q.timings.result_serialization_us)}</div></div>
     </div></div>`;
 
   if(q.error){
@@ -370,6 +395,31 @@ function showDetail(id){
     h+=`</div></div>`;
   }
   h+=`</div></div>`;
+
+  // Plan
+  h+=`<div class="qd-pane" id="qdt-plan">
+    <div class="qd-label">Logical plan</div>
+    <div class="qd-json">${q.plan&&q.plan.logical?esc(q.plan.logical):'Not available yet'}</div>
+    <div class="qd-label" style="margin-top:20px">Storage scans</div>`;
+  if(q.scans&&q.scans.length){
+    q.scans.forEach((s,index)=>{h+=`<div class="qd-section"><div class="qd-label">Scan ${index+1}</div><div class="qd-grid">
+      <div class="qd-metric"><div class="qd-metric-label">Files opened</div><div class="qd-metric-value">${s.files_opened} / ${s.files_considered}</div></div>
+      <div class="qd-metric"><div class="qd-metric-label">Row groups read</div><div class="qd-metric-value">${s.row_groups_read} / ${s.row_groups_considered}</div></div>
+      <div class="qd-metric"><div class="qd-metric-label">Row groups pruned</div><div class="qd-metric-value">${s.row_groups_pruned}</div></div>
+      <div class="qd-metric"><div class="qd-metric-label">Rows emitted</div><div class="qd-metric-value">${s.rows_emitted.toLocaleString()}</div></div>
+      <div class="qd-metric"><div class="qd-metric-label">Selected compressed data</div><div class="qd-metric-value">${bytes(s.compressed_bytes_selected)}</div></div>
+      <div class="qd-metric"><div class="qd-metric-label">Read throughput</div><div class="qd-metric-value">${rate(s.compressed_bytes_per_second,'B/s')}</div></div>
+      <div class="qd-metric"><div class="qd-metric-label">Row throughput</div><div class="qd-metric-value">${rate(s.rows_per_second,'rows/s')}</div></div>
+      <div class="qd-metric"><div class="qd-metric-label">Delta snapshot</div><div class="qd-metric-value">${durationNs(s.snapshot_ns)}</div></div>
+      <div class="qd-metric"><div class="qd-metric-label">Parquet footers</div><div class="qd-metric-value">${durationNs(s.footer_ns)}</div></div>
+      <div class="qd-metric"><div class="qd-metric-label">Read and decode</div><div class="qd-metric-value">${durationNs(s.read_ns)}</div></div>
+    </div></div>`});
+  }else{
+    h+=`<div class="qd-plan-note"><strong>Not measured.</strong> No storage scan was attached to this query.</div>`;
+  }
+  h+=`<div class="qd-label" style="margin-top:20px">Physical operators and distributed stages</div>
+    <div class="qd-plan-note"><strong>Not measured.</strong> The current executor does not yet expose per-operator CPU, memory, live stages, or task counters. Kaveon reports this explicitly instead of deriving or fabricating values.</div>
+  </div>`;
 
   // Results
   h+=`<div class="qd-pane" id="qdt-results">`;
@@ -419,7 +469,7 @@ function renderHistory(){
   visible.forEach(id=>{
     const q=queries[id];if(!q)return;
     const preview=esc(q.sql);
-    const stateClass=q.state==='FAILED'?' failed':'';
+    const stateClass=q.state==='FAILED'?' failed':q.state==='RUNNING'?' running':'';
     h+=`<button class="query-card" type="button" data-query-id="${esc(id)}">
       <span class="query-card-top"><span class="query-identity"><span class="query-id">${esc(id)}</span></span><span class="query-time">${submitted(q.submitted_at_ms)}</span></span>
       <span class="query-body"><span class="query-meta">

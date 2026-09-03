@@ -211,6 +211,11 @@ error in the terminal.
 - The CLI embeds and executes the Engine in its own process. It does not submit
   statements to `kaveon-server`, so CLI queries do not appear in the Engine web
   UI query history.
+- Queries submitted through the Engine HTTP API appear immediately as running
+  records. Completed records retain measured lifecycle timings, the logical
+  plan, and Parquet/Delta scan statistics. Physical operator and distributed
+  stage/task metrics are explicitly unavailable until executor instrumentation
+  is wired.
 - The Engine currently executes local Parquet and local Delta Lake reads. Iceberg,
   ADLS Gen2, and S3 are not executable through the CLI.
 - A plain Parquet table is one configured file. Reading multiple Parquet files as

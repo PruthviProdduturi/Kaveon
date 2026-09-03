@@ -10,6 +10,9 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
+
+use crate::ScanMetrics;
 
 const DEFAULT_BATCH_SIZE: usize = 8_192;
 
@@ -25,15 +28,23 @@ pub struct ParquetFileMetadata {
 pub struct ParquetBatchIterator {
     schema: SchemaRef,
     inner: ParquetRecordBatchReader,
+    metrics: ScanMetrics,
 }
 
 impl Iterator for ParquetBatchIterator {
     type Item = Result<RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner
-            .next()
-            .map(|result| result.map_err(|error| storage_error(error.to_string())))
+        let started = Instant::now();
+        let result = self.inner.next();
+        self.metrics.read_time(started.elapsed());
+        result.map(|result| {
+            result
+                .inspect(|batch| {
+                    self.metrics.emitted(batch.num_rows());
+                })
+                .map_err(|error| storage_error(error.to_string()))
+        })
     }
 }
 
@@ -47,12 +58,19 @@ impl BatchSource for ParquetBatchIterator {
     }
 }
 
+impl ParquetBatchIterator {
+    pub fn metrics(&self) -> ScanMetrics {
+        self.metrics.clone()
+    }
+}
+
 /// Configuration for a synchronous local Parquet read.
 pub struct ParquetReader {
     path: PathBuf,
     batch_size: usize,
     columns: Option<Vec<String>>,
     predicate: Option<StoragePredicate>,
+    metrics: Option<ScanMetrics>,
 }
 
 impl ParquetReader {
@@ -62,6 +80,7 @@ impl ParquetReader {
             batch_size: DEFAULT_BATCH_SIZE,
             columns: None,
             predicate: None,
+            metrics: None,
         }
     }
 
@@ -83,11 +102,26 @@ impl ParquetReader {
         self
     }
 
+    pub(crate) fn with_metrics(mut self, metrics: ScanMetrics) -> Self {
+        self.metrics = Some(metrics);
+        self
+    }
+
     pub fn read(&self) -> Result<ParquetBatchIterator> {
-        let builder = self.configure_builder(self.open_builder()?)?;
+        let metrics = self.metrics.clone().unwrap_or_default();
+        metrics.files_considered(1);
+        let footer_started = Instant::now();
+        let builder = self.open_builder()?;
+        metrics.footer_time(footer_started.elapsed());
+        metrics.file_opened();
+        let builder = self.configure_builder(builder, &metrics)?;
         let inner = builder.build().map_err(parquet_error)?;
         let schema = inner.schema();
-        Ok(ParquetBatchIterator { schema, inner })
+        Ok(ParquetBatchIterator {
+            schema,
+            inner,
+            metrics,
+        })
     }
 
     /// Convenience method for callers that explicitly want materialization.
@@ -116,23 +150,60 @@ impl ParquetReader {
     fn configure_builder(
         &self,
         mut builder: ParquetRecordBatchReaderBuilder<File>,
+        metrics: &ScanMetrics,
     ) -> Result<ParquetRecordBatchReaderBuilder<File>> {
         let schema = Arc::clone(builder.schema());
         builder = builder.with_batch_size(self.batch_size);
 
-        if let Some(columns) = &self.columns {
-            let projection = projection_indices(&schema, columns)?;
-            let mask = ProjectionMask::roots(builder.parquet_schema(), projection);
+        let projection = self
+            .columns
+            .as_ref()
+            .map(|columns| projection_indices(&schema, columns))
+            .transpose()?;
+
+        if let Some(projection) = projection.as_ref() {
+            let mask = ProjectionMask::roots(builder.parquet_schema(), projection.clone());
             builder = builder.with_projection(mask);
         }
 
-        if let Some(predicate) = &self.predicate {
+        let groups = if let Some(predicate) = &self.predicate {
             validate_predicate(predicate, &schema)?;
-            let groups = matching_row_groups(builder.metadata().as_ref(), &schema, predicate);
+            matching_row_groups(builder.metadata().as_ref(), &schema, predicate)
+        } else {
+            (0..builder.metadata().num_row_groups()).collect()
+        };
+        record_selection_metrics(
+            builder.metadata().as_ref(),
+            &groups,
+            projection.as_deref(),
+            metrics,
+        );
+        if self.predicate.is_some() {
             builder = builder.with_row_groups(groups);
         }
         Ok(builder)
     }
+}
+
+fn record_selection_metrics(
+    metadata: &ParquetMetaData,
+    groups: &[usize],
+    projection: Option<&[usize]>,
+    metrics: &ScanMetrics,
+) {
+    metrics.row_groups(metadata.num_row_groups() as u64, groups.len() as u64);
+    let mut rows = 0_u64;
+    let mut bytes = 0_u64;
+    for index in groups {
+        let group = metadata.row_group(*index);
+        rows = rows.saturating_add(group.num_rows().max(0) as u64);
+        for (column_index, column) in group.columns().iter().enumerate() {
+            if projection.is_none_or(|indices| indices.contains(&column_index)) {
+                bytes = bytes.saturating_add(column.compressed_size().max(0) as u64);
+            }
+        }
+    }
+    metrics.selected(rows, bytes);
 }
 
 fn projection_indices(schema: &SchemaRef, columns: &[String]) -> Result<Vec<usize>> {
@@ -643,5 +714,39 @@ mod tests {
             CompareOp::Ne,
             &ScalarValue::Int64(4),
         ));
+    }
+
+    #[test]
+    fn reports_measured_scan_metrics() {
+        let file = fixture();
+        let mut source = ParquetReader::new(&file.0)
+            .with_batch_size(2)
+            .with_columns(vec!["id".to_owned()])
+            .with_predicate(compare("id", CompareOp::Eq, ScalarValue::Int64(4)))
+            .read()
+            .expect("reader must open");
+        let metrics = source.metrics();
+
+        let planned = metrics.snapshot();
+        assert_eq!(planned.files_considered, 1);
+        assert_eq!(planned.files_opened, 1);
+        assert_eq!(planned.row_groups_considered, 2);
+        assert_eq!(planned.row_groups_selected, 1);
+        assert_eq!(planned.row_groups_pruned(), 1);
+        assert_eq!(planned.rows_selected, ROW_GROUP_SIZE as u64);
+        assert!(planned.compressed_bytes_selected > 0);
+        assert_eq!(planned.rows_emitted, 0);
+
+        while source
+            .next()
+            .transpose()
+            .expect("batch must decode")
+            .is_some()
+        {}
+        let completed = metrics.snapshot();
+        assert_eq!(completed.rows_emitted, ROW_GROUP_SIZE as u64);
+        assert_eq!(completed.batches_emitted, 2);
+        assert!(completed.rows_per_second().is_finite());
+        assert!(completed.compressed_bytes_per_second().is_finite());
     }
 }
