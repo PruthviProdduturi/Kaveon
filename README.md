@@ -26,11 +26,11 @@ Kaveon combines a columnar analytical engine, deterministic data intelligence, a
 
 | Pillar | Responsibility | Current state |
 |---|---|---|
-| **Kaveon Engine** | Vectorized Rust query engine over Arrow `RecordBatch` data; direct local Parquet reads, SQL, CLI, and HTTP server | Alpha |
+| **Kaveon Engine** | Vectorized Rust query engine over Arrow `RecordBatch` data; direct local Parquet and Delta reads, SQL, CLI, and HTTP server | Alpha |
 | **Kaveon DLM** | Deterministic dataset context compilation and natural-language-to-SQL routing without an LLM | Integrated in the Python API |
 | **Kaveon Studio** | Next.js analytics experience for questions, SQL, datasets, charts, and dashboards | Live preview |
 
-The product direction is direct lakehouse analytics: read Parquet, Delta Lake, and Iceberg from local storage, ADLS Gen2, and S3 without an import step. Today, the Rust Engine reads local Parquet; cloud object stores and table formats are planned and must not be confused with shipped support.
+The product direction is direct lakehouse analytics: read Parquet, Delta Lake, and Iceberg from local storage, ADLS Gen2, and S3 without an import step. Today, the Rust Engine reads local Parquet and local Delta tables with a complete JSON commit history. Delta checkpoints, cloud object stores, and Iceberg remain target capabilities.
 
 ## Why Kaveon
 
@@ -129,13 +129,14 @@ Studio runs on `http://localhost:3000`; the API defaults to `http://localhost:80
 | Data system | Current path | State |
 |---|---|---|
 | Local Parquet | Kaveon Engine direct read | Alpha |
+| Local Delta Lake | Kaveon Engine JSON-log snapshot and multi-file read | Alpha |
 | Microsoft Fabric SQL / Azure SQL | Studio + API connector | Available |
 | PostgreSQL | Studio + API connector | Available |
 | MySQL | API connector; not exposed in Studio's source-type picker | Available through API |
 | StarRocks | Studio + API connector (MySQL protocol) | Available |
 | Trino | No executable driver | Planned |
 | ADLS Gen2 / S3 | Kaveon Engine direct read | Planned |
-| Delta Lake / Iceberg | Kaveon Engine table-format reader | Planned |
+| Delta Lake on ADLS Gen2 / S3; Iceberg | Kaveon Engine table-format reader | Planned |
 
 Each current platform query targets one selected data source; cross-source federated execution is not implemented.
 

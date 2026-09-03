@@ -65,13 +65,15 @@ username/password login.
 
 ## Engine configuration — alpha
 
-The CLI accepts `--data-dir` for a directory of local Parquet files. The server
+The CLI accepts `--data-dir` for a directory of local Parquet files and immediate
+child Delta table directories. The server
 uses TOML configuration; examples are in `engine/kaveon.example.toml` and
 `engine/etc/`. Catalog examples are in `engine/catalogs.example/`.
 
-Only local Parquet storage is executable. ADLS Gen2, S3, Delta Lake, Iceberg, the
-`Optimized` access pattern, and distributed execution are represented in types or
-configuration but remain target capabilities.
+Local Parquet and local Delta Lake storage are executable. Delta support replays
+all JSON commits from version 0 and reads the active Parquet files; checkpoint-only
+or otherwise incomplete JSON history is unsupported. ADLS Gen2, S3, Iceberg, the
+`Optimized` access pattern, and distributed execution remain target capabilities.
 
 ## Deployment secrets
 

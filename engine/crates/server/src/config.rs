@@ -2,7 +2,7 @@ use kaveon_core::{
     AccessPattern, CatalogManager, CatalogProvider, DataFormat, MemoryCatalog, StorageType,
     TableMeta,
 };
-use kaveon_storage::ParquetReader;
+use kaveon_storage::{DeltaTableReader, ParquetReader};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -178,7 +178,22 @@ fn build_local_catalog(name: &str, dir: &Path) -> MemoryCatalog {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().is_some_and(|e| e == "parquet")
+            if path.is_dir() && path.join("_delta_log").is_dir() {
+                if let Some(table_name) = path.file_name().and_then(|s| s.to_str())
+                    && let Ok(meta) = DeltaTableReader::new(&path).metadata()
+                {
+                    let _ = catalog.register_table(
+                        "default",
+                        TableMeta {
+                            name: table_name.to_owned(),
+                            arrow_schema: meta.schema,
+                            location: path.file_name().unwrap().to_string_lossy().into_owned(),
+                            access: AccessPattern::Shortcut,
+                            format: DataFormat::Delta,
+                        },
+                    );
+                }
+            } else if path.extension().is_some_and(|e| e == "parquet")
                 && let Some(table_name) = path.file_stem().and_then(|s| s.to_str())
                 && let Ok(meta) = ParquetReader::new(&path).metadata()
             {
@@ -310,8 +325,11 @@ fn build_catalog_from_toml(name: &str, content: &str) -> anyhow::Result<MemoryCa
         };
         let arrow_schema = if let StorageType::Local { ref base_path } = storage {
             let full_path = base_path.join(&t.location);
-            ParquetReader::new(&full_path)
-                .metadata()
+            match format {
+                DataFormat::Delta => DeltaTableReader::new(&full_path).metadata(),
+                DataFormat::Parquet => ParquetReader::new(&full_path).metadata(),
+                DataFormat::Iceberg => anyhow::bail!("local Iceberg metadata is not implemented"),
+            }
                 .map(|m| m.schema)
                 .unwrap_or_else(|_| Arc::new(arrow::datatypes::Schema::empty()))
         } else {

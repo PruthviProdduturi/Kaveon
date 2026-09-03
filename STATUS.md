@@ -35,13 +35,14 @@
 | Capability | Status | Notes |
 |---|---|---|
 | Local Parquet reader, projection, metadata statistics, row-group pruning | 🧪 Alpha | Synchronous Arrow `RecordBatch` stream |
+| Local Delta Lake reader | 🧪 Alpha | Replays complete JSON commits from version 0 and streams all active Parquet files; checkpoints unsupported |
 | Scan, filter, project, hash aggregate, limit | 🧪 Alpha | Vectorized node-local execution |
 | SQL parser, CLI, HTTP statement API, catalog | 🧪 Alpha | Engine is not yet wired into Studio/API |
 | Coordinator/worker discovery and heartbeats | 🧪 Alpha | Discovery only; queries still execute on the receiving node |
 | Sort and TopN | 📋 Not Started | `ORDER BY` is parsed but not physically executed |
 | Filter-pushdown optimizer pass | 📋 Not Started | Optimizer currently returns the input plan unchanged |
 | ADLS Gen2 / S3 readers | 📋 Planning | Local validation precedes cloud object storage |
-| Delta Lake / Iceberg readers | 📋 Planning | Snapshot and manifest semantics not implemented |
+| Cloud Delta Lake / Iceberg readers | 📋 Planning | ADLS/S3 Delta, checkpoint replay, and Iceberg manifest semantics not implemented |
 | Distributed scheduling, exchange, retry | 📋 Planning | Required before Trino-class distributed claims |
 | Engine HTTP auth and TLS | 📋 Planning | Do not expose the alpha server directly to untrusted networks |
 

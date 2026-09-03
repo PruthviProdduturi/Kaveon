@@ -1298,6 +1298,7 @@ dependencies = [
  "criterion",
  "kaveon-core",
  "parquet",
+ "serde_json",
  "thiserror",
  "tokio",
 ]

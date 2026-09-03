@@ -1,11 +1,14 @@
-use kaveon_core::{BatchOperator, CatalogManager, Expr, KaveonError, Result, TableReference};
+use kaveon_core::{
+    BatchOperator, BatchSource, CatalogManager, DataFormat, Expr, KaveonError, Result,
+    TableReference,
+};
 use kaveon_exec::aggregate::{AggExpr, AggFunc, HashAggregate};
 use kaveon_exec::filter::FilterOperator;
 use kaveon_exec::limit::LimitOperator;
 use kaveon_exec::project::ProjectOperator;
 use kaveon_exec::scan::ScanOperator;
 use kaveon_sql::logical_plan::{AggregateExpr, LogicalPlan};
-use kaveon_storage::ParquetReader;
+use kaveon_storage::{DeltaTableReader, ParquetReader};
 
 pub fn plan_to_operator(
     plan: &LogicalPlan,
@@ -17,14 +20,32 @@ pub fn plan_to_operator(
             let resolved = catalog.resolve_table(&reference)?;
             let path = resolved.full_path();
 
-            let mut reader = ParquetReader::new(&path);
-            if let Some(cols) = columns {
-                reader = reader.with_columns(cols.clone());
-            }
-            let source = reader
-                .read()
-                .map_err(|e| KaveonError::Execution(format!("failed to open '{}': {e}", path)))?;
-            let scan = ScanOperator::new(Box::new(source), columns.as_deref())?;
+            let source: Box<dyn BatchSource> = match resolved.table.format {
+                DataFormat::Parquet => {
+                    let mut reader = ParquetReader::new(&path);
+                    if let Some(cols) = columns {
+                        reader = reader.with_columns(cols.clone());
+                    }
+                    Box::new(reader.read().map_err(|e| {
+                        KaveonError::Execution(format!("failed to open '{path}': {e}"))
+                    })?)
+                }
+                DataFormat::Delta => {
+                    let mut reader = DeltaTableReader::new(&path);
+                    if let Some(cols) = columns {
+                        reader = reader.with_columns(cols.clone());
+                    }
+                    Box::new(reader.read().map_err(|e| {
+                        KaveonError::Execution(format!("failed to open '{path}': {e}"))
+                    })?)
+                }
+                DataFormat::Iceberg => {
+                    return Err(KaveonError::Execution(
+                        "local Iceberg scans are not implemented".into(),
+                    ));
+                }
+            };
+            let scan = ScanOperator::new(source, columns.as_deref())?;
             Ok(Box::new(scan))
         }
 

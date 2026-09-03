@@ -8,7 +8,7 @@ by the selected database and Kaveon's API guardrails.
 
 | SQL feature | State | Notes |
 |---|---|---|
-| `SELECT` | Alpha | Local Parquet tables resolved through the Engine catalog |
+| `SELECT` | Alpha | Local Parquet and local Delta tables resolved through the Engine catalog |
 | Column projection and aliases | Alpha | Projection is strict; unknown or duplicate requested columns fail |
 | `WHERE` comparisons and boolean expressions | Alpha | Row-level filter operator is implemented |
 | `GROUP BY` | Alpha | In-memory blocking hash aggregation |
@@ -22,7 +22,9 @@ by the selected database and Kaveon's API guardrails.
 - Joins, subqueries, window functions, `HAVING`, set operations, DDL, and DML.
 - Physical Sort or TopN execution.
 - Filter predicate pushdown from the logical planner into Parquet row-group pruning.
-- Delta Lake, Iceberg, ADLS Gen2, or S3 reads.
+- Delta checkpoint replay, Iceberg, ADLS Gen2, or S3 reads. Local Delta tables
+  are supported only when their complete JSON commit history is available from
+  version 0.
 - Cross-node fragments, shuffle, retry, spill, admission control, or cancellation.
 
 Unsupported syntax should be treated as unsupported even if the upstream SQL
