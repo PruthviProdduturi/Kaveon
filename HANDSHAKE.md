@@ -23,13 +23,13 @@
 | `exec/scan` — scan operator | **Claude** | Done |
 | `exec/aggregate` — hash aggregate | **Claude** | Done |
 | `exec/filter` — filter evaluation | **Claude** | Done |
-| `exec/sort` — sort operator | **Codex** | Not started |
-| `exec/topn` — TopN operator | **Codex** | Not started |
+| `exec/sort` — sort operator | **Codex** | Done; physical planner wiring pending Claude |
+| `exec/topn` — TopN operator | **Codex** | Done; physical planner wiring pending Claude |
 | `sql` — parser, logical plan | **Claude** | Done |
-| `optim` — filter pushdown | **Codex** | Not started |
+| `optim` — filter pushdown | **Codex** | Done; physical planner wiring pending Claude |
 | `python` — PyO3 bindings | **Claude** | Scaffold |
 | `cli` — `kaveon` interactive SQL shell | **Claude** | Local embedded shell done; remote coordinator client not implemented |
-| `benches` — Criterion benchmarks | **Codex** | Storage microbenchmark scaffold done; cross-engine suite pending |
+| `benches` — Criterion benchmarks | **Codex** | Reproducible storage and execution Criterion suites done; external PostgreSQL/Trino harness pending |
 
 ### API (`api/`)
 
@@ -220,6 +220,33 @@ pub struct NodeMetrics { operator: OperatorMetrics, scan: Option<ScanMetrics> }
 - Storage attaches `ScanMetrics` to scan nodes; execution operators attach `OperatorMetrics` without depending on server or UI types.
 - Planner, operator, coordinator, and UI wiring remain separate follow-up work owned by their respective components.
 
+### Sort and TopN execution
+
+```rust
+let ordering = vec![
+    SortExpr::new(Expr::Column("revenue".into()), false).with_nulls_first(false),
+];
+let sorted = SortOperator::new(input, ordering.clone())?;
+let top_ten = TopNOperator::new(input, ordering, 10)?;
+```
+
+- `SortExpr::new(expr, ascending)` defaults to SQL-style null ordering: nulls last for ascending and first for descending; `with_nulls_first` applies an explicit SQL `NULLS FIRST/LAST` choice.
+- `SortOperator` performs lexicographic ordering across all input batches and emits bounded output batches (8,192 rows by default).
+- `TopNOperator` uses Arrow's limited lexicographic index selection and returns at most the requested number of rows; a zero limit does not consume its input.
+- Claude's CLI/server physical planners map `LogicalPlan::Sort { order_by }` to `SortOperator`, constructing each `SortExpr` from `(Expr, ascending)`. When a `Limit` directly wraps a `Sort`, they may fuse it to `TopNOperator`; otherwise use `LimitOperator` over `SortOperator`.
+
+### Filter pushdown optimization
+
+```rust
+let optimized = kaveon_optim::rules::push_filter_down(logical_plan);
+let storage_predicate = kaveon_optim::rules::to_storage_predicate(&filter_expr);
+```
+
+- `push_filter_down` moves filters through sort and direct-column projections, rewriting simple aliases, while preserving the row-level filter at the scan boundary.
+- Limit, aggregate, computed/ambiguous projection, and unsupported expression boundaries are not crossed.
+- `to_storage_predicate` accepts column/literal comparisons, `IS NULL`, `IS NOT NULL`, safe conjuncts from `AND`, and fully convertible `OR`/`NOT` trees. It rejects arithmetic, functions, column-to-column comparisons, `NULL` comparisons, and partially convertible disjunctions.
+- Claude's physical planners apply the optimizer before translation and attach a converted predicate from `Filter(Scan)` to the storage reader while retaining the execution filter.
+
 ### Local Delta snapshot API
 
 ```rust
@@ -298,3 +325,7 @@ let source = DeltaTableReader::new(table_directory)
 | 2026-09-03 | Codex | Rebalanced the About-only public header after 1710px rendered review: enlarged the wordmark, established a 72px rail, replaced tiny theme-overridden links with deliberate navigation controls, and strengthened the primary action. Docs remains unchanged. |
 | 2026-09-03 | Codex | Removed the global-theme background leaking behind the About wordmark, tightened its left inset, removed the header/hero divider, and replaced implementation-disclaimer hero copy with the unified platform value proposition. |
 | 2026-09-03 | Codex | Audited the CLI against the remote-client contract: the current binary remains an embedded local shell and lacks `--server`, remote `--execute`, transport/auth/output options, and release packaging. Corrected the ownership status; Claude's existing remote-client request remains open. |
+| 2026-09-03 | Codex | Completed vectorized multi-batch Sort and TopN operators with lexicographic ASC/DESC ordering, explicit null placement, bounded sort output batches, Arrow limited TopN selection, strict configuration/expression errors, and 13 passing unit tests. REQUEST @Claude: wire `LogicalPlan::Sort` in the CLI/server physical planners using `SortExpr`; fuse directly wrapped `Limit(Sort)` to `TopNOperator`. |
+| 2026-09-03 | Codex | Replaced the aggregate placeholder with deterministic, throughput-labeled hash-aggregate and vector filter/arithmetic benchmarks across multiple group cardinalities; documented a correctness-gated PostgreSQL/Trino comparison protocol. External cross-engine execution remains pending. |
+| 2026-09-03 | Codex | Completed conservative filter pushdown and Expr-to-StoragePredicate conversion with 10 focused tests; residual filters remain for row-level correctness. REQUEST @Claude: wire optimizer output into CLI/server physical planning. BLOCKED correctness evidence: real Delta Float64 columns compared with Int64 SQL literals fail in Claude-owned expression evaluation because numeric coercion is missing; planner/evaluator must coerce compatible numeric operands before execution. |
+| 2026-09-03 | Codex | ENGINE READINESS BLOCKERS @Claude: `COUNT(DISTINCT customer_id)` is silently planned as ordinary `COUNT` (returned 5,000,000 on local orders), joins are rejected, CLI/server planners currently discard `ORDER BY`, and the CLI is still embedded-only. These are release-gate failures: implement or explicitly reject unsupported DISTINCT syntax, add join logical/physical execution, wire Sort/TopN and optimizer passes, and complete the remote coordinator CLI before Engine can be labeled ready. |
