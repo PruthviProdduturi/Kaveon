@@ -40,7 +40,7 @@
 | SQL parser, CLI, HTTP statement API, catalog | 🧪 Alpha | Engine is not yet wired into Studio/API |
 | Coordinator/worker discovery and heartbeats | 🧪 Alpha | Two-worker discovery plus partitioned partial aggregation for eligible single-source queries |
 | Query lifecycle and storage-scan telemetry | 🧪 Alpha | HTTP history retains real phase timings, logical plans, file/row-group pruning, selected bytes, emitted rows, and scan throughput |
-| Physical operator, stage, and task telemetry | 📋 Planning | Shared nullable metrics contract exists; executor and distributed scheduler instrumentation are not wired |
+| Physical operator, stage, and task telemetry | 🧪 Alpha | Completed distributed stages/tasks report worker, partition, elapsed time, rows, Arrow batches, and bytes; live and per-operator metrics remain target |
 | Sort and TopN | 📋 Not Started | `ORDER BY` is parsed but not physically executed |
 | Filter-pushdown optimizer pass | 📋 Not Started | Optimizer currently returns the input plan unchanged |
 | ADLS Gen2 / S3 readers | 📋 Planning | Local validation precedes cloud object storage |

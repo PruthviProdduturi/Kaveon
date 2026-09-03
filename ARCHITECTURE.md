@@ -67,7 +67,7 @@ flowchart LR
 
 Today the Engine queries local single-file Parquet tables and local multi-file Delta tables. Delta snapshot resolution replays a complete JSON commit history from version 0; checkpoint replay is not supported. Studio and FastAPI do not route queries to the Engine, and Python bindings are a scaffold. ADLS Gen2, S3, and Iceberg remain non-executable target paths.
 
-HTTP query records are inserted at submission and retain measured analysis, physical-planning, execution, and result-serialization durations. Completed storage scans report files opened, row groups considered/read/pruned, selected compressed Parquet bytes, emitted rows and batches, Delta snapshot time, footer time, read time, and throughput. The shared telemetry types distinguish a measured zero from an unavailable value. Physical operator CPU/memory and distributed stage/task telemetry are not yet emitted.
+HTTP query records are inserted at submission and retain measured analysis, physical-planning, execution, and result-serialization durations. Completed storage scans report files opened, row groups considered/read/pruned, selected compressed Parquet bytes, emitted rows and batches, Delta snapshot time, footer time, read time, and throughput. Completed distributed stages report their worker tasks, partitions, elapsed time, output rows, Arrow batches, and transport bytes. The shared telemetry types distinguish a measured zero from an unavailable value. Physical operator CPU/memory, blocked time, spill, and live task updates are not yet emitted.
 
 ## Engine architecture
 
@@ -265,7 +265,7 @@ kaveon-server [config.toml]
 5. Workers start heartbeats to the coordinator.
 6. Bind Axum to `0.0.0.0:<http_port>`; default `8080`.
 
-Docker declares one coordinator and two workers. Workers advertise routable service URIs, receive partition tasks, and scan disjoint Parquet row groups or Delta active files. The coordinator merges eligible partial COUNT, SUM, MIN, MAX, and GROUP BY results. Queries requiring hash exchange, distributed ordering, AVG state, exact DISTINCT state, retry, or spill deliberately remain node-local. The shared data volume starts empty unless populated externally.
+Docker declares one coordinator and two workers. Workers advertise routable service URIs, receive JSON task-control requests, and return typed Arrow IPC streams after scanning disjoint Parquet row groups or Delta active files. The coordinator merges eligible partial COUNT, SUM, MIN, MAX, and GROUP BY results. Queries requiring hash exchange, distributed ordering, AVG state, exact DISTINCT state, retry, or spill deliberately remain node-local. The shared data volume starts empty unless populated externally.
 
 ## Quality invariants
 

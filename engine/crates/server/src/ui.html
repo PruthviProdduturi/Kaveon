@@ -452,10 +452,27 @@ function showDetail(id){
       <div class="qd-metric"><div class="qd-metric-label">Read and decode</div><div class="qd-metric-value">${durationNs(s.read_ns)}</div></div>
     </div></div>`});
   }else{
-    h+=`<div class="qd-plan-note"><strong>Not measured.</strong> No storage scan was attached to this query.</div>`;
+    h+=q.stages&&q.stages.length
+      ?`<div class="qd-plan-note"><strong>Worker-level metric pending.</strong> This distributed stage reports task output; worker storage-scan metrics are not yet aggregated into the coordinator record.</div>`
+      :`<div class="qd-plan-note"><strong>Not measured.</strong> No storage scan was attached to this query.</div>`;
   }
-  h+=`<div class="qd-label" style="margin-top:20px">Physical operators and distributed stages</div>
-    <div class="qd-plan-note"><strong>Not measured.</strong> The current executor does not yet expose per-operator CPU, memory, live stages, or task counters. Kaveon reports this explicitly instead of deriving or fabricating values.</div>
+  h+=`<div class="qd-label" style="margin-top:20px">Distributed stages</div>`;
+  if(q.stages&&q.stages.length){
+    q.stages.forEach(stage=>{
+      h+=`<div class="qd-section"><div class="qd-grid">
+        <div class="qd-metric"><div class="qd-metric-label">Stage</div><div class="qd-metric-value">${stage.stage_id}</div></div>
+        <div class="qd-metric"><div class="qd-metric-label">State</div><div class="qd-metric-value">${esc(stage.state)}</div></div>
+        <div class="qd-metric"><div class="qd-metric-label">Completed tasks</div><div class="qd-metric-value">${stage.completed_tasks} / ${stage.task_count}</div></div>
+        <div class="qd-metric"><div class="qd-metric-label">Elapsed</div><div class="qd-metric-value">${durationUs(stage.elapsed_us)}</div></div>
+      </div><div class="qd-data" style="margin-top:14px"><table><thead><tr><th>Task</th><th>Worker</th><th>Partition</th><th>Elapsed</th><th>Rows</th><th>Batches</th><th>Arrow bytes</th></tr></thead><tbody>`;
+      stage.tasks.forEach(task=>{h+=`<tr><td>${esc(task.task_id)}</td><td>${esc(task.node_id)}</td><td>${task.partition_index}</td><td>${durationUs(task.elapsed_us)}</td><td>${task.output_rows.toLocaleString()}</td><td>${task.output_batches.toLocaleString()}</td><td>${bytes(task.output_bytes)}</td></tr>`});
+      h+=`</tbody></table></div></div>`;
+    });
+  }else{
+    h+=`<div class="qd-plan-note"><strong>Node-local execution.</strong> No distributed stage was scheduled for this query.</div>`;
+  }
+  h+=`<div class="qd-label" style="margin-top:20px">Physical operator metrics</div>
+    <div class="qd-plan-note"><strong>Not measured.</strong> Per-operator CPU, memory, blocked time, and spill counters are not yet emitted.</div>
   </div>`;
 
   // Results

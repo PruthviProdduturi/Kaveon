@@ -1,8 +1,9 @@
 use crate::AppState;
 use crate::cluster::{NodeInfo, NodeRole};
+use axum::body::Body;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::http::{StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use kaveon_core::collect_batches;
@@ -11,6 +12,7 @@ use kaveon_sql::logical_plan::{AggregateExpr, LogicalPlan};
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::HashMap;
+use std::io::Cursor;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tower_http::cors::CorsLayer;
@@ -36,7 +38,29 @@ struct QueryRecord {
     timings: QueryTimings,
     plan: QueryPlan,
     scans: Vec<ScanTelemetry>,
+    stages: Vec<StageTelemetry>,
     context: QueryContext,
+}
+
+#[derive(Clone, Serialize)]
+struct StageTelemetry {
+    stage_id: u32,
+    state: &'static str,
+    task_count: usize,
+    completed_tasks: usize,
+    elapsed_us: u64,
+    tasks: Vec<TaskTelemetry>,
+}
+
+#[derive(Clone, Serialize)]
+struct TaskTelemetry {
+    task_id: String,
+    node_id: String,
+    partition_index: usize,
+    elapsed_us: u64,
+    output_rows: usize,
+    output_batches: usize,
+    output_bytes: usize,
 }
 
 #[derive(Clone, Serialize)]
@@ -166,7 +190,7 @@ struct TaskRequest {
     partition_count: usize,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 struct TaskResponse {
     columns: Vec<ColumnInfo>,
     data: Vec<Vec<serde_json::Value>>,
@@ -227,29 +251,33 @@ async fn execute_task(
     let plan = kaveon_optim::rules::push_projection_down(plan);
     let result = {
         let catalog = state.catalog.read().await;
-        crate::planner::plan_partitioned_query(&plan, &catalog, partition)
-            .and_then(|mut planned| collect_batches(&mut *planned.operator))
+        crate::planner::plan_partitioned_query(&plan, &catalog, partition).and_then(
+            |mut planned| {
+                let schema = planned.operator.schema().clone();
+                collect_batches(&mut *planned.operator).map(|batches| (schema, batches))
+            },
+        )
     };
     match result {
-        Ok(batches) => {
-            let columns = batches.first().map_or_else(Vec::new, |batch| {
-                batch
-                    .schema()
-                    .fields()
-                    .iter()
-                    .map(|field| ColumnInfo {
-                        name: field.name().clone(),
-                        data_type: field.data_type().to_string(),
-                    })
-                    .collect()
-            });
-            Json(TaskResponse {
-                columns,
-                data: batches_to_json(&batches),
-                elapsed_us: elapsed_us(started),
-            })
-            .into_response()
-        }
+        Ok((schema, batches)) => match encode_arrow_stream(&schema, &batches) {
+            Ok(bytes) => Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/vnd.apache.arrow.stream")
+                .header("x-kaveon-task-elapsed-us", elapsed_us(started))
+                .body(Body::from(bytes))
+                .unwrap_or_else(|error| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({ "error": error.to_string() })),
+                    )
+                        .into_response()
+                }),
+            Err(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response(),
+        },
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": error.to_string() })),
@@ -356,6 +384,7 @@ async fn submit_statement(
                 physical: None,
             },
             scans: vec![],
+            stages: vec![],
             context: context.clone(),
         },
     );
@@ -392,7 +421,7 @@ async fn submit_statement(
 
     if let Some(distributed) = execute_distributed_aggregate(&state, &sql, &context, &plan).await {
         match distributed {
-            Ok(result) => {
+            Ok((result, stage)) => {
                 let elapsed = start.elapsed().as_millis() as u64;
                 let record = QueryRecord {
                     id: query_id.clone(),
@@ -416,6 +445,7 @@ async fn submit_statement(
                         physical: Some(physical_plan),
                     },
                     scans: vec![],
+                    stages: vec![stage],
                     context,
                 };
                 QUERY_STORE
@@ -516,6 +546,7 @@ async fn submit_statement(
                     physical: Some(physical_plan),
                 },
                 scans,
+                stages: vec![],
                 context: context.clone(),
             };
             QUERY_STORE
@@ -575,6 +606,7 @@ async fn submit_statement(
             physical: Some(physical_plan),
         },
         scans,
+        stages: vec![],
         context,
     };
     QUERY_STORE
@@ -770,6 +802,55 @@ async fn ready(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
 // --- Helpers ---
 
+fn encode_arrow_stream(
+    schema: &arrow::datatypes::SchemaRef,
+    batches: &[arrow::record_batch::RecordBatch],
+) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    {
+        let mut writer = arrow::ipc::writer::StreamWriter::try_new(&mut bytes, schema)
+            .map_err(|error| format!("cannot create Arrow stream: {error}"))?;
+        for batch in batches {
+            writer
+                .write(batch)
+                .map_err(|error| format!("cannot encode Arrow batch: {error}"))?;
+        }
+        writer
+            .finish()
+            .map_err(|error| format!("cannot finish Arrow stream: {error}"))?;
+    }
+    Ok(bytes)
+}
+
+fn decode_arrow_stream(
+    bytes: &[u8],
+) -> Result<
+    (
+        arrow::datatypes::SchemaRef,
+        Vec<arrow::record_batch::RecordBatch>,
+    ),
+    String,
+> {
+    let reader = arrow::ipc::reader::StreamReader::try_new(Cursor::new(bytes), None)
+        .map_err(|error| error.to_string())?;
+    let schema = reader.schema();
+    let batches = reader
+        .map(|batch| batch.map_err(|error| error.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((schema, batches))
+}
+
+fn columns_from_schema(schema: &arrow::datatypes::SchemaRef) -> Vec<ColumnInfo> {
+    schema
+        .fields()
+        .iter()
+        .map(|field| ColumnInfo {
+            name: field.name().clone(),
+            data_type: field.data_type().to_string(),
+        })
+        .collect()
+}
+
 #[derive(Clone, Copy)]
 enum MergeOperation {
     Add,
@@ -782,7 +863,7 @@ async fn execute_distributed_aggregate(
     sql: &str,
     context: &QueryContext,
     plan: &LogicalPlan,
-) -> Option<Result<TaskResponse, String>> {
+) -> Option<Result<(TaskResponse, StageTelemetry), String>> {
     let (group_count, operations) = aggregate_merge_contract(plan)?;
     let mut workers = {
         let mut cluster = state.cluster.write().await;
@@ -808,6 +889,7 @@ async fn execute_distributed_aggregate(
             partition_count,
         };
         tasks.spawn(async move {
+            let task_id = format!("stage-0-task-{partition_index}");
             let url = format!("{}/v1/task", worker.address.trim_end_matches('/'));
             let response = client
                 .post(url)
@@ -823,29 +905,74 @@ async fn execute_distributed_aggregate(
                     worker.node_id
                 ));
             }
-            response.json::<TaskResponse>().await.map_err(|error| {
+            let elapsed_us = response
+                .headers()
+                .get("x-kaveon-task-elapsed-us")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse().ok())
+                .unwrap_or_default();
+            let bytes = response.bytes().await.map_err(|error| {
                 format!(
-                    "worker '{}' returned an invalid result: {error}",
+                    "worker '{}' result could not be read: {error}",
                     worker.node_id
                 )
-            })
+            })?;
+            let output_bytes = bytes.len();
+            let (schema, batches) = decode_arrow_stream(&bytes).map_err(|error| {
+                format!(
+                    "worker '{}' returned an invalid Arrow stream: {error}",
+                    worker.node_id
+                )
+            })?;
+            let data = batches_to_json(&batches);
+            let telemetry = TaskTelemetry {
+                task_id,
+                node_id: worker.node_id,
+                partition_index,
+                elapsed_us,
+                output_rows: data.len(),
+                output_batches: batches.len(),
+                output_bytes,
+            };
+            Ok((
+                TaskResponse {
+                    columns: columns_from_schema(&schema),
+                    data,
+                    elapsed_us,
+                },
+                telemetry,
+            ))
         });
     }
 
     let mut partials = Vec::with_capacity(partition_count);
+    let mut task_metrics = Vec::with_capacity(partition_count);
     while let Some(result) = tasks.join_next().await {
         match result {
-            Ok(Ok(response)) => partials.push(response),
+            Ok(Ok((response, telemetry))) => {
+                partials.push(response);
+                task_metrics.push(telemetry);
+            }
             Ok(Err(error)) => return Some(Err(error)),
             Err(error) => return Some(Err(format!("worker task failed: {error}"))),
         }
     }
-    Some(merge_partial_aggregates(
-        partials,
-        group_count,
-        &operations,
-        elapsed_us(started),
-    ))
+    let total_elapsed_us = elapsed_us(started);
+    task_metrics.sort_unstable_by_key(|task| task.partition_index);
+    let merged = merge_partial_aggregates(partials, group_count, &operations, total_elapsed_us);
+    Some(merged.map(|result| {
+        (
+            result,
+            StageTelemetry {
+                stage_id: 0,
+                state: "FINISHED",
+                task_count: partition_count,
+                completed_tasks: task_metrics.len(),
+                elapsed_us: total_elapsed_us,
+                tasks: task_metrics,
+            },
+        )
+    }))
 }
 
 fn aggregate_merge_contract(plan: &LogicalPlan) -> Option<(usize, Vec<MergeOperation>)> {
@@ -1192,9 +1319,13 @@ async fn finish_failed_query(
 #[cfg(test)]
 mod tests {
     use super::{
-        ColumnInfo, MergeOperation, TaskResponse, aggregate_merge_contract,
-        merge_partial_aggregates,
+        ColumnInfo, MergeOperation, TaskResponse, aggregate_merge_contract, decode_arrow_stream,
+        encode_arrow_stream, merge_partial_aggregates,
     };
+    use arrow::array::{Int64Array, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use std::sync::Arc;
 
     fn columns() -> Vec<ColumnInfo> {
         vec![
@@ -1248,5 +1379,38 @@ mod tests {
         .unwrap();
         assert!(aggregate_merge_contract(&supported).is_some());
         assert!(aggregate_merge_contract(&reordered).is_none());
+    }
+
+    #[test]
+    fn arrow_task_stream_round_trips_schema_and_batches() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("region", DataType::Utf8, false),
+            Field::new("total", DataType::Int64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["east", "west"])),
+                Arc::new(Int64Array::from(vec![2, 3])),
+            ],
+        )
+        .unwrap();
+        let bytes = encode_arrow_stream(&schema, std::slice::from_ref(&batch)).unwrap();
+        let (decoded_schema, decoded_batches) = decode_arrow_stream(&bytes).unwrap();
+        assert_eq!(decoded_schema, schema);
+        assert_eq!(decoded_batches, vec![batch]);
+    }
+
+    #[test]
+    fn arrow_task_stream_preserves_empty_result_schema() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "region",
+            DataType::Utf8,
+            false,
+        )]));
+        let bytes = encode_arrow_stream(&schema, &[]).unwrap();
+        let (decoded_schema, decoded_batches) = decode_arrow_stream(&bytes).unwrap();
+        assert_eq!(decoded_schema, schema);
+        assert!(decoded_batches.is_empty());
     }
 }
