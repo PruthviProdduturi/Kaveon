@@ -31,6 +31,42 @@ struct QueryRecord {
     error: Option<String>,
     elapsed_ms: u64,
     submitted_at_ms: u64,
+    completed_at_ms: u64,
+    timings: QueryTimings,
+    plan: QueryPlan,
+    scans: Vec<ScanTelemetry>,
+}
+
+#[derive(Clone, Serialize)]
+struct ScanTelemetry {
+    files_considered: u64,
+    files_opened: u64,
+    row_groups_considered: u64,
+    row_groups_read: u64,
+    row_groups_pruned: u64,
+    rows_selected: u64,
+    rows_emitted: u64,
+    batches_emitted: u64,
+    compressed_bytes_selected: u64,
+    snapshot_ns: u64,
+    footer_ns: u64,
+    read_ns: u64,
+    rows_per_second: f64,
+    compressed_bytes_per_second: f64,
+}
+
+#[derive(Clone, Serialize)]
+struct QueryTimings {
+    analysis_us: Option<u64>,
+    planning_us: Option<u64>,
+    execution_us: Option<u64>,
+    result_serialization_us: Option<u64>,
+}
+
+#[derive(Clone, Serialize)]
+struct QueryPlan {
+    logical: Option<String>,
+    physical: Option<String>,
 }
 
 const QUERY_HISTORY_LIMIT: usize = 100;
@@ -38,6 +74,7 @@ const QUERY_HISTORY_LIMIT: usize = 100;
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 enum QueryState {
+    Running,
     Finished,
     Failed,
 }
@@ -120,36 +157,91 @@ async fn submit_statement(
         .as_millis() as u64;
     let start = Instant::now();
 
+    QUERY_STORE.write().await.queries.insert(
+        query_id.clone(),
+        QueryRecord {
+            id: query_id.clone(),
+            sql: sql.clone(),
+            state: QueryState::Running,
+            columns: vec![],
+            rows: vec![],
+            error: None,
+            elapsed_ms: 0,
+            submitted_at_ms,
+            completed_at_ms: 0,
+            timings: QueryTimings {
+                analysis_us: None,
+                planning_us: None,
+                execution_us: None,
+                result_serialization_us: None,
+            },
+            plan: QueryPlan {
+                logical: None,
+                physical: None,
+            },
+            scans: vec![],
+        },
+    );
+
+    let analysis_start = Instant::now();
     let plan = match sql_to_logical_plan(&sql) {
         Ok(p) => p,
         Err(e) => {
+            let message = format!("SQL parse error: {e}");
+            finish_failed_query(&query_id, message.clone(), start, None, None, None).await;
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({
-                    "error": format!("SQL parse error: {e}"),
+                    "error": message,
                     "code": "SYNTAX_ERROR"
                 })),
             )
                 .into_response();
         }
     };
+    let analysis_us = elapsed_us(analysis_start);
+    let logical_plan = format!("{plan:#?}");
+    if let Some(record) = QUERY_STORE.write().await.queries.get_mut(&query_id) {
+        record.timings.analysis_us = Some(analysis_us);
+        record.plan.logical = Some(logical_plan.clone());
+    }
 
-    let exec_result = {
+    let planned_execution = {
         let catalog = state.catalog.read().await;
-        let mut operator = match crate::planner::plan_to_operator(&plan, &catalog) {
-            Ok(op) => op,
-            Err(e) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({
-                        "error": format!("planning error: {e}"),
-                        "code": "PLANNING_ERROR"
-                    })),
-                )
-                    .into_response();
-            }
-        };
-        collect_batches(&mut *operator)
+        let planning_start = Instant::now();
+        crate::planner::plan_query(&plan, &catalog).map(|planned| {
+            let planning_us = elapsed_us(planning_start);
+            let scan_handles = planned.scan_metrics;
+            let mut operator = planned.operator;
+            let execution_start = Instant::now();
+            let result = collect_batches(&mut *operator);
+            let execution_us = elapsed_us(execution_start);
+            let scans = scan_handles.iter().map(scan_telemetry).collect::<Vec<_>>();
+            (planning_us, execution_us, scans, result)
+        })
+    };
+    let (planning_us, execution_us, scans, exec_result) = match planned_execution {
+        Ok(execution) => execution,
+        Err(error) => {
+            let message = format!("planning error: {error}");
+            finish_failed_query(
+                &query_id,
+                message.clone(),
+                start,
+                Some(analysis_us),
+                None,
+                Some(logical_plan),
+            )
+            .await;
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": message,
+                    "code": "PLANNING_ERROR"
+                })),
+            )
+                .into_response();
+        }
     };
 
     let batches = match exec_result {
@@ -165,6 +257,18 @@ async fn submit_statement(
                 error: Some(format!("{e}")),
                 elapsed_ms: elapsed,
                 submitted_at_ms,
+                completed_at_ms: unix_time_ms(),
+                timings: QueryTimings {
+                    analysis_us: Some(analysis_us),
+                    planning_us: Some(planning_us),
+                    execution_us: Some(execution_us),
+                    result_serialization_us: None,
+                },
+                plan: QueryPlan {
+                    logical: Some(logical_plan),
+                    physical: None,
+                },
+                scans,
             };
             QUERY_STORE
                 .write()
@@ -182,8 +286,6 @@ async fn submit_statement(
         }
     };
 
-    let elapsed = start.elapsed().as_millis() as u64;
-
     let columns: Vec<ColumnInfo> = if let Some(first) = batches.first() {
         first
             .schema()
@@ -198,7 +300,10 @@ async fn submit_statement(
         vec![]
     };
 
+    let serialization_start = Instant::now();
     let rows = batches_to_json(&batches);
+    let result_serialization_us = elapsed_us(serialization_start);
+    let elapsed = start.elapsed().as_millis() as u64;
 
     let record = QueryRecord {
         id: query_id.clone(),
@@ -209,6 +314,18 @@ async fn submit_statement(
         error: None,
         elapsed_ms: elapsed,
         submitted_at_ms,
+        completed_at_ms: unix_time_ms(),
+        timings: QueryTimings {
+            analysis_us: Some(analysis_us),
+            planning_us: Some(planning_us),
+            execution_us: Some(execution_us),
+            result_serialization_us: Some(result_serialization_us),
+        },
+        plan: QueryPlan {
+            logical: Some(logical_plan),
+            physical: None,
+        },
+        scans,
     };
     QUERY_STORE
         .write()
@@ -239,17 +356,7 @@ async fn list_queries() -> Json<Vec<QueryRecord>> {
 async fn get_query(Path(query_id): Path<String>) -> impl IntoResponse {
     let store = QUERY_STORE.read().await;
     match store.queries.get(&query_id) {
-        Some(record) => {
-            let resp = StatementResponse {
-                id: record.id.clone(),
-                state: record.state,
-                columns: Some(record.columns.clone()),
-                data: Some(record.rows.clone()),
-                error: record.error.clone(),
-                elapsed_ms: record.elapsed_ms,
-            };
-            Json(resp).into_response()
-        }
+        Some(record) => Json(record.clone()).into_response(),
         None => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({
@@ -479,4 +586,61 @@ fn batches_to_json(batches: &[arrow::record_batch::RecordBatch]) -> Vec<Vec<serd
         }
     }
     rows
+}
+
+fn elapsed_us(start: Instant) -> u64 {
+    start.elapsed().as_micros().try_into().unwrap_or(u64::MAX)
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn scan_telemetry(metrics: &kaveon_storage::ScanMetrics) -> ScanTelemetry {
+    let snapshot = metrics.snapshot();
+    ScanTelemetry {
+        files_considered: snapshot.files_considered,
+        files_opened: snapshot.files_opened,
+        row_groups_considered: snapshot.row_groups_considered,
+        row_groups_read: snapshot.row_groups_selected,
+        row_groups_pruned: snapshot.row_groups_pruned(),
+        rows_selected: snapshot.rows_selected,
+        rows_emitted: snapshot.rows_emitted,
+        batches_emitted: snapshot.batches_emitted,
+        compressed_bytes_selected: snapshot.compressed_bytes_selected,
+        snapshot_ns: duration_ns(snapshot.snapshot_elapsed),
+        footer_ns: duration_ns(snapshot.footer_elapsed),
+        read_ns: duration_ns(snapshot.read_elapsed),
+        rows_per_second: snapshot.rows_per_second(),
+        compressed_bytes_per_second: snapshot.compressed_bytes_per_second(),
+    }
+}
+
+fn duration_ns(duration: std::time::Duration) -> u64 {
+    duration.as_nanos().try_into().unwrap_or(u64::MAX)
+}
+
+async fn finish_failed_query(
+    query_id: &str,
+    error: String,
+    started: Instant,
+    analysis_us: Option<u64>,
+    planning_us: Option<u64>,
+    logical_plan: Option<String>,
+) {
+    if let Some(record) = QUERY_STORE.write().await.queries.get_mut(query_id) {
+        record.state = QueryState::Failed;
+        record.error = Some(error);
+        record.elapsed_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+        record.completed_at_ms = unix_time_ms();
+        record.timings.analysis_us = analysis_us;
+        record.timings.planning_us = planning_us;
+        record.plan.logical = logical_plan;
+        record.scans.clear();
+    }
 }

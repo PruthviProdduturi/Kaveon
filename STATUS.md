@@ -39,6 +39,8 @@
 | Scan, filter, project, hash aggregate, limit | 🧪 Alpha | Vectorized node-local execution |
 | SQL parser, CLI, HTTP statement API, catalog | 🧪 Alpha | Engine is not yet wired into Studio/API |
 | Coordinator/worker discovery and heartbeats | 🧪 Alpha | Discovery only; queries still execute on the receiving node |
+| Query lifecycle and storage-scan telemetry | 🧪 Alpha | HTTP history retains real phase timings, logical plans, file/row-group pruning, selected bytes, emitted rows, and scan throughput |
+| Physical operator, stage, and task telemetry | 📋 Planning | Shared nullable metrics contract exists; executor and distributed scheduler instrumentation are not wired |
 | Sort and TopN | 📋 Not Started | `ORDER BY` is parsed but not physically executed |
 | Filter-pushdown optimizer pass | 📋 Not Started | Optimizer currently returns the input plan unchanged |
 | ADLS Gen2 / S3 readers | 📋 Planning | Local validation precedes cloud object storage |

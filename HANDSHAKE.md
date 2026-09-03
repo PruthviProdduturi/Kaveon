@@ -184,9 +184,26 @@ version = kaveon_engine.version()
 ### Engine operational API
 
 - `GET /v1/query` returns up to 100 most-recent in-memory query records for the Engine UI
-- Records include SQL, state, schema, rows, error, elapsed time, and submission time
+- Records include SQL, live/terminal state, schema, rows, error, submission/completion time, measured analysis/planning/execution/serialization phases, logical plan, and completed storage-scan metrics
+- Storage-scan records include file and row-group selection, pruning, selected compressed bytes, emitted rows/batches, Delta snapshot time, Parquet footer time, read time, and throughput
+- Physical operator CPU/memory and distributed stage/task telemetry remain unavailable and are labeled as such in the UI
 - History is process-local and resets when the coordinator restarts
 - Node payloads and heartbeats include `memory_rss_bytes`, measured from each Engine process; unsupported hosts report zero
+
+### Explain and execution telemetry
+
+```rust
+// Defined in kaveon-core::telemetry
+pub struct PlanNode { id, phase, operator, attributes, children }
+pub struct PlanMetricsSnapshot { sequence, captured_at_unix_ms, nodes }
+pub struct NodeMetrics { operator: OperatorMetrics, scan: Option<ScanMetrics> }
+```
+
+- Plan node IDs are stable within a query and join live or terminal metric snapshots to the physical plan.
+- Every measurement is optional so consumers can distinguish an unsupported metric from a measured zero.
+- Durations use nanoseconds, sizes use bytes, timestamps use Unix milliseconds, and counters are monotonic.
+- Storage attaches `ScanMetrics` to scan nodes; execution operators attach `OperatorMetrics` without depending on server or UI types.
+- Planner, operator, coordinator, and UI wiring remain separate follow-up work owned by their respective components.
 
 ### Local Delta snapshot API
 
@@ -254,3 +271,5 @@ let source = DeltaTableReader::new(table_directory)
 | 2026-09-02 | Codex | Simplified the Engine overview to aggregate operational signals: removed per-worker details, total-node duplication, and catalog inventory from the UI. Active worker count remains visible; catalogs remain internal Engine query-routing state. |
 | 2026-09-02 | Codex | Added correct local multi-file Delta snapshot reads via JSON transaction-log replay, immediate Delta table discovery for CLI/server catalogs, format-aware physical scans, and validated CLI `USE`; verified six tables and 50,100,500 rows from `F:\kaveon-data`. |
 | 2026-09-02 | Codex | Rebuilt Engine query history as an operator-focused execution list with state, query identity, submission time, SQL, elapsed time, returned rows, columns, and drill-down while avoiding unsupported Trino metrics. |
+| 2026-09-02 | Codex | Added the shared structured plan and execution-metric contract for explain, live plan snapshots, and storage scan telemetry; no planner or operator implementation changed. |
+| 2026-09-02 | Codex | Wired real query lifecycle phases and completed Parquet/Delta scan telemetry into Engine query records and the Plan view; physical operator and distributed-stage instrumentation remain the next milestone. |

@@ -10,34 +10,51 @@ use kaveon_exec::scan::ScanOperator;
 use kaveon_sql::logical_plan::{AggregateExpr, LogicalPlan};
 use kaveon_storage::{DeltaTableReader, ParquetReader};
 
+pub struct PlannedQuery {
+    pub operator: Box<dyn BatchOperator>,
+    pub scan_metrics: Vec<kaveon_storage::ScanMetrics>,
+}
+
 pub fn plan_to_operator(
     plan: &LogicalPlan,
     catalog: &CatalogManager,
 ) -> Result<Box<dyn BatchOperator>> {
+    Ok(plan_query(plan, catalog)?.operator)
+}
+
+pub fn plan_query(plan: &LogicalPlan, catalog: &CatalogManager) -> Result<PlannedQuery> {
+    plan_query_inner(plan, catalog)
+}
+
+fn plan_query_inner(plan: &LogicalPlan, catalog: &CatalogManager) -> Result<PlannedQuery> {
     match plan {
         LogicalPlan::Scan { table, columns } => {
             let reference = TableReference::parse(table);
             let resolved = catalog.resolve_table(&reference)?;
             let path = resolved.full_path();
 
-            let source: Box<dyn BatchSource> = match resolved.table.format {
+            let (source, scan_metrics): (Box<dyn BatchSource>, _) = match resolved.table.format {
                 DataFormat::Parquet => {
                     let mut reader = ParquetReader::new(&path);
                     if let Some(cols) = columns {
                         reader = reader.with_columns(cols.clone());
                     }
-                    Box::new(reader.read().map_err(|e| {
+                    let source = reader.read().map_err(|e| {
                         KaveonError::Execution(format!("failed to open '{path}': {e}"))
-                    })?)
+                    })?;
+                    let metrics = source.metrics();
+                    (Box::new(source), vec![metrics])
                 }
                 DataFormat::Delta => {
                     let mut reader = DeltaTableReader::new(&path);
                     if let Some(cols) = columns {
                         reader = reader.with_columns(cols.clone());
                     }
-                    Box::new(reader.read().map_err(|e| {
+                    let source = reader.read().map_err(|e| {
                         KaveonError::Execution(format!("failed to open '{path}': {e}"))
-                    })?)
+                    })?;
+                    let metrics = source.metrics();
+                    (Box::new(source), vec![metrics])
                 }
                 DataFormat::Iceberg => {
                     return Err(KaveonError::Execution(
@@ -46,20 +63,26 @@ pub fn plan_to_operator(
                 }
             };
             let scan = ScanOperator::new(source, columns.as_deref())?;
-            Ok(Box::new(scan))
+            Ok(PlannedQuery {
+                operator: Box::new(scan),
+                scan_metrics,
+            })
         }
 
         LogicalPlan::Filter { input, predicate } => {
-            let source = plan_to_operator(input, catalog)?;
-            Ok(Box::new(FilterOperator::new(source, predicate.clone())))
+            let planned = plan_query_inner(input, catalog)?;
+            Ok(PlannedQuery {
+                operator: Box::new(FilterOperator::new(planned.operator, predicate.clone())),
+                scan_metrics: planned.scan_metrics,
+            })
         }
 
         LogicalPlan::Project { input, columns } => {
-            let source = plan_to_operator(input, catalog)?;
+            let planned = plan_query_inner(input, catalog)?;
 
             let has_star = columns.iter().any(|e| matches!(e, Expr::Star));
             if has_star {
-                return Ok(source);
+                return Ok(planned);
             }
 
             let exprs: Vec<Expr> = columns
@@ -83,7 +106,10 @@ pub fn plan_to_operator(
                 })
                 .collect();
 
-            Ok(Box::new(ProjectOperator::new(source, exprs)?))
+            Ok(PlannedQuery {
+                operator: Box::new(ProjectOperator::new(planned.operator, exprs)?),
+                scan_metrics: planned.scan_metrics,
+            })
         }
 
         LogicalPlan::Aggregate {
@@ -91,7 +117,7 @@ pub fn plan_to_operator(
             group_by,
             aggregates,
         } => {
-            let source = plan_to_operator(input, catalog)?;
+            let planned = plan_query_inner(input, catalog)?;
 
             let group_cols: Vec<String> = group_by
                 .iter()
@@ -108,14 +134,20 @@ pub fn plan_to_operator(
                 .map(logical_agg_to_exec)
                 .collect::<Result<_>>()?;
 
-            Ok(Box::new(HashAggregate::new(source, group_cols, agg_exprs)?))
+            Ok(PlannedQuery {
+                operator: Box::new(HashAggregate::new(planned.operator, group_cols, agg_exprs)?),
+                scan_metrics: planned.scan_metrics,
+            })
         }
 
-        LogicalPlan::Sort { input, .. } => plan_to_operator(input, catalog),
+        LogicalPlan::Sort { input, .. } => plan_query_inner(input, catalog),
 
         LogicalPlan::Limit { input, count } => {
-            let source = plan_to_operator(input, catalog)?;
-            Ok(Box::new(LimitOperator::new(source, *count)))
+            let planned = plan_query_inner(input, catalog)?;
+            Ok(PlannedQuery {
+                operator: Box::new(LimitOperator::new(planned.operator, *count)),
+                scan_metrics: planned.scan_metrics,
+            })
         }
     }
 }

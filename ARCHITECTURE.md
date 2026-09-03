@@ -67,6 +67,8 @@ flowchart LR
 
 Today the Engine queries local single-file Parquet tables and local multi-file Delta tables. Delta snapshot resolution replays a complete JSON commit history from version 0; checkpoint replay is not supported. Studio and FastAPI do not route queries to the Engine, and Python bindings are a scaffold. ADLS Gen2, S3, and Iceberg remain non-executable target paths.
 
+HTTP query records are inserted at submission and retain measured analysis, physical-planning, execution, and result-serialization durations. Completed storage scans report files opened, row groups considered/read/pruned, selected compressed Parquet bytes, emitted rows and batches, Delta snapshot time, footer time, read time, and throughput. The shared telemetry types distinguish a measured zero from an unavailable value. Physical operator CPU/memory and distributed stage/task telemetry are not yet emitted.
+
 ## Engine architecture
 
 <div align="center">

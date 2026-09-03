@@ -3,6 +3,7 @@ pub mod error;
 pub mod expr;
 pub mod operator;
 pub mod predicate;
+pub mod telemetry;
 pub mod types;
 
 pub use catalog::{
@@ -13,3 +14,6 @@ pub use error::{KaveonError, Result};
 pub use expr::{BinaryOp, Expr};
 pub use operator::{BatchOperator, BatchSource, collect_batches};
 pub use predicate::{CompareOp, ScalarValue, StoragePredicate};
+pub use telemetry::{
+    NodeMetrics, OperatorMetrics, PlanMetricsSnapshot, PlanNode, PlanNodeId, PlanPhase, ScanMetrics,
+};
