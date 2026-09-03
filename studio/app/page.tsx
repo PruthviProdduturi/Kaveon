@@ -409,6 +409,7 @@ export default function Home() {
     const headers = { "x-user-email": email };
 
     async function load() {
+      setSchemasReady(false);
       try {
         const [summaryRes, listRes, activeRes, dsRes] = await Promise.all([
           msalFetch("/api/v1/metadata/summary", { headers }),
@@ -453,6 +454,7 @@ export default function Home() {
             database_name: ds.database_name,
           }));
           setDatasets(dsList);
+          if (dsList.length === 0) setSchemasReady(true);
           // Auto-select first dataset
           if (dsList.length > 0 && !selectedDataset) {
             setSelectedDataset(dsList[0].id);
@@ -460,9 +462,12 @@ export default function Home() {
             const matchSource = list.find((s: any) => s.database_name === dsList[0].database_name);
             if (matchSource) setSelectedSource({ id: matchSource.id, name: matchSource.name, database_name: matchSource.database_name });
           }
+        } else {
+          setSchemasReady(true);
         }
       } catch {
         setData({ datasetCount: 0, sourceCount: 0, tableCount: 0, sourceNames: [] });
+        setSchemasReady(true);
       }
     }
 

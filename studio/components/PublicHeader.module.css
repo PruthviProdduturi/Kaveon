@@ -1,8 +1,10 @@
 .header { --text-primary: #f4f7fb; position: fixed; inset: 0 0 auto; z-index: 100; display: flex; min-height: 65px; align-items: center; justify-content: space-between; padding: 0 48px; border-bottom: 1px solid rgba(255,255,255,.07); background: rgba(10,10,10,.88); backdrop-filter: blur(16px) saturate(180%); }
-.aboutHeader { min-height: 0; padding: 14px 48px; border-bottom-color: rgba(255,255,255,.04); background: rgba(10,10,10,.85); backdrop-filter: blur(12px) saturate(180%); }
+.header.aboutHeader { min-height: 0; padding: 14px 48px; border-bottom-color: rgba(74,158,232,.1) !important; background: #0a0a0a !important; backdrop-filter: none; box-shadow: none; }
 .brand { display: flex; align-items: center; text-decoration: none; }
 .nav { display: flex; align-items: center; gap: 32px; }
 .aboutNav { gap: 36px; }
+.aboutNav .link { color: #ccc; }
+.aboutNav .launch { border-color: transparent !important; background: #4a9ee8 !important; color: #fff !important; }
 .link { color: #b8bec8; font-size: 13px; text-decoration: none; transition: color 160ms ease; }
 .link:hover, .link:focus-visible, .active { color: #fff; }
 .link:focus-visible, .brand:focus-visible, .launch:focus-visible { border-radius: 7px; outline: 3px solid rgba(74,158,232,.5); outline-offset: 4px; }
