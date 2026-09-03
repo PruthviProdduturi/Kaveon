@@ -174,6 +174,11 @@ Correctness dominates pruning aggression. Missing, nested, inexact, incompatible
 5. Operators pull batches; the server collects all results.
 6. Cells are converted to JSON and the completed result is retained in process memory.
 
+The retained record includes a structured logical-plan tree and optional client
+session context. The Engine UI renders the tree directly rather than exposing
+Rust debug text. Optimized and physical plans remain nullable until their actual
+planner and executor producers are connected.
+
 Submission is currently synchronous despite query IDs and query-state types. Deleting a stored query removes its retained result; it does not cancel running computation.
 
 ### Target integrated query

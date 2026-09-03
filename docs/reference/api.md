@@ -52,7 +52,7 @@ The Rust server exposes these routes:
 |---|---|---|
 | `POST` | `/v1/statement` | Synchronously parse, plan, execute, materialize, and retain a query result |
 | `GET` | `/v1/query` | Return up to 100 newest process-local query records |
-| `GET` | `/v1/query/{query_id}` | Return a retained completed or failed result |
+| `GET` | `/v1/query/{query_id}` | Return retained lifecycle, context, structured logical plan, result, and scan telemetry |
 | `DELETE` | `/v1/query/{query_id}` | Delete a retained record; does not cancel running computation |
 | `GET` | `/v1/cluster` | Coordinator and discovered-worker state |
 | `GET` | `/v1/node` | Current node information |
@@ -65,3 +65,9 @@ The Rust server exposes these routes:
 The Engine server has permissive CORS and no authentication, authorization, TLS,
 quota, cancellation, or distributed fragment execution. Keep it behind a trusted
 boundary during alpha.
+
+The statement JSON body requires `query`. Clients may also provide `source`,
+`client`, `time_zone`, `client_tags`, and `result_delivery`. These identify the
+submitting application and session; they are not trusted user identity. Principal
+and client address remain unavailable until authenticated request plumbing is
+implemented.

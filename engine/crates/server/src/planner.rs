@@ -9,6 +9,7 @@ use kaveon_exec::project::ProjectOperator;
 use kaveon_exec::scan::ScanOperator;
 use kaveon_sql::logical_plan::{AggregateExpr, LogicalPlan};
 use kaveon_storage::{DeltaTableReader, ParquetReader};
+use std::collections::BTreeMap;
 
 pub struct PlannedQuery {
     pub operator: Box<dyn BatchOperator>,
@@ -24,6 +25,63 @@ pub fn plan_to_operator(
 
 pub fn plan_query(plan: &LogicalPlan, catalog: &CatalogManager) -> Result<PlannedQuery> {
     plan_query_inner(plan, catalog)
+}
+
+pub fn logical_plan_tree(plan: &LogicalPlan) -> kaveon_core::PlanNode {
+    let mut next_id = 0;
+    build_logical_plan_tree(plan, &mut next_id)
+}
+
+fn build_logical_plan_tree(plan: &LogicalPlan, next_id: &mut u32) -> kaveon_core::PlanNode {
+    let id = *next_id;
+    *next_id = next_id.saturating_add(1);
+    let (operator, attributes, input) = match plan {
+        LogicalPlan::Scan { table, columns } => {
+            let mut attributes = BTreeMap::from([("table".to_owned(), table.clone())]);
+            if let Some(columns) = columns {
+                attributes.insert("columns".to_owned(), columns.join(", "));
+            }
+            ("Scan", attributes, None)
+        }
+        LogicalPlan::Filter { input, predicate } => (
+            "Filter",
+            BTreeMap::from([("predicate".to_owned(), format!("{predicate:?}"))]),
+            Some(input.as_ref()),
+        ),
+        LogicalPlan::Project { input, columns } => (
+            "Project",
+            BTreeMap::from([("expressions".to_owned(), format!("{columns:?}"))]),
+            Some(input.as_ref()),
+        ),
+        LogicalPlan::Aggregate {
+            input,
+            group_by,
+            aggregates,
+        } => (
+            "Aggregate",
+            BTreeMap::from([
+                ("group_by".to_owned(), format!("{group_by:?}")),
+                ("aggregates".to_owned(), format!("{aggregates:?}")),
+            ]),
+            Some(input.as_ref()),
+        ),
+        LogicalPlan::Sort { input, order_by } => (
+            "Sort",
+            BTreeMap::from([("order_by".to_owned(), format!("{order_by:?}"))]),
+            Some(input.as_ref()),
+        ),
+        LogicalPlan::Limit { input, count } => (
+            "Limit",
+            BTreeMap::from([("rows".to_owned(), count.to_string())]),
+            Some(input.as_ref()),
+        ),
+    };
+    let mut node = kaveon_core::PlanNode::new(id, kaveon_core::PlanPhase::Logical, operator);
+    node.attributes = attributes;
+    if let Some(input) = input {
+        node.children.push(build_logical_plan_tree(input, next_id));
+    }
+    node
 }
 
 fn plan_query_inner(plan: &LogicalPlan, catalog: &CatalogManager) -> Result<PlannedQuery> {

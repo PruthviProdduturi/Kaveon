@@ -186,6 +186,8 @@ version = kaveon_engine.version()
 - `GET /v1/query` returns up to 100 most-recent in-memory query records for the Engine UI
 - Records include SQL, live/terminal state, schema, rows, error, submission/completion time, measured analysis/planning/execution/serialization phases, logical plan, and completed storage-scan metrics
 - Storage-scan records include file and row-group selection, pruning, selected compressed bytes, emitted rows/batches, Delta snapshot time, Parquet footer time, read time, and throughput
+- Statement clients may provide optional `source`, `client`, `time_zone`, `client_tags`, and `result_delivery` context; the coordinator records its actual version, environment, default catalog, and default schema. Principal and client address remain unavailable until authenticated request plumbing exists.
+- Logical plans are returned as structured `PlanNode` trees. Optimized and physical plan fields remain nullable until their producers are wired.
 - Physical operator CPU/memory and distributed stage/task telemetry remain unavailable and are labeled as such in the UI
 - History is process-local and resets when the coordinator restarts
 - Node payloads and heartbeats include `memory_rss_bytes`, measured from each Engine process; unsupported hosts report zero
@@ -273,3 +275,4 @@ let source = DeltaTableReader::new(table_directory)
 | 2026-09-02 | Codex | Rebuilt Engine query history as an operator-focused execution list with state, query identity, submission time, SQL, elapsed time, returned rows, columns, and drill-down while avoiding unsupported Trino metrics. |
 | 2026-09-02 | Codex | Added the shared structured plan and execution-metric contract for explain, live plan snapshots, and storage scan telemetry; no planner or operator implementation changed. |
 | 2026-09-02 | Codex | Wired real query lifecycle phases and completed Parquet/Delta scan telemetry into Engine query records and the Plan view; physical operator and distributed-stage instrumentation remain the next milestone. |
+| 2026-09-02 | Codex | Rebuilt Query Details from the Trino information model with explicit session/execution/Engine context and a responsive structured logical-plan tree; unsupported identity and physical telemetry remain visibly unavailable. |
