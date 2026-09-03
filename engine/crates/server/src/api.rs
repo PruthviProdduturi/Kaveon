@@ -183,6 +183,9 @@ struct StatementRequest {
 
 #[derive(Serialize, Deserialize)]
 struct TaskRequest {
+    query_id: String,
+    stage_id: u32,
+    attempt: u32,
     query: String,
     catalog: String,
     schema: String,
@@ -419,7 +422,9 @@ async fn submit_statement(
         record.plan.physical = Some(physical_plan.clone());
     }
 
-    if let Some(distributed) = execute_distributed_aggregate(&state, &sql, &context, &plan).await {
+    if let Some(distributed) =
+        execute_distributed_aggregate(&state, &query_id, &sql, &context, &plan).await
+    {
         match distributed {
             Ok((result, stage)) => {
                 let elapsed = start.elapsed().as_millis() as u64;
@@ -860,6 +865,7 @@ enum MergeOperation {
 
 async fn execute_distributed_aggregate(
     state: &Arc<AppState>,
+    query_id: &str,
     sql: &str,
     context: &QueryContext,
     plan: &LogicalPlan,
@@ -882,6 +888,9 @@ async fn execute_distributed_aggregate(
     for (partition_index, worker) in workers.into_iter().enumerate() {
         let client = client.clone();
         let request = TaskRequest {
+            query_id: query_id.to_owned(),
+            stage_id: 0,
+            attempt: 0,
             query: sql.to_owned(),
             catalog: context.catalog.clone(),
             schema: context.schema.clone(),
@@ -889,7 +898,13 @@ async fn execute_distributed_aggregate(
             partition_count,
         };
         tasks.spawn(async move {
-            let task_id = format!("stage-0-task-{partition_index}");
+            let task_id = kaveon_core::TaskId {
+                query_id: request.query_id.clone(),
+                stage_id: kaveon_core::StageId(request.stage_id),
+                partition: partition_index,
+                attempt: request.attempt,
+            }
+            .to_string();
             let url = format!("{}/v1/task", worker.address.trim_end_matches('/'));
             let response = client
                 .post(url)

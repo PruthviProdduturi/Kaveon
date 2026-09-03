@@ -46,6 +46,7 @@
 | ADLS Gen2 / S3 readers | 📋 Planning | Local validation precedes cloud object storage |
 | Cloud Delta Lake / Iceberg readers | 📋 Planning | ADLS/S3 Delta, checkpoint replay, and Iceberg manifest semantics not implemented |
 | Distributed scheduling, exchange, retry | 🧪 Alpha | COUNT/SUM/MIN/MAX and GROUP BY fan out across workers; joins, shuffle, retry, spill, AVG, and DISTINCT remain local/target |
+| Hash exchange primitives | 🧪 Alpha | Stable Arrow-row partitioning, retry-safe task identity, and bounded in-memory buffers implemented; network shuffle not wired |
 | Engine HTTP auth and TLS | 📋 Planning | Do not expose the alpha server directly to untrusted networks |
 
 ---

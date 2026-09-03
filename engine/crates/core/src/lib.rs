@@ -1,5 +1,6 @@
 pub mod catalog;
 pub mod error;
+pub mod exchange;
 pub mod expr;
 pub mod operator;
 pub mod predicate;
@@ -11,6 +12,7 @@ pub use catalog::{
     StorageType, TableMeta, TableReference,
 };
 pub use error::{KaveonError, Result};
+pub use exchange::{Partitioning, StageId, TaskId};
 pub use expr::{BinaryOp, Expr};
 pub use operator::{BatchOperator, BatchSource, collect_batches};
 pub use predicate::{CompareOp, ScalarValue, StoragePredicate};
