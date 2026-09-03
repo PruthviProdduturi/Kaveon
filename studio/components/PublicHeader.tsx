@@ -10,7 +10,7 @@ export function PublicHeader({ active }: PublicHeaderProps) {
   return (
     <header className={`${styles.header} ${isAbout ? styles.aboutHeader : ""}`}>
       <Link href={isAbout ? "/about" : "/"} className={styles.brand} aria-label={isAbout ? "Kaveon about" : "Kaveon home"}>
-        <KaveonWordmark height={24} />
+        <KaveonWordmark height={isAbout ? 30 : 24} />
       </Link>
       <nav className={`${styles.nav} ${isAbout ? styles.aboutNav : ""}`} aria-label="Kaveon">
         {isAbout ? (
