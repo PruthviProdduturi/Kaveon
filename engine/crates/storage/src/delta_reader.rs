@@ -42,7 +42,9 @@ impl DeltaTableReader {
 
     pub fn metadata(&self) -> Result<ParquetFileMetadata> {
         let files = active_files(&self.path)?;
-        let first = files.first().ok_or_else(|| delta_error("Delta snapshot has no active files"))?;
+        let first = files
+            .first()
+            .ok_or_else(|| delta_error("Delta snapshot has no active files"))?;
         let mut metadata = ParquetReader::new(first).metadata()?;
         for path in files.iter().skip(1) {
             let next = ParquetReader::new(path).metadata()?;
@@ -53,7 +55,9 @@ impl DeltaTableReader {
                 )));
             }
             metadata.row_count = metadata.row_count.saturating_add(next.row_count);
-            metadata.row_group_count = metadata.row_group_count.saturating_add(next.row_group_count);
+            metadata.row_group_count = metadata
+                .row_group_count
+                .saturating_add(next.row_group_count);
         }
         Ok(metadata)
     }
@@ -63,7 +67,9 @@ impl DeltaTableReader {
             return Err(delta_error("batch size must be greater than zero"));
         }
         let files = active_files(&self.path)?;
-        let first = files.first().ok_or_else(|| delta_error("Delta snapshot has no active files"))?;
+        let first = files
+            .first()
+            .ok_or_else(|| delta_error("Delta snapshot has no active files"))?;
         let schema = configured_reader(first, self.batch_size, self.columns.as_ref())
             .read()?
             .schema()
@@ -99,16 +105,17 @@ impl BatchSource for DeltaBatchIterator {
                 && let Some(batch) = reader.next_batch()?
             {
                 if batch.schema() != self.schema {
-                    return Err(delta_error("Delta snapshot contains incompatible Parquet schemas"));
+                    return Err(delta_error(
+                        "Delta snapshot contains incompatible Parquet schemas",
+                    ));
                 }
                 return Ok(Some(batch));
             }
             let Some(path) = self.files.get(self.next_file) else {
                 return Ok(None);
             };
-            self.current = Some(
-                configured_reader(path, self.batch_size, self.columns.as_ref()).read()?,
-            );
+            self.current =
+                Some(configured_reader(path, self.batch_size, self.columns.as_ref()).read()?);
             self.next_file += 1;
         }
     }
@@ -133,7 +140,8 @@ fn active_files(table_path: &Path) -> Result<Vec<PathBuf>> {
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| {
-            path.extension().is_some_and(|extension| extension == "json")
+            path.extension()
+                .is_some_and(|extension| extension == "json")
                 && path
                     .file_stem()
                     .and_then(|name| name.to_str())
@@ -165,12 +173,17 @@ fn active_files(table_path: &Path) -> Result<Vec<PathBuf>> {
             }
         }
     }
-    Ok(active.into_iter().map(|path| table_path.join(path)).collect())
+    Ok(active
+        .into_iter()
+        .map(|path| table_path.join(path))
+        .collect())
 }
 
 fn validate_log_sequence(logs: &[PathBuf]) -> Result<()> {
     if logs.is_empty() {
-        return Err(delta_error("Delta transaction log contains no JSON commits"));
+        return Err(delta_error(
+            "Delta transaction log contains no JSON commits",
+        ));
     }
     for (expected, path) in logs.iter().enumerate() {
         let actual = path
@@ -189,9 +202,12 @@ fn validate_log_sequence(logs: &[PathBuf]) -> Result<()> {
 fn validate_relative_path(path: &str) -> Result<PathBuf> {
     let path = PathBuf::from(path);
     if path.is_absolute()
-        || path
-            .components()
-            .any(|component| matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_)))
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
     {
         return Err(delta_error("Delta action contains an unsafe file path"));
     }

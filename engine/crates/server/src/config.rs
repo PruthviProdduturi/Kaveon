@@ -330,8 +330,8 @@ fn build_catalog_from_toml(name: &str, content: &str) -> anyhow::Result<MemoryCa
                 DataFormat::Parquet => ParquetReader::new(&full_path).metadata(),
                 DataFormat::Iceberg => anyhow::bail!("local Iceberg metadata is not implemented"),
             }
-                .map(|m| m.schema)
-                .unwrap_or_else(|_| Arc::new(arrow::datatypes::Schema::empty()))
+            .map(|m| m.schema)
+            .unwrap_or_else(|_| Arc::new(arrow::datatypes::Schema::empty()))
         } else {
             Arc::new(arrow::datatypes::Schema::empty())
         };

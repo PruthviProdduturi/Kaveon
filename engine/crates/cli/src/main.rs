@@ -175,7 +175,11 @@ fn build_local_catalog(dir: &Path) -> MemoryCatalog {
                                 TableMeta {
                                     name: table_name.to_owned(),
                                     arrow_schema: meta.schema,
-                                    location: path.file_name().unwrap().to_string_lossy().into_owned(),
+                                    location: path
+                                        .file_name()
+                                        .unwrap()
+                                        .to_string_lossy()
+                                        .into_owned(),
                                     access: AccessPattern::Shortcut,
                                     format: DataFormat::Delta,
                                 },
@@ -453,7 +457,10 @@ fn use_catalog(target: &str, catalog: &mut CatalogManager) {
     let parts: Vec<&str> = target.split('.').collect();
     let (catalog_name, schema_name) = match parts.as_slice() {
         [catalog_name, schema_name] => ((*catalog_name).to_owned(), (*schema_name).to_owned()),
-        [catalog_name] => ((*catalog_name).to_owned(), catalog.default_schema().to_owned()),
+        [catalog_name] => (
+            (*catalog_name).to_owned(),
+            catalog.default_schema().to_owned(),
+        ),
         _ => {
             eprintln!("usage: USE catalog.schema");
             return;

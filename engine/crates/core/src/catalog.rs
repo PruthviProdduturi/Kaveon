@@ -141,7 +141,11 @@ impl CatalogManager {
         let catalog = self.catalogs.get(catalog_name).ok_or_else(|| {
             crate::KaveonError::Execution(format!("catalog '{catalog_name}' not found"))
         })?;
-        if !catalog.schema_names().iter().any(|name| name == schema_name) {
+        if !catalog
+            .schema_names()
+            .iter()
+            .any(|name| name == schema_name)
+        {
             return Err(crate::KaveonError::Execution(format!(
                 "schema '{schema_name}' not found in catalog '{catalog_name}'"
             )));
