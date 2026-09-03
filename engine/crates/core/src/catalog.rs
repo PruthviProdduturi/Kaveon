@@ -137,6 +137,20 @@ impl CatalogManager {
         &self.default_schema
     }
 
+    pub fn set_default(&mut self, catalog_name: &str, schema_name: &str) -> Result<()> {
+        let catalog = self.catalogs.get(catalog_name).ok_or_else(|| {
+            crate::KaveonError::Execution(format!("catalog '{catalog_name}' not found"))
+        })?;
+        if !catalog.schema_names().iter().any(|name| name == schema_name) {
+            return Err(crate::KaveonError::Execution(format!(
+                "schema '{schema_name}' not found in catalog '{catalog_name}'"
+            )));
+        }
+        self.default_catalog = catalog_name.to_owned();
+        self.default_schema = schema_name.to_owned();
+        Ok(())
+    }
+
     pub fn resolve_table(&self, reference: &TableReference) -> Result<ResolvedTable> {
         let (catalog_name, schema_name, table_name) = match reference {
             TableReference::Full {

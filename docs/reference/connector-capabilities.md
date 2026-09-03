@@ -24,7 +24,9 @@ that every deployment has drivers, credentials, or network access configured.
   and are stored plaintext in `data_sources`; API responses suppress the field,
   but vault-backed storage is target work.
 - Fabric/Azure SQL requires ODBC Driver 18 in the API runtime.
-- Local Parquet is an Engine catalog path, not a Studio data-source connector.
+- Local Parquet and local Delta Lake are Engine catalog paths, not Studio
+  data-source connectors. Local Delta requires complete JSON commit history from
+  version 0; checkpoint replay is unsupported.
 
 See [data-source guide](../guides/data-sources.md), [configuration](configuration.md),
 and [security](../../SECURITY.md).

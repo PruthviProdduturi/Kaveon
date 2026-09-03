@@ -16,6 +16,7 @@ are planned rather than executable.
 
 ## Runtime guides
 
+- [Use the Engine CLI](guides/engine-cli.md)
 - [Connect data sources](guides/data-sources.md)
 - [Use SQL Lab](guides/sql-lab.md)
 - [Build charts](guides/charts.md)

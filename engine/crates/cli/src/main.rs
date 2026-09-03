@@ -7,7 +7,7 @@ use kaveon_core::{
     TableMeta, TableReference, collect_batches,
 };
 use kaveon_sql::logical_plan::sql_to_logical_plan;
-use kaveon_storage::ParquetReader;
+use kaveon_storage::{DeltaTableReader, ParquetReader};
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -19,7 +19,7 @@ fn main() {
     let (data_dir, config_path) = parse_args(&args);
 
     let mut catalog_mgr = if let Some(dir) = &data_dir {
-        let mut mgr = CatalogManager::new("local", "default");
+        let mut mgr = CatalogManager::new("kaveon", "default");
         let catalog = build_local_catalog(dir);
         let table_count = catalog.table_names("default").map(|t| t.len()).unwrap_or(0);
         mgr.register_catalog(Box::new(catalog));
@@ -166,7 +166,25 @@ fn build_local_catalog(dir: &Path) -> MemoryCatalog {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().is_some_and(|e| e == "parquet")
+            if path.is_dir() && path.join("_delta_log").is_dir() {
+                if let Some(table_name) = path.file_name().and_then(|s| s.to_str()) {
+                    match DeltaTableReader::new(&path).metadata() {
+                        Ok(meta) => {
+                            let _ = catalog.register_table(
+                                "default",
+                                TableMeta {
+                                    name: table_name.to_owned(),
+                                    arrow_schema: meta.schema,
+                                    location: path.file_name().unwrap().to_string_lossy().into_owned(),
+                                    access: AccessPattern::Shortcut,
+                                    format: DataFormat::Delta,
+                                },
+                            );
+                        }
+                        Err(e) => eprintln!("warning: skipping {}: {e}", path.display()),
+                    }
+                }
+            } else if path.extension().is_some_and(|e| e == "parquet")
                 && let Some(table_name) = path.file_stem().and_then(|s| s.to_str())
             {
                 match ParquetReader::new(&path).metadata() {
@@ -244,7 +262,7 @@ fn repl(catalog: &mut CatalogManager) {
     println!();
 }
 
-fn handle_meta_command(cmd: &str, catalog: &CatalogManager) {
+fn handle_meta_command(cmd: &str, catalog: &mut CatalogManager) {
     let parts: Vec<&str> = cmd.split_whitespace().collect();
     match parts[0] {
         ".quit" | ".exit" | ".q" => std::process::exit(0),
@@ -347,7 +365,11 @@ fn handle_meta_command(cmd: &str, catalog: &CatalogManager) {
             }
         }
         ".use" => {
-            eprintln!("note: .use is not yet implemented — restart with --data-dir");
+            if parts.len() != 2 {
+                eprintln!("usage: .use <catalog.schema>");
+                return;
+            }
+            use_catalog(parts[1], catalog);
         }
         _ => {
             eprintln!("unknown command: {}", parts[0]);
@@ -420,22 +442,26 @@ fn try_handle_show_use(sql: &str, catalog: &mut CatalogManager) -> bool {
         }
         _ if upper.starts_with("USE ") => {
             let target = sql.trim()[4..].trim().trim_end_matches(';');
-            let parts: Vec<&str> = target.split('.').collect();
-            match parts.len() {
-                2 => {
-                    *catalog = CatalogManager::new(parts[0], parts[1]);
-                    println!("Using catalog '{}', schema '{}'", parts[0], parts[1]);
-                }
-                1 => {
-                    let current_schema = catalog.default_schema().to_owned();
-                    *catalog = CatalogManager::new(parts[0], current_schema);
-                    println!("Using catalog '{}'", parts[0]);
-                }
-                _ => eprintln!("usage: USE catalog.schema"),
-            }
+            use_catalog(target, catalog);
             true
         }
         _ => false,
+    }
+}
+
+fn use_catalog(target: &str, catalog: &mut CatalogManager) {
+    let parts: Vec<&str> = target.split('.').collect();
+    let (catalog_name, schema_name) = match parts.as_slice() {
+        [catalog_name, schema_name] => ((*catalog_name).to_owned(), (*schema_name).to_owned()),
+        [catalog_name] => ((*catalog_name).to_owned(), catalog.default_schema().to_owned()),
+        _ => {
+            eprintln!("usage: USE catalog.schema");
+            return;
+        }
+    };
+    match catalog.set_default(&catalog_name, &schema_name) {
+        Ok(()) => println!("Using catalog '{catalog_name}', schema '{schema_name}'"),
+        Err(error) => eprintln!("error: {error}"),
     }
 }
 

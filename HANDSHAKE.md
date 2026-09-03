@@ -19,7 +19,7 @@
 | Crate | Owner | Status |
 |-------|-------|--------|
 | `core` — shared types, errors, traits | Shared (either can add, neither restructures without updating this doc) | Scaffold |
-| `storage` — Parquet reader, ADLS Gen 2 | **Codex** | Local Parquet M1 done; ADLS Gen 2 not started |
+| `storage` — Parquet reader, ADLS Gen 2 | **Codex** | Local Parquet M1 and local Delta JSON snapshot reads done; ADLS Gen 2 not started |
 | `exec/scan` — scan operator | **Claude** | Done |
 | `exec/aggregate` — hash aggregate | **Claude** | Done |
 | `exec/filter` — filter evaluation | **Claude** | Done |
@@ -188,6 +188,19 @@ version = kaveon_engine.version()
 - History is process-local and resets when the coordinator restarts
 - Node payloads and heartbeats include `memory_rss_bytes`, measured from each Engine process; unsupported hosts report zero
 
+### Local Delta snapshot API
+
+```rust
+let source = DeltaTableReader::new(table_directory)
+    .with_columns(vec!["region".into(), "revenue".into()])
+    .read()?;
+```
+
+- The local reader replays ordered `_delta_log/*.json` add/remove actions and streams only active Parquet files.
+- Snapshot reads require a complete contiguous JSON history beginning at version 0; checkpoint replay is not implemented and incomplete histories fail closed.
+- CLI and server planners select Parquet or Delta readers from `TableMeta::format`.
+- `CatalogManager::set_default(catalog, schema)` validates and changes CLI defaults without unloading catalogs.
+
 ### DLM API (standalone target)
 
 - **Claude** extracts DLM into callable API endpoints independent of Studio
@@ -239,3 +252,5 @@ version = kaveon_engine.version()
 | 2026-09-02 | Codex | Removed the root localhost stack's duplicate `local` catalog registration; `/data` now appears once under the canonical `kaveon` catalog while explicit catalog configuration remains supported. |
 | 2026-09-02 | Codex | Removed the duplicate Active Workers trend from the Engine console; current worker availability remains in the summary while the trend area is reserved for non-duplicative query and memory telemetry. |
 | 2026-09-02 | Codex | Simplified the Engine overview to aggregate operational signals: removed per-worker details, total-node duplication, and catalog inventory from the UI. Active worker count remains visible; catalogs remain internal Engine query-routing state. |
+| 2026-09-02 | Codex | Added correct local multi-file Delta snapshot reads via JSON transaction-log replay, immediate Delta table discovery for CLI/server catalogs, format-aware physical scans, and validated CLI `USE`; verified six tables and 50,100,500 rows from `F:\kaveon-data`. |
+| 2026-09-02 | Codex | Rebuilt Engine query history as an operator-focused execution list with state, query identity, submission time, SQL, elapsed time, returned rows, columns, and drill-down while avoiding unsupported Trino metrics. |

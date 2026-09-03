@@ -23,7 +23,7 @@ See [STATUS.md](STATUS.md) and [HANDSHAKE.md](HANDSHAKE.md) for volatile deliver
 |---|---|
 | **Kaveon Studio** | Dashboards, chart construction, SQL Lab, datasets, and administration |
 | **Kaveon DLM** | Deterministic dataset routing, intent resolution, compiled answers, and SQL generation without a hosted LLM |
-| **Kaveon Engine** | Rust catalog resolution, SQL planning, and vectorized execution over local Parquet today; optimization and direct cloud lake reads are target capabilities |
+| **Kaveon Engine** | Rust catalog resolution, SQL planning, and vectorized execution over local Parquet and local Delta today; optimization and direct cloud lake reads are target capabilities |
 
 The defining data model is the **Live Lake Path**: Kaveon reads data in the customer’s storage without mandatory import. **Optimized ingest** is an explicit target mode that writes sorted, partitioned, compressed data back into customer-controlled storage. The current internal enum still calls this access pattern `Shortcut`; that implementation name is not the product concept.
 
@@ -61,11 +61,11 @@ flowchart LR
     Plan --> Physical[Physical planner]
     Physical --> Ops[kaveon-exec]
     Ops --> Reader[kaveon-storage]
-    Reader --> Local[(Local Parquet file)]
+    Reader --> Local[(Local Parquet or Delta table)]
     Reader -->|Arrow RecordBatch| Ops
 ```
 
-Today the Engine queries local, single-file Parquet tables. Studio and FastAPI do not route queries to it. Python bindings are a scaffold. Catalog types describe ADLS Gen2, S3, Delta, and Iceberg, but those backends and formats are not executable yet.
+Today the Engine queries local single-file Parquet tables and local multi-file Delta tables. Delta snapshot resolution replays a complete JSON commit history from version 0; checkpoint replay is not supported. Studio and FastAPI do not route queries to the Engine, and Python bindings are a scaffold. ADLS Gen2, S3, and Iceberg remain non-executable target paths.
 
 ## Engine architecture
 
@@ -113,6 +113,7 @@ pub trait BatchOperator {
 | Capability | State | Notes |
 |---|---|---|
 | Local Parquet scan | **Implemented** | Streaming batches, metadata, strict projection |
+| Local Delta scan | **Alpha** | JSON-log snapshot replay and streaming across active Parquet files; complete history from version 0 required, checkpoints unsupported |
 | Row-group pruning | **Implemented** | Available in storage; planners do not yet supply the predicate |
 | Filter and projection | **Implemented** | Batch operators |
 | Hash aggregate | **Implemented** | In-memory and blocking; no spill or shuffle |
@@ -132,7 +133,7 @@ Catalog
         └── access: Shortcut | Optimized
 ```
 
-The catalog separates logical `catalog.schema.table` identity from physical location. A resolved table combines metadata with local, ADLS Gen2, or S3 storage. Only local Parquet is executable today.
+The catalog separates logical `catalog.schema.table` identity from physical location. A resolved table combines metadata with local, ADLS Gen2, or S3 storage. Local Parquet and local Delta are executable today; ADLS Gen2, S3, and Iceberg are targets.
 
 ### Target lake-read path
 
@@ -167,7 +168,7 @@ Correctness dominates pruning aggression. Missing, nested, inexact, incompatible
 1. `POST /v1/statement` accepts SQL.
 2. `kaveon-sql` creates a logical plan.
 3. The server recursively constructs the physical operator tree.
-4. `ParquetReader` opens the resolved local file and streams Arrow batches.
+4. `ParquetReader` streams a resolved local Parquet file, or `DeltaTableReader` resolves the JSON-log snapshot and streams its active Parquet files.
 5. Operators pull batches; the server collects all results.
 6. Cells are converted to JSON and the completed result is retained in process memory.
 
@@ -241,7 +242,7 @@ kaveon --data-dir <path>
 kaveon --config <catalog-config>
 ```
 
-The CLI builds an in-memory catalog and starts a synchronous SQL REPL. Auto-discovery scans only immediate `*.parquet` files; one file becomes one table.
+The CLI builds an in-memory catalog and starts a synchronous SQL REPL. Auto-discovery scans immediate `*.parquet` files and immediate child directories containing `_delta_log`; one Parquet file or one Delta directory becomes one table.
 
 ### Engine server
 
@@ -276,9 +277,9 @@ Performance claims must name dataset, hardware, version, cache state, concurrenc
 
 | Horizon | Engine capability |
 |---|---|
-| **M1 in progress** | Delivered: local Parquet reads, `GROUP BY`, storage benchmarks. In progress: sort, TopN, filter pushdown |
+| **M1 in progress** | Delivered: local Parquet reads, local Delta JSON-log snapshots, `GROUP BY`, storage benchmarks. In progress: sort, TopN, filter pushdown |
 | **Next** | ADLS Gen2 range reads, bounded concurrency, metrics, API integration, comparative benchmarks |
-| **Then** | Delta snapshots, schema evolution, deletion vectors, time travel |
+| **Then** | Delta checkpoint replay, schema evolution, deletion vectors, time travel |
 | **Scale-out** | Fragments, exchanges, shuffle, retries, cancellation, spill, admission control |
 | **Post-launch** | Iceberg, optimized ingest, SIMD/JIT candidates, cost-based optimization |
 

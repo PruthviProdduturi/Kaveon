@@ -102,17 +102,21 @@ body{font-family:var(--sans);background:radial-gradient(circle at 50% -20%,rgba(
   padding:1px 7px;border-radius:5px;font-size:11px;font-family:var(--mono);
 }
 
-/* ===== QUERY TABLE ===== */
-.qtable{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+/* ===== QUERY HISTORY ===== */
+.query-list{display:flex;flex-direction:column;gap:10px}
+.query-card{width:100%;text-align:left;color:inherit;background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius);padding:0;overflow:hidden;cursor:pointer;transition:border-color .15s,background .15s,transform .15s}
+.query-card:hover{background:var(--bg-elevated);border-color:var(--border-active);transform:translateY(-1px)}
+.query-card-top{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:9px 14px;background:var(--bg-elevated);border-bottom:1px solid var(--border)}
+.query-identity{display:flex;align-items:center;gap:10px;min-width:0}.query-id{font:600 11px var(--mono);color:var(--brand-light);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.query-time{font:11px var(--mono);color:var(--text-muted);white-space:nowrap}
+.query-body{display:grid;grid-template-columns:minmax(230px,28%) 1fr;min-height:112px}.query-meta{display:flex;align-content:flex-start;gap:14px 20px;flex-wrap:wrap;padding:16px;border-right:1px solid var(--border)}
+.query-main{min-width:0}.query-state{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:rgba(var(--success-rgb),.1);border-bottom:1px solid rgba(var(--success-rgb),.2);color:var(--success);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}.query-state.failed{background:rgba(var(--error-rgb),.1);border-color:rgba(var(--error-rgb),.2);color:var(--error)}
+.query-sql{display:block;font:13px/1.65 var(--mono);color:var(--text);padding:16px 18px;white-space:pre-wrap;overflow-wrap:anywhere}
+.query-stat{display:flex;flex-direction:column;gap:2px;min-width:74px}.query-stat-label{font-size:9px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted)}.query-stat-value{font:600 12px var(--mono);color:var(--text-secondary)}
 table{width:100%;border-collapse:collapse;font-size:13px}
 thead{position:sticky;top:64px;z-index:10}
 th{text-align:left;padding:10px 16px;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);background:var(--bg-elevated);border-bottom:1px solid var(--border);white-space:nowrap}
 td{padding:9px 16px;border-bottom:1px solid var(--border);font-size:13px}
 tr:last-child td{border-bottom:none}
-
-.qr{cursor:pointer;transition:background .1s}
-.qr:hover td{background:var(--bg-hover)}
-.qr.active td{background:rgba(var(--brand-rgb),.05);border-bottom-color:transparent}
 
 .badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.03em;font-family:var(--sans)}
 .badge-finished{background:rgba(var(--success-rgb),.12);color:var(--success)}
@@ -205,7 +209,7 @@ td.nl{color:var(--text-muted);font-style:italic}
 :focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 @media(max-width:900px){.telemetry{grid-template-columns:1fr}}
-@media(max-width:700px){.mast{align-items:flex-start;flex-direction:column}.section-row{align-items:flex-start;flex-direction:column}.query-tools{width:100%}.query-tools input{width:100%}.main{padding:20px}.header{padding:0 18px}.gauges{padding:12px 18px}}
+@media(max-width:700px){.mast{align-items:flex-start;flex-direction:column}.section-row{align-items:flex-start;flex-direction:column}.query-tools{width:100%}.query-tools input{width:100%}.query-body{grid-template-columns:1fr}.query-meta{border-right:0;border-bottom:1px solid var(--border)}.main{padding:20px}.header{padding:0 18px}.gauges{padding:12px 18px}}
 </style>
 </head>
 <body>
@@ -278,6 +282,7 @@ function fmt(s){
 }
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
 function bytes(value){if(value<1024)return value+' B';if(value<1048576)return(value/1024).toFixed(1)+' KiB';if(value<1073741824)return(value/1048576).toFixed(1)+' MiB';return(value/1073741824).toFixed(2)+' GiB'}
+function submitted(value){return new Date(value).toLocaleString([],{month:'short',day:'numeric',hour:'numeric',minute:'2-digit',second:'2-digit'})}
 function spark(id,values){
   const svg=document.getElementById(id);if(!values.length)return;
   const max=Math.max(...values,1),step=values.length>1?320/(values.length-1):0;
@@ -410,26 +415,27 @@ function renderHistory(){
   const visible=qorder.filter(id=>{const q=queries[id];return q&&(state==='ALL'||q.state===state)&&(!term||q.sql.toLowerCase().includes(term)||id.toLowerCase().includes(term));});
   document.getElementById('qc').textContent=visible.length===qorder.length?qorder.length:visible.length+' / '+qorder.length;
   if(!visible.length){document.getElementById('qarea').innerHTML='<div class="empty"><div class="empty-t">No matching queries</div><div class="empty-s">Adjust the search or state filter</div></div>';return;}
-  let h='<div class="qtable"><table><thead><tr><th>Query</th><th>State</th><th>Elapsed</th><th>Rows</th><th>Query ID</th></tr></thead><tbody>';
+  let h='<div class="query-list">';
   visible.forEach(id=>{
     const q=queries[id];if(!q)return;
-    const preview=esc(q.sql.length>90?q.sql.substring(0,90)+'…':q.sql);
-    const badge=q.state==='FINISHED'?'<span class="badge badge-finished">Finished</span>':'<span class="badge badge-failed">Failed</span>';
-    h+=`<tr class="qr" tabindex="0" role="button" data-query-id="${esc(id)}">
-      <td style="font-family:var(--mono);color:var(--text)">${preview}</td>
-      <td>${badge}</td>
-      <td style="font-family:var(--mono)">${q.elapsed_ms||0}ms</td>
-      <td style="font-family:var(--mono)">${q.rows?q.rows.length:0}</td>
-      <td style="font-size:11px;color:var(--text-muted);font-family:var(--mono)">${esc(id)}</td>
-    </tr>`;
+    const preview=esc(q.sql);
+    const stateClass=q.state==='FAILED'?' failed':'';
+    h+=`<button class="query-card" type="button" data-query-id="${esc(id)}">
+      <span class="query-card-top"><span class="query-identity"><span class="query-id">${esc(id)}</span></span><span class="query-time">${submitted(q.submitted_at_ms)}</span></span>
+      <span class="query-body"><span class="query-meta">
+        <span class="query-stat"><span class="query-stat-label">Elapsed</span><span class="query-stat-value">${q.elapsed_ms||0} ms</span></span>
+        <span class="query-stat"><span class="query-stat-label">Returned</span><span class="query-stat-value">${q.rows?q.rows.length:0} rows</span></span>
+        <span class="query-stat"><span class="query-stat-label">Columns</span><span class="query-stat-value">${q.columns?q.columns.length:0}</span></span>
+        <span class="query-stat"><span class="query-stat-label">Entry point</span><span class="query-stat-value">HTTP API</span></span>
+      </span><span class="query-main"><span class="query-state${stateClass}"><span>${q.state}</span><span>Query text</span></span><span class="query-sql">${preview}</span></span></span>
+    </button>`;
   });
-  h+='</tbody></table></div>';
+  h+='</div>';
   const area=document.getElementById('qarea');
   area.innerHTML=h;
   area.querySelectorAll('[data-query-id]').forEach(row=>{
     const open=()=>showDetail(row.dataset.queryId);
     row.addEventListener('click',open);
-    row.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();open();}});
   });
 }
 
