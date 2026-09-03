@@ -35,6 +35,22 @@ struct QueryRecord {
     timings: QueryTimings,
     plan: QueryPlan,
     scans: Vec<ScanTelemetry>,
+    context: QueryContext,
+}
+
+#[derive(Clone, Serialize)]
+struct QueryContext {
+    engine_version: String,
+    environment: String,
+    principal: Option<String>,
+    source: Option<String>,
+    client: Option<String>,
+    catalog: String,
+    schema: String,
+    time_zone: Option<String>,
+    client_address: Option<String>,
+    client_tags: Vec<String>,
+    result_delivery: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -65,8 +81,9 @@ struct QueryTimings {
 
 #[derive(Clone, Serialize)]
 struct QueryPlan {
-    logical: Option<String>,
-    physical: Option<String>,
+    logical: Option<kaveon_core::PlanNode>,
+    optimized: Option<kaveon_core::PlanNode>,
+    physical: Option<kaveon_core::PlanNode>,
 }
 
 const QUERY_HISTORY_LIMIT: usize = 100;
@@ -119,6 +136,16 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 #[derive(Deserialize)]
 struct StatementRequest {
     query: String,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    client: Option<String>,
+    #[serde(default)]
+    time_zone: Option<String>,
+    #[serde(default)]
+    client_tags: Vec<String>,
+    #[serde(default)]
+    result_delivery: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -156,6 +183,22 @@ async fn submit_statement(
         .unwrap_or_default()
         .as_millis() as u64;
     let start = Instant::now();
+    let context = {
+        let catalog = state.catalog.read().await;
+        QueryContext {
+            engine_version: env!("CARGO_PKG_VERSION").to_owned(),
+            environment: state.config.environment.clone(),
+            principal: None,
+            source: req.source,
+            client: req.client,
+            catalog: catalog.default_catalog().to_owned(),
+            schema: catalog.default_schema().to_owned(),
+            time_zone: req.time_zone,
+            client_address: None,
+            client_tags: req.client_tags,
+            result_delivery: req.result_delivery,
+        }
+    };
 
     QUERY_STORE.write().await.queries.insert(
         query_id.clone(),
@@ -177,9 +220,11 @@ async fn submit_statement(
             },
             plan: QueryPlan {
                 logical: None,
+                optimized: None,
                 physical: None,
             },
             scans: vec![],
+            context: context.clone(),
         },
     );
 
@@ -200,7 +245,7 @@ async fn submit_statement(
         }
     };
     let analysis_us = elapsed_us(analysis_start);
-    let logical_plan = format!("{plan:#?}");
+    let logical_plan = crate::planner::logical_plan_tree(&plan);
     if let Some(record) = QUERY_STORE.write().await.queries.get_mut(&query_id) {
         record.timings.analysis_us = Some(analysis_us);
         record.plan.logical = Some(logical_plan.clone());
@@ -266,9 +311,11 @@ async fn submit_statement(
                 },
                 plan: QueryPlan {
                     logical: Some(logical_plan),
+                    optimized: None,
                     physical: None,
                 },
                 scans,
+                context: context.clone(),
             };
             QUERY_STORE
                 .write()
@@ -323,9 +370,11 @@ async fn submit_statement(
         },
         plan: QueryPlan {
             logical: Some(logical_plan),
+            optimized: None,
             physical: None,
         },
         scans,
+        context,
     };
     QUERY_STORE
         .write()
@@ -631,7 +680,7 @@ async fn finish_failed_query(
     started: Instant,
     analysis_us: Option<u64>,
     planning_us: Option<u64>,
-    logical_plan: Option<String>,
+    logical_plan: Option<kaveon_core::PlanNode>,
 ) {
     if let Some(record) = QUERY_STORE.write().await.queries.get_mut(query_id) {
         record.state = QueryState::Failed;

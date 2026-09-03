@@ -125,7 +125,7 @@ tr:last-child td{border-bottom:none}
 
 /* ===== QUERY DETAIL ===== */
 .qdetail{background:var(--bg-elevated);border-bottom:1px solid var(--border)}
-.qd-inner{padding:24px;max-width:1200px}
+.qd-inner{padding:24px;max-width:1440px;margin:0 auto}
 .qd-back{
   display:inline-flex;align-items:center;gap:6px;
   font-size:12px;color:var(--text-muted);cursor:pointer;
@@ -134,13 +134,20 @@ tr:last-child td{border-bottom:none}
 }
 .qd-back:hover{color:var(--text-secondary);background:var(--bg-hover);border-color:var(--border)}
 .qd-back svg{width:14px;height:14px}
-.qd-header{display:flex;align-items:center;gap:12px;margin-bottom:24px}
+.qd-header{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;margin-bottom:20px;padding:20px 22px;background:linear-gradient(135deg,rgba(var(--brand-rgb),.09),transparent 55%),var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius)}
+.qd-heading{min-width:0}.qd-kicker{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--brand);font-weight:700;margin-bottom:6px}
 .qd-title{font-size:16px;font-weight:600}
-.qd-id{font-size:11px;font-family:var(--mono);color:var(--text-muted)}
+.qd-id{font-size:16px;font-family:var(--mono);color:var(--text);overflow-wrap:anywhere}
+.qd-state{display:flex;align-items:center;gap:10px;flex-shrink:0}.qd-state-time{font:12px var(--mono);color:var(--text-muted)}
 
 .qd-sections{display:flex;flex-direction:column;gap:24px}
-.qd-section{}
+.qd-section{min-width:0}
 .qd-label{font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px}
+.qd-panel{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px}
+.qd-columns{display:grid;grid-template-columns:1fr 1fr;gap:18px}.qd-stack{display:flex;flex-direction:column;gap:18px}
+.qd-definition{display:grid;grid-template-columns:minmax(105px,.7fr) minmax(130px,1fr);gap:0 18px}
+.qd-definition dt,.qd-definition dd{padding:8px 0;border-bottom:1px solid rgba(38,50,68,.72);font-size:12px}.qd-definition dt{color:var(--text-muted)}.qd-definition dd{margin:0;color:var(--text);font-family:var(--mono);overflow-wrap:anywhere}.qd-definition dt:last-of-type,.qd-definition dd:last-of-type{border-bottom:0}
+.qd-unavailable{color:var(--text-muted)!important;font-family:var(--sans)!important;font-style:italic}
 
 .qd-sql{
   background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);
@@ -180,11 +187,15 @@ td.nl{color:var(--text-muted);font-style:italic}
 }
 .qd-plan-note{margin-bottom:12px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-surface);color:var(--text-secondary);font-size:12px}
 .qd-plan-note strong{color:var(--warning);font-weight:600}
+.plan-shell{padding:24px;overflow:auto;min-height:240px;background:radial-gradient(circle at 50% 0,rgba(var(--brand-rgb),.08),transparent 45%),var(--bg);border:1px solid var(--border);border-radius:var(--radius)}
+.plan-tree,.plan-tree ul{list-style:none;margin:0;padding:0}.plan-tree ul{margin-left:22px;padding-left:24px;border-left:1px solid rgba(var(--brand-rgb),.28)}.plan-tree li{position:relative;padding:7px 0}.plan-tree ul>li:before{content:"";position:absolute;left:-24px;top:31px;width:24px;border-top:1px solid rgba(var(--brand-rgb),.28)}
+.plan-node{display:inline-block;min-width:250px;max-width:720px;padding:13px 15px;background:linear-gradient(145deg,rgba(255,255,255,.025),transparent),var(--bg-elevated);border:1px solid var(--border);border-left:3px solid var(--brand);border-radius:var(--radius-sm);box-shadow:0 10px 28px rgba(0,0,0,.18)}
+.plan-node-top{display:flex;align-items:center;gap:10px}.plan-op{font-size:13px;font-weight:700}.plan-phase{font-size:9px;text-transform:uppercase;letter-spacing:.09em;color:var(--brand);margin-left:auto}.plan-id{font:10px var(--mono);color:var(--text-muted);margin-top:3px}.plan-attrs{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}.plan-attr{font:10px var(--mono);color:var(--text-secondary);padding:3px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px}
 
 .qd-tabs{display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:16px}
 .qd-tab{
   padding:8px 16px;font-size:12px;font-weight:500;color:var(--text-muted);
-  cursor:pointer;border-bottom:2px solid transparent;transition:all .15s;
+  cursor:pointer;border:0;border-bottom:2px solid transparent;transition:all .15s;background:transparent;font-family:inherit;
 }
 .qd-tab:hover{color:var(--text-secondary)}
 .qd-tab.active{color:var(--brand);border-bottom-color:var(--brand)}
@@ -210,8 +221,8 @@ td.nl{color:var(--text-muted);font-style:italic}
 
 :focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
-@media(max-width:900px){.telemetry{grid-template-columns:1fr}}
-@media(max-width:700px){.mast{align-items:flex-start;flex-direction:column}.section-row{align-items:flex-start;flex-direction:column}.query-tools{width:100%}.query-tools input{width:100%}.query-body{grid-template-columns:1fr}.query-meta{border-right:0;border-bottom:1px solid var(--border)}.main{padding:20px}.header{padding:0 18px}.gauges{padding:12px 18px}}
+@media(max-width:900px){.telemetry,.qd-columns{grid-template-columns:1fr}}
+@media(max-width:700px){.mast,.qd-header{align-items:flex-start;flex-direction:column}.section-row{align-items:flex-start;flex-direction:column}.query-tools{width:100%}.query-tools input{width:100%}.query-body{grid-template-columns:1fr}.query-meta{border-right:0;border-bottom:1px solid var(--border)}.main{padding:20px}.header{padding:0 18px}.gauges{padding:12px 18px}.qd-inner{padding:16px}.qd-tabs{overflow-x:auto}.qd-tab{white-space:nowrap}.qd-definition{grid-template-columns:1fr}.qd-definition dt{border-bottom:0;padding-bottom:2px}.qd-definition dd{padding-top:0}.plan-shell{padding:14px}.plan-node{min-width:210px}}
 </style>
 </head>
 <body>
@@ -315,6 +326,23 @@ function setGauge(id,value,max){
   document.getElementById(id+'-ring').setAttribute('stroke-dashoffset',C*(1-pct));
 }
 
+function present(value,fallback='Not provided'){
+  return value===undefined||value===null||value===''?`<span class="qd-unavailable">${fallback}</span>`:esc(String(value));
+}
+function definition(items){
+  return '<dl class="qd-definition">'+items.map(([label,value])=>`<dt>${esc(label)}</dt><dd>${value}</dd>`).join('')+'</dl>';
+}
+function planNode(node){
+  if(!node||typeof node!=='object')return '<div class="qd-plan-note"><strong>Not available.</strong> The planner did not attach a structured plan.</div>';
+  const attributes=node.attributes&&typeof node.attributes==='object'?Object.entries(node.attributes):[];
+  const children=Array.isArray(node.children)?node.children:[];
+  return `<li><article class="plan-node"><div class="plan-node-top"><span class="plan-op">${present(node.operator,'Unknown operator')}</span><span class="plan-phase">${present(node.phase,'Plan')}</span></div><div class="plan-id">${present(node.id,'No node ID')}</div>${attributes.length?'<div class="plan-attrs">'+attributes.map(([key,value])=>`<span class="plan-attr">${esc(key)}: ${present(value)}</span>`).join('')+'</div>':''}</article>${children.length?'<ul>'+children.map(planNode).join('')+'</ul>':''}</li>`;
+}
+function renderPlan(plan){
+  if(typeof plan==='string')return `<div class="qd-json">${esc(plan)}</div>`;
+  return `<div class="plan-shell"><ul class="plan-tree">${planNode(plan)}</ul></div>`;
+}
+
 async function fetchCluster(){
   try{
     const r=await fetch(API+'/v1/cluster');
@@ -351,34 +379,43 @@ function showDetail(id){
   const badge=q.state==='FINISHED'?'<span class="badge badge-finished">Finished</span>':q.state==='RUNNING'?'<span class="badge badge-running">Running</span>':'<span class="badge badge-failed">Failed</span>';
   const elapsed=q.elapsed_ms||0;
 
+  const context=q.context||{};
+  const tags=Array.isArray(context.client_tags)?context.client_tags.join(', '):context.client_tags;
   let h=`<div class="qd-inner">
-    <div class="qd-back" onclick="hideDetail()">
+    <button class="qd-back" type="button" onclick="hideDetail()">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 2L4 8l6 6"/></svg>
       Back to queries
-    </div>
+    </button>
     <div class="qd-header">
-      ${badge}
-      <span class="qd-id">${esc(q.id)}</span>
+      <div class="qd-heading"><div class="qd-kicker">Query details</div><div class="qd-id">${esc(q.id)}</div></div>
+      <div class="qd-state">${badge}<span class="qd-state-time">${elapsed} ms</span></div>
     </div>
-    <div class="qd-tabs" id="qd-tabs">
-      <div class="qd-tab active" data-t="overview">Overview</div>
-      <div class="qd-tab" data-t="plan">Plan</div>
-      <div class="qd-tab" data-t="results">Results</div>
-      <div class="qd-tab" data-t="json">JSON</div>
+    <div class="qd-tabs" id="qd-tabs" role="tablist" aria-label="Query details">
+      <button class="qd-tab active" type="button" role="tab" aria-selected="true" data-t="overview">Overview</button>
+      <button class="qd-tab" type="button" role="tab" aria-selected="false" data-t="plan">Execution plan</button>
+      <button class="qd-tab" type="button" role="tab" aria-selected="false" data-t="results">Results</button>
+      <button class="qd-tab" type="button" role="tab" aria-selected="false" data-t="json">Raw telemetry</button>
     </div>`;
 
   // Overview
-  h+=`<div class="qd-pane active" id="qdt-overview"><div class="qd-sections">
-    <div class="qd-section"><div class="qd-label">SQL</div><div class="qd-sql">${esc(q.sql)}</div></div>
-    <div class="qd-section"><div class="qd-label">Execution</div><div class="qd-grid">
-      <div class="qd-metric"><div class="qd-metric-label">Status</div><div class="qd-metric-value">${q.state}</div></div>
-      <div class="qd-metric"><div class="qd-metric-label">Elapsed</div><div class="qd-metric-value">${elapsed}<span style="font-size:12px;color:var(--text-muted)">ms</span></div></div>
-      <div class="qd-metric"><div class="qd-metric-label">Rows</div><div class="qd-metric-value">${q.rows?q.rows.length:0}</div></div>
-      <div class="qd-metric"><div class="qd-metric-label">Columns</div><div class="qd-metric-value">${q.columns?q.columns.length:0}</div></div>
-      <div class="qd-metric"><div class="qd-metric-label">Submitted</div><div class="qd-metric-value" style="font-size:13px">${submitted(q.submitted_at_ms)}</div></div>
-      <div class="qd-metric"><div class="qd-metric-label">Completed</div><div class="qd-metric-value" style="font-size:13px">${q.completed_at_ms?submitted(q.completed_at_ms):'In progress'}</div></div>
-    </div></div>
-    <div class="qd-section"><div class="qd-label">Measured timeline</div><div class="qd-grid">
+  h+=`<div class="qd-pane active" id="qdt-overview" role="tabpanel"><div class="qd-sections">
+    <div class="qd-section"><div class="qd-label">Query</div><div class="qd-sql">${esc(q.sql)}</div></div>
+    <div class="qd-columns">
+      <section class="qd-panel"><div class="qd-label">Session</div>${definition([
+        ['Principal',present(context.principal)],['Source',present(context.source)],['Client',present(context.client)],
+        ['Catalog',present(context.catalog)],['Schema',present(context.schema)],['Time zone',present(context.time_zone)],
+        ['Client address',present(context.client_address)],['Client tags',present(tags)],['Result delivery',present(context.result_delivery)]
+      ])}</section>
+      <div class="qd-stack"><section class="qd-panel"><div class="qd-label">Execution</div>${definition([
+        ['State',present(q.state)],['Submitted',present(q.submitted_at_ms?submitted(q.submitted_at_ms):null)],
+        ['Completed',q.completed_at_ms?esc(submitted(q.completed_at_ms)):'<span class="qd-unavailable">In progress</span>'],
+        ['Elapsed',esc(elapsed+' ms')],['Rows returned',esc(String(q.rows?q.rows.length:0))],['Columns',esc(String(q.columns?q.columns.length:0))]
+      ])}</section>
+      <section class="qd-panel"><div class="qd-label">Engine context</div>${definition([
+        ['Version',present(context.engine_version)],['Environment',present(context.environment)]
+      ])}</section></div>
+    </div>
+    <div class="qd-section"><div class="qd-label">Measured execution timeline</div><div class="qd-grid">
       <div class="qd-metric"><div class="qd-metric-label">Analysis</div><div class="qd-metric-value">${durationUs(q.timings&&q.timings.analysis_us)}</div></div>
       <div class="qd-metric"><div class="qd-metric-label">Physical planning</div><div class="qd-metric-value">${durationUs(q.timings&&q.timings.planning_us)}</div></div>
       <div class="qd-metric"><div class="qd-metric-label">Execution</div><div class="qd-metric-value">${durationUs(q.timings&&q.timings.execution_us)}</div></div>
@@ -397,9 +434,9 @@ function showDetail(id){
   h+=`</div></div>`;
 
   // Plan
-  h+=`<div class="qd-pane" id="qdt-plan">
+  h+=`<div class="qd-pane" id="qdt-plan" role="tabpanel">
     <div class="qd-label">Logical plan</div>
-    <div class="qd-json">${q.plan&&q.plan.logical?esc(q.plan.logical):'Not available yet'}</div>
+    ${q.plan&&q.plan.logical?renderPlan(q.plan.logical):'<div class="qd-plan-note"><strong>Not available.</strong> The planner did not attach a logical plan.</div>'}
     <div class="qd-label" style="margin-top:20px">Storage scans</div>`;
   if(q.scans&&q.scans.length){
     q.scans.forEach((s,index)=>{h+=`<div class="qd-section"><div class="qd-label">Scan ${index+1}</div><div class="qd-grid">
@@ -422,7 +459,7 @@ function showDetail(id){
   </div>`;
 
   // Results
-  h+=`<div class="qd-pane" id="qdt-results">`;
+  h+=`<div class="qd-pane" id="qdt-results" role="tabpanel">`;
   if(q.rows&&q.rows.length&&q.columns){
     h+=`<div class="qd-data"><table><thead><tr>`;
     q.columns.forEach(c=>{h+=`<th>${esc(c.name)}</th>`;});
@@ -439,7 +476,7 @@ function showDetail(id){
   h+=`</div>`;
 
   // JSON
-  h+=`<div class="qd-pane" id="qdt-json"><div class="qd-json">${esc(JSON.stringify(q,null,2))}</div></div>`;
+  h+=`<div class="qd-pane" id="qdt-json" role="tabpanel"><div class="qd-json">${esc(JSON.stringify(q,null,2))}</div></div>`;
 
   h+=`</div>`;
   el.innerHTML=h;
@@ -447,8 +484,10 @@ function showDetail(id){
   el.querySelectorAll('.qd-tab').forEach(tab=>{
     tab.addEventListener('click',()=>{
       el.querySelectorAll('.qd-tab').forEach(t=>t.classList.remove('active'));
+      el.querySelectorAll('.qd-tab').forEach(t=>t.setAttribute('aria-selected','false'));
       el.querySelectorAll('.qd-pane').forEach(p=>p.classList.remove('active'));
       tab.classList.add('active');
+      tab.setAttribute('aria-selected','true');
       document.getElementById('qdt-'+tab.dataset.t).classList.add('active');
     });
   });
