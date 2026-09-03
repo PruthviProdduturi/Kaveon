@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use kaveon_core::{BinaryOp, CompareOp, Expr, ScalarValue, StoragePredicate};
 use kaveon_sql::logical_plan::LogicalPlan;
@@ -34,7 +34,183 @@ pub fn push_filter_down(plan: LogicalPlan) -> LogicalPlan {
             input: Box::new(push_filter_down(*input)),
             count,
         },
+        LogicalPlan::Join {
+            left,
+            right,
+            join_type,
+            condition,
+        } => LogicalPlan::Join {
+            left: Box::new(push_filter_down(*left)),
+            right: Box::new(push_filter_down(*right)),
+            join_type,
+            condition,
+        },
         scan @ LogicalPlan::Scan { .. } => scan,
+    }
+}
+
+/// Restricts scans to columns required by projections, filters, sorting, and aggregates.
+pub fn push_projection_down(plan: LogicalPlan) -> LogicalPlan {
+    prune_columns(plan, None)
+}
+
+fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> LogicalPlan {
+    match plan {
+        LogicalPlan::Scan {
+            table,
+            alias,
+            columns,
+        } => {
+            let projected = required
+                .filter(|columns| !columns.is_empty())
+                .map(|columns| {
+                    let mut columns = columns
+                        .into_iter()
+                        .map(|column| column.rsplit('.').next().unwrap_or(&column).to_owned())
+                        .collect::<Vec<_>>();
+                    columns.sort();
+                    columns.dedup();
+                    columns
+                })
+                .or(columns);
+            LogicalPlan::Scan {
+                table,
+                alias,
+                columns: projected,
+            }
+        }
+        LogicalPlan::Filter { input, predicate } => {
+            let mut columns = required.unwrap_or_default();
+            collect_columns(&predicate, &mut columns);
+            LogicalPlan::Filter {
+                input: Box::new(prune_columns(*input, Some(columns))),
+                predicate,
+            }
+        }
+        LogicalPlan::Project { input, columns } => {
+            let mut input_columns = HashSet::new();
+            for expression in &columns {
+                collect_columns(expression, &mut input_columns);
+            }
+            LogicalPlan::Project {
+                input: Box::new(prune_columns(*input, Some(input_columns))),
+                columns,
+            }
+        }
+        LogicalPlan::Aggregate {
+            input,
+            group_by,
+            aggregates,
+        } => {
+            let mut input_columns = HashSet::new();
+            for expression in &group_by {
+                collect_columns(expression, &mut input_columns);
+            }
+            for aggregate in &aggregates {
+                let expression = match aggregate {
+                    kaveon_sql::logical_plan::AggregateExpr::Count { expr, .. }
+                    | kaveon_sql::logical_plan::AggregateExpr::Sum(expr)
+                    | kaveon_sql::logical_plan::AggregateExpr::Avg(expr)
+                    | kaveon_sql::logical_plan::AggregateExpr::Min(expr)
+                    | kaveon_sql::logical_plan::AggregateExpr::Max(expr) => expr,
+                };
+                collect_columns(expression, &mut input_columns);
+            }
+            LogicalPlan::Aggregate {
+                input: Box::new(prune_columns(*input, Some(input_columns))),
+                group_by,
+                aggregates,
+            }
+        }
+        LogicalPlan::Sort { input, order_by } => {
+            let mut columns = required.unwrap_or_default();
+            for (expression, _) in &order_by {
+                collect_columns(expression, &mut columns);
+            }
+            LogicalPlan::Sort {
+                input: Box::new(prune_columns(*input, Some(columns))),
+                order_by,
+            }
+        }
+        LogicalPlan::Limit { input, count } => LogicalPlan::Limit {
+            input: Box::new(prune_columns(*input, required)),
+            count,
+        },
+        LogicalPlan::Join {
+            left,
+            right,
+            join_type,
+            condition,
+        } => {
+            let mut columns = required.unwrap_or_default();
+            if let Some(condition) = &condition {
+                collect_columns(condition, &mut columns);
+            }
+            let left_qualifier = plan_qualifier(&left);
+            let right_qualifier = plan_qualifier(&right);
+            let can_split = !columns.is_empty()
+                && columns.iter().all(|column| column.contains('.'))
+                && left_qualifier.is_some()
+                && right_qualifier.is_some();
+            let (left_required, right_required) = if can_split {
+                let left_qualifier = left_qualifier.expect("qualifier checked");
+                let right_qualifier = right_qualifier.expect("qualifier checked");
+                let left_columns = columns
+                    .iter()
+                    .filter(|column| column.starts_with(&format!("{left_qualifier}.")))
+                    .cloned()
+                    .collect();
+                let right_columns = columns
+                    .iter()
+                    .filter(|column| column.starts_with(&format!("{right_qualifier}.")))
+                    .cloned()
+                    .collect();
+                (Some(left_columns), Some(right_columns))
+            } else {
+                (None, None)
+            };
+            LogicalPlan::Join {
+                left: Box::new(prune_columns(*left, left_required)),
+                right: Box::new(prune_columns(*right, right_required)),
+                join_type,
+                condition,
+            }
+        }
+    }
+}
+
+fn collect_columns(expression: &Expr, columns: &mut HashSet<String>) {
+    match expression {
+        Expr::Column(name) => {
+            columns.insert(name.to_owned());
+        }
+        Expr::BinaryOp { left, right, .. } | Expr::And(left, right) | Expr::Or(left, right) => {
+            collect_columns(left, columns);
+            collect_columns(right, columns);
+        }
+        Expr::IsNull(expression)
+        | Expr::IsNotNull(expression)
+        | Expr::Not(expression)
+        | Expr::Alias {
+            expr: expression, ..
+        } => collect_columns(expression, columns),
+        Expr::Function { args, .. } => {
+            for argument in args {
+                collect_columns(argument, columns);
+            }
+        }
+        Expr::Literal(_) | Expr::Star => {}
+    }
+}
+
+fn plan_qualifier(plan: &LogicalPlan) -> Option<String> {
+    match plan {
+        LogicalPlan::Scan { table, alias, .. } => Some(
+            alias
+                .clone()
+                .unwrap_or_else(|| table.rsplit('.').next().unwrap_or(table).to_owned()),
+        ),
+        _ => None,
     }
 }
 
@@ -225,6 +401,7 @@ mod tests {
     fn scan() -> LogicalPlan {
         LogicalPlan::Scan {
             table: "orders".to_owned(),
+            alias: None,
             columns: None,
         }
     }

@@ -5,7 +5,7 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field, Float64Type, Int32Type, Int64Type, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use kaveon_core::{BatchOperator, KaveonError, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy)]
@@ -22,6 +22,7 @@ pub struct AggExpr {
     pub func: AggFunc,
     pub column: String,
     pub alias: Option<String>,
+    pub distinct: bool,
 }
 
 impl AggExpr {
@@ -30,7 +31,13 @@ impl AggExpr {
             func,
             column: column.into(),
             alias: None,
+            distinct: false,
         }
+    }
+
+    pub fn distinct(mut self) -> Self {
+        self.distinct = true;
+        self
     }
 
     pub fn with_alias(mut self, alias: impl Into<String>) -> Self {
@@ -65,6 +72,7 @@ struct Accumulator {
     count: u64,
     min: f64,
     max: f64,
+    distinct_values: HashSet<GroupKey>,
 }
 
 impl Accumulator {
@@ -74,6 +82,7 @@ impl Accumulator {
             count: 0,
             min: f64::INFINITY,
             max: f64::NEG_INFINITY,
+            distinct_values: HashSet::new(),
         }
     }
 
@@ -88,32 +97,17 @@ impl Accumulator {
         }
     }
 
-    fn result(&self, func: AggFunc) -> f64 {
-        match func {
+    fn result(&self, func: AggFunc) -> Option<f64> {
+        if self.count == 0 {
+            return None;
+        }
+        Some(match func {
             AggFunc::Sum => self.sum,
             AggFunc::Count => self.count as f64,
-            AggFunc::Min => {
-                if self.count == 0 {
-                    0.0
-                } else {
-                    self.min
-                }
-            }
-            AggFunc::Max => {
-                if self.count == 0 {
-                    0.0
-                } else {
-                    self.max
-                }
-            }
-            AggFunc::Avg => {
-                if self.count == 0 {
-                    0.0
-                } else {
-                    self.sum / self.count as f64
-                }
-            }
-        }
+            AggFunc::Min => self.min,
+            AggFunc::Max => self.max,
+            AggFunc::Avg => self.sum / self.count as f64,
+        })
     }
 }
 
@@ -143,7 +137,24 @@ impl HashAggregate {
                 .map_err(|_| exec_err(format!("group-by column '{col}' not in input")))?;
         }
         for agg in &aggregates {
+            if agg.distinct && !matches!(agg.func, AggFunc::Count) {
+                return Err(exec_err("DISTINCT is currently supported only for COUNT"));
+            }
+            if agg.distinct && agg.column == "*" {
+                return Err(exec_err("COUNT(DISTINCT *) is not supported"));
+            }
             if !matches!(agg.func, AggFunc::Count) {
+                let index = source_schema.index_of(&agg.column).map_err(|_| {
+                    exec_err(format!("aggregate column '{}' not in input", agg.column))
+                })?;
+                if !is_numeric_type(source_schema.field(index).data_type()) {
+                    return Err(exec_err(format!(
+                        "{} requires a numeric column, got {}",
+                        agg.output_name(),
+                        source_schema.field(index).data_type()
+                    )));
+                }
+            } else if agg.column != "*" {
                 source_schema.index_of(&agg.column).map_err(|_| {
                     exec_err(format!("aggregate column '{}' not in input", agg.column))
                 })?;
@@ -226,8 +237,15 @@ impl BatchOperator for HashAggregate {
                     } else if let Some(arr) = agg_arrays[i]
                         && !arr.is_null(row)
                     {
-                        let val = extract_f64(arr, row);
-                        accums[i].update(val);
+                        if matches!(agg.func, AggFunc::Count) {
+                            if !agg.distinct
+                                || accums[i].distinct_values.insert(extract_key(arr, row))
+                            {
+                                accums[i].count += 1;
+                            }
+                        } else {
+                            accums[i].update(extract_f64(arr, row)?);
+                        }
                     }
                 }
             }
@@ -259,7 +277,7 @@ impl BatchOperator for HashAggregate {
                     columns.push(Arc::new(UInt64Array::from(values)));
                 }
                 _ => {
-                    let values: Vec<f64> = entries
+                    let values: Vec<Option<f64>> = entries
                         .iter()
                         .map(|(_, accums)| accums[ai].result(agg.func))
                         .collect();
@@ -305,8 +323,8 @@ fn extract_key(arr: &ArrayRef, row: usize) -> GroupKey {
     }
 }
 
-fn extract_f64(arr: &ArrayRef, row: usize) -> f64 {
-    match arr.data_type() {
+fn extract_f64(arr: &ArrayRef, row: usize) -> Result<f64> {
+    let value = match arr.data_type() {
         DataType::Float64 => arr.as_primitive::<Float64Type>().value(row),
         DataType::Float32 => arr
             .as_primitive::<arrow::datatypes::Float32Type>()
@@ -316,8 +334,25 @@ fn extract_f64(arr: &ArrayRef, row: usize) -> f64 {
         DataType::UInt64 => arr
             .as_primitive::<arrow::datatypes::UInt64Type>()
             .value(row) as f64,
-        _ => 0.0,
-    }
+        _ => {
+            return Err(exec_err(format!(
+                "expected numeric aggregate input, got {}",
+                arr.data_type()
+            )));
+        }
+    };
+    Ok(value)
+}
+
+fn is_numeric_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Float32
+            | DataType::Float64
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt64
+    )
 }
 
 fn build_group_column(
@@ -386,4 +421,106 @@ fn build_group_column(
 
 fn exec_err(msg: impl Into<String>) -> KaveonError {
     KaveonError::Execution(msg.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    struct Input {
+        schema: SchemaRef,
+        batches: VecDeque<RecordBatch>,
+    }
+    impl Input {
+        fn new(batch: RecordBatch) -> Self {
+            Self {
+                schema: batch.schema(),
+                batches: VecDeque::from([batch]),
+            }
+        }
+    }
+    impl BatchOperator for Input {
+        fn schema(&self) -> &SchemaRef {
+            &self.schema
+        }
+        fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+            Ok(self.batches.pop_front())
+        }
+    }
+
+    #[test]
+    fn count_distinct_ignores_nulls_and_deduplicates_values() {
+        let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringArray::from(vec![
+                Some("a"),
+                Some("a"),
+                None,
+                Some("b"),
+            ]))],
+        )
+        .unwrap();
+        let mut aggregate = HashAggregate::new(
+            Box::new(Input::new(batch)),
+            Vec::new(),
+            vec![AggExpr::new(AggFunc::Count, "value").distinct()],
+        )
+        .unwrap();
+        let result = aggregate.next_batch().unwrap().unwrap();
+        assert_eq!(
+            result
+                .column(0)
+                .as_primitive::<arrow::datatypes::UInt64Type>()
+                .value(0),
+            2
+        );
+    }
+
+    #[test]
+    fn rejects_nonnumeric_sum_instead_of_silently_returning_zero() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Utf8,
+            false,
+        )]));
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(vec!["a"]))]).unwrap();
+        let result = HashAggregate::new(
+            Box::new(Input::new(batch)),
+            Vec::new(),
+            vec![AggExpr::new(AggFunc::Sum, "value")],
+        );
+        assert!(
+            matches!(result, Err(KaveonError::Execution(message)) if message.contains("numeric"))
+        );
+    }
+
+    #[test]
+    fn empty_global_aggregate_returns_zero_count_and_null_sum() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            true,
+        )]));
+        let mut aggregate = HashAggregate::new(
+            Box::new(Input::new(RecordBatch::new_empty(schema))),
+            Vec::new(),
+            vec![
+                AggExpr::new(AggFunc::Count, "*"),
+                AggExpr::new(AggFunc::Sum, "value"),
+            ],
+        )
+        .unwrap();
+        let result = aggregate.next_batch().unwrap().unwrap();
+        assert_eq!(
+            result
+                .column(0)
+                .as_primitive::<arrow::datatypes::UInt64Type>()
+                .value(0),
+            0
+        );
+        assert!(result.column(1).is_null(0));
+    }
 }

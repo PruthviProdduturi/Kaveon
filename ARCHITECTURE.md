@@ -244,12 +244,13 @@ The Engine server currently performs blocking file and CPU work in an async hand
 ### Engine CLI
 
 ```text
-kaveon [DATA_DIR]
-kaveon --data-dir <path>
-kaveon --config <catalog-config>
+kaveon --server http://coordinator:8080 --catalog kaveon --schema default
+kaveon --server http://coordinator:8080 --execute "SELECT COUNT(*) FROM orders"
+kaveon --local --data-dir <path>
+kaveon --local --config <catalog-config>
 ```
 
-The CLI builds an in-memory catalog and starts a synchronous SQL REPL. Auto-discovery scans immediate `*.parquet` files and immediate child directories containing `_delta_log`; one Parquet file or one Delta directory becomes one table.
+The CLI is a thin coordinator client by default. It supports interactive and one-shot execution, request-scoped catalog/schema/user context, client source and tags, configurable timeout, and table/CSV/TSV/JSON output. HTTPS uses Rustls. Local embedded execution is available only with explicit `--local`; in that mode auto-discovery scans immediate `*.parquet` files and immediate child directories containing `_delta_log`, where one Parquet file or one Delta directory becomes one table.
 
 ### Engine server
 

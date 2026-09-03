@@ -250,12 +250,19 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    static TEST_DIRECTORY_SEQUENCE: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
+
     fn test_table() -> PathBuf {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system clock should follow the Unix epoch")
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("kaveon-delta-{unique}"));
+        let sequence = TEST_DIRECTORY_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "kaveon-delta-{}-{unique}-{sequence}",
+            std::process::id()
+        ));
         fs::create_dir_all(path.join("_delta_log")).expect("test Delta log should be created");
         path
     }

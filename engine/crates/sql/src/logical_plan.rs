@@ -5,18 +5,34 @@ use sqlparser::ast;
 
 #[derive(Debug)]
 pub enum AggregateExpr {
-    Count(Expr),
+    Count { expr: Expr, distinct: bool },
     Sum(Expr),
     Avg(Expr),
     Min(Expr),
     Max(Expr),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JoinType {
+    Inner,
+    Left,
+    Right,
+    Full,
+    Cross,
+}
+
 #[derive(Debug)]
 pub enum LogicalPlan {
     Scan {
         table: String,
+        alias: Option<String>,
         columns: Option<Vec<String>>,
+    },
+    Join {
+        left: Box<LogicalPlan>,
+        right: Box<LogicalPlan>,
+        join_type: JoinType,
+        condition: Option<Expr>,
     },
     Filter {
         input: Box<LogicalPlan>,
@@ -91,23 +107,60 @@ fn build_from_clause(select: &ast::Select) -> Result<LogicalPlan> {
     if select.from.is_empty() {
         return Err(sql_err("SELECT requires a FROM clause"));
     }
-    if select.from.len() > 1 {
-        return Err(sql_err("joins are not yet supported"));
+    let mut inputs = select.from.iter();
+    let first = inputs.next().expect("FROM was checked as non-empty");
+    let mut plan = table_factor_to_plan(&first.relation)?;
+    plan = apply_joins(plan, &first.joins)?;
+    for input in inputs {
+        let right = apply_joins(table_factor_to_plan(&input.relation)?, &input.joins)?;
+        plan = LogicalPlan::Join {
+            left: Box::new(plan),
+            right: Box::new(right),
+            join_type: JoinType::Cross,
+            condition: None,
+        };
     }
-    let from = &select.from[0];
-    if !from.joins.is_empty() {
-        return Err(sql_err("joins are not yet supported"));
-    }
-    match &from.relation {
-        ast::TableFactor::Table { name, .. } => {
-            let table = name.to_string();
-            Ok(LogicalPlan::Scan {
-                table,
-                columns: None,
-            })
-        }
+    Ok(plan)
+}
+
+fn table_factor_to_plan(factor: &ast::TableFactor) -> Result<LogicalPlan> {
+    match factor {
+        ast::TableFactor::Table { name, alias, .. } => Ok(LogicalPlan::Scan {
+            table: name.to_string(),
+            alias: alias.as_ref().map(|alias| alias.name.value.clone()),
+            columns: None,
+        }),
         _ => Err(sql_err("only table references are supported in FROM")),
     }
+}
+
+fn apply_joins(mut left: LogicalPlan, joins: &[ast::Join]) -> Result<LogicalPlan> {
+    for join in joins {
+        let right = table_factor_to_plan(&join.relation)?;
+        let (join_type, constraint) = match &join.join_operator {
+            ast::JoinOperator::Inner(c) => (JoinType::Inner, Some(c)),
+            ast::JoinOperator::LeftOuter(c) => (JoinType::Left, Some(c)),
+            ast::JoinOperator::RightOuter(c) => (JoinType::Right, Some(c)),
+            ast::JoinOperator::FullOuter(c) => (JoinType::Full, Some(c)),
+            ast::JoinOperator::CrossJoin => (JoinType::Cross, None),
+            other => return Err(sql_err(format!("unsupported join type: {other:?}"))),
+        };
+        let condition = match constraint {
+            None | Some(ast::JoinConstraint::None) => None,
+            Some(ast::JoinConstraint::On(expr)) => Some(ast_expr_to_expr(expr)?),
+            Some(other) => return Err(sql_err(format!("unsupported join constraint: {other:?}"))),
+        };
+        if join_type != JoinType::Cross && condition.is_none() {
+            return Err(sql_err("non-cross joins require an ON condition"));
+        }
+        left = LogicalPlan::Join {
+            left: Box::new(left),
+            right: Box::new(right),
+            join_type,
+            condition,
+        };
+    }
+    Ok(left)
 }
 
 fn build_where(plan: LogicalPlan, select: &ast::Select) -> Result<LogicalPlan> {
@@ -401,8 +454,22 @@ fn collect_aggregates_from_ast_expr(expr: &ast::Expr, out: &mut Vec<AggregateExp
                     }
                     _ => Expr::Star,
                 };
+                let distinct = matches!(
+                    &func.args,
+                    ast::FunctionArguments::List(args)
+                        if args.duplicate_treatment == Some(ast::DuplicateTreatment::Distinct)
+                );
+                if distinct && name != "COUNT" {
+                    return Err(sql_err(format!("DISTINCT is not supported for {name}")));
+                }
+                if distinct && matches!(arg, Expr::Star) {
+                    return Err(sql_err("COUNT(DISTINCT *) is not supported"));
+                }
                 let agg = match name.as_str() {
-                    "COUNT" => AggregateExpr::Count(arg),
+                    "COUNT" => AggregateExpr::Count {
+                        expr: arg,
+                        distinct,
+                    },
                     "SUM" => AggregateExpr::Sum(arg),
                     "AVG" => AggregateExpr::Avg(arg),
                     "MIN" => AggregateExpr::Min(arg),
@@ -539,5 +606,52 @@ mod tests {
     #[test]
     fn rejects_insert() {
         assert!(sql_to_logical_plan("INSERT INTO users VALUES (1)").is_err());
+    }
+
+    #[test]
+    fn preserves_count_distinct_semantics() {
+        let plan = sql_to_logical_plan("SELECT COUNT(DISTINCT user_id) FROM events").unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected project")
+        };
+        let LogicalPlan::Aggregate { aggregates, .. } = *input else {
+            panic!("expected aggregate")
+        };
+        assert!(matches!(
+            aggregates.as_slice(),
+            [AggregateExpr::Count { distinct: true, .. }]
+        ));
+    }
+
+    #[test]
+    fn plans_supported_join_types() {
+        for (keyword, expected) in [
+            ("INNER JOIN", JoinType::Inner),
+            ("LEFT JOIN", JoinType::Left),
+            ("RIGHT JOIN", JoinType::Right),
+            ("FULL JOIN", JoinType::Full),
+        ] {
+            let sql = format!("SELECT * FROM users u {keyword} orders o ON u.id = o.user_id");
+            let LogicalPlan::Join {
+                join_type,
+                condition,
+                ..
+            } = sql_to_logical_plan(&sql).unwrap()
+            else {
+                panic!("expected join")
+            };
+            assert_eq!(join_type, expected);
+            assert!(condition.is_some());
+        }
+        let LogicalPlan::Join {
+            join_type,
+            condition,
+            ..
+        } = sql_to_logical_plan("SELECT * FROM users CROSS JOIN regions").unwrap()
+        else {
+            panic!("expected cross join")
+        };
+        assert_eq!(join_type, JoinType::Cross);
+        assert!(condition.is_none());
     }
 }
