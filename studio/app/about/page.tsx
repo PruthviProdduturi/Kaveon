@@ -257,7 +257,7 @@ export default function AboutPage() {
             maxWidth: 640, margin: "0 auto 20px", fontWeight: 400,
             animation: "hero-sub-drop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 0.5s both",
           }}>
-            Connect governed data sources, ask questions, write SQL, and build interactive dashboards.<br />The deterministic DLM path is distinct from optional hosted-AI assistance.
+            Connect your data. Ask questions. Build intelligence.<br />One governed platform for analytics, dashboards, and deterministic data reasoning.
           </p>
 
           {/* Subtle accent line */}
