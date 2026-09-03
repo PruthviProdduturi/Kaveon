@@ -19,7 +19,7 @@
 | Crate | Owner | Status |
 |-------|-------|--------|
 | `core` — shared types, errors, traits | Shared (either can add, neither restructures without updating this doc) | Scaffold |
-| `storage` — Parquet reader, ADLS Gen 2 | **Codex** | Local Parquet M1 and local Delta JSON snapshot reads done; ADLS Gen 2 not started |
+| `storage` — Parquet reader, ADLS Gen 2 | **Codex** | Local Parquet and Delta reads support deterministic distributed scan partitions; ADLS Gen 2 not started |
 | `exec/scan` — scan operator | **Codex** | Done; takeover authorized 2026-09-03 |
 | `exec/aggregate` — hash aggregate | **Codex** | Exact COUNT DISTINCT and SQL empty-set semantics done |
 | `exec/filter` — filter evaluation | **Codex** | Compatible numeric coercion done |
@@ -128,6 +128,7 @@ let metadata = ParquetReader::new(path).metadata()?;
 - Projection is strict: empty, duplicate, and unknown columns return `KaveonError::Storage`
 - Row-group pruning uses `kaveon_core::StoragePredicate` and is conservative when statistics are absent or inexact
 - Predicates eliminate row groups only; execution operators still apply row-level filters
+- `ScanPartition::new(index, count)` assigns each Parquet row group or Delta active file to exactly one partition by stable ordinal; invalid partition coordinates return `KaveonError::Storage`
 
 ### Predicate type (Storage-level)
 
@@ -193,6 +194,7 @@ version = kaveon_engine.version()
 - Physical operator CPU/memory and distributed stage/task telemetry remain unavailable and are labeled as such in the UI
 - History is process-local and resets when the coordinator restarts
 - Node payloads and heartbeats include `memory_rss_bytes`, measured from each Engine process; unsupported hosts report zero
+- Workers advertise a routable `KAVEON_ADVERTISED_URI` and execute internal `POST /v1/task` partition requests. With at least two active workers, the coordinator distributes single-source COUNT, SUM, MIN, MAX, and GROUP BY aggregates, then merges partial results. AVG, DISTINCT, joins, ORDER BY, and LIMIT currently fall back to node-local execution.
 
 ### Remote CLI target
 
@@ -334,3 +336,4 @@ let source = DeltaTableReader::new(table_directory)
 | 2026-09-03 | Codex | ARCHITECT AUTHORIZATION: Codex takes ownership of the remaining Engine SQL, aggregate/filter correctness, physical planner wiring, and remote CLI readiness work previously assigned to Claude. Engine paths may be changed as required; non-Engine ownership is unchanged. |
 | 2026-09-03 | Codex | Closed the functional Engine readiness blockers: remote-first CLI with request-scoped catalog/schema/user context, optimizer and storage pruning integration, physical Sort/TopN, exact COUNT DISTINCT, compatible numeric coercion, and INNER/LEFT/RIGHT/FULL/CROSS hash joins with qualified relation aliases. Real Delta verification returned 100,000 distinct customers, 4,039,740 orders above 100, descending IDs 4,999,999..4,999,997, a 5,000,000-row customer/order join, and correct regional joined counts. Remaining scale limitation: joins materialize locally without spill or distributed exchange; this is not yet a Trino-class distributed performance claim. |
 | 2026-09-03 | Codex | Added projection pruning for scans and relation-aware join pruning. Optimized local release measurements on `F:\kaveon-data`: exact distinct over 100K rows 83 ms, filtered count over 5M rows 527 ms, TopN over 5M rows 247 ms, and 5M-row joined regional aggregate 6.09 s (improved from 15.93 s before join pruning). Results are single runs, not comparative benchmark claims. |
+| 2026-09-03 | Codex | Added the first correctness-bounded distributed execution slice: deterministic Parquet row-group and Delta-file partitions, routable worker advertisements, internal worker task execution, concurrent coordinator fan-out, and partial COUNT/SUM/MIN/MAX GROUP BY merge. AVG, DISTINCT, joins, ordering, limits, exchange, retry, and spill intentionally remain local/target. |

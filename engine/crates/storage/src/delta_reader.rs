@@ -1,4 +1,4 @@
-use crate::{ParquetBatchIterator, ParquetFileMetadata, ParquetReader, ScanMetrics};
+use crate::{ParquetBatchIterator, ParquetFileMetadata, ParquetReader, ScanMetrics, ScanPartition};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use kaveon_core::{BatchSource, KaveonError, Result};
@@ -20,6 +20,7 @@ pub struct DeltaTableReader {
     path: PathBuf,
     batch_size: usize,
     columns: Option<Vec<String>>,
+    partition: Option<ScanPartition>,
 }
 
 impl DeltaTableReader {
@@ -28,6 +29,7 @@ impl DeltaTableReader {
             path: path.as_ref().to_path_buf(),
             batch_size: DEFAULT_BATCH_SIZE,
             columns: None,
+            partition: None,
         }
     }
 
@@ -38,6 +40,11 @@ impl DeltaTableReader {
 
     pub fn with_columns(mut self, columns: Vec<String>) -> Self {
         self.columns = Some(columns);
+        self
+    }
+
+    pub fn with_partition(mut self, partition: ScanPartition) -> Self {
+        self.partition = Some(partition);
         self
     }
 
@@ -68,31 +75,69 @@ impl DeltaTableReader {
             return Err(delta_error("batch size must be greater than zero"));
         }
         let snapshot_started = Instant::now();
-        let files = active_files(&self.path)?;
+        let all_files = active_files(&self.path)?;
         let snapshot_elapsed = snapshot_started.elapsed();
-        let first = files
+        let schema_file = all_files
             .first()
+            .cloned()
             .ok_or_else(|| delta_error("Delta snapshot has no active files"))?;
+        let files: Vec<_> = all_files
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, path)| {
+                self.partition
+                    .is_none_or(|partition| partition.contains(index))
+                    .then_some(path)
+            })
+            .collect();
         let metrics = ScanMetrics::default();
         metrics.snapshot_time(snapshot_elapsed);
-        let first_reader = configured_reader(
-            first,
-            self.batch_size,
-            self.columns.as_ref(),
-            metrics.clone(),
-        )
-        .read()?;
-        let schema = first_reader.schema().clone();
+        let current = files
+            .first()
+            .map(|first| {
+                configured_reader(
+                    first,
+                    self.batch_size,
+                    self.columns.as_ref(),
+                    metrics.clone(),
+                )
+                .read()
+            })
+            .transpose()?;
+        let schema = match current.as_ref() {
+            Some(reader) => reader.schema().clone(),
+            None => projected_schema(
+                configured_reader(&schema_file, self.batch_size, None, ScanMetrics::default())
+                    .metadata()?
+                    .schema,
+                self.columns.as_deref(),
+            )?,
+        };
         Ok(DeltaBatchIterator {
             files,
-            next_file: 1,
-            current: Some(first_reader),
+            next_file: usize::from(current.is_some()),
+            current,
             schema,
             batch_size: self.batch_size,
             columns: self.columns.clone(),
             metrics,
         })
     }
+}
+
+fn projected_schema(schema: SchemaRef, columns: Option<&[String]>) -> Result<SchemaRef> {
+    let Some(columns) = columns else {
+        return Ok(schema);
+    };
+    let fields = columns
+        .iter()
+        .map(|column| {
+            schema.field_with_name(column).cloned().map_err(|_| {
+                delta_error(format!("projection references unknown column '{column}'"))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(std::sync::Arc::new(arrow::datatypes::Schema::new(fields)))
 }
 
 pub struct DeltaBatchIterator {

@@ -122,7 +122,7 @@ pub trait BatchOperator {
 | Limit | **Implemented** | Physical operator |
 | Sort / TopN | **Target** | `ORDER BY` is parsed but currently passed through |
 | Filter pushdown | **Target** | Optimizer pass is a no-op and is not wired |
-| Distributed execution | **Target** | Node discovery exists; fragments and exchanges do not |
+| Distributed execution | **Alpha** | Deterministic scan partitions and partial COUNT/SUM/MIN/MAX GROUP BY execute across active workers; shuffle, joins, retry, spill, AVG, and DISTINCT remain local/target |
 
 ### Catalog identity
 
@@ -265,7 +265,7 @@ kaveon-server [config.toml]
 5. Workers start heartbeats to the coordinator.
 6. Bind Axum to `0.0.0.0:<http_port>`; default `8080`.
 
-Docker declares one coordinator and two workers. This is discovery scaffolding, not Trino-equivalent distributed execution: statements execute on the receiving node. The shared data volume starts empty unless populated externally.
+Docker declares one coordinator and two workers. Workers advertise routable service URIs, receive partition tasks, and scan disjoint Parquet row groups or Delta active files. The coordinator merges eligible partial COUNT, SUM, MIN, MAX, and GROUP BY results. Queries requiring hash exchange, distributed ordering, AVG state, exact DISTINCT state, retry, or spill deliberately remain node-local. The shared data volume starts empty unless populated externally.
 
 ## Quality invariants
 
@@ -306,7 +306,7 @@ Performance claims must name dataset, hardware, version, cache state, concurrenc
 ## Known architectural debt
 
 - Engine is not integrated with Studio, FastAPI, or functional Python bindings.
-- Coordinator/worker discovery does not schedule distributed work.
+- Distributed scheduling currently covers only single-source merge-safe aggregates; there is no hash exchange, retry, or spill.
 - `ORDER BY` is ignored by physical planners; sort and TopN are incomplete.
 - Predicate pushdown is not implemented end to end.
 - Storage pruning needs safe handling for nested columns and incomparable float statistics.

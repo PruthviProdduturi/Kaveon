@@ -47,7 +47,10 @@ impl ClusterState {
                 } else {
                     NodeRole::Worker
                 },
-                address: format!("http://0.0.0.0:{}", config.http_port),
+                address: config
+                    .advertised_uri
+                    .clone()
+                    .unwrap_or_else(|| format!("http://127.0.0.1:{}", config.http_port)),
                 environment: config.environment.clone(),
                 version: env!("CARGO_PKG_VERSION").to_owned(),
                 uptime_secs: 0,

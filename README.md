@@ -93,7 +93,7 @@ $env:KAVEON_DATA_PATH='F:\kaveon-data' # optional; defaults to ./data
 docker compose up --build
 ```
 
-Open Studio at `http://localhost:3000`, the API at `http://localhost:8080`, and the Engine UI at `http://localhost:8081/ui`. All published ports bind to localhost. The stack uses an explicit development identity and local-only secrets; it is not a production deployment configuration. The Engine topology previews coordinator/worker discovery but does not yet distribute query fragments, shuffle data, or provide fault-tolerant execution. Use `docker compose down` to stop it; add `--volumes` only when you intentionally want to delete the local PostgreSQL state.
+Open Studio at `http://localhost:3000`, the API at `http://localhost:8080`, and the Engine UI at `http://localhost:8081/ui`. All published ports bind to localhost. The stack uses an explicit development identity and local-only secrets; it is not a production deployment configuration. The Engine coordinator distributes eligible single-source partial aggregates across its two workers; joins, shuffle, retries, and fault-tolerant execution are not implemented. Use `docker compose down` to stop it; add `--volumes` only when you intentionally want to delete the local PostgreSQL state.
 
 ## Platform quick start
 
