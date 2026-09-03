@@ -8,6 +8,7 @@ use crate::config::ServerConfig;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 const NODE_EXPIRY: Duration = Duration::from_secs(30);
+const KIBIBYTE_BYTES: u64 = 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeInfo {
@@ -18,6 +19,8 @@ pub struct NodeInfo {
     pub version: String,
     pub uptime_secs: u64,
     pub last_heartbeat: u64,
+    #[serde(default)]
+    pub memory_rss_bytes: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,6 +52,7 @@ impl ClusterState {
                 version: env!("CARGO_PKG_VERSION").to_owned(),
                 uptime_secs: 0,
                 last_heartbeat: now,
+                memory_rss_bytes: process_memory_rss_bytes(),
             },
             workers: HashMap::new(),
             started_at: now,
@@ -59,6 +63,7 @@ impl ClusterState {
         let now = now_epoch();
         self.this_node.uptime_secs = now.saturating_sub(self.started_at);
         self.this_node.last_heartbeat = now;
+        self.this_node.memory_rss_bytes = process_memory_rss_bytes();
     }
 
     pub fn register_worker(&mut self, info: NodeInfo) {
@@ -81,6 +86,22 @@ impl ClusterState {
         nodes.extend(self.workers.values().cloned());
         nodes
     }
+}
+
+fn process_memory_rss_bytes() -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| {
+            status.lines().find_map(|line| {
+                line.strip_prefix("VmRSS:")?
+                    .split_whitespace()
+                    .next()?
+                    .parse::<u64>()
+                    .ok()
+            })
+        })
+        .unwrap_or_default()
+        .saturating_mul(KIBIBYTE_BYTES)
 }
 
 pub async fn worker_heartbeat_loop(state: Arc<AppState>) {

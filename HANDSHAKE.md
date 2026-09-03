@@ -186,6 +186,7 @@ version = kaveon_engine.version()
 - `GET /v1/query` returns up to 100 most-recent in-memory query records for the Engine UI
 - Records include SQL, state, schema, rows, error, elapsed time, and submission time
 - History is process-local and resets when the coordinator restarts
+- Node payloads and heartbeats include `memory_rss_bytes`, measured from each Engine process; unsupported hosts report zero
 
 ### DLM API (standalone target)
 
@@ -232,3 +233,4 @@ version = kaveon_engine.version()
 | 2026-09-02 | Codex | Made the Studio container package registry configurable through `KAVEON_NPM_REGISTRY` and persisted its BuildKit package store across retries, preserving npmjs as the portable default while supporting managed Docker proxy environments. |
 | 2026-09-02 | Codex | Applied the same configurable, retry-safe package-feed contract to the API image through `KAVEON_PIP_INDEX_URL`; the portable default remains PyPI. |
 | 2026-09-02 | Codex | Matured the Engine operational console into a read-only control-plane experience with stronger information hierarchy, responsive query search/state filters, catalog inventory, explicit refresh, and a clearer separation from Studio. Engine API contracts are unchanged. |
+| 2026-09-02 | Codex | Added measured per-process RSS memory to Engine node heartbeats and moved coordinator uptime into the header. The console now charts active workers, observed query count, and aggregate Engine RSS at five-second intervals for the current browser session. |

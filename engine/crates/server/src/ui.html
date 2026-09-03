@@ -93,6 +93,7 @@ body{font-family:var(--sans);background:radial-gradient(circle at 50% -20%,rgba(
 .section-row{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:14px}.section-row .section-hdr{margin:0}
 .query-tools{display:flex;gap:8px}.query-tools input,.query-tools select{height:34px;color:var(--text-secondary);background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;padding:0 10px;font:12px var(--sans)}.query-tools input{width:250px}
 .catalogs{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 32px}.catalog{display:flex;align-items:center;gap:9px;background:var(--bg-surface);border:1px solid var(--border);border-radius:9px;padding:10px 13px;font:12px var(--mono);color:var(--text-secondary)}.catalog-dot{width:7px;height:7px;border-radius:50%;background:var(--brand);box-shadow:0 0 10px rgba(var(--brand-rgb),.5)}
+.telemetry{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:32px}.chart{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px}.chart-top{display:flex;justify-content:space-between;align-items:baseline}.chart-label{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted)}.chart-value{font:650 18px var(--mono)}.spark{width:100%;height:72px;margin-top:12px;overflow:visible}.spark .grid{stroke:var(--border);stroke-width:1}.spark .line{fill:none;stroke:var(--brand);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.spark .area{fill:url(#fade)}.chart-note{font-size:10px;color:var(--text-muted);margin-top:4px}
 .section-hdr{
   font-size:12px;font-weight:600;color:var(--text-muted);
   text-transform:uppercase;letter-spacing:.06em;
@@ -233,7 +234,7 @@ td.nl{color:var(--text-muted);font-style:italic}
 
 :focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
-@media(max-width:900px){.nodes{grid-template-columns:1fr}.gauges{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:900px){.nodes{grid-template-columns:1fr}.gauges{grid-template-columns:repeat(2,1fr)}.telemetry{grid-template-columns:1fr}}
 @media(max-width:700px){.mast{align-items:flex-start;flex-direction:column}.section-row{align-items:flex-start;flex-direction:column}.query-tools{width:100%}.query-tools input{width:100%}.main{padding:20px}.header{padding:0 18px}.gauges{padding:12px 18px}}
 </style>
 </head>
@@ -245,6 +246,7 @@ td.nl{color:var(--text-muted);font-style:italic}
     <span class="logo-text">Engine<span class="d" id="env-l"></span></span>
   </div>
   <div class="header-r">
+    <span class="ver" id="header-uptime">Uptime —</span>
     <span class="ver" id="ver"></span>
     <div class="conn"><span class="conn-dot" id="cd"></span><span id="ct">Connecting</span></div>
   </div>
@@ -267,10 +269,6 @@ td.nl{color:var(--text-muted);font-style:italic}
     <div class="gauge-ring"><svg viewBox="0 0 56 56"><circle class="track" cx="28" cy="28" r="24"/><circle class="val" cx="28" cy="28" r="24" stroke="var(--error)" stroke-dasharray="150.8" id="g-failed-ring"/></svg><span class="gauge-num" style="color:var(--error)" id="g-failed">0</span></div>
     <div class="gauge-label">Failed</div>
   </div>
-  <div class="gauge">
-    <div class="gauge-ring"><svg viewBox="0 0 56 56"><circle class="track" cx="28" cy="28" r="24"/><circle class="val" cx="28" cy="28" r="24" stroke="var(--brand-light)" stroke-dasharray="150.8" id="g-uptime-ring"/></svg><span class="gauge-num" style="color:var(--brand-light)" id="g-uptime">0</span></div>
-    <div class="gauge-label">Uptime (min)</div>
-  </div>
 </div>
 
 <div class="main">
@@ -278,6 +276,11 @@ td.nl{color:var(--text-muted);font-style:italic}
     <div class="mast">
       <div><div class="eyebrow">Control plane</div><h1>Engine operations</h1><p>Live coordinator, worker, catalog, and query telemetry. This console observes the Engine; analytical work belongs in Kaveon Studio.</p></div>
       <div class="actions"><span class="read-only">Read only</span><button class="refresh" id="refresh" type="button">Refresh now</button></div>
+    </div>
+    <div class="telemetry">
+      <div class="chart"><div class="chart-top"><span class="chart-label">Active workers</span><span class="chart-value" id="cv-workers">0</span></div><svg class="spark" id="chart-workers" viewBox="0 0 320 72" preserveAspectRatio="none"></svg><div class="chart-note">This console session · 5 second samples</div></div>
+      <div class="chart"><div class="chart-top"><span class="chart-label">Observed queries</span><span class="chart-value" id="cv-queries">0</span></div><svg class="spark" id="chart-queries" viewBox="0 0 320 72" preserveAspectRatio="none"></svg><div class="chart-note">Coordinator process history</div></div>
+      <div class="chart"><div class="chart-top"><span class="chart-label">Engine memory</span><span class="chart-value" id="cv-memory">0 B</span></div><svg class="spark" id="chart-memory" viewBox="0 0 320 72" preserveAspectRatio="none"></svg><div class="chart-note">Resident memory across active nodes</div></div>
     </div>
     <div class="section-hdr">Cluster nodes <span class="ct" id="nc">0</span></div>
     <div class="nodes" id="nodes"></div>
@@ -301,6 +304,7 @@ td.nl{color:var(--text-muted);font-style:italic}
 <script>
 const API='';
 let queries={},qorder=[],clusterData=null;
+const MAX_SAMPLES=60,samples={workers:[],queries:[],memory:[]};
 
 function fmt(s){
   if(s<60)return s+'s';
@@ -316,6 +320,14 @@ function ago(ep){
   return Math.floor(d/3600)+'h ago';
 }
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+function bytes(value){if(value<1024)return value+' B';if(value<1048576)return(value/1024).toFixed(1)+' KiB';if(value<1073741824)return(value/1048576).toFixed(1)+' MiB';return(value/1073741824).toFixed(2)+' GiB'}
+function spark(id,values){
+  const svg=document.getElementById(id);if(!values.length)return;
+  const max=Math.max(...values,1),step=values.length>1?320/(values.length-1):0;
+  const points=values.map((v,i)=>`${i*step},${68-(v/max)*60}`).join(' ');
+  svg.innerHTML='<line class="grid" x1="0" y1="68" x2="320" y2="68"/><polyline class="line" points="'+points+'"/>';
+}
+function sample(name,value){samples[name].push(value);if(samples[name].length>MAX_SAMPLES)samples[name].shift()}
 
 const C=150.8; // 2*PI*24
 let nodesRendered=false, prevNodeIds='';
@@ -341,7 +353,7 @@ function nodeCard(n,i){
       <div><div class="node-ml">Uptime</div><div class="node-mv n-uptime">${fmt(n.uptime_secs)}</div></div>
       <div><div class="node-ml">Heartbeat</div><div class="node-mv n-hb">${ago(n.last_heartbeat)}</div></div>
       <div><div class="node-ml">Version</div><div class="node-mv">${esc(n.version)}</div></div>
-      <div><div class="node-ml">Env</div><div class="node-mv">${esc(n.environment)}</div></div>
+      <div><div class="node-ml">Memory RSS</div><div class="node-mv n-memory">${bytes(n.memory_rss_bytes||0)}</div></div>
     </div>
     <div class="node-bar ${ic?'c':'w'}"></div>
   </div>`;
@@ -358,12 +370,17 @@ async function fetchCluster(){
     document.getElementById('ct').textContent='Connected';
 
     const failed=qorder.filter(id=>queries[id]&&queries[id].state==='FAILED').length;
-    const uptimeMin=Math.floor(d.coordinator.uptime_secs/60);
+    document.getElementById('header-uptime').textContent='Uptime '+fmt(d.coordinator.uptime_secs);
     setGauge('g-workers',d.active_workers,d.total_nodes);
     setGauge('g-nodes',d.total_nodes,d.total_nodes);
     setGauge('g-queries',qorder.length,Math.max(qorder.length,10));
     setGauge('g-failed',failed,Math.max(qorder.length,1));
-    setGauge('g-uptime',uptimeMin,uptimeMin||1);
+    const memory=[d.coordinator,...d.workers].reduce((sum,node)=>sum+(node.memory_rss_bytes||0),0);
+    sample('workers',d.active_workers);sample('queries',qorder.length);sample('memory',memory);
+    document.getElementById('cv-workers').textContent=d.active_workers;
+    document.getElementById('cv-queries').textContent=qorder.length;
+    document.getElementById('cv-memory').textContent=bytes(memory);
+    spark('chart-workers',samples.workers);spark('chart-queries',samples.queries);spark('chart-memory',samples.memory);
 
     const nodes=[d.coordinator,...d.workers];
     const nodeIds=nodes.map(n=>n.node_id).join(',');
@@ -378,6 +395,7 @@ async function fetchCluster(){
         if(!el)return;
         const up=el.querySelector('.n-uptime');if(up)up.textContent=fmt(n.uptime_secs);
         const hb=el.querySelector('.n-hb');if(hb)hb.textContent=ago(n.last_heartbeat);
+        const memory=el.querySelector('.n-memory');if(memory)memory.textContent=bytes(n.memory_rss_bytes||0);
       });
     }
   }catch{
