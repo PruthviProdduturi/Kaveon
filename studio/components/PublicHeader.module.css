@@ -1,14 +1,16 @@
 .header { --text-primary: #f4f7fb; position: fixed; inset: 0 0 auto; z-index: 100; display: flex; min-height: 65px; align-items: center; justify-content: space-between; padding: 0 48px; border-bottom: 1px solid rgba(255,255,255,.07); background: rgba(10,10,10,.88); backdrop-filter: blur(16px) saturate(180%); }
-.header.aboutHeader { min-height: 0; padding: 14px 48px; border-bottom-color: rgba(74,158,232,.1) !important; background: #0a0a0a !important; backdrop-filter: none; box-shadow: none; }
+.header.aboutHeader { min-height: 72px; padding: 0 clamp(28px,5vw,72px); border-bottom-color: rgba(74,158,232,.12) !important; background: #0a0a0a !important; backdrop-filter: none; box-shadow: none; }
 .brand { display: flex; align-items: center; text-decoration: none; }
 .nav { display: flex; align-items: center; gap: 32px; }
-.aboutNav { gap: 36px; }
-.aboutNav .link { color: #ccc; }
-.aboutNav .launch { border-color: transparent !important; background: #4a9ee8 !important; color: #fff !important; }
+.aboutNav { gap: 8px; }
+.aboutNav .link { padding: 10px 12px; border: 1px solid transparent !important; border-radius: 8px; background: transparent !important; color: #aeb7c4 !important; font-size: 14px; font-weight: 600; letter-spacing: .01em; text-decoration: none; }
+.aboutNav .link:hover, .aboutNav .link:focus-visible { border-color: rgba(255,255,255,.07) !important; background: rgba(255,255,255,.045) !important; color: #fff !important; }
+.aboutNav .launch { margin-left: 8px; padding: 10px 20px; border: 1px solid rgba(112,190,255,.3) !important; border-radius: 9px; background: #4a9ee8 !important; box-shadow: 0 6px 22px rgba(74,158,232,.2); color: #fff !important; font-size: 14px; font-weight: 700; }
+.aboutNav .launch:hover { background: #62acec !important; box-shadow: 0 8px 28px rgba(74,158,232,.3); }
 .link { color: #b8bec8; font-size: 13px; text-decoration: none; transition: color 160ms ease; }
 .link:hover, .link:focus-visible, .active { color: #fff; }
 .link:focus-visible, .brand:focus-visible, .launch:focus-visible { border-radius: 7px; outline: 3px solid rgba(74,158,232,.5); outline-offset: 4px; }
 .launch { padding: 8px 18px; border-radius: 8px; background: #4a9ee8; color: #fff; font-size: 13px; font-weight: 650; text-decoration: none; transition: background 160ms ease, transform 160ms ease; }
 .launch:hover { background: #62acec; transform: translateY(-1px); }
-@media (max-width: 680px) { .header { min-height: 60px; padding: 0 16px; } .aboutHeader { min-height: 0; padding: 14px 16px; } .nav { gap: 14px; } .aboutNav { margin-left: auto; gap: 10px; } .aboutSectionLink, .github { display: none; } .launch { padding: 8px 12px; white-space: nowrap; } }
+@media (max-width: 680px) { .header { min-height: 60px; padding: 0 16px; } .aboutHeader { min-height: 64px; padding: 0 16px; } .nav { gap: 14px; } .aboutNav { margin-left: auto; gap: 2px; } .aboutNav .link { padding: 8px; font-size: 13px; } .aboutNav .launch { margin-left: 4px; padding: 8px 12px; font-size: 13px; white-space: nowrap; } .aboutSectionLink, .github { display: none; } .launch { padding: 8px 12px; white-space: nowrap; } }
 @media (prefers-reduced-motion: reduce) { .link, .launch { transition: none; } .launch:hover { transform: none; } }
