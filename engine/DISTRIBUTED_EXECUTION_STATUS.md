@@ -47,7 +47,7 @@ Every workstream must land with:
 - `cargo test --workspace --no-fail-fast`: 164 passed, 0 failed
 - `cargo clippy --workspace --all-targets -- -D warnings`: passed
 - Focused coverage includes graph/fragment agreement, partition-correct scans, weighted AVG and exact distinct partial/final execution, empty Arrow schemas, exchange identity/corruption/byte bounds, broadcast routing, fixed-fan-in spill compaction, retry cleanup, and deterministic split steal/requeue
-- Docker worker-loss, end-to-end exchange, distributed AVG/distinct, TopN, join, spill, and scheduler stress evidence: not yet complete
+- Two-worker Docker correctness on `F:\kaveon-data`: exact DISTINCT returned 100,000; grouped weighted AVG + TopN returned five rows through three stages; TopN returned five rows; repartitioned customer/order join returned 5,000,000 rows. Worker-loss, spill-pressure, concurrency, and comparative performance evidence remain open.
 
 The second integrated gate passed 69 focused tests across core, exec, and server and 112 tests across the full workspace after distributed TopN, authenticated exchange endpoints, memory reservations, and split leasing were added. Strict Clippy passed; Windows emitted filesystem-only incremental-cache hard-link warnings and copied the files instead.
 
@@ -57,7 +57,7 @@ The fourth gate passed 96 focused tests across core, exec, and server and 139 te
 
 The fifth gate passed 106 focused tests across core, exec, and server and 149 tests across the full workspace after executable fragments, canonical grouped aggregate states, lazy spill merging, HTTP lifecycle integration, and terminal cleanup were added. Strict Clippy and formatting passed. Spill merge retains one cursor batch per run, so fixed fan-in/multi-pass compaction remains required for a strict constant ceiling.
 
-The sixth gate passed 164 tests across the full workspace after general coordinator/worker fragment execution, exchange v2 routing, distributed partial/final aggregates and joins, fixed-fan-in spill compaction, and local split enumeration were added. Strict workspace Clippy and formatting passed. Docker Compose configuration validates, but container startup, worker-loss, concurrency, and comparative performance evidence have not yet been run for this gate.
+The sixth gate passed 164 tests across the full workspace after general coordinator/worker fragment execution, exchange v2 routing, distributed partial/final aggregates and joins, fixed-fan-in spill compaction, and local split enumeration were added. Strict workspace Clippy and formatting passed. The Rust 1.88 release image built and a coordinator plus two workers completed representative Delta queries over the real local dataset. This run exposed and closed release-toolchain compatibility, aggregate projection, HTTP exchange-body, and grouped-state partition-key defects. Worker-loss, concurrency, pressure, and comparative performance evidence have not yet been run.
 
 ## Continuation point
 
