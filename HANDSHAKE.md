@@ -19,6 +19,7 @@
 | Crate | Owner | Status |
 |-------|-------|--------|
 | `core` — shared types, errors, traits | Shared (either can add, neither restructures without updating this doc) | Stage graph, exchange, split/task, plan, telemetry, catalog, and operator contracts active |
+| `catalog` — durable Engine metadata | **Codex** | Native SQLite/WAL catalog, revisions, lifecycle, audit, and coordinator API complete; multi-coordinator service and external adapters remain target |
 | `storage` — Parquet reader, ADLS Gen 2 | **Codex** | Local Parquet row-group and Delta active-file splits are enumerable and partitioned; ADLS Gen 2 not started |
 | `exec/scan` — scan operator | **Codex** | Done; takeover authorized 2026-09-03 |
 | `exec/aggregate` — hash aggregate | **Codex** | Partial/final state execution and exchange for COUNT/SUM/MIN/MAX/AVG/exact DISTINCT done |
@@ -38,13 +39,15 @@
 | DLM engine (`api/dlm/`) | **Claude** | Done (shipping) |
 | DLM standalone API extraction | **Claude** | Not started |
 | Routers, services, middleware | **Claude** | Done (shipping) |
+| Catalog source CRUD (`api/routers/catalog_sources.py`) | **Claude** | In progress — Entra-authorized endpoints, Key Vault credential refs, audit events |
+| Adapter configuration (Hive Metastore, AWS Glue, Unity Catalog, Iceberg REST) | **Claude** | In progress — optional adapter config on catalog sources |
 
 ### Studio (`studio/`)
 
 | Area | Owner | Status |
 |------|-------|--------|
 | Platform rebrand (about, landing, nav) | **Claude** | About page and shared wordmark redesigned; broader landing polish pending |
-| Lakehouse data source UI | **Claude** | Not started |
+| Lakehouse data source UI / Catalog Sources admin | **Claude** | In progress — storage type, credential ref, adapter config, lifecycle management |
 | UX polish | **Claude** | In progress |
 
 ### Launch
@@ -308,6 +311,17 @@ let source = DeltaTableReader::new(table_directory)
 - CLI and server planners select Parquet or Delta readers from `TableMeta::format`.
 - `CatalogManager::set_default(catalog, schema)` validates and changes CLI defaults without unloading catalogs.
 
+### Native catalog
+
+- `kaveon-catalog` is the single-coordinator durable metadata authority, backed by SQLite transactions, WAL, foreign keys, schema migrations, optimistic revisions, lifecycle validation, and audit history.
+- Catalog definitions store only `CredentialReference` values; secrets, tokens, passwords, and connection strings are forbidden from metadata and audit records.
+- `ColumnDefinition` persists Arrow `DataType` structurally, including nested and parameterized types. Display strings are not a serialization contract.
+- The coordinator reconstructs the process-local `CatalogManager` planning snapshot from durable active definitions at startup and after mutations.
+- Catalog mutations are coordinator-only and require `Authorization: Bearer <KAVEON_CATALOG_ADMIN_TOKEN>` plus `x-kaveon-actor`. An absent admin token disables mutation endpoints.
+- `ExecutableFragment` version 2 carries the coordinator-resolved source URI and `DataFormat`. Workers execute that immutable resolution and do not consult their local catalog snapshot.
+- SQLite is not a multi-coordinator claim. The scale target is an external transactional catalog service with PostgreSQL persistence and revision-aware invalidation.
+- Hive Metastore, AWS Glue, Unity Catalog, and Iceberg REST are capability contracts only; adapters are not implemented. See `engine/CATALOG.md`.
+
 ### DLM API (standalone target)
 
 - **Claude** extracts DLM into callable API endpoints independent of Studio
@@ -390,3 +404,6 @@ let source = DeltaTableReader::new(table_directory)
 | 2026-09-04 | Codex | Added versioned executable fragments, canonical grouped aggregate-state transport, lazy spill-run merging, idempotent HTTP task replay/cancellation, and authenticated terminal lifecycle cleanup. Fragment translation/execution and distributed join/AVG/distinct remain the next correctness gates; spill merge fan-in remains uncapped. |
 | 2026-09-04 | Codex | Wired the general distributed runtime: graph-to-fragment translation, authenticated coordinator dispatch, partition-correct worker execution, collision-free exchange v2 transport, partial/final AVG and exact DISTINCT state execution, repartitioned/broadcast joins, retry/cancel/cleanup, fixed-fan-in spill merge, and deterministic local Parquet/Delta split enumeration. Workspace tests and strict Clippy pass; Docker fault/performance evidence, aggregate/join spill, admission control, ADLS Gen2, and AKS remain explicit gates. |
 | 2026-09-04 | Codex | Two-worker Docker validation on the real local Delta data passed exact DISTINCT (100,000), grouped weighted AVG plus TopN (three stages), TopN, and the 5,000,000-row customer/order repartition join. The run found and fixed Rust 1.88 image compatibility, finalized-aggregate projection mapping, HTTP exchange envelope limits, and canonical grouped-state hash partitioning. Full Kaveon Compose was restored healthy after Engine validation. |
+| 2026-09-04 | Claude | Claimed control-plane integration: catalog source CRUD API (Entra-authorized, Key Vault credential refs, audit events), Studio Data Sources admin UI (storage type/format/adapter/lifecycle management), optional adapter config for Hive Metastore/AWS Glue/Unity Catalog/Iceberg REST. Schema aligned with Engine's CatalogDefinition/CredentialReference/CatalogAdapter types. Codex retains Engine-native catalog, transactional persistence, and runtime resolution. |
+| 2026-09-04 | Codex | Added the Engine-native durable catalog: validated shared definitions and Arrow schemas, SQLite/WAL transactions and migrations, stable IDs/revisions, lifecycle enforcement, credential references, audit history, authenticated coordinator CRUD, restart reconstruction, and persistent Docker coordinator storage. Executable fragment v2 carries resolved format/location so workers cannot diverge through stale local catalogs. External catalog adapters and multi-coordinator metadata remain explicit targets. |
+| 2026-09-04 | Codex | REQUEST @Claude: bridge the Entra-authorized platform `catalog_sources` lifecycle to the authenticated Engine catalog definition APIs with stable ID mapping, revision conflict propagation, credential references only, and actor attribution. The PostgreSQL source registry and Engine catalog are separate authorities until this bridge is implemented and tested; Studio registration must not imply Engine query availability yet. |

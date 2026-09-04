@@ -8,6 +8,7 @@ import { Button } from "../../components/Button";
 import { ListPageShell } from "../../components/ListPageShell";
 import { Pagination } from "../../components/Pagination";
 import { SOURCE_TYPE_META, SOURCE_TYPES } from "../../components/DataSourceIcons";
+import { CatalogSources } from "../../components/CatalogSources";
 
 function SourceTypeBadge({ type }: { type: string }) {
   const meta = SOURCE_TYPE_META[type];
@@ -42,6 +43,7 @@ interface DataSource {
 }
 
 export default function DataSourcesPage() {
+  const [activeTab, setActiveTab] = useState<"connections" | "catalogs">("connections");
   const { account, isAuthenticated } = useAuth();
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
   const [loading, setLoading] = useState(true);
@@ -242,117 +244,139 @@ export default function DataSourcesPage() {
   const myCount = userEmail ? dataSources.filter(ds => ds.created_by === userEmail).length : 0;
   const othersCount = dataSources.length - myCount;
 
+  const tabStyle = (active: boolean): React.CSSProperties => ({
+    padding: "0.5rem 1rem", fontSize: 14, fontWeight: active ? 600 : 400,
+    color: active ? "var(--accent)" : "var(--text-secondary)",
+    background: "none", border: "none", borderBottom: active ? "2px solid var(--accent)" : "2px solid transparent",
+    cursor: "pointer", transition: "all 0.15s",
+  });
+
   return (
     <>
       <ListPageShell
         icon="fa-server"
         title="Data Sources"
-        subtitle="Manage database connections and switch between data sources."
-        pills={!loading && !error ? [
+        subtitle="Manage database connections and Engine catalog sources."
+        pills={activeTab === "connections" && !loading && !error ? [
           { label: `${dataSources.length} Total`, icon: "fa-server" },
           ...(myCount > 0 ? [{ label: `${myCount} Mine`, icon: "fa-user" }] : []),
           ...(othersCount > 0 ? [{ label: `${othersCount} Others`, icon: "fa-users", bg: "var(--bg-hover)", border: "var(--border)", color: "var(--text-muted)" }] : []),
           ...(activeCount > 0 ? [{ label: `${activeCount} Active`, icon: "fa-check-circle", bg: "#d1fae5", border: "#6ee7b7", color: "#065f46" }] : []),
         ] : []}
-        action={
+        action={activeTab === "connections" ? (
           <Button onClick={() => setShowAddModal(true)}>
             <i className="fas fa-plus" /> New Data Source
           </Button>
-        }
-        loading={loading}
+        ) : undefined}
+        loading={activeTab === "connections" && loading}
         loadingMessage="Loading data sources"
-        error={error}
-        empty={!loading && !error && dataSources.length === 0}
+        error={activeTab === "connections" ? error : undefined}
+        empty={activeTab === "connections" && !loading && !error && dataSources.length === 0}
         emptyTitle="No data sources yet"
         emptyBody="Add your first database connection to get started."
         emptyAction={<Button onClick={() => setShowAddModal(true)}><i className="fas fa-plus" /> Add Data Source</Button>}
-        search={search}
-        onSearch={handleSearch}
-        resultCount={search ? filtered.length : undefined}
+        search={activeTab === "connections" ? search : undefined}
+        onSearch={activeTab === "connections" ? handleSearch : undefined}
+        resultCount={activeTab === "connections" && search ? filtered.length : undefined}
       >
-        <div className="card">
-          {contextMessage && (
-            <div style={{
-              padding: "0.75rem 1rem", borderRadius: 8, marginBottom: "1rem",
-              background: "rgba(16,185,129,0.08)", color: "var(--success)",
-              border: "1px solid rgba(16,185,129,0.3)",
-              display: "flex", alignItems: "center", gap: "0.75rem", fontSize: 13,
-            }}>
-              <i className="fas fa-check-circle" />
-              {contextMessage}
-            </div>
-          )}
-          <div className="results-table-container">
-            <table className="results-table">
-              <thead>
-                <tr>
-                  <th><span className="column-header-label">Name</span></th>
-                  <th><span className="column-header-label">Type</span></th>
-                  <th><span className="column-header-label">Endpoint</span></th>
-                  <th><span className="column-header-label">Database</span></th>
-                  <th><span className="column-header-label">Region</span></th>
-                  <th><span className="column-header-label">Status</span></th>
-                  <th><span className="column-header-label">Tables</span></th>
-                  <th><span className="column-header-label">Actions</span></th>
-                </tr>
-              </thead>
-              <tbody>
-                {paged.map(ds => (
-                  <tr key={ds.id}>
-                    <td>
-                      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                        <strong>{ds.name}</strong>
-                        {ds.is_favorite === 1 && <i className="fas fa-star" style={{ color: "#f59e0b", fontSize: "0.85rem" }} title="Favorite data source" />}
-                      </div>
-                      {ds.description && <div className="muted" style={{ marginTop: 4, fontSize: 13 }}>{ds.description}</div>}
-                    </td>
-                    <td><SourceTypeBadge type={ds.type} /></td>
-                    <td className="muted" style={{ fontSize: 12, fontFamily: "monospace", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ds.connection_string}</td>
-                    <td className="muted" style={{ fontSize: 13 }}>{ds.database_name || "—"}</td>
-                    <td>
-                      <span style={{ padding: "0.2rem 0.5rem", borderRadius: 6, fontSize: "0.75rem", fontWeight: 600, background: ds.region === "WW" ? "rgba(59,130,246,0.12)" : "rgba(245,158,11,0.12)", color: ds.region === "WW" ? "var(--accent)" : "var(--warning, #92400e)" }}>
-                        {ds.region}
-                      </span>
-                    </td>
-                    <td>
-                      <span style={{ padding: "0.2rem 0.5rem", borderRadius: 6, fontSize: "0.75rem", fontWeight: 600, background: ds.is_active ? "rgba(16,185,129,0.12)" : "var(--bg-hover)", color: ds.is_active ? "var(--success)" : "var(--text-muted)" }}>
-                        {ds.is_active ? "Active" : "Inactive"}
-                      </span>
-                    </td>
-                    <td className="muted" style={{ fontSize: 13 }}>
-                      {tableCounts[ds.id] !== undefined ? (
-                        tableCounts[ds.id] !== null ? <span style={{ fontWeight: 600, color: "var(--success)" }}>{tableCounts[ds.id]} tables</span> : <span style={{ color: "var(--text-muted)" }}>—</span>
-                      ) : <i className="fas fa-spinner fa-spin" style={{ fontSize: 11, color: "var(--lens-primary)" }} />}
-                    </td>
-                    <td className="actions-cell">
-                      <div className="row-actions">
-                        <button type="button" className="action-icon-btn" title={ds.is_favorite === 1 ? "Remove favorite" : "Set as favorite"} onClick={e => toggleFavorite(ds, e)} style={{ color: ds.is_favorite === 1 ? "#f59e0b" : undefined }}>
-                          <i className={ds.is_favorite === 1 ? "fas fa-star" : "far fa-star"} />
-                        </button>
-                        <button type="button" className="action-icon-btn" title={ds.is_active ? "Deactivate" : "Activate"} onClick={e => toggleDataSource(ds, e)}>
-                          <i className={`fas fa-${ds.is_active ? "pause" : "play"}-circle`} />
-                        </button>
-                        <button type="button" className="action-icon-btn" title="Copy data source" onClick={e => { e.stopPropagation(); setCopyingDataSource(ds); }}>
-                          <i className="fas fa-copy" />
-                        </button>
-                        <button type="button" className="action-icon-btn" title="Build Context" onClick={e => buildContext(ds, e)} disabled={buildingContextId === ds.id}>
-                          <i className={buildingContextId === ds.id ? "fas fa-spinner fa-spin" : "fas fa-brain"} />
-                        </button>
-                        <button type="button" className="action-icon-btn" title="Edit data source" onClick={e => { e.stopPropagation(); setEditingDataSource(ds); }}>
-                          <i className="fas fa-edit" />
-                        </button>
-                        <button type="button" className="action-icon-btn" title="Delete data source" onClick={e => deleteDataSource(ds, e)} disabled={deletingId === ds.id}>
-                          <i className={deletingId === ds.id ? "fas fa-spinner fa-spin" : "fas fa-trash"} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <Pagination total={filtered.length} page={page} pageSize={PAGE_SIZE} onChange={setPage} />
+        <div style={{ display: "flex", gap: 0, borderBottom: "1px solid var(--border)", marginBottom: "1rem" }}>
+          <button type="button" style={tabStyle(activeTab === "connections")} onClick={() => setActiveTab("connections")}>
+            <i className="fas fa-plug" style={{ marginRight: 6 }} />
+            Connections
+          </button>
+          <button type="button" style={tabStyle(activeTab === "catalogs")} onClick={() => setActiveTab("catalogs")}>
+            <i className="fas fa-database" style={{ marginRight: 6 }} />
+            Engine Catalogs
+          </button>
         </div>
+
+        {activeTab === "connections" && (
+          <div className="card">
+            {contextMessage && (
+              <div style={{
+                padding: "0.75rem 1rem", borderRadius: 8, marginBottom: "1rem",
+                background: "rgba(16,185,129,0.08)", color: "var(--success)",
+                border: "1px solid rgba(16,185,129,0.3)",
+                display: "flex", alignItems: "center", gap: "0.75rem", fontSize: 13,
+              }}>
+                <i className="fas fa-check-circle" />
+                {contextMessage}
+              </div>
+            )}
+            <div className="results-table-container">
+              <table className="results-table">
+                <thead>
+                  <tr>
+                    <th><span className="column-header-label">Name</span></th>
+                    <th><span className="column-header-label">Type</span></th>
+                    <th><span className="column-header-label">Endpoint</span></th>
+                    <th><span className="column-header-label">Database</span></th>
+                    <th><span className="column-header-label">Region</span></th>
+                    <th><span className="column-header-label">Status</span></th>
+                    <th><span className="column-header-label">Tables</span></th>
+                    <th><span className="column-header-label">Actions</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paged.map(ds => (
+                    <tr key={ds.id}>
+                      <td>
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                          <strong>{ds.name}</strong>
+                          {ds.is_favorite === 1 && <i className="fas fa-star" style={{ color: "#f59e0b", fontSize: "0.85rem" }} title="Favorite data source" />}
+                        </div>
+                        {ds.description && <div className="muted" style={{ marginTop: 4, fontSize: 13 }}>{ds.description}</div>}
+                      </td>
+                      <td><SourceTypeBadge type={ds.type} /></td>
+                      <td className="muted" style={{ fontSize: 12, fontFamily: "monospace", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ds.connection_string}</td>
+                      <td className="muted" style={{ fontSize: 13 }}>{ds.database_name || "—"}</td>
+                      <td>
+                        <span style={{ padding: "0.2rem 0.5rem", borderRadius: 6, fontSize: "0.75rem", fontWeight: 600, background: ds.region === "WW" ? "rgba(59,130,246,0.12)" : "rgba(245,158,11,0.12)", color: ds.region === "WW" ? "var(--accent)" : "var(--warning, #92400e)" }}>
+                          {ds.region}
+                        </span>
+                      </td>
+                      <td>
+                        <span style={{ padding: "0.2rem 0.5rem", borderRadius: 6, fontSize: "0.75rem", fontWeight: 600, background: ds.is_active ? "rgba(16,185,129,0.12)" : "var(--bg-hover)", color: ds.is_active ? "var(--success)" : "var(--text-muted)" }}>
+                          {ds.is_active ? "Active" : "Inactive"}
+                        </span>
+                      </td>
+                      <td className="muted" style={{ fontSize: 13 }}>
+                        {tableCounts[ds.id] !== undefined ? (
+                          tableCounts[ds.id] !== null ? <span style={{ fontWeight: 600, color: "var(--success)" }}>{tableCounts[ds.id]} tables</span> : <span style={{ color: "var(--text-muted)" }}>—</span>
+                        ) : <i className="fas fa-spinner fa-spin" style={{ fontSize: 11, color: "var(--lens-primary)" }} />}
+                      </td>
+                      <td className="actions-cell">
+                        <div className="row-actions">
+                          <button type="button" className="action-icon-btn" title={ds.is_favorite === 1 ? "Remove favorite" : "Set as favorite"} onClick={e => toggleFavorite(ds, e)} style={{ color: ds.is_favorite === 1 ? "#f59e0b" : undefined }}>
+                            <i className={ds.is_favorite === 1 ? "fas fa-star" : "far fa-star"} />
+                          </button>
+                          <button type="button" className="action-icon-btn" title={ds.is_active ? "Deactivate" : "Activate"} onClick={e => toggleDataSource(ds, e)}>
+                            <i className={`fas fa-${ds.is_active ? "pause" : "play"}-circle`} />
+                          </button>
+                          <button type="button" className="action-icon-btn" title="Copy data source" onClick={e => { e.stopPropagation(); setCopyingDataSource(ds); }}>
+                            <i className="fas fa-copy" />
+                          </button>
+                          <button type="button" className="action-icon-btn" title="Build Context" onClick={e => buildContext(ds, e)} disabled={buildingContextId === ds.id}>
+                            <i className={buildingContextId === ds.id ? "fas fa-spinner fa-spin" : "fas fa-brain"} />
+                          </button>
+                          <button type="button" className="action-icon-btn" title="Edit data source" onClick={e => { e.stopPropagation(); setEditingDataSource(ds); }}>
+                            <i className="fas fa-edit" />
+                          </button>
+                          <button type="button" className="action-icon-btn" title="Delete data source" onClick={e => deleteDataSource(ds, e)} disabled={deletingId === ds.id}>
+                            <i className={deletingId === ds.id ? "fas fa-spinner fa-spin" : "fas fa-trash"} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <Pagination total={filtered.length} page={page} pageSize={PAGE_SIZE} onChange={setPage} />
+          </div>
+        )}
+
+        {activeTab === "catalogs" && <CatalogSources />}
       </ListPageShell>
 
       {showAddModal && <AddDataSourceModal onClose={() => setShowAddModal(false)} onSuccess={() => { setShowAddModal(false); loadDataSources(); }} />}
