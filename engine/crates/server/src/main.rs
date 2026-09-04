@@ -1,7 +1,9 @@
 mod api;
 mod cluster;
 mod config;
+pub mod exchange;
 pub mod planner;
+mod scheduler;
 mod ui;
 
 use std::net::SocketAddr;

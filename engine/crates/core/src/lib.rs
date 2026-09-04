@@ -12,7 +12,10 @@ pub use catalog::{
     StorageType, TableMeta, TableReference,
 };
 pub use error::{KaveonError, Result};
-pub use exchange::{Partitioning, StageId, TaskId};
+pub use exchange::{
+    ExchangeDescriptor, ExchangeId, Partitioning, SplitDescriptor, SplitId, StageFragment,
+    StageGraph, StageId, TaskAssignment, TaskId, TaskState, TaskStatus,
+};
 pub use expr::{BinaryOp, Expr};
 pub use operator::{BatchOperator, BatchSource, collect_batches};
 pub use predicate::{CompareOp, ScalarValue, StoragePredicate};

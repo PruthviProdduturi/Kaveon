@@ -67,49 +67,147 @@ impl AggExpr {
     }
 }
 
-struct Accumulator {
-    sum: f64,
-    count: u64,
-    min: f64,
-    max: f64,
-    distinct_values: HashSet<GroupKey>,
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AggregateValue {
+    Null,
+    Bool(bool),
+    Int32(i32),
+    Int64(i64),
+    Utf8(String),
+    Float64Bits(u64),
 }
 
-impl Accumulator {
-    fn new() -> Self {
-        Self {
-            sum: 0.0,
-            count: 0,
-            min: f64::INFINITY,
-            max: f64::NEG_INFINITY,
-            distinct_values: HashSet::new(),
+#[derive(Debug, Clone, PartialEq)]
+pub enum AggregateState {
+    Sum { sum: f64, count: u64 },
+    Count(u64),
+    Min(Option<f64>),
+    Max(Option<f64>),
+    Avg { sum: f64, count: u64 },
+    CountDistinct(HashSet<AggregateValue>),
+}
+
+impl AggregateState {
+    pub fn new(expression: &AggExpr) -> Self {
+        match (expression.func, expression.distinct) {
+            (AggFunc::Sum, false) => Self::Sum { sum: 0.0, count: 0 },
+            (AggFunc::Count, false) => Self::Count(0),
+            (AggFunc::Min, false) => Self::Min(None),
+            (AggFunc::Max, false) => Self::Max(None),
+            (AggFunc::Avg, false) => Self::Avg { sum: 0.0, count: 0 },
+            (AggFunc::Count, true) => Self::CountDistinct(HashSet::new()),
+            (_, true) => unreachable!("aggregate validation rejects unsupported DISTINCT"),
         }
     }
 
-    fn update(&mut self, value: f64) {
-        self.sum += value;
-        self.count += 1;
-        if value < self.min {
-            self.min = value;
-        }
-        if value > self.max {
-            self.max = value;
+    pub fn update_count(&mut self) -> Result<()> {
+        match self {
+            Self::Count(count) => {
+                *count += 1;
+                Ok(())
+            }
+            _ => Err(exec_err(
+                "count update applied to a non-count aggregate state",
+            )),
         }
     }
 
-    fn result(&self, func: AggFunc) -> Option<f64> {
-        if self.count == 0 {
-            return None;
+    pub fn update_numeric(&mut self, value: f64) -> Result<()> {
+        match self {
+            Self::Sum { sum, count } | Self::Avg { sum, count } => {
+                *sum += value;
+                *count += 1;
+            }
+            Self::Min(current) => {
+                *current = Some(current.map_or(value, |existing| existing.min(value)));
+            }
+            Self::Max(current) => {
+                *current = Some(current.map_or(value, |existing| existing.max(value)));
+            }
+            _ => {
+                return Err(exec_err(
+                    "numeric update applied to an incompatible aggregate state",
+                ));
+            }
         }
-        Some(match func {
-            AggFunc::Sum => self.sum,
-            AggFunc::Count => self.count as f64,
-            AggFunc::Min => self.min,
-            AggFunc::Max => self.max,
-            AggFunc::Avg => self.sum / self.count as f64,
-        })
+        Ok(())
+    }
+
+    pub fn update_distinct(&mut self, value: AggregateValue) -> Result<()> {
+        match self {
+            Self::CountDistinct(values) => {
+                if !matches!(value, AggregateValue::Null) {
+                    values.insert(value);
+                }
+                Ok(())
+            }
+            _ => Err(exec_err(
+                "distinct update applied to a non-distinct aggregate state",
+            )),
+        }
+    }
+
+    pub fn merge(&mut self, partial: &Self) -> Result<()> {
+        match (self, partial) {
+            (
+                Self::Sum { sum, count },
+                Self::Sum {
+                    sum: other_sum,
+                    count: other_count,
+                },
+            )
+            | (
+                Self::Avg { sum, count },
+                Self::Avg {
+                    sum: other_sum,
+                    count: other_count,
+                },
+            ) => {
+                *sum += other_sum;
+                *count += other_count;
+            }
+            (Self::Count(count), Self::Count(other)) => *count += other,
+            (Self::Min(value), Self::Min(other)) => {
+                if let Some(other) = other {
+                    *value = Some(value.map_or(*other, |current| current.min(*other)));
+                }
+            }
+            (Self::Max(value), Self::Max(other)) => {
+                if let Some(other) = other {
+                    *value = Some(value.map_or(*other, |current| current.max(*other)));
+                }
+            }
+            (Self::CountDistinct(values), Self::CountDistinct(other)) => {
+                values.extend(other.iter().cloned());
+            }
+            _ => return Err(exec_err("cannot merge incompatible aggregate states")),
+        }
+        Ok(())
+    }
+
+    pub fn count_result(&self) -> Result<u64> {
+        match self {
+            Self::Count(count) => Ok(*count),
+            Self::CountDistinct(values) => Ok(values.len() as u64),
+            _ => Err(exec_err(
+                "count result requested from a non-count aggregate state",
+            )),
+        }
+    }
+
+    pub fn numeric_result(&self) -> Result<Option<f64>> {
+        match self {
+            Self::Sum { sum, count } => Ok((*count > 0).then_some(*sum)),
+            Self::Min(value) | Self::Max(value) => Ok(*value),
+            Self::Avg { sum, count } => Ok((*count > 0).then(|| *sum / *count as f64)),
+            _ => Err(exec_err(
+                "numeric result requested from a count aggregate state",
+            )),
+        }
     }
 }
+
+type Accumulator = AggregateState;
 
 pub struct HashAggregate {
     source: Box<dyn BatchOperator>,
@@ -229,22 +327,22 @@ impl BatchOperator for HashAggregate {
 
                 let accums = groups
                     .entry(key)
-                    .or_insert_with(|| (0..num_aggs).map(|_| Accumulator::new()).collect());
+                    .or_insert_with(|| self.aggregates.iter().map(AggregateState::new).collect());
 
                 for (i, agg) in self.aggregates.iter().enumerate() {
                     if matches!(agg.func, AggFunc::Count) && agg.column == "*" {
-                        accums[i].count += 1;
+                        accums[i].update_count()?;
                     } else if let Some(arr) = agg_arrays[i]
                         && !arr.is_null(row)
                     {
                         if matches!(agg.func, AggFunc::Count) {
-                            if !agg.distinct
-                                || accums[i].distinct_values.insert(extract_key(arr, row))
-                            {
-                                accums[i].count += 1;
+                            if agg.distinct {
+                                accums[i].update_distinct(extract_key(arr, row).into())?;
+                            } else {
+                                accums[i].update_count()?;
                             }
                         } else {
-                            accums[i].update(extract_f64(arr, row)?);
+                            accums[i].update_numeric(extract_f64(arr, row)?)?;
                         }
                     }
                 }
@@ -256,7 +354,10 @@ impl BatchOperator for HashAggregate {
         }
 
         let entries: Vec<(Vec<GroupKey>, Vec<Accumulator>)> = if groups.is_empty() {
-            vec![(vec![], (0..num_aggs).map(|_| Accumulator::new()).collect())]
+            vec![(
+                vec![],
+                self.aggregates.iter().map(AggregateState::new).collect(),
+            )]
         } else {
             groups.into_iter().collect()
         };
@@ -272,16 +373,18 @@ impl BatchOperator for HashAggregate {
         for (ai, agg) in self.aggregates.iter().enumerate() {
             match agg.output_type() {
                 DataType::UInt64 => {
-                    let values: Vec<u64> =
-                        entries.iter().map(|(_, accums)| accums[ai].count).collect();
-                    columns.push(Arc::new(UInt64Array::from(values)));
+                    let values: Result<Vec<u64>> = entries
+                        .iter()
+                        .map(|(_, accums)| accums[ai].count_result())
+                        .collect();
+                    columns.push(Arc::new(UInt64Array::from(values?)));
                 }
                 _ => {
-                    let values: Vec<Option<f64>> = entries
+                    let values: Result<Vec<Option<f64>>> = entries
                         .iter()
-                        .map(|(_, accums)| accums[ai].result(agg.func))
+                        .map(|(_, accums)| accums[ai].numeric_result())
                         .collect();
-                    columns.push(Arc::new(Float64Array::from(values)));
+                    columns.push(Arc::new(Float64Array::from(values?)));
                 }
             }
         }
@@ -299,6 +402,19 @@ enum GroupKey {
     Int64(i64),
     Utf8(String),
     Float64Bits(u64),
+}
+
+impl From<GroupKey> for AggregateValue {
+    fn from(value: GroupKey) -> Self {
+        match value {
+            GroupKey::Null => Self::Null,
+            GroupKey::Bool(value) => Self::Bool(value),
+            GroupKey::Int32(value) => Self::Int32(value),
+            GroupKey::Int64(value) => Self::Int64(value),
+            GroupKey::Utf8(value) => Self::Utf8(value),
+            GroupKey::Float64Bits(value) => Self::Float64Bits(value),
+        }
+    }
 }
 
 fn extract_key(arr: &ArrayRef, row: usize) -> GroupKey {
@@ -522,5 +638,52 @@ mod tests {
             0
         );
         assert!(result.column(1).is_null(0));
+    }
+
+    #[test]
+    fn average_state_merges_weighted_partials() {
+        let expression = AggExpr::new(AggFunc::Avg, "value");
+        let mut left = AggregateState::new(&expression);
+        left.update_numeric(10.0).unwrap();
+        left.update_numeric(20.0).unwrap();
+        let mut right = AggregateState::new(&expression);
+        right.update_numeric(100.0).unwrap();
+
+        left.merge(&right).unwrap();
+
+        assert_eq!(left.numeric_result().unwrap(), Some(130.0 / 3.0));
+    }
+
+    #[test]
+    fn distinct_count_state_unions_overlapping_partials() {
+        let expression = AggExpr::new(AggFunc::Count, "value").distinct();
+        let mut left = AggregateState::new(&expression);
+        left.update_distinct(AggregateValue::Utf8("a".into()))
+            .unwrap();
+        left.update_distinct(AggregateValue::Utf8("b".into()))
+            .unwrap();
+        let mut right = AggregateState::new(&expression);
+        right
+            .update_distinct(AggregateValue::Utf8("b".into()))
+            .unwrap();
+        right
+            .update_distinct(AggregateValue::Utf8("c".into()))
+            .unwrap();
+
+        left.merge(&right).unwrap();
+
+        assert_eq!(left.count_result().unwrap(), 3);
+    }
+
+    #[test]
+    fn aggregate_states_reject_incompatible_merges() {
+        let mut count = AggregateState::new(&AggExpr::new(AggFunc::Count, "*"));
+        let sum = AggregateState::new(&AggExpr::new(AggFunc::Sum, "value"));
+
+        let result = count.merge(&sum);
+
+        assert!(
+            matches!(result, Err(KaveonError::Execution(message)) if message.contains("incompatible"))
+        );
     }
 }

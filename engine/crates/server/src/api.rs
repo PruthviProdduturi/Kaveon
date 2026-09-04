@@ -863,6 +863,56 @@ enum MergeOperation {
     Max,
 }
 
+async fn execute_remote_task(
+    client: &reqwest::Client,
+    worker: &NodeInfo,
+    request: &TaskRequest,
+) -> Result<
+    (
+        arrow::datatypes::SchemaRef,
+        Vec<arrow::record_batch::RecordBatch>,
+        u64,
+        usize,
+    ),
+    String,
+> {
+    let url = format!("{}/v1/task", worker.address.trim_end_matches('/'));
+    let response = client
+        .post(url)
+        .json(request)
+        .send()
+        .await
+        .map_err(|error| format!("worker '{}' is unavailable: {error}", worker.node_id))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let message = response.text().await.unwrap_or_default();
+        return Err(format!(
+            "worker '{}' failed task with {status}: {message}",
+            worker.node_id
+        ));
+    }
+    let elapsed_us = response
+        .headers()
+        .get("x-kaveon-task-elapsed-us")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_default();
+    let bytes = response.bytes().await.map_err(|error| {
+        format!(
+            "worker '{}' result could not be read: {error}",
+            worker.node_id
+        )
+    })?;
+    let output_bytes = bytes.len();
+    let (schema, batches) = decode_arrow_stream(&bytes).map_err(|error| {
+        format!(
+            "worker '{}' returned an invalid Arrow stream: {error}",
+            worker.node_id
+        )
+    })?;
+    Ok((schema, batches, elapsed_us, output_bytes))
+}
+
 async fn execute_distributed_aggregate(
     state: &Arc<AppState>,
     query_id: &str,
@@ -885,77 +935,64 @@ async fn execute_distributed_aggregate(
     let partition_count = workers.len();
     let client = reqwest::Client::new();
     let mut tasks = tokio::task::JoinSet::new();
-    for (partition_index, worker) in workers.into_iter().enumerate() {
+    for partition_index in 0..partition_count {
         let client = client.clone();
-        let request = TaskRequest {
-            query_id: query_id.to_owned(),
-            stage_id: 0,
-            attempt: 0,
-            query: sql.to_owned(),
-            catalog: context.catalog.clone(),
-            schema: context.schema.clone(),
+        let candidates = crate::scheduler::task_candidates(
+            &workers,
             partition_index,
-            partition_count,
-        };
+            crate::scheduler::RetryPolicy::default(),
+        );
+        let query_id = query_id.to_owned();
+        let query = sql.to_owned();
+        let catalog = context.catalog.clone();
+        let schema_name = context.schema.clone();
         tasks.spawn(async move {
-            let task_id = kaveon_core::TaskId {
-                query_id: request.query_id.clone(),
-                stage_id: kaveon_core::StageId(request.stage_id),
-                partition: partition_index,
-                attempt: request.attempt,
+            let mut failures = Vec::new();
+            for (attempt, worker) in candidates {
+                let request = TaskRequest {
+                    query_id: query_id.clone(),
+                    stage_id: 0,
+                    attempt,
+                    query: query.clone(),
+                    catalog: catalog.clone(),
+                    schema: schema_name.clone(),
+                    partition_index,
+                    partition_count,
+                };
+                let task_id = kaveon_core::TaskId {
+                    query_id: request.query_id.clone(),
+                    stage_id: kaveon_core::StageId(request.stage_id),
+                    partition: partition_index,
+                    attempt,
+                }
+                .to_string();
+                match execute_remote_task(&client, &worker, &request).await {
+                    Ok((schema, batches, elapsed_us, output_bytes)) => {
+                        let data = batches_to_json(&batches);
+                        let telemetry = TaskTelemetry {
+                            task_id,
+                            node_id: worker.node_id,
+                            partition_index,
+                            elapsed_us,
+                            output_rows: data.len(),
+                            output_batches: batches.len(),
+                            output_bytes,
+                        };
+                        return Ok((
+                            TaskResponse {
+                                columns: columns_from_schema(&schema),
+                                data,
+                                elapsed_us,
+                            },
+                            telemetry,
+                        ));
+                    }
+                    Err(error) => failures.push(error),
+                }
             }
-            .to_string();
-            let url = format!("{}/v1/task", worker.address.trim_end_matches('/'));
-            let response = client
-                .post(url)
-                .json(&request)
-                .send()
-                .await
-                .map_err(|error| format!("worker '{}' is unavailable: {error}", worker.node_id))?;
-            if !response.status().is_success() {
-                let status = response.status();
-                let message = response.text().await.unwrap_or_default();
-                return Err(format!(
-                    "worker '{}' failed task with {status}: {message}",
-                    worker.node_id
-                ));
-            }
-            let elapsed_us = response
-                .headers()
-                .get("x-kaveon-task-elapsed-us")
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.parse().ok())
-                .unwrap_or_default();
-            let bytes = response.bytes().await.map_err(|error| {
-                format!(
-                    "worker '{}' result could not be read: {error}",
-                    worker.node_id
-                )
-            })?;
-            let output_bytes = bytes.len();
-            let (schema, batches) = decode_arrow_stream(&bytes).map_err(|error| {
-                format!(
-                    "worker '{}' returned an invalid Arrow stream: {error}",
-                    worker.node_id
-                )
-            })?;
-            let data = batches_to_json(&batches);
-            let telemetry = TaskTelemetry {
-                task_id,
-                node_id: worker.node_id,
-                partition_index,
-                elapsed_us,
-                output_rows: data.len(),
-                output_batches: batches.len(),
-                output_bytes,
-            };
-            Ok((
-                TaskResponse {
-                    columns: columns_from_schema(&schema),
-                    data,
-                    elapsed_us,
-                },
-                telemetry,
+            Err(format!(
+                "partition {partition_index} exhausted worker attempts: {}",
+                failures.join("; ")
             ))
         });
     }
