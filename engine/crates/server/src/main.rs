@@ -2,7 +2,9 @@ mod api;
 pub mod cluster;
 mod config;
 pub mod exchange;
+pub mod lifecycle;
 pub mod planner;
+pub mod runtime;
 pub mod scheduler;
 mod ui;
 

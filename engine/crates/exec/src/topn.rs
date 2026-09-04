@@ -3,10 +3,11 @@ use std::collections::VecDeque;
 use arrow::compute::{SortColumn, SortOptions, concat_batches, lexsort_to_indices, take};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use kaveon_core::{BatchOperator, KaveonError, Result};
+use kaveon_core::{BatchOperator, KaveonError, OperatorMemoryAccount, Result};
 
 use crate::expr_eval::evaluate;
 use crate::sort::SortExpr;
+use crate::spill::SpillManager;
 
 pub struct TopNOperator {
     source: Box<dyn BatchOperator>,
@@ -15,6 +16,7 @@ pub struct TopNOperator {
     schema: SchemaRef,
     output: VecDeque<RecordBatch>,
     initialized: bool,
+    spill: Option<(OperatorMemoryAccount, SpillManager)>,
 }
 
 impl TopNOperator {
@@ -36,7 +38,20 @@ impl TopNOperator {
             schema,
             output: VecDeque::new(),
             initialized: false,
+            spill: None,
         })
+    }
+
+    pub fn new_with_spill(
+        source: Box<dyn BatchOperator>,
+        sort_exprs: Vec<SortExpr>,
+        limit: usize,
+        memory: OperatorMemoryAccount,
+        spill: SpillManager,
+    ) -> Result<Self> {
+        let mut operator = Self::new(source, sort_exprs, limit)?;
+        operator.spill = Some((memory, spill));
+        Ok(operator)
     }
 
     fn initialize(&mut self) -> Result<()> {
@@ -44,13 +59,33 @@ impl TopNOperator {
             return Ok(());
         }
         let mut batches = Vec::new();
+        let mut reservations = Vec::new();
+        let mut runs = Vec::new();
         while let Some(batch) = self.source.next_batch()? {
             if batch.num_rows() > 0 {
-                batches.push(batch);
+                let candidate = merge_top_n(&self.schema, &[batch], &self.sort_exprs, self.limit)?
+                    .expect("non-empty input produces a TopN candidate");
+                if let Some((memory, spill)) = &self.spill {
+                    let bytes = u64::try_from(candidate.get_array_memory_size()).map_err(|_| {
+                        KaveonError::Execution("TopN batch memory size exceeds u64".into())
+                    })?;
+                    match memory.reserve(bytes) {
+                        Ok(reservation) => reservations.push(reservation),
+                        Err(_) => {
+                            runs.push(spill.write_run(&self.schema, &[candidate])?);
+                            continue;
+                        }
+                    }
+                }
+                batches.push(candidate);
             }
         }
-        if batches.is_empty() {
+        if batches.is_empty() && runs.is_empty() {
             return Ok(());
+        }
+
+        for run in &runs {
+            batches.extend(run.read()?);
         }
 
         if let Some(batch) = merge_top_n(&self.schema, &batches, &self.sort_exprs, self.limit)? {
@@ -340,5 +375,31 @@ mod tests {
             1,
         );
         assert!(result.unwrap_err().to_string().contains("incompatible"));
+    }
+
+    #[test]
+    fn spill_aware_top_n_matches_in_memory_result_under_a_tiny_limit() {
+        let input_values = vec![vec![Some(2), Some(5)], vec![Some(4), Some(1)]];
+        let probe = MockOperator::new(vec![input_values[0].clone()]);
+        let per_batch_bytes = u64::try_from(probe.schema().fields().len()).unwrap();
+        let memory_pool = kaveon_core::QueryMemoryPool::new("topn-spill", per_batch_bytes).unwrap();
+        let memory = memory_pool.operator("topn").unwrap();
+        let spill = SpillManager::new(std::env::temp_dir(), 64 * 1_024).unwrap();
+        let spill_metrics = spill.clone();
+        let mut operator = TopNOperator::new_with_spill(
+            Box::new(MockOperator::new(input_values)),
+            vec![SortExpr::new(Expr::Column("id".into()), false)],
+            3,
+            memory,
+            spill,
+        )
+        .unwrap();
+
+        assert_eq!(
+            values(&operator.next_batch().unwrap().unwrap()),
+            vec![Some(5), Some(4), Some(2)]
+        );
+        assert!(spill_metrics.snapshot().peak_bytes > 0);
+        assert!(memory_pool.snapshot().peak_bytes <= per_batch_bytes);
     }
 }
