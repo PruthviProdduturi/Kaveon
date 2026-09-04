@@ -18,6 +18,8 @@ use kaveon_sql::logical_plan::{AggregateExpr, JoinType, LogicalPlan};
 use kaveon_storage::{DeltaTableReader, ParquetReader, ScanPartition};
 use std::collections::BTreeMap;
 
+const GROUPED_AGGREGATE_STATE_KEY_COLUMN: &str = "group_keys";
+
 pub struct PlannedQuery {
     pub operator: Box<dyn BatchOperator>,
     pub scan_metrics: Vec<kaveon_storage::ScanMetrics>,
@@ -237,7 +239,15 @@ impl ExecutableFragmentBuilder<'_> {
                 source_draft.push(
                     FragmentOperator::ExchangeOutput(ExchangeOutput {
                         exchange_id: exchange.id.clone(),
-                        partitioning: exchange.partitioning,
+                        partitioning: match exchange.partitioning {
+                            Partitioning::Hash {
+                                partition_count, ..
+                            } => Partitioning::Hash {
+                                columns: vec![GROUPED_AGGREGATE_STATE_KEY_COLUMN.to_owned()],
+                                partition_count,
+                            },
+                            partitioning => partitioning,
+                        },
                     }),
                     vec![source_draft.root],
                 );
@@ -1338,6 +1348,11 @@ mod tests {
         let FragmentOperator::ExchangeOutput(output) = &output.operator else {
             panic!("partial aggregate must terminate in exchange output");
         };
+        assert!(matches!(
+            &output.partitioning,
+            Partitioning::Hash { columns, .. }
+                if columns == &[GROUPED_AGGREGATE_STATE_KEY_COLUMN]
+        ));
         let final_fragment = &fragments[&StageId(1)];
         assert!(final_fragment.nodes.iter().any(|node| matches!(
             node.operator,
