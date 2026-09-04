@@ -19,12 +19,12 @@
 | Crate | Owner | Status |
 |-------|-------|--------|
 | `core` — shared types, errors, traits | Shared (either can add, neither restructures without updating this doc) | Stage graph, exchange, split/task, plan, telemetry, catalog, and operator contracts active |
-| `storage` — Parquet reader, ADLS Gen 2 | **Codex** | Local Parquet and Delta reads support deterministic distributed scan partitions; ADLS Gen 2 not started |
+| `storage` — Parquet reader, ADLS Gen 2 | **Codex** | Local Parquet row-group and Delta active-file splits are enumerable and partitioned; ADLS Gen 2 not started |
 | `exec/scan` — scan operator | **Codex** | Done; takeover authorized 2026-09-03 |
-| `exec/aggregate` — hash aggregate | **Codex** | Mergeable AVG/exact DISTINCT and versioned Arrow state encoding done; distributed state exchange pending |
+| `exec/aggregate` — hash aggregate | **Codex** | Partial/final state execution and exchange for COUNT/SUM/MIN/MAX/AVG/exact DISTINCT done |
 | `exec/filter` — filter evaluation | **Codex** | Compatible numeric coercion done |
-| `exec/sort` — sort operator | **Codex** | Done and wired in local/server planners |
-| `exec/topn` — TopN operator | **Codex** | Done and fused for ORDER BY + LIMIT |
+| `exec/sort` — sort operator | **Codex** | Local/distributed planning done; fixed-fan-in external merge available |
+| `exec/topn` — TopN operator | **Codex** | Local/distributed planning done; fixed-fan-in external merge available |
 | `sql` — parser, logical plan | **Codex** | Equi/cross joins and exact COUNT DISTINCT done |
 | `optim` — filter pushdown | **Codex** | Done and wired in local/server planning |
 | `python` — PyO3 bindings | **Claude** | Scaffold |
@@ -239,10 +239,10 @@ pub struct TaskAssignment { task_id, node_id, splits }
 
 - `StageGraph::validate` rejects duplicate/unknown/cyclic stages and exchanges and invalid partitioning before scheduling.
 - `HashPartitioner` uses Arrow row encoding plus fixed FNV-1a hashing so equal keys, including nulls, always reach the same partition on every worker running the same Engine version.
-- `BoundedExchangeBuffer` accounts for Arrow array memory, rejects writes beyond its byte capacity, and releases capacity when consumers pop batches. Network scheduling and asynchronous wait/wake backpressure are not wired yet.
-- The server exchange envelope carries query/stage/task-attempt/output-partition identity, versioning, chunk bounds, and corruption checks around Arrow IPC payloads. Endpoint and flow-control integration remain pending.
-- Distributed aggregate fan-out retries a failed partition on alternate active workers, with the retry attempt encoded in `TaskId`. Cancellation propagation and idempotent worker task registries remain pending.
-- Internal exchange routes use `POST`, `GET`, and `DELETE /v1/internal/exchange/...`; every node must share a non-empty `KAVEON_EXCHANGE_TOKEN`. Upload retries are idempotent, conflicting duplicates fail closed, and stores are bounded. Query fragments are not yet producing or consuming these exchanges.
+- `BoundedExchangeBuffer` and the HTTP `ExchangeStore` enforce byte ceilings; the store also bounds exchange count and releases exact payload accounting on cleanup. Streaming wait/wake flow control remains future work.
+- The v2 server exchange envelope carries query/exchange/stage/task-attempt/output-partition identity, versioning, chunk bounds, and corruption checks around Arrow IPC payloads. Including `ExchangeId` prevents collisions when a task feeds multiple downstream stages.
+- General fragment tasks fetch producer exchanges, aggregate inputs by exchange ID, execute their assigned scan partition, and publish hash/single/round-robin/broadcast outputs to consumer workers.
+- Internal exchange routes use authenticated `POST`, `GET`, and `DELETE /v1/internal/exchange/...`; every node must share a non-empty `KAVEON_EXCHANGE_TOKEN`. Upload retries are idempotent, conflicting duplicates fail closed, failed attempts and consumed stages clean up their outputs.
 
 ### Memory reservations
 
@@ -254,16 +254,17 @@ let reservation = operator.reserve(bytes)?;
 
 - Reservations atomically enforce the query-wide hard limit across operator accounts and release through RAII.
 - Snapshots expose current and peak bytes for the query and operator. Operators and admission control are not wired to these accounts yet; operator-triggered spill is not implemented.
-- `SpillManager` writes bounded Arrow IPC runs into collision-safe private directories, accounts current/peak disk bytes, rolls back failed writes, and removes runs through RAII. Operators are not wired to spill yet.
-- Sort and TopN expose opt-in spill-aware constructors that create real Arrow runs when reservation pressure is reached. Their final merge currently reloads runs eagerly; streaming k-way merge remains required before claiming fully bounded external sorting.
+- `SpillManager` writes bounded Arrow IPC runs into collision-safe private directories, accounts current/peak disk bytes, rolls back failed writes, streams replacement runs, and removes runs through RAII.
+- Sort and TopN expose opt-in spill-aware constructors with a validated merge fan-in (16 by default). Multi-pass compaction and lazy final merge bound memory to the fan-in cursor batches plus one output batch; aggregate/join spill and admission control remain open.
 
 ### Distributed stage planning
 
 - `build_stage_graph(query_id, logical_plan, worker_count)` produces and validates post-order stage DAGs.
 - Grouped aggregates use hash exchange; global aggregates, sort, and final TopN use single-partition exchange.
 - Equi-joins hash both inputs into colocated partitions; cross joins model a round-robin probe side and broadcast build side.
-- The stage graph is descriptive today. The executor still uses aggregate/TopN-specific fan-out until fragment execution is wired.
-- `StageRuntime` validates complete task assignment coverage, gates stages on dependencies, enforces task transitions and retry attempts, cascades terminal failure/cancellation, and emits deduplicated exchange-cleanup intents. Worker transport integration remains pending.
+- `build_executable_fragments` translates the same stage IDs and exchange IDs into validated worker plans, including partial/final aggregates and repartitioned/broadcast joins.
+- `CoordinatorOrchestrator` assigns workers deterministically, gates dependent stages, rotates retry attempts, carries exact scan partitions, and resolves producer/consumer exchange locations and cleanup.
+- The coordinator runs eligible scan/filter/project/aggregate/sort/limit/join trees through authenticated fragment tasks before legacy fallbacks, collects only root Arrow results, and fails closed after partial distributed execution.
 - `ExecutableFragment` is the versioned worker instruction contract for scans, filter/project, aggregate modes, Sort/TopN/limit, exchange inputs/outputs, and hash joins. It rejects malformed, cyclic, unreachable, and invalid operator graphs before execution.
 - `WorkerLifecycle` now backs HTTP task owner/waiter/completed replay and cancellation. Coordinator cancellation propagates to workers and retains `CANCELED` history; an authenticated terminal-finish endpoint releases registry capacity without conflating completion and cancellation.
 
@@ -387,3 +388,4 @@ let source = DeltaTableReader::new(table_directory)
 | 2026-09-04 | Codex | Added versioned Arrow encoding for weighted AVG and typed exact DISTINCT states, a validated aggregate/sort/TopN/join stage-DAG builder, bounded RAII Arrow spill runs, and task timeout/retry classification. These are green foundations; stage execution, distributed join/state exchange, operator spill wiring, cancellation, and Docker/AKS stress remain open. |
 | 2026-09-04 | Codex | Added the dependency-gated stage runtime, bounded idempotent task/cancellation lifecycle, and opt-in spill-aware Sort/TopN. Final spill merge remains eager, and runtime/lifecycle contracts still require worker HTTP integration before failure recovery or fully bounded execution can be claimed. |
 | 2026-09-04 | Codex | Added versioned executable fragments, canonical grouped aggregate-state transport, lazy spill-run merging, idempotent HTTP task replay/cancellation, and authenticated terminal lifecycle cleanup. Fragment translation/execution and distributed join/AVG/distinct remain the next correctness gates; spill merge fan-in remains uncapped. |
+| 2026-09-04 | Codex | Wired the general distributed runtime: graph-to-fragment translation, authenticated coordinator dispatch, partition-correct worker execution, collision-free exchange v2 transport, partial/final AVG and exact DISTINCT state execution, repartitioned/broadcast joins, retry/cancel/cleanup, fixed-fan-in spill merge, and deterministic local Parquet/Delta split enumeration. Workspace tests and strict Clippy pass; Docker fault/performance evidence, aggregate/join spill, admission control, ADLS Gen2, and AKS remain explicit gates. |

@@ -1,6 +1,9 @@
 use kaveon_core::{
-    BatchOperator, BatchSource, CatalogManager, DataFormat, ExchangeDescriptor, ExchangeId, Expr,
-    KaveonError, Partitioning, Result, StageFragment, StageGraph, StageId, TableReference,
+    AggregateFunction, AggregateMode, AggregateSpec, BatchOperator, BatchSource, CatalogManager,
+    DataFormat, EXECUTABLE_FRAGMENT_VERSION, ExchangeDescriptor, ExchangeId, ExchangeInput,
+    ExchangeOutput, ExecutableFragment, Expr, FragmentNode, FragmentNodeId, FragmentOperator,
+    JoinSpec, JoinType as FragmentJoinType, KaveonError, NamedExpr, Partitioning, Result, ScanSpec,
+    ScanTable, SortSpec, StageFragment, StageGraph, StageId, TableReference,
 };
 use kaveon_exec::aggregate::{AggExpr, AggFunc, HashAggregate};
 use kaveon_exec::filter::FilterOperator;
@@ -106,6 +109,426 @@ pub fn build_stage_graph(
     };
     graph.validate()?;
     Ok(graph)
+}
+
+pub fn build_executable_fragments(
+    query_id: impl Into<String>,
+    plan: &LogicalPlan,
+    catalog: &CatalogManager,
+    worker_count: usize,
+) -> Result<BTreeMap<StageId, ExecutableFragment>> {
+    let graph = build_stage_graph(query_id, plan, worker_count)?;
+    let mut builder = ExecutableFragmentBuilder {
+        graph: &graph,
+        catalog,
+        fragments: BTreeMap::new(),
+        next_stage: 0,
+    };
+    let root = builder.build(plan)?;
+    if root != graph.root_stage || builder.fragments.len() != graph.stages.len() {
+        return Err(KaveonError::Execution(
+            "executable fragments diverged from the stage graph".into(),
+        ));
+    }
+    for fragment in builder.fragments.values() {
+        fragment.validate()?;
+    }
+    Ok(builder.fragments)
+}
+
+struct FragmentDraft {
+    nodes: Vec<FragmentNode>,
+    root: FragmentNodeId,
+}
+
+impl FragmentDraft {
+    fn leaf(operator: FragmentOperator) -> Self {
+        Self {
+            nodes: vec![FragmentNode {
+                id: FragmentNodeId(0),
+                inputs: Vec::new(),
+                operator,
+            }],
+            root: FragmentNodeId(0),
+        }
+    }
+
+    fn push(&mut self, operator: FragmentOperator, inputs: Vec<FragmentNodeId>) {
+        let id = FragmentNodeId(self.nodes.len() as u32);
+        self.nodes.push(FragmentNode {
+            id,
+            inputs,
+            operator,
+        });
+        self.root = id;
+    }
+}
+
+struct ExecutableFragmentBuilder<'a> {
+    graph: &'a StageGraph,
+    catalog: &'a CatalogManager,
+    fragments: BTreeMap<StageId, ExecutableFragment>,
+    next_stage: u32,
+}
+
+impl ExecutableFragmentBuilder<'_> {
+    fn build(&mut self, plan: &LogicalPlan) -> Result<StageId> {
+        match plan {
+            LogicalPlan::Scan { table, columns, .. } => {
+                let reference = TableReference::parse(table);
+                let resolved = self.catalog.resolve_table(&reference)?;
+                let scan = ScanSpec {
+                    source_uri: resolved.full_path(),
+                    table: ScanTable {
+                        catalog: resolved.catalog,
+                        schema: resolved.schema,
+                        table: resolved.table.name.clone(),
+                    },
+                    projection: columns.clone().unwrap_or_default(),
+                    predicate: None,
+                };
+                Ok(self.add_fragment(FragmentDraft::leaf(FragmentOperator::Scan(scan))))
+            }
+            LogicalPlan::Filter { input, predicate } => {
+                let stage = self.build(input)?;
+                let mut draft = self.draft_mut(stage)?;
+                if let Some(storage_predicate) = to_storage_predicate(predicate)
+                    && let Some(FragmentNode {
+                        operator: FragmentOperator::Scan(scan),
+                        ..
+                    }) = draft.nodes.first_mut()
+                {
+                    scan.predicate = Some(storage_predicate);
+                }
+                draft.push(
+                    FragmentOperator::Filter {
+                        predicate: predicate.clone(),
+                    },
+                    vec![draft.root],
+                );
+                Ok(stage)
+            }
+            LogicalPlan::Project { input, columns } => {
+                let stage = self.build(input)?;
+                let expressions = named_expressions(columns);
+                let mut draft = self.draft_mut(stage)?;
+                draft.push(FragmentOperator::Project { expressions }, vec![draft.root]);
+                Ok(stage)
+            }
+            LogicalPlan::Aggregate {
+                input,
+                group_by,
+                aggregates,
+            } => {
+                let source = self.build(input)?;
+                let groups = named_expressions(group_by);
+                let aggregates = aggregate_specs(aggregates);
+                let target = StageId(self.next_stage);
+                let exchange = self.exchange(source, target)?.clone();
+                let mut source_draft = self.draft_mut(source)?;
+                source_draft.push(
+                    FragmentOperator::Aggregate {
+                        mode: AggregateMode::Partial,
+                        group_by: groups.clone(),
+                        aggregates: aggregates.clone(),
+                    },
+                    vec![source_draft.root],
+                );
+                source_draft.push(
+                    FragmentOperator::ExchangeOutput(ExchangeOutput {
+                        exchange_id: exchange.id.clone(),
+                        partitioning: exchange.partitioning,
+                    }),
+                    vec![source_draft.root],
+                );
+                let mut target_draft =
+                    FragmentDraft::leaf(FragmentOperator::ExchangeInput(ExchangeInput {
+                        exchange_id: exchange.id,
+                    }));
+                target_draft.push(
+                    FragmentOperator::Aggregate {
+                        mode: AggregateMode::Final,
+                        group_by: groups,
+                        aggregates,
+                    },
+                    vec![target_draft.root],
+                );
+                Ok(self.add_fragment(target_draft))
+            }
+            LogicalPlan::Limit { input, count }
+                if matches!(input.as_ref(), LogicalPlan::Sort { .. }) =>
+            {
+                let LogicalPlan::Sort {
+                    input: sort_input,
+                    order_by,
+                } = input.as_ref()
+                else {
+                    unreachable!()
+                };
+                let source = self.build(sort_input)?;
+                let keys = sort_specs(order_by);
+                let target = StageId(self.next_stage);
+                let exchange = self.exchange(source, target)?.clone();
+                let mut draft = self.draft_mut(source)?;
+                draft.push(
+                    FragmentOperator::TopN {
+                        keys: keys.clone(),
+                        limit: *count,
+                    },
+                    vec![draft.root],
+                );
+                draft.push(
+                    FragmentOperator::ExchangeOutput(ExchangeOutput {
+                        exchange_id: exchange.id.clone(),
+                        partitioning: exchange.partitioning,
+                    }),
+                    vec![draft.root],
+                );
+                let mut target_draft =
+                    FragmentDraft::leaf(FragmentOperator::ExchangeInput(ExchangeInput {
+                        exchange_id: exchange.id,
+                    }));
+                target_draft.push(
+                    FragmentOperator::TopN {
+                        keys,
+                        limit: *count,
+                    },
+                    vec![target_draft.root],
+                );
+                Ok(self.add_fragment(target_draft))
+            }
+            LogicalPlan::Sort { input, order_by } => self.build_single_exchange(
+                input,
+                FragmentOperator::Sort {
+                    keys: sort_specs(order_by),
+                },
+                None,
+            ),
+            LogicalPlan::Limit { input, count } => self.build_single_exchange(
+                input,
+                FragmentOperator::Limit { limit: *count },
+                Some(FragmentOperator::Limit { limit: *count }),
+            ),
+            LogicalPlan::Join {
+                left,
+                right,
+                join_type,
+                condition,
+            } => self.build_join(left, right, *join_type, condition.as_ref()),
+        }
+    }
+
+    fn build_single_exchange(
+        &mut self,
+        input: &LogicalPlan,
+        operator: FragmentOperator,
+        partial_operator: Option<FragmentOperator>,
+    ) -> Result<StageId> {
+        let source = self.build(input)?;
+        let target = StageId(self.next_stage);
+        let exchange = self.exchange(source, target)?.clone();
+        let mut source_draft = self.draft_mut(source)?;
+        if let Some(partial_operator) = partial_operator {
+            source_draft.push(partial_operator, vec![source_draft.root]);
+        }
+        source_draft.push(
+            FragmentOperator::ExchangeOutput(ExchangeOutput {
+                exchange_id: exchange.id.clone(),
+                partitioning: exchange.partitioning,
+            }),
+            vec![source_draft.root],
+        );
+        let mut target_draft =
+            FragmentDraft::leaf(FragmentOperator::ExchangeInput(ExchangeInput {
+                exchange_id: exchange.id,
+            }));
+        target_draft.push(operator, vec![target_draft.root]);
+        Ok(self.add_fragment(target_draft))
+    }
+
+    fn build_join(
+        &mut self,
+        left: &LogicalPlan,
+        right: &LogicalPlan,
+        join_type: JoinType,
+        condition: Option<&Expr>,
+    ) -> Result<StageId> {
+        let left_stage = self.build(left)?;
+        let right_stage = self.build(right)?;
+        let target = StageId(self.next_stage);
+        let left_exchange = self.exchange(left_stage, target)?.clone();
+        let right_exchange = self.exchange(right_stage, target)?.clone();
+        for (stage, exchange) in [
+            (left_stage, left_exchange.clone()),
+            (right_stage, right_exchange.clone()),
+        ] {
+            let mut draft = self.draft_mut(stage)?;
+            draft.push(
+                FragmentOperator::ExchangeOutput(ExchangeOutput {
+                    exchange_id: exchange.id,
+                    partitioning: exchange.partitioning,
+                }),
+                vec![draft.root],
+            );
+        }
+        let mut target_draft =
+            FragmentDraft::leaf(FragmentOperator::ExchangeInput(ExchangeInput {
+                exchange_id: left_exchange.id,
+            }));
+        let right_input = FragmentNodeId(1);
+        target_draft.nodes.push(FragmentNode {
+            id: right_input,
+            inputs: Vec::new(),
+            operator: FragmentOperator::ExchangeInput(ExchangeInput {
+                exchange_id: right_exchange.id,
+            }),
+        });
+        let keys = join_keys(condition)?;
+        let (left_keys, right_keys): (Vec<_>, Vec<_>) = keys.into_iter().unzip();
+        target_draft.push(
+            FragmentOperator::HashJoin(JoinSpec {
+                join_type: fragment_join_type(join_type),
+                left_keys: left_keys.into_iter().map(Expr::Column).collect(),
+                right_keys: right_keys.into_iter().map(Expr::Column).collect(),
+                residual: None,
+                broadcast: join_type == JoinType::Cross,
+            }),
+            vec![FragmentNodeId(0), right_input],
+        );
+        Ok(self.add_fragment(target_draft))
+    }
+
+    fn add_fragment(&mut self, draft: FragmentDraft) -> StageId {
+        let stage_id = StageId(self.next_stage);
+        self.next_stage += 1;
+        self.fragments.insert(
+            stage_id,
+            ExecutableFragment {
+                version: EXECUTABLE_FRAGMENT_VERSION,
+                stage_id,
+                root: draft.root,
+                nodes: draft.nodes,
+            },
+        );
+        stage_id
+    }
+
+    fn draft_mut(&mut self, stage: StageId) -> Result<FragmentDraftGuard<'_>> {
+        let fragment = self.fragments.get_mut(&stage).ok_or_else(|| {
+            KaveonError::Execution(format!("missing executable fragment for stage {}", stage.0))
+        })?;
+        Ok(FragmentDraftGuard { fragment })
+    }
+
+    fn exchange(&self, source: StageId, target: StageId) -> Result<&ExchangeDescriptor> {
+        self.graph
+            .exchanges
+            .iter()
+            .find(|exchange| exchange.source_stage == source && exchange.target_stage == target)
+            .ok_or_else(|| {
+                KaveonError::Execution(format!(
+                    "stage graph has no exchange from {} to {}",
+                    source.0, target.0
+                ))
+            })
+    }
+}
+
+struct FragmentDraftGuard<'a> {
+    fragment: &'a mut ExecutableFragment,
+}
+
+impl std::ops::Deref for FragmentDraftGuard<'_> {
+    type Target = ExecutableFragment;
+
+    fn deref(&self) -> &Self::Target {
+        self.fragment
+    }
+}
+
+impl std::ops::DerefMut for FragmentDraftGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.fragment
+    }
+}
+
+impl FragmentDraftGuard<'_> {
+    fn push(&mut self, operator: FragmentOperator, inputs: Vec<FragmentNodeId>) {
+        let id = FragmentNodeId(self.fragment.nodes.len() as u32);
+        self.fragment.nodes.push(FragmentNode {
+            id,
+            inputs,
+            operator,
+        });
+        self.fragment.root = id;
+    }
+}
+
+fn named_expressions(expressions: &[Expr]) -> Vec<NamedExpr> {
+    expressions
+        .iter()
+        .enumerate()
+        .map(|(index, expression)| NamedExpr {
+            name: match expression {
+                Expr::Alias { name, .. } => name.clone(),
+                Expr::Column(column) => unqualify(column),
+                _ => format!("expr_{index}"),
+            },
+            expression: expression.clone(),
+        })
+        .collect()
+}
+
+fn aggregate_specs(aggregates: &[AggregateExpr]) -> Vec<AggregateSpec> {
+    aggregates
+        .iter()
+        .map(|aggregate| {
+            let (function, argument, name) = match aggregate {
+                AggregateExpr::Count { expr, distinct } => (
+                    if *distinct {
+                        AggregateFunction::CountDistinct
+                    } else {
+                        AggregateFunction::Count
+                    },
+                    (!matches!(expr, Expr::Star)).then(|| expr.clone()),
+                    "count",
+                ),
+                AggregateExpr::Sum(expr) => (AggregateFunction::Sum, Some(expr.clone()), "sum"),
+                AggregateExpr::Min(expr) => (AggregateFunction::Min, Some(expr.clone()), "min"),
+                AggregateExpr::Max(expr) => (AggregateFunction::Max, Some(expr.clone()), "max"),
+                AggregateExpr::Avg(expr) => (AggregateFunction::Avg, Some(expr.clone()), "avg"),
+            };
+            let suffix = argument.as_ref().map_or("star".into(), |expression| {
+                expression_column(expression).unwrap_or_else(|_| "expr".into())
+            });
+            AggregateSpec {
+                function,
+                argument,
+                output: format!("{name}_{suffix}"),
+            }
+        })
+        .collect()
+}
+
+fn sort_specs(order_by: &[(Expr, bool)]) -> Vec<SortSpec> {
+    order_by
+        .iter()
+        .map(|(expression, ascending)| SortSpec {
+            expression: expression.clone(),
+            ascending: *ascending,
+            nulls_first: !ascending,
+        })
+        .collect()
+}
+
+fn fragment_join_type(join_type: JoinType) -> FragmentJoinType {
+    match join_type {
+        JoinType::Inner => FragmentJoinType::Inner,
+        JoinType::Left => FragmentJoinType::Left,
+        JoinType::Right => FragmentJoinType::Right,
+        JoinType::Full => FragmentJoinType::Full,
+        JoinType::Cross => FragmentJoinType::Cross,
+    }
 }
 
 struct StageGraphBuilder {
@@ -778,6 +1201,22 @@ mod tests {
                 },
             )
             .unwrap();
+        memory
+            .register_table(
+                "default",
+                TableMeta {
+                    name: "customers".into(),
+                    arrow_schema: Arc::new(Schema::new(vec![Field::new(
+                        "id",
+                        DataType::Int64,
+                        false,
+                    )])),
+                    location: "items.parquet".into(),
+                    access: AccessPattern::Shortcut,
+                    format: DataFormat::Parquet,
+                },
+            )
+            .unwrap();
         let mut catalog = CatalogManager::new("test", "default");
         catalog.register_catalog(Box::new(memory));
         Fixture { directory, catalog }
@@ -833,6 +1272,90 @@ mod tests {
     fn graph(sql: &str) -> StageGraph {
         let plan = kaveon_sql::logical_plan::sql_to_logical_plan(sql).unwrap();
         build_stage_graph("query-1", &plan, 4).unwrap()
+    }
+
+    fn executable_fragments(sql: &str) -> BTreeMap<StageId, ExecutableFragment> {
+        let fixture = fixture();
+        let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(sql).unwrap();
+        qualify_tables(&mut plan, "test", "default");
+        build_executable_fragments("query-1", &plan, &fixture.catalog, 4).unwrap()
+    }
+
+    #[test]
+    fn translates_grouped_aggregate_into_partial_and_final_fragments() {
+        let fragments = executable_fragments("SELECT id, AVG(id) FROM items GROUP BY id");
+        assert_eq!(fragments.len(), 2);
+        let partial = &fragments[&StageId(0)];
+        assert!(partial.nodes.iter().any(|node| matches!(
+            node.operator,
+            FragmentOperator::Aggregate {
+                mode: AggregateMode::Partial,
+                ..
+            }
+        )));
+        let output = partial.nodes.last().unwrap();
+        let FragmentOperator::ExchangeOutput(output) = &output.operator else {
+            panic!("partial aggregate must terminate in exchange output");
+        };
+        let final_fragment = &fragments[&StageId(1)];
+        assert!(final_fragment.nodes.iter().any(|node| matches!(
+            node.operator,
+            FragmentOperator::Aggregate {
+                mode: AggregateMode::Final,
+                ..
+            }
+        )));
+        assert!(matches!(
+            &final_fragment.nodes[0].operator,
+            FragmentOperator::ExchangeInput(input) if input.exchange_id == output.exchange_id
+        ));
+    }
+
+    #[test]
+    fn translates_top_n_with_matching_single_exchange() {
+        let fragments = executable_fragments("SELECT id FROM items ORDER BY id DESC LIMIT 3");
+        let partial = &fragments[&StageId(0)];
+        assert!(
+            partial
+                .nodes
+                .iter()
+                .any(|node| matches!(node.operator, FragmentOperator::TopN { limit: 3, .. }))
+        );
+        assert!(matches!(
+            fragments[&StageId(1)].nodes.last().unwrap().operator,
+            FragmentOperator::TopN { limit: 3, .. }
+        ));
+    }
+
+    #[test]
+    fn translates_equi_and_cross_joins_with_graph_exchange_ids() {
+        for (sql, expected_type, expected_broadcast) in [
+            (
+                "SELECT * FROM items i JOIN customers c ON i.id = c.id",
+                FragmentJoinType::Inner,
+                false,
+            ),
+            (
+                "SELECT * FROM items CROSS JOIN customers",
+                FragmentJoinType::Cross,
+                true,
+            ),
+        ] {
+            let fragments = executable_fragments(sql);
+            let join = fragments[&StageId(2)].nodes.last().unwrap();
+            assert!(matches!(
+                &join.operator,
+                FragmentOperator::HashJoin(spec)
+                    if spec.join_type == expected_type && spec.broadcast == expected_broadcast
+            ));
+            assert_eq!(join.inputs, vec![FragmentNodeId(0), FragmentNodeId(1)]);
+            for stage in [StageId(0), StageId(1)] {
+                assert!(matches!(
+                    fragments[&stage].nodes.last().unwrap().operator,
+                    FragmentOperator::ExchangeOutput(_)
+                ));
+            }
+        }
     }
 
     #[test]

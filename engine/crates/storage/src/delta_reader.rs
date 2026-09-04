@@ -70,6 +70,14 @@ impl DeltaTableReader {
         Ok(metadata)
     }
 
+    /// Resolves the latest local snapshot into its deterministic active-file order.
+    ///
+    /// This is intentionally metadata-only so coordinators can create distributed
+    /// scan splits without opening or decoding every data file.
+    pub fn active_file_paths(&self) -> Result<Vec<PathBuf>> {
+        active_files(&self.path)
+    }
+
     pub fn read(&self) -> Result<DeltaBatchIterator> {
         if self.batch_size == 0 {
             return Err(delta_error("batch size must be greater than zero"));

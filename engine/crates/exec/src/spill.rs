@@ -125,6 +125,13 @@ impl SpillManager {
     }
 
     pub fn write_run(&self, schema: &SchemaRef, batches: &[RecordBatch]) -> Result<SpillRun> {
+        self.write_run_stream(schema, batches.iter().cloned().map(Ok))
+    }
+
+    pub fn write_run_stream<I>(&self, schema: &SchemaRef, batches: I) -> Result<SpillRun>
+    where
+        I: IntoIterator<Item = Result<RecordBatch>>,
+    {
         let run_id = NEXT_RUN.fetch_add(1, Ordering::Relaxed);
         let path = self.inner.directory.join(format!("run-{run_id}.arrow"));
         let file = OpenOptions::new()
@@ -136,12 +143,13 @@ impl SpillManager {
         let result = (|| -> Result<()> {
             let mut writer = StreamWriter::try_new(&mut output, schema)?;
             for batch in batches {
+                let batch = batch?;
                 if batch.schema().as_ref() != schema.as_ref() {
                     return Err(KaveonError::Execution(
                         "spill batch schema does not match the run schema".into(),
                     ));
                 }
-                writer.write(batch)?;
+                writer.write(&batch)?;
             }
             writer.finish()?;
             drop(writer);

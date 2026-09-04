@@ -6,7 +6,7 @@ use arrow::record_batch::RecordBatch;
 use kaveon_core::{BatchOperator, KaveonError, OperatorMemoryAccount, Result};
 
 use crate::expr_eval::evaluate;
-use crate::sort::{ExternalMerge, SortExpr};
+use crate::sort::{ExternalMerge, SortExpr, compact_runs};
 use crate::spill::SpillManager;
 
 pub struct TopNOperator {
@@ -18,7 +18,11 @@ pub struct TopNOperator {
     initialized: bool,
     spill: Option<(OperatorMemoryAccount, SpillManager)>,
     external_merge: Option<ExternalMerge>,
+    merge_fan_in: usize,
 }
+
+const DEFAULT_MERGE_FAN_IN: usize = 16;
+const MINIMUM_MERGE_FAN_IN: usize = 2;
 
 impl TopNOperator {
     pub fn new(
@@ -41,6 +45,7 @@ impl TopNOperator {
             initialized: false,
             spill: None,
             external_merge: None,
+            merge_fan_in: DEFAULT_MERGE_FAN_IN,
         })
     }
 
@@ -54,6 +59,16 @@ impl TopNOperator {
         let mut operator = Self::new(source, sort_exprs, limit)?;
         operator.spill = Some((memory, spill));
         Ok(operator)
+    }
+
+    pub fn with_merge_fan_in(mut self, merge_fan_in: usize) -> Result<Self> {
+        if merge_fan_in < MINIMUM_MERGE_FAN_IN {
+            return Err(KaveonError::Execution(format!(
+                "TopN spill merge fan-in must be at least {MINIMUM_MERGE_FAN_IN}"
+            )));
+        }
+        self.merge_fan_in = merge_fan_in;
+        Ok(self)
     }
 
     fn initialize(&mut self) -> Result<()> {
@@ -94,6 +109,16 @@ impl TopNOperator {
                 runs.push(spill.write_run(&self.schema, &[candidate])?);
             }
             reservations.clear();
+            let spill = &self.spill.as_ref().expect("spill mode is active").1;
+            let runs = compact_runs(
+                runs,
+                spill,
+                self.schema.clone(),
+                &self.sort_exprs,
+                self.limit,
+                self.merge_fan_in,
+                Some(self.limit),
+            )?;
             self.external_merge = Some(ExternalMerge::new(
                 runs,
                 self.schema.clone(),
@@ -398,7 +423,13 @@ mod tests {
 
     #[test]
     fn spill_aware_top_n_matches_in_memory_result_under_a_tiny_limit() {
-        let input_values = vec![vec![Some(2), Some(5)], vec![Some(4), Some(1)]];
+        let input_values = vec![
+            vec![Some(2), Some(5)],
+            vec![Some(4), Some(1)],
+            vec![Some(8), Some(3)],
+            vec![Some(7), Some(6)],
+            vec![Some(10), Some(9)],
+        ];
         let probe = MockOperator::new(vec![input_values[0].clone()]);
         let per_batch_bytes = u64::try_from(probe.schema().fields().len()).unwrap();
         let memory_pool = kaveon_core::QueryMemoryPool::new("topn-spill", per_batch_bytes).unwrap();
@@ -412,11 +443,13 @@ mod tests {
             memory,
             spill,
         )
+        .unwrap()
+        .with_merge_fan_in(2)
         .unwrap();
 
         assert_eq!(
             values(&operator.next_batch().unwrap().unwrap()),
-            vec![Some(5), Some(4), Some(2)]
+            vec![Some(10), Some(9), Some(8)]
         );
         assert!(spill_metrics.snapshot().peak_bytes > 0);
         assert!(memory_pool.snapshot().peak_bytes <= per_batch_bytes);
