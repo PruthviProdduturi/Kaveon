@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 kaveon-core = { path = "../core" }
+kaveon-catalog = { path = "../catalog" }
 kaveon-exec = { path = "../exec" }
 kaveon-optim = { path = "../optim" }
 kaveon-sql = { path = "../sql" }

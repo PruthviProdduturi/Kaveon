@@ -11,3 +11,6 @@ uri = "http://coordinator:8080"
 [storage]
 data_dir = "/data"
 catalog_dir = "/etc/kaveon/catalogs"
+
+[catalog]
+database_path = "/tmp/kaveon/catalog.db"

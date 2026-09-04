@@ -2,9 +2,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ExchangeId, Expr, KaveonError, Partitioning, Result, StageId, StoragePredicate};
+use crate::{
+    DataFormat, ExchangeId, Expr, KaveonError, Partitioning, Result, StageId, StoragePredicate,
+};
 
-pub const EXECUTABLE_FRAGMENT_VERSION: u16 = 1;
+pub const EXECUTABLE_FRAGMENT_VERSION: u16 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct FragmentNodeId(pub u32);
@@ -57,6 +59,7 @@ pub enum FragmentOperator {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ScanSpec {
     pub source_uri: String,
+    pub format: DataFormat,
     pub table: ScanTable,
     pub projection: Vec<String>,
     pub predicate: Option<StoragePredicate>,
@@ -351,6 +354,7 @@ mod tests {
             inputs: vec![],
             operator: FragmentOperator::Scan(ScanSpec {
                 source_uri: "file:///events.parquet".into(),
+                format: DataFormat::Parquet,
                 table: ScanTable {
                     catalog: "local".into(),
                     schema: "default".into(),

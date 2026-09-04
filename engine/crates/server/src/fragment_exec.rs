@@ -10,7 +10,7 @@ use arrow::record_batch::RecordBatch;
 use kaveon_core::{
     AggregateFunction, AggregateMode, BatchOperator, CatalogManager, DataFormat, ExchangeId,
     ExecutableFragment, Expr, FragmentNode, FragmentNodeId, FragmentOperator, KaveonError,
-    Partitioning, Result, TableReference,
+    Partitioning, Result,
 };
 use kaveon_exec::aggregate::{
     AggExpr, AggFunc, AggregateState, AggregateValue, FinalAggregateValue, GroupedAggregateState,
@@ -94,14 +94,8 @@ fn compile_node(
     let node = nodes[&id];
     match &node.operator {
         FragmentOperator::Scan(scan) => {
-            let reference = TableReference::Full {
-                catalog: scan.table.catalog.clone(),
-                schema: scan.table.schema.clone(),
-                table: scan.table.table.clone(),
-            };
-            let resolved = catalog.resolve_table(&reference)?;
             let path = local_path(&scan.source_uri)?;
-            let source: Box<dyn kaveon_core::BatchSource> = match resolved.table.format {
+            let source: Box<dyn kaveon_core::BatchSource> = match scan.format {
                 DataFormat::Parquet => {
                     let mut reader = ParquetReader::new(path).with_partition(scan_partition);
                     if !scan.projection.is_empty() {
@@ -512,9 +506,8 @@ mod tests {
     use arrow::array::{Array, Int64Array, UInt64Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use kaveon_core::{
-        AccessPattern, AggregateSpec, BinaryOp, CatalogProvider, EXECUTABLE_FRAGMENT_VERSION,
-        ExchangeInput, ExchangeOutput, FragmentNode, JoinSpec, MemoryCatalog, ScalarValue,
-        ScanSpec, ScanTable, SortSpec, StageId, StorageType, TableMeta,
+        AggregateSpec, BinaryOp, EXECUTABLE_FRAGMENT_VERSION, ExchangeInput, ExchangeOutput,
+        FragmentNode, JoinSpec, ScalarValue, ScanSpec, ScanTable, SortSpec, StageId,
     };
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
@@ -1092,27 +1085,7 @@ mod tests {
         writer.write(&batch).unwrap();
         writer.close().unwrap();
 
-        let mut memory = MemoryCatalog::new(
-            "test",
-            StorageType::Local {
-                base_path: directory.clone(),
-            },
-        )
-        .with_schema("default");
-        memory
-            .register_table(
-                "default",
-                TableMeta {
-                    name: "items".into(),
-                    arrow_schema: Arc::clone(&schema),
-                    location: "items.parquet".into(),
-                    access: AccessPattern::Shortcut,
-                    format: DataFormat::Parquet,
-                },
-            )
-            .unwrap();
-        let mut catalog = CatalogManager::new("test", "default");
-        catalog.register_catalog(Box::new(memory));
+        let catalog = CatalogManager::new("missing", "missing");
         let fragment = ExecutableFragment {
             version: EXECUTABLE_FRAGMENT_VERSION,
             stage_id: StageId(3),
@@ -1122,6 +1095,7 @@ mod tests {
                 vec![],
                 FragmentOperator::Scan(ScanSpec {
                     source_uri: path.to_string_lossy().into_owned(),
+                    format: DataFormat::Parquet,
                     table: ScanTable {
                         catalog: "test".into(),
                         schema: "default".into(),

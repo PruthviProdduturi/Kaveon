@@ -1,6 +1,8 @@
+use kaveon_catalog::CatalogStore;
 use kaveon_core::{
-    AccessPattern, CatalogManager, CatalogProvider, DataFormat, MemoryCatalog, StorageType,
-    TableMeta,
+    AccessPattern, CatalogAdapter, CatalogDefinition, CatalogId, CatalogLifecycle, CatalogManager,
+    CatalogProvider, ColumnDefinition, DataFormat, MemoryCatalog, SchemaDefinition, SchemaId,
+    StorageType, TableDefinition, TableId, TableMeta,
 };
 use kaveon_storage::{DeltaTableReader, ParquetReader};
 use serde::Deserialize;
@@ -17,6 +19,8 @@ pub struct ServerConfig {
     pub advertised_uri: Option<String>,
     pub data_dir: Option<PathBuf>,
     pub catalog_dir: Option<PathBuf>,
+    pub catalog_database_path: PathBuf,
+    pub catalog_admin_token: Option<String>,
     pub exchange_token: Option<String>,
 }
 
@@ -31,6 +35,8 @@ impl Default for ServerConfig {
             advertised_uri: None,
             data_dir: None,
             catalog_dir: None,
+            catalog_database_path: PathBuf::from("kaveon-catalog.db"),
+            catalog_admin_token: None,
             exchange_token: None,
         }
     }
@@ -43,6 +49,7 @@ struct RawConfig {
     discovery: Option<DiscoveryConfig>,
     storage: Option<StorageConfig>,
     exchange: Option<ExchangeConfig>,
+    catalog: Option<NativeCatalogConfig>,
 }
 
 #[derive(Deserialize)]
@@ -67,11 +74,18 @@ struct DiscoveryConfig {
 struct StorageConfig {
     data_dir: Option<String>,
     catalog_dir: Option<String>,
+    catalog_database_path: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct ExchangeConfig {
     token: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct NativeCatalogConfig {
+    database_path: Option<String>,
+    admin_token: Option<String>,
 }
 
 pub fn default_config_path() -> PathBuf {
@@ -114,9 +128,18 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
             if let Some(dir) = storage.catalog_dir {
                 config.catalog_dir = Some(PathBuf::from(dir));
             }
+            if let Some(path) = storage.catalog_database_path {
+                config.catalog_database_path = PathBuf::from(path);
+            }
         }
         if let Some(exchange) = raw.exchange {
             config.exchange_token = exchange.token;
+        }
+        if let Some(catalog) = raw.catalog {
+            if let Some(path) = catalog.database_path {
+                config.catalog_database_path = PathBuf::from(path);
+            }
+            config.catalog_admin_token = catalog.admin_token;
         }
     }
 
@@ -146,11 +169,160 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     if let Ok(v) = std::env::var("KAVEON_CATALOG_DIR") {
         config.catalog_dir = Some(PathBuf::from(v));
     }
+    if let Ok(v) = std::env::var("KAVEON_CATALOG_DATABASE_PATH") {
+        config.catalog_database_path = PathBuf::from(v);
+    }
+    if let Ok(v) = std::env::var("KAVEON_CATALOG_ADMIN_TOKEN") {
+        config.catalog_admin_token = Some(v);
+    }
     if let Ok(v) = std::env::var("KAVEON_EXCHANGE_TOKEN") {
         config.exchange_token = Some(v);
     }
 
     Ok(config)
+}
+
+const BOOTSTRAP_ACTOR: &str = "engine-bootstrap";
+
+pub fn open_catalog(config: &ServerConfig) -> anyhow::Result<(CatalogStore, CatalogManager)> {
+    if let Some(parent) = config.catalog_database_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    let store = CatalogStore::open(&config.catalog_database_path)?;
+    bootstrap_catalog(&store, config)?;
+    let manager = catalog_manager_snapshot(&store)?;
+    Ok((store, manager))
+}
+
+fn bootstrap_catalog(store: &CatalogStore, config: &ServerConfig) -> anyhow::Result<()> {
+    let discovered = build_catalog_manager(config);
+    for catalog_name in discovered.catalog_names() {
+        let provider = discovered.catalog(&catalog_name).ok_or_else(|| {
+            anyhow::anyhow!("catalog '{catalog_name}' disappeared during bootstrap")
+        })?;
+        let catalog_id = if let Some(existing) = store.catalog_by_name(&catalog_name)? {
+            existing.id().clone()
+        } else {
+            let catalog_id = CatalogId::new(format!("catalog:{catalog_name}"))?;
+            let catalog = CatalogDefinition::new(
+                catalog_id.clone(),
+                &catalog_name,
+                CatalogAdapter::Native,
+                provider.storage_type().clone(),
+            )?
+            .transition(CatalogLifecycle::Active)?;
+            store.create_catalog(BOOTSTRAP_ACTOR, &catalog)?;
+            catalog_id
+        };
+
+        for schema_name in provider.schema_names() {
+            let existing_schemas = store.list_schemas(&catalog_id)?;
+            let schema_id = if let Some(existing) = existing_schemas
+                .iter()
+                .find(|schema| schema.name() == schema_name)
+            {
+                existing.id().clone()
+            } else {
+                let schema_id = SchemaId::new(format!("schema:{catalog_name}:{schema_name}"))?;
+                let schema =
+                    SchemaDefinition::new(schema_id.clone(), catalog_id.clone(), &schema_name)?
+                        .transition(CatalogLifecycle::Active)?;
+                store.create_schema(BOOTSTRAP_ACTOR, &schema)?;
+                schema_id
+            };
+            for table_name in provider.table_names(&schema_name)? {
+                if store
+                    .list_tables(&schema_id)?
+                    .iter()
+                    .any(|table| table.name() == table_name)
+                {
+                    continue;
+                }
+                let table = provider.table(&schema_name, &table_name)?.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "table '{catalog_name}.{schema_name}.{table_name}' disappeared during bootstrap"
+                    )
+                })?;
+                let columns = table
+                    .arrow_schema
+                    .fields()
+                    .iter()
+                    .map(|field| {
+                        ColumnDefinition::new(
+                            field.name(),
+                            field.data_type().clone(),
+                            field.is_nullable(),
+                        )
+                    })
+                    .collect::<kaveon_core::Result<Vec<_>>>()?;
+                let definition = TableDefinition::new(
+                    TableId::new(format!("table:{catalog_name}:{schema_name}:{table_name}"))?,
+                    schema_id.clone(),
+                    &table_name,
+                    &table.location,
+                    table.access,
+                    table.format,
+                    columns,
+                )?
+                .transition(CatalogLifecycle::Active)?;
+                store.create_table(BOOTSTRAP_ACTOR, &definition)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn catalog_manager_snapshot(store: &CatalogStore) -> anyhow::Result<CatalogManager> {
+    let catalogs = store.list_catalogs()?;
+    let default_catalog = catalogs
+        .iter()
+        .find(|catalog| catalog.name() == "kaveon")
+        .or_else(|| catalogs.first())
+        .map(|catalog| catalog.name().to_owned())
+        .unwrap_or_else(|| "kaveon".to_owned());
+    let mut manager = CatalogManager::new(&default_catalog, "default");
+    for definition in catalogs {
+        if definition.lifecycle() != CatalogLifecycle::Active {
+            continue;
+        }
+        let mut catalog = MemoryCatalog::new(definition.name(), definition.storage().clone());
+        for schema in store.list_schemas(definition.id())? {
+            if schema.lifecycle() != CatalogLifecycle::Active {
+                continue;
+            }
+            catalog = catalog.with_schema(schema.name());
+            for table in store.list_tables(schema.id())? {
+                if table.lifecycle() != CatalogLifecycle::Active {
+                    continue;
+                }
+                let fields = table
+                    .columns()
+                    .iter()
+                    .map(|column| {
+                        Ok(arrow::datatypes::Field::new(
+                            column.name(),
+                            column.data_type().clone(),
+                            column.nullable(),
+                        ))
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                catalog.register_table(
+                    schema.name(),
+                    TableMeta {
+                        name: table.name().to_owned(),
+                        arrow_schema: Arc::new(arrow::datatypes::Schema::new(fields)),
+                        location: table.location().to_owned(),
+                        access: table.access(),
+                        format: table.format(),
+                    },
+                )?;
+            }
+        }
+        manager.register_catalog(Box::new(catalog));
+    }
+    Ok(manager)
 }
 
 pub fn build_catalog_manager(config: &ServerConfig) -> CatalogManager {
@@ -376,4 +548,104 @@ fn parse_kv(line: &str) -> Option<(&str, String)> {
     let key = key.trim();
     let value = rest.trim().trim_matches('"').to_owned();
     Some((key, value))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ServerConfig, load_server_config, open_catalog};
+    use arrow::datatypes::{DataType, Field};
+    use kaveon_core::{
+        AccessPattern, CatalogAdapter, CatalogDefinition, CatalogId, CatalogLifecycle,
+        ColumnDefinition, DataFormat, SchemaDefinition, SchemaId, StorageType, TableDefinition,
+        TableId, TableReference,
+    };
+    use std::sync::Arc;
+
+    fn temporary_directory() -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("kaveon-server-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn catalog_configuration_loads_database_and_admin_token() {
+        let directory = temporary_directory();
+        let config_path = directory.join("config.toml");
+        std::fs::write(
+            &config_path,
+            "[catalog]\ndatabase_path = \"state/catalog.db\"\nadmin_token = \"test-token\"\n",
+        )
+        .unwrap();
+
+        let config = load_server_config(&config_path).unwrap();
+        assert_eq!(
+            config.catalog_database_path,
+            std::path::PathBuf::from("state/catalog.db")
+        );
+        assert_eq!(config.catalog_admin_token.as_deref(), Some("test-token"));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn durable_catalog_survives_server_reopen() {
+        let directory = temporary_directory();
+        let config = ServerConfig {
+            catalog_database_path: directory.join("catalog.db"),
+            ..ServerConfig::default()
+        };
+        let (store, _) = open_catalog(&config).unwrap();
+        let definition = CatalogDefinition::new(
+            CatalogId::new("catalog:durable").unwrap(),
+            "durable",
+            CatalogAdapter::Native,
+            StorageType::Local {
+                base_path: directory.clone(),
+            },
+        )
+        .unwrap()
+        .transition(CatalogLifecycle::Active)
+        .unwrap();
+        store
+            .create_catalog("test", &definition)
+            .expect("catalog creation must succeed");
+        let schema = SchemaDefinition::new(
+            SchemaId::new("schema:durable:default").unwrap(),
+            definition.id().clone(),
+            "default",
+        )
+        .unwrap()
+        .transition(CatalogLifecycle::Active)
+        .unwrap();
+        store.create_schema("test", &schema).unwrap();
+        let nested_type = DataType::List(Arc::new(Field::new("element", DataType::Int64, true)));
+        let table = TableDefinition::new(
+            TableId::new("table:durable:default:nested").unwrap(),
+            schema.id().clone(),
+            "nested",
+            "nested.parquet",
+            AccessPattern::Shortcut,
+            DataFormat::Parquet,
+            vec![ColumnDefinition::new("items", nested_type.clone(), true).unwrap()],
+        )
+        .unwrap()
+        .transition(CatalogLifecycle::Active)
+        .unwrap();
+        store.create_table("test", &table).unwrap();
+        drop(store);
+
+        let (reopened, manager) = open_catalog(&config).unwrap();
+        assert_eq!(
+            reopened.catalog_by_name("durable").unwrap().unwrap().id(),
+            definition.id()
+        );
+        let resolved = manager
+            .resolve_table(&TableReference::parse("durable.default.nested"))
+            .unwrap();
+        assert_eq!(
+            resolved.table.arrow_schema.field(0).data_type(),
+            &nested_type
+        );
+        drop(reopened);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }

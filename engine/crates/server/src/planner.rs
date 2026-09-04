@@ -181,6 +181,7 @@ impl ExecutableFragmentBuilder<'_> {
                 let resolved = self.catalog.resolve_table(&reference)?;
                 let scan = ScanSpec {
                     source_uri: resolved.full_path(),
+                    format: resolved.table.format,
                     table: ScanTable {
                         catalog: resolved.catalog,
                         schema: resolved.schema,

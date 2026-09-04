@@ -377,8 +377,8 @@ fn execution_error(message: &str) -> KaveonError {
 #[cfg(test)]
 mod tests {
     use kaveon_core::{
-        ExchangeDescriptor, FragmentNode, FragmentNodeId, FragmentOperator, PlanNode, PlanPhase,
-        StageFragment,
+        EXECUTABLE_FRAGMENT_VERSION, ExchangeDescriptor, FragmentNode, FragmentNodeId,
+        FragmentOperator, PlanNode, PlanPhase, StageFragment,
     };
 
     use super::*;
@@ -430,7 +430,7 @@ mod tests {
                 (
                     stage_id,
                     ExecutableFragment {
-                        version: 1,
+                        version: EXECUTABLE_FRAGMENT_VERSION,
                         stage_id,
                         root: FragmentNodeId(0),
                         nodes: vec![FragmentNode {

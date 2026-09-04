@@ -8,3 +8,6 @@ port = 8080
 [storage]
 data_dir = "/data"
 catalog_dir = "/etc/kaveon/catalogs"
+
+[catalog]
+database_path = "/var/lib/kaveon/catalog.db"

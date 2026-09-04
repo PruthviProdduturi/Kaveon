@@ -22,6 +22,7 @@ pub struct AppState {
     pub config: ServerConfig,
     pub cluster: RwLock<ClusterState>,
     pub catalog: RwLock<kaveon_core::CatalogManager>,
+    pub catalog_store: kaveon_catalog::CatalogStore,
     pub exchange_store: exchange::ExchangeStore,
     pub lifecycle: lifecycle::WorkerLifecycle<(Vec<u8>, u64)>,
 }
@@ -44,7 +45,16 @@ async fn main() {
 
     let addr: SocketAddr = format!("0.0.0.0:{}", config.http_port).parse().unwrap();
     let cluster = ClusterState::new(&config);
-    let catalog = config::build_catalog_manager(&config);
+    let (catalog_store, catalog) = match config::open_catalog(&config) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            eprintln!(
+                "failed to open durable catalog {}: {error}",
+                config.catalog_database_path.display()
+            );
+            std::process::exit(1);
+        }
+    };
 
     println!("Kaveon Engine v{}", env!("CARGO_PKG_VERSION"));
     println!("Node:        {}", config.node_id);
@@ -58,6 +68,7 @@ async fn main() {
     );
     println!("Environment: {}", config.environment);
     println!("Listening:   http://{addr}");
+    println!("Catalog DB:  {}", config.catalog_database_path.display());
     if !config.coordinator {
         println!("Coordinator: {}", config.discovery_uri);
     }
@@ -67,6 +78,7 @@ async fn main() {
         config,
         cluster: RwLock::new(cluster),
         catalog: RwLock::new(catalog),
+        catalog_store,
         exchange_store: exchange::ExchangeStore::default(),
         lifecycle: lifecycle::WorkerLifecycle::default(),
     });
