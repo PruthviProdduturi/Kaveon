@@ -3,9 +3,10 @@ use std::collections::VecDeque;
 use arrow::compute::{SortColumn, SortOptions, concat_batches, lexsort_to_indices, take};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use kaveon_core::{BatchOperator, Expr, KaveonError, Result};
+use kaveon_core::{BatchOperator, Expr, KaveonError, OperatorMemoryAccount, Result};
 
 use crate::expr_eval::evaluate;
+use crate::spill::SpillManager;
 
 const DEFAULT_OUTPUT_BATCH_SIZE: usize = 8_192;
 
@@ -38,6 +39,7 @@ pub struct SortOperator {
     output_batch_size: usize,
     output: VecDeque<RecordBatch>,
     initialized: bool,
+    spill: Option<(OperatorMemoryAccount, SpillManager)>,
 }
 
 impl SortOperator {
@@ -55,7 +57,19 @@ impl SortOperator {
             output_batch_size: DEFAULT_OUTPUT_BATCH_SIZE,
             output: VecDeque::new(),
             initialized: false,
+            spill: None,
         })
+    }
+
+    pub fn new_with_spill(
+        source: Box<dyn BatchOperator>,
+        sort_exprs: Vec<SortExpr>,
+        memory: OperatorMemoryAccount,
+        spill: SpillManager,
+    ) -> Result<Self> {
+        let mut operator = Self::new(source, sort_exprs)?;
+        operator.spill = Some((memory, spill));
+        Ok(operator)
     }
 
     pub fn with_output_batch_size(mut self, output_batch_size: usize) -> Result<Self> {
@@ -70,36 +84,66 @@ impl SortOperator {
 
     fn initialize(&mut self) -> Result<()> {
         let mut batches = Vec::new();
+        let mut reservations = Vec::new();
+        let mut runs = Vec::new();
         while let Some(batch) = self.source.next_batch()? {
             if batch.num_rows() > 0 {
+                if let Some((memory, spill)) = &self.spill {
+                    let bytes = u64::try_from(batch.get_array_memory_size()).map_err(|_| {
+                        KaveonError::Execution("sort batch memory size exceeds u64".into())
+                    })?;
+                    match memory.reserve(bytes) {
+                        Ok(reservation) => reservations.push(reservation),
+                        Err(_) if !batches.is_empty() => {
+                            let sorted = sort_batches(&self.schema, &batches, &self.sort_exprs)?;
+                            runs.push(spill.write_run(&self.schema, &[sorted])?);
+                            batches.clear();
+                            reservations.clear();
+                            match memory.reserve(bytes) {
+                                Ok(reservation) => reservations.push(reservation),
+                                Err(_) => {
+                                    let sorted = sort_batches(
+                                        &self.schema,
+                                        std::slice::from_ref(&batch),
+                                        &self.sort_exprs,
+                                    )?;
+                                    runs.push(spill.write_run(&self.schema, &[sorted])?);
+                                    continue;
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            let sorted = sort_batches(
+                                &self.schema,
+                                std::slice::from_ref(&batch),
+                                &self.sort_exprs,
+                            )?;
+                            runs.push(spill.write_run(&self.schema, &[sorted])?);
+                            continue;
+                        }
+                    }
+                }
                 batches.push(batch);
             }
         }
-        if batches.is_empty() {
+        if batches.is_empty() && runs.is_empty() {
             return Ok(());
         }
 
-        let combined = concat_batches(&self.schema, &batches)?;
-        let columns = self
-            .sort_exprs
-            .iter()
-            .map(|sort_expr| {
-                Ok(SortColumn {
-                    values: evaluate(&sort_expr.expr, &combined)?,
-                    options: Some(SortOptions {
-                        descending: !sort_expr.ascending,
-                        nulls_first: sort_expr.nulls_first,
-                    }),
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let indices = lexsort_to_indices(&columns, None)?;
-        let sorted_columns = combined
-            .columns()
-            .iter()
-            .map(|column| take(column.as_ref(), &indices, None))
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        let sorted = RecordBatch::try_new(self.schema.clone(), sorted_columns)?;
+        if !runs.is_empty() {
+            if !batches.is_empty() {
+                let sorted = sort_batches(&self.schema, &batches, &self.sort_exprs)?;
+                let spill = &self.spill.as_ref().expect("spill mode is active").1;
+                runs.push(spill.write_run(&self.schema, &[sorted])?);
+            }
+            batches.clear();
+            reservations.clear();
+            for run in &runs {
+                batches.extend(run.read()?);
+            }
+        }
+
+        let sorted = sort_batches(&self.schema, &batches, &self.sort_exprs)?;
 
         for offset in (0..sorted.num_rows()).step_by(self.output_batch_size) {
             let length = self.output_batch_size.min(sorted.num_rows() - offset);
@@ -107,6 +151,33 @@ impl SortOperator {
         }
         Ok(())
     }
+}
+
+fn sort_batches(
+    schema: &SchemaRef,
+    batches: &[RecordBatch],
+    sort_exprs: &[SortExpr],
+) -> Result<RecordBatch> {
+    let combined = concat_batches(schema, batches)?;
+    let columns = sort_exprs
+        .iter()
+        .map(|sort_expr| {
+            Ok(SortColumn {
+                values: evaluate(&sort_expr.expr, &combined)?,
+                options: Some(SortOptions {
+                    descending: !sort_expr.ascending,
+                    nulls_first: sort_expr.nulls_first,
+                }),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let indices = lexsort_to_indices(&columns, None)?;
+    let sorted_columns = combined
+        .columns()
+        .iter()
+        .map(|column| take(column.as_ref(), &indices, None))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(RecordBatch::try_new(schema.clone(), sorted_columns)?)
 }
 
 impl BatchOperator for SortOperator {
@@ -346,5 +417,30 @@ mod tests {
                 .to_string()
                 .contains("arithmetic not supported")
         );
+    }
+
+    #[test]
+    fn spill_aware_sort_preserves_order_when_memory_forces_runs() {
+        let first = batch(vec![Some(4), Some(1)], vec!["d", "a"]);
+        let per_batch_bytes = u64::try_from(first.get_array_memory_size()).unwrap();
+        let source = MockOperator::new(vec![first, batch(vec![Some(3), Some(2)], vec!["c", "b"])]);
+        let memory_pool = kaveon_core::QueryMemoryPool::new("sort-spill", per_batch_bytes).unwrap();
+        let memory = memory_pool.operator("sort").unwrap();
+        let spill = SpillManager::new(std::env::temp_dir(), 64 * 1_024).unwrap();
+        let spill_metrics = spill.clone();
+        let mut operator = SortOperator::new_with_spill(
+            Box::new(source),
+            vec![SortExpr::new(Expr::Column("id".into()), true)],
+            memory,
+            spill,
+        )
+        .unwrap();
+
+        assert_eq!(
+            ids(&collect_batches(&mut operator).unwrap()),
+            vec![Some(1), Some(2), Some(3), Some(4)]
+        );
+        assert!(spill_metrics.snapshot().peak_bytes > 0);
+        assert!(memory_pool.snapshot().peak_bytes <= per_batch_bytes);
     }
 }

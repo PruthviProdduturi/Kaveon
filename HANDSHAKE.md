@@ -255,6 +255,7 @@ let reservation = operator.reserve(bytes)?;
 - Reservations atomically enforce the query-wide hard limit across operator accounts and release through RAII.
 - Snapshots expose current and peak bytes for the query and operator. Operators and admission control are not wired to these accounts yet; operator-triggered spill is not implemented.
 - `SpillManager` writes bounded Arrow IPC runs into collision-safe private directories, accounts current/peak disk bytes, rolls back failed writes, and removes runs through RAII. Operators are not wired to spill yet.
+- Sort and TopN expose opt-in spill-aware constructors that create real Arrow runs when reservation pressure is reached. Their final merge currently reloads runs eagerly; streaming k-way merge remains required before claiming fully bounded external sorting.
 
 ### Distributed stage planning
 
@@ -262,6 +263,8 @@ let reservation = operator.reserve(bytes)?;
 - Grouped aggregates use hash exchange; global aggregates, sort, and final TopN use single-partition exchange.
 - Equi-joins hash both inputs into colocated partitions; cross joins model a round-robin probe side and broadcast build side.
 - The stage graph is descriptive today. The executor still uses aggregate/TopN-specific fan-out until fragment execution is wired.
+- `StageRuntime` validates complete task assignment coverage, gates stages on dependencies, enforces task transitions and retry attempts, cascades terminal failure/cancellation, and emits deduplicated exchange-cleanup intents. Worker transport integration remains pending.
+- `WorkerLifecycle` provides bounded idempotent task owner/waiter/completed replay and query cancellation tokens. HTTP task execution and coordinator cancellation are not wired to it yet.
 
 ### Sort and TopN execution
 
@@ -381,3 +384,4 @@ let source = DeltaTableReader::new(table_directory)
 | 2026-09-03 | Codex | Began the eight-workstream distributed-runtime program: added validated stage/fragment/exchange/split contracts, mergeable weighted AVG and exact COUNT DISTINCT states, a bounded authenticated Arrow exchange wire envelope, and alternate-worker partition retry. Added `engine/DISTRIBUTED_EXECUTION_STATUS.md` as the durable cross-machine handoff. Network endpoints, general fragment scheduling, distributed TopN/join, spill, cancellation propagation, and mature split scheduling remain explicit gates. |
 | 2026-09-03 | Codex | Added distributed partial/final TopN, authenticated bounded exchange endpoints, atomic query/operator memory reservations, and dynamic split leasing with failed-task requeue. Local Docker nodes now share the exchange token through environment configuration. General fragment execution, distributed join/AVG/distinct, operator memory wiring/spill, cancellation, and scheduler stress remain open. |
 | 2026-09-04 | Codex | Added versioned Arrow encoding for weighted AVG and typed exact DISTINCT states, a validated aggregate/sort/TopN/join stage-DAG builder, bounded RAII Arrow spill runs, and task timeout/retry classification. These are green foundations; stage execution, distributed join/state exchange, operator spill wiring, cancellation, and Docker/AKS stress remain open. |
+| 2026-09-04 | Codex | Added the dependency-gated stage runtime, bounded idempotent task/cancellation lifecycle, and opt-in spill-aware Sort/TopN. Final spill merge remains eager, and runtime/lifecycle contracts still require worker HTTP integration before failure recovery or fully bounded execution can be claimed. |
