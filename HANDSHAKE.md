@@ -18,10 +18,10 @@
 
 | Crate | Owner | Status |
 |-------|-------|--------|
-| `core` — shared types, errors, traits | Shared (either can add, neither restructures without updating this doc) | Scaffold |
+| `core` — shared types, errors, traits | Shared (either can add, neither restructures without updating this doc) | Stage graph, exchange, split/task, plan, telemetry, catalog, and operator contracts active |
 | `storage` — Parquet reader, ADLS Gen 2 | **Codex** | Local Parquet and Delta reads support deterministic distributed scan partitions; ADLS Gen 2 not started |
 | `exec/scan` — scan operator | **Codex** | Done; takeover authorized 2026-09-03 |
-| `exec/aggregate` — hash aggregate | **Codex** | Exact COUNT DISTINCT and SQL empty-set semantics done |
+| `exec/aggregate` — hash aggregate | **Codex** | Mergeable AVG and exact COUNT DISTINCT states done; wire encoding and spill pending |
 | `exec/filter` — filter evaluation | **Codex** | Compatible numeric coercion done |
 | `exec/sort` — sort operator | **Codex** | Done and wired in local/server planners |
 | `exec/topn` — TopN operator | **Codex** | Done and fused for ORDER BY + LIMIT |
@@ -231,10 +231,17 @@ pub struct NodeMetrics { operator: OperatorMetrics, scan: Option<ScanMetrics> }
 pub struct StageId(pub u32);
 pub struct TaskId { query_id, stage_id, partition, attempt }
 pub enum Partitioning { Single, Hash { columns, partition_count }, Broadcast, RoundRobin { partition_count } }
+pub struct StageGraph { query_id, root_stage, stages, exchanges }
+pub struct StageFragment { id, task_count, plan }
+pub struct ExchangeDescriptor { id, source_stage, target_stage, partitioning }
+pub struct TaskAssignment { task_id, node_id, splits }
 ```
 
+- `StageGraph::validate` rejects duplicate/unknown/cyclic stages and exchanges and invalid partitioning before scheduling.
 - `HashPartitioner` uses Arrow row encoding plus fixed FNV-1a hashing so equal keys, including nulls, always reach the same partition on every worker running the same Engine version.
 - `BoundedExchangeBuffer` accounts for Arrow array memory, rejects writes beyond its byte capacity, and releases capacity when consumers pop batches. Network scheduling and asynchronous wait/wake backpressure are not wired yet.
+- The server exchange envelope carries query/stage/task-attempt/output-partition identity, versioning, chunk bounds, and corruption checks around Arrow IPC payloads. Endpoint and flow-control integration remain pending.
+- Distributed aggregate fan-out retries a failed partition on alternate active workers, with the retry attempt encoded in `TaskId`. Cancellation propagation and idempotent worker task registries remain pending.
 
 ### Sort and TopN execution
 
@@ -351,3 +358,4 @@ let source = DeltaTableReader::new(table_directory)
 | 2026-09-03 | Codex | Added the first correctness-bounded distributed execution slice: deterministic Parquet row-group and Delta-file partitions, routable worker advertisements, internal worker task execution, concurrent coordinator fan-out, and partial COUNT/SUM/MIN/MAX GROUP BY merge. AVG, DISTINCT, joins, ordering, limits, exchange, retry, and spill intentionally remain local/target. |
 | 2026-09-03 | Codex | Replaced worker-result JSON with Arrow IPC streams and added completed-stage/task telemetry to query records and the Engine UI, including worker, partition, elapsed time, rows, batches, and transport bytes. This establishes the binary exchange contract; live updates and operator CPU/memory/spill metrics remain follow-up work. |
 | 2026-09-03 | Codex | Added shared stage/task/attempt and partitioning contracts, deterministic multi-column Arrow hash partitioning, and a byte-bounded exchange queue with explicit backpressure. Correctness tests cover deterministic assignment, equal/null keys, lossless row coverage, invalid configuration, and capacity release; network shuffle is not wired yet. |
+| 2026-09-03 | Codex | Began the eight-workstream distributed-runtime program: added validated stage/fragment/exchange/split contracts, mergeable weighted AVG and exact COUNT DISTINCT states, a bounded authenticated Arrow exchange wire envelope, and alternate-worker partition retry. Added `engine/DISTRIBUTED_EXECUTION_STATUS.md` as the durable cross-machine handoff. Network endpoints, general fragment scheduling, distributed TopN/join, spill, cancellation propagation, and mature split scheduling remain explicit gates. |
