@@ -13,6 +13,8 @@ export default function ResearchDocs() {
       <tr><td>DLM Curation at Scale</td><td>Precomputed answer tiers, HLL cuboids, incremental refresh, and serving</td><td><a href="https://github.com/PruthviProdduturi/Kaveon/blob/dev/docs/whitepaper-dlm-curation.md">Read paper</a></td></tr>
       <tr><td>Adaptive Context Routing</td><td>Validity scoring and selection between context and live data</td><td><a href="https://github.com/PruthviProdduturi/Kaveon/blob/dev/docs/whitepaper-adaptive-context-routing.md">Read paper</a></td></tr>
       <tr><td>Deterministic NL→SQL</td><td>Template patterns, fuzzy matching, dataset selection, and chart choice</td><td><a href="https://github.com/PruthviProdduturi/Kaveon/blob/dev/docs/whitepaper-nl-to-sql.md">Read paper</a></td></tr>
+      <tr><td>Kaveon vs Trino</td><td>Distributed SQL architecture, maturity, differentiation, and benchmark proof requirements</td><td><a href="/docs/research/trino">Read comparison</a></td></tr>
+      <tr><td>Kaveon Engine vs Fabric SQL endpoint</td><td>Direct-lake execution compared with the managed Lakehouse SQL serving boundary</td><td><a href="/docs/research/fabric-sql-endpoint">Read comparison</a></td></tr>
     </tbody></table>
 
     <h2>Patent disclosure</h2>

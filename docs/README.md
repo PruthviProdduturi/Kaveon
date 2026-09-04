@@ -51,6 +51,8 @@ it is running. The Engine HTTP API does not currently publish an OpenAPI documen
 - [Adaptive context routing](whitepaper-adaptive-context-routing.md)
 - [Template-based NL-to-SQL](whitepaper-nl-to-sql.md)
 - [Adaptive-context patent draft](patent-adaptive-context-routing.md)
+- [Kaveon and Trino: architectural comparison](research/kaveon-vs-trino.md)
+- [Kaveon Engine and Fabric SQL analytics endpoint](research/kaveon-engine-vs-fabric-sql-analytics-endpoint.md)
 
 White papers and the patent draft contain research descriptions and historical
 measurements. They are not substitutes for current capability status. Performance
