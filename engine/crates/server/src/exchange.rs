@@ -13,12 +13,12 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use kaveon_core::TaskId;
+use kaveon_core::{ExchangeId, TaskId};
 
 const WIRE_MAGIC: [u8; 4] = *b"KVEX";
-const WIRE_VERSION: u16 = 1;
-const FIXED_HEADER_BYTES: usize = 58;
-const CHECKSUM_OFFSET: usize = 50;
+const WIRE_VERSION: u16 = 2;
+const FIXED_HEADER_BYTES: usize = 62;
+const CHECKSUM_OFFSET: usize = 54;
 const FNV_OFFSET_BASIS: u64 = 14_695_981_039_346_656_037;
 const FNV_PRIME: u64 = 1_099_511_628_211;
 const BEARER_PREFIX: &str = "Bearer ";
@@ -54,80 +54,129 @@ impl ExchangeLimits {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ExchangeIdentity {
+    pub exchange_id: ExchangeId,
     pub task_id: TaskId,
     pub output_partition: usize,
 }
 
 const DEFAULT_MAX_BUFFERED_EXCHANGES: usize = 1_024;
-const EXCHANGE_MEDIA_TYPE: &str = "application/vnd.kaveon.exchange.v1";
+const DEFAULT_MAX_BUFFERED_BYTES: usize = 512 * 1024 * 1024;
+const EXCHANGE_MEDIA_TYPE: &str = "application/vnd.kaveon.exchange.v2";
+
+#[derive(Debug, Default)]
+struct ExchangeStoreState {
+    chunks: HashMap<ExchangeIdentity, Vec<ExchangeChunk>>,
+    buffered_bytes: usize,
+}
 
 #[derive(Debug)]
 pub struct ExchangeStore {
-    chunks: RwLock<HashMap<ExchangeIdentity, Vec<ExchangeChunk>>>,
+    state: RwLock<ExchangeStoreState>,
     max_buffered_exchanges: usize,
+    max_buffered_bytes: usize,
 }
 
 impl Default for ExchangeStore {
     fn default() -> Self {
         Self {
-            chunks: RwLock::new(HashMap::new()),
+            state: RwLock::new(ExchangeStoreState::default()),
             max_buffered_exchanges: DEFAULT_MAX_BUFFERED_EXCHANGES,
+            max_buffered_bytes: DEFAULT_MAX_BUFFERED_BYTES,
         }
     }
 }
 
 impl ExchangeStore {
     pub fn insert(&self, chunk: ExchangeChunk) -> ExchangeResult<()> {
-        let mut exchanges = self
-            .chunks
+        let mut state = self
+            .state
             .write()
             .map_err(|_| ExchangeError::StorePoisoned)?;
-        if !exchanges.contains_key(&chunk.identity)
-            && exchanges.len() >= self.max_buffered_exchanges
+        if !state.chunks.contains_key(&chunk.identity)
+            && state.chunks.len() >= self.max_buffered_exchanges
         {
             return Err(ExchangeError::StoreCapacityExceeded);
         }
-        let chunks = exchanges.entry(chunk.identity.clone()).or_default();
-        if let Some(existing) = chunks
-            .iter()
-            .find(|existing| existing.chunk_index == chunk.chunk_index)
-        {
+        if let Some(existing) = state.chunks.get(&chunk.identity).and_then(|chunks| {
+            chunks
+                .iter()
+                .find(|existing| existing.chunk_index == chunk.chunk_index)
+        }) {
             return if existing == &chunk {
                 Ok(())
             } else {
                 Err(ExchangeError::ConflictingChunk)
             };
         }
-        chunks.push(chunk);
+        let buffered_bytes = state
+            .buffered_bytes
+            .checked_add(chunk.payload.len())
+            .ok_or(ExchangeError::StoreCapacityExceeded)?;
+        if buffered_bytes > self.max_buffered_bytes {
+            return Err(ExchangeError::StoreCapacityExceeded);
+        }
+        state.buffered_bytes = buffered_bytes;
+        state
+            .chunks
+            .entry(chunk.identity.clone())
+            .or_default()
+            .push(chunk);
         Ok(())
     }
 
     pub fn get(&self, identity: &ExchangeIdentity) -> ExchangeResult<Vec<ExchangeChunk>> {
-        self.chunks
+        self.state
             .read()
             .map_err(|_| ExchangeError::StorePoisoned)?
+            .chunks
             .get(identity)
             .cloned()
             .ok_or(ExchangeError::ExchangeNotFound)
     }
 
     pub fn remove(&self, identity: &ExchangeIdentity) -> ExchangeResult<bool> {
-        Ok(self
-            .chunks
+        let mut state = self
+            .state
             .write()
+            .map_err(|_| ExchangeError::StorePoisoned)?;
+        let Some(chunks) = state.chunks.remove(identity) else {
+            return Ok(false);
+        };
+        let released_bytes = chunks.iter().try_fold(0_usize, |total, chunk| {
+            total.checked_add(chunk.payload.len())
+        });
+        state.buffered_bytes = state
+            .buffered_bytes
+            .checked_sub(released_bytes.ok_or(ExchangeError::StorePoisoned)?)
+            .ok_or(ExchangeError::StorePoisoned)?;
+        Ok(true)
+    }
+
+    pub fn buffered_bytes(&self) -> ExchangeResult<usize> {
+        Ok(self
+            .state
+            .read()
             .map_err(|_| ExchangeError::StorePoisoned)?
-            .remove(identity)
-            .is_some())
+            .buffered_bytes)
+    }
+
+    #[cfg(test)]
+    fn with_capacity(max_buffered_exchanges: usize, max_buffered_bytes: usize) -> Self {
+        Self {
+            state: RwLock::new(ExchangeStoreState::default()),
+            max_buffered_exchanges,
+            max_buffered_bytes,
+        }
     }
 }
 
-type ExchangePath = (String, u32, usize, u32, usize);
+type ExchangePath = (String, String, u32, usize, u32, usize);
 
 pub fn routes() -> Router<Arc<crate::AppState>> {
     Router::new()
         .route("/v1/internal/exchange", post(upload_exchange_chunk))
         .route(
-            "/v1/internal/exchange/{query_id}/{stage_id}/{source_partition}/{attempt}/{output_partition}",
+            "/v1/internal/exchange/{query_id}/{exchange_id}/{stage_id}/{source_partition}/{attempt}/{output_partition}",
             get(download_exchange).delete(delete_exchange),
         )
 }
@@ -198,21 +247,23 @@ fn authorize(state: &crate::AppState, headers: &HeaderMap) -> ExchangeResult<()>
 
 fn identity_from_path(path: ExchangePath) -> ExchangeIdentity {
     ExchangeIdentity {
+        exchange_id: ExchangeId(path.1),
         task_id: TaskId {
             query_id: path.0,
-            stage_id: kaveon_core::StageId(path.1),
-            partition: path.2,
-            attempt: path.3,
+            stage_id: kaveon_core::StageId(path.2),
+            partition: path.3,
+            attempt: path.4,
         },
-        output_partition: path.4,
+        output_partition: path.5,
     }
 }
 
 fn exchange_url(base_uri: &str, identity: &ExchangeIdentity) -> String {
     format!(
-        "{}/v1/internal/exchange/{}/{}/{}/{}/{}",
+        "{}/v1/internal/exchange/{}/{}/{}/{}/{}/{}",
         base_uri.trim_end_matches('/'),
         identity.task_id.query_id,
+        identity.exchange_id.0,
         identity.task_id.stage_id.0,
         identity.task_id.partition,
         identity.task_id.attempt,
@@ -307,21 +358,35 @@ fn exchange_error_response(error: ExchangeError) -> Response {
 
 impl ExchangeIdentity {
     fn validate(&self) -> ExchangeResult<()> {
-        if self.task_id.query_id.is_empty() {
-            return Err(ExchangeError::InvalidIdentity("query ID is empty"));
-        }
-        if !self
-            .task_id
-            .query_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-        {
-            return Err(ExchangeError::InvalidIdentity(
-                "query ID contains unsupported URL characters",
-            ));
-        }
+        validate_route_identifier(
+            &self.task_id.query_id,
+            "query ID is empty",
+            "query ID contains unsupported URL characters",
+        )?;
+        validate_route_identifier(
+            &self.exchange_id.0,
+            "exchange ID is empty",
+            "exchange ID contains unsupported URL characters",
+        )?;
         Ok(())
     }
+}
+
+fn validate_route_identifier(
+    value: &str,
+    empty_reason: &'static str,
+    unsupported_reason: &'static str,
+) -> ExchangeResult<()> {
+    if value.is_empty() {
+        return Err(ExchangeError::InvalidIdentity(empty_reason));
+    }
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return Err(ExchangeError::InvalidIdentity(unsupported_reason));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -336,7 +401,10 @@ impl ExchangeChunk {
     pub fn encode(&self, limits: ExchangeLimits) -> ExchangeResult<Vec<u8>> {
         self.validate(limits)?;
         let query = self.identity.task_id.query_id.as_bytes();
+        let exchange = self.identity.exchange_id.0.as_bytes();
         let query_len = u32::try_from(query.len()).map_err(|_| ExchangeError::IntegerOverflow)?;
+        let exchange_len =
+            u32::try_from(exchange.len()).map_err(|_| ExchangeError::IntegerOverflow)?;
         let source_partition = u64::try_from(self.identity.task_id.partition)
             .map_err(|_| ExchangeError::IntegerOverflow)?;
         let output_partition = u64::try_from(self.identity.output_partition)
@@ -349,12 +417,14 @@ impl ExchangeChunk {
             u64::try_from(self.payload.len()).map_err(|_| ExchangeError::IntegerOverflow)?;
         let capacity = FIXED_HEADER_BYTES
             .checked_add(query.len())
+            .and_then(|size| size.checked_add(exchange.len()))
             .and_then(|size| size.checked_add(self.payload.len()))
             .ok_or(ExchangeError::IntegerOverflow)?;
         let mut wire = Vec::with_capacity(capacity);
         wire.extend_from_slice(&WIRE_MAGIC);
         wire.extend_from_slice(&WIRE_VERSION.to_be_bytes());
         wire.extend_from_slice(&query_len.to_be_bytes());
+        wire.extend_from_slice(&exchange_len.to_be_bytes());
         wire.extend_from_slice(&self.identity.task_id.stage_id.0.to_be_bytes());
         wire.extend_from_slice(&source_partition.to_be_bytes());
         wire.extend_from_slice(&self.identity.task_id.attempt.to_be_bytes());
@@ -364,6 +434,7 @@ impl ExchangeChunk {
         wire.extend_from_slice(&payload_len.to_be_bytes());
         wire.extend_from_slice(&0_u64.to_be_bytes());
         wire.extend_from_slice(query);
+        wire.extend_from_slice(exchange);
         wire.extend_from_slice(&self.payload);
         let checksum = checksum(&wire[..CHECKSUM_OFFSET], &wire[FIXED_HEADER_BYTES..]);
         wire[CHECKSUM_OFFSET..FIXED_HEADER_BYTES].copy_from_slice(&checksum.to_be_bytes());
@@ -385,6 +456,8 @@ impl ExchangeChunk {
         }
         let query_len = usize::try_from(read_u32(wire, &mut offset)?)
             .map_err(|_| ExchangeError::IntegerOverflow)?;
+        let exchange_len = usize::try_from(read_u32(wire, &mut offset)?)
+            .map_err(|_| ExchangeError::IntegerOverflow)?;
         let stage_id = read_u32(wire, &mut offset)?;
         let source_partition = usize::try_from(read_u64(wire, &mut offset)?)
             .map_err(|_| ExchangeError::IntegerOverflow)?;
@@ -400,6 +473,7 @@ impl ExchangeChunk {
         let encoded_checksum = read_u64(wire, &mut offset)?;
         let expected_len = FIXED_HEADER_BYTES
             .checked_add(query_len)
+            .and_then(|size| size.checked_add(exchange_len))
             .and_then(|size| size.checked_add(payload_len))
             .ok_or(ExchangeError::IntegerOverflow)?;
         if wire.len() != expected_len {
@@ -413,8 +487,15 @@ impl ExchangeChunk {
         let query_id = std::str::from_utf8(&wire[FIXED_HEADER_BYTES..query_end])
             .map_err(|_| ExchangeError::InvalidQueryId)?
             .to_owned();
+        let exchange_end = query_end
+            .checked_add(exchange_len)
+            .ok_or(ExchangeError::IntegerOverflow)?;
+        let exchange_id = std::str::from_utf8(&wire[query_end..exchange_end])
+            .map_err(|_| ExchangeError::InvalidExchangeId)?
+            .to_owned();
         let chunk = Self {
             identity: ExchangeIdentity {
+                exchange_id: ExchangeId(exchange_id),
                 task_id: TaskId {
                     query_id,
                     stage_id: kaveon_core::StageId(stage_id),
@@ -425,7 +506,7 @@ impl ExchangeChunk {
             },
             chunk_index,
             chunk_count,
-            payload: wire[query_end..].to_vec(),
+            payload: wire[exchange_end..].to_vec(),
         };
         chunk.validate(limits)?;
         Ok(chunk)
@@ -615,6 +696,7 @@ pub enum ExchangeError {
     LengthMismatch,
     ChecksumMismatch,
     InvalidQueryId,
+    InvalidExchangeId,
     InvalidChunkCount,
     InvalidChunkIndex,
     ChunkTooLarge,
@@ -649,6 +731,9 @@ impl Display for ExchangeError {
             Self::LengthMismatch => write!(formatter, "exchange envelope length mismatch"),
             Self::ChecksumMismatch => write!(formatter, "exchange envelope checksum mismatch"),
             Self::InvalidQueryId => write!(formatter, "exchange query ID is not valid UTF-8"),
+            Self::InvalidExchangeId => {
+                write!(formatter, "exchange ID is not valid UTF-8")
+            }
             Self::InvalidChunkCount => write!(formatter, "invalid exchange chunk count"),
             Self::InvalidChunkIndex => write!(formatter, "invalid exchange chunk index"),
             Self::ChunkTooLarge => write!(formatter, "exchange chunk exceeds configured limit"),
@@ -693,6 +778,7 @@ mod tests {
 
     fn identity() -> ExchangeIdentity {
         ExchangeIdentity {
+            exchange_id: ExchangeId("exchange-9".into()),
             task_id: TaskId {
                 query_id: "query-42".into(),
                 stage_id: kaveon_core::StageId(3),
@@ -723,6 +809,22 @@ mod tests {
         let second = chunk.encode(limits()).unwrap();
         assert_eq!(first, second);
         assert_eq!(ExchangeChunk::decode(&first, limits()).unwrap(), chunk);
+    }
+
+    #[test]
+    fn envelope_rejects_the_previous_identity_version() {
+        let chunk = ExchangeChunk {
+            identity: identity(),
+            chunk_index: 0,
+            chunk_count: 1,
+            payload: vec![1],
+        };
+        let mut wire = chunk.encode(limits()).unwrap();
+        wire[WIRE_MAGIC.len()..WIRE_MAGIC.len() + 2].copy_from_slice(&1_u16.to_be_bytes());
+        assert_eq!(
+            ExchangeChunk::decode(&wire, limits()),
+            Err(ExchangeError::UnsupportedVersion(1))
+        );
     }
 
     #[test]
@@ -853,6 +955,54 @@ mod tests {
     }
 
     #[test]
+    fn store_keeps_outputs_for_distinct_exchanges_separate() {
+        let store = ExchangeStore::default();
+        let first = ExchangeChunk {
+            identity: identity(),
+            chunk_index: 0,
+            chunk_count: 1,
+            payload: vec![1],
+        };
+        let mut second = first.clone();
+        second.identity.exchange_id = ExchangeId("exchange-10".into());
+        second.payload = vec![2];
+
+        store.insert(first.clone()).unwrap();
+        store.insert(second.clone()).unwrap();
+
+        assert_eq!(store.get(&first.identity).unwrap(), vec![first]);
+        assert_eq!(store.get(&second.identity).unwrap(), vec![second]);
+    }
+
+    #[test]
+    fn store_bounds_and_releases_buffered_payload_bytes() {
+        let store = ExchangeStore::with_capacity(2, 4);
+        let chunk = ExchangeChunk {
+            identity: identity(),
+            chunk_index: 0,
+            chunk_count: 2,
+            payload: vec![1, 2, 3],
+        };
+        store.insert(chunk.clone()).unwrap();
+        store.insert(chunk).unwrap();
+        assert_eq!(store.buffered_bytes().unwrap(), 3);
+
+        let second = ExchangeChunk {
+            identity: identity(),
+            chunk_index: 1,
+            chunk_count: 2,
+            payload: vec![4, 5],
+        };
+        assert_eq!(
+            store.insert(second),
+            Err(ExchangeError::StoreCapacityExceeded)
+        );
+        assert_eq!(store.buffered_bytes().unwrap(), 3);
+        assert!(store.remove(&identity()).unwrap());
+        assert_eq!(store.buffered_bytes().unwrap(), 0);
+    }
+
+    #[test]
     fn identity_rejects_query_ids_that_cannot_be_used_in_routes() {
         let mut invalid = identity();
         invalid.task_id.query_id = "query/42".into();
@@ -866,5 +1016,29 @@ mod tests {
             chunk.encode(limits()),
             Err(ExchangeError::InvalidIdentity(_))
         ));
+    }
+
+    #[test]
+    fn identity_rejects_exchange_ids_that_cannot_be_used_in_routes() {
+        let mut invalid = identity();
+        invalid.exchange_id = ExchangeId("exchange/9".into());
+        let chunk = ExchangeChunk {
+            identity: invalid,
+            chunk_index: 0,
+            chunk_count: 1,
+            payload: Vec::new(),
+        };
+        assert!(matches!(
+            chunk.encode(limits()),
+            Err(ExchangeError::InvalidIdentity(_))
+        ));
+    }
+
+    #[test]
+    fn exchange_url_contains_the_exchange_id() {
+        assert_eq!(
+            exchange_url("http://worker:8080/", &identity()),
+            "http://worker:8080/v1/internal/exchange/query-42/exchange-9/3/7/2/11"
+        );
     }
 }

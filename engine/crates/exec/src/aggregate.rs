@@ -246,6 +246,19 @@ impl AggregateState {
 }
 
 pub fn encode_grouped_aggregate_states(groups: &[GroupedAggregateState]) -> Result<Vec<u8>> {
+    let batch = grouped_aggregate_states_to_batch(groups)?;
+    let schema = batch.schema();
+    let mut bytes = Vec::new();
+    {
+        let mut writer = StreamWriter::try_new(&mut bytes, &schema)?;
+        writer.write(&batch)?;
+        writer.finish()?;
+    }
+    Ok(bytes)
+}
+
+/// Builds the canonical Arrow batch exchanged between partial and final aggregates.
+pub fn grouped_aggregate_states_to_batch(groups: &[GroupedAggregateState]) -> Result<RecordBatch> {
     validate_group_layouts(groups)?;
     let mut rows = groups
         .iter()
@@ -269,20 +282,35 @@ pub fn encode_grouped_aggregate_states(groups: &[GroupedAggregateState]) -> Resu
         .map(|(_, states)| Some(states.as_slice()))
         .collect::<Vec<_>>();
     let schema = grouped_state_schema();
-    let batch = RecordBatch::try_new(
+    Ok(RecordBatch::try_new(
         schema.clone(),
         vec![
             Arc::new(BinaryArray::from(key_values)),
             Arc::new(BinaryArray::from(state_values)),
         ],
-    )?;
-    let mut bytes = Vec::new();
-    {
-        let mut writer = StreamWriter::try_new(&mut bytes, &schema)?;
-        writer.write(&batch)?;
-        writer.finish()?;
+    )?)
+}
+
+/// Decodes canonical partial-aggregate Arrow batches received through an exchange.
+pub fn grouped_aggregate_states_from_batches(
+    batches: &[RecordBatch],
+) -> Result<Vec<GroupedAggregateState>> {
+    let mut groups = Vec::new();
+    for batch in batches {
+        validate_grouped_state_schema(&batch.schema())?;
+        let keys = batch.column(0).as_binary::<i32>();
+        let states = batch.column(1).as_binary::<i32>();
+        for row in 0..batch.num_rows() {
+            if keys.is_null(row) || states.is_null(row) {
+                return Err(exec_err("grouped aggregate state row cannot contain nulls"));
+            }
+            groups.push(GroupedAggregateState {
+                group_keys: decode_group_keys(keys.value(row))?,
+                states: decode_aggregate_states(states.value(row))?,
+            });
+        }
     }
-    Ok(bytes)
+    Ok(groups)
 }
 
 pub fn decode_grouped_aggregate_states(bytes: &[u8]) -> Result<Vec<GroupedAggregateState>> {
@@ -852,6 +880,77 @@ impl HashAggregate {
             emitted: false,
         })
     }
+
+    /// Consumes the input and returns mergeable per-group accumulator state.
+    pub fn into_grouped_states(mut self) -> Result<Vec<GroupedAggregateState>> {
+        let groups = self.collect_states()?;
+        if groups.is_empty() && !self.group_by.is_empty() {
+            return Ok(Vec::new());
+        }
+        let groups = if groups.is_empty() {
+            vec![(
+                Vec::new(),
+                self.aggregates.iter().map(AggregateState::new).collect(),
+            )]
+        } else {
+            groups.into_iter().collect()
+        };
+        Ok(groups
+            .into_iter()
+            .map(|(keys, states)| GroupedAggregateState {
+                group_keys: keys.into_iter().map(AggregateValue::from).collect(),
+                states,
+            })
+            .collect())
+    }
+
+    fn collect_states(&mut self) -> Result<HashMap<Vec<GroupKey>, Vec<Accumulator>>> {
+        let mut groups: HashMap<Vec<GroupKey>, Vec<Accumulator>> = HashMap::new();
+        while let Some(batch) = self.source.next_batch()? {
+            let schema = batch.schema();
+            let group_arrays = self
+                .group_by
+                .iter()
+                .map(|column| batch.column(schema.index_of(column).unwrap()))
+                .collect::<Vec<_>>();
+            let aggregate_arrays = self
+                .aggregates
+                .iter()
+                .map(|aggregate| {
+                    (!(matches!(aggregate.func, AggFunc::Count) && aggregate.column == "*"))
+                        .then(|| batch.column(schema.index_of(&aggregate.column).unwrap()))
+                })
+                .collect::<Vec<_>>();
+            for row in 0..batch.num_rows() {
+                let key = group_arrays
+                    .iter()
+                    .map(|array| extract_key(array, row))
+                    .collect::<Vec<_>>();
+                let accumulators = groups
+                    .entry(key)
+                    .or_insert_with(|| self.aggregates.iter().map(AggregateState::new).collect());
+                for (index, aggregate) in self.aggregates.iter().enumerate() {
+                    if matches!(aggregate.func, AggFunc::Count) && aggregate.column == "*" {
+                        accumulators[index].update_count()?;
+                    } else if let Some(array) = aggregate_arrays[index]
+                        && !array.is_null(row)
+                    {
+                        if matches!(aggregate.func, AggFunc::Count) {
+                            if aggregate.distinct {
+                                accumulators[index]
+                                    .update_distinct(extract_key(array, row).into())?;
+                            } else {
+                                accumulators[index].update_count()?;
+                            }
+                        } else {
+                            accumulators[index].update_numeric(extract_f64(array, row)?)?;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(groups)
+    }
 }
 
 impl BatchOperator for HashAggregate {
@@ -865,62 +964,8 @@ impl BatchOperator for HashAggregate {
         }
         self.emitted = true;
 
-        let mut groups: HashMap<Vec<GroupKey>, Vec<Accumulator>> = HashMap::new();
+        let groups = self.collect_states()?;
         let num_aggs = self.aggregates.len();
-
-        while let Some(batch) = self.source.next_batch()? {
-            let schema = batch.schema();
-
-            let group_arrays: Vec<&ArrayRef> = self
-                .group_by
-                .iter()
-                .map(|col| {
-                    let idx = schema.index_of(col).unwrap();
-                    batch.column(idx)
-                })
-                .collect();
-
-            let agg_arrays: Vec<Option<&ArrayRef>> = self
-                .aggregates
-                .iter()
-                .map(|agg| {
-                    if matches!(agg.func, AggFunc::Count) && agg.column == "*" {
-                        None
-                    } else {
-                        Some(batch.column(schema.index_of(&agg.column).unwrap()))
-                    }
-                })
-                .collect();
-
-            for row in 0..batch.num_rows() {
-                let key: Vec<GroupKey> = group_arrays
-                    .iter()
-                    .map(|arr| extract_key(arr, row))
-                    .collect();
-
-                let accums = groups
-                    .entry(key)
-                    .or_insert_with(|| self.aggregates.iter().map(AggregateState::new).collect());
-
-                for (i, agg) in self.aggregates.iter().enumerate() {
-                    if matches!(agg.func, AggFunc::Count) && agg.column == "*" {
-                        accums[i].update_count()?;
-                    } else if let Some(arr) = agg_arrays[i]
-                        && !arr.is_null(row)
-                    {
-                        if matches!(agg.func, AggFunc::Count) {
-                            if agg.distinct {
-                                accums[i].update_distinct(extract_key(arr, row).into())?;
-                            } else {
-                                accums[i].update_count()?;
-                            }
-                        } else {
-                            accums[i].update_numeric(extract_f64(arr, row)?)?;
-                        }
-                    }
-                }
-            }
-        }
 
         if groups.is_empty() && !self.group_by.is_empty() {
             return Ok(Some(RecordBatch::new_empty(self.output_schema.clone())));

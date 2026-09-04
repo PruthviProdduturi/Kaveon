@@ -10,6 +10,8 @@ use crate::expr_eval::evaluate;
 use crate::spill::{SpillManager, SpillRun, SpillRunReader};
 
 const DEFAULT_OUTPUT_BATCH_SIZE: usize = 8_192;
+const DEFAULT_MERGE_FAN_IN: usize = 16;
+const MINIMUM_MERGE_FAN_IN: usize = 2;
 
 #[derive(Debug, Clone)]
 pub struct SortExpr {
@@ -42,6 +44,7 @@ pub struct SortOperator {
     initialized: bool,
     spill: Option<(OperatorMemoryAccount, SpillManager)>,
     external_merge: Option<ExternalMerge>,
+    merge_fan_in: usize,
 }
 
 impl SortOperator {
@@ -61,6 +64,7 @@ impl SortOperator {
             initialized: false,
             spill: None,
             external_merge: None,
+            merge_fan_in: DEFAULT_MERGE_FAN_IN,
         })
     }
 
@@ -82,6 +86,16 @@ impl SortOperator {
             ));
         }
         self.output_batch_size = output_batch_size;
+        Ok(self)
+    }
+
+    pub fn with_merge_fan_in(mut self, merge_fan_in: usize) -> Result<Self> {
+        if merge_fan_in < MINIMUM_MERGE_FAN_IN {
+            return Err(KaveonError::Execution(format!(
+                "sort spill merge fan-in must be at least {MINIMUM_MERGE_FAN_IN}"
+            )));
+        }
+        self.merge_fan_in = merge_fan_in;
         Ok(self)
     }
 
@@ -141,6 +155,16 @@ impl SortOperator {
             }
             batches.clear();
             reservations.clear();
+            let spill = &self.spill.as_ref().expect("spill mode is active").1;
+            let runs = compact_runs(
+                runs,
+                spill,
+                self.schema.clone(),
+                &self.sort_exprs,
+                self.output_batch_size,
+                self.merge_fan_in,
+                None,
+            )?;
             self.external_merge = Some(ExternalMerge::new(
                 runs,
                 self.schema.clone(),
@@ -159,6 +183,41 @@ impl SortOperator {
         }
         Ok(())
     }
+}
+
+pub(crate) fn compact_runs(
+    mut runs: Vec<SpillRun>,
+    spill: &SpillManager,
+    schema: SchemaRef,
+    sort_exprs: &[SortExpr],
+    output_batch_size: usize,
+    fan_in: usize,
+    limit: Option<usize>,
+) -> Result<Vec<SpillRun>> {
+    while runs.len() > fan_in {
+        let mut source = runs.into_iter();
+        let mut compacted = Vec::new();
+        loop {
+            let group = source.by_ref().take(fan_in).collect::<Vec<_>>();
+            if group.is_empty() {
+                break;
+            }
+            if group.len() == 1 {
+                compacted.extend(group);
+                continue;
+            }
+            let mut merge =
+                ExternalMerge::new(group, schema.clone(), sort_exprs, output_batch_size, limit)?;
+            let stream = std::iter::from_fn(|| match merge.next_batch() {
+                Ok(Some(batch)) => Some(Ok(batch)),
+                Ok(None) => None,
+                Err(error) => Some(Err(error)),
+            });
+            compacted.push(spill.write_run_stream(&schema, stream)?);
+        }
+        runs = compacted;
+    }
+    Ok(runs)
 }
 
 fn sort_batches(
@@ -604,7 +663,13 @@ mod tests {
     fn spill_aware_sort_preserves_order_when_memory_forces_runs() {
         let first = batch(vec![Some(4), Some(1)], vec!["d", "a"]);
         let per_batch_bytes = u64::try_from(first.get_array_memory_size()).unwrap();
-        let source = MockOperator::new(vec![first, batch(vec![Some(3), Some(2)], vec!["c", "b"])]);
+        let source = MockOperator::new(vec![
+            first,
+            batch(vec![Some(3), Some(2)], vec!["c", "b"]),
+            batch(vec![Some(8), Some(5)], vec!["h", "e"]),
+            batch(vec![Some(7), Some(6)], vec!["g", "f"]),
+            batch(vec![Some(10), Some(9)], vec!["j", "i"]),
+        ]);
         let memory_pool = kaveon_core::QueryMemoryPool::new("sort-spill", per_batch_bytes).unwrap();
         let memory = memory_pool.operator("sort").unwrap();
         let spill = SpillManager::new(std::env::temp_dir(), 64 * 1_024).unwrap();
@@ -615,11 +680,13 @@ mod tests {
             memory,
             spill,
         )
+        .unwrap()
+        .with_merge_fan_in(2)
         .unwrap();
 
         assert_eq!(
             ids(&collect_batches(&mut operator).unwrap()),
-            vec![Some(1), Some(2), Some(3), Some(4)]
+            (1..=10).map(Some).collect::<Vec<_>>()
         );
         assert!(spill_metrics.snapshot().peak_bytes > 0);
         assert!(memory_pool.snapshot().peak_bytes <= per_batch_bytes);

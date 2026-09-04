@@ -8,14 +8,14 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use kaveon_core::collect_batches;
-use kaveon_core::{StageId, TaskId};
+use kaveon_core::{ExchangeId, ExecutableFragment, StageId, TaskId};
 use kaveon_exec::sort::SortExpr;
 use kaveon_exec::topn::merge_top_n;
 use kaveon_sql::logical_plan::sql_to_logical_plan;
 use kaveon_sql::logical_plan::{AggregateExpr, LogicalPlan};
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Cursor;
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,6 +24,8 @@ use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
 use tokio::sync::RwLock;
+
+use crate::orchestrator::{CoordinatorOrchestrator, TaskDispatch};
 
 struct QueryStore {
     queries: HashMap<String, QueryRecord>,
@@ -197,11 +199,38 @@ struct TaskRequest {
     query_id: String,
     stage_id: u32,
     attempt: u32,
+    #[serde(default)]
     query: String,
+    #[serde(default)]
     catalog: String,
+    #[serde(default)]
     schema: String,
+    #[serde(default)]
     partition_index: usize,
+    #[serde(default)]
     partition_count: usize,
+    #[serde(default)]
+    fragment: Option<ExecutableFragment>,
+    #[serde(default)]
+    execution_partition: Option<ExecutionPartitionRequest>,
+    #[serde(default)]
+    exchange_inputs: Vec<ExchangeLocationRequest>,
+    #[serde(default)]
+    exchange_outputs: Vec<ExchangeLocationRequest>,
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+struct ExecutionPartitionRequest {
+    index: usize,
+    count: usize,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct ExchangeLocationRequest {
+    exchange_id: ExchangeId,
+    producer: TaskId,
+    output_partition: usize,
+    worker_uri: String,
 }
 
 #[derive(Serialize)]
@@ -226,6 +255,7 @@ struct StatementResponse {
 
 async fn execute_task(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<TaskRequest>,
 ) -> impl IntoResponse {
     if state.config.coordinator {
@@ -237,6 +267,19 @@ async fn execute_task(
             })),
         )
             .into_response();
+    }
+    if req.fragment.is_some() {
+        let expected = state.config.exchange_token.as_deref().unwrap_or_default();
+        if crate::exchange::validate_bearer_header(
+            headers
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            expected,
+        )
+        .is_err()
+        {
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
     }
     let task_id = TaskId {
         query_id: req.query_id.clone(),
@@ -296,16 +339,32 @@ async fn execute_owned_task(
     owner: TaskOwner<(Vec<u8>, u64)>,
     cancellation: CancellationToken,
 ) -> Response {
-    let partition =
-        match kaveon_storage::ScanPartition::new(req.partition_index, req.partition_count) {
-            Ok(partition) => partition,
-            Err(error) => {
-                let message = error.to_string();
-                let _ = owner.complete(TaskOutcome::Failed(Arc::from(message.clone())));
-                return task_failure_response(StatusCode::BAD_REQUEST, &message);
-            }
-        };
+    let requested_partition = req
+        .execution_partition
+        .unwrap_or(ExecutionPartitionRequest {
+            index: req.partition_index,
+            count: req.partition_count,
+        });
+    let partition = match kaveon_storage::ScanPartition::new(
+        requested_partition.index,
+        requested_partition.count,
+    ) {
+        Ok(partition) => partition,
+        Err(error) => {
+            let message = error.to_string();
+            let _ = owner.complete(TaskOutcome::Failed(Arc::from(message.clone())));
+            return task_failure_response(StatusCode::BAD_REQUEST, &message);
+        }
+    };
     let started = Instant::now();
+    if let Some(fragment) = req.fragment.as_ref() {
+        let result = execute_fragment_task(state, &req, fragment, partition).await;
+        if cancellation.is_cancelled() {
+            let _ = owner.complete(TaskOutcome::Failed(Arc::from("query canceled")));
+            return canceled_task_response();
+        }
+        return complete_owned_task(owner, started, result);
+    }
     let mut plan = match sql_to_logical_plan(req.query.trim().trim_end_matches(';')) {
         Ok(plan) => plan,
         Err(error) => {
@@ -346,6 +405,177 @@ async fn execute_owned_task(
         },
         Err(error) => {
             let message = error.to_string();
+            let _ = owner.complete(TaskOutcome::Failed(Arc::from(message.clone())));
+            task_failure_response(StatusCode::INTERNAL_SERVER_ERROR, &message)
+        }
+    }
+}
+
+struct PrefetchedExchangeInputs {
+    inputs: HashMap<ExchangeId, crate::fragment_exec::ExchangeBatches>,
+}
+
+impl crate::fragment_exec::ExchangeInputProvider for PrefetchedExchangeInputs {
+    fn read(
+        &self,
+        exchange_id: &ExchangeId,
+    ) -> kaveon_core::Result<crate::fragment_exec::ExchangeBatches> {
+        let input = self.inputs.get(exchange_id).ok_or_else(|| {
+            kaveon_core::KaveonError::Execution(format!(
+                "exchange input '{}' was not supplied to the fragment task",
+                exchange_id.0
+            ))
+        })?;
+        Ok(crate::fragment_exec::ExchangeBatches {
+            schema: input.schema.clone(),
+            batches: input.batches.clone(),
+        })
+    }
+}
+
+async fn execute_fragment_task(
+    state: &Arc<AppState>,
+    req: &TaskRequest,
+    fragment: &ExecutableFragment,
+    partition: kaveon_storage::ScanPartition,
+) -> Result<
+    (
+        arrow::datatypes::SchemaRef,
+        Vec<arrow::record_batch::RecordBatch>,
+    ),
+    String,
+> {
+    let client = reqwest::Client::new();
+    let token = state
+        .config
+        .exchange_token
+        .as_deref()
+        .ok_or_else(|| "fragment execution requires an exchange bearer token".to_owned())?;
+    let mut inputs = HashMap::<ExchangeId, crate::fragment_exec::ExchangeBatches>::new();
+    for location in &req.exchange_inputs {
+        let identity = crate::exchange::ExchangeIdentity {
+            exchange_id: location.exchange_id.clone(),
+            task_id: location.producer.clone(),
+            output_partition: location.output_partition,
+        };
+        let (schema, mut batches) =
+            crate::exchange::fetch_batches(&client, &location.worker_uri, token, &identity)
+                .await
+                .map_err(|error| {
+                    format!(
+                        "cannot fetch exchange '{}': {error}",
+                        location.exchange_id.0
+                    )
+                })?;
+        match inputs.get_mut(&location.exchange_id) {
+            Some(input) if input.schema != schema => {
+                return Err(format!(
+                    "exchange '{}' producers returned incompatible schemas",
+                    location.exchange_id.0
+                ));
+            }
+            Some(input) => input.batches.append(&mut batches),
+            None => {
+                inputs.insert(
+                    location.exchange_id.clone(),
+                    crate::fragment_exec::ExchangeBatches { schema, batches },
+                );
+            }
+        }
+    }
+    let execution = {
+        let catalog = state.catalog.read().await;
+        crate::fragment_exec::execute_fragment(
+            fragment,
+            &catalog,
+            &PrefetchedExchangeInputs { inputs },
+            partition,
+        )
+        .map_err(|error| error.to_string())?
+    };
+    for (exchange_id, output) in execution.exchange_outputs {
+        for (output_partition, batches) in output.partitions.iter().enumerate() {
+            let destinations = req.exchange_outputs.iter().filter(|location| {
+                location.exchange_id == exchange_id && location.output_partition == output_partition
+            });
+            let mut destination_count = 0_usize;
+            for destination in destinations {
+                destination_count += 1;
+                if destination.producer.query_id != req.query_id
+                    || destination.producer.stage_id != StageId(req.stage_id)
+                    || destination.producer.partition != requested_partition_index(req)
+                    || destination.producer.attempt != req.attempt
+                {
+                    return Err(format!(
+                        "exchange '{}' destination declares a producer that does not match this task",
+                        exchange_id.0
+                    ));
+                }
+                let identity = crate::exchange::ExchangeIdentity {
+                    exchange_id: exchange_id.clone(),
+                    task_id: destination.producer.clone(),
+                    output_partition,
+                };
+                let chunks = crate::exchange::encode_batches(
+                    identity,
+                    &output.schema,
+                    batches,
+                    crate::exchange::ExchangeLimits::default(),
+                )
+                .map_err(|error| format!("cannot encode exchange '{}': {error}", exchange_id.0))?;
+                crate::exchange::upload_chunks(
+                    &client,
+                    &destination.worker_uri,
+                    token,
+                    &chunks,
+                    crate::exchange::ExchangeLimits::default(),
+                )
+                .await
+                .map_err(|error| format!("cannot upload exchange '{}': {error}", exchange_id.0))?;
+            }
+            if destination_count == 0 {
+                return Err(format!(
+                    "exchange '{}' output partition {output_partition} has no destination",
+                    exchange_id.0
+                ));
+            }
+        }
+    }
+    Ok((execution.result_schema, execution.result_batches))
+}
+
+fn requested_partition_index(req: &TaskRequest) -> usize {
+    req.execution_partition
+        .map(|partition| partition.index)
+        .unwrap_or(req.partition_index)
+}
+
+fn complete_owned_task(
+    owner: TaskOwner<(Vec<u8>, u64)>,
+    started: Instant,
+    result: Result<
+        (
+            arrow::datatypes::SchemaRef,
+            Vec<arrow::record_batch::RecordBatch>,
+        ),
+        String,
+    >,
+) -> Response {
+    match result {
+        Ok((schema, batches)) => match encode_arrow_stream(&schema, &batches) {
+            Ok(bytes) => {
+                let elapsed = elapsed_us(started);
+                let outcome = TaskOutcome::Success(Arc::new((bytes, elapsed)));
+                let response = task_outcome_response(outcome.clone());
+                let _ = owner.complete(outcome);
+                response
+            }
+            Err(error) => {
+                let _ = owner.complete(TaskOutcome::Failed(Arc::from(error.clone())));
+                task_failure_response(StatusCode::INTERNAL_SERVER_ERROR, &error)
+            }
+        },
+        Err(message) => {
             let _ = owner.complete(TaskOutcome::Failed(Arc::from(message.clone())));
             task_failure_response(StatusCode::INTERNAL_SERVER_ERROR, &message)
         }
@@ -516,6 +746,73 @@ async fn submit_statement(
         record.plan.logical = Some(logical_plan.clone());
         record.plan.optimized = Some(optimized_plan.clone());
         record.plan.physical = Some(physical_plan.clone());
+    }
+
+    if let Some(distributed) =
+        execute_distributed_fragments(&state, &query_id, &context, &plan).await
+    {
+        match distributed {
+            Ok((result, stages, planning_us)) => {
+                let elapsed = start.elapsed().as_millis() as u64;
+                let record = QueryRecord {
+                    id: query_id.clone(),
+                    sql,
+                    state: QueryState::Finished,
+                    columns: result.columns.clone(),
+                    rows: result.data.clone(),
+                    error: None,
+                    elapsed_ms: elapsed,
+                    submitted_at_ms,
+                    completed_at_ms: unix_time_ms(),
+                    timings: QueryTimings {
+                        analysis_us: Some(analysis_us),
+                        planning_us: Some(planning_us),
+                        execution_us: Some(result.elapsed_us),
+                        result_serialization_us: None,
+                    },
+                    plan: QueryPlan {
+                        logical: Some(logical_plan),
+                        optimized: Some(optimized_plan),
+                        physical: Some(physical_plan),
+                    },
+                    scans: vec![],
+                    stages,
+                    context,
+                };
+                QUERY_STORE
+                    .write()
+                    .await
+                    .queries
+                    .insert(query_id.clone(), record);
+                cleanup_distributed_query(&state, &query_id).await;
+                return Json(StatementResponse {
+                    id: query_id,
+                    state: QueryState::Finished,
+                    columns: Some(result.columns),
+                    data: Some(result.data),
+                    error: None,
+                    elapsed_ms: elapsed,
+                })
+                .into_response();
+            }
+            Err(error) => {
+                finish_failed_query(
+                    &query_id,
+                    error.clone(),
+                    start,
+                    Some(analysis_us),
+                    None,
+                    Some(logical_plan),
+                )
+                .await;
+                cleanup_distributed_query(&state, &query_id).await;
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": error, "code": "DISTRIBUTED_EXECUTION_ERROR" })),
+                )
+                    .into_response();
+            }
+        }
     }
 
     if let Some(distributed) =
@@ -1070,6 +1367,7 @@ async fn execute_remote_task(
     client: &reqwest::Client,
     worker: &NodeInfo,
     request: &TaskRequest,
+    exchange_token: Option<&str>,
 ) -> Result<
     (
         arrow::datatypes::SchemaRef,
@@ -1080,9 +1378,11 @@ async fn execute_remote_task(
     RemoteTaskFailure,
 > {
     let url = format!("{}/v1/task", worker.address.trim_end_matches('/'));
-    let response = client
-        .post(url)
-        .json(request)
+    let mut submission = client.post(url).json(request);
+    if let Some(token) = exchange_token {
+        submission = submission.bearer_auth(token);
+    }
+    let response = submission
         .timeout(REMOTE_TASK_TIMEOUT)
         .send()
         .await
@@ -1154,6 +1454,266 @@ async fn cleanup_distributed_query(state: &Arc<AppState>, query_id: &str) {
     let _ = state.lifecycle.finish_query(query_id);
 }
 
+async fn execute_distributed_fragments(
+    state: &Arc<AppState>,
+    query_id: &str,
+    context: &QueryContext,
+    plan: &LogicalPlan,
+) -> Option<Result<(TaskResponse, Vec<StageTelemetry>, u64), String>> {
+    if !general_distributed_eligible(plan) {
+        return None;
+    }
+    let mut workers = {
+        let mut cluster = state.cluster.write().await;
+        cluster.remove_stale_workers();
+        cluster.workers.values().cloned().collect::<Vec<_>>()
+    };
+    workers.sort_unstable_by(|left, right| left.node_id.cmp(&right.node_id));
+    let token = state.config.exchange_token.clone()?;
+    if workers.len() < 2 || token.is_empty() {
+        return None;
+    }
+
+    let planning_start = Instant::now();
+    let (graph, fragments) = {
+        let catalog = state.catalog.read().await;
+        let graph = crate::planner::build_stage_graph(query_id, plan, workers.len()).ok()?;
+        let fragments =
+            crate::planner::build_executable_fragments(query_id, plan, &catalog, workers.len())
+                .ok()?;
+        (graph, fragments)
+    };
+    let planning_us = elapsed_us(planning_start);
+    let mut orchestrator = match CoordinatorOrchestrator::new(graph, fragments, workers.clone()) {
+        Ok(orchestrator) => orchestrator,
+        Err(error) => return Some(Err(format!("cannot initialize stage execution: {error}"))),
+    };
+    let cancellation = match state.lifecycle.cancellations.token(query_id) {
+        Ok(cancellation) => cancellation,
+        Err(error) => return Some(Err(error.to_string())),
+    };
+    let client = reqwest::Client::new();
+    let execution_start = Instant::now();
+    let mut stage_started = BTreeMap::<StageId, Instant>::new();
+    let mut stage_tasks = BTreeMap::<StageId, Vec<TaskTelemetry>>::new();
+    let mut result_schema = None;
+    let mut result_batches = Vec::new();
+
+    while !orchestrator.is_terminal() {
+        if cancellation.is_cancelled() {
+            orchestrator.cancel();
+            return Some(Err("query canceled".into()));
+        }
+        let dispatches = match orchestrator.ready_dispatches() {
+            Ok(dispatches) if !dispatches.is_empty() => dispatches,
+            Ok(_) => return Some(Err("distributed stage graph made no progress".into())),
+            Err(error) => return Some(Err(format!("cannot schedule ready tasks: {error}"))),
+        };
+        let mut tasks = tokio::task::JoinSet::new();
+        for dispatch in dispatches {
+            if let Err(error) = orchestrator.start_task(&dispatch.assignment.task_id) {
+                return Some(Err(format!("cannot start distributed task: {error}")));
+            }
+            stage_started
+                .entry(dispatch.assignment.task_id.stage_id)
+                .or_insert_with(Instant::now);
+            let Some(worker) = workers
+                .iter()
+                .find(|worker| worker.node_id == dispatch.assignment.worker_id)
+                .cloned()
+            else {
+                return Some(Err("task references an unavailable worker".into()));
+            };
+            let request = task_request_from_dispatch(&dispatch, context);
+            let client = client.clone();
+            let token = token.clone();
+            tasks.spawn(async move {
+                let result = execute_remote_task(&client, &worker, &request, Some(&token)).await;
+                (dispatch, worker, result)
+            });
+        }
+        while let Some(joined) = tasks.join_next().await {
+            let (dispatch, worker, result) = match joined {
+                Ok(result) => result,
+                Err(error) => {
+                    orchestrator.cancel();
+                    return Some(Err(format!("distributed task panicked: {error}")));
+                }
+            };
+            let task_id = &dispatch.assignment.task_id;
+            match result {
+                Ok((schema, batches, elapsed_us, output_bytes)) => {
+                    if dispatch.exchange_outputs.is_empty() {
+                        if result_schema
+                            .as_ref()
+                            .is_some_and(|expected| expected != &schema)
+                        {
+                            orchestrator.cancel();
+                            return Some(Err("root tasks returned incompatible schemas".into()));
+                        }
+                        result_schema.get_or_insert(schema);
+                        result_batches.extend(batches.iter().cloned());
+                    }
+                    stage_tasks
+                        .entry(task_id.stage_id)
+                        .or_default()
+                        .push(TaskTelemetry {
+                            task_id: task_id.to_string(),
+                            node_id: worker.node_id,
+                            partition_index: task_id.partition,
+                            elapsed_us,
+                            output_rows: batches.iter().map(|batch| batch.num_rows()).sum(),
+                            output_batches: batches.len(),
+                            output_bytes,
+                        });
+                    if let Err(error) = orchestrator.finish_task(task_id) {
+                        return Some(Err(format!("cannot finish distributed task: {error}")));
+                    }
+                }
+                Err(failure) => {
+                    release_dispatch_outputs(&client, &token, &dispatch).await;
+                    if !failure.retryable {
+                        orchestrator.cancel();
+                        return Some(Err(failure.message));
+                    }
+                    match orchestrator.fail_task(task_id, &failure.message) {
+                        Ok(true) => {}
+                        Ok(false) => return Some(Err(failure.message)),
+                        Err(error) => {
+                            return Some(Err(format!(
+                                "cannot record distributed task failure: {error}"
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+        release_completed_exchanges(&client, &token, &mut orchestrator).await;
+    }
+
+    if !orchestrator.is_finished() {
+        return Some(Err("distributed query terminated before completion".into()));
+    }
+    let Some(schema) = result_schema else {
+        return Some(Err(
+            "distributed query completed without a root result".into()
+        ));
+    };
+    let execution_us = elapsed_us(execution_start);
+    let mut stages = stage_tasks
+        .into_iter()
+        .map(|(stage_id, mut tasks)| {
+            tasks.sort_unstable_by_key(|task| task.partition_index);
+            StageTelemetry {
+                stage_id: stage_id.0,
+                state: "FINISHED",
+                task_count: tasks.len(),
+                completed_tasks: tasks.len(),
+                elapsed_us: stage_started
+                    .get(&stage_id)
+                    .map_or_default(|started| elapsed_us(*started)),
+                tasks,
+            }
+        })
+        .collect::<Vec<_>>();
+    stages.sort_unstable_by_key(|stage| stage.stage_id);
+    Some(Ok((
+        TaskResponse {
+            columns: columns_from_schema(&schema),
+            data: batches_to_json(&result_batches),
+            elapsed_us: execution_us,
+        },
+        stages,
+        planning_us,
+    )))
+}
+
+async fn release_dispatch_outputs(client: &reqwest::Client, token: &str, dispatch: &TaskDispatch) {
+    for location in &dispatch.exchange_outputs {
+        let identity = crate::exchange::ExchangeIdentity {
+            exchange_id: location.exchange_id.clone(),
+            task_id: location.producer.clone(),
+            output_partition: location.output_partition,
+        };
+        let _ =
+            crate::exchange::release_exchange(client, &location.worker_uri, token, &identity).await;
+    }
+}
+
+fn general_distributed_eligible(plan: &LogicalPlan) -> bool {
+    match plan {
+        LogicalPlan::Aggregate { input, .. } => general_distributed_eligible(input),
+        LogicalPlan::Project { input, .. }
+        | LogicalPlan::Filter { input, .. }
+        | LogicalPlan::Sort { input, .. }
+        | LogicalPlan::Limit { input, .. } => general_distributed_eligible(input),
+        LogicalPlan::Join { left, right, .. } => {
+            general_distributed_eligible(left) && general_distributed_eligible(right)
+        }
+        LogicalPlan::Scan { .. } => true,
+    }
+}
+
+fn task_request_from_dispatch(dispatch: &TaskDispatch, context: &QueryContext) -> TaskRequest {
+    TaskRequest {
+        query_id: dispatch.assignment.task_id.query_id.clone(),
+        stage_id: dispatch.assignment.task_id.stage_id.0,
+        attempt: dispatch.assignment.task_id.attempt,
+        query: String::new(),
+        catalog: context.catalog.clone(),
+        schema: context.schema.clone(),
+        partition_index: dispatch.assignment.task_id.partition,
+        partition_count: dispatch.execution_partition.count,
+        fragment: Some(dispatch.fragment.clone()),
+        execution_partition: Some(ExecutionPartitionRequest {
+            index: dispatch.execution_partition.index,
+            count: dispatch.execution_partition.count,
+        }),
+        exchange_inputs: dispatch
+            .exchange_inputs
+            .iter()
+            .map(|location| ExchangeLocationRequest {
+                exchange_id: location.exchange_id.clone(),
+                producer: location.producer.clone(),
+                output_partition: location.output_partition,
+                worker_uri: location.worker_uri.clone(),
+            })
+            .collect(),
+        exchange_outputs: dispatch
+            .exchange_outputs
+            .iter()
+            .map(|location| ExchangeLocationRequest {
+                exchange_id: location.exchange_id.clone(),
+                producer: location.producer.clone(),
+                output_partition: location.output_partition,
+                worker_uri: location.worker_uri.clone(),
+            })
+            .collect(),
+    }
+}
+
+async fn release_completed_exchanges(
+    client: &reqwest::Client,
+    token: &str,
+    orchestrator: &mut CoordinatorOrchestrator,
+) {
+    let Ok(cleanups) = orchestrator.drain_exchange_cleanup() else {
+        return;
+    };
+    for cleanup in cleanups {
+        for location in cleanup.locations {
+            let identity = crate::exchange::ExchangeIdentity {
+                exchange_id: cleanup.exchange_id.clone(),
+                task_id: location.producer,
+                output_partition: location.output_partition,
+            };
+            let _ =
+                crate::exchange::release_exchange(client, &location.worker_uri, token, &identity)
+                    .await;
+        }
+    }
+}
+
 async fn execute_distributed_top_n(
     state: &Arc<AppState>,
     query_id: &str,
@@ -1175,9 +1735,11 @@ async fn execute_distributed_top_n(
     let started = Instant::now();
     let partition_count = workers.len();
     let client = reqwest::Client::new();
+    let exchange_token = state.config.exchange_token.clone();
     let mut tasks = tokio::task::JoinSet::new();
     for partition_index in 0..partition_count {
         let client = client.clone();
+        let exchange_token = exchange_token.clone();
         let candidates = crate::scheduler::task_candidates(
             &workers,
             partition_index,
@@ -1199,6 +1761,10 @@ async fn execute_distributed_top_n(
                     schema: schema_name.clone(),
                     partition_index,
                     partition_count,
+                    fragment: None,
+                    execution_partition: None,
+                    exchange_inputs: vec![],
+                    exchange_outputs: vec![],
                 };
                 let task_id = kaveon_core::TaskId {
                     query_id: request.query_id.clone(),
@@ -1207,7 +1773,9 @@ async fn execute_distributed_top_n(
                     attempt,
                 }
                 .to_string();
-                match execute_remote_task(&client, &worker, &request).await {
+                match execute_remote_task(&client, &worker, &request, exchange_token.as_deref())
+                    .await
+                {
                     Ok((schema, batches, elapsed_us, output_bytes)) => {
                         let output_rows = batches.iter().map(|batch| batch.num_rows()).sum();
                         let telemetry = TaskTelemetry {
@@ -1330,9 +1898,11 @@ async fn execute_distributed_aggregate(
     let started = Instant::now();
     let partition_count = workers.len();
     let client = reqwest::Client::new();
+    let exchange_token = state.config.exchange_token.clone();
     let mut tasks = tokio::task::JoinSet::new();
     for partition_index in 0..partition_count {
         let client = client.clone();
+        let exchange_token = exchange_token.clone();
         let candidates = crate::scheduler::task_candidates(
             &workers,
             partition_index,
@@ -1354,6 +1924,10 @@ async fn execute_distributed_aggregate(
                     schema: schema_name.clone(),
                     partition_index,
                     partition_count,
+                    fragment: None,
+                    execution_partition: None,
+                    exchange_inputs: vec![],
+                    exchange_outputs: vec![],
                 };
                 let task_id = kaveon_core::TaskId {
                     query_id: request.query_id.clone(),
@@ -1362,7 +1936,9 @@ async fn execute_distributed_aggregate(
                     attempt,
                 }
                 .to_string();
-                match execute_remote_task(&client, &worker, &request).await {
+                match execute_remote_task(&client, &worker, &request, exchange_token.as_deref())
+                    .await
+                {
                     Ok((schema, batches, elapsed_us, output_bytes)) => {
                         let data = batches_to_json(&batches);
                         let telemetry = TaskTelemetry {
@@ -1772,8 +2348,9 @@ async fn finish_failed_query(
 #[cfg(test)]
 mod tests {
     use super::{
-        ColumnInfo, MergeOperation, TaskResponse, aggregate_merge_contract, decode_arrow_stream,
-        encode_arrow_stream, merge_partial_aggregates, top_n_merge_contract,
+        ColumnInfo, MergeOperation, TaskRequest, TaskResponse, aggregate_merge_contract,
+        decode_arrow_stream, encode_arrow_stream, general_distributed_eligible,
+        merge_partial_aggregates, task_request_from_dispatch, top_n_merge_contract,
     };
     use arrow::array::{Int64Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
@@ -1791,6 +2368,102 @@ mod tests {
                 data_type: "UInt64".into(),
             },
         ]
+    }
+
+    #[test]
+    fn legacy_task_request_remains_wire_compatible() {
+        let request: TaskRequest = serde_json::from_value(serde_json::json!({
+            "query_id": "query-1",
+            "stage_id": 0,
+            "attempt": 0,
+            "query": "SELECT 1",
+            "catalog": "kaveon",
+            "schema": "default",
+            "partition_index": 1,
+            "partition_count": 2
+        }))
+        .unwrap();
+
+        assert!(request.fragment.is_none());
+        assert!(request.execution_partition.is_none());
+        assert!(request.exchange_inputs.is_empty());
+        assert!(request.exchange_outputs.is_empty());
+    }
+
+    #[test]
+    fn fragment_request_preserves_assignment_and_partition_contract() {
+        use kaveon_core::{
+            EXECUTABLE_FRAGMENT_VERSION, ExecutableFragment, FragmentNodeId, StageId,
+            TaskAssignment, TaskId,
+        };
+
+        let task_id = TaskId {
+            query_id: "query-1".into(),
+            stage_id: StageId(3),
+            partition: 2,
+            attempt: 1,
+        };
+        let dispatch = crate::orchestrator::TaskDispatch {
+            assignment: TaskAssignment {
+                task_id: task_id.clone(),
+                worker_id: "worker-1".into(),
+                splits: vec![],
+                input_exchanges: vec![],
+                output_exchanges: vec![],
+            },
+            execution_partition: crate::orchestrator::ExecutionPartition { index: 2, count: 4 },
+            fragment: ExecutableFragment {
+                version: EXECUTABLE_FRAGMENT_VERSION,
+                stage_id: StageId(3),
+                root: FragmentNodeId(0),
+                nodes: vec![],
+            },
+            exchange_inputs: vec![],
+            exchange_outputs: vec![],
+        };
+        let context = super::QueryContext {
+            engine_version: "test".into(),
+            environment: "test".into(),
+            principal: None,
+            user: None,
+            source: None,
+            client: None,
+            catalog: "kaveon".into(),
+            schema: "default".into(),
+            time_zone: None,
+            client_address: None,
+            client_tags: vec![],
+            result_delivery: None,
+        };
+
+        let request = task_request_from_dispatch(&dispatch, &context);
+        assert_eq!(request.query_id, task_id.query_id);
+        assert_eq!(request.stage_id, 3);
+        assert_eq!(request.attempt, 1);
+        assert_eq!(request.partition_index, 2);
+        assert_eq!(request.partition_count, 4);
+        assert_eq!(request.execution_partition.unwrap().count, 4);
+        assert!(request.fragment.is_some());
+    }
+
+    #[test]
+    fn general_fragment_path_accepts_supported_plan_families() {
+        let scan = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT region FROM orders WHERE total > 10",
+        )
+        .unwrap();
+        let aggregate = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT region, AVG(total) FROM orders GROUP BY region",
+        )
+        .unwrap();
+        let join = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id",
+        )
+        .unwrap();
+
+        assert!(general_distributed_eligible(&scan));
+        assert!(general_distributed_eligible(&aggregate));
+        assert!(general_distributed_eligible(&join));
     }
 
     #[test]
