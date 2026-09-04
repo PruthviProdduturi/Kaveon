@@ -1,12 +1,29 @@
 use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, Float64Array, Int32Array, Int64Array, StringArray,
-    UInt64Array,
+    Array, ArrayRef, AsArray, BinaryArray, BooleanArray, Float64Array, Int32Array, Int64Array,
+    StringArray, UInt8Array, UInt64Array,
 };
 use arrow::datatypes::{DataType, Field, Float64Type, Int32Type, Int64Type, Schema, SchemaRef};
+use arrow::ipc::reader::StreamReader;
+use arrow::ipc::writer::StreamWriter;
 use arrow::record_batch::RecordBatch;
 use kaveon_core::{BatchOperator, KaveonError, Result};
 use std::collections::{HashMap, HashSet};
+use std::io::Cursor;
 use std::sync::Arc;
+
+const AGGREGATE_STATE_VERSION_KEY: &str = "kaveon.aggregate_state.version";
+const AGGREGATE_STATE_VERSION: &str = "1";
+const STATE_SUM: u8 = 1;
+const STATE_COUNT: u8 = 2;
+const STATE_MIN: u8 = 3;
+const STATE_MAX: u8 = 4;
+const STATE_AVG: u8 = 5;
+const STATE_COUNT_DISTINCT: u8 = 6;
+const VALUE_BOOL: u8 = 1;
+const VALUE_INT32: u8 = 2;
+const VALUE_INT64: u8 = 3;
+const VALUE_UTF8: u8 = 4;
+const VALUE_FLOAT64_BITS: u8 = 5;
 
 #[derive(Debug, Clone, Copy)]
 pub enum AggFunc {
@@ -205,6 +222,296 @@ impl AggregateState {
             )),
         }
     }
+}
+
+/// Encodes mergeable aggregate accumulators as a versioned Arrow IPC stream.
+///
+/// AVG retains both sum and count so final aggregation remains weighted, while
+/// COUNT DISTINCT retains every typed value for an exact union on the receiver.
+pub fn encode_aggregate_states(states: &[AggregateState]) -> Result<Vec<u8>> {
+    let schema = aggregate_state_schema();
+    let mut kinds = Vec::with_capacity(states.len());
+    let mut sums = Vec::with_capacity(states.len());
+    let mut counts = Vec::with_capacity(states.len());
+    let mut extrema = Vec::with_capacity(states.len());
+    let mut distinct_payloads = Vec::with_capacity(states.len());
+
+    for state in states {
+        match state {
+            AggregateState::Sum { sum, count } => {
+                kinds.push(STATE_SUM);
+                sums.push(Some(*sum));
+                counts.push(Some(*count));
+                extrema.push(None);
+                distinct_payloads.push(None);
+            }
+            AggregateState::Count(count) => {
+                kinds.push(STATE_COUNT);
+                sums.push(None);
+                counts.push(Some(*count));
+                extrema.push(None);
+                distinct_payloads.push(None);
+            }
+            AggregateState::Min(value) => {
+                kinds.push(STATE_MIN);
+                sums.push(None);
+                counts.push(None);
+                extrema.push(*value);
+                distinct_payloads.push(None);
+            }
+            AggregateState::Max(value) => {
+                kinds.push(STATE_MAX);
+                sums.push(None);
+                counts.push(None);
+                extrema.push(*value);
+                distinct_payloads.push(None);
+            }
+            AggregateState::Avg { sum, count } => {
+                kinds.push(STATE_AVG);
+                sums.push(Some(*sum));
+                counts.push(Some(*count));
+                extrema.push(None);
+                distinct_payloads.push(None);
+            }
+            AggregateState::CountDistinct(values) => {
+                kinds.push(STATE_COUNT_DISTINCT);
+                sums.push(None);
+                counts.push(None);
+                extrema.push(None);
+                distinct_payloads.push(Some(encode_distinct_values(values)?));
+            }
+        }
+    }
+
+    let distinct_slices = distinct_payloads
+        .iter()
+        .map(|payload| payload.as_deref())
+        .collect::<Vec<_>>();
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(UInt8Array::from(kinds)),
+            Arc::new(Float64Array::from(sums)),
+            Arc::new(UInt64Array::from(counts)),
+            Arc::new(Float64Array::from(extrema)),
+            Arc::new(BinaryArray::from(distinct_slices)),
+        ],
+    )?;
+    let mut bytes = Vec::new();
+    {
+        let mut writer = StreamWriter::try_new(&mut bytes, &schema)?;
+        writer.write(&batch)?;
+        writer.finish()?;
+    }
+    Ok(bytes)
+}
+
+/// Decodes and validates aggregate accumulators from the versioned Arrow wire format.
+pub fn decode_aggregate_states(bytes: &[u8]) -> Result<Vec<AggregateState>> {
+    let reader = StreamReader::try_new(Cursor::new(bytes), None)?;
+    validate_aggregate_state_schema(&reader.schema())?;
+    let mut states = Vec::new();
+    for batch in reader {
+        let batch = batch?;
+        validate_aggregate_state_schema(&batch.schema())?;
+        let kinds = batch
+            .column(0)
+            .as_primitive::<arrow::datatypes::UInt8Type>();
+        let sums = batch.column(1).as_primitive::<Float64Type>();
+        let counts = batch
+            .column(2)
+            .as_primitive::<arrow::datatypes::UInt64Type>();
+        let extrema = batch.column(3).as_primitive::<Float64Type>();
+        let distinct = batch.column(4).as_binary::<i32>();
+        for row in 0..batch.num_rows() {
+            if kinds.is_null(row) {
+                return Err(exec_err("aggregate state kind cannot be null"));
+            }
+            let state = match kinds.value(row) {
+                STATE_SUM => AggregateState::Sum {
+                    sum: required_f64(sums, row, "sum")?,
+                    count: required_u64(counts, row, "sum count")?,
+                },
+                STATE_COUNT => AggregateState::Count(required_u64(counts, row, "count")?),
+                STATE_MIN => AggregateState::Min(optional_f64(extrema, row)),
+                STATE_MAX => AggregateState::Max(optional_f64(extrema, row)),
+                STATE_AVG => AggregateState::Avg {
+                    sum: required_f64(sums, row, "average sum")?,
+                    count: required_u64(counts, row, "average count")?,
+                },
+                STATE_COUNT_DISTINCT => {
+                    if distinct.is_null(row) {
+                        return Err(exec_err("COUNT DISTINCT state payload cannot be null"));
+                    }
+                    AggregateState::CountDistinct(decode_distinct_values(distinct.value(row))?)
+                }
+                kind => return Err(exec_err(format!("unknown aggregate state kind {kind}"))),
+            };
+            states.push(state);
+        }
+    }
+    Ok(states)
+}
+
+fn aggregate_state_schema() -> SchemaRef {
+    let metadata = HashMap::from([(
+        AGGREGATE_STATE_VERSION_KEY.to_owned(),
+        AGGREGATE_STATE_VERSION.to_owned(),
+    )]);
+    Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("state_kind", DataType::UInt8, false),
+            Field::new("sum", DataType::Float64, true),
+            Field::new("count", DataType::UInt64, true),
+            Field::new("extremum", DataType::Float64, true),
+            Field::new("distinct_values", DataType::Binary, true),
+        ],
+        metadata,
+    ))
+}
+
+fn validate_aggregate_state_schema(schema: &SchemaRef) -> Result<()> {
+    let expected = aggregate_state_schema();
+    if schema.fields() != expected.fields()
+        || schema
+            .metadata()
+            .get(AGGREGATE_STATE_VERSION_KEY)
+            .map(String::as_str)
+            != Some(AGGREGATE_STATE_VERSION)
+    {
+        return Err(exec_err("incompatible aggregate state Arrow schema"));
+    }
+    Ok(())
+}
+
+fn required_f64(array: &Float64Array, row: usize, field: &str) -> Result<f64> {
+    if array.is_null(row) {
+        return Err(exec_err(format!("aggregate state {field} cannot be null")));
+    }
+    Ok(array.value(row))
+}
+
+fn required_u64(array: &UInt64Array, row: usize, field: &str) -> Result<u64> {
+    if array.is_null(row) {
+        return Err(exec_err(format!("aggregate state {field} cannot be null")));
+    }
+    Ok(array.value(row))
+}
+
+fn optional_f64(array: &Float64Array, row: usize) -> Option<f64> {
+    (!array.is_null(row)).then(|| array.value(row))
+}
+
+fn encode_distinct_values(values: &HashSet<AggregateValue>) -> Result<Vec<u8>> {
+    let mut encoded = values
+        .iter()
+        .map(encode_aggregate_value)
+        .collect::<Result<Vec<_>>>()?;
+    encoded.sort_unstable();
+    let mut output = Vec::new();
+    write_u64(&mut output, encoded.len())?;
+    for value in encoded {
+        write_u64(&mut output, value.len())?;
+        output.extend_from_slice(&value);
+    }
+    Ok(output)
+}
+
+fn encode_aggregate_value(value: &AggregateValue) -> Result<Vec<u8>> {
+    let mut output = Vec::new();
+    match value {
+        AggregateValue::Null => return Err(exec_err("null cannot appear in a distinct state")),
+        AggregateValue::Bool(value) => {
+            output.push(VALUE_BOOL);
+            output.push(u8::from(*value));
+        }
+        AggregateValue::Int32(value) => {
+            output.push(VALUE_INT32);
+            output.extend_from_slice(&value.to_le_bytes());
+        }
+        AggregateValue::Int64(value) => {
+            output.push(VALUE_INT64);
+            output.extend_from_slice(&value.to_le_bytes());
+        }
+        AggregateValue::Utf8(value) => {
+            output.push(VALUE_UTF8);
+            output.extend_from_slice(value.as_bytes());
+        }
+        AggregateValue::Float64Bits(value) => {
+            output.push(VALUE_FLOAT64_BITS);
+            output.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    Ok(output)
+}
+
+fn decode_distinct_values(bytes: &[u8]) -> Result<HashSet<AggregateValue>> {
+    let mut offset = 0;
+    let value_count = read_u64(bytes, &mut offset)?;
+    let mut values = HashSet::with_capacity(
+        usize::try_from(value_count).map_err(|_| exec_err("distinct state is too large"))?,
+    );
+    for _ in 0..value_count {
+        let length = usize::try_from(read_u64(bytes, &mut offset)?)
+            .map_err(|_| exec_err("distinct value is too large"))?;
+        let end = offset
+            .checked_add(length)
+            .ok_or_else(|| exec_err("distinct state length overflow"))?;
+        let encoded = bytes
+            .get(offset..end)
+            .ok_or_else(|| exec_err("truncated distinct state payload"))?;
+        values.insert(decode_aggregate_value(encoded)?);
+        offset = end;
+    }
+    if offset != bytes.len() {
+        return Err(exec_err("distinct state payload has trailing bytes"));
+    }
+    Ok(values)
+}
+
+fn decode_aggregate_value(bytes: &[u8]) -> Result<AggregateValue> {
+    let (&tag, payload) = bytes
+        .split_first()
+        .ok_or_else(|| exec_err("empty distinct value payload"))?;
+    match tag {
+        VALUE_BOOL if payload.len() == 1 && payload[0] <= 1 => {
+            Ok(AggregateValue::Bool(payload[0] == 1))
+        }
+        VALUE_INT32 if payload.len() == size_of::<i32>() => Ok(AggregateValue::Int32(
+            i32::from_le_bytes(payload.try_into().expect("validated i32 length")),
+        )),
+        VALUE_INT64 if payload.len() == size_of::<i64>() => Ok(AggregateValue::Int64(
+            i64::from_le_bytes(payload.try_into().expect("validated i64 length")),
+        )),
+        VALUE_UTF8 => Ok(AggregateValue::Utf8(
+            std::str::from_utf8(payload)
+                .map_err(|_| exec_err("distinct string is not valid UTF-8"))?
+                .to_owned(),
+        )),
+        VALUE_FLOAT64_BITS if payload.len() == size_of::<u64>() => Ok(AggregateValue::Float64Bits(
+            u64::from_le_bytes(payload.try_into().expect("validated f64 bit length")),
+        )),
+        _ => Err(exec_err("invalid typed distinct value payload")),
+    }
+}
+
+fn write_u64(output: &mut Vec<u8>, value: usize) -> Result<()> {
+    let value = u64::try_from(value).map_err(|_| exec_err("aggregate state is too large"))?;
+    output.extend_from_slice(&value.to_le_bytes());
+    Ok(())
+}
+
+fn read_u64(bytes: &[u8], offset: &mut usize) -> Result<u64> {
+    let end = offset
+        .checked_add(size_of::<u64>())
+        .ok_or_else(|| exec_err("aggregate state offset overflow"))?;
+    let encoded = bytes
+        .get(*offset..end)
+        .ok_or_else(|| exec_err("truncated aggregate state payload"))?;
+    *offset = end;
+    Ok(u64::from_le_bytes(
+        encoded.try_into().expect("validated u64 length"),
+    ))
 }
 
 type Accumulator = AggregateState;
@@ -681,6 +988,106 @@ mod tests {
         let sum = AggregateState::new(&AggExpr::new(AggFunc::Sum, "value"));
 
         let result = count.merge(&sum);
+
+        assert!(
+            matches!(result, Err(KaveonError::Execution(message)) if message.contains("incompatible"))
+        );
+    }
+
+    #[test]
+    fn aggregate_state_arrow_stream_round_trips_every_state_kind() {
+        let distinct = HashSet::from([
+            AggregateValue::Bool(true),
+            AggregateValue::Int32(-7),
+            AggregateValue::Int64(9),
+            AggregateValue::Utf8("east".into()),
+            AggregateValue::Float64Bits((-0.0_f64).to_bits()),
+        ]);
+        let states = vec![
+            AggregateState::Sum {
+                sum: 12.5,
+                count: 3,
+            },
+            AggregateState::Count(4),
+            AggregateState::Min(None),
+            AggregateState::Max(Some(99.0)),
+            AggregateState::Avg {
+                sum: 130.0,
+                count: 3,
+            },
+            AggregateState::CountDistinct(distinct),
+        ];
+
+        let encoded = encode_aggregate_states(&states).unwrap();
+        let decoded = decode_aggregate_states(&encoded).unwrap();
+
+        assert_eq!(decoded, states);
+    }
+
+    #[test]
+    fn decoded_average_merges_with_weighted_count() {
+        let left = AggregateState::Avg {
+            sum: 30.0,
+            count: 2,
+        };
+        let right = AggregateState::Avg {
+            sum: 100.0,
+            count: 1,
+        };
+        let mut decoded_left = decode_aggregate_states(&encode_aggregate_states(&[left]).unwrap())
+            .unwrap()
+            .remove(0);
+        let decoded_right = decode_aggregate_states(&encode_aggregate_states(&[right]).unwrap())
+            .unwrap()
+            .remove(0);
+
+        decoded_left.merge(&decoded_right).unwrap();
+
+        assert_eq!(decoded_left.numeric_result().unwrap(), Some(130.0 / 3.0));
+    }
+
+    #[test]
+    fn decoded_distinct_states_union_exact_values() {
+        let left = AggregateState::CountDistinct(HashSet::from([
+            AggregateValue::Utf8("a".into()),
+            AggregateValue::Utf8("b".into()),
+        ]));
+        let right = AggregateState::CountDistinct(HashSet::from([
+            AggregateValue::Utf8("b".into()),
+            AggregateValue::Utf8("c".into()),
+        ]));
+        let mut decoded_left = decode_aggregate_states(&encode_aggregate_states(&[left]).unwrap())
+            .unwrap()
+            .remove(0);
+        let decoded_right = decode_aggregate_states(&encode_aggregate_states(&[right]).unwrap())
+            .unwrap()
+            .remove(0);
+
+        decoded_left.merge(&decoded_right).unwrap();
+
+        assert_eq!(decoded_left.count_result().unwrap(), 3);
+    }
+
+    #[test]
+    fn rejects_incompatible_aggregate_state_arrow_schema() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "state_kind",
+            DataType::UInt8,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(UInt8Array::from(vec![STATE_COUNT]))],
+        )
+        .unwrap();
+        let mut bytes = Vec::new();
+        {
+            let mut writer = StreamWriter::try_new(&mut bytes, &schema).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let result = decode_aggregate_states(&bytes);
 
         assert!(
             matches!(result, Err(KaveonError::Execution(message)) if message.contains("incompatible"))

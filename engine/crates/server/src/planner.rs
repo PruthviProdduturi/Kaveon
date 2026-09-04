@@ -1,6 +1,6 @@
 use kaveon_core::{
-    BatchOperator, BatchSource, CatalogManager, DataFormat, Expr, KaveonError, Result,
-    TableReference,
+    BatchOperator, BatchSource, CatalogManager, DataFormat, ExchangeDescriptor, ExchangeId, Expr,
+    KaveonError, Partitioning, Result, StageFragment, StageGraph, StageId, TableReference,
 };
 use kaveon_exec::aggregate::{AggExpr, AggFunc, HashAggregate};
 use kaveon_exec::filter::FilterOperator;
@@ -79,6 +79,230 @@ pub fn optimized_plan_tree(plan: &LogicalPlan) -> kaveon_core::PlanNode {
 pub fn physical_plan_tree(plan: &LogicalPlan) -> kaveon_core::PlanNode {
     let mut next_id = 0;
     build_plan_tree(plan, &mut next_id, kaveon_core::PlanPhase::Physical)
+}
+
+pub fn build_stage_graph(
+    query_id: impl Into<String>,
+    plan: &LogicalPlan,
+    worker_count: usize,
+) -> Result<StageGraph> {
+    if worker_count == 0 {
+        return Err(KaveonError::Execution(
+            "stage planning requires at least one worker".into(),
+        ));
+    }
+    let query_id = query_id.into();
+    let mut builder = StageGraphBuilder {
+        worker_count,
+        stages: Vec::new(),
+        exchanges: Vec::new(),
+    };
+    let root_stage = builder.build(plan)?;
+    let graph = StageGraph {
+        query_id,
+        root_stage,
+        stages: builder.stages,
+        exchanges: builder.exchanges,
+    };
+    graph.validate()?;
+    Ok(graph)
+}
+
+struct StageGraphBuilder {
+    worker_count: usize,
+    stages: Vec<StageFragment>,
+    exchanges: Vec<ExchangeDescriptor>,
+}
+
+impl StageGraphBuilder {
+    fn build(&mut self, plan: &LogicalPlan) -> Result<StageId> {
+        match plan {
+            LogicalPlan::Aggregate {
+                input, group_by, ..
+            } => {
+                let source = self.build(input)?;
+                let aggregate = physical_plan_tree(plan);
+                self.wrap_stage(source, "PartialAggregate", aggregate.attributes.clone());
+                let keys = group_by
+                    .iter()
+                    .map(expression_column)
+                    .collect::<Result<Vec<_>>>()?;
+                let partitioning = if keys.is_empty() {
+                    Partitioning::Single
+                } else {
+                    Partitioning::Hash {
+                        columns: keys,
+                        partition_count: self.worker_count,
+                    }
+                };
+                let task_count = match &partitioning {
+                    Partitioning::Single => 1,
+                    _ => self.worker_count,
+                };
+                let target =
+                    self.add_exchange_stage("FinalAggregate", aggregate.attributes, task_count, 1);
+                self.add_exchange(source, target, partitioning);
+                Ok(target)
+            }
+            LogicalPlan::Limit { input, .. }
+                if matches!(input.as_ref(), LogicalPlan::Sort { .. }) =>
+            {
+                let LogicalPlan::Sort {
+                    input: sort_input, ..
+                } = input.as_ref()
+                else {
+                    unreachable!()
+                };
+                let source = self.build(sort_input)?;
+                let top_n = physical_plan_tree(plan);
+                self.wrap_stage(source, "PartialTopN", top_n.attributes.clone());
+                let target = self.add_exchange_stage("FinalTopN", top_n.attributes, 1, 1);
+                self.add_exchange(source, target, Partitioning::Single);
+                Ok(target)
+            }
+            LogicalPlan::Sort { input, .. } | LogicalPlan::Limit { input, .. } => {
+                let source = self.build(input)?;
+                let physical = physical_plan_tree(plan);
+                let operator = if matches!(plan, LogicalPlan::Sort { .. }) {
+                    "FinalSort"
+                } else {
+                    self.wrap_stage(source, "PartialLimit", physical.attributes.clone());
+                    "FinalLimit"
+                };
+                let target = self.add_exchange_stage(operator, physical.attributes, 1, 1);
+                self.add_exchange(source, target, Partitioning::Single);
+                Ok(target)
+            }
+            LogicalPlan::Join {
+                left,
+                right,
+                join_type,
+                condition,
+            } => {
+                let left_stage = self.build(left)?;
+                let right_stage = self.build(right)?;
+                let join = physical_plan_tree(plan);
+                let target = self.add_exchange_stage(
+                    "PartitionedHashJoin",
+                    join.attributes,
+                    self.worker_count,
+                    2,
+                );
+                if *join_type == JoinType::Cross {
+                    self.add_exchange(
+                        left_stage,
+                        target,
+                        Partitioning::RoundRobin {
+                            partition_count: self.worker_count,
+                        },
+                    );
+                    self.add_exchange(right_stage, target, Partitioning::Broadcast);
+                } else {
+                    let keys = join_keys(condition.as_ref())?;
+                    if keys.is_empty() {
+                        return Err(KaveonError::Execution(
+                            "distributed non-cross joins require equality keys".into(),
+                        ));
+                    }
+                    let (left_keys, right_keys): (Vec<_>, Vec<_>) = keys.into_iter().unzip();
+                    self.add_exchange(
+                        left_stage,
+                        target,
+                        Partitioning::Hash {
+                            columns: left_keys,
+                            partition_count: self.worker_count,
+                        },
+                    );
+                    self.add_exchange(
+                        right_stage,
+                        target,
+                        Partitioning::Hash {
+                            columns: right_keys,
+                            partition_count: self.worker_count,
+                        },
+                    );
+                }
+                Ok(target)
+            }
+            LogicalPlan::Filter { input, .. } | LogicalPlan::Project { input, .. } => {
+                let stage = self.build(input)?;
+                let physical = physical_plan_tree(plan);
+                let operator = physical.operator;
+                self.wrap_stage(stage, &operator, physical.attributes);
+                Ok(stage)
+            }
+            LogicalPlan::Scan { .. } => Ok(self.add_stage(plan, self.worker_count)),
+        }
+    }
+
+    fn add_stage(&mut self, plan: &LogicalPlan, task_count: usize) -> StageId {
+        let id = StageId(self.stages.len() as u32);
+        self.stages.push(StageFragment {
+            id,
+            task_count,
+            plan: physical_plan_tree(plan),
+        });
+        id
+    }
+
+    fn wrap_stage(&mut self, stage: StageId, operator: &str, attributes: BTreeMap<String, String>) {
+        if let Some(fragment) = self.stages.iter_mut().find(|fragment| fragment.id == stage) {
+            let child = std::mem::replace(
+                &mut fragment.plan,
+                kaveon_core::PlanNode::new(0, kaveon_core::PlanPhase::Physical, operator),
+            );
+            fragment.plan.attributes = attributes;
+            fragment.plan.children.push(child);
+        }
+    }
+
+    fn add_exchange_stage(
+        &mut self,
+        operator: &str,
+        attributes: BTreeMap<String, String>,
+        task_count: usize,
+        input_count: usize,
+    ) -> StageId {
+        let id = StageId(self.stages.len() as u32);
+        let mut plan = kaveon_core::PlanNode::new(0, kaveon_core::PlanPhase::Physical, operator);
+        plan.attributes = attributes;
+        for input in 0..input_count {
+            let mut exchange = kaveon_core::PlanNode::new(
+                input as u32 + 1,
+                kaveon_core::PlanPhase::Physical,
+                "ExchangeInput",
+            );
+            exchange
+                .attributes
+                .insert("input".into(), input.to_string());
+            plan.children.push(exchange);
+        }
+        self.stages.push(StageFragment {
+            id,
+            task_count,
+            plan,
+        });
+        id
+    }
+
+    fn add_exchange(&mut self, source: StageId, target: StageId, partitioning: Partitioning) {
+        let ordinal = self.exchanges.len();
+        self.exchanges.push(ExchangeDescriptor {
+            id: ExchangeId(format!("exchange-{}-{}-{ordinal}", source.0, target.0)),
+            source_stage: source,
+            target_stage: target,
+            partitioning,
+        });
+    }
+}
+
+fn expression_column(expression: &Expr) -> Result<String> {
+    match expression {
+        Expr::Column(column) => Ok(unqualify(column)),
+        _ => Err(KaveonError::Execution(
+            "distributed partition keys must be column references".into(),
+        )),
+    }
 }
 
 fn build_plan_tree(
@@ -604,5 +828,105 @@ mod tests {
             plan,
             LogicalPlan::Scan { ref table, .. } if table == "test.default.items"
         ));
+    }
+
+    fn graph(sql: &str) -> StageGraph {
+        let plan = kaveon_sql::logical_plan::sql_to_logical_plan(sql).unwrap();
+        build_stage_graph("query-1", &plan, 4).unwrap()
+    }
+
+    #[test]
+    fn plans_grouped_aggregate_with_hash_exchange() {
+        let graph = graph("SELECT region, SUM(total) FROM orders GROUP BY region");
+
+        assert_eq!(graph.stages.len(), 2);
+        assert_eq!(graph.exchanges.len(), 1);
+        assert_eq!(graph.stages[0].plan.operator, "PartialAggregate");
+        let root = &graph.stages[graph.root_stage.0 as usize];
+        assert_eq!(root.plan.operator, "Project");
+        assert_eq!(root.plan.children[0].operator, "FinalAggregate");
+        assert_eq!(root.task_count, 4);
+        assert_eq!(
+            graph.exchanges[0].partitioning,
+            Partitioning::Hash {
+                columns: vec!["region".into()],
+                partition_count: 4,
+            }
+        );
+    }
+
+    #[test]
+    fn plans_global_aggregate_with_single_exchange() {
+        let graph = graph("SELECT COUNT(*) FROM orders");
+
+        assert_eq!(graph.stages.len(), 2);
+        assert_eq!(graph.stages[graph.root_stage.0 as usize].task_count, 1);
+        assert_eq!(graph.exchanges[0].partitioning, Partitioning::Single);
+    }
+
+    #[test]
+    fn plans_sort_and_top_n_as_single_final_stages() {
+        for sql in [
+            "SELECT id FROM orders ORDER BY id DESC",
+            "SELECT id FROM orders ORDER BY id DESC LIMIT 10",
+        ] {
+            let graph = graph(sql);
+            assert_eq!(graph.stages.len(), 2);
+            assert_eq!(graph.exchanges.len(), 1);
+            assert_eq!(graph.exchanges[0].partitioning, Partitioning::Single);
+            assert_eq!(graph.stages[graph.root_stage.0 as usize].task_count, 1);
+            assert!(
+                graph.stages[graph.root_stage.0 as usize]
+                    .plan
+                    .operator
+                    .starts_with("Final")
+            );
+        }
+    }
+
+    #[test]
+    fn plans_equi_join_with_colocated_hash_exchanges() {
+        let graph =
+            graph("SELECT * FROM orders o JOIN customers c ON o.customer_id = c.customer_id");
+
+        assert_eq!(graph.stages.len(), 3);
+        assert_eq!(graph.exchanges.len(), 2);
+        assert_eq!(
+            graph.stages[graph.root_stage.0 as usize].plan.operator,
+            "PartitionedHashJoin"
+        );
+        assert_eq!(
+            graph.exchanges[0].partitioning,
+            Partitioning::Hash {
+                columns: vec!["customer_id".into()],
+                partition_count: 4,
+            }
+        );
+        assert_eq!(
+            graph.exchanges[1].partitioning,
+            Partitioning::Hash {
+                columns: vec!["customer_id".into()],
+                partition_count: 4,
+            }
+        );
+    }
+
+    #[test]
+    fn plans_cross_join_with_broadcast_build_side() {
+        let graph = graph("SELECT * FROM orders CROSS JOIN customers");
+
+        assert_eq!(graph.stages.len(), 3);
+        assert_eq!(
+            graph.exchanges[0].partitioning,
+            Partitioning::RoundRobin { partition_count: 4 }
+        );
+        assert_eq!(graph.exchanges[1].partitioning, Partitioning::Broadcast);
+    }
+
+    #[test]
+    fn stage_planning_rejects_empty_worker_sets() {
+        let plan = kaveon_sql::logical_plan::sql_to_logical_plan("SELECT * FROM orders").unwrap();
+        let error = build_stage_graph("query-1", &plan, 0).unwrap_err();
+        assert!(error.to_string().contains("at least one worker"));
     }
 }

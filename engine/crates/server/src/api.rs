@@ -16,6 +16,7 @@ use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
@@ -931,6 +932,13 @@ enum MergeOperation {
     Max,
 }
 
+const REMOTE_TASK_TIMEOUT: Duration = Duration::from_secs(120);
+
+struct RemoteTaskFailure {
+    message: String,
+    retryable: bool,
+}
+
 async fn execute_remote_task(
     client: &reqwest::Client,
     worker: &NodeInfo,
@@ -942,22 +950,32 @@ async fn execute_remote_task(
         u64,
         usize,
     ),
-    String,
+    RemoteTaskFailure,
 > {
     let url = format!("{}/v1/task", worker.address.trim_end_matches('/'));
     let response = client
         .post(url)
         .json(request)
+        .timeout(REMOTE_TASK_TIMEOUT)
         .send()
         .await
-        .map_err(|error| format!("worker '{}' is unavailable: {error}", worker.node_id))?;
+        .map_err(|error| RemoteTaskFailure {
+            message: format!("worker '{}' is unavailable: {error}", worker.node_id),
+            retryable: true,
+        })?;
     if !response.status().is_success() {
         let status = response.status();
+        let retryable = status.is_server_error()
+            || status == StatusCode::REQUEST_TIMEOUT
+            || status == StatusCode::TOO_MANY_REQUESTS;
         let message = response.text().await.unwrap_or_default();
-        return Err(format!(
-            "worker '{}' failed task with {status}: {message}",
-            worker.node_id
-        ));
+        return Err(RemoteTaskFailure {
+            message: format!(
+                "worker '{}' failed task with {status}: {message}",
+                worker.node_id
+            ),
+            retryable,
+        });
     }
     let elapsed_us = response
         .headers()
@@ -965,18 +983,20 @@ async fn execute_remote_task(
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse().ok())
         .unwrap_or_default();
-    let bytes = response.bytes().await.map_err(|error| {
-        format!(
+    let bytes = response.bytes().await.map_err(|error| RemoteTaskFailure {
+        message: format!(
             "worker '{}' result could not be read: {error}",
             worker.node_id
-        )
+        ),
+        retryable: true,
     })?;
     let output_bytes = bytes.len();
-    let (schema, batches) = decode_arrow_stream(&bytes).map_err(|error| {
-        format!(
+    let (schema, batches) = decode_arrow_stream(&bytes).map_err(|error| RemoteTaskFailure {
+        message: format!(
             "worker '{}' returned an invalid Arrow stream: {error}",
             worker.node_id
-        )
+        ),
+        retryable: false,
     })?;
     Ok((schema, batches, elapsed_us, output_bytes))
 }
@@ -1048,7 +1068,12 @@ async fn execute_distributed_top_n(
                         };
                         return Ok((schema, batches, telemetry));
                     }
-                    Err(error) => failures.push(error),
+                    Err(error) => {
+                        failures.push(error.message);
+                        if !error.retryable {
+                            break;
+                        }
+                    }
                 }
             }
             Err(format!(
@@ -1205,7 +1230,12 @@ async fn execute_distributed_aggregate(
                             telemetry,
                         ));
                     }
-                    Err(error) => failures.push(error),
+                    Err(error) => {
+                        failures.push(error.message);
+                        if !error.retryable {
+                            break;
+                        }
+                    }
                 }
             }
             Err(format!(
