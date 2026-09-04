@@ -2430,7 +2430,11 @@ return;
                 {/* ── Single-statement results ── */}
                 {!multiResults && !results && !resultError && (
                   <div className="empty-state">
-                    <i className="fas fa-chart-bar" />
+                    <div className="analysis-ready-mark" aria-hidden="true">
+                      <span className="analysis-ready-orbit analysis-ready-orbit-one" />
+                      <span className="analysis-ready-orbit analysis-ready-orbit-two" />
+                      <span className="analysis-ready-core"><i className="fas fa-chart-bar" /></span>
+                    </div>
                     <h3>Ready for Analysis</h3>
                     <p>
                       Select a table from the left sidebar or write a custom SQL query to get started.

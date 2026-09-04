@@ -30,9 +30,8 @@ export default function ApiReferenceDocs() {
     <ul>
       <li>Pin clients to the deployed Kaveon version and verify response fields before upgrading.</li>
       <li>Use the Studio proxy for user-facing applications; never trust identity headers supplied by a browser.</li>
-      <li>Keep Engine HTTP private during alpha because it has no authentication, authorization, or TLS termination.</li>
+      <li>Keep Engine HTTP private during alpha. Internal exchange and catalog-mutation tokens do not replace end-user statement authentication, authorization, or TLS termination.</li>
     </ul>
     <Pager prev={{ href: "/docs/engine", title: "Kaveon Engine" }} next={{ href: "/docs/auth", title: "Auth & RBAC" }} />
   </div>;
 }
-

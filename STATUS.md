@@ -37,17 +37,18 @@
 | Local Parquet reader, projection, metadata statistics, row-group pruning | 🧪 Alpha | Synchronous Arrow `RecordBatch` stream |
 | Local Delta Lake reader | 🧪 Alpha | Replays complete JSON commits from version 0 and streams all active Parquet files; checkpoints unsupported |
 | Scan, filter, project, hash aggregate, limit | 🧪 Alpha | Vectorized node-local execution |
-| SQL parser, CLI, HTTP statement API, catalog | 🧪 Alpha | Engine is not yet wired into Studio/API |
-| Coordinator/worker discovery and heartbeats | 🧪 Alpha | Two-worker discovery plus partitioned partial aggregation for eligible single-source queries |
+| SQL parser, remote-first CLI, HTTP statement API | 🧪 Alpha | Engine query execution is not yet wired into Studio/API identity |
+| Native durable catalog | 🧪 Alpha | SQLite/WAL single-coordinator authority with revisions, lifecycle, audit, Arrow schemas, authenticated mutation API, and restart recovery |
+| Coordinator/worker discovery and heartbeats | 🧪 Alpha | Two-worker local Docker topology verified on real Delta data |
 | Query lifecycle and storage-scan telemetry | 🧪 Alpha | HTTP history retains real phase timings, logical plans, file/row-group pruning, selected bytes, emitted rows, and scan throughput |
 | Physical operator, stage, and task telemetry | 🧪 Alpha | Completed distributed stages/tasks report worker, partition, elapsed time, rows, Arrow batches, and bytes; live and per-operator metrics remain target |
-| Sort and TopN | 📋 Not Started | `ORDER BY` is parsed but not physically executed |
-| Filter-pushdown optimizer pass | 📋 Not Started | Optimizer currently returns the input plan unchanged |
+| Sort and TopN | 🧪 Alpha | Local and distributed execution with fixed-fan-in external merge |
+| Filter-pushdown optimizer pass | 🧪 Alpha | Wired conservative pushdown with residual row-level evaluation |
 | ADLS Gen2 / S3 readers | 📋 Planning | Local validation precedes cloud object storage |
 | Cloud Delta Lake / Iceberg readers | 📋 Planning | ADLS/S3 Delta, checkpoint replay, and Iceberg manifest semantics not implemented |
-| Distributed scheduling, exchange, retry | 🧪 Alpha | COUNT/SUM/MIN/MAX and GROUP BY fan out across workers; joins, shuffle, retry, spill, AVG, and DISTINCT remain local/target |
-| Hash exchange primitives | 🧪 Alpha | Stable Arrow-row partitioning, retry-safe task identity, and bounded in-memory buffers implemented; network shuffle not wired |
-| Engine HTTP auth and TLS | 📋 Planning | Do not expose the alpha server directly to untrusted networks |
+| Distributed scheduling, exchange, retry | 🧪 Alpha | Versioned fragments execute scans, partial/final aggregates including AVG/exact DISTINCT, Sort/TopN, and repartitioned/broadcast joins; retry/cancellation wired |
+| Hash exchange | 🧪 Alpha | Authenticated Arrow IPC v2, stable partitioning, bounded payloads, idempotent upload, and cleanup; streaming flow control remains target |
+| Engine HTTP auth and TLS | 📋 Planning | Internal exchange/catalog mutation tokens exist; end-user statements still require a trusted boundary |
 
 ---
 
@@ -121,6 +122,8 @@
 | Connection strings stored plaintext in `data_sources` | Needs vault integration |
 | In-process rate limiting not shared across replicas | Redis fixes this |
 | Engine server has no auth/TLS | Keep behind a trusted local boundary during alpha |
+| Platform catalog-source registry is not synchronized to Engine catalog | Add an authenticated revision-aware API-to-Engine bridge |
+| Engine aggregate/join memory can exceed desired limits | Wire reservations, revocation, and spill before production scale claims |
 
 ---
 

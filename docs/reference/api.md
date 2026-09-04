@@ -53,18 +53,22 @@ The Rust server exposes these routes:
 | `POST` | `/v1/statement` | Synchronously parse, plan, execute, materialize, and retain a query result |
 | `GET` | `/v1/query` | Return up to 100 newest process-local query records |
 | `GET` | `/v1/query/{query_id}` | Return retained lifecycle, context, structured logical plan, result, and scan telemetry |
-| `DELETE` | `/v1/query/{query_id}` | Delete a retained record; does not cancel running computation |
+| `DELETE` | `/v1/query/{query_id}` | Cancel the query and propagate cancellation to active worker tasks |
 | `GET` | `/v1/cluster` | Coordinator and discovered-worker state |
 | `GET` | `/v1/node` | Current node information |
 | `POST` | `/v1/node/heartbeat` | Register a worker heartbeat on a coordinator |
 | `GET` | `/v1/catalog` | List catalogs |
+| `GET`, `POST` | `/v1/catalog/definitions` | List or create durable catalog definitions |
+| `GET`, `PUT`, `DELETE` | `/v1/catalog/definitions/{catalog_id}` | Read, revision-replace, or delete a durable catalog definition |
+| `GET`, `POST` | `/v1/catalog/definitions/{catalog_id}/schemas` | List or create durable schema definitions |
+| `GET`, `PUT`, `DELETE` | `/v1/catalog/schemas/{schema_id}` | Read, revision-replace, or delete a durable schema definition |
+| `GET`, `POST` | `/v1/catalog/schemas/{schema_id}/tables` | List or create durable table definitions |
+| `GET`, `PUT`, `DELETE` | `/v1/catalog/tables/{table_id}` | Read, revision-replace, or delete a durable table definition |
 | `GET` | `/v1/catalog/{catalog}/schema` | List schemas |
 | `GET` | `/v1/catalog/{catalog}/schema/{schema}/table` | List tables |
 | `GET` | `/health`, `/ready`, `/ui` | Liveness, catalog readiness, and operational UI |
 
-The Engine server has permissive CORS and no authentication, authorization, TLS,
-quota, cancellation, or distributed fragment execution. Keep it behind a trusted
-boundary during alpha.
+Catalog mutations require the configured catalog-admin bearer token, an actor header, and optimistic `If-Match` revisions for replacement. Internal task/exchange routes use a separate shared bearer token. Statement clients still lack end-user authentication, authorization, TLS, quotas, and resource groups, so keep Engine behind a trusted boundary during alpha. Distributed fragments and cancellation are implemented but not production-qualified.
 
 The statement JSON body requires `query`. Clients may also provide `source`,
 `client`, `time_zone`, `client_tags`, and `result_delivery`. These identify the

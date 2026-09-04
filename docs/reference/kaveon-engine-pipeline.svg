@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="680" viewBox="0 0 1200 680" role="img" aria-labelledby="engine-title engine-desc">
   <title id="engine-title">Kaveon Engine query pipeline</title>
-  <desc id="engine-desc">Current SQL planning and vectorized execution feed local Parquet and Delta readers. Logical optimizer pushdown, Sort and TopN, cloud stores, and Iceberg are marked as targets. Solid paths are current and dashed paths are target.</desc>
+  <desc id="engine-desc">The coordinator resolves the durable catalog, optimizes SQL, schedules versioned fragments, and workers exchange Arrow batches while reading local Parquet and Delta. Cloud stores and Iceberg remain targets.</desc>
   <defs>
     <marker id="engine-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 1l9 4-9 4z" fill="#4A9EE8"/></marker>
     <style>
@@ -13,22 +13,21 @@
   <text x="600" y="112" text-anchor="middle" class="title">Engine · Vectorized Query Pipeline</text>
   <line x1="56" y1="140" x2="1144" y2="140" class="rule"/>
 
-  <text x="60" y="178" class="label">QUERY PIPELINE · CURRENT WITH TARGET OPTIMIZER STAGE</text>
+  <text x="60" y="178" class="label">COORDINATOR PLAN · DISTRIBUTED ALPHA</text>
   <g><rect class="box active" x="60" y="196" width="188" height="100" rx="14"/><text x="154" y="235" text-anchor="middle" class="heading">SQL</text><text x="154" y="262" text-anchor="middle" class="body">Parser → logical plan</text></g>
-  <path class="flow target" d="M248 246h48"/>
-  <g><rect class="box" x="304" y="196" width="210" height="100" rx="14"/><text x="409" y="231" text-anchor="middle" class="heading">Logical optimizer</text><text x="409" y="256" text-anchor="middle" class="body">Filter pushdown</text><text x="409" y="277" text-anchor="middle" class="label">TARGET</text></g>
-  <path class="flow target" d="M514 246h48"/>
-  <path class="flow" d="M248 286c92 54 220 54 314 0"/>
-  <g><rect class="box" x="570" y="196" width="210" height="100" rx="14"/><text x="675" y="235" text-anchor="middle" class="heading">Physical plan</text><text x="675" y="262" text-anchor="middle" class="body">BatchOperator pipeline</text></g>
+  <path class="flow" d="M248 246h48"/>
+  <g><rect class="box active" x="304" y="196" width="210" height="100" rx="14"/><text x="409" y="231" text-anchor="middle" class="heading">Logical optimizer</text><text x="409" y="256" text-anchor="middle" class="body">Filter + projection pruning</text><text x="409" y="277" text-anchor="middle" class="label">WIRED</text></g>
+  <path class="flow" d="M514 246h48"/>
+  <g><rect class="box active" x="570" y="196" width="210" height="100" rx="14"/><text x="675" y="235" text-anchor="middle" class="heading">Stage graph</text><text x="675" y="262" text-anchor="middle" class="body">Versioned fragments</text></g>
   <path class="flow" d="M780 246h48"/>
-  <g><rect class="box active" x="836" y="180" width="304" height="132" rx="14"/><text x="988" y="221" text-anchor="middle" class="heading">Vectorized execution</text><text x="988" y="250" text-anchor="middle" class="body">Scan · Filter · Project · Aggregate · Limit</text><text x="988" y="278" text-anchor="middle" class="label">ARROW RECORD BATCH</text><text x="988" y="297" text-anchor="middle" class="label">SORT · TOPN TARGET</text></g>
+  <g><rect class="box active" x="836" y="180" width="304" height="132" rx="14"/><text x="988" y="221" text-anchor="middle" class="heading">Worker execution</text><text x="988" y="250" text-anchor="middle" class="body">Scan · Filter · Aggregate · Join · TopN</text><text x="988" y="278" text-anchor="middle" class="label">ARROW RECORD BATCH</text><text x="988" y="297" text-anchor="middle" class="label">AUTHENTICATED IPC EXCHANGE</text></g>
 
   <path class="flow" d="M988 312v60"/>
-  <text x="60" y="366" class="label">DATA PLANE</text>
-  <g><rect class="box active" x="650" y="386" width="490" height="130" rx="14"/><text x="895" y="426" text-anchor="middle" class="heading">Parquet + Delta readers · current</text><text x="895" y="455" text-anchor="middle" class="body">Projection · JSON snapshot replay · multi-file streaming</text><text x="895" y="482" text-anchor="middle" class="label">BATCHSOURCE · LOCAL FILESYSTEM</text></g>
+  <text x="60" y="366" class="label">LIVE LAKE PATH · CATALOG RESOLVED</text>
+  <g><rect class="box active" x="650" y="386" width="490" height="130" rx="14"/><text x="895" y="426" text-anchor="middle" class="heading">Parquet + Delta readers · alpha</text><text x="895" y="455" text-anchor="middle" class="body">Projection · pruning · deterministic splits</text><text x="895" y="482" text-anchor="middle" class="label">LOCAL NOW · ADLS GEN2 NEXT</text></g>
   <path class="flow" d="M650 451H586"/>
   <g><rect class="box" x="60" y="386" width="518" height="130" rx="14"/><text x="319" y="426" text-anchor="middle" class="heading">Customer-controlled data</text><text x="319" y="455" text-anchor="middle" class="body">Local Parquet · local Delta · current</text><text x="319" y="482" text-anchor="middle" class="body">ADLS Gen2 · S3 · Iceberg · target</text></g>
 
-  <g transform="translate(60 554)"><line x1="0" y1="0" x2="38" y2="0" class="flow"/><text x="52" y="5" class="body">Current contract</text><line x1="210" y1="0" x2="248" y2="0" class="flow" stroke-dasharray="8 7"/><text x="262" y="5" class="body">Target contract</text></g>
+  <g transform="translate(60 554)"><line x1="0" y1="0" x2="38" y2="0" class="flow"/><text x="52" y="5" class="body">Implemented alpha path</text><line x1="230" y1="0" x2="268" y2="0" class="flow" stroke-dasharray="8 7"/><text x="282" y="5" class="body">Target storage path</text></g>
   <rect x="60" y="596" width="1080" height="48" rx="10" fill="#0e141d" stroke="#263244"/><text x="600" y="625" text-anchor="middle" class="body">Safety invariant · uncertain, absent, nested, or incompatible statistics retain data; pruning never guesses.</text>
 </svg>

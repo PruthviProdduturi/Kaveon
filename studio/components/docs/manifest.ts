@@ -59,6 +59,8 @@ export const DOCS_NAV: readonly DocsGroup[] = [
     label: "Research",
     items: [
       { title: "Papers & Patents", href: "/docs/research", description: "Read the technical papers and patent disclosure.", keywords: ["whitepaper", "adaptive routing", "curation"] },
+      { title: "Kaveon vs Trino", href: "/docs/research/trino", description: "Compare architecture, execution maturity, and proof requirements.", keywords: ["trino", "distributed sql", "benchmark"], status: "Reference", lastVerified: "September 4, 2026" },
+      { title: "Engine vs Fabric SQL", href: "/docs/research/fabric-sql-endpoint", description: "Compare Kaveon Engine with the Fabric Lakehouse SQL analytics endpoint.", keywords: ["fabric", "sql analytics endpoint", "onelake"], status: "Reference", lastVerified: "September 4, 2026" },
     ],
   },
 ] as const;

@@ -5,7 +5,7 @@ export const metadata = { title: "Architecture" };
 export default function ArchitectureDocs() {
   return (
     <div className="docs-prose">
-      <PageHeader eyebrow="Platform" title="Architecture" lead="Kaveon is one product with three pillars: Studio, the deterministic Data Language Model, and the Rust analytical Engine. The shipping application and alpha Engine are separate runtimes today; their unified control plane is the target architecture." />
+      <PageHeader eyebrow="Platform" title="Architecture" lead="Kaveon is one product with three pillars: Studio, the deterministic Data Language Model, and the Rust analytical Engine. Studio and DLM are hosted today; the distributed Engine is an independently runnable alpha awaiting the authenticated platform bridge." />
 
       <Callout type="note"><strong>Status vocabulary:</strong> Current means available in the shipping Studio/API path. Alpha means runnable but not production-integrated. Target means approved architecture that is not yet implemented.</Callout>
 
@@ -17,7 +17,7 @@ export default function ArchitectureDocs() {
         <tbody>
           <tr><td><strong>Kaveon Studio</strong></td><td>Next.js 15 · React 19</td><td>Current</td><td>Ask, SQL Lab, semantic datasets, charts, dashboards, and administration.</td></tr>
           <tr><td><strong>Platform API + DLM</strong></td><td>FastAPI · Python</td><td>Current</td><td>Authenticated application services, metadata, deterministic resolution, and registered SQL-source execution.</td></tr>
-          <tr><td><strong>Kaveon Engine</strong></td><td>Rust · Arrow · Parquet</td><td>Alpha</td><td>Local Parquet catalog resolution, SQL planning, and vectorized batch execution through separate CLI and HTTP entry points.</td></tr>
+          <tr><td><strong>Kaveon Engine</strong></td><td>Rust · Arrow · Parquet/Delta</td><td>Alpha</td><td>Durable catalog resolution, optimized SQL plans, distributed vectorized stages, Arrow IPC exchanges, and direct local lake reads.</td></tr>
         </tbody>
       </table>
 
@@ -33,16 +33,16 @@ Platform API + DLM (FastAPI)
   └─ one selected registered SQL source per query`}</Code>
       <p>The browser does not send trusted identity headers directly. Studio derives identity from the server-side session and signs the proxy request with <code>KAVEON_PROXY_SECRET</code>. FastAPI can also validate configured provider-issued bearer tokens for direct API clients. Each current query runs against one selected source; cross-source federation is not implemented.</p>
 
-      <h2>Engine alpha path</h2>
-      <Code lang="text">{`CLI or Engine HTTP client
+      <h2>Engine distributed alpha path</h2>
+      <Code lang="text">{`Remote CLI or Engine HTTP client
   ▼
-catalog.schema.table resolution
+Coordinator: durable catalog → SQL → optimizer → stage graph
   ▼
-SQL parser → logical plan → physical BatchOperator pipeline
+Versioned fragments → worker tasks → Arrow IPC exchanges
   ▼
-local Parquet reader → Arrow RecordBatch results`}</Code>
-      <p>The Engine currently supports local Parquet with strict projection and conservative row-group pruning. It is not called by Studio or FastAPI. The Docker coordinator and workers exchange discovery heartbeats, but query fragments, shuffle, retry, cancellation, ADLS Gen2, S3, Delta Lake, and Iceberg remain target work.</p>
-      <Callout type="warn">The alpha Engine HTTP service has no authentication or TLS. Keep it on a trusted local network boundary. See <a href="/docs/engine">Engine</a> and <a href="/docs/operations">Operations</a> before running it.</Callout>
+local Parquet / Delta splits → root Arrow result`}</Code>
+      <p>The Engine executes distributed scans, partial/final aggregates, Sort/TopN, and repartitioned or broadcast joins. Retry, cancellation, exchange cleanup, and bounded Sort/TopN spill foundations are wired. It is not yet called by Studio or FastAPI. ADLS Gen2, S3, Iceberg, admission control, aggregate/join spill, and production qualification remain target work.</p>
+      <Callout type="warn">Internal exchange and catalog-mutation routes have bearer tokens, but statement clients do not yet have end-user authentication, authorization, or TLS. Keep Engine behind a trusted network boundary.</Callout>
 
       <h2>Data and control planes</h2>
       <ul>

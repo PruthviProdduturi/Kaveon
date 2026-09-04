@@ -23,7 +23,7 @@ See [STATUS.md](STATUS.md) and [HANDSHAKE.md](HANDSHAKE.md) for volatile deliver
 |---|---|
 | **Kaveon Studio** | Dashboards, chart construction, SQL Lab, datasets, and administration |
 | **Kaveon DLM** | Deterministic dataset routing, intent resolution, compiled answers, and SQL generation without a hosted LLM |
-| **Kaveon Engine** | Rust catalog resolution, SQL planning, and vectorized execution over local Parquet and local Delta today; optimization and direct cloud lake reads are target capabilities |
+| **Kaveon Engine** | Rust catalog resolution, SQL optimization, vectorized operators, and distributed stage execution over local Parquet and Delta; direct cloud lake reads remain target capabilities |
 
 The defining data model is the **Live Lake Path**: Kaveon reads data in the customer’s storage without mandatory import. **Optimized ingest** is an explicit target mode that writes sorted, partitioned, compressed data back into customer-controlled storage. The current internal enum still calls this access pattern `Shortcut`; that implementation name is not the product concept.
 
@@ -51,21 +51,22 @@ flowchart LR
 
 The browser calls the Next.js proxy rather than constructing trusted API identity headers. FastAPI owns product services, metadata, DLM compilation and serving, and the legacy live-query path.
 
-### Rust Engine path — alpha
+### Rust Engine path — distributed alpha
 
 ```mermaid
 flowchart LR
-    Client[CLI or HTTP client] --> Entry[kaveon / kaveon-server]
-    Entry --> Parser[kaveon-sql]
-    Parser --> Plan[Logical plan]
-    Plan --> Physical[Physical planner]
-    Physical --> Ops[kaveon-exec]
-    Ops --> Reader[kaveon-storage]
-    Reader --> Local[(Local Parquet or Delta table)]
-    Reader -->|Arrow RecordBatch| Ops
+    Client[Remote CLI or HTTP client] --> Coordinator[Engine coordinator]
+    Coordinator --> Catalog[(Native durable catalog)]
+    Coordinator --> Parser[SQL + optimizer]
+    Parser --> Graph[Stage graph + executable fragments]
+    Graph --> Workers[Engine workers]
+    Workers <-->|Authenticated Arrow IPC exchange| Workers
+    Workers --> Reader[Parquet / Delta readers]
+    Reader --> Local[(Customer-controlled local lake)]
+    Workers -->|Root Arrow results| Coordinator
 ```
 
-Today the Engine queries local single-file Parquet tables and local multi-file Delta tables. Delta snapshot resolution replays a complete JSON commit history from version 0; checkpoint replay is not supported. Studio and FastAPI do not route queries to the Engine, and Python bindings are a scaffold. ADLS Gen2, S3, and Iceberg remain non-executable target paths.
+Today the Engine queries local Parquet tables and multi-file Delta tables. The coordinator builds validated stage DAGs and versioned fragments for scan/filter/project, partial/final aggregates, Sort/TopN/limit, and repartitioned or broadcast joins. Workers execute deterministic partitions, exchange Arrow IPC payloads, and support bounded retry/cancellation lifecycle behavior. Delta snapshot resolution still requires complete JSON commit history from version 0; checkpoints are unsupported. Studio and FastAPI do not yet route user queries to the Engine, and Python bindings remain a scaffold. ADLS Gen2, S3, and Iceberg are non-executable target paths.
 
 HTTP query records are inserted at submission and retain measured analysis, physical-planning, execution, and result-serialization durations. Completed storage scans report files opened, row groups considered/read/pruned, selected compressed Parquet bytes, emitted rows and batches, Delta snapshot time, footer time, read time, and throughput. Completed distributed stages report their worker tasks, partitions, elapsed time, output rows, Arrow batches, and transport bytes. The shared telemetry types distinguish a measured zero from an unavailable value. Physical operator CPU/memory, blocked time, spill, and live task updates are not yet emitted.
 
@@ -78,19 +79,20 @@ HTTP query records are inserted at submission and retain measured analysis, phys
 ### Crate boundaries
 
 ```text
-kaveon-cli ─────┐
-kaveon-server ──┼──> kaveon-sql ──> logical plan ──> physical planner
-                │                                      │
-                └──────────────────────────────────> kaveon-exec
-                                                       │
-                                                       v
-                                                kaveon-storage
-                                                       │
-                                                       v
-                                                Arrow / Parquet
+kaveon-cli ─────> kaveon-server ──> kaveon-sql ──> kaveon-optim
+                       │                                │
+                       ├──> kaveon-catalog              v
+                       ├──> stage / fragment planner -> kaveon-exec
+                       └──> scheduler / exchange         │
+                                                          v
+                                                   kaveon-storage
+                                                          │
+                                                          v
+                                                Arrow / Parquet / Delta
 
-kaveon-core: shared errors, expressions, catalog types and operator contracts
-kaveon-optim: logical rewrites (target; current pass is not wired)
+kaveon-core: shared errors, expressions, catalog, fragment, exchange, memory, and telemetry contracts
+kaveon-catalog: SQLite/WAL metadata authority for one coordinator
+kaveon-optim: wired logical filter pushdown and predicate conversion
 kaveon-python: Python boundary (scaffold)
 ```
 
@@ -116,14 +118,15 @@ pub trait BatchOperator {
 |---|---|---|
 | Local Parquet scan | **Implemented** | Streaming batches, metadata, strict projection |
 | Local Delta scan | **Alpha** | JSON-log snapshot replay and streaming across active Parquet files; complete history from version 0 required, checkpoints unsupported |
-| Row-group pruning | **Implemented** | Available in storage; planners do not yet supply the predicate |
+| Row-group pruning | **Implemented** | Conservative statistics pruning; planner supplies pushed filters and retains residual evaluation |
 | Filter and projection | **Implemented** | Batch operators |
-| Hash aggregate | **Implemented** | In-memory and blocking; no spill or shuffle |
+| Hash aggregate | **Alpha** | Local and distributed partial/final COUNT/SUM/MIN/MAX/weighted AVG/exact DISTINCT; aggregate spill absent |
 | Limit | **Implemented** | Physical operator |
-| Sort / TopN | **Target** | `ORDER BY` is parsed but currently passed through |
-| Filter pushdown | **Target** | Optimizer pass is a no-op and is not wired |
-| Distributed execution | **Alpha** | Deterministic scan partitions and partial COUNT/SUM/MIN/MAX GROUP BY execute across active workers; shuffle, joins, retry, spill, AVG, and DISTINCT remain local/target |
-| Exchange foundation | **Alpha** | Stable hash partitioning and bounded Arrow batch buffers are implemented; asynchronous network shuffle is not wired |
+| Sort / TopN | **Alpha** | Vectorized local execution, distributed partial/final TopN, and fixed-fan-in external merge |
+| Filter pushdown | **Implemented** | Wired optimizer pass converts safe predicates while retaining the row filter |
+| Distributed execution | **Alpha** | General fragments cover scans, aggregates, Sort/TopN, and hash/cross joins with retry and cancellation |
+| Exchange foundation | **Alpha** | Authenticated Arrow IPC v2 endpoints, deterministic partitioning, byte bounds, idempotency, and cleanup; streaming flow control absent |
+| Native durable catalog | **Alpha** | SQLite/WAL transactions, revisions, lifecycle, audit, Arrow schemas, and restart reconstruction for one coordinator |
 
 ### Catalog identity
 
@@ -136,7 +139,7 @@ Catalog
         └── access: Shortcut | Optimized
 ```
 
-The catalog separates logical `catalog.schema.table` identity from physical location. A resolved table combines metadata with local, ADLS Gen2, or S3 storage. Local Parquet and local Delta are executable today; ADLS Gen2, S3, and Iceberg are targets.
+The catalog separates logical `catalog.schema.table` identity from physical location. SQLite/WAL is the durable authority for the current single coordinator; `CatalogManager` is its process-local planning snapshot. Executable fragment version 2 carries the resolved source URI and data format, so workers do not depend on divergent local catalog state. External Hive Metastore, Glue, Unity Catalog, and Iceberg REST adapters are contracts—not implemented connectivity. See [Engine catalog architecture](engine/CATALOG.md).
 
 ### Target lake-read path
 
@@ -170,17 +173,14 @@ Correctness dominates pruning aggression. Missing, nested, inexact, incompatible
 
 1. `POST /v1/statement` accepts SQL.
 2. `kaveon-sql` creates a logical plan.
-3. The server recursively constructs the physical operator tree.
-4. `ParquetReader` streams a resolved local Parquet file, or `DeltaTableReader` resolves the JSON-log snapshot and streams its active Parquet files.
-5. Operators pull batches; the server collects all results.
-6. Cells are converted to JSON and the completed result is retained in process memory.
+3. The optimizer applies safe filter/projection pruning and the coordinator creates a stage graph plus versioned executable fragments.
+4. Workers scan deterministic Parquet row-group or Delta-file partitions and execute vectorized operators.
+5. Intermediate stages move authenticated Arrow IPC partitions through hash, single, round-robin, or broadcast exchanges.
+6. The root stage returns Arrow results to the coordinator; cells are converted to JSON and the completed result is retained in process memory.
 
-The retained record includes a structured logical-plan tree and optional client
-session context. The Engine UI renders the tree directly rather than exposing
-Rust debug text. Optimized and physical plans remain nullable until their actual
-planner and executor producers are connected.
+The retained record includes structured logical, optimized, and physical plan trees, optional client session context, and completed stage/task telemetry. The Engine UI renders these structures directly rather than exposing Rust debug text. Per-operator live CPU, memory, blocked, and spill measurements remain incomplete.
 
-Submission is currently synchronous despite query IDs and query-state types. Deleting a stored query removes its retained result; it does not cancel running computation.
+The statement response remains synchronous, while internal worker tasks have explicit attempts, waiting, replay, cancellation, and cleanup. Coordinator cancellation propagates to workers; query-history persistence and asynchronous result retrieval remain incomplete.
 
 ### Target integrated query
 
@@ -208,7 +208,7 @@ sequenceDiagram
     end
 ```
 
-This sequence is a target. API-to-Engine identity, distributed scheduling, exchanges, and worker fragment execution are not implemented.
+API-to-Engine identity and Studio routing remain target integration. Distributed scheduling, exchanges, and worker fragment execution are implemented alpha capabilities.
 
 ## Trust boundaries
 
@@ -217,7 +217,8 @@ This sequence is a target. API-to-Engine identity, distributed scheduling, excha
 | Browser → Studio | Auth.js session and same-origin routes | Maintain CSRF and session controls |
 | Studio → FastAPI | Proxy secret and server-created identity headers | Strip client identity headers; TLS/private ingress |
 | API → databases | Configured credentials and workload identity | Least privilege and auditable rotation |
-| Client → Engine HTTP | **No authentication, TLS, or authorization** | Service identity, query authorization, TLS, quotas |
+| Client → Engine HTTP | Catalog mutations and internal exchanges have bearer tokens; statements lack end-user auth/TLS | Service identity, query authorization, TLS, quotas |
+| Engine coordinator → workers | Shared bearer token on internal exchange/task control | Workload identity, rotation, TLS, network policy |
 | Engine → storage | Local filesystem access | Scoped managed/workload identity and snapshot consistency |
 
 The metadata plane stores product configuration, semantic definitions, DLM artifacts, and operational records. The customer data plane contains analytical rows. The Live Lake Path must not silently copy customer data into Kaveon-owned persistence.
@@ -229,12 +230,12 @@ The metadata plane stores product configuration, semantic definitions, DLM artif
 | Session | Cookie and Studio runtime | Identity remains server asserted |
 | DLM context | Metadata DB and process-local compiled contexts | Coverage and freshness are observable |
 | Database pools | FastAPI process | Bounded pools and stale-connection recovery |
-| Engine catalog | Per Engine process | Versioned configuration and consistent snapshots |
-| Engine results | Process-global unbounded map | Limits, expiry, pagination, persistence policy, cancellation |
+| Engine catalog | SQLite/WAL authority plus coordinator planning snapshot | External transactional service for multi-coordinator consistency |
+| Engine results | Bounded process-local query registry | Expiry, pagination, persistence policy, asynchronous retrieval |
 | Parquet batches | Pull-based storage boundary | Preserve bounded execution end to end |
 | Object metadata | Not implemented | Cache by object identity/eTag; never mix snapshots |
 
-The Engine server currently performs blocking file and CPU work in an async handler and collects full results. Production integration requires bounded materialization, backpressure, concurrency limits, timeouts, cancellation, and isolation from the async reactor.
+The Engine still collects root results for synchronous response materialization. Production integration requires paged/streaming delivery, admission queues, operator-wide memory enforcement, aggregate/join spill, and exchange streaming flow control.
 
 ## Deployment and startup
 
@@ -261,12 +262,12 @@ kaveon-server [config.toml]
 
 1. Load `/etc/kaveon/config.toml` by default.
 2. Overlay `KAVEON_*` environment variables.
-3. Build in-memory catalogs and local schemas.
+3. Open/migrate the durable native catalog, idempotently bootstrap configured discovery, and reconstruct the active planning snapshot.
 4. Initialize node and cluster state.
 5. Workers start heartbeats to the coordinator.
 6. Bind Axum to `0.0.0.0:<http_port>`; default `8080`.
 
-Docker declares one coordinator and two workers. Workers advertise routable service URIs, receive JSON task-control requests, and return typed Arrow IPC streams after scanning disjoint Parquet row groups or Delta active files. The coordinator merges eligible partial COUNT, SUM, MIN, MAX, and GROUP BY results. Queries requiring hash exchange, distributed ordering, AVG state, exact DISTINCT state, retry, or spill deliberately remain node-local. The shared data volume starts empty unless populated externally.
+Docker declares one coordinator and two workers. Workers advertise routable service URIs, receive versioned fragment tasks, and exchange typed Arrow IPC partitions after scanning disjoint Parquet row groups or Delta active files. The coordinator schedules partial/final aggregates, distributed Sort/TopN, and repartitioned/broadcast joins. The catalog database uses a persistent coordinator volume; customer data is bind-mounted separately and starts empty unless explicitly provided.
 
 ## Quality invariants
 
@@ -286,10 +287,10 @@ Performance claims must name dataset, hardware, version, cache state, concurrenc
 
 | Horizon | Engine capability |
 |---|---|
-| **M1 in progress** | Delivered: local Parquet reads, local Delta JSON-log snapshots, `GROUP BY`, storage benchmarks. In progress: sort, TopN, filter pushdown |
-| **Next** | ADLS Gen2 range reads, bounded concurrency, metrics, API integration, comparative benchmarks |
-| **Then** | Delta checkpoint replay, schema evolution, deletion vectors, time travel |
-| **Scale-out** | Fragments, exchanges, shuffle, retries, cancellation, spill, admission control |
+| **Delivered alpha** | Local Parquet/Delta, optimizer, analytical operators, native catalog, remote CLI, distributed fragments/exchanges/retry/cancellation |
+| **Next** | ADLS Gen2 range reads, API/Studio identity bridge, catalog synchronization, admission control, aggregate/join spill |
+| **Then** | Delta checkpoints, schema evolution, deletion vectors, time travel, cost/statistics planning, dynamic filtering |
+| **Scale qualification** | Exchange flow control, worker-loss/concurrency/skew tests, operator telemetry, five-worker AKS evidence, comparative benchmarks |
 | **Post-launch** | Iceberg, optimized ingest, SIMD/JIT candidates, cost-based optimization |
 
 ## Architectural decisions
@@ -306,14 +307,14 @@ Performance claims must name dataset, hardware, version, cache state, concurrenc
 
 ## Known architectural debt
 
-- Engine is not integrated with Studio, FastAPI, or functional Python bindings.
-- Distributed scheduling currently covers only single-source merge-safe aggregates; there is no hash exchange, retry, or spill.
-- `ORDER BY` is ignored by physical planners; sort and TopN are incomplete.
-- Predicate pushdown is not implemented end to end.
-- Storage pruning needs safe handling for nested columns and incomparable float statistics.
-- Engine HTTP lacks authentication, TLS, authorization, quotas, and admission control.
-- Query execution is synchronous and retains full results in an unbounded map.
-- Docker starts with an empty named data volume, and readiness checks catalog presence rather than validating that a table is readable.
+- Engine query execution is not integrated with Studio/FastAPI identity, and Python bindings remain a scaffold.
+- The platform PostgreSQL source registry and Engine native catalog need a revision-aware synchronization bridge.
+- ADLS Gen2/S3 readers and broader Delta/Iceberg protocol semantics are not executable.
+- Aggregate/join spill, admission control, exchange streaming flow control, dynamic filtering, and cost-based optimization are absent.
+- Engine statement HTTP lacks end-user authentication, TLS, authorization, resource groups, and quotas.
+- Query responses still materialize root results synchronously; retained history is process-local.
+- Multi-coordinator metadata requires an external transactional catalog service; SQLite is intentionally single-coordinator.
+- Docker data mounts must be configured explicitly, and readiness does not validate every registered table snapshot.
 - The shipping application uses legacy SQL passthrough during Engine integration.
 
 ## Repository topology

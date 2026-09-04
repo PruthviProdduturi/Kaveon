@@ -14,7 +14,7 @@ Engine:  GET /ready   # requires a loaded catalog`}</Code>
     <h2>Database connectivity</h2>
     <p>Check the <code>METADATA_*</code> settings, DNS/firewall access, TLS, driver installation, and database role. A registered source’s test endpoint is a stub; run <code>SELECT 1</code> in SQL Lab or use a setup/admin probe.</p>
     <h2>Expected alpha behavior</h2>
-    <ul><li>ORDER BY is ignored by Engine physical planning.</li><li>Workers are discovery-only and do not execute distributed fragments.</li><li>Engine history and FastAPI job/cache state disappear after process restart.</li><li>Deleting an Engine query record does not cancel computation.</li></ul>
+    <ul><li>Workers execute versioned distributed fragments, but admission control and aggregate/join spill are not yet implemented.</li><li>Engine query history and FastAPI job/cache state are process-local and disappear after restart.</li><li>Query cancellation propagates to active distributed work, but synchronous operators only observe cancellation at their current execution boundaries.</li><li>ADLS Gen2, S3, Iceberg, and external catalog adapters are contracts rather than executable data paths.</li></ul>
     <h2>Escalation</h2>
     <p>Record commit, component, timestamp/time zone, route or sanitized SQL, database type, topology, and restart behavior. Never publish tokens, <code>.env</code>, connection strings, or customer rows.</p>
     <Pager prev={{ href: "/docs/connectors", title: "Connector Matrix" }} next={{ href: "/docs/upgrades", title: "Upgrades" }} />
