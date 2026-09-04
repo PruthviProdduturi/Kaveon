@@ -19,12 +19,12 @@ This is a functioning distributed slice, not yet a Trino-class distributed runti
 | # | Workstream | State | Verified scope | Remaining release gate |
 |---|---|---|---|---|
 | 1 | Network hash exchange | In progress | Arrow IPC transport; hash partitioner; bounded buffer; authenticated idempotent POST/GET/DELETE exchange endpoints | Wire fragment producers/consumers to the endpoints, streaming flow control, and end-to-end repartition tests |
-| 2 | Stage and fragment planner | In progress | Shared stage/task/partition identities; general fragment contracts under validation | Translate physical plans into a dependency graph and schedule dependencies instead of query-shape branches |
-| 3 | Multi-stage aggregation | In progress | Distributed merge for count/sum/min/max | Mergeable AVG and exact distinct state, repartitioned final aggregation, empty/null semantics, multi-stage integration |
+| 2 | Stage and fragment planner | In progress | Validated DAG builder emits partial/final aggregate, sort/TopN, equi-join, and broadcast cross-join stages | Execute the graph and schedule dependencies instead of query-shape branches |
+| 3 | Multi-stage aggregation | In progress | Distributed count/sum/min/max; versioned Arrow state encoding covers weighted AVG and typed exact distinct | Send encoded states through exchange and execute repartitioned final aggregation with equivalence tests |
 | 4 | Distributed TopN | Implemented | Local partial TopN per scan partition followed by an Arrow-native coordinator final merge; multi-column direction/null and schema validation tests | Docker correctness/performance evidence and migration into the general fragment scheduler |
 | 5 | Distributed hash joins | Not started | Correct local inner/outer/cross hash joins; hash partitioner exists | Co-partition both inputs, exchange by join keys, build/probe tasks, broadcast threshold, skew handling, outer-join correctness |
-| 6 | Memory accounting and spill | In progress | Thread-safe hard query limits, per-operator RAII reservations, current/peak accounting, bounded exchange; process RSS telemetry | Wire accounts into operators, admission/revocation, aggregate/join/sort spill, disk limits, spill telemetry |
-| 7 | Failure, retry, cancellation | In progress | Task attempt is part of task identity; alternate-worker retry scheduler under validation | Idempotent task registry, query cancellation propagation, timeouts, retry classification, exchange cleanup, worker-loss tests |
+| 6 | Memory accounting and spill | In progress | Thread-safe memory limits and RAII reservations; bounded Arrow IPC spill runs with disk accounting and cleanup | Wire accounts/spill into aggregate, join, sort and exchange; add admission/revocation and spill telemetry |
+| 7 | Failure, retry, cancellation | In progress | Attempt identity, alternate-worker retry, 120-second task timeout, and retryable HTTP/transport classification | Idempotent task registry, cancellation propagation, exchange cleanup, and worker-loss tests |
 | 8 | Scheduler maturity | In progress | Active-worker discovery, retry rotation, dynamic split leases independent of worker count, failed-lease requeue | Wire storage split enumeration, worker pull/steal, skew mitigation, queues, admission, and resource groups |
 
 ## Correctness and performance gates
@@ -40,7 +40,7 @@ Every workstream must land with:
 7. Correctness comparison against the local executor for identical SQL and data.
 8. Criterion or repeatable release-build measurements that report data volume, rows, worker count, warmup, sample count, and memory. Single runs are never published as benchmark claims.
 
-### Latest verification — 2026-09-03
+### Latest verification — 2026-09-04
 
 - `cargo fmt --check`: passed
 - Strict Clippy for `kaveon-core`, `kaveon-exec`, and `kaveon-server`, including all targets: passed
@@ -50,18 +50,20 @@ Every workstream must land with:
 
 The second integrated gate passed 69 focused tests across core, exec, and server and 112 tests across the full workspace after distributed TopN, authenticated exchange endpoints, memory reservations, and split leasing were added. Strict Clippy passed; Windows emitted filesystem-only incremental-cache hard-link warnings and copied the files instead.
 
+The third integrated gate passed 85 focused tests across core, exec, and server and 128 tests across the full workspace after aggregate-state wire encoding, the stage DAG builder, spill-run infrastructure, and task timeout/retry classification were added. Strict Clippy and formatting passed. The Windows incremental cache again used file copies when hard links were unavailable; this is an environment warning, not a Rust lint.
+
 ## Continuation point
 
 Complete the current round in this order:
 
-1. Validate and integrate the shared stage/fragment contracts.
-2. Validate the exchange envelope and expose authenticated worker exchange endpoints.
-3. Replace aggregate-specific task fan-out with the fragment scheduler.
-4. Finish mergeable AVG and exact distinct state and run local/distributed equivalence tests.
-5. Add distributed partial/final TopN.
-6. Add repartitioned hash joins only after exchange backpressure is proven end to end.
-7. Add memory reservations and spill before broad concurrency benchmarks.
-8. Exercise worker loss, retry, cancellation, skew, and admission under Docker before making a Trino-class claim.
+1. Build the stage executor and connect graph outputs/inputs through authenticated exchange endpoints.
+2. Replace aggregate-specific fan-out and send AVG/exact-distinct states through the exchange.
+3. Execute repartitioned and broadcast hash-join graphs with local/distributed equivalence tests.
+4. Wire memory reservations and spill runs into aggregate, join, sort, TopN, and exchange.
+5. Add the idempotent worker task registry, query cancellation propagation, and exchange cleanup.
+6. Connect storage split enumeration to worker pull/steal, skew mitigation, and admission control.
+7. Exercise correctness, worker loss, memory pressure, concurrency, and performance under local Docker.
+8. Add ADLS Gen2 range reads, then repeat the suite on a minimum five-worker AKS cluster.
 
 ## Machine-to-machine handoff
 
