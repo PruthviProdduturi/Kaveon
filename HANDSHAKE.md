@@ -264,7 +264,8 @@ let reservation = operator.reserve(bytes)?;
 - Equi-joins hash both inputs into colocated partitions; cross joins model a round-robin probe side and broadcast build side.
 - The stage graph is descriptive today. The executor still uses aggregate/TopN-specific fan-out until fragment execution is wired.
 - `StageRuntime` validates complete task assignment coverage, gates stages on dependencies, enforces task transitions and retry attempts, cascades terminal failure/cancellation, and emits deduplicated exchange-cleanup intents. Worker transport integration remains pending.
-- `WorkerLifecycle` provides bounded idempotent task owner/waiter/completed replay and query cancellation tokens. HTTP task execution and coordinator cancellation are not wired to it yet.
+- `ExecutableFragment` is the versioned worker instruction contract for scans, filter/project, aggregate modes, Sort/TopN/limit, exchange inputs/outputs, and hash joins. It rejects malformed, cyclic, unreachable, and invalid operator graphs before execution.
+- `WorkerLifecycle` now backs HTTP task owner/waiter/completed replay and cancellation. Coordinator cancellation propagates to workers and retains `CANCELED` history; an authenticated terminal-finish endpoint releases registry capacity without conflating completion and cancellation.
 
 ### Sort and TopN execution
 
@@ -385,3 +386,4 @@ let source = DeltaTableReader::new(table_directory)
 | 2026-09-03 | Codex | Added distributed partial/final TopN, authenticated bounded exchange endpoints, atomic query/operator memory reservations, and dynamic split leasing with failed-task requeue. Local Docker nodes now share the exchange token through environment configuration. General fragment execution, distributed join/AVG/distinct, operator memory wiring/spill, cancellation, and scheduler stress remain open. |
 | 2026-09-04 | Codex | Added versioned Arrow encoding for weighted AVG and typed exact DISTINCT states, a validated aggregate/sort/TopN/join stage-DAG builder, bounded RAII Arrow spill runs, and task timeout/retry classification. These are green foundations; stage execution, distributed join/state exchange, operator spill wiring, cancellation, and Docker/AKS stress remain open. |
 | 2026-09-04 | Codex | Added the dependency-gated stage runtime, bounded idempotent task/cancellation lifecycle, and opt-in spill-aware Sort/TopN. Final spill merge remains eager, and runtime/lifecycle contracts still require worker HTTP integration before failure recovery or fully bounded execution can be claimed. |
+| 2026-09-04 | Codex | Added versioned executable fragments, canonical grouped aggregate-state transport, lazy spill-run merging, idempotent HTTP task replay/cancellation, and authenticated terminal lifecycle cleanup. Fragment translation/execution and distributed join/AVG/distinct remain the next correctness gates; spill merge fan-in remains uncapped. |

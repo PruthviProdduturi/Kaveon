@@ -21,6 +21,7 @@ pub struct AppState {
     pub cluster: RwLock<ClusterState>,
     pub catalog: RwLock<kaveon_core::CatalogManager>,
     pub exchange_store: exchange::ExchangeStore,
+    pub lifecycle: lifecycle::WorkerLifecycle<(Vec<u8>, u64)>,
 }
 
 #[tokio::main]
@@ -65,6 +66,7 @@ async fn main() {
         cluster: RwLock::new(cluster),
         catalog: RwLock::new(catalog),
         exchange_store: exchange::ExchangeStore::default(),
+        lifecycle: lifecycle::WorkerLifecycle::default(),
     });
 
     if !state.config.coordinator {

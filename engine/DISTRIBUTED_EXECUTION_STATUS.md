@@ -19,12 +19,12 @@ This is a functioning distributed slice, not yet a Trino-class distributed runti
 | # | Workstream | State | Verified scope | Remaining release gate |
 |---|---|---|---|---|
 | 1 | Network hash exchange | In progress | Arrow IPC transport; hash partitioner; bounded buffer; authenticated idempotent POST/GET/DELETE exchange endpoints | Wire fragment producers/consumers to the endpoints, streaming flow control, and end-to-end repartition tests |
-| 2 | Stage and fragment planner | In progress | Validated DAG builder plus dependency-gated runtime state machine, retries, terminal cascade, and exchange-cleanup intents | Connect task assignments to worker transport and execute fragments instead of query-shape branches |
-| 3 | Multi-stage aggregation | In progress | Distributed count/sum/min/max; versioned Arrow state encoding covers weighted AVG and typed exact distinct | Send encoded states through exchange and execute repartitioned final aggregation with equivalence tests |
+| 2 | Stage and fragment planner | In progress | Validated DAG/runtime plus a versioned executable-fragment contract covering scans, relational operators, exchanges, aggregates, and joins | Translate stage DAGs into executable fragments and connect assignments to worker transport |
+| 3 | Multi-stage aggregation | In progress | Distributed count/sum/min/max; canonical grouped Arrow state supports typed/null keys, weighted AVG, and exact distinct | Execute partial/final grouped states through network exchange with equivalence tests |
 | 4 | Distributed TopN | Implemented | Local partial TopN per scan partition followed by an Arrow-native coordinator final merge; multi-column direction/null and schema validation tests | Docker correctness/performance evidence and migration into the general fragment scheduler |
 | 5 | Distributed hash joins | Not started | Correct local inner/outer/cross hash joins; hash partitioner exists | Co-partition both inputs, exchange by join keys, build/probe tasks, broadcast threshold, skew handling, outer-join correctness |
-| 6 | Memory accounting and spill | In progress | Thread-safe memory limits; bounded Arrow spill runs; opt-in spill-aware Sort/TopN accumulation | Add streaming k-way run merge, then wire aggregate/join/exchange, admission/revocation, and telemetry |
-| 7 | Failure, retry, cancellation | In progress | Attempt identity, retry/timeouts, bounded idempotent task registry, owner/waiter replay, cancellation tokens, and cleanup contracts | Wire lifecycle into HTTP execution, propagate cancellation across workers, and run worker-loss tests |
+| 6 | Memory accounting and spill | In progress | Memory limits; bounded Arrow spill runs; lazy streaming k-way merge for spill-aware Sort/TopN | Cap fan-in with multi-pass compaction, then wire aggregate/join/exchange, admission/revocation, and telemetry |
+| 7 | Failure, retry, cancellation | In progress | Idempotent HTTP task replay, cancellation propagation, terminal registry cleanup, retries/timeouts, and retained CANCELED history | Wire stage-runtime cleanup, authenticate all internal task control, and run worker-loss tests |
 | 8 | Scheduler maturity | In progress | Active-worker discovery, retry rotation, dynamic split leases independent of worker count, failed-lease requeue | Wire storage split enumeration, worker pull/steal, skew mitigation, queues, admission, and resource groups |
 
 ## Correctness and performance gates
@@ -53,6 +53,8 @@ The second integrated gate passed 69 focused tests across core, exec, and server
 The third integrated gate passed 85 focused tests across core, exec, and server and 128 tests across the full workspace after aggregate-state wire encoding, the stage DAG builder, spill-run infrastructure, and task timeout/retry classification were added. Strict Clippy and formatting passed. The Windows incremental cache again used file copies when hard links were unavailable; this is an environment warning, not a Rust lint.
 
 The fourth gate passed 96 focused tests across core, exec, and server and 139 tests across the full workspace after the stage runtime, idempotent task/cancellation lifecycle, and spill-aware Sort/TopN paths were added. Strict Clippy and formatting passed. Spill accumulation is bounded, but final run merging is still eager and is not yet a fully bounded external sort.
+
+The fifth gate passed 106 focused tests across core, exec, and server and 149 tests across the full workspace after executable fragments, canonical grouped aggregate states, lazy spill merging, HTTP lifecycle integration, and terminal cleanup were added. Strict Clippy and formatting passed. Spill merge retains one cursor batch per run, so fixed fan-in/multi-pass compaction remains required for a strict constant ceiling.
 
 ## Continuation point
 

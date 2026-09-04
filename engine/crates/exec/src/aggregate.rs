@@ -13,6 +13,8 @@ use std::sync::Arc;
 
 const AGGREGATE_STATE_VERSION_KEY: &str = "kaveon.aggregate_state.version";
 const AGGREGATE_STATE_VERSION: &str = "1";
+const GROUPED_STATE_VERSION_KEY: &str = "kaveon.grouped_aggregate_state.version";
+const GROUPED_STATE_VERSION: &str = "1";
 const STATE_SUM: u8 = 1;
 const STATE_COUNT: u8 = 2;
 const STATE_MIN: u8 = 3;
@@ -24,6 +26,7 @@ const VALUE_INT32: u8 = 2;
 const VALUE_INT64: u8 = 3;
 const VALUE_UTF8: u8 = 4;
 const VALUE_FLOAT64_BITS: u8 = 5;
+const VALUE_NULL: u8 = 0;
 
 #[derive(Debug, Clone, Copy)]
 pub enum AggFunc {
@@ -102,6 +105,24 @@ pub enum AggregateState {
     Max(Option<f64>),
     Avg { sum: f64, count: u64 },
     CountDistinct(HashSet<AggregateValue>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GroupedAggregateState {
+    pub group_keys: Vec<AggregateValue>,
+    pub states: Vec<AggregateState>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FinalAggregateValue {
+    Count(u64),
+    Numeric(Option<f64>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FinalizedAggregateGroup {
+    pub group_keys: Vec<AggregateValue>,
+    pub values: Vec<FinalAggregateValue>,
 }
 
 impl AggregateState {
@@ -221,6 +242,246 @@ impl AggregateState {
                 "numeric result requested from a count aggregate state",
             )),
         }
+    }
+}
+
+pub fn encode_grouped_aggregate_states(groups: &[GroupedAggregateState]) -> Result<Vec<u8>> {
+    validate_group_layouts(groups)?;
+    let mut rows = groups
+        .iter()
+        .map(|group| {
+            Ok((
+                encode_group_keys(&group.group_keys)?,
+                encode_aggregate_states(&group.states)?,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    rows.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    if rows.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err(exec_err("grouped aggregate state contains duplicate keys"));
+    }
+    let key_values = rows
+        .iter()
+        .map(|(keys, _)| Some(keys.as_slice()))
+        .collect::<Vec<_>>();
+    let state_values = rows
+        .iter()
+        .map(|(_, states)| Some(states.as_slice()))
+        .collect::<Vec<_>>();
+    let schema = grouped_state_schema();
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(BinaryArray::from(key_values)),
+            Arc::new(BinaryArray::from(state_values)),
+        ],
+    )?;
+    let mut bytes = Vec::new();
+    {
+        let mut writer = StreamWriter::try_new(&mut bytes, &schema)?;
+        writer.write(&batch)?;
+        writer.finish()?;
+    }
+    Ok(bytes)
+}
+
+pub fn decode_grouped_aggregate_states(bytes: &[u8]) -> Result<Vec<GroupedAggregateState>> {
+    let reader = StreamReader::try_new(Cursor::new(bytes), None)?;
+    validate_grouped_state_schema(&reader.schema())?;
+    let mut groups = Vec::new();
+    let mut previous_key: Option<Vec<u8>> = None;
+    for batch in reader {
+        let batch = batch?;
+        validate_grouped_state_schema(&batch.schema())?;
+        let keys = batch.column(0).as_binary::<i32>();
+        let states = batch.column(1).as_binary::<i32>();
+        for row in 0..batch.num_rows() {
+            if keys.is_null(row) || states.is_null(row) {
+                return Err(exec_err("grouped aggregate state row cannot contain nulls"));
+            }
+            let encoded_key = keys.value(row);
+            if previous_key
+                .as_deref()
+                .is_some_and(|previous| previous >= encoded_key)
+            {
+                return Err(exec_err(
+                    "grouped aggregate state keys are not in canonical order",
+                ));
+            }
+            groups.push(GroupedAggregateState {
+                group_keys: decode_group_keys(encoded_key)?,
+                states: decode_aggregate_states(states.value(row))?,
+            });
+            previous_key = Some(encoded_key.to_vec());
+        }
+    }
+    Ok(groups)
+}
+
+pub fn merge_grouped_aggregate_states(
+    partials: impl IntoIterator<Item = GroupedAggregateState>,
+) -> Result<Vec<GroupedAggregateState>> {
+    let mut merged = HashMap::<Vec<AggregateValue>, Vec<AggregateState>>::new();
+    let mut expected_layout = None;
+    for partial in partials {
+        let layout = state_layout(&partial.states)?;
+        match &expected_layout {
+            Some(expected) if expected != &layout => {
+                return Err(exec_err(
+                    "grouped aggregate partials contain incompatible state layouts",
+                ));
+            }
+            None => expected_layout = Some(layout),
+            _ => {}
+        }
+        if let Some(states) = merged.get_mut(&partial.group_keys) {
+            for (state, other) in states.iter_mut().zip(&partial.states) {
+                state.merge(other)?;
+            }
+        } else {
+            merged.insert(partial.group_keys, partial.states);
+        }
+    }
+    let mut groups = merged
+        .into_iter()
+        .map(|(group_keys, states)| {
+            let encoded_key = encode_group_keys(&group_keys)?;
+            Ok((encoded_key, GroupedAggregateState { group_keys, states }))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    groups.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    Ok(groups.into_iter().map(|(_, group)| group).collect())
+}
+
+fn validate_group_layouts(groups: &[GroupedAggregateState]) -> Result<()> {
+    let mut expected = None;
+    for group in groups {
+        let layout = state_layout(&group.states)?;
+        match &expected {
+            Some(expected) if expected != &layout => {
+                return Err(exec_err(
+                    "grouped aggregate states contain incompatible state layouts",
+                ));
+            }
+            None => expected = Some(layout),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn state_layout(states: &[AggregateState]) -> Result<Vec<u8>> {
+    if states.is_empty() {
+        return Err(exec_err(
+            "grouped aggregate state requires at least one accumulator",
+        ));
+    }
+    Ok(states
+        .iter()
+        .map(|state| match state {
+            AggregateState::Sum { .. } => STATE_SUM,
+            AggregateState::Count(_) => STATE_COUNT,
+            AggregateState::Min(_) => STATE_MIN,
+            AggregateState::Max(_) => STATE_MAX,
+            AggregateState::Avg { .. } => STATE_AVG,
+            AggregateState::CountDistinct(_) => STATE_COUNT_DISTINCT,
+        })
+        .collect())
+}
+
+pub fn finalize_grouped_aggregate_states(
+    groups: &[GroupedAggregateState],
+) -> Result<Vec<FinalizedAggregateGroup>> {
+    groups
+        .iter()
+        .map(|group| {
+            let values = group
+                .states
+                .iter()
+                .map(|state| match state {
+                    AggregateState::Count(_) | AggregateState::CountDistinct(_) => {
+                        state.count_result().map(FinalAggregateValue::Count)
+                    }
+                    _ => state.numeric_result().map(FinalAggregateValue::Numeric),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(FinalizedAggregateGroup {
+                group_keys: group.group_keys.clone(),
+                values,
+            })
+        })
+        .collect()
+}
+
+fn grouped_state_schema() -> SchemaRef {
+    let metadata = HashMap::from([(
+        GROUPED_STATE_VERSION_KEY.to_owned(),
+        GROUPED_STATE_VERSION.to_owned(),
+    )]);
+    Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("group_keys", DataType::Binary, false),
+            Field::new("aggregate_states", DataType::Binary, false),
+        ],
+        metadata,
+    ))
+}
+
+fn validate_grouped_state_schema(schema: &SchemaRef) -> Result<()> {
+    let expected = grouped_state_schema();
+    if schema.fields() != expected.fields()
+        || schema
+            .metadata()
+            .get(GROUPED_STATE_VERSION_KEY)
+            .map(String::as_str)
+            != Some(GROUPED_STATE_VERSION)
+    {
+        return Err(exec_err(
+            "incompatible grouped aggregate state Arrow schema",
+        ));
+    }
+    Ok(())
+}
+
+fn encode_group_keys(keys: &[AggregateValue]) -> Result<Vec<u8>> {
+    let mut output = Vec::new();
+    write_u64(&mut output, keys.len())?;
+    for key in keys {
+        let encoded = encode_group_key(key)?;
+        write_u64(&mut output, encoded.len())?;
+        output.extend_from_slice(&encoded);
+    }
+    Ok(output)
+}
+
+fn decode_group_keys(bytes: &[u8]) -> Result<Vec<AggregateValue>> {
+    let mut offset = 0;
+    let key_count = usize::try_from(read_u64(bytes, &mut offset)?)
+        .map_err(|_| exec_err("aggregate group key count is too large"))?;
+    let mut keys = Vec::with_capacity(key_count);
+    for _ in 0..key_count {
+        let length = usize::try_from(read_u64(bytes, &mut offset)?)
+            .map_err(|_| exec_err("aggregate group key is too large"))?;
+        let end = offset
+            .checked_add(length)
+            .ok_or_else(|| exec_err("aggregate group key length overflow"))?;
+        let encoded = bytes
+            .get(offset..end)
+            .ok_or_else(|| exec_err("truncated aggregate group key"))?;
+        keys.push(decode_aggregate_value(encoded)?);
+        offset = end;
+    }
+    if offset != bytes.len() {
+        return Err(exec_err("aggregate group keys contain trailing bytes"));
+    }
+    Ok(keys)
+}
+
+fn encode_group_key(value: &AggregateValue) -> Result<Vec<u8>> {
+    if matches!(value, AggregateValue::Null) {
+        Ok(vec![VALUE_NULL])
+    } else {
+        encode_aggregate_value(value)
     }
 }
 
@@ -460,7 +721,11 @@ fn decode_distinct_values(bytes: &[u8]) -> Result<HashSet<AggregateValue>> {
         let encoded = bytes
             .get(offset..end)
             .ok_or_else(|| exec_err("truncated distinct state payload"))?;
-        values.insert(decode_aggregate_value(encoded)?);
+        let value = decode_aggregate_value(encoded)?;
+        if matches!(value, AggregateValue::Null) {
+            return Err(exec_err("null cannot appear in a distinct state"));
+        }
+        values.insert(value);
         offset = end;
     }
     if offset != bytes.len() {
@@ -474,6 +739,7 @@ fn decode_aggregate_value(bytes: &[u8]) -> Result<AggregateValue> {
         .split_first()
         .ok_or_else(|| exec_err("empty distinct value payload"))?;
     match tag {
+        VALUE_NULL if payload.is_empty() => Ok(AggregateValue::Null),
         VALUE_BOOL if payload.len() == 1 && payload[0] <= 1 => {
             Ok(AggregateValue::Bool(payload[0] == 1))
         }
@@ -1092,5 +1358,86 @@ mod tests {
         assert!(
             matches!(result, Err(KaveonError::Execution(message)) if message.contains("incompatible"))
         );
+    }
+
+    fn grouped_state(
+        key: AggregateValue,
+        average: (f64, u64),
+        distinct: &[&str],
+    ) -> GroupedAggregateState {
+        GroupedAggregateState {
+            group_keys: vec![key],
+            states: vec![
+                AggregateState::Avg {
+                    sum: average.0,
+                    count: average.1,
+                },
+                AggregateState::CountDistinct(
+                    distinct
+                        .iter()
+                        .map(|value| AggregateValue::Utf8((*value).into()))
+                        .collect(),
+                ),
+            ],
+        }
+    }
+
+    #[test]
+    fn grouped_state_arrow_encoding_is_canonical_and_round_trips_null_keys() {
+        let first = grouped_state(AggregateValue::Utf8("west".into()), (30.0, 2), &["a", "b"]);
+        let second = grouped_state(AggregateValue::Null, (5.0, 1), &["c"]);
+
+        let forward = encode_grouped_aggregate_states(&[first.clone(), second.clone()]).unwrap();
+        let reverse = encode_grouped_aggregate_states(&[second, first]).unwrap();
+
+        assert_eq!(forward, reverse);
+        let decoded = decode_grouped_aggregate_states(&forward).unwrap();
+        assert_eq!(decoded.len(), 2);
+        assert!(
+            decoded
+                .iter()
+                .any(|group| group.group_keys == vec![AggregateValue::Null])
+        );
+    }
+
+    #[test]
+    fn grouped_merge_preserves_weighted_average_and_exact_distinct_union() {
+        let partials = vec![
+            grouped_state(AggregateValue::Utf8("west".into()), (30.0, 2), &["a", "b"]),
+            grouped_state(AggregateValue::Utf8("west".into()), (90.0, 1), &["b", "c"]),
+            grouped_state(AggregateValue::Utf8("east".into()), (20.0, 1), &["z"]),
+        ];
+
+        let merged = merge_grouped_aggregate_states(partials).unwrap();
+        let finalized = finalize_grouped_aggregate_states(&merged).unwrap();
+        let west = finalized
+            .iter()
+            .find(|group| group.group_keys == vec![AggregateValue::Utf8("west".into())])
+            .unwrap();
+
+        assert_eq!(
+            west.values,
+            vec![
+                FinalAggregateValue::Numeric(Some(40.0)),
+                FinalAggregateValue::Count(3),
+            ]
+        );
+    }
+
+    #[test]
+    fn grouped_state_rejects_incompatible_accumulator_layouts() {
+        let groups = vec![
+            GroupedAggregateState {
+                group_keys: vec![AggregateValue::Int64(1)],
+                states: vec![AggregateState::Count(1)],
+            },
+            GroupedAggregateState {
+                group_keys: vec![AggregateValue::Int64(2)],
+                states: vec![AggregateState::Avg { sum: 2.0, count: 1 }],
+            },
+        ];
+
+        assert!(encode_grouped_aggregate_states(&groups).is_err());
+        assert!(merge_grouped_aggregate_states(groups).is_err());
     }
 }

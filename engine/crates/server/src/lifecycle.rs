@@ -397,6 +397,26 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn sequential_terminal_queries_can_exceed_registry_capacity() {
+        let lifecycle = WorkerLifecycle::<Vec<u8>> {
+            tasks: TaskRegistry::with_capacity(2).unwrap(),
+            cancellations: CancellationRegistry::with_capacity(2).unwrap(),
+        };
+        for index in 0..10 {
+            let query_id = format!("query-{index}");
+            lifecycle.cancellations.token(&query_id).unwrap();
+            let TaskClaim::Owner(owner) = lifecycle.tasks.claim(task(&query_id, 0)).unwrap() else {
+                panic!("new sequential task must own its registry entry");
+            };
+            owner
+                .complete(TaskOutcome::Success(Arc::new(Vec::new())))
+                .unwrap();
+            assert_eq!(lifecycle.finish_query(&query_id).unwrap(), 1);
+            assert!(lifecycle.tasks.is_empty().unwrap());
+        }
+    }
+
     #[tokio::test]
     async fn cancellation_is_idempotent_and_wakes_existing_and_late_waiters() {
         let registry = CancellationRegistry::with_capacity(1).unwrap();
