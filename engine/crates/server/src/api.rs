@@ -1,12 +1,14 @@
 use crate::AppState;
 use crate::cluster::{NodeInfo, NodeRole};
+use crate::lifecycle::{CancellationToken, TaskClaim, TaskOutcome, TaskOwner};
 use axum::body::Body;
 use axum::extract::{Path, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use kaveon_core::collect_batches;
+use kaveon_core::{StageId, TaskId};
 use kaveon_exec::sort::SortExpr;
 use kaveon_exec::topn::merge_top_n;
 use kaveon_sql::logical_plan::sql_to_logical_plan;
@@ -123,6 +125,7 @@ enum QueryState {
     Running,
     Finished,
     Failed,
+    Canceled,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,6 +146,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(crate::exchange::routes())
         .route("/v1/statement", post(submit_statement))
         .route("/v1/task", post(execute_task))
+        .route(
+            "/v1/internal/query/{query_id}/finish",
+            post(finish_worker_query),
+        )
         .route("/v1/query", get(list_queries))
         .route("/v1/query/{query_id}", get(get_query))
         .route("/v1/query/{query_id}", delete(cancel_query))
@@ -231,26 +238,80 @@ async fn execute_task(
         )
             .into_response();
     }
+    let task_id = TaskId {
+        query_id: req.query_id.clone(),
+        stage_id: StageId(req.stage_id),
+        partition: req.partition_index,
+        attempt: req.attempt,
+    };
+    let cancellation = match state.lifecycle.cancellations.token(&req.query_id) {
+        Ok(token) => token,
+        Err(error) => return lifecycle_error_response(error.to_string()),
+    };
+    if cancellation.is_cancelled() {
+        return canceled_task_response();
+    }
+    let claim = match state.lifecycle.tasks.claim(task_id) {
+        Ok(claim) => claim,
+        Err(error) => return lifecycle_error_response(error.to_string()),
+    };
+    let owner = match claim {
+        TaskClaim::Owner(owner) => owner,
+        TaskClaim::Completed(outcome) => return task_outcome_response(outcome),
+        TaskClaim::Waiter(waiter) => {
+            return tokio::select! {
+                outcome = waiter.wait() => match outcome {
+                    Ok(outcome) => task_outcome_response(outcome),
+                    Err(error) => lifecycle_error_response(error.to_string()),
+                },
+                () = cancellation.cancelled() => canceled_task_response(),
+            };
+        }
+    };
+    execute_owned_task(&state, req, owner, cancellation).await
+}
+
+async fn finish_worker_query(
+    State(state): State<Arc<AppState>>,
+    Path(query_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let expected = state.config.exchange_token.as_deref();
+    let supplied = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+    if expected.is_none() || supplied != expected {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match state.lifecycle.finish_query(&query_id) {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => lifecycle_error_response(error.to_string()),
+    }
+}
+
+async fn execute_owned_task(
+    state: &Arc<AppState>,
+    req: TaskRequest,
+    owner: TaskOwner<(Vec<u8>, u64)>,
+    cancellation: CancellationToken,
+) -> Response {
     let partition =
         match kaveon_storage::ScanPartition::new(req.partition_index, req.partition_count) {
             Ok(partition) => partition,
             Err(error) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": error.to_string() })),
-                )
-                    .into_response();
+                let message = error.to_string();
+                let _ = owner.complete(TaskOutcome::Failed(Arc::from(message.clone())));
+                return task_failure_response(StatusCode::BAD_REQUEST, &message);
             }
         };
     let started = Instant::now();
     let mut plan = match sql_to_logical_plan(req.query.trim().trim_end_matches(';')) {
         Ok(plan) => plan,
         Err(error) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": error.to_string() })),
-            )
-                .into_response();
+            let message = error.to_string();
+            let _ = owner.complete(TaskOutcome::Failed(Arc::from(message.clone())));
+            return task_failure_response(StatusCode::BAD_REQUEST, &message);
         }
     };
     crate::planner::qualify_tables(&mut plan, &req.catalog, &req.schema);
@@ -265,32 +326,60 @@ async fn execute_task(
             },
         )
     };
+    if cancellation.is_cancelled() {
+        let _ = owner.complete(TaskOutcome::Failed(Arc::from("query canceled")));
+        return canceled_task_response();
+    }
     match result {
         Ok((schema, batches)) => match encode_arrow_stream(&schema, &batches) {
-            Ok(bytes) => Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "application/vnd.apache.arrow.stream")
-                .header("x-kaveon-task-elapsed-us", elapsed_us(started))
-                .body(Body::from(bytes))
-                .unwrap_or_else(|error| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({ "error": error.to_string() })),
-                    )
-                        .into_response()
-                }),
-            Err(error) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": error })),
-            )
-                .into_response(),
+            Ok(bytes) => {
+                let elapsed = elapsed_us(started);
+                let outcome = TaskOutcome::Success(Arc::new((bytes, elapsed)));
+                let response = task_outcome_response(outcome.clone());
+                let _ = owner.complete(outcome);
+                response
+            }
+            Err(error) => {
+                let _ = owner.complete(TaskOutcome::Failed(Arc::from(error.clone())));
+                task_failure_response(StatusCode::INTERNAL_SERVER_ERROR, &error)
+            }
         },
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error.to_string() })),
-        )
-            .into_response(),
+        Err(error) => {
+            let message = error.to_string();
+            let _ = owner.complete(TaskOutcome::Failed(Arc::from(message.clone())));
+            task_failure_response(StatusCode::INTERNAL_SERVER_ERROR, &message)
+        }
     }
+}
+
+fn task_outcome_response(outcome: TaskOutcome<(Vec<u8>, u64)>) -> Response {
+    match outcome {
+        TaskOutcome::Success(result) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/vnd.apache.arrow.stream")
+            .header("x-kaveon-task-elapsed-us", result.1)
+            .body(Body::from(result.0.clone()))
+            .unwrap_or_else(|error| lifecycle_error_response(error.to_string())),
+        TaskOutcome::Failed(message) => {
+            task_failure_response(StatusCode::INTERNAL_SERVER_ERROR, &message)
+        }
+    }
+}
+
+fn canceled_task_response() -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(serde_json::json!({ "error": "query canceled", "code": "QUERY_CANCELED" })),
+    )
+        .into_response()
+}
+
+fn lifecycle_error_response(message: String) -> Response {
+    task_failure_response(StatusCode::SERVICE_UNAVAILABLE, &message)
+}
+
+fn task_failure_response(status: StatusCode, message: &str) -> Response {
+    (status, Json(serde_json::json!({ "error": message }))).into_response()
 }
 
 async fn submit_statement(
@@ -366,6 +455,9 @@ async fn submit_statement(
             result_delivery: req.result_delivery,
         }
     };
+    if let Err(error) = state.lifecycle.cancellations.token(&query_id) {
+        return lifecycle_error_response(error.to_string());
+    }
 
     QUERY_STORE.write().await.queries.insert(
         query_id.clone(),
@@ -462,6 +554,7 @@ async fn submit_statement(
                     .await
                     .queries
                     .insert(query_id.clone(), record);
+                cleanup_distributed_query(&state, &query_id).await;
                 return Json(StatementResponse {
                     id: query_id,
                     state: QueryState::Finished,
@@ -482,6 +575,7 @@ async fn submit_statement(
                     Some(logical_plan),
                 )
                 .await;
+                cleanup_distributed_query(&state, &query_id).await;
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({ "error": error, "code": "DISTRIBUTED_EXECUTION_ERROR" })),
@@ -527,6 +621,7 @@ async fn submit_statement(
                     .await
                     .queries
                     .insert(query_id.clone(), record);
+                cleanup_distributed_query(&state, &query_id).await;
                 return Json(StatementResponse {
                     id: query_id,
                     state: QueryState::Finished,
@@ -547,6 +642,7 @@ async fn submit_statement(
                     Some(logical_plan),
                 )
                 .await;
+                cleanup_distributed_query(&state, &query_id).await;
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({ "error": error, "code": "DISTRIBUTED_EXECUTION_ERROR" })),
@@ -724,20 +820,51 @@ async fn get_query(Path(query_id): Path<String>) -> impl IntoResponse {
     }
 }
 
-async fn cancel_query(Path(query_id): Path<String>) -> impl IntoResponse {
+async fn cancel_query(
+    State(state): State<Arc<AppState>>,
+    Path(query_id): Path<String>,
+) -> impl IntoResponse {
+    if !state.config.coordinator {
+        if state.lifecycle.cancellations.token(&query_id).is_err()
+            || state.lifecycle.cancellations.cancel(&query_id).is_err()
+        {
+            return lifecycle_error_response("cannot register worker cancellation".into());
+        }
+        return StatusCode::NO_CONTENT.into_response();
+    }
     let mut store = QUERY_STORE.write().await;
-    if store.queries.remove(&query_id).is_some() {
-        StatusCode::NO_CONTENT.into_response()
-    } else {
-        (
+    let Some(record) = store.queries.get_mut(&query_id) else {
+        return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({
                 "error": format!("query '{query_id}' not found"),
                 "code": "QUERY_NOT_FOUND"
             })),
         )
-            .into_response()
+            .into_response();
+    };
+    if matches!(record.state, QueryState::Running) {
+        record.state = QueryState::Canceled;
+        record.error = Some("query canceled by client".into());
+        record.completed_at_ms = unix_time_ms();
+        let _ = state.lifecycle.cancellations.cancel(&query_id);
     }
+    drop(store);
+
+    let workers = {
+        let mut cluster = state.cluster.write().await;
+        cluster.remove_stale_workers();
+        cluster.workers.values().cloned().collect::<Vec<_>>()
+    };
+    let client = reqwest::Client::new();
+    for worker in workers {
+        let url = format!(
+            "{}/v1/query/{query_id}",
+            worker.address.trim_end_matches('/')
+        );
+        let _ = client.delete(url).send().await;
+    }
+    StatusCode::NO_CONTENT.into_response()
 }
 
 // --- Cluster / Node ---
@@ -999,6 +1126,32 @@ async fn execute_remote_task(
         retryable: false,
     })?;
     Ok((schema, batches, elapsed_us, output_bytes))
+}
+
+async fn cleanup_distributed_query(state: &Arc<AppState>, query_id: &str) {
+    let workers = {
+        let mut cluster = state.cluster.write().await;
+        cluster.remove_stale_workers();
+        cluster.workers.values().cloned().collect::<Vec<_>>()
+    };
+    if let Some(token) = state.config.exchange_token.as_deref() {
+        let client = reqwest::Client::new();
+        let mut cleanups = tokio::task::JoinSet::new();
+        for worker in workers {
+            let client = client.clone();
+            let token = token.to_owned();
+            let query_id = query_id.to_owned();
+            cleanups.spawn(async move {
+                let url = format!(
+                    "{}/v1/internal/query/{query_id}/finish",
+                    worker.address.trim_end_matches('/')
+                );
+                let _ = client.post(url).bearer_auth(token).send().await;
+            });
+        }
+        while cleanups.join_next().await.is_some() {}
+    }
+    let _ = state.lifecycle.finish_query(query_id);
 }
 
 async fn execute_distributed_top_n(

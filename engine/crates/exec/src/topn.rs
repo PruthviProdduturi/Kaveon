@@ -6,7 +6,7 @@ use arrow::record_batch::RecordBatch;
 use kaveon_core::{BatchOperator, KaveonError, OperatorMemoryAccount, Result};
 
 use crate::expr_eval::evaluate;
-use crate::sort::SortExpr;
+use crate::sort::{ExternalMerge, SortExpr};
 use crate::spill::SpillManager;
 
 pub struct TopNOperator {
@@ -17,6 +17,7 @@ pub struct TopNOperator {
     output: VecDeque<RecordBatch>,
     initialized: bool,
     spill: Option<(OperatorMemoryAccount, SpillManager)>,
+    external_merge: Option<ExternalMerge>,
 }
 
 impl TopNOperator {
@@ -39,6 +40,7 @@ impl TopNOperator {
             output: VecDeque::new(),
             initialized: false,
             spill: None,
+            external_merge: None,
         })
     }
 
@@ -84,8 +86,22 @@ impl TopNOperator {
             return Ok(());
         }
 
-        for run in &runs {
-            batches.extend(run.read()?);
+        if !runs.is_empty() {
+            if !batches.is_empty() {
+                let candidate = merge_top_n(&self.schema, &batches, &self.sort_exprs, self.limit)?
+                    .expect("non-empty candidates produce a TopN candidate");
+                let spill = &self.spill.as_ref().expect("spill mode is active").1;
+                runs.push(spill.write_run(&self.schema, &[candidate])?);
+            }
+            reservations.clear();
+            self.external_merge = Some(ExternalMerge::new(
+                runs,
+                self.schema.clone(),
+                &self.sort_exprs,
+                self.limit,
+                Some(self.limit),
+            )?);
+            return Ok(());
         }
 
         if let Some(batch) = merge_top_n(&self.schema, &batches, &self.sort_exprs, self.limit)? {
@@ -156,6 +172,9 @@ impl BatchOperator for TopNOperator {
         if !self.initialized {
             self.initialized = true;
             self.initialize()?;
+        }
+        if let Some(merge) = &mut self.external_merge {
+            return merge.next_batch();
         }
         Ok(self.output.pop_front())
     }

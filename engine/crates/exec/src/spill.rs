@@ -189,6 +189,27 @@ impl SpillRun {
             .map(|batch| batch.map_err(KaveonError::from))
             .collect()
     }
+
+    pub fn reader(&self) -> Result<SpillRunReader> {
+        let file = File::open(&self.path)?;
+        Ok(SpillRunReader {
+            reader: StreamReader::try_new(file, None)?,
+        })
+    }
+}
+
+pub struct SpillRunReader {
+    reader: StreamReader<File>,
+}
+
+impl Iterator for SpillRunReader {
+    type Item = Result<RecordBatch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.reader
+            .next()
+            .map(|batch| batch.map_err(KaveonError::from))
+    }
 }
 
 impl Drop for SpillRun {
@@ -336,6 +357,24 @@ mod tests {
         assert_eq!(manager.snapshot().current_bytes, run.bytes());
         drop(run);
         assert_eq!(manager.snapshot().current_bytes, 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn streaming_reader_yields_batches_incrementally() {
+        let root = test_root("stream");
+        let manager = SpillManager::new(&root, SPILL_LIMIT).unwrap();
+        let input = batch();
+        let run = manager
+            .write_run(&input.schema(), &[input.clone(), input.clone()])
+            .unwrap();
+        let mut reader = run.reader().unwrap();
+
+        assert_eq!(reader.next().unwrap().unwrap(), input);
+        assert!(reader.next().is_some());
+        assert!(reader.next().is_none());
+        drop(reader);
+        drop(run);
         let _ = fs::remove_dir_all(root);
     }
 

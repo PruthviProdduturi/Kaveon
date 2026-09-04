@@ -2,6 +2,7 @@ pub mod catalog;
 pub mod error;
 pub mod exchange;
 pub mod expr;
+pub mod fragment;
 pub mod memory;
 pub mod operator;
 pub mod predicate;
@@ -18,6 +19,11 @@ pub use exchange::{
     StageGraph, StageId, TaskAssignment, TaskId, TaskState, TaskStatus,
 };
 pub use expr::{BinaryOp, Expr};
+pub use fragment::{
+    AggregateFunction, AggregateMode, AggregateSpec, EXECUTABLE_FRAGMENT_VERSION, ExchangeInput,
+    ExchangeOutput, ExecutableFragment, FragmentNode, FragmentNodeId, FragmentOperator, JoinSpec,
+    JoinType, NamedExpr, ScanSpec, ScanTable, SortSpec,
+};
 pub use memory::{MemoryReservation, MemorySnapshot, OperatorMemoryAccount, QueryMemoryPool};
 pub use operator::{BatchOperator, BatchSource, collect_batches};
 pub use predicate::{CompareOp, ScalarValue, StoragePredicate};

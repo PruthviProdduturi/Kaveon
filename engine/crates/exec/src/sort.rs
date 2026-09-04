@@ -3,10 +3,11 @@ use std::collections::VecDeque;
 use arrow::compute::{SortColumn, SortOptions, concat_batches, lexsort_to_indices, take};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use arrow::row::{RowConverter, Rows, SortField};
 use kaveon_core::{BatchOperator, Expr, KaveonError, OperatorMemoryAccount, Result};
 
 use crate::expr_eval::evaluate;
-use crate::spill::SpillManager;
+use crate::spill::{SpillManager, SpillRun, SpillRunReader};
 
 const DEFAULT_OUTPUT_BATCH_SIZE: usize = 8_192;
 
@@ -40,6 +41,7 @@ pub struct SortOperator {
     output: VecDeque<RecordBatch>,
     initialized: bool,
     spill: Option<(OperatorMemoryAccount, SpillManager)>,
+    external_merge: Option<ExternalMerge>,
 }
 
 impl SortOperator {
@@ -58,6 +60,7 @@ impl SortOperator {
             output: VecDeque::new(),
             initialized: false,
             spill: None,
+            external_merge: None,
         })
     }
 
@@ -138,9 +141,14 @@ impl SortOperator {
             }
             batches.clear();
             reservations.clear();
-            for run in &runs {
-                batches.extend(run.read()?);
-            }
+            self.external_merge = Some(ExternalMerge::new(
+                runs,
+                self.schema.clone(),
+                &self.sort_exprs,
+                self.output_batch_size,
+                None,
+            )?);
+            return Ok(());
         }
 
         let sorted = sort_batches(&self.schema, &batches, &self.sort_exprs)?;
@@ -190,7 +198,180 @@ impl BatchOperator for SortOperator {
             self.initialized = true;
             self.initialize()?;
         }
+        if let Some(merge) = &mut self.external_merge {
+            return merge.next_batch();
+        }
         Ok(self.output.pop_front())
+    }
+}
+
+struct MergeCursor {
+    reader: SpillRunReader,
+    batch: Option<RecordBatch>,
+    rows: Option<Rows>,
+    row: usize,
+}
+
+pub(crate) struct ExternalMerge {
+    cursors: Vec<MergeCursor>,
+    converter: RowConverter,
+    schema: SchemaRef,
+    sort_exprs: Vec<SortExpr>,
+    output_batch_size: usize,
+    remaining: Option<usize>,
+    // Declared last so readers are closed before run-file cleanup on Windows.
+    _runs: Vec<SpillRun>,
+}
+
+impl ExternalMerge {
+    pub(crate) fn new(
+        runs: Vec<SpillRun>,
+        schema: SchemaRef,
+        sort_exprs: &[SortExpr],
+        output_batch_size: usize,
+        remaining: Option<usize>,
+    ) -> Result<Self> {
+        let mut readers = runs
+            .iter()
+            .map(SpillRun::reader)
+            .collect::<Result<Vec<_>>>()?;
+        let mut first_batch = None;
+        for reader in &mut readers {
+            if let Some(batch) = reader.next().transpose()?
+                && batch.num_rows() > 0
+            {
+                first_batch = Some(batch);
+                break;
+            }
+        }
+        let Some(probe) = first_batch else {
+            return Err(KaveonError::Execution(
+                "external merge requires at least one non-empty spill run".into(),
+            ));
+        };
+        let key_columns = evaluate_sort_columns(sort_exprs, &probe)?;
+        let fields = key_columns
+            .iter()
+            .zip(sort_exprs)
+            .map(|(column, sort_expr)| {
+                SortField::new_with_options(
+                    column.data_type().clone(),
+                    SortOptions {
+                        descending: !sort_expr.ascending,
+                        nulls_first: sort_expr.nulls_first,
+                    },
+                )
+            })
+            .collect();
+        let converter = RowConverter::new(fields)?;
+        let mut cursors = Vec::with_capacity(runs.len());
+        for run in &runs {
+            let mut cursor = MergeCursor {
+                reader: run.reader()?,
+                batch: None,
+                rows: None,
+                row: 0,
+            };
+            load_next_cursor_batch(&converter, sort_exprs, &mut cursor)?;
+            cursors.push(cursor);
+        }
+        Ok(Self {
+            cursors,
+            converter,
+            schema,
+            sort_exprs: sort_exprs.to_vec(),
+            output_batch_size,
+            remaining,
+            _runs: runs,
+        })
+    }
+
+    pub(crate) fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        let target = self.remaining.map_or(self.output_batch_size, |remaining| {
+            remaining.min(self.output_batch_size)
+        });
+        if target == 0 {
+            return Ok(None);
+        }
+        let mut rows = Vec::with_capacity(target);
+        while rows.len() < target {
+            let Some(index) = self.best_cursor() else {
+                break;
+            };
+            let cursor = &mut self.cursors[index];
+            let batch = cursor.batch.as_ref().expect("active cursor has a batch");
+            rows.push(batch.slice(cursor.row, 1));
+            cursor.row += 1;
+            if cursor.row == batch.num_rows() {
+                load_next_cursor_batch(&self.converter, &self.sort_exprs, cursor)?;
+            }
+        }
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        if let Some(remaining) = &mut self.remaining {
+            *remaining -= rows.len();
+        }
+        Ok(Some(concat_batches(&self.schema, &rows)?))
+    }
+
+    fn best_cursor(&self) -> Option<usize> {
+        self.cursors
+            .iter()
+            .enumerate()
+            .filter(|(_, cursor)| cursor.batch.is_some())
+            .min_by(|(_, left), (_, right)| {
+                left.rows
+                    .as_ref()
+                    .expect("active cursor has keys")
+                    .row(left.row)
+                    .cmp(
+                        &right
+                            .rows
+                            .as_ref()
+                            .expect("active cursor has keys")
+                            .row(right.row),
+                    )
+            })
+            .map(|(index, _)| index)
+    }
+}
+
+fn evaluate_sort_columns(
+    sort_exprs: &[SortExpr],
+    batch: &RecordBatch,
+) -> Result<Vec<arrow::array::ArrayRef>> {
+    sort_exprs
+        .iter()
+        .map(|sort_expr| evaluate(&sort_expr.expr, batch))
+        .collect()
+}
+
+fn load_next_cursor_batch(
+    converter: &RowConverter,
+    sort_exprs: &[SortExpr],
+    cursor: &mut MergeCursor,
+) -> Result<()> {
+    loop {
+        let Some(batch) = cursor.reader.next().transpose()? else {
+            cursor.batch = None;
+            cursor.rows = None;
+            return Ok(());
+        };
+        if batch.num_rows() == 0 {
+            continue;
+        }
+        let columns = if sort_exprs.is_empty() {
+            return Err(KaveonError::Execution(
+                "external merge cannot advance without ordering expressions".into(),
+            ));
+        } else {
+            evaluate_sort_columns(sort_exprs, &batch)?
+        };
+        cursor.rows = Some(converter.convert_columns(&columns)?);
+        cursor.batch = Some(batch);
+        cursor.row = 0;
+        return Ok(());
     }
 }
 

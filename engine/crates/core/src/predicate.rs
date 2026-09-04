@@ -1,7 +1,7 @@
 use arrow::datatypes::DataType;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ScalarValue {
     Null,
     Bool(bool),
@@ -10,7 +10,7 @@ pub enum ScalarValue {
     Utf8(String),
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CompareOp {
     Eq,
     Ne,
@@ -20,7 +20,7 @@ pub enum CompareOp {
     Ge,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum StoragePredicate {
     Compare {
         column: String,
