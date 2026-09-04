@@ -18,8 +18,7 @@ RUN apt-get update \
 
 COPY api/requirements.txt .
 ARG PIP_INDEX_URL=https://pypi.org/simple
-RUN --mount=type=cache,id=kaveon-pip-cache,target=/root/.cache/pip \
-    pip install --index-url $PIP_INDEX_URL -r requirements.txt
+RUN pip install --no-cache-dir --index-url $PIP_INDEX_URL -r requirements.txt
 
 COPY api/ .
 
