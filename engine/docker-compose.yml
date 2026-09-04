@@ -11,10 +11,12 @@ services:
       KAVEON_HTTP_PORT: "8080"
       KAVEON_DATA_DIR: /data
       KAVEON_CATALOG_DIR: /etc/kaveon/catalogs
+      KAVEON_CATALOG_ADMIN_TOKEN: ${KAVEON_CATALOG_ADMIN_TOKEN:-kaveon-local-catalog-admin}
     volumes:
       - ./etc/coordinator.toml:/etc/kaveon/config.toml:ro
       - ./etc/catalogs:/etc/kaveon/catalogs:ro
       - kaveon-data:/data
+      - catalog-data:/var/lib/kaveon
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 10s
@@ -63,3 +65,4 @@ services:
 
 volumes:
   kaveon-data:
+  catalog-data:

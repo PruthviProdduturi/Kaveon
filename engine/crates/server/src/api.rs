@@ -7,8 +7,12 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
+use kaveon_catalog::CascadePolicy;
 use kaveon_core::collect_batches;
-use kaveon_core::{ExchangeId, ExecutableFragment, StageId, TaskId};
+use kaveon_core::{
+    CatalogDefinition, CatalogId, CatalogLifecycle, CatalogRevision, ColumnDefinition, ExchangeId,
+    ExecutableFragment, SchemaDefinition, SchemaId, StageId, TableDefinition, TableId, TaskId,
+};
 use kaveon_exec::sort::SortExpr;
 use kaveon_exec::topn::merge_top_n;
 use kaveon_sql::logical_plan::sql_to_logical_plan;
@@ -159,6 +163,36 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/v1/node", get(get_node))
         .route("/v1/node/heartbeat", post(receive_heartbeat))
         .route("/v1/catalog", get(list_catalogs))
+        .route(
+            "/v1/catalog/definitions",
+            get(list_catalog_definitions).post(create_catalog_definition),
+        )
+        .route(
+            "/v1/catalog/definitions/{catalog_id}",
+            get(get_catalog_definition)
+                .put(replace_catalog_definition)
+                .delete(delete_catalog_definition),
+        )
+        .route(
+            "/v1/catalog/definitions/{catalog_id}/schemas",
+            get(list_schema_definitions).post(create_schema_definition),
+        )
+        .route(
+            "/v1/catalog/schemas/{schema_id}",
+            get(get_schema_definition)
+                .put(replace_schema_definition)
+                .delete(delete_schema_definition),
+        )
+        .route(
+            "/v1/catalog/schemas/{schema_id}/tables",
+            get(list_table_definitions).post(create_table_definition),
+        )
+        .route(
+            "/v1/catalog/tables/{table_id}",
+            get(get_table_definition)
+                .put(replace_table_definition)
+                .delete(delete_table_definition),
+        )
         .route("/v1/catalog/{catalog}/schema", get(list_schemas))
         .route(
             "/v1/catalog/{catalog}/schema/{schema}/table",
@@ -1224,6 +1258,655 @@ async fn list_catalogs(State(state): State<Arc<AppState>>) -> impl IntoResponse 
     let catalog = state.catalog.read().await;
     let names = catalog.catalog_names();
     Json(serde_json::json!({ "catalogs": names }))
+}
+
+const ACTOR_HEADER: &str = "x-kaveon-actor";
+
+fn mutation_actor<'a>(state: &AppState, headers: &'a HeaderMap) -> Result<&'a str, Box<Response>> {
+    if !state.config.coordinator {
+        return Err(Box::new(
+            (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "catalog mutations are accepted only by the coordinator"
+                })),
+            )
+                .into_response(),
+        ));
+    }
+    let Some(expected_token) = state
+        .config
+        .catalog_admin_token
+        .as_deref()
+        .filter(|token| !token.is_empty())
+    else {
+        return Err(Box::new(
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "error": "catalog mutations are disabled because no admin token is configured"
+                })),
+            )
+                .into_response(),
+        ));
+    };
+    let supplied_token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+    if supplied_token != Some(expected_token) {
+        return Err(Box::new(
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({ "error": "invalid catalog authorization" })),
+            )
+                .into_response(),
+        ));
+    }
+    headers
+        .get(ACTOR_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            Box::new(
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("missing non-empty {ACTOR_HEADER} header")
+                    })),
+                )
+                    .into_response(),
+            )
+        })
+}
+
+fn expected_revision(headers: &HeaderMap) -> Result<CatalogRevision, Box<Response>> {
+    let raw = headers
+        .get(header::IF_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.trim().trim_matches('"'))
+        .ok_or_else(|| {
+            Box::new(
+                (
+                    StatusCode::PRECONDITION_REQUIRED,
+                    Json(serde_json::json!({ "error": "missing If-Match revision header" })),
+                )
+                    .into_response(),
+            )
+        })?;
+    let value =
+        raw.parse::<u64>().map_err(|_| {
+            Box::new((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "If-Match must be a positive revision number" })),
+        )
+            .into_response())
+        })?;
+    CatalogRevision::new(value).map_err(|error| Box::new(catalog_error_response(error)))
+}
+
+fn catalog_error_response(error: kaveon_core::KaveonError) -> Response {
+    let message = error.to_string();
+    let status = if message.contains("not found") {
+        StatusCode::NOT_FOUND
+    } else if message.contains("revision")
+        || message.contains("already exists")
+        || message.contains("contains")
+    {
+        StatusCode::CONFLICT
+    } else {
+        StatusCode::BAD_REQUEST
+    };
+    (status, Json(serde_json::json!({ "error": message }))).into_response()
+}
+
+fn validate_new_catalog(value: &CatalogDefinition) -> kaveon_core::Result<()> {
+    CatalogId::new(value.id().as_str())?;
+    let mut validated = CatalogDefinition::new(
+        value.id().clone(),
+        value.name(),
+        value.adapter(),
+        value.storage().clone(),
+    )?;
+    if let Some(credential) = value.credential() {
+        let credential =
+            kaveon_core::CredentialReference::new(credential.kind(), credential.reference())?;
+        validated = validated.with_credential(credential);
+    }
+    if value.lifecycle() != CatalogLifecycle::Draft
+        || value.revision() != CatalogRevision::initial()
+        || &validated != value
+    {
+        return Err(kaveon_core::KaveonError::Execution(
+            "new catalog definitions must be valid draft revision 1 values".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_catalog_fields(value: &CatalogDefinition) -> kaveon_core::Result<()> {
+    CatalogId::new(value.id().as_str())?;
+    CatalogDefinition::new(
+        value.id().clone(),
+        value.name(),
+        value.adapter(),
+        value.storage().clone(),
+    )?;
+    if let Some(credential) = value.credential() {
+        kaveon_core::CredentialReference::new(credential.kind(), credential.reference())?;
+    }
+    Ok(())
+}
+
+fn validate_new_schema(value: &SchemaDefinition) -> kaveon_core::Result<()> {
+    SchemaId::new(value.id().as_str())?;
+    CatalogId::new(value.catalog_id().as_str())?;
+    let validated =
+        SchemaDefinition::new(value.id().clone(), value.catalog_id().clone(), value.name())?;
+    if value.lifecycle() != CatalogLifecycle::Draft
+        || value.revision() != CatalogRevision::initial()
+        || &validated != value
+    {
+        return Err(kaveon_core::KaveonError::Execution(
+            "new schema definitions must be valid draft revision 1 values".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_schema_fields(value: &SchemaDefinition) -> kaveon_core::Result<()> {
+    SchemaId::new(value.id().as_str())?;
+    CatalogId::new(value.catalog_id().as_str())?;
+    SchemaDefinition::new(value.id().clone(), value.catalog_id().clone(), value.name())?;
+    Ok(())
+}
+
+fn validate_new_table(value: &TableDefinition) -> kaveon_core::Result<()> {
+    TableId::new(value.id().as_str())?;
+    SchemaId::new(value.schema_id().as_str())?;
+    let columns = value
+        .columns()
+        .iter()
+        .map(|column| {
+            ColumnDefinition::new(column.name(), column.data_type().clone(), column.nullable())
+        })
+        .collect::<kaveon_core::Result<Vec<_>>>()?;
+    let validated = TableDefinition::new(
+        value.id().clone(),
+        value.schema_id().clone(),
+        value.name(),
+        value.location(),
+        value.access(),
+        value.format(),
+        columns,
+    )?;
+    if value.lifecycle() != CatalogLifecycle::Draft
+        || value.revision() != CatalogRevision::initial()
+        || &validated != value
+    {
+        return Err(kaveon_core::KaveonError::Execution(
+            "new table definitions must be valid draft revision 1 values".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_table_fields(value: &TableDefinition) -> kaveon_core::Result<()> {
+    TableId::new(value.id().as_str())?;
+    SchemaId::new(value.schema_id().as_str())?;
+    let columns = value
+        .columns()
+        .iter()
+        .map(|column| {
+            ColumnDefinition::new(column.name(), column.data_type().clone(), column.nullable())
+        })
+        .collect::<kaveon_core::Result<Vec<_>>>()?;
+    TableDefinition::new(
+        value.id().clone(),
+        value.schema_id().clone(),
+        value.name(),
+        value.location(),
+        value.access(),
+        value.format(),
+        columns,
+    )?;
+    Ok(())
+}
+
+fn validate_replacement(
+    current_revision: CatalogRevision,
+    current_lifecycle: CatalogLifecycle,
+    new_revision: CatalogRevision,
+    new_lifecycle: CatalogLifecycle,
+) -> kaveon_core::Result<()> {
+    if new_revision != current_revision.next()? {
+        return Err(kaveon_core::KaveonError::Execution(format!(
+            "replacement revision must be {}",
+            current_revision.next()?.value()
+        )));
+    }
+    if current_lifecycle == new_lifecycle {
+        Ok(())
+    } else {
+        current_lifecycle.validate_transition(new_lifecycle)
+    }
+}
+
+async fn refresh_catalog_snapshot(state: &AppState) -> Result<(), Box<Response>> {
+    let snapshot =
+        crate::config::catalog_manager_snapshot(&state.catalog_store).map_err(|error| {
+            Box::new(
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(
+                        serde_json::json!({ "error": format!("catalog snapshot failed: {error}") }),
+                    ),
+                )
+                    .into_response(),
+            )
+        })?;
+    *state.catalog.write().await = snapshot;
+    Ok(())
+}
+
+async fn list_catalog_definitions(State(state): State<Arc<AppState>>) -> Response {
+    match state.catalog_store.list_catalogs() {
+        Ok(values) => Json(values).into_response(),
+        Err(error) => catalog_error_response(error),
+    }
+}
+
+async fn get_catalog_definition(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    let id = match CatalogId::new(id) {
+        Ok(id) => id,
+        Err(error) => return catalog_error_response(error),
+    };
+    match state.catalog_store.catalog(&id) {
+        Ok(Some(value)) => Json(value).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => catalog_error_response(error),
+    }
+}
+
+async fn create_catalog_definition(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(value): Json<CatalogDefinition>,
+) -> Response {
+    let actor = match mutation_actor(&state, &headers) {
+        Ok(actor) => actor,
+        Err(response) => return *response,
+    };
+    if let Err(error) = validate_new_catalog(&value) {
+        return catalog_error_response(error);
+    }
+    if let Err(error) = state.catalog_store.create_catalog(actor, &value) {
+        return catalog_error_response(error);
+    }
+    if let Err(response) = refresh_catalog_snapshot(&state).await {
+        return *response;
+    }
+    (StatusCode::CREATED, Json(value)).into_response()
+}
+
+async fn replace_catalog_definition(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(value): Json<CatalogDefinition>,
+) -> Response {
+    let actor = match mutation_actor(&state, &headers) {
+        Ok(actor) => actor,
+        Err(response) => return *response,
+    };
+    let expected = match expected_revision(&headers) {
+        Ok(revision) => revision,
+        Err(response) => return *response,
+    };
+    if value.id().as_str() != id {
+        return catalog_error_response(kaveon_core::KaveonError::Execution(
+            "catalog path ID does not match request body".into(),
+        ));
+    }
+    if let Err(error) = validate_catalog_fields(&value) {
+        return catalog_error_response(error);
+    }
+    let current = match state.catalog_store.catalog(value.id()) {
+        Ok(Some(current)) => current,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => return catalog_error_response(error),
+    };
+    if let Err(error) = validate_replacement(
+        current.revision(),
+        current.lifecycle(),
+        value.revision(),
+        value.lifecycle(),
+    ) {
+        return catalog_error_response(error);
+    }
+    if let Err(error) = state.catalog_store.replace_catalog(actor, expected, &value) {
+        return catalog_error_response(error);
+    }
+    if let Err(response) = refresh_catalog_snapshot(&state).await {
+        return *response;
+    }
+    Json(value).into_response()
+}
+
+#[derive(Deserialize)]
+struct DeleteCatalogQuery {
+    #[serde(default)]
+    cascade: bool,
+}
+
+async fn delete_catalog_definition(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<DeleteCatalogQuery>,
+    headers: HeaderMap,
+) -> Response {
+    let actor = match mutation_actor(&state, &headers) {
+        Ok(actor) => actor,
+        Err(response) => return *response,
+    };
+    let expected = match expected_revision(&headers) {
+        Ok(revision) => revision,
+        Err(response) => return *response,
+    };
+    let id = match CatalogId::new(id) {
+        Ok(id) => id,
+        Err(error) => return catalog_error_response(error),
+    };
+    let policy = if query.cascade {
+        CascadePolicy::Cascade
+    } else {
+        CascadePolicy::Restrict
+    };
+    if let Err(error) = state
+        .catalog_store
+        .delete_catalog(actor, &id, expected, policy)
+    {
+        return catalog_error_response(error);
+    }
+    if let Err(response) = refresh_catalog_snapshot(&state).await {
+        return *response;
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn list_schema_definitions(
+    State(state): State<Arc<AppState>>,
+    Path(catalog_id): Path<String>,
+) -> Response {
+    let id = match CatalogId::new(catalog_id) {
+        Ok(id) => id,
+        Err(error) => return catalog_error_response(error),
+    };
+    match state.catalog_store.list_schemas(&id) {
+        Ok(values) => Json(values).into_response(),
+        Err(error) => catalog_error_response(error),
+    }
+}
+
+async fn get_schema_definition(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    let id = match SchemaId::new(id) {
+        Ok(id) => id,
+        Err(error) => return catalog_error_response(error),
+    };
+    match state.catalog_store.schema(&id) {
+        Ok(Some(value)) => Json(value).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => catalog_error_response(error),
+    }
+}
+
+async fn create_schema_definition(
+    State(state): State<Arc<AppState>>,
+    Path(catalog_id): Path<String>,
+    headers: HeaderMap,
+    Json(value): Json<SchemaDefinition>,
+) -> Response {
+    let actor = match mutation_actor(&state, &headers) {
+        Ok(actor) => actor,
+        Err(response) => return *response,
+    };
+    if value.catalog_id().as_str() != catalog_id {
+        return catalog_error_response(kaveon_core::KaveonError::Execution(
+            "catalog path ID does not match schema parent ID".into(),
+        ));
+    }
+    if let Err(error) = validate_new_schema(&value) {
+        return catalog_error_response(error);
+    }
+    if let Err(error) = state.catalog_store.create_schema(actor, &value) {
+        return catalog_error_response(error);
+    }
+    if let Err(response) = refresh_catalog_snapshot(&state).await {
+        return *response;
+    }
+    (StatusCode::CREATED, Json(value)).into_response()
+}
+
+async fn replace_schema_definition(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(value): Json<SchemaDefinition>,
+) -> Response {
+    let actor = match mutation_actor(&state, &headers) {
+        Ok(actor) => actor,
+        Err(response) => return *response,
+    };
+    let expected = match expected_revision(&headers) {
+        Ok(revision) => revision,
+        Err(response) => return *response,
+    };
+    if value.id().as_str() != id {
+        return catalog_error_response(kaveon_core::KaveonError::Execution(
+            "schema path ID does not match request body".into(),
+        ));
+    }
+    if let Err(error) = validate_schema_fields(&value) {
+        return catalog_error_response(error);
+    }
+    let current = match state.catalog_store.schema(value.id()) {
+        Ok(Some(current)) => current,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => return catalog_error_response(error),
+    };
+    if current.catalog_id() != value.catalog_id() {
+        return catalog_error_response(kaveon_core::KaveonError::Execution(
+            "schema catalog cannot change during replacement".into(),
+        ));
+    }
+    if let Err(error) = validate_replacement(
+        current.revision(),
+        current.lifecycle(),
+        value.revision(),
+        value.lifecycle(),
+    ) {
+        return catalog_error_response(error);
+    }
+    if let Err(error) = state.catalog_store.replace_schema(actor, expected, &value) {
+        return catalog_error_response(error);
+    }
+    if let Err(response) = refresh_catalog_snapshot(&state).await {
+        return *response;
+    }
+    Json(value).into_response()
+}
+
+async fn delete_schema_definition(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<DeleteCatalogQuery>,
+    headers: HeaderMap,
+) -> Response {
+    let actor = match mutation_actor(&state, &headers) {
+        Ok(actor) => actor,
+        Err(response) => return *response,
+    };
+    let expected = match expected_revision(&headers) {
+        Ok(revision) => revision,
+        Err(response) => return *response,
+    };
+    let id = match SchemaId::new(id) {
+        Ok(id) => id,
+        Err(error) => return catalog_error_response(error),
+    };
+    let policy = if query.cascade {
+        CascadePolicy::Cascade
+    } else {
+        CascadePolicy::Restrict
+    };
+    if let Err(error) = state
+        .catalog_store
+        .delete_schema(actor, &id, expected, policy)
+    {
+        return catalog_error_response(error);
+    }
+    if let Err(response) = refresh_catalog_snapshot(&state).await {
+        return *response;
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn list_table_definitions(
+    State(state): State<Arc<AppState>>,
+    Path(schema_id): Path<String>,
+) -> Response {
+    let id = match SchemaId::new(schema_id) {
+        Ok(id) => id,
+        Err(error) => return catalog_error_response(error),
+    };
+    match state.catalog_store.list_tables(&id) {
+        Ok(values) => Json(values).into_response(),
+        Err(error) => catalog_error_response(error),
+    }
+}
+
+async fn get_table_definition(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    let id = match TableId::new(id) {
+        Ok(id) => id,
+        Err(error) => return catalog_error_response(error),
+    };
+    match state.catalog_store.table(&id) {
+        Ok(Some(value)) => Json(value).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => catalog_error_response(error),
+    }
+}
+
+async fn create_table_definition(
+    State(state): State<Arc<AppState>>,
+    Path(schema_id): Path<String>,
+    headers: HeaderMap,
+    Json(value): Json<TableDefinition>,
+) -> Response {
+    let actor = match mutation_actor(&state, &headers) {
+        Ok(actor) => actor,
+        Err(response) => return *response,
+    };
+    if value.schema_id().as_str() != schema_id {
+        return catalog_error_response(kaveon_core::KaveonError::Execution(
+            "schema path ID does not match table parent ID".into(),
+        ));
+    }
+    if let Err(error) = validate_new_table(&value) {
+        return catalog_error_response(error);
+    }
+    if let Err(error) = state.catalog_store.create_table(actor, &value) {
+        return catalog_error_response(error);
+    }
+    if let Err(response) = refresh_catalog_snapshot(&state).await {
+        return *response;
+    }
+    (StatusCode::CREATED, Json(value)).into_response()
+}
+
+async fn replace_table_definition(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(value): Json<TableDefinition>,
+) -> Response {
+    let actor = match mutation_actor(&state, &headers) {
+        Ok(actor) => actor,
+        Err(response) => return *response,
+    };
+    let expected = match expected_revision(&headers) {
+        Ok(revision) => revision,
+        Err(response) => return *response,
+    };
+    if value.id().as_str() != id {
+        return catalog_error_response(kaveon_core::KaveonError::Execution(
+            "table path ID does not match request body".into(),
+        ));
+    }
+    if let Err(error) = validate_table_fields(&value) {
+        return catalog_error_response(error);
+    }
+    let current = match state.catalog_store.table(value.id()) {
+        Ok(Some(current)) => current,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => return catalog_error_response(error),
+    };
+    if current.schema_id() != value.schema_id() {
+        return catalog_error_response(kaveon_core::KaveonError::Execution(
+            "table schema cannot change during replacement".into(),
+        ));
+    }
+    if let Err(error) = validate_replacement(
+        current.revision(),
+        current.lifecycle(),
+        value.revision(),
+        value.lifecycle(),
+    ) {
+        return catalog_error_response(error);
+    }
+    if let Err(error) = state.catalog_store.replace_table(actor, expected, &value) {
+        return catalog_error_response(error);
+    }
+    if let Err(response) = refresh_catalog_snapshot(&state).await {
+        return *response;
+    }
+    Json(value).into_response()
+}
+
+async fn delete_table_definition(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let actor = match mutation_actor(&state, &headers) {
+        Ok(actor) => actor,
+        Err(response) => return *response,
+    };
+    let expected = match expected_revision(&headers) {
+        Ok(revision) => revision,
+        Err(response) => return *response,
+    };
+    let id = match TableId::new(id) {
+        Ok(id) => id,
+        Err(error) => return catalog_error_response(error),
+    };
+    if let Err(error) = state.catalog_store.delete_table(actor, &id, expected) {
+        return catalog_error_response(error);
+    }
+    if let Err(response) = refresh_catalog_snapshot(&state).await {
+        return *response;
+    }
+    StatusCode::NO_CONTENT.into_response()
 }
 
 async fn list_schemas(
@@ -2350,12 +3033,74 @@ mod tests {
     use super::{
         ColumnInfo, MergeOperation, TaskRequest, TaskResponse, aggregate_merge_contract,
         decode_arrow_stream, encode_arrow_stream, general_distributed_eligible,
-        merge_partial_aggregates, task_request_from_dispatch, top_n_merge_contract,
+        merge_partial_aggregates, mutation_actor, task_request_from_dispatch, top_n_merge_contract,
+        validate_replacement,
     };
     use arrow::array::{Int64Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use std::sync::Arc;
+
+    fn catalog_test_state() -> crate::AppState {
+        let config = crate::config::ServerConfig {
+            catalog_admin_token: Some("admin-token".into()),
+            ..crate::config::ServerConfig::default()
+        };
+        crate::AppState {
+            cluster: tokio::sync::RwLock::new(crate::cluster::ClusterState::new(&config)),
+            catalog: tokio::sync::RwLock::new(kaveon_core::CatalogManager::new(
+                "kaveon", "default",
+            )),
+            catalog_store: kaveon_catalog::CatalogStore::open_in_memory().unwrap(),
+            exchange_store: crate::exchange::ExchangeStore::default(),
+            lifecycle: crate::lifecycle::WorkerLifecycle::default(),
+            config,
+        }
+    }
+
+    #[test]
+    fn catalog_mutations_require_bearer_authorization_and_actor() {
+        let state = catalog_test_state();
+        let mut headers = axum::http::HeaderMap::new();
+        assert_eq!(
+            mutation_actor(&state, &headers).unwrap_err().status(),
+            axum::http::StatusCode::UNAUTHORIZED
+        );
+
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer wrong-token".parse().unwrap(),
+        );
+        headers.insert("x-kaveon-actor", "engineer@example.com".parse().unwrap());
+        assert_eq!(
+            mutation_actor(&state, &headers).unwrap_err().status(),
+            axum::http::StatusCode::UNAUTHORIZED
+        );
+
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer admin-token".parse().unwrap(),
+        );
+        assert_eq!(
+            mutation_actor(&state, &headers).unwrap(),
+            "engineer@example.com"
+        );
+    }
+
+    #[test]
+    fn catalog_metadata_updates_may_preserve_lifecycle() {
+        let current = kaveon_core::CatalogRevision::new(2).unwrap();
+        let next = current.next().unwrap();
+        assert!(
+            validate_replacement(
+                current,
+                kaveon_core::CatalogLifecycle::Active,
+                next,
+                kaveon_core::CatalogLifecycle::Active,
+            )
+            .is_ok()
+        );
+    }
 
     fn columns() -> Vec<ColumnInfo> {
         vec![

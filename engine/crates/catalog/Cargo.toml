@@ -1,0 +1,16 @@
+[package]
+name = "kaveon-catalog"
+description = "Durable transactional catalog for Kaveon Engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+kaveon-core = { path = "../core" }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+arrow-schema = { workspace = true }
+uuid = { workspace = true }
