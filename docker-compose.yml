@@ -22,6 +22,24 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  metadata-migrate:
+    image: postgres:17-alpine
+    environment:
+      PGPASSWORD: ${KAVEON_POSTGRES_PASSWORD:-kaveon-local-only}
+    volumes:
+      - ./api/schema_postgresql.sql:/migrations/schema.sql:ro
+    command:
+      - psql
+      - --host=postgres
+      - --username=kaveon
+      - --dbname=kaveonmeta
+      - --set=ON_ERROR_STOP=1
+      - --file=/migrations/schema.sql
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   engine-coordinator:
     build:
       context: ./engine
@@ -114,8 +132,8 @@ services:
       KAVEON_DEV_USER_ROLE: Admin
       KAVEON_ENGINE_URL: http://engine-coordinator:8080
     depends_on:
-      postgres:
-        condition: service_healthy
+      metadata-migrate:
+        condition: service_completed_successfully
       engine-coordinator:
         condition: service_healthy
     healthcheck:
