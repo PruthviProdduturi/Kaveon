@@ -195,6 +195,46 @@ CREATE TABLE IF NOT EXISTS data_sources (
 CREATE INDEX IF NOT EXISTS ix_data_sources_region    ON data_sources(region);
 CREATE INDEX IF NOT EXISTS ix_data_sources_is_active ON data_sources(is_active);
 
+-- ── Catalog Sources (Engine control plane) ───────────────────────────────────
+-- Mirrors Engine CatalogDefinition/CredentialReference/CatalogAdapter types.
+-- Platform API owns CRUD + lifecycle; Engine owns runtime resolution.
+CREATE TABLE IF NOT EXISTS catalog_sources (
+    id              VARCHAR(36)  NOT NULL PRIMARY KEY DEFAULT gen_random_uuid()::VARCHAR,
+    name            VARCHAR(255) NOT NULL,
+    engine_catalog  VARCHAR(255) NOT NULL,
+
+    storage_type    VARCHAR(50)  NOT NULL
+                    CONSTRAINT ck_cs_storage CHECK (storage_type IN ('local','adls_gen2','s3')),
+    storage_config  TEXT         NOT NULL DEFAULT '{}',
+
+    data_format     VARCHAR(50)  NOT NULL DEFAULT 'parquet'
+                    CONSTRAINT ck_cs_format CHECK (data_format IN ('parquet','delta','iceberg')),
+
+    credential_kind VARCHAR(50)  NULL
+                    CONSTRAINT ck_cs_cred CHECK (credential_kind IS NULL
+                        OR credential_kind IN ('managed_identity','workload_identity','environment','secret_store')),
+    credential_ref  VARCHAR(1000) NULL,
+
+    adapter_type    VARCHAR(50)  NOT NULL DEFAULT 'native'
+                    CONSTRAINT ck_cs_adapter CHECK (adapter_type IN ('native','hive_metastore','aws_glue','unity_catalog','iceberg_rest')),
+    adapter_config  TEXT         NOT NULL DEFAULT '{}',
+
+    lifecycle       VARCHAR(50)  NOT NULL DEFAULT 'draft'
+                    CONSTRAINT ck_cs_lifecycle CHECK (lifecycle IN ('draft','active','suspended','deleting','deleted')),
+
+    description     TEXT         NULL,
+    created_by      VARCHAR(255) NOT NULL DEFAULT 'system',
+    modified_by     VARCHAR(255) NULL,
+    created_at      TIMESTAMP    NOT NULL DEFAULT NOW(),
+    modified_at     TIMESTAMP    NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT uq_catalog_sources_name UNIQUE (name),
+    CONSTRAINT uq_catalog_sources_engine UNIQUE (engine_catalog)
+);
+CREATE INDEX IF NOT EXISTS ix_catalog_sources_lifecycle ON catalog_sources(lifecycle);
+CREATE INDEX IF NOT EXISTS ix_catalog_sources_adapter   ON catalog_sources(adapter_type);
+CREATE INDEX IF NOT EXISTS ix_catalog_sources_storage   ON catalog_sources(storage_type);
+
 -- ── User Themes ───────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS user_themes (
     user_email  VARCHAR(255) NOT NULL PRIMARY KEY,
