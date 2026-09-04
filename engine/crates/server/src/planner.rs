@@ -210,7 +210,7 @@ impl ExecutableFragmentBuilder<'_> {
             }
             LogicalPlan::Project { input, columns } => {
                 let stage = self.build(input)?;
-                let expressions = named_expressions(columns);
+                let expressions = fragment_project_expressions(columns);
                 let mut draft = self.draft_mut(stage)?;
                 draft.push(FragmentOperator::Project { expressions }, vec![draft.root]);
                 Ok(stage)
@@ -477,6 +477,47 @@ fn named_expressions(expressions: &[Expr]) -> Vec<NamedExpr> {
             expression: expression.clone(),
         })
         .collect()
+}
+
+fn fragment_project_expressions(expressions: &[Expr]) -> Vec<NamedExpr> {
+    named_expressions(expressions)
+        .into_iter()
+        .map(|mut named| {
+            named.expression = match named.expression {
+                Expr::Function { name, args } => {
+                    Expr::Column(fragment_aggregate_output_name(&name, &args))
+                }
+                Expr::Alias { expr, name } => match *expr {
+                    Expr::Function {
+                        name: function,
+                        args,
+                    } => Expr::Alias {
+                        expr: Box::new(Expr::Column(fragment_aggregate_output_name(
+                            &function, &args,
+                        ))),
+                        name,
+                    },
+                    expression => Expr::Alias {
+                        expr: Box::new(expression),
+                        name,
+                    },
+                },
+                expression => expression,
+            };
+            named
+        })
+        .collect()
+}
+
+fn fragment_aggregate_output_name(function: &str, arguments: &[Expr]) -> String {
+    let suffix = arguments.first().map_or("star".to_owned(), |argument| {
+        if matches!(argument, Expr::Star) {
+            "star".to_owned()
+        } else {
+            expression_column(argument).unwrap_or_else(|_| "expr".to_owned())
+        }
+    });
+    format!("{}_{}", function.to_ascii_lowercase(), suffix)
 }
 
 fn aggregate_specs(aggregates: &[AggregateExpr]) -> Vec<AggregateSpec> {
@@ -1308,6 +1349,11 @@ mod tests {
         assert!(matches!(
             &final_fragment.nodes[0].operator,
             FragmentOperator::ExchangeInput(input) if input.exchange_id == output.exchange_id
+        ));
+        assert!(matches!(
+            &final_fragment.nodes.last().unwrap().operator,
+            FragmentOperator::Project { expressions }
+                if expressions[1].expression == Expr::Column("avg_id".into())
         ));
     }
 

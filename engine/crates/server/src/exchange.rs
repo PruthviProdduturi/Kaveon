@@ -9,7 +9,7 @@ use arrow::ipc::writer::StreamWriter;
 use arrow::record_batch::RecordBatch;
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -25,6 +25,7 @@ const BEARER_PREFIX: &str = "Bearer ";
 const DEFAULT_MAX_PAYLOAD_BYTES: usize = 256 * 1024 * 1024;
 const DEFAULT_MAX_CHUNK_BYTES: usize = 4 * 1024 * 1024;
 const DEFAULT_MAX_CHUNKS: usize = 64;
+const MAX_WIRE_ENVELOPE_OVERHEAD_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ExchangeLimits {
@@ -179,6 +180,9 @@ pub fn routes() -> Router<Arc<crate::AppState>> {
             "/v1/internal/exchange/{query_id}/{exchange_id}/{stage_id}/{source_partition}/{attempt}/{output_partition}",
             get(download_exchange).delete(delete_exchange),
         )
+        .layer(DefaultBodyLimit::max(
+            DEFAULT_MAX_CHUNK_BYTES + MAX_WIRE_ENVELOPE_OVERHEAD_BYTES,
+        ))
 }
 
 async fn upload_exchange_chunk(
