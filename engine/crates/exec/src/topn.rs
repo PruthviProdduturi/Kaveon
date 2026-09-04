@@ -53,30 +53,63 @@ impl TopNOperator {
             return Ok(());
         }
 
-        let combined = concat_batches(&self.schema, &batches)?;
-        let columns = self
-            .sort_exprs
-            .iter()
-            .map(|sort_expr| {
-                Ok(SortColumn {
-                    values: evaluate(&sort_expr.expr, &combined)?,
-                    options: Some(SortOptions {
-                        descending: !sort_expr.ascending,
-                        nulls_first: sort_expr.nulls_first,
-                    }),
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let indices = lexsort_to_indices(&columns, Some(self.limit))?;
-        let output_columns = combined
-            .columns()
-            .iter()
-            .map(|column| take(column.as_ref(), &indices, None))
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        self.output
-            .push_back(RecordBatch::try_new(self.schema.clone(), output_columns)?);
+        if let Some(batch) = merge_top_n(&self.schema, &batches, &self.sort_exprs, self.limit)? {
+            self.output.push_back(batch);
+        }
         Ok(())
     }
+}
+
+/// Merges partition-local TopN batches into the globally ordered TopN result.
+///
+/// Each input partition only needs to contribute its first `limit` rows. A row
+/// ranked below that boundary cannot appear in the global TopN because at least
+/// `limit` rows in its own partition already rank ahead of it.
+pub fn merge_top_n(
+    schema: &SchemaRef,
+    batches: &[RecordBatch],
+    sort_exprs: &[SortExpr],
+    limit: usize,
+) -> Result<Option<RecordBatch>> {
+    if sort_exprs.is_empty() {
+        return Err(KaveonError::Execution(
+            "TopN merge requires at least one ordering expression".into(),
+        ));
+    }
+    if limit == 0 || batches.iter().all(|batch| batch.num_rows() == 0) {
+        return Ok(None);
+    }
+    if batches.iter().any(|batch| batch.schema() != *schema) {
+        return Err(KaveonError::Execution(
+            "TopN merge received incompatible batch schemas".into(),
+        ));
+    }
+
+    let non_empty = batches
+        .iter()
+        .filter(|batch| batch.num_rows() > 0)
+        .cloned()
+        .collect::<Vec<_>>();
+    let combined = concat_batches(schema, &non_empty)?;
+    let columns = sort_exprs
+        .iter()
+        .map(|sort_expr| {
+            Ok(SortColumn {
+                values: evaluate(&sort_expr.expr, &combined)?,
+                options: Some(SortOptions {
+                    descending: !sort_expr.ascending,
+                    nulls_first: sort_expr.nulls_first,
+                }),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let indices = lexsort_to_indices(&columns, Some(limit))?;
+    let output_columns = combined
+        .columns()
+        .iter()
+        .map(|column| take(column.as_ref(), &indices, None))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(Some(RecordBatch::try_new(schema.clone(), output_columns)?))
 }
 
 impl BatchOperator for TopNOperator {
@@ -97,7 +130,7 @@ impl BatchOperator for TopNOperator {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{Array, Int64Array};
+    use arrow::array::{Array, Int64Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;
@@ -236,5 +269,76 @@ mod tests {
                 .to_string()
                 .contains("missing")
         );
+    }
+
+    #[test]
+    fn merges_partition_top_n_with_multi_column_and_null_ordering() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("score", DataType::Int64, true),
+            Field::new("name", DataType::Utf8, false),
+        ]));
+        let partition_a = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![None, Some(9), Some(8)])),
+                Arc::new(StringArray::from(vec!["null-a", "amy", "zed"])),
+            ],
+        )
+        .unwrap();
+        let partition_b = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![None, Some(9), Some(7)])),
+                Arc::new(StringArray::from(vec!["null-b", "zoe", "bob"])),
+            ],
+        )
+        .unwrap();
+        let ordering = vec![
+            SortExpr::new(Expr::Column("score".into()), false).with_nulls_first(false),
+            SortExpr::new(Expr::Column("name".into()), true),
+        ];
+
+        let result = merge_top_n(&schema, &[partition_a, partition_b], &ordering, 4)
+            .unwrap()
+            .unwrap();
+        let scores = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let names = result
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(
+            (0..scores.len())
+                .map(|index| (!scores.is_null(index)).then(|| scores.value(index)))
+                .collect::<Vec<_>>(),
+            vec![Some(9), Some(9), Some(8), Some(7)]
+        );
+        assert_eq!(
+            names.iter().collect::<Vec<_>>(),
+            vec![Some("amy"), Some("zoe"), Some("zed"), Some("bob")]
+        );
+    }
+
+    #[test]
+    fn merge_rejects_incompatible_partition_schema() {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let incompatible_schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Utf8, false)]));
+        let batch = RecordBatch::try_new(
+            incompatible_schema,
+            vec![Arc::new(StringArray::from(vec!["1"]))],
+        )
+        .unwrap();
+        let result = merge_top_n(
+            &schema,
+            &[batch],
+            &[SortExpr::new(Expr::Column("id".into()), true)],
+            1,
+        );
+        assert!(result.unwrap_err().to_string().contains("incompatible"));
     }
 }

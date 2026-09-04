@@ -1,9 +1,9 @@
 mod api;
-mod cluster;
+pub mod cluster;
 mod config;
 pub mod exchange;
 pub mod planner;
-mod scheduler;
+pub mod scheduler;
 mod ui;
 
 use std::net::SocketAddr;
@@ -18,6 +18,7 @@ pub struct AppState {
     pub config: ServerConfig,
     pub cluster: RwLock<ClusterState>,
     pub catalog: RwLock<kaveon_core::CatalogManager>,
+    pub exchange_store: exchange::ExchangeStore,
 }
 
 #[tokio::main]
@@ -61,6 +62,7 @@ async fn main() {
         config,
         cluster: RwLock::new(cluster),
         catalog: RwLock::new(catalog),
+        exchange_store: exchange::ExchangeStore::default(),
     });
 
     if !state.config.coordinator {

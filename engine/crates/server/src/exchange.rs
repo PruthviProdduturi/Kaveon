@@ -1,10 +1,18 @@
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::io::Cursor;
+use std::sync::{Arc, RwLock};
 
 use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::StreamReader;
 use arrow::ipc::writer::StreamWriter;
 use arrow::record_batch::RecordBatch;
+use axum::Router;
+use axum::body::Bytes;
+use axum::extract::{Path, State};
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
 use kaveon_core::TaskId;
 
 const WIRE_MAGIC: [u8; 4] = *b"KVEX";
@@ -44,16 +52,273 @@ impl ExchangeLimits {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ExchangeIdentity {
     pub task_id: TaskId,
     pub output_partition: usize,
+}
+
+const DEFAULT_MAX_BUFFERED_EXCHANGES: usize = 1_024;
+const EXCHANGE_MEDIA_TYPE: &str = "application/vnd.kaveon.exchange.v1";
+
+#[derive(Debug)]
+pub struct ExchangeStore {
+    chunks: RwLock<HashMap<ExchangeIdentity, Vec<ExchangeChunk>>>,
+    max_buffered_exchanges: usize,
+}
+
+impl Default for ExchangeStore {
+    fn default() -> Self {
+        Self {
+            chunks: RwLock::new(HashMap::new()),
+            max_buffered_exchanges: DEFAULT_MAX_BUFFERED_EXCHANGES,
+        }
+    }
+}
+
+impl ExchangeStore {
+    pub fn insert(&self, chunk: ExchangeChunk) -> ExchangeResult<()> {
+        let mut exchanges = self
+            .chunks
+            .write()
+            .map_err(|_| ExchangeError::StorePoisoned)?;
+        if !exchanges.contains_key(&chunk.identity)
+            && exchanges.len() >= self.max_buffered_exchanges
+        {
+            return Err(ExchangeError::StoreCapacityExceeded);
+        }
+        let chunks = exchanges.entry(chunk.identity.clone()).or_default();
+        if let Some(existing) = chunks
+            .iter()
+            .find(|existing| existing.chunk_index == chunk.chunk_index)
+        {
+            return if existing == &chunk {
+                Ok(())
+            } else {
+                Err(ExchangeError::ConflictingChunk)
+            };
+        }
+        chunks.push(chunk);
+        Ok(())
+    }
+
+    pub fn get(&self, identity: &ExchangeIdentity) -> ExchangeResult<Vec<ExchangeChunk>> {
+        self.chunks
+            .read()
+            .map_err(|_| ExchangeError::StorePoisoned)?
+            .get(identity)
+            .cloned()
+            .ok_or(ExchangeError::ExchangeNotFound)
+    }
+
+    pub fn remove(&self, identity: &ExchangeIdentity) -> ExchangeResult<bool> {
+        Ok(self
+            .chunks
+            .write()
+            .map_err(|_| ExchangeError::StorePoisoned)?
+            .remove(identity)
+            .is_some())
+    }
+}
+
+type ExchangePath = (String, u32, usize, u32, usize);
+
+pub fn routes() -> Router<Arc<crate::AppState>> {
+    Router::new()
+        .route("/v1/internal/exchange", post(upload_exchange_chunk))
+        .route(
+            "/v1/internal/exchange/{query_id}/{stage_id}/{source_partition}/{attempt}/{output_partition}",
+            get(download_exchange).delete(delete_exchange),
+        )
+}
+
+async fn upload_exchange_chunk(
+    State(state): State<Arc<crate::AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(error) = authorize(&state, &headers) {
+        return exchange_error_response(error);
+    }
+    match ExchangeChunk::decode(&body, ExchangeLimits::default())
+        .and_then(|chunk| state.exchange_store.insert(chunk))
+    {
+        Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Err(error) => exchange_error_response(error),
+    }
+}
+
+async fn download_exchange(
+    State(state): State<Arc<crate::AppState>>,
+    headers: HeaderMap,
+    Path(path): Path<ExchangePath>,
+) -> Response {
+    if let Err(error) = authorize(&state, &headers) {
+        return exchange_error_response(error);
+    }
+    let identity = identity_from_path(path);
+    let result = state
+        .exchange_store
+        .get(&identity)
+        .and_then(|chunks| assemble_chunks(chunks, ExchangeLimits::default()));
+    match result {
+        Ok((_, payload)) => {
+            ([(header::CONTENT_TYPE, EXCHANGE_MEDIA_TYPE)], payload).into_response()
+        }
+        Err(error) => exchange_error_response(error),
+    }
+}
+
+async fn delete_exchange(
+    State(state): State<Arc<crate::AppState>>,
+    headers: HeaderMap,
+    Path(path): Path<ExchangePath>,
+) -> Response {
+    if let Err(error) = authorize(&state, &headers) {
+        return exchange_error_response(error);
+    }
+    match state.exchange_store.remove(&identity_from_path(path)) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => exchange_error_response(error),
+    }
+}
+
+fn authorize(state: &crate::AppState, headers: &HeaderMap) -> ExchangeResult<()> {
+    let token = state
+        .config
+        .exchange_token
+        .as_deref()
+        .ok_or(ExchangeError::EmptyExpectedToken)?;
+    let authorization = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok());
+    validate_bearer_header(authorization, token)
+}
+
+fn identity_from_path(path: ExchangePath) -> ExchangeIdentity {
+    ExchangeIdentity {
+        task_id: TaskId {
+            query_id: path.0,
+            stage_id: kaveon_core::StageId(path.1),
+            partition: path.2,
+            attempt: path.3,
+        },
+        output_partition: path.4,
+    }
+}
+
+fn exchange_url(base_uri: &str, identity: &ExchangeIdentity) -> String {
+    format!(
+        "{}/v1/internal/exchange/{}/{}/{}/{}/{}",
+        base_uri.trim_end_matches('/'),
+        identity.task_id.query_id,
+        identity.task_id.stage_id.0,
+        identity.task_id.partition,
+        identity.task_id.attempt,
+        identity.output_partition
+    )
+}
+
+pub async fn upload_chunks(
+    client: &reqwest::Client,
+    worker_uri: &str,
+    token: &str,
+    chunks: &[ExchangeChunk],
+    limits: ExchangeLimits,
+) -> ExchangeResult<()> {
+    for chunk in chunks {
+        let body = chunk.encode(limits)?;
+        let response = client
+            .post(format!(
+                "{}/v1/internal/exchange",
+                worker_uri.trim_end_matches('/')
+            ))
+            .bearer_auth(token)
+            .header(header::CONTENT_TYPE.as_str(), EXCHANGE_MEDIA_TYPE)
+            .body(body)
+            .send()
+            .await
+            .map_err(|error| ExchangeError::Transport(error.to_string()))?;
+        if !response.status().is_success() {
+            return Err(ExchangeError::HttpStatus(response.status().as_u16()));
+        }
+    }
+    Ok(())
+}
+
+pub async fn fetch_batches(
+    client: &reqwest::Client,
+    worker_uri: &str,
+    token: &str,
+    identity: &ExchangeIdentity,
+) -> ExchangeResult<(SchemaRef, Vec<RecordBatch>)> {
+    let response = client
+        .get(exchange_url(worker_uri, identity))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|error| ExchangeError::Transport(error.to_string()))?;
+    if !response.status().is_success() {
+        return Err(ExchangeError::HttpStatus(response.status().as_u16()));
+    }
+    let payload = response
+        .bytes()
+        .await
+        .map_err(|error| ExchangeError::Transport(error.to_string()))?;
+    let reader = StreamReader::try_new(Cursor::new(payload), None)
+        .map_err(|error| ExchangeError::Arrow(error.to_string()))?;
+    let schema = reader.schema();
+    let batches = reader
+        .map(|batch| batch.map_err(|error| ExchangeError::Arrow(error.to_string())))
+        .collect::<ExchangeResult<Vec<_>>>()?;
+    Ok((schema, batches))
+}
+
+pub async fn release_exchange(
+    client: &reqwest::Client,
+    worker_uri: &str,
+    token: &str,
+    identity: &ExchangeIdentity,
+) -> ExchangeResult<()> {
+    let response = client
+        .delete(exchange_url(worker_uri, identity))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|error| ExchangeError::Transport(error.to_string()))?;
+    if !response.status().is_success() {
+        return Err(ExchangeError::HttpStatus(response.status().as_u16()));
+    }
+    Ok(())
+}
+
+fn exchange_error_response(error: ExchangeError) -> Response {
+    let status = match error {
+        ExchangeError::Unauthorized => StatusCode::UNAUTHORIZED,
+        ExchangeError::EmptyExpectedToken => StatusCode::SERVICE_UNAVAILABLE,
+        ExchangeError::ExchangeNotFound => StatusCode::NOT_FOUND,
+        ExchangeError::MissingChunks => StatusCode::CONFLICT,
+        ExchangeError::StoreCapacityExceeded => StatusCode::INSUFFICIENT_STORAGE,
+        _ => StatusCode::BAD_REQUEST,
+    };
+    (status, error.to_string()).into_response()
 }
 
 impl ExchangeIdentity {
     fn validate(&self) -> ExchangeResult<()> {
         if self.task_id.query_id.is_empty() {
             return Err(ExchangeError::InvalidIdentity("query ID is empty"));
+        }
+        if !self
+            .task_id
+            .query_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        {
+            return Err(ExchangeError::InvalidIdentity(
+                "query ID contains unsupported URL characters",
+            ));
         }
         Ok(())
     }
@@ -361,6 +626,12 @@ pub enum ExchangeError {
     Arrow(String),
     EmptyExpectedToken,
     Unauthorized,
+    StorePoisoned,
+    StoreCapacityExceeded,
+    ConflictingChunk,
+    ExchangeNotFound,
+    Transport(String),
+    HttpStatus(u16),
 }
 
 impl Display for ExchangeError {
@@ -395,6 +666,16 @@ impl Display for ExchangeError {
                 write!(formatter, "exchange bearer token is not configured")
             }
             Self::Unauthorized => write!(formatter, "exchange bearer token is invalid"),
+            Self::StorePoisoned => write!(formatter, "exchange store lock is poisoned"),
+            Self::StoreCapacityExceeded => write!(formatter, "exchange store capacity exceeded"),
+            Self::ConflictingChunk => {
+                write!(formatter, "exchange chunk conflicts with stored data")
+            }
+            Self::ExchangeNotFound => write!(formatter, "exchange was not found"),
+            Self::Transport(reason) => write!(formatter, "exchange transport error: {reason}"),
+            Self::HttpStatus(status) => {
+                write!(formatter, "exchange endpoint returned HTTP {status}")
+            }
         }
     }
 }
@@ -543,5 +824,47 @@ mod tests {
             Err(ExchangeError::Unauthorized)
         );
         validate_bearer_header(Some("Bearer secret"), "secret").unwrap();
+    }
+
+    #[test]
+    fn store_accepts_idempotent_retries_and_rejects_conflicts() {
+        let store = ExchangeStore::default();
+        let chunk = ExchangeChunk {
+            identity: identity(),
+            chunk_index: 0,
+            chunk_count: 1,
+            payload: vec![1, 2, 3],
+        };
+
+        store.insert(chunk.clone()).unwrap();
+        store.insert(chunk.clone()).unwrap();
+        assert_eq!(store.get(&identity()).unwrap(), vec![chunk.clone()]);
+
+        let conflicting = ExchangeChunk {
+            payload: vec![9],
+            ..chunk
+        };
+        assert_eq!(
+            store.insert(conflicting),
+            Err(ExchangeError::ConflictingChunk)
+        );
+        assert!(store.remove(&identity()).unwrap());
+        assert_eq!(store.get(&identity()), Err(ExchangeError::ExchangeNotFound));
+    }
+
+    #[test]
+    fn identity_rejects_query_ids_that_cannot_be_used_in_routes() {
+        let mut invalid = identity();
+        invalid.task_id.query_id = "query/42".into();
+        let chunk = ExchangeChunk {
+            identity: invalid,
+            chunk_index: 0,
+            chunk_count: 1,
+            payload: Vec::new(),
+        };
+        assert!(matches!(
+            chunk.encode(limits()),
+            Err(ExchangeError::InvalidIdentity(_))
+        ));
     }
 }
