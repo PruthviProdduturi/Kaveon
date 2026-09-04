@@ -194,7 +194,7 @@ version = kaveon_engine.version()
 - Completed distributed queries expose measured stage/task telemetry: worker, partition, elapsed time, output rows, Arrow batches, and transport bytes. Physical operator CPU/memory, blocked time, spill, and live task updates remain unavailable.
 - History is process-local and resets when the coordinator restarts
 - Node payloads and heartbeats include `memory_rss_bytes`, measured from each Engine process; unsupported hosts report zero
-- Workers advertise a routable `KAVEON_ADVERTISED_URI` and execute internal `POST /v1/task` partition requests. Task control is JSON; typed results use Arrow IPC stream transport. With at least two active workers, the coordinator distributes single-source COUNT, SUM, MIN, MAX, and GROUP BY aggregates, then merges partial results. AVG, DISTINCT, joins, ORDER BY, and LIMIT currently fall back to node-local execution.
+- Workers advertise a routable `KAVEON_ADVERTISED_URI` and execute internal `POST /v1/task` partition requests. Task control is JSON; typed results use Arrow IPC stream transport. With at least two active workers, the coordinator distributes single-source COUNT, SUM, MIN, MAX, GROUP BY, and scan-backed ORDER BY + LIMIT, then performs the appropriate final merge. AVG, DISTINCT, and joins currently fall back to node-local execution.
 
 ### Remote CLI target
 
@@ -242,6 +242,18 @@ pub struct TaskAssignment { task_id, node_id, splits }
 - `BoundedExchangeBuffer` accounts for Arrow array memory, rejects writes beyond its byte capacity, and releases capacity when consumers pop batches. Network scheduling and asynchronous wait/wake backpressure are not wired yet.
 - The server exchange envelope carries query/stage/task-attempt/output-partition identity, versioning, chunk bounds, and corruption checks around Arrow IPC payloads. Endpoint and flow-control integration remain pending.
 - Distributed aggregate fan-out retries a failed partition on alternate active workers, with the retry attempt encoded in `TaskId`. Cancellation propagation and idempotent worker task registries remain pending.
+- Internal exchange routes use `POST`, `GET`, and `DELETE /v1/internal/exchange/...`; every node must share a non-empty `KAVEON_EXCHANGE_TOKEN`. Upload retries are idempotent, conflicting duplicates fail closed, and stores are bounded. Query fragments are not yet producing or consuming these exchanges.
+
+### Memory reservations
+
+```rust
+let query = QueryMemoryPool::new(query_id, query_limit_bytes)?;
+let operator = query.operator("hash-aggregate")?;
+let reservation = operator.reserve(bytes)?;
+```
+
+- Reservations atomically enforce the query-wide hard limit across operator accounts and release through RAII.
+- Snapshots expose current and peak bytes for the query and operator. Operators and admission control are not wired to these accounts yet; spill is not implemented.
 
 ### Sort and TopN execution
 
@@ -359,3 +371,4 @@ let source = DeltaTableReader::new(table_directory)
 | 2026-09-03 | Codex | Replaced worker-result JSON with Arrow IPC streams and added completed-stage/task telemetry to query records and the Engine UI, including worker, partition, elapsed time, rows, batches, and transport bytes. This establishes the binary exchange contract; live updates and operator CPU/memory/spill metrics remain follow-up work. |
 | 2026-09-03 | Codex | Added shared stage/task/attempt and partitioning contracts, deterministic multi-column Arrow hash partitioning, and a byte-bounded exchange queue with explicit backpressure. Correctness tests cover deterministic assignment, equal/null keys, lossless row coverage, invalid configuration, and capacity release; network shuffle is not wired yet. |
 | 2026-09-03 | Codex | Began the eight-workstream distributed-runtime program: added validated stage/fragment/exchange/split contracts, mergeable weighted AVG and exact COUNT DISTINCT states, a bounded authenticated Arrow exchange wire envelope, and alternate-worker partition retry. Added `engine/DISTRIBUTED_EXECUTION_STATUS.md` as the durable cross-machine handoff. Network endpoints, general fragment scheduling, distributed TopN/join, spill, cancellation propagation, and mature split scheduling remain explicit gates. |
+| 2026-09-03 | Codex | Added distributed partial/final TopN, authenticated bounded exchange endpoints, atomic query/operator memory reservations, and dynamic split leasing with failed-task requeue. Local Docker nodes now share the exchange token through environment configuration. General fragment execution, distributed join/AVG/distinct, operator memory wiring/spill, cancellation, and scheduler stress remain open. |

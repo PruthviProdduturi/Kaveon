@@ -18,14 +18,14 @@ This is a functioning distributed slice, not yet a Trino-class distributed runti
 
 | # | Workstream | State | Verified scope | Remaining release gate |
 |---|---|---|---|---|
-| 1 | Network hash exchange | In progress | Arrow IPC result transport; hash partitioner; bounded buffer; exchange envelope implementation under validation | Wire producer/consumer endpoints, streaming flow control, authentication, and end-to-end repartition tests |
+| 1 | Network hash exchange | In progress | Arrow IPC transport; hash partitioner; bounded buffer; authenticated idempotent POST/GET/DELETE exchange endpoints | Wire fragment producers/consumers to the endpoints, streaming flow control, and end-to-end repartition tests |
 | 2 | Stage and fragment planner | In progress | Shared stage/task/partition identities; general fragment contracts under validation | Translate physical plans into a dependency graph and schedule dependencies instead of query-shape branches |
 | 3 | Multi-stage aggregation | In progress | Distributed merge for count/sum/min/max | Mergeable AVG and exact distinct state, repartitioned final aggregation, empty/null semantics, multi-stage integration |
-| 4 | Distributed TopN | Not started | Correct vectorized local TopN | Local partial TopN per scan partition followed by a coordinator final TopN, with ordering/null equivalence tests |
+| 4 | Distributed TopN | Implemented | Local partial TopN per scan partition followed by an Arrow-native coordinator final merge; multi-column direction/null and schema validation tests | Docker correctness/performance evidence and migration into the general fragment scheduler |
 | 5 | Distributed hash joins | Not started | Correct local inner/outer/cross hash joins; hash partitioner exists | Co-partition both inputs, exchange by join keys, build/probe tasks, broadcast threshold, skew handling, outer-join correctness |
-| 6 | Memory accounting and spill | Not started | Byte-bounded in-process exchange buffer; process RSS telemetry | Per-query/operator reservations, admission, revocation, aggregate/join/sort spill, disk limits, spill telemetry |
+| 6 | Memory accounting and spill | In progress | Thread-safe hard query limits, per-operator RAII reservations, current/peak accounting, bounded exchange; process RSS telemetry | Wire accounts into operators, admission/revocation, aggregate/join/sort spill, disk limits, spill telemetry |
 | 7 | Failure, retry, cancellation | In progress | Task attempt is part of task identity; alternate-worker retry scheduler under validation | Idempotent task registry, query cancellation propagation, timeouts, retry classification, exchange cleanup, worker-loss tests |
-| 8 | Scheduler maturity | Not started | Active-worker discovery and deterministic scan partition fan-out | Split enumeration independent of worker count, dynamic assignment, work stealing, skew mitigation, queues, resource groups |
+| 8 | Scheduler maturity | In progress | Active-worker discovery, retry rotation, dynamic split leases independent of worker count, failed-lease requeue | Wire storage split enumeration, worker pull/steal, skew mitigation, queues, admission, and resource groups |
 
 ## Correctness and performance gates
 
@@ -47,6 +47,8 @@ Every workstream must land with:
 - `cargo test --workspace --no-fail-fast`: 100 passed, 0 failed
 - Focused coverage includes stage-graph validation, task/split identity, weighted AVG state merge, exact distinct set union, exchange chunk corruption and bounds, strict bearer validation, and alternate-worker retry selection
 - Docker worker-loss, end-to-end exchange, distributed AVG/distinct, TopN, join, spill, and scheduler stress evidence: not yet complete
+
+The second integrated gate passed 69 focused tests across core, exec, and server and 112 tests across the full workspace after distributed TopN, authenticated exchange endpoints, memory reservations, and split leasing were added. Strict Clippy passed; Windows emitted filesystem-only incremental-cache hard-link warnings and copied the files instead.
 
 ## Continuation point
 

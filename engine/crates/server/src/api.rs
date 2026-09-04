@@ -7,6 +7,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use kaveon_core::collect_batches;
+use kaveon_exec::sort::SortExpr;
+use kaveon_exec::topn::merge_top_n;
 use kaveon_sql::logical_plan::sql_to_logical_plan;
 use kaveon_sql::logical_plan::{AggregateExpr, LogicalPlan};
 use serde::{Deserialize, Serialize};
@@ -137,6 +139,7 @@ static QUERY_STORE: std::sync::LazyLock<RwLock<QueryStore>> = std::sync::LazyLoc
 
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
+        .merge(crate::exchange::routes())
         .route("/v1/statement", post(submit_statement))
         .route("/v1/task", post(execute_task))
         .route("/v1/query", get(list_queries))
@@ -424,6 +427,71 @@ async fn submit_statement(
 
     if let Some(distributed) =
         execute_distributed_aggregate(&state, &query_id, &sql, &context, &plan).await
+    {
+        match distributed {
+            Ok((result, stage)) => {
+                let elapsed = start.elapsed().as_millis() as u64;
+                let record = QueryRecord {
+                    id: query_id.clone(),
+                    sql,
+                    state: QueryState::Finished,
+                    columns: result.columns.clone(),
+                    rows: result.data.clone(),
+                    error: None,
+                    elapsed_ms: elapsed,
+                    submitted_at_ms,
+                    completed_at_ms: unix_time_ms(),
+                    timings: QueryTimings {
+                        analysis_us: Some(analysis_us),
+                        planning_us: None,
+                        execution_us: Some(result.elapsed_us),
+                        result_serialization_us: None,
+                    },
+                    plan: QueryPlan {
+                        logical: Some(logical_plan),
+                        optimized: Some(optimized_plan),
+                        physical: Some(physical_plan),
+                    },
+                    scans: vec![],
+                    stages: vec![stage],
+                    context,
+                };
+                QUERY_STORE
+                    .write()
+                    .await
+                    .queries
+                    .insert(query_id.clone(), record);
+                return Json(StatementResponse {
+                    id: query_id,
+                    state: QueryState::Finished,
+                    columns: Some(result.columns),
+                    data: Some(result.data),
+                    error: None,
+                    elapsed_ms: elapsed,
+                })
+                .into_response();
+            }
+            Err(error) => {
+                finish_failed_query(
+                    &query_id,
+                    error.clone(),
+                    start,
+                    Some(analysis_us),
+                    None,
+                    Some(logical_plan),
+                )
+                .await;
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": error, "code": "DISTRIBUTED_EXECUTION_ERROR" })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    if let Some(distributed) =
+        execute_distributed_top_n(&state, &query_id, &sql, &context, &plan).await
     {
         match distributed {
             Ok((result, stage)) => {
@@ -913,6 +981,156 @@ async fn execute_remote_task(
     Ok((schema, batches, elapsed_us, output_bytes))
 }
 
+async fn execute_distributed_top_n(
+    state: &Arc<AppState>,
+    query_id: &str,
+    sql: &str,
+    context: &QueryContext,
+    plan: &LogicalPlan,
+) -> Option<Result<(TaskResponse, StageTelemetry), String>> {
+    let (sort_exprs, limit) = top_n_merge_contract(plan)?;
+    let mut workers = {
+        let mut cluster = state.cluster.write().await;
+        cluster.remove_stale_workers();
+        cluster.workers.values().cloned().collect::<Vec<_>>()
+    };
+    workers.sort_unstable_by(|left, right| left.node_id.cmp(&right.node_id));
+    if workers.len() < 2 {
+        return None;
+    }
+
+    let started = Instant::now();
+    let partition_count = workers.len();
+    let client = reqwest::Client::new();
+    let mut tasks = tokio::task::JoinSet::new();
+    for partition_index in 0..partition_count {
+        let client = client.clone();
+        let candidates = crate::scheduler::task_candidates(
+            &workers,
+            partition_index,
+            crate::scheduler::RetryPolicy::default(),
+        );
+        let query_id = query_id.to_owned();
+        let query = sql.to_owned();
+        let catalog = context.catalog.clone();
+        let schema_name = context.schema.clone();
+        tasks.spawn(async move {
+            let mut failures = Vec::new();
+            for (attempt, worker) in candidates {
+                let request = TaskRequest {
+                    query_id: query_id.clone(),
+                    stage_id: 0,
+                    attempt,
+                    query: query.clone(),
+                    catalog: catalog.clone(),
+                    schema: schema_name.clone(),
+                    partition_index,
+                    partition_count,
+                };
+                let task_id = kaveon_core::TaskId {
+                    query_id: request.query_id.clone(),
+                    stage_id: kaveon_core::StageId(request.stage_id),
+                    partition: partition_index,
+                    attempt,
+                }
+                .to_string();
+                match execute_remote_task(&client, &worker, &request).await {
+                    Ok((schema, batches, elapsed_us, output_bytes)) => {
+                        let output_rows = batches.iter().map(|batch| batch.num_rows()).sum();
+                        let telemetry = TaskTelemetry {
+                            task_id,
+                            node_id: worker.node_id,
+                            partition_index,
+                            elapsed_us,
+                            output_rows,
+                            output_batches: batches.len(),
+                            output_bytes,
+                        };
+                        return Ok((schema, batches, telemetry));
+                    }
+                    Err(error) => failures.push(error),
+                }
+            }
+            Err(format!(
+                "partition {partition_index} exhausted worker attempts: {}",
+                failures.join("; ")
+            ))
+        });
+    }
+
+    let mut schema = None;
+    let mut partial_batches = Vec::new();
+    let mut task_metrics = Vec::with_capacity(partition_count);
+    while let Some(result) = tasks.join_next().await {
+        match result {
+            Ok(Ok((worker_schema, batches, telemetry))) => {
+                if schema
+                    .as_ref()
+                    .is_some_and(|expected| expected != &worker_schema)
+                {
+                    return Some(Err("workers returned incompatible TopN schemas".into()));
+                }
+                schema.get_or_insert(worker_schema);
+                partial_batches.extend(batches);
+                task_metrics.push(telemetry);
+            }
+            Ok(Err(error)) => return Some(Err(error)),
+            Err(error) => return Some(Err(format!("worker task failed: {error}"))),
+        }
+    }
+
+    let Some(schema) = schema else {
+        return Some(Err(
+            "distributed TopN completed without a result schema".into()
+        ));
+    };
+    let merged = match merge_top_n(&schema, &partial_batches, &sort_exprs, limit) {
+        Ok(merged) => merged,
+        Err(error) => return Some(Err(format!("cannot merge distributed TopN: {error}"))),
+    };
+    let total_elapsed_us = elapsed_us(started);
+    task_metrics.sort_unstable_by_key(|task| task.partition_index);
+    let batches = merged.into_iter().collect::<Vec<_>>();
+    Some(Ok((
+        TaskResponse {
+            columns: columns_from_schema(&schema),
+            data: batches_to_json(&batches),
+            elapsed_us: total_elapsed_us,
+        },
+        StageTelemetry {
+            stage_id: 0,
+            state: "FINISHED",
+            task_count: partition_count,
+            completed_tasks: task_metrics.len(),
+            elapsed_us: total_elapsed_us,
+            tasks: task_metrics,
+        },
+    )))
+}
+
+fn top_n_merge_contract(plan: &LogicalPlan) -> Option<(Vec<SortExpr>, usize)> {
+    let LogicalPlan::Limit { input, count } = plan else {
+        return None;
+    };
+    let LogicalPlan::Sort {
+        input: sort_input,
+        order_by,
+    } = input.as_ref()
+    else {
+        return None;
+    };
+    if !distributed_scan_input(sort_input) {
+        return None;
+    }
+    Some((
+        order_by
+            .iter()
+            .map(|(expr, ascending)| SortExpr::new(expr.clone(), *ascending))
+            .collect(),
+        *count,
+    ))
+}
+
 async fn execute_distributed_aggregate(
     state: &Arc<AppState>,
     query_id: &str,
@@ -1372,7 +1590,7 @@ async fn finish_failed_query(
 mod tests {
     use super::{
         ColumnInfo, MergeOperation, TaskResponse, aggregate_merge_contract, decode_arrow_stream,
-        encode_arrow_stream, merge_partial_aggregates,
+        encode_arrow_stream, merge_partial_aggregates, top_n_merge_contract,
     };
     use arrow::array::{Int64Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
@@ -1431,6 +1649,22 @@ mod tests {
         .unwrap();
         assert!(aggregate_merge_contract(&supported).is_some());
         assert!(aggregate_merge_contract(&reordered).is_none());
+    }
+
+    #[test]
+    fn distributes_top_n_over_partitionable_scan_inputs() {
+        let supported = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT region, total FROM orders WHERE total > 10 ORDER BY total DESC, region ASC LIMIT 5",
+        )
+        .unwrap();
+        let no_limit = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT region, total FROM orders ORDER BY total DESC",
+        )
+        .unwrap();
+        let (ordering, limit) = top_n_merge_contract(&supported).unwrap();
+        assert_eq!(ordering.len(), 2);
+        assert_eq!(limit, 5);
+        assert!(top_n_merge_contract(&no_limit).is_none());
     }
 
     #[test]

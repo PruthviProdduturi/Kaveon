@@ -17,6 +17,7 @@ pub struct ServerConfig {
     pub advertised_uri: Option<String>,
     pub data_dir: Option<PathBuf>,
     pub catalog_dir: Option<PathBuf>,
+    pub exchange_token: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -30,6 +31,7 @@ impl Default for ServerConfig {
             advertised_uri: None,
             data_dir: None,
             catalog_dir: None,
+            exchange_token: None,
         }
     }
 }
@@ -40,6 +42,7 @@ struct RawConfig {
     http: Option<HttpConfig>,
     discovery: Option<DiscoveryConfig>,
     storage: Option<StorageConfig>,
+    exchange: Option<ExchangeConfig>,
 }
 
 #[derive(Deserialize)]
@@ -64,6 +67,11 @@ struct DiscoveryConfig {
 struct StorageConfig {
     data_dir: Option<String>,
     catalog_dir: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ExchangeConfig {
+    token: Option<String>,
 }
 
 pub fn default_config_path() -> PathBuf {
@@ -107,6 +115,9 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
                 config.catalog_dir = Some(PathBuf::from(dir));
             }
         }
+        if let Some(exchange) = raw.exchange {
+            config.exchange_token = exchange.token;
+        }
     }
 
     if let Ok(v) = std::env::var("KAVEON_NODE_ID") {
@@ -134,6 +145,9 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     }
     if let Ok(v) = std::env::var("KAVEON_CATALOG_DIR") {
         config.catalog_dir = Some(PathBuf::from(v));
+    }
+    if let Ok(v) = std::env::var("KAVEON_EXCHANGE_TOKEN") {
+        config.exchange_token = Some(v);
     }
 
     Ok(config)
