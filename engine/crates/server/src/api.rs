@@ -1611,7 +1611,7 @@ async fn execute_distributed_fragments(
                 completed_tasks: tasks.len(),
                 elapsed_us: stage_started
                     .get(&stage_id)
-                    .map_or_default(|started| elapsed_us(*started)),
+                    .map_or(0, |started| elapsed_us(*started)),
                 tasks,
             }
         })
