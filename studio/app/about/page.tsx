@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState, type MouseEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { KaveonMark } from "../../components/KaveonMark";
@@ -75,6 +75,16 @@ export default function AboutPage() {
     container.addEventListener("scroll", onScroll, { passive: true });
     return () => container.removeEventListener("scroll", onScroll);
   }, []);
+
+  // The About page scrolls inside its own fixed container, so window.scrollTo would be a no-op.
+  const scrollToTop = (event: MouseEvent<HTMLAnchorElement>) => {
+    const container = scrollRef.current;
+    if (!container) return;
+    event.preventDefault();
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    container.scrollTo({ top: 0, behavior: reduceMotion ? "auto" : "smooth" });
+  };
+
   const slides = [
     { dark: "/showcase/climate-dark.png", light: "/showcase/climate-dark.png", title: "Climate x Energy Impact", desc: "Cross-domain — warming vs renewables, carbon intensity across 188 countries" },
     { dark: "/showcase/ai-arena-dark.png", light: "/showcase/ai-arena-dark.png", title: "AI Model Arena", desc: "34 LLMs — Arena ELO rankings, benchmarks, pricing, head-to-head" },
@@ -158,7 +168,7 @@ export default function AboutPage() {
         }
       `}</style>
 
-      <PublicHeader active="about" />
+      <PublicHeader active="about" onBrandClick={scrollToTop} />
 
       {/* Scroll indicator — travels down with scroll, fades near bottom */}
       <a

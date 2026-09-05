@@ -1,15 +1,25 @@
+import type { MouseEvent } from "react";
 import Link from "next/link";
 import { KaveonWordmark } from "./KaveonMark";
 import styles from "./PublicHeader.module.css";
 
-type PublicHeaderProps = { active?: "about" | "docs" };
+type PublicHeaderProps = {
+  active?: "about" | "docs";
+  /** Optional brand-click handler. The About page uses it to return its own scroll container to the top. */
+  onBrandClick?: (event: MouseEvent<HTMLAnchorElement>) => void;
+};
 
-export function PublicHeader({ active }: PublicHeaderProps) {
+export function PublicHeader({ active, onBrandClick }: PublicHeaderProps) {
   const isAbout = active === "about";
 
   return (
     <header className={`${styles.header} ${isAbout ? styles.aboutHeader : ""}`}>
-      <Link href={isAbout ? "/about" : "/"} className={styles.brand} aria-label={isAbout ? "Kaveon about" : "Kaveon home"}>
+      <Link
+        href={isAbout ? "/about" : "/"}
+        className={styles.brand}
+        aria-label={isAbout ? "Kaveon about, back to top" : "Kaveon home"}
+        onClick={onBrandClick}
+      >
         <KaveonWordmark height={isAbout ? 30 : 24} />
       </Link>
       <nav className={`${styles.nav} ${isAbout ? styles.aboutNav : ""}`} aria-label="Kaveon">
