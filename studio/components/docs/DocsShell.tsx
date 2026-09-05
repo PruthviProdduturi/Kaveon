@@ -100,9 +100,16 @@ export function DocsShell({ children }: { children: React.ReactNode }) {
   // pathname so following a link into a closed group opens it.
   const Nav = () => <nav aria-label="Documentation">{DOCS_NAV.map((group) => {
     const holdsCurrent = group.items.some((item) => item.href === pathname);
+    const links = group.items.map((item) => <Link key={item.href} href={item.href} title={item.description} aria-current={item.href === pathname ? "page" : undefined} className={`docs-navlink${item.href === pathname ? " active" : ""}`}>{item.title}</Link>);
+    // A pinned group is a plain block, not a <details> -- "always expanded" has to
+    // mean it cannot be closed, and an open <details> is still closeable.
+    if (group.pinned) return <div className="docs-navgroup docs-navgroup-pinned" key={group.label}>
+      <div className="docs-navgroup-label">{group.label}</div>
+      {links}
+    </div>;
     return <details className="docs-navgroup" key={`${group.label}-${pathname}`} open={holdsCurrent}>
       <summary className="docs-navgroup-label">{group.label}</summary>
-      {group.items.map((item) => <Link key={item.href} href={item.href} title={item.description} aria-current={item.href === pathname ? "page" : undefined} className={`docs-navlink${item.href === pathname ? " active" : ""}`}>{item.title}</Link>)}
+      {links}
     </details>;
   })}</nav>;
 

@@ -9,16 +9,27 @@ export type DocsItem = {
 
 export type DocsGroup = {
   label: string;
+  /** Rendered always-open and non-collapsible in the sidebar. */
+  pinned?: boolean;
   items: readonly DocsItem[];
 };
 
 export const DOCS_NAV: readonly DocsGroup[] = [
   {
     label: "Getting Started",
+    pinned: true,
     items: [
       { title: "Introduction", href: "/docs", description: "What Kaveon is and where to begin.", keywords: ["overview"] },
       { title: "Quickstart", href: "/docs/quickstart", description: "Connect data and build a first chart.", keywords: ["install", "start"] },
       { title: "Core concepts", href: "/docs/concepts", description: "Sources, datasets, charts, dashboards, and questions." },
+    ],
+  },
+  {
+    label: "Platform",
+    items: [
+      { title: "Architecture", href: "/docs/architecture", description: "Current platform structure and data flow." },
+      { title: "API Reference", href: "/docs/api-reference", description: "Find platform and Engine API surfaces.", keywords: ["rest", "endpoint"] },
+      { title: "Connector Matrix", href: "/docs/connectors", description: "Compare source registration, execution, and DLM support.", keywords: ["mysql", "postgresql", "fabric", "trino"] },
     ],
   },
   {
@@ -49,14 +60,6 @@ export const DOCS_NAV: readonly DocsGroup[] = [
       { title: "Storage & Catalogs", href: "/docs/engine/storage", description: "Read Parquet/Delta and understand native metadata.", keywords: ["parquet", "delta", "catalog"], status: "Alpha", lastVerified: "September 4, 2026" },
       { title: "Engine Memory", href: "/docs/memory", description: "Understand admission, reservations, spill, and current safety boundaries.", keywords: ["memory", "spill", "admission"], status: "Alpha", lastVerified: "September 4, 2026" },
       { title: "SQL Compatibility", href: "/docs/sql-compatibility", description: "See what the alpha Engine can execute.", keywords: ["order by", "aggregate", "operator"] },
-    ],
-  },
-  {
-    label: "Platform",
-    items: [
-      { title: "Architecture", href: "/docs/architecture", description: "Current platform structure and data flow." },
-      { title: "API Reference", href: "/docs/api-reference", description: "Find platform and Engine API surfaces.", keywords: ["rest", "endpoint"] },
-      { title: "Connector Matrix", href: "/docs/connectors", description: "Compare source registration, execution, and DLM support.", keywords: ["mysql", "postgresql", "fabric", "trino"] },
     ],
   },
   {
