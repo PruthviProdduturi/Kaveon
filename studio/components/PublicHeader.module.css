@@ -62,5 +62,5 @@
    This marker class exists so the light theme can still target docs alone; the
    About page stays a theme-independent dark surface. */
 .header.aboutHeader.docsHeader {
-  border-bottom: 2px solid var(--accent, #4A9EE8) !important;
+  border-bottom: 2px solid #70BEFF !important;
 }
