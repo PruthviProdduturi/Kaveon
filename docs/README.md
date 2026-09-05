@@ -17,6 +17,7 @@ are planned rather than executable.
 ## Runtime guides
 
 - [Engine technical manual](engine/README.md)
+- [Engineer 2 continuation brief](engineering/codex-continuation.md)
 - [Use the Engine CLI](guides/engine-cli.md)
 - [Connect data sources](guides/data-sources.md)
 - [Use SQL Lab](guides/sql-lab.md)
