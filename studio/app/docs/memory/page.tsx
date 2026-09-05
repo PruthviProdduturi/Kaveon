@@ -4,7 +4,7 @@ export const metadata = { title: "Engine Memory" };
 
 export default function EngineMemoryDocs() {
   return <div className="docs-prose">
-    <PageHeader eyebrow="Build & Operate" title="Engine memory management" lead="Kaveon reserves retained execution state against explicit query budgets and fails closed when a bounded operator cannot continue safely." />
+    <PageHeader eyebrow="Engine Manual" title="Engine memory management" lead="Kaveon reserves retained execution state against explicit query budgets and fails closed when a bounded operator cannot continue safely." />
     <Callout type="warn"><strong>Alpha boundary:</strong> admission and hash aggregate/join accounting exist as opt-in execution contracts, but coordinator and worker planning do not yet propagate them universally. Aggregate and join spill remain release gates.</Callout>
 
     <h2>Budget hierarchy</h2>
@@ -25,6 +25,6 @@ export default function EngineMemoryDocs() {
 
     <h2>What remains</h2>
     <p>Production readiness requires universal planner wiring, queued admission, partitioned aggregate and join spill, measured operator telemetry, and stress evidence for skew, concurrency, cancellation, retry, and worker loss. Until then, deployments must not claim global memory enforcement.</p>
-    <Pager prev={{ href: "/docs/operations", title: "Operations" }} next={{ href: "/docs/sql-compatibility", title: "SQL Compatibility" }} />
+    <Pager prev={{ href: "/docs/engine/storage", title: "Storage & Catalogs" }} next={{ href: "/docs/sql-compatibility", title: "SQL Compatibility" }} />
   </div>;
 }

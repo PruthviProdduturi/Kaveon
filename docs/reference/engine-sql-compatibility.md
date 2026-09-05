@@ -19,11 +19,18 @@ by the selected database and Kaveon's API guardrails.
 | Equi joins | Alpha | INNER/LEFT/RIGHT/FULL locally; distributed hash repartition path implemented |
 | Cross joins | Alpha | Local Cartesian semantics and distributed broadcast-build path |
 | Arithmetic expressions | Alpha | Compatible numeric coercion for supported primitive numeric types |
+| `HAVING` | Alpha | Post-aggregation filter |
+| Window functions | Alpha | `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `LAG`, `LEAD`, aggregates with `OVER (PARTITION BY … ORDER BY …)` |
+| Set operations | Alpha | `UNION ALL`, `INTERSECT`, `EXCEPT` |
+| Date/time functions | Alpha | `EXTRACT`, `DATE_TRUNC`, `DATE_PART`, `TO_CHAR`, `NOW`, `CURRENT_DATE`, `CURRENT_TIMESTAMP` |
+| Conditional and comparison | Alpha | `CASE`, `COALESCE`, `BETWEEN`, `IN`, `LIKE`, `ILIKE`, `CAST` |
+| `SUM(DISTINCT)`, `AVG(DISTINCT)` | Alpha | Exact mergeable distinct state |
 
 ## Not currently executable
 
-- CTEs, subqueries, window functions, `HAVING`, general `SELECT DISTINCT`, `CASE`, set operations, DDL, and DML.
+- Scalar and correlated subqueries.
 - Non-equality join conditions and broader join expressions.
+- DDL and DML. The Engine reads; it does not create or mutate tables.
 - Delta checkpoint replay, Iceberg, ADLS Gen2, or S3 reads. Local Delta tables
   are supported only when their complete JSON commit history is available from
   version 0.
