@@ -16,6 +16,7 @@ are planned rather than executable.
 
 ## Runtime guides
 
+- [Engine technical manual](engine/README.md)
 - [Use the Engine CLI](guides/engine-cli.md)
 - [Connect data sources](guides/data-sources.md)
 - [Use SQL Lab](guides/sql-lab.md)
@@ -30,6 +31,7 @@ are planned rather than executable.
 - [HTTP API](reference/api.md)
 - [Configuration](reference/configuration.md)
 - [Engine SQL compatibility](reference/engine-sql-compatibility.md)
+- [Engine memory management](reference/engine-memory-management.md)
 - [Connector capability matrix](reference/connector-capabilities.md)
 - [Operations and troubleshooting](operations-troubleshooting.md)
 - [Upgrade and version policy](upgrade-version-policy.md)

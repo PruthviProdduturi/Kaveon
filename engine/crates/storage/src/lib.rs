@@ -5,6 +5,7 @@ pub mod delta_reader;
 pub mod metrics;
 pub mod parquet_reader;
 
+pub use adls_reader::{AdlsAuthMode, AdlsBatchSource, AdlsBatchStream, AdlsParquetReader};
 pub use delta_reader::{DeltaBatchIterator, DeltaTableReader};
 pub use metrics::{ScanMetrics, ScanMetricsSnapshot};
 pub use parquet_reader::{ParquetBatchIterator, ParquetFileMetadata, ParquetReader};
@@ -61,4 +62,3 @@ mod tests {
         assert!(ScanPartition::new(2, 2).is_err());
     }
 }
-pub use adls_reader::{AdlsAuthMode, AdlsBatchSource, AdlsBatchStream, AdlsParquetReader};

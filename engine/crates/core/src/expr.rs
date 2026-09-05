@@ -56,6 +56,7 @@ pub enum Expr {
         args: Vec<Expr>,
         partition_by: Vec<Expr>,
         order_by: Vec<(Expr, bool)>,
+        frame: Option<WindowFrame>,
     },
     Extract {
         field: DateField,
@@ -70,6 +71,30 @@ pub enum CastTarget {
     Int64,
     Float64,
     Utf8,
+    Decimal128 { precision: u8, scale: i8 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WindowFrameUnits {
+    Rows,
+    Range,
+    Groups,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WindowFrameBound {
+    UnboundedPreceding,
+    Preceding(u64),
+    CurrentRow,
+    Following(u64),
+    UnboundedFollowing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowFrame {
+    pub units: WindowFrameUnits,
+    pub start: WindowFrameBound,
+    pub end: WindowFrameBound,
 }
 
 impl CastTarget {
@@ -80,6 +105,9 @@ impl CastTarget {
             Self::Int64 => arrow::datatypes::DataType::Int64,
             Self::Float64 => arrow::datatypes::DataType::Float64,
             Self::Utf8 => arrow::datatypes::DataType::Utf8,
+            Self::Decimal128 { precision, scale } => {
+                arrow::datatypes::DataType::Decimal128(*precision, *scale)
+            }
         }
     }
 }

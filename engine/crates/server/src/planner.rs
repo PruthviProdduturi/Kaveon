@@ -13,6 +13,7 @@ use kaveon_exec::limit::LimitOperator;
 use kaveon_exec::offset::OffsetOperator;
 use kaveon_exec::project::ProjectOperator;
 use kaveon_exec::scan::ScanOperator;
+use kaveon_exec::semijoin::SemiJoinOperator;
 use kaveon_exec::setop::{SetOpMode, SetOpOperator};
 use kaveon_exec::sort::{SortExpr, SortOperator};
 use kaveon_exec::topn::TopNOperator;
@@ -89,7 +90,10 @@ pub fn qualify_tables(plan: &mut LogicalPlan, catalog: &str, schema: &str) {
                 qualify_tables(input, catalog, schema);
             }
         }
-        LogicalPlan::Intersect { left, right } | LogicalPlan::Except { left, right } => {
+        LogicalPlan::Intersect { left, right }
+        | LogicalPlan::Except { left, right }
+        | LogicalPlan::SemiJoin { left, right, .. }
+        | LogicalPlan::AntiJoin { left, right, .. } => {
             qualify_tables(left, catalog, schema);
             qualify_tables(right, catalog, schema);
         }
@@ -462,6 +466,9 @@ impl ExecutableFragmentBuilder<'_> {
                 join_type,
                 condition,
             } => self.build_join(left, right, *join_type, condition.as_ref()),
+            LogicalPlan::SemiJoin { .. } | LogicalPlan::AntiJoin { .. } => Err(
+                KaveonError::Execution("distributed semi/anti joins are not implemented".into()),
+            ),
         }
     }
 
@@ -681,26 +688,14 @@ fn aggregate_specs(aggregates: &[AggregateExpr]) -> Vec<AggregateSpec> {
                     (!matches!(expr, Expr::Star)).then(|| expr.clone()),
                     "count",
                 ),
-                AggregateExpr::Sum { expr, distinct } => (
-                    if *distinct {
-                        AggregateFunction::Sum
-                    } else {
-                        AggregateFunction::Sum
-                    },
-                    Some(expr.clone()),
-                    "sum",
-                ),
+                AggregateExpr::Sum { expr, .. } => {
+                    (AggregateFunction::Sum, Some(expr.clone()), "sum")
+                }
                 AggregateExpr::Min(expr) => (AggregateFunction::Min, Some(expr.clone()), "min"),
                 AggregateExpr::Max(expr) => (AggregateFunction::Max, Some(expr.clone()), "max"),
-                AggregateExpr::Avg { expr, distinct } => (
-                    if *distinct {
-                        AggregateFunction::Avg
-                    } else {
-                        AggregateFunction::Avg
-                    },
-                    Some(expr.clone()),
-                    "avg",
-                ),
+                AggregateExpr::Avg { expr, .. } => {
+                    (AggregateFunction::Avg, Some(expr.clone()), "avg")
+                }
             };
             let suffix = argument.as_ref().map_or("star".into(), |expression| {
                 expression_column(expression).unwrap_or_else(|_| "expr".into())
@@ -906,6 +901,9 @@ impl StageGraphBuilder {
                 Ok(stage)
             }
             LogicalPlan::Scan { .. } => Ok(self.add_stage(plan, self.worker_count)),
+            LogicalPlan::SemiJoin { .. } | LogicalPlan::AntiJoin { .. } => Err(
+                KaveonError::Execution("distributed semi/anti joins are not implemented".into()),
+            ),
         }
     }
 
@@ -1060,6 +1058,8 @@ fn build_plan_tree(
         LogicalPlan::Union { .. } => ("Union", BTreeMap::new(), None),
         LogicalPlan::Intersect { .. } => ("Intersect", BTreeMap::new(), None),
         LogicalPlan::Except { .. } => ("Except", BTreeMap::new(), None),
+        LogicalPlan::SemiJoin { .. } => ("SemiJoin", BTreeMap::new(), None),
+        LogicalPlan::AntiJoin { .. } => ("AntiJoin", BTreeMap::new(), None),
     };
     let mut node = kaveon_core::PlanNode::new(id, phase, operator);
     node.attributes = attributes;
@@ -1068,6 +1068,11 @@ fn build_plan_tree(
     } else if let LogicalPlan::Join { left, right, .. }
     | LogicalPlan::Intersect { left, right }
     | LogicalPlan::Except { left, right } = plan
+    {
+        node.children.push(build_plan_tree(left, next_id, phase));
+        node.children.push(build_plan_tree(right, next_id, phase));
+    } else if let LogicalPlan::SemiJoin { left, right, .. }
+    | LogicalPlan::AntiJoin { left, right, .. } = plan
     {
         node.children.push(build_plan_tree(left, next_id, phase));
         node.children.push(build_plan_tree(right, next_id, phase));
@@ -1395,6 +1400,33 @@ fn plan_query_with_predicate(
                     left_planned.operator,
                     right_planned.operator,
                     SetOpMode::Except,
+                )),
+                scan_metrics,
+            })
+        }
+        LogicalPlan::SemiJoin {
+            left,
+            right,
+            left_key,
+            right_key,
+        }
+        | LogicalPlan::AntiJoin {
+            left,
+            right,
+            left_key,
+            right_key,
+        } => {
+            let left_planned = plan_query_inner(left, catalog, partition, memory)?;
+            let right_planned = plan_query_inner(right, catalog, partition, memory)?;
+            let mut scan_metrics = left_planned.scan_metrics;
+            scan_metrics.extend(right_planned.scan_metrics);
+            Ok(PlannedQuery {
+                operator: Box::new(SemiJoinOperator::new(
+                    left_planned.operator,
+                    right_planned.operator,
+                    left_key.clone(),
+                    right_key.clone(),
+                    matches!(plan, LogicalPlan::AntiJoin { .. }),
                 )),
                 scan_metrics,
             })

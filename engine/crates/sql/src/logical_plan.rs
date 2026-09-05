@@ -2,7 +2,10 @@ use std::collections::HashMap;
 
 use crate::parser::parse_sql;
 use kaveon_core::predicate::ScalarValue;
-use kaveon_core::{BinaryOp, CastTarget, DateField, Expr, KaveonError, Result};
+use kaveon_core::{
+    BinaryOp, CastTarget, DateField, Expr, KaveonError, Result, WindowFrame, WindowFrameBound,
+    WindowFrameUnits,
+};
 use sqlparser::ast;
 
 #[derive(Debug)]
@@ -79,6 +82,18 @@ pub enum LogicalPlan {
     Except {
         left: Box<LogicalPlan>,
         right: Box<LogicalPlan>,
+    },
+    SemiJoin {
+        left: Box<LogicalPlan>,
+        right: Box<LogicalPlan>,
+        left_key: Expr,
+        right_key: Expr,
+    },
+    AntiJoin {
+        left: Box<LogicalPlan>,
+        right: Box<LogicalPlan>,
+        left_key: Expr,
+        right_key: Expr,
     },
 }
 
@@ -280,10 +295,10 @@ fn table_factor_to_plan(
                     },
                     ctes,
                 )?;
-                if alias_name.is_some() {
-                    if let LogicalPlan::Scan { ref mut alias, .. } = plan {
-                        *alias = alias_name.clone();
-                    }
+                if alias_name.is_some()
+                    && let LogicalPlan::Scan { ref mut alias, .. } = plan
+                {
+                    *alias = alias_name.clone();
                 }
                 Ok(plan)
             } else {
@@ -344,11 +359,106 @@ fn build_where(plan: LogicalPlan, select: &ast::Select) -> Result<LogicalPlan> {
     match &select.selection {
         None => Ok(plan),
         Some(expr) => {
-            let predicate = ast_expr_to_expr(expr)?;
-            Ok(LogicalPlan::Filter {
-                input: Box::new(plan),
-                predicate,
-            })
+            let mut plan = plan;
+            let mut remaining = Vec::new();
+            extract_subquery_predicates(expr, &mut plan, &mut remaining)?;
+            if remaining.is_empty() {
+                Ok(plan)
+            } else {
+                let predicate = remaining
+                    .into_iter()
+                    .reduce(|a, b| Expr::And(Box::new(a), Box::new(b)))
+                    .unwrap();
+                Ok(LogicalPlan::Filter {
+                    input: Box::new(plan),
+                    predicate,
+                })
+            }
+        }
+    }
+}
+
+fn extract_subquery_predicates(
+    expr: &ast::Expr,
+    plan: &mut LogicalPlan,
+    remaining: &mut Vec<Expr>,
+) -> Result<()> {
+    match expr {
+        ast::Expr::BinaryOp {
+            left,
+            op: ast::BinaryOperator::And,
+            right,
+        } => {
+            extract_subquery_predicates(left, plan, remaining)?;
+            extract_subquery_predicates(right, plan, remaining)?;
+            Ok(())
+        }
+        ast::Expr::InSubquery {
+            expr: lhs,
+            subquery,
+            negated,
+        } => {
+            let left_key = ast_expr_to_expr(lhs)?;
+            let sub_plan = query_to_plan(subquery, &HashMap::new())?;
+            let right_key = first_output_column(&sub_plan);
+            let current = std::mem::replace(
+                plan,
+                LogicalPlan::Scan {
+                    table: String::new(),
+                    alias: None,
+                    columns: None,
+                },
+            );
+            if *negated {
+                *plan = LogicalPlan::AntiJoin {
+                    left: Box::new(current),
+                    right: Box::new(sub_plan),
+                    left_key,
+                    right_key,
+                };
+            } else {
+                *plan = LogicalPlan::SemiJoin {
+                    left: Box::new(current),
+                    right: Box::new(sub_plan),
+                    left_key,
+                    right_key,
+                };
+            }
+            Ok(())
+        }
+        ast::Expr::Exists { subquery, negated } => {
+            let sub_plan = query_to_plan(subquery, &HashMap::new())?;
+            let right_key = first_output_column(&sub_plan);
+            let left_key = right_key.clone();
+            let current = std::mem::replace(
+                plan,
+                LogicalPlan::Scan {
+                    table: String::new(),
+                    alias: None,
+                    columns: None,
+                },
+            );
+            if *negated {
+                *plan = LogicalPlan::AntiJoin {
+                    left: Box::new(current),
+                    right: Box::new(sub_plan),
+                    left_key,
+                    right_key,
+                };
+            } else {
+                *plan = LogicalPlan::SemiJoin {
+                    left: Box::new(current),
+                    right: Box::new(sub_plan),
+                    left_key,
+                    right_key,
+                };
+            }
+            Ok(())
+        }
+        ast::Expr::Nested(inner) => extract_subquery_predicates(inner, plan, remaining),
+        other => {
+            remaining.push(ast_expr_to_expr(other)?);
+            Ok(())
         }
     }
 }
@@ -641,10 +751,13 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
         }
 
         // ── Subqueries ──────────────────────────────────────────────────
-        ast::Expr::InSubquery { .. } => {
-            Err(sql_err("IN (SELECT ...) subqueries are not yet supported"))
-        }
-        ast::Expr::Exists { .. } => Err(sql_err("EXISTS subqueries are not yet supported")),
+        // IN/EXISTS subqueries are handled at plan level by build_where()
+        ast::Expr::InSubquery { .. } => Err(sql_err(
+            "IN subquery in this position is not supported; use it in WHERE",
+        )),
+        ast::Expr::Exists { .. } => Err(sql_err(
+            "EXISTS in this position is not supported; use it in WHERE",
+        )),
         ast::Expr::Subquery(_) => Err(sql_err("scalar subqueries are not yet supported")),
 
         _ => Err(sql_err(format!("unsupported expression: {expr}"))),
@@ -668,6 +781,17 @@ fn ast_data_type_to_cast_target(dt: &ast::DataType) -> Result<CastTarget> {
         | ast::DataType::String(_)
         | ast::DataType::Char(_)
         | ast::DataType::CharVarying(_) => Ok(CastTarget::Utf8),
+        ast::DataType::Decimal(info) | ast::DataType::Numeric(info) => {
+            let (p, s) = match info {
+                ast::ExactNumberInfo::PrecisionAndScale(p, s) => (*p as u8, *s as i8),
+                ast::ExactNumberInfo::Precision(p) => (*p as u8, 0),
+                ast::ExactNumberInfo::None => (38, 10),
+            };
+            Ok(CastTarget::Decimal128 {
+                precision: p,
+                scale: s,
+            })
+        }
         other => Err(sql_err(format!("unsupported CAST target type: {other}"))),
     }
 }
@@ -677,6 +801,23 @@ fn ast_value_to_expr(value: &ast::Value) -> Result<Expr> {
         ast::Value::Number(n, _) => {
             if let Ok(i) = n.parse::<i64>() {
                 Ok(Expr::Literal(ScalarValue::Int64(i)))
+            } else if n.contains('.') {
+                let (int_part, frac_part) = n.split_once('.').unwrap();
+                let scale = frac_part.len() as i8;
+                let combined = format!("{int_part}{frac_part}");
+                if let Ok(v) = combined.parse::<i128>() {
+                    let precision = n.replace(['-', '.'], "").len() as u8;
+                    let precision = precision.max(scale as u8 + 1);
+                    Ok(Expr::Literal(ScalarValue::Decimal128 {
+                        value: v,
+                        precision: precision.min(38),
+                        scale,
+                    }))
+                } else if let Ok(f) = n.parse::<f64>() {
+                    Ok(Expr::Literal(ScalarValue::Float64(f)))
+                } else {
+                    Err(sql_err(format!("invalid number: {n}")))
+                }
             } else if let Ok(f) = n.parse::<f64>() {
                 Ok(Expr::Literal(ScalarValue::Float64(f)))
             } else {
@@ -727,7 +868,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
     };
 
     if let Some(over) = &func.over {
-        let (partition_by, order_by) = match over {
+        let (partition_by, order_by, frame) = match over {
             ast::WindowType::WindowSpec(spec) => {
                 let partition_by = spec
                     .partition_by
@@ -743,7 +884,12 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
                         Ok((expr, asc))
                     })
                     .collect::<Result<Vec<_>>>()?;
-                (partition_by, order_by)
+                let frame = spec
+                    .window_frame
+                    .as_ref()
+                    .map(ast_window_frame)
+                    .transpose()?;
+                (partition_by, order_by, frame)
             }
             ast::WindowType::NamedWindow(_) => {
                 return Err(sql_err("named windows are not supported"));
@@ -754,6 +900,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             args,
             partition_by,
             order_by,
+            frame,
         });
     }
 
@@ -965,6 +1112,73 @@ fn ast_date_field_to_date_field(field: &ast::DateTimeField) -> Result<DateField>
         ast::DateTimeField::Epoch => Ok(DateField::Epoch),
         other => Err(sql_err(format!("unsupported EXTRACT field: {other}"))),
     }
+}
+
+fn ast_window_frame(frame: &ast::WindowFrame) -> Result<WindowFrame> {
+    let units = match frame.units {
+        ast::WindowFrameUnits::Rows => WindowFrameUnits::Rows,
+        ast::WindowFrameUnits::Range => WindowFrameUnits::Range,
+        ast::WindowFrameUnits::Groups => WindowFrameUnits::Groups,
+    };
+    let start = ast_window_frame_bound(&frame.start_bound)?;
+    let end = frame
+        .end_bound
+        .as_ref()
+        .map(ast_window_frame_bound)
+        .transpose()?
+        .unwrap_or(WindowFrameBound::CurrentRow);
+    Ok(WindowFrame { units, start, end })
+}
+
+fn ast_window_frame_bound(bound: &ast::WindowFrameBound) -> Result<WindowFrameBound> {
+    match bound {
+        ast::WindowFrameBound::CurrentRow => Ok(WindowFrameBound::CurrentRow),
+        ast::WindowFrameBound::Preceding(None) => Ok(WindowFrameBound::UnboundedPreceding),
+        ast::WindowFrameBound::Preceding(Some(expr)) => match expr.as_ref() {
+            ast::Expr::Value(v) => match v {
+                ast::Value::Number(n, _) => n
+                    .parse::<u64>()
+                    .map(WindowFrameBound::Preceding)
+                    .map_err(|_| sql_err(format!("invalid frame offset: {n}"))),
+                _ => Err(sql_err("frame offset must be a number")),
+            },
+            _ => Err(sql_err("frame offset must be a literal")),
+        },
+        ast::WindowFrameBound::Following(None) => Ok(WindowFrameBound::UnboundedFollowing),
+        ast::WindowFrameBound::Following(Some(expr)) => match expr.as_ref() {
+            ast::Expr::Value(v) => match v {
+                ast::Value::Number(n, _) => n
+                    .parse::<u64>()
+                    .map(WindowFrameBound::Following)
+                    .map_err(|_| sql_err(format!("invalid frame offset: {n}"))),
+                _ => Err(sql_err("frame offset must be a number")),
+            },
+            _ => Err(sql_err("frame offset must be a literal")),
+        },
+    }
+}
+
+fn first_output_column(plan: &LogicalPlan) -> Expr {
+    match plan {
+        LogicalPlan::Project { columns, .. } => columns.first().cloned(),
+        LogicalPlan::Aggregate { aggregates, .. } => aggregates.first().map(|a| match a {
+            AggregateExpr::Count { expr, .. }
+            | AggregateExpr::Sum { expr, .. }
+            | AggregateExpr::Avg { expr, .. }
+            | AggregateExpr::Min(expr)
+            | AggregateExpr::Max(expr) => expr.clone(),
+        }),
+        LogicalPlan::Filter { input, .. }
+        | LogicalPlan::Sort { input, .. }
+        | LogicalPlan::Limit { input, .. }
+        | LogicalPlan::Offset { input, .. }
+        | LogicalPlan::Distinct { input, .. } => Some(first_output_column(input)),
+        LogicalPlan::Scan { columns, .. } => columns
+            .as_ref()
+            .and_then(|c| c.first().map(|n| Expr::Column(n.clone()))),
+        _ => None,
+    }
+    .unwrap_or_else(|| Expr::Column("*".into()))
 }
 
 fn sql_err(msg: impl Into<String>) -> KaveonError {
@@ -1309,5 +1523,149 @@ mod tests {
             }
             _ => panic!("expected Project"),
         }
+    }
+
+    #[test]
+    fn parses_window_frame_rows_between() {
+        let plan = sql_to_logical_plan(
+            "SELECT SUM(amount) OVER (ORDER BY id ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) FROM t",
+        )
+        .unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected Project");
+        };
+        let LogicalPlan::Window { window_exprs, .. } = *input else {
+            panic!("expected Window");
+        };
+        assert_eq!(window_exprs.len(), 1);
+        let Expr::WindowFunction { frame, .. } = &window_exprs[0] else {
+            panic!("expected WindowFunction");
+        };
+        let frame = frame.as_ref().expect("frame should be Some");
+        assert_eq!(frame.units, WindowFrameUnits::Rows);
+        assert_eq!(frame.start, WindowFrameBound::Preceding(2));
+        assert_eq!(frame.end, WindowFrameBound::CurrentRow);
+    }
+
+    #[test]
+    fn parses_window_frame_unbounded() {
+        let plan = sql_to_logical_plan(
+            "SELECT SUM(x) OVER (PARTITION BY g ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM t",
+        )
+        .unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected Project");
+        };
+        let LogicalPlan::Window { window_exprs, .. } = *input else {
+            panic!("expected Window");
+        };
+        let Expr::WindowFunction { frame, .. } = &window_exprs[0] else {
+            panic!("expected WindowFunction");
+        };
+        let frame = frame.as_ref().expect("frame should be Some");
+        assert_eq!(frame.start, WindowFrameBound::UnboundedPreceding);
+        assert_eq!(frame.end, WindowFrameBound::UnboundedFollowing);
+    }
+
+    #[test]
+    fn parses_decimal_literal() {
+        let plan = sql_to_logical_plan("SELECT 123.45 FROM t").unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("expected Project");
+        };
+        match &columns[0] {
+            Expr::Literal(ScalarValue::Decimal128 {
+                value,
+                precision,
+                scale,
+            }) => {
+                assert_eq!(*value, 12345);
+                assert_eq!(*scale, 2);
+                assert!(*precision >= 5);
+            }
+            other => panic!("expected Decimal128 literal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_cast_to_decimal() {
+        let plan = sql_to_logical_plan("SELECT CAST(x AS DECIMAL(10,2)) FROM t").unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("expected Project");
+        };
+        assert!(matches!(
+            columns[0],
+            Expr::Cast {
+                data_type: CastTarget::Decimal128 {
+                    precision: 10,
+                    scale: 2,
+                },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parses_in_subquery() {
+        let plan = sql_to_logical_plan(
+            "SELECT * FROM orders WHERE user_id IN (SELECT id FROM users WHERE active = true)",
+        )
+        .unwrap();
+        assert!(matches!(plan, LogicalPlan::SemiJoin { .. }));
+    }
+
+    #[test]
+    fn parses_not_in_subquery() {
+        let plan =
+            sql_to_logical_plan("SELECT * FROM orders WHERE user_id NOT IN (SELECT id FROM users)")
+                .unwrap();
+        assert!(matches!(plan, LogicalPlan::AntiJoin { .. }));
+    }
+
+    #[test]
+    fn parses_exists_subquery() {
+        let plan = sql_to_logical_plan(
+            "SELECT * FROM orders WHERE EXISTS (SELECT 1 FROM users WHERE users.id = orders.user_id)",
+        )
+        .unwrap();
+        assert!(matches!(plan, LogicalPlan::SemiJoin { .. }));
+    }
+
+    #[test]
+    fn parses_not_exists_subquery() {
+        let plan =
+            sql_to_logical_plan("SELECT * FROM orders WHERE NOT EXISTS (SELECT 1 FROM users)")
+                .unwrap();
+        assert!(matches!(plan, LogicalPlan::AntiJoin { .. }));
+    }
+
+    #[test]
+    fn parses_sum_distinct() {
+        let plan = sql_to_logical_plan("SELECT SUM(DISTINCT amount) FROM t").unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected project")
+        };
+        let LogicalPlan::Aggregate { aggregates, .. } = *input else {
+            panic!("expected aggregate")
+        };
+        assert!(matches!(
+            aggregates.as_slice(),
+            [AggregateExpr::Sum { distinct: true, .. }]
+        ));
+    }
+
+    #[test]
+    fn parses_avg_distinct() {
+        let plan = sql_to_logical_plan("SELECT AVG(DISTINCT score) FROM t").unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected project")
+        };
+        let LogicalPlan::Aggregate { aggregates, .. } = *input else {
+            panic!("expected aggregate")
+        };
+        assert!(matches!(
+            aggregates.as_slice(),
+            [AggregateExpr::Avg { distinct: true, .. }]
+        ));
     }
 }

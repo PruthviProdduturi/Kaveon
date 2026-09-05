@@ -68,6 +68,7 @@ impl BatchOperator for WindowOperator {
                 args,
                 partition_by,
                 order_by,
+                frame,
             } = expr
             else {
                 return Err(KaveonError::Execution(
@@ -93,6 +94,7 @@ impl BatchOperator for WindowOperator {
                 &partitions,
                 sort_indices.as_deref(),
                 num_rows,
+                frame.as_ref(),
             )?;
 
             let col_name = window_output_name(name, args, idx);
@@ -202,6 +204,7 @@ fn evaluate_window_function(
     partitions: &PartitionMap,
     sort_order: Option<&[usize]>,
     num_rows: usize,
+    frame: Option<&kaveon_core::WindowFrame>,
 ) -> Result<ArrayRef> {
     match name.to_uppercase().as_str() {
         "ROW_NUMBER" => {
@@ -303,9 +306,9 @@ fn evaluate_window_function(
         }
         "LAG" | "LEAD" => {
             if args.is_empty() {
-                return Err(KaveonError::Execution(
-                    format!("{name} requires at least one argument").into(),
-                ));
+                return Err(KaveonError::Execution(format!(
+                    "{name} requires at least one argument"
+                )));
             }
             let col = crate::expr_eval::evaluate(&args[0], batch)?;
             let offset = if args.len() > 1 {
@@ -339,7 +342,7 @@ fn evaluate_window_function(
             eval_first_last_value(&col, partitions, sort_order, num_rows, false)
         }
         "SUM" | "COUNT" | "AVG" | "MIN" | "MAX" => {
-            eval_aggregate_window(name, args, batch, partitions)
+            eval_aggregate_window(name, args, batch, partitions, sort_order, frame)
         }
         _ => Err(KaveonError::Execution(format!(
             "unsupported window function: {name}"
@@ -493,6 +496,8 @@ fn eval_aggregate_window(
     args: &[Expr],
     batch: &RecordBatch,
     partitions: &PartitionMap,
+    sort_order: Option<&[usize]>,
+    frame: Option<&kaveon_core::WindowFrame>,
 ) -> Result<ArrayRef> {
     let col = if args.is_empty() || matches!(&args[0], Expr::Star) {
         None
@@ -501,6 +506,11 @@ fn eval_aggregate_window(
     };
 
     let num_rows = batch.num_rows();
+    let has_frame = frame.is_some() || sort_order.is_some();
+
+    if has_frame {
+        return eval_framed_aggregate(name, &col, partitions, sort_order, num_rows, frame);
+    }
 
     match name.to_uppercase().as_str() {
         "COUNT" => {
@@ -576,6 +586,145 @@ fn eval_aggregate_window(
     }
 }
 
+fn eval_framed_aggregate(
+    name: &str,
+    col: &Option<ArrayRef>,
+    partitions: &PartitionMap,
+    sort_order: Option<&[usize]>,
+    num_rows: usize,
+    frame: Option<&kaveon_core::WindowFrame>,
+) -> Result<ArrayRef> {
+    use kaveon_core::{WindowFrameBound, WindowFrameUnits};
+
+    let default_frame = kaveon_core::WindowFrame {
+        units: WindowFrameUnits::Range,
+        start: WindowFrameBound::UnboundedPreceding,
+        end: WindowFrameBound::CurrentRow,
+    };
+    let frame = frame.unwrap_or(&default_frame);
+
+    let upper = name.to_uppercase();
+
+    match upper.as_str() {
+        "COUNT" => {
+            let mut result = vec![0i64; num_rows];
+            for (_, rows) in partitions {
+                let sorted = sort_partition(rows, sort_order);
+                for (pos, &row) in sorted.iter().enumerate() {
+                    let (start, end) = frame_bounds(frame, pos, sorted.len());
+                    let count = if let Some(c) = col {
+                        (start..=end).filter(|&i| !c.is_null(sorted[i])).count() as i64
+                    } else {
+                        (end - start + 1) as i64
+                    };
+                    result[row] = count;
+                }
+            }
+            Ok(Arc::new(Int64Array::from(result)))
+        }
+        "SUM" => {
+            let col = col
+                .as_ref()
+                .ok_or_else(|| KaveonError::Execution("SUM requires a column".into()))?;
+            let mut result = vec![0.0f64; num_rows];
+            for (_, rows) in partitions {
+                let sorted = sort_partition(rows, sort_order);
+                for (pos, &row) in sorted.iter().enumerate() {
+                    let (start, end) = frame_bounds(frame, pos, sorted.len());
+                    let window_rows: Vec<usize> = (start..=end).map(|i| sorted[i]).collect();
+                    result[row] = sum_values(col, &window_rows)?;
+                }
+            }
+            Ok(Arc::new(Float64Array::from(result)))
+        }
+        "AVG" => {
+            let col = col
+                .as_ref()
+                .ok_or_else(|| KaveonError::Execution("AVG requires a column".into()))?;
+            let mut result: Vec<Option<f64>> = vec![None; num_rows];
+            for (_, rows) in partitions {
+                let sorted = sort_partition(rows, sort_order);
+                for (pos, &row) in sorted.iter().enumerate() {
+                    let (start, end) = frame_bounds(frame, pos, sorted.len());
+                    let window_rows: Vec<usize> = (start..=end).map(|i| sorted[i]).collect();
+                    let (sum, count) = sum_count_values(col, &window_rows)?;
+                    result[row] = if count > 0 {
+                        Some(sum / count as f64)
+                    } else {
+                        None
+                    };
+                }
+            }
+            Ok(Arc::new(Float64Array::from(result)))
+        }
+        "MIN" => {
+            let col = col
+                .as_ref()
+                .ok_or_else(|| KaveonError::Execution("MIN requires a column".into()))?;
+            let mut result: Vec<Option<f64>> = vec![None; num_rows];
+            for (_, rows) in partitions {
+                let sorted = sort_partition(rows, sort_order);
+                for (pos, &row) in sorted.iter().enumerate() {
+                    let (start, end) = frame_bounds(frame, pos, sorted.len());
+                    let window_rows: Vec<usize> = (start..=end).map(|i| sorted[i]).collect();
+                    result[row] = min_max_values(col, &window_rows, true)?;
+                }
+            }
+            Ok(Arc::new(Float64Array::from(result)))
+        }
+        "MAX" => {
+            let col = col
+                .as_ref()
+                .ok_or_else(|| KaveonError::Execution("MAX requires a column".into()))?;
+            let mut result: Vec<Option<f64>> = vec![None; num_rows];
+            for (_, rows) in partitions {
+                let sorted = sort_partition(rows, sort_order);
+                for (pos, &row) in sorted.iter().enumerate() {
+                    let (start, end) = frame_bounds(frame, pos, sorted.len());
+                    let window_rows: Vec<usize> = (start..=end).map(|i| sorted[i]).collect();
+                    result[row] = min_max_values(col, &window_rows, false)?;
+                }
+            }
+            Ok(Arc::new(Float64Array::from(result)))
+        }
+        _ => Err(KaveonError::Execution(format!(
+            "unsupported framed aggregate window: {name}"
+        ))),
+    }
+}
+
+fn sort_partition(rows: &[usize], sort_order: Option<&[usize]>) -> Vec<usize> {
+    let mut sorted = rows.to_vec();
+    if let Some(order) = sort_order {
+        sorted.sort_by_key(|&r| order[r]);
+    }
+    sorted
+}
+
+fn frame_bounds(
+    frame: &kaveon_core::WindowFrame,
+    pos: usize,
+    partition_len: usize,
+) -> (usize, usize) {
+    use kaveon_core::WindowFrameBound;
+
+    let start = match frame.start {
+        WindowFrameBound::UnboundedPreceding => 0,
+        WindowFrameBound::Preceding(n) => pos.saturating_sub(n as usize),
+        WindowFrameBound::CurrentRow => pos,
+        WindowFrameBound::Following(n) => (pos + n as usize).min(partition_len - 1),
+        WindowFrameBound::UnboundedFollowing => partition_len - 1,
+    };
+    let end = match frame.end {
+        WindowFrameBound::UnboundedPreceding => 0,
+        WindowFrameBound::Preceding(n) => pos.saturating_sub(n as usize),
+        WindowFrameBound::CurrentRow => pos,
+        WindowFrameBound::Following(n) => (pos + n as usize).min(partition_len - 1),
+        WindowFrameBound::UnboundedFollowing => partition_len - 1,
+    };
+    (start, end)
+}
+
 fn sum_values(col: &ArrayRef, rows: &[usize]) -> Result<f64> {
     let mut sum = 0.0;
     for &row in rows {
@@ -629,6 +778,13 @@ fn to_f64(col: &ArrayRef, row: usize) -> Result<f64> {
             .as_primitive::<arrow::datatypes::UInt64Type>()
             .value(row) as f64),
         DataType::Float64 => Ok(col.as_primitive::<Float64Type>().value(row)),
+        DataType::Decimal128(_, scale) => {
+            let arr = col
+                .as_any()
+                .downcast_ref::<arrow::array::Decimal128Array>()
+                .expect("Decimal128");
+            Ok(arr.value(row) as f64 / 10f64.powi(*scale as i32))
+        }
         dt => Err(KaveonError::Execution(format!(
             "cannot convert {dt} to numeric for window aggregate"
         ))),

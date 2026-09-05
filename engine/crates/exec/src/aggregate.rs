@@ -248,19 +248,14 @@ impl AggregateState {
                 if values.is_empty() {
                     Ok(None)
                 } else {
-                    Ok(Some(
-                        values
-                            .iter()
-                            .map(|v| aggregate_value_to_f64(v))
-                            .sum::<f64>(),
-                    ))
+                    Ok(Some(values.iter().map(aggregate_value_to_f64).sum::<f64>()))
                 }
             }
             Self::AvgDistinct(values) => {
                 if values.is_empty() {
                     Ok(None)
                 } else {
-                    let sum: f64 = values.iter().map(|v| aggregate_value_to_f64(v)).sum();
+                    let sum: f64 = values.iter().map(aggregate_value_to_f64).sum();
                     Ok(Some(sum / values.len() as f64))
                 }
             }
@@ -984,12 +979,7 @@ impl HashAggregate {
             .collect())
     }
 
-    fn collect_states(
-        &mut self,
-    ) -> Result<(
-        HashMap<Vec<GroupKey>, Vec<Accumulator>>,
-        Vec<MemoryReservation>,
-    )> {
+    fn collect_states(&mut self) -> Result<(GroupStateMap, Vec<MemoryReservation>)> {
         let mut groups: HashMap<Vec<GroupKey>, Vec<Accumulator>> = HashMap::new();
         let mut reservations = Vec::new();
         while let Some(batch) = self.source.next_batch()? {
@@ -1118,6 +1108,8 @@ enum GroupKey {
     Float64Bits(u64),
 }
 
+type GroupStateMap = HashMap<Vec<GroupKey>, Vec<Accumulator>>;
+
 fn estimated_group_bytes(key: &[GroupKey], aggregate_count: usize) -> u64 {
     let key_bytes = key
         .iter()
@@ -1212,6 +1204,14 @@ fn extract_f64(arr: &ArrayRef, row: usize) -> Result<f64> {
         DataType::UInt64 => arr
             .as_primitive::<arrow::datatypes::UInt64Type>()
             .value(row) as f64,
+        DataType::Decimal128(_, scale) => {
+            let v = arr
+                .as_any()
+                .downcast_ref::<arrow::array::Decimal128Array>()
+                .expect("Decimal128")
+                .value(row);
+            v as f64 / 10f64.powi(*scale as i32)
+        }
         _ => {
             return Err(exec_err(format!(
                 "expected numeric aggregate input, got {}",
@@ -1230,6 +1230,7 @@ fn is_numeric_type(data_type: &DataType) -> bool {
             | DataType::Int32
             | DataType::Int64
             | DataType::UInt64
+            | DataType::Decimal128(_, _)
     )
 }
 

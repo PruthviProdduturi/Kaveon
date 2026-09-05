@@ -212,7 +212,7 @@ export function CatalogSources() {
         </div>
       )}
 
-      {sources.length === 0 ? (
+      {!error && sources.length === 0 ? (
         <div style={{
           textAlign: "center", padding: "3rem", color: "var(--text-muted)",
           background: "var(--bg-surface)", borderRadius: 12, border: "1px solid var(--border)",

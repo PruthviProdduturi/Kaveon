@@ -9,7 +9,7 @@ export default function OperationsDocs() {
     <h2>Know your deployment</h2>
     <p>The production application path is Browser → Vercel Studio → private FastAPI → metadata database and registered sources. Kaveon Engine is a separate alpha runtime until platform integration ships.</p>
     <Diagram src="/docs/architecture/kaveon-deployment-topology.svg" alt="Kaveon production and Engine alpha deployment boundaries" caption="Operate the shipping platform and alpha Engine as distinct security and failure domains until the target integration is implemented." />
-    <Callout type="warn">Never infer production readiness from an Engine worker appearing healthy. Engine HTTP lacks authentication and TLS, and distributed execution is not yet implemented.</Callout>
+    <Callout type="warn">Never infer production readiness from an Engine worker appearing healthy. Distributed execution is active, but end-user Engine authorization/TLS, universally wired memory admission, aggregate/join spill, and production-scale resilience evidence remain gates.</Callout>
 
     <h2>Health and readiness</h2>
     <Code lang="bash">{`curl -fsS https://<api-host>/health

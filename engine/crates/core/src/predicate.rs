@@ -8,6 +8,11 @@ pub enum ScalarValue {
     Int64(i64),
     Float64(f64),
     Utf8(String),
+    Decimal128 {
+        value: i128,
+        precision: u8,
+        scale: i8,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +55,9 @@ impl ScalarValue {
             Self::Int64(_) => DataType::Int64,
             Self::Float64(_) => DataType::Float64,
             Self::Utf8(_) => DataType::Utf8,
+            Self::Decimal128 {
+                precision, scale, ..
+            } => DataType::Decimal128(*precision, *scale),
         }
     }
 }

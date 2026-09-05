@@ -8,6 +8,7 @@ pub mod limit;
 pub mod offset;
 pub mod project;
 pub mod scan;
+pub mod semijoin;
 pub mod setop;
 pub mod sort;
 pub mod spill;
