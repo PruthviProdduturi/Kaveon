@@ -13,16 +13,16 @@ export function PublicHeader({ active, onBrandClick }: PublicHeaderProps) {
   const isAbout = active === "about";
 
   return (
-    <header className={`${styles.header} ${isAbout ? styles.aboutHeader : ""}`}>
+    <header className={`${styles.header} ${styles.aboutHeader} ${isAbout ? "" : styles.docsHeader}`}>
       <Link
         href="/about"
         className={styles.brand}
         aria-label={isAbout ? "Kaveon about, back to top" : "Kaveon home"}
         onClick={onBrandClick}
       >
-        <KaveonWordmark height={isAbout ? 30 : 24} />
+        <KaveonWordmark height={30} />
       </Link>
-      <nav className={`${styles.nav} ${isAbout ? styles.aboutNav : ""}`} aria-label="Kaveon">
+      <nav className={`${styles.nav} ${styles.aboutNav}`} aria-label="Kaveon">
         {isAbout ? (
           <a href="#features" className={`${styles.link} ${styles.aboutSectionLink}`}>Features</a>
         ) : (
