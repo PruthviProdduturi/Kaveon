@@ -18,32 +18,21 @@
 
 /* On the dark docs ground the header is the same #0a0a0a as the page, so the divider is
    the only seam left. Drop it there to match the About page's seamless header. */
-:global([data-theme="dark"]) .header:not(.aboutHeader) { border-bottom-color: transparent; }
 
 /* Light theme, docs header only. The base rule above is the dark treatment (also the
    pre-hydration default), so only an explicit light theme flips it — no SSR flash.
    The About header is excluded: it is a theme-independent #0a0a0a surface by design
    and must keep light text in every theme. */
-:global([data-theme="light"]) .header:not(.aboutHeader) {
+:global([data-theme="light"]) .docsHeader {
   --text-primary: #1a1a2e;
-  border-bottom-color: var(--border, #e0ddd8);
-  background: rgba(248,247,245,.88);
+  border-bottom-color: var(--border, #e0ddd8) !important;
+  background: #f8f7f5 !important;
 }
-:global([data-theme="light"]) .header:not(.aboutHeader) .link { color: var(--text-secondary, #4a5568); }
-:global([data-theme="light"]) .header:not(.aboutHeader) .link:hover,
-:global([data-theme="light"]) .header:not(.aboutHeader) .link:focus-visible,
-:global([data-theme="light"]) .header:not(.aboutHeader) .active { color: var(--text-primary, #1a1a2e); }
-:global([data-theme="light"]) .header:not(.aboutHeader) .launch { color: #fff; }
-
-/* Dark docs header: solid, no backdrop filter — the same treatment the About header
-   uses. blur(16px) samples the prose and sidebar behind the bar and smears them
-   upward, which lifts it off pure black into a grey haze even though the colour
-   underneath is already #0a0a0a. */
-:global([data-theme="dark"]) .header:not(.aboutHeader) {
-  background: #0a0a0a;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-}
+:global([data-theme="light"]) .docsHeader .link { color: var(--text-secondary, #4a5568); }
+:global([data-theme="light"]) .docsHeader .link:hover,
+:global([data-theme="light"]) .docsHeader .link:focus-visible,
+:global([data-theme="light"]) .docsHeader .active { color: var(--text-primary, #1a1a2e); }
+:global([data-theme="light"]) .docsHeader .launch { color: #fff; }
 
 /* The wordmark is a mark, not a button — it never takes a surface. It lifts and
    picks up the brand glow instead. */
@@ -68,3 +57,9 @@
   .brand { transition: none; will-change: auto; }
   .brand:hover { transform: none; }
 }
+
+/* Docs carries .aboutHeader so it inherits that variant exactly, including its
+   !important background -- which is what makes the About header render reliably.
+   This marker class exists so the light theme can still target docs alone; the
+   About page stays a theme-independent dark surface. */
+.docsHeader { }
