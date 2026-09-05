@@ -37,6 +37,7 @@
 | Local Parquet reader, projection, metadata statistics, row-group pruning | 🧪 Alpha | Synchronous Arrow `RecordBatch` stream |
 | Local Delta Lake reader | 🧪 Alpha | Replays complete JSON commits from version 0 and streams all active Parquet files; checkpoints unsupported |
 | Scan, filter, project, hash aggregate, limit | 🧪 Alpha | Vectorized node-local execution |
+| SQL coverage — window functions, set operations, date/time, decimal, subqueries | 🧪 Alpha | ROW_NUMBER/RANK/DENSE_RANK/LAG/LEAD/SUM/AVG/COUNT/MIN/MAX OVER with frame specs (ROWS/RANGE/GROUPS BETWEEN), INTERSECT/EXCEPT, EXTRACT, DATE_TRUNC, DATE_PART, TO_CHAR, NOW/CURRENT_DATE/CURRENT_TIMESTAMP; DISTINCT on SUM/AVG; Decimal128 type; IN/NOT IN/EXISTS/NOT EXISTS subqueries via semi/anti join |
 | SQL parser, remote-first CLI, HTTP statement API | 🧪 Alpha | Engine query execution is not yet wired into Studio/API identity |
 | Native durable catalog | 🧪 Alpha | SQLite/WAL single-coordinator authority with revisions, lifecycle, audit, Arrow schemas, authenticated mutation API, and restart recovery |
 | Coordinator/worker discovery and heartbeats | 🧪 Alpha | Two-worker local Docker topology verified on real Delta data |
@@ -123,7 +124,7 @@
 | In-process rate limiting not shared across replicas | Redis fixes this |
 | Engine server has no auth/TLS | Keep behind a trusted local boundary during alpha |
 | Platform catalog-source registry is not synchronized to Engine catalog | Add an authenticated revision-aware API-to-Engine bridge |
-| Engine aggregate/join memory can exceed desired limits | Wire reservations, revocation, and spill before production scale claims |
+| Engine aggregate/join memory is bounded only through opt-in constructors | Wire admission and accounts through every coordinator/worker plan, then add partitioned aggregate/join spill before production scale claims |
 
 ---
 

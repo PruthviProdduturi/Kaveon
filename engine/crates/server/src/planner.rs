@@ -2,20 +2,25 @@ use kaveon_core::{
     AggregateFunction, AggregateMode, AggregateSpec, BatchOperator, BatchSource, CatalogManager,
     DataFormat, EXECUTABLE_FRAGMENT_VERSION, ExchangeDescriptor, ExchangeId, ExchangeInput,
     ExchangeOutput, ExecutableFragment, Expr, FragmentNode, FragmentNodeId, FragmentOperator,
-    JoinSpec, JoinType as FragmentJoinType, KaveonError, NamedExpr, Partitioning, Result, ScanSpec,
-    ScanTable, SortSpec, StageFragment, StageGraph, StageId, TableReference,
+    JoinSpec, JoinType as FragmentJoinType, KaveonError, NamedExpr, Partitioning, QueryMemoryPool,
+    Result, ScanSpec, ScanTable, SortSpec, StageFragment, StageGraph, StageId, TableReference,
 };
 use kaveon_exec::aggregate::{AggExpr, AggFunc, HashAggregate};
+use kaveon_exec::distinct::DistinctOperator;
 use kaveon_exec::filter::FilterOperator;
 use kaveon_exec::join::{HashJoin, JoinType as PhysicalJoinType};
 use kaveon_exec::limit::LimitOperator;
+use kaveon_exec::offset::OffsetOperator;
 use kaveon_exec::project::ProjectOperator;
 use kaveon_exec::scan::ScanOperator;
+use kaveon_exec::setop::{SetOpMode, SetOpOperator};
 use kaveon_exec::sort::{SortExpr, SortOperator};
 use kaveon_exec::topn::TopNOperator;
+use kaveon_exec::union::UnionOperator;
+use kaveon_exec::window::WindowOperator;
 use kaveon_optim::rules::to_storage_predicate;
 use kaveon_sql::logical_plan::{AggregateExpr, JoinType, LogicalPlan};
-use kaveon_storage::{DeltaTableReader, ParquetReader, ScanPartition};
+use kaveon_storage::{AdlsParquetReader, DeltaTableReader, ParquetReader, ScanPartition};
 use std::collections::BTreeMap;
 
 const GROUPED_AGGREGATE_STATE_KEY_COLUMN: &str = "group_keys";
@@ -33,7 +38,15 @@ pub fn plan_to_operator(
 }
 
 pub fn plan_query(plan: &LogicalPlan, catalog: &CatalogManager) -> Result<PlannedQuery> {
-    plan_query_inner(plan, catalog, None)
+    plan_query_inner(plan, catalog, None, None)
+}
+
+pub fn plan_query_with_memory(
+    plan: &LogicalPlan,
+    catalog: &CatalogManager,
+    memory: &QueryMemoryPool,
+) -> Result<PlannedQuery> {
+    plan_query_inner(plan, catalog, None, Some(memory))
 }
 
 pub fn plan_partitioned_query(
@@ -41,7 +54,7 @@ pub fn plan_partitioned_query(
     catalog: &CatalogManager,
     partition: ScanPartition,
 ) -> Result<PlannedQuery> {
-    plan_query_inner(plan, catalog, Some(partition))
+    plan_query_inner(plan, catalog, Some(partition), None)
 }
 
 pub fn qualify_tables(plan: &mut LogicalPlan, catalog: &str, schema: &str) {
@@ -67,7 +80,19 @@ pub fn qualify_tables(plan: &mut LogicalPlan, catalog: &str, schema: &str) {
         | LogicalPlan::Project { input, .. }
         | LogicalPlan::Aggregate { input, .. }
         | LogicalPlan::Sort { input, .. }
-        | LogicalPlan::Limit { input, .. } => qualify_tables(input, catalog, schema),
+        | LogicalPlan::Limit { input, .. }
+        | LogicalPlan::Offset { input, .. }
+        | LogicalPlan::Distinct { input, .. }
+        | LogicalPlan::Window { input, .. } => qualify_tables(input, catalog, schema),
+        LogicalPlan::Union { inputs, .. } => {
+            for input in inputs.iter_mut() {
+                qualify_tables(input, catalog, schema);
+            }
+        }
+        LogicalPlan::Intersect { left, right } | LogicalPlan::Except { left, right } => {
+            qualify_tables(left, catalog, schema);
+            qualify_tables(right, catalog, schema);
+        }
     }
 }
 
@@ -320,6 +345,117 @@ impl ExecutableFragmentBuilder<'_> {
                 FragmentOperator::Limit { limit: *count },
                 Some(FragmentOperator::Limit { limit: *count }),
             ),
+            LogicalPlan::Offset { input, count } => {
+                self.build_single_exchange(input, FragmentOperator::Offset { offset: *count }, None)
+            }
+            LogicalPlan::Distinct { input } => {
+                self.build_single_exchange(input, FragmentOperator::Distinct, None)
+            }
+            LogicalPlan::Union { inputs, .. } => {
+                let mut stages = Vec::new();
+                for input in inputs {
+                    stages.push(self.build(input)?);
+                }
+                let target = StageId(self.next_stage);
+                let mut exchange_inputs = Vec::new();
+                for stage in stages.iter() {
+                    let exchange = self.exchange(*stage, target)?.clone();
+                    let mut draft = self.draft_mut(*stage)?;
+                    draft.push(
+                        FragmentOperator::ExchangeOutput(ExchangeOutput {
+                            exchange_id: exchange.id.clone(),
+                            partitioning: exchange.partitioning,
+                        }),
+                        vec![draft.root],
+                    );
+                    exchange_inputs.push(exchange.id);
+                }
+                let mut target_draft =
+                    FragmentDraft::leaf(FragmentOperator::ExchangeInput(ExchangeInput {
+                        exchange_id: exchange_inputs[0].clone(),
+                    }));
+                for exchange_id in &exchange_inputs[1..] {
+                    let id = FragmentNodeId(target_draft.nodes.len() as u32);
+                    target_draft.nodes.push(FragmentNode {
+                        id,
+                        inputs: Vec::new(),
+                        operator: FragmentOperator::ExchangeInput(ExchangeInput {
+                            exchange_id: exchange_id.clone(),
+                        }),
+                    });
+                }
+                target_draft.push(FragmentOperator::Union, vec![]);
+                Ok(self.add_fragment(target_draft))
+            }
+            LogicalPlan::Window { input, .. } => {
+                self.build_single_exchange(input, FragmentOperator::Window, None)
+            }
+            LogicalPlan::Intersect { left, right } => {
+                let left_stage = self.build(left)?;
+                let right_stage = self.build(right)?;
+                let target = StageId(self.next_stage);
+                let left_exchange = self.exchange(left_stage, target)?.clone();
+                let right_exchange = self.exchange(right_stage, target)?.clone();
+                for (stage, exchange) in [
+                    (left_stage, left_exchange.clone()),
+                    (right_stage, right_exchange.clone()),
+                ] {
+                    let mut draft = self.draft_mut(stage)?;
+                    draft.push(
+                        FragmentOperator::ExchangeOutput(ExchangeOutput {
+                            exchange_id: exchange.id,
+                            partitioning: exchange.partitioning,
+                        }),
+                        vec![draft.root],
+                    );
+                }
+                let mut target_draft =
+                    FragmentDraft::leaf(FragmentOperator::ExchangeInput(ExchangeInput {
+                        exchange_id: left_exchange.id,
+                    }));
+                target_draft.nodes.push(FragmentNode {
+                    id: FragmentNodeId(1),
+                    inputs: Vec::new(),
+                    operator: FragmentOperator::ExchangeInput(ExchangeInput {
+                        exchange_id: right_exchange.id,
+                    }),
+                });
+                target_draft.push(FragmentOperator::Intersect, vec![]);
+                Ok(self.add_fragment(target_draft))
+            }
+            LogicalPlan::Except { left, right } => {
+                let left_stage = self.build(left)?;
+                let right_stage = self.build(right)?;
+                let target = StageId(self.next_stage);
+                let left_exchange = self.exchange(left_stage, target)?.clone();
+                let right_exchange = self.exchange(right_stage, target)?.clone();
+                for (stage, exchange) in [
+                    (left_stage, left_exchange.clone()),
+                    (right_stage, right_exchange.clone()),
+                ] {
+                    let mut draft = self.draft_mut(stage)?;
+                    draft.push(
+                        FragmentOperator::ExchangeOutput(ExchangeOutput {
+                            exchange_id: exchange.id,
+                            partitioning: exchange.partitioning,
+                        }),
+                        vec![draft.root],
+                    );
+                }
+                let mut target_draft =
+                    FragmentDraft::leaf(FragmentOperator::ExchangeInput(ExchangeInput {
+                        exchange_id: left_exchange.id,
+                    }));
+                target_draft.nodes.push(FragmentNode {
+                    id: FragmentNodeId(1),
+                    inputs: Vec::new(),
+                    operator: FragmentOperator::ExchangeInput(ExchangeInput {
+                        exchange_id: right_exchange.id,
+                    }),
+                });
+                target_draft.push(FragmentOperator::Except, vec![]);
+                Ok(self.add_fragment(target_draft))
+            }
             LogicalPlan::Join {
                 left,
                 right,
@@ -545,10 +681,26 @@ fn aggregate_specs(aggregates: &[AggregateExpr]) -> Vec<AggregateSpec> {
                     (!matches!(expr, Expr::Star)).then(|| expr.clone()),
                     "count",
                 ),
-                AggregateExpr::Sum(expr) => (AggregateFunction::Sum, Some(expr.clone()), "sum"),
+                AggregateExpr::Sum { expr, distinct } => (
+                    if *distinct {
+                        AggregateFunction::Sum
+                    } else {
+                        AggregateFunction::Sum
+                    },
+                    Some(expr.clone()),
+                    "sum",
+                ),
                 AggregateExpr::Min(expr) => (AggregateFunction::Min, Some(expr.clone()), "min"),
                 AggregateExpr::Max(expr) => (AggregateFunction::Max, Some(expr.clone()), "max"),
-                AggregateExpr::Avg(expr) => (AggregateFunction::Avg, Some(expr.clone()), "avg"),
+                AggregateExpr::Avg { expr, distinct } => (
+                    if *distinct {
+                        AggregateFunction::Avg
+                    } else {
+                        AggregateFunction::Avg
+                    },
+                    Some(expr.clone()),
+                    "avg",
+                ),
             };
             let suffix = argument.as_ref().map_or("star".into(), |expression| {
                 expression_column(expression).unwrap_or_else(|_| "expr".into())
@@ -697,6 +849,53 @@ impl StageGraphBuilder {
                         },
                     );
                 }
+                Ok(target)
+            }
+            LogicalPlan::Offset { input, .. } => {
+                let source = self.build(input)?;
+                let physical = physical_plan_tree(plan);
+                let target = self.add_exchange_stage("FinalOffset", physical.attributes, 1, 1);
+                self.add_exchange(source, target, Partitioning::Single);
+                Ok(target)
+            }
+            LogicalPlan::Distinct { input } => {
+                let source = self.build(input)?;
+                let physical = physical_plan_tree(plan);
+                let target = self.add_exchange_stage("FinalDistinct", physical.attributes, 1, 1);
+                self.add_exchange(source, target, Partitioning::Single);
+                Ok(target)
+            }
+            LogicalPlan::Union { inputs, .. } => {
+                let mut stages = Vec::new();
+                for input in inputs {
+                    stages.push(self.build(input)?);
+                }
+                let physical = physical_plan_tree(plan);
+                let target = self.add_exchange_stage("Union", physical.attributes, 1, stages.len());
+                for stage in stages {
+                    self.add_exchange(stage, target, Partitioning::Single);
+                }
+                Ok(target)
+            }
+            LogicalPlan::Window { input, .. } => {
+                let source = self.build(input)?;
+                let physical = physical_plan_tree(plan);
+                let target = self.add_exchange_stage("FinalWindow", physical.attributes, 1, 1);
+                self.add_exchange(source, target, Partitioning::Single);
+                Ok(target)
+            }
+            LogicalPlan::Intersect { left, right } | LogicalPlan::Except { left, right } => {
+                let left_stage = self.build(left)?;
+                let right_stage = self.build(right)?;
+                let physical = physical_plan_tree(plan);
+                let operator = if matches!(plan, LogicalPlan::Intersect { .. }) {
+                    "Intersect"
+                } else {
+                    "Except"
+                };
+                let target = self.add_exchange_stage(operator, physical.attributes, 1, 2);
+                self.add_exchange(left_stage, target, Partitioning::Single);
+                self.add_exchange(right_stage, target, Partitioning::Single);
                 Ok(target)
             }
             LogicalPlan::Filter { input, .. } | LogicalPlan::Project { input, .. } => {
@@ -851,14 +1050,31 @@ fn build_plan_tree(
             BTreeMap::from([("rows".to_owned(), count.to_string())]),
             Some(input.as_ref()),
         ),
+        LogicalPlan::Offset { input, count } => (
+            "Offset",
+            BTreeMap::from([("rows".to_owned(), count.to_string())]),
+            Some(input.as_ref()),
+        ),
+        LogicalPlan::Distinct { input } => ("Distinct", BTreeMap::new(), Some(input.as_ref())),
+        LogicalPlan::Window { input, .. } => ("Window", BTreeMap::new(), Some(input.as_ref())),
+        LogicalPlan::Union { .. } => ("Union", BTreeMap::new(), None),
+        LogicalPlan::Intersect { .. } => ("Intersect", BTreeMap::new(), None),
+        LogicalPlan::Except { .. } => ("Except", BTreeMap::new(), None),
     };
     let mut node = kaveon_core::PlanNode::new(id, phase, operator);
     node.attributes = attributes;
     if let Some(input) = input {
         node.children.push(build_plan_tree(input, next_id, phase));
-    } else if let LogicalPlan::Join { left, right, .. } = plan {
+    } else if let LogicalPlan::Join { left, right, .. }
+    | LogicalPlan::Intersect { left, right }
+    | LogicalPlan::Except { left, right } = plan
+    {
         node.children.push(build_plan_tree(left, next_id, phase));
         node.children.push(build_plan_tree(right, next_id, phase));
+    } else if let LogicalPlan::Union { inputs, .. } = plan {
+        for input in inputs {
+            node.children.push(build_plan_tree(input, next_id, phase));
+        }
     }
     node
 }
@@ -867,8 +1083,9 @@ fn plan_query_inner(
     plan: &LogicalPlan,
     catalog: &CatalogManager,
     partition: Option<ScanPartition>,
+    memory: Option<&QueryMemoryPool>,
 ) -> Result<PlannedQuery> {
-    plan_query_with_predicate(plan, catalog, None, partition)
+    plan_query_with_predicate(plan, catalog, None, partition, memory)
 }
 
 fn plan_query_with_predicate(
@@ -876,6 +1093,7 @@ fn plan_query_with_predicate(
     catalog: &CatalogManager,
     storage_predicate: Option<&kaveon_core::StoragePredicate>,
     partition: Option<ScanPartition>,
+    memory: Option<&QueryMemoryPool>,
 ) -> Result<PlannedQuery> {
     match plan {
         LogicalPlan::Scan { table, columns, .. } => {
@@ -885,6 +1103,29 @@ fn plan_query_with_predicate(
 
             let (source, scan_metrics): (Box<dyn BatchSource>, _) = match resolved.table.format {
                 DataFormat::Parquet => {
+                    if path.starts_with("abfss://") {
+                        let mut reader = AdlsParquetReader::from_abfss_uri(&path)?;
+                        if let Some(cols) = columns {
+                            reader = reader.with_columns(cols.clone());
+                        }
+                        if let Some(predicate) = storage_predicate {
+                            reader = reader.with_predicate(predicate.clone());
+                        }
+                        if let Some(partition) = partition {
+                            reader = reader.with_partition(partition);
+                        }
+                        let source = reader.read_blocking().map_err(|error| {
+                            KaveonError::Execution(format!("failed to open '{path}': {error}"))
+                        })?;
+                        let metrics = source.metrics();
+                        return Ok(PlannedQuery {
+                            operator: Box::new(ScanOperator::new(
+                                Box::new(source),
+                                columns.as_deref(),
+                            )?),
+                            scan_metrics: vec![metrics],
+                        });
+                    }
                     let mut reader = ParquetReader::new(&path);
                     if let Some(cols) = columns {
                         reader = reader.with_columns(cols.clone());
@@ -902,6 +1143,11 @@ fn plan_query_with_predicate(
                     (Box::new(source), vec![metrics])
                 }
                 DataFormat::Delta => {
+                    if path.starts_with("abfss://") {
+                        return Err(KaveonError::Execution(
+                            "Delta snapshots over ADLS Gen2 are not implemented; register Parquet objects for the current ADLS reader".into(),
+                        ));
+                    }
                     let mut reader = DeltaTableReader::new(&path);
                     if let Some(cols) = columns {
                         reader = reader.with_columns(cols.clone());
@@ -936,27 +1182,40 @@ fn plan_query_with_predicate(
         } => {
             let left_qualifier = relation_qualifier(left);
             let right_qualifier = relation_qualifier(right);
-            let left = plan_query_inner(left, catalog, partition)?;
-            let right = plan_query_inner(right, catalog, partition)?;
+            let left = plan_query_inner(left, catalog, partition, memory)?;
+            let right = plan_query_inner(right, catalog, partition, memory)?;
             let keys = join_keys(condition.as_ref())?;
             let mut scan_metrics = left.scan_metrics;
             scan_metrics.extend(right.scan_metrics);
             Ok(PlannedQuery {
-                operator: Box::new(HashJoin::try_new_qualified(
-                    left.operator,
-                    right.operator,
-                    physical_join_type(*join_type),
-                    keys,
-                    left_qualifier.as_deref(),
-                    right_qualifier.as_deref(),
-                )?),
+                operator: Box::new(if let Some(memory) = memory {
+                    HashJoin::try_new_qualified_with_memory(
+                        left.operator,
+                        right.operator,
+                        physical_join_type(*join_type),
+                        keys,
+                        left_qualifier.as_deref(),
+                        right_qualifier.as_deref(),
+                        memory.operator("hash-join")?,
+                    )?
+                } else {
+                    HashJoin::try_new_qualified(
+                        left.operator,
+                        right.operator,
+                        physical_join_type(*join_type),
+                        keys,
+                        left_qualifier.as_deref(),
+                        right_qualifier.as_deref(),
+                    )?
+                }),
                 scan_metrics,
             })
         }
 
         LogicalPlan::Filter { input, predicate } => {
             let pushed = to_storage_predicate(predicate);
-            let planned = plan_query_with_predicate(input, catalog, pushed.as_ref(), partition)?;
+            let planned =
+                plan_query_with_predicate(input, catalog, pushed.as_ref(), partition, memory)?;
             Ok(PlannedQuery {
                 operator: Box::new(FilterOperator::new(planned.operator, predicate.clone())),
                 scan_metrics: planned.scan_metrics,
@@ -964,7 +1223,7 @@ fn plan_query_with_predicate(
         }
 
         LogicalPlan::Project { input, columns } => {
-            let planned = plan_query_inner(input, catalog, partition)?;
+            let planned = plan_query_inner(input, catalog, partition, memory)?;
 
             let has_star = columns.iter().any(|e| matches!(e, Expr::Star));
             if has_star {
@@ -1003,7 +1262,7 @@ fn plan_query_with_predicate(
             group_by,
             aggregates,
         } => {
-            let planned = plan_query_inner(input, catalog, partition)?;
+            let planned = plan_query_inner(input, catalog, partition, memory)?;
 
             let group_cols: Vec<String> = group_by
                 .iter()
@@ -1021,13 +1280,22 @@ fn plan_query_with_predicate(
                 .collect::<Result<_>>()?;
 
             Ok(PlannedQuery {
-                operator: Box::new(HashAggregate::new(planned.operator, group_cols, agg_exprs)?),
+                operator: Box::new(if let Some(memory) = memory {
+                    HashAggregate::new_with_memory(
+                        planned.operator,
+                        group_cols,
+                        agg_exprs,
+                        memory.operator("hash-aggregate")?,
+                    )?
+                } else {
+                    HashAggregate::new(planned.operator, group_cols, agg_exprs)?
+                }),
                 scan_metrics: planned.scan_metrics,
             })
         }
 
         LogicalPlan::Sort { input, order_by } => {
-            let planned = plan_query_inner(input, catalog, partition)?;
+            let planned = plan_query_inner(input, catalog, partition, memory)?;
             let sort_exprs = order_by
                 .iter()
                 .map(|(expr, ascending)| SortExpr::new(expr.clone(), *ascending))
@@ -1044,7 +1312,7 @@ fn plan_query_with_predicate(
                 order_by,
             } = input.as_ref()
             {
-                let planned = plan_query_inner(sort_input, catalog, partition)?;
+                let planned = plan_query_inner(sort_input, catalog, partition, memory)?;
                 let sort_exprs = order_by
                     .iter()
                     .map(|(expr, ascending)| SortExpr::new(expr.clone(), *ascending))
@@ -1054,10 +1322,81 @@ fn plan_query_with_predicate(
                     scan_metrics: planned.scan_metrics,
                 });
             }
-            let planned = plan_query_inner(input, catalog, partition)?;
+            let planned = plan_query_inner(input, catalog, partition, memory)?;
             Ok(PlannedQuery {
                 operator: Box::new(LimitOperator::new(planned.operator, *count)),
                 scan_metrics: planned.scan_metrics,
+            })
+        }
+
+        LogicalPlan::Offset { input, count } => {
+            let planned = plan_query_inner(input, catalog, partition, memory)?;
+            Ok(PlannedQuery {
+                operator: Box::new(OffsetOperator::new(planned.operator, *count)),
+                scan_metrics: planned.scan_metrics,
+            })
+        }
+
+        LogicalPlan::Distinct { input } => {
+            let planned = plan_query_inner(input, catalog, partition, memory)?;
+            Ok(PlannedQuery {
+                operator: Box::new(DistinctOperator::new(planned.operator)),
+                scan_metrics: planned.scan_metrics,
+            })
+        }
+
+        LogicalPlan::Union { inputs, .. } => {
+            let mut operators: Vec<Box<dyn BatchOperator>> = Vec::new();
+            let mut scan_metrics = Vec::new();
+            for input in inputs {
+                let planned = plan_query_inner(input, catalog, partition, memory)?;
+                operators.push(planned.operator);
+                scan_metrics.extend(planned.scan_metrics);
+            }
+            Ok(PlannedQuery {
+                operator: Box::new(UnionOperator::new(operators)),
+                scan_metrics,
+            })
+        }
+
+        LogicalPlan::Window {
+            input,
+            window_exprs,
+        } => {
+            let planned = plan_query_inner(input, catalog, partition, memory)?;
+            Ok(PlannedQuery {
+                operator: Box::new(WindowOperator::new(planned.operator, window_exprs.clone())),
+                scan_metrics: planned.scan_metrics,
+            })
+        }
+
+        LogicalPlan::Intersect { left, right } => {
+            let left_planned = plan_query_inner(left, catalog, partition, memory)?;
+            let right_planned = plan_query_inner(right, catalog, partition, memory)?;
+            let mut scan_metrics = left_planned.scan_metrics;
+            scan_metrics.extend(right_planned.scan_metrics);
+            Ok(PlannedQuery {
+                operator: Box::new(SetOpOperator::new(
+                    left_planned.operator,
+                    right_planned.operator,
+                    SetOpMode::Intersect,
+                )),
+                scan_metrics,
+            })
+        }
+
+        LogicalPlan::Except { left, right } => {
+            let left_planned = plan_query_inner(left, catalog, partition, memory)?;
+            let right_planned = plan_query_inner(right, catalog, partition, memory)?;
+            let mut scan_metrics = left_planned.scan_metrics;
+            scan_metrics.extend(right_planned.scan_metrics);
+            Ok(PlannedQuery {
+                operator: Box::new(SetOpOperator::new(
+                    left_planned.operator,
+                    right_planned.operator,
+                    SetOpMode::Except,
+                )),
+                scan_metrics,
             })
         }
     }
@@ -1069,8 +1408,8 @@ fn logical_agg_to_exec(
 ) -> Result<AggExpr> {
     let (func, expr, distinct) = match agg {
         AggregateExpr::Count { expr, distinct } => (AggFunc::Count, expr, *distinct),
-        AggregateExpr::Sum(e) => (AggFunc::Sum, e, false),
-        AggregateExpr::Avg(e) => (AggFunc::Avg, e, false),
+        AggregateExpr::Sum { expr, distinct } => (AggFunc::Sum, expr, *distinct),
+        AggregateExpr::Avg { expr, distinct } => (AggFunc::Avg, expr, *distinct),
         AggregateExpr::Min(e) => (AggFunc::Min, e, false),
         AggregateExpr::Max(e) => (AggFunc::Max, e, false),
     };

@@ -52,6 +52,14 @@ pub enum FragmentOperator {
     Limit {
         limit: usize,
     },
+    Offset {
+        offset: usize,
+    },
+    Distinct,
+    Union,
+    Window,
+    Intersect,
+    Except,
     ExchangeOutput(ExchangeOutput),
     HashJoin(JoinSpec),
 }
@@ -253,6 +261,12 @@ impl FragmentNode {
                 }
                 1
             }
+            FragmentOperator::Offset { .. } => 1,
+            FragmentOperator::Distinct => 1,
+            FragmentOperator::Union => 0,
+            FragmentOperator::Window => 1,
+            FragmentOperator::Intersect => 0,
+            FragmentOperator::Except => 0,
         };
         if self.inputs.len() != expected {
             return invalid(format!(

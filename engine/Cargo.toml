@@ -21,7 +21,9 @@ repository = "https://github.com/PruthviProdduturi/Kaveon"
 [workspace.dependencies]
 arrow = { version = "54", features = ["ffi"] }
 arrow-schema = { version = "54", features = ["serde"] }
-parquet = { version = "54", features = ["arrow", "snap", "zstd"] }
+parquet = { version = "54", features = ["arrow", "async", "object_store", "snap", "zstd"] }
+object_store = { version = "0.11", features = ["azure"] }
+futures = "0.3"
 sqlparser = "0.53"
 thiserror = "2"
 anyhow = "1"

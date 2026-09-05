@@ -21,13 +21,16 @@ pub use exchange::{
     ExchangeDescriptor, ExchangeId, Partitioning, SplitDescriptor, SplitId, StageFragment,
     StageGraph, StageId, TaskAssignment, TaskId, TaskState, TaskStatus,
 };
-pub use expr::{BinaryOp, Expr};
+pub use expr::{BinaryOp, CastTarget, DateField, Expr};
 pub use fragment::{
     AggregateFunction, AggregateMode, AggregateSpec, EXECUTABLE_FRAGMENT_VERSION, ExchangeInput,
     ExchangeOutput, ExecutableFragment, FragmentNode, FragmentNodeId, FragmentOperator, JoinSpec,
     JoinType, NamedExpr, ScanSpec, ScanTable, SortSpec,
 };
-pub use memory::{MemoryReservation, MemorySnapshot, OperatorMemoryAccount, QueryMemoryPool};
+pub use memory::{
+    AdmittedQueryMemory, MemoryAdmissionController, MemoryReservation, MemorySnapshot,
+    OperatorMemoryAccount, QueryMemoryPool,
+};
 pub use operator::{BatchOperator, BatchSource, collect_batches};
 pub use predicate::{CompareOp, ScalarValue, StoragePredicate};
 pub use telemetry::{

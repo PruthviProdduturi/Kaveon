@@ -10,22 +10,27 @@ use arrow::record_batch::RecordBatch;
 use kaveon_core::{
     AggregateFunction, AggregateMode, BatchOperator, CatalogManager, DataFormat, ExchangeId,
     ExecutableFragment, Expr, FragmentNode, FragmentNodeId, FragmentOperator, KaveonError,
-    Partitioning, Result,
+    Partitioning, QueryMemoryPool, Result,
 };
 use kaveon_exec::aggregate::{
     AggExpr, AggFunc, AggregateState, AggregateValue, FinalAggregateValue, GroupedAggregateState,
     HashAggregate, finalize_grouped_aggregate_states, grouped_aggregate_states_from_batches,
     grouped_aggregate_states_to_batch, merge_grouped_aggregate_states,
 };
+use kaveon_exec::distinct::DistinctOperator;
 use kaveon_exec::exchange::HashPartitioner;
 use kaveon_exec::filter::FilterOperator;
 use kaveon_exec::join::{HashJoin, JoinType};
 use kaveon_exec::limit::LimitOperator;
+use kaveon_exec::offset::OffsetOperator;
 use kaveon_exec::project::ProjectOperator;
 use kaveon_exec::scan::ScanOperator;
+use kaveon_exec::setop::{SetOpMode, SetOpOperator};
 use kaveon_exec::sort::{SortExpr, SortOperator};
 use kaveon_exec::topn::TopNOperator;
-use kaveon_storage::{DeltaTableReader, ParquetReader, ScanPartition};
+use kaveon_exec::union::UnionOperator;
+use kaveon_exec::window::WindowOperator;
+use kaveon_storage::{AdlsParquetReader, DeltaTableReader, ParquetReader, ScanPartition};
 
 pub struct ExchangeBatches {
     pub schema: SchemaRef,
@@ -53,6 +58,16 @@ pub fn execute_fragment(
     exchanges: &dyn ExchangeInputProvider,
     scan_partition: ScanPartition,
 ) -> Result<FragmentExecution> {
+    execute_fragment_with_memory(fragment, catalog, exchanges, scan_partition, None)
+}
+
+pub fn execute_fragment_with_memory(
+    fragment: &ExecutableFragment,
+    catalog: &CatalogManager,
+    exchanges: &dyn ExchangeInputProvider,
+    scan_partition: ScanPartition,
+    memory: Option<&QueryMemoryPool>,
+) -> Result<FragmentExecution> {
     fragment.validate()?;
     let nodes = fragment
         .nodes
@@ -61,8 +76,14 @@ pub fn execute_fragment(
         .collect::<HashMap<_, _>>();
     let root = nodes[&fragment.root];
     if let FragmentOperator::ExchangeOutput(output) = &root.operator {
-        let mut operator =
-            compile_node(root.inputs[0], &nodes, catalog, exchanges, scan_partition)?;
+        let mut operator = compile_node(
+            root.inputs[0],
+            &nodes,
+            catalog,
+            exchanges,
+            scan_partition,
+            memory,
+        )?;
         let schema = Arc::clone(operator.schema());
         let batches = collect(&mut *operator)?;
         let partitions = partition_batches(&batches, &schema, &output.partitioning)?;
@@ -75,7 +96,14 @@ pub fn execute_fragment(
             )]),
         });
     }
-    let mut operator = compile_node(fragment.root, &nodes, catalog, exchanges, scan_partition)?;
+    let mut operator = compile_node(
+        fragment.root,
+        &nodes,
+        catalog,
+        exchanges,
+        scan_partition,
+        memory,
+    )?;
     let result_schema = Arc::clone(operator.schema());
     Ok(FragmentExecution {
         result_schema,
@@ -90,13 +118,28 @@ fn compile_node(
     catalog: &CatalogManager,
     exchanges: &dyn ExchangeInputProvider,
     scan_partition: ScanPartition,
+    memory: Option<&QueryMemoryPool>,
 ) -> Result<Box<dyn BatchOperator>> {
     let node = nodes[&id];
     match &node.operator {
         FragmentOperator::Scan(scan) => {
-            let path = local_path(&scan.source_uri)?;
             let source: Box<dyn kaveon_core::BatchSource> = match scan.format {
                 DataFormat::Parquet => {
+                    if scan.source_uri.starts_with("abfss://") {
+                        let mut reader = AdlsParquetReader::from_abfss_uri(&scan.source_uri)?
+                            .with_partition(scan_partition);
+                        if !scan.projection.is_empty() {
+                            reader = reader.with_columns(scan.projection.clone());
+                        }
+                        if let Some(predicate) = &scan.predicate {
+                            reader = reader.with_predicate(predicate.clone());
+                        }
+                        return Ok(Box::new(ScanOperator::new(
+                            Box::new(reader.read_blocking()?),
+                            None,
+                        )?));
+                    }
+                    let path = local_path(&scan.source_uri)?;
                     let mut reader = ParquetReader::new(path).with_partition(scan_partition);
                     if !scan.projection.is_empty() {
                         reader = reader.with_columns(scan.projection.clone());
@@ -107,6 +150,12 @@ fn compile_node(
                     Box::new(reader.read()?)
                 }
                 DataFormat::Delta => {
+                    if scan.source_uri.starts_with("abfss://") {
+                        return Err(exec_err(
+                            "fragment Delta snapshots over ADLS Gen2 are not implemented",
+                        ));
+                    }
+                    let path = local_path(&scan.source_uri)?;
                     let mut reader = DeltaTableReader::new(path).with_partition(scan_partition);
                     if !scan.projection.is_empty() {
                         reader = reader.with_columns(scan.projection.clone());
@@ -124,11 +173,11 @@ fn compile_node(
             Ok(Box::new(BatchInput::new(input.schema, input.batches)))
         }
         FragmentOperator::Filter { predicate } => Ok(Box::new(FilterOperator::new(
-            compile_input(node, 0, nodes, catalog, exchanges, scan_partition)?,
+            compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?,
             predicate.clone(),
         ))),
         FragmentOperator::Project { expressions } => Ok(Box::new(ProjectOperator::new(
-            compile_input(node, 0, nodes, catalog, exchanges, scan_partition)?,
+            compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?,
             expressions
                 .iter()
                 .map(|named| Expr::Alias {
@@ -171,14 +220,30 @@ fn compile_node(
                     })
                 })
                 .collect::<Result<_>>()?;
-            let input = compile_input(node, 0, nodes, catalog, exchanges, scan_partition)?;
+            let input = compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?;
             match mode {
-                AggregateMode::Single => {
-                    Ok(Box::new(HashAggregate::new(input, group_by, aggregates)?))
-                }
+                AggregateMode::Single => Ok(Box::new(if let Some(memory) = memory {
+                    HashAggregate::new_with_memory(
+                        input,
+                        group_by,
+                        aggregates,
+                        memory.operator("fragment-hash-aggregate")?,
+                    )?
+                } else {
+                    HashAggregate::new(input, group_by, aggregates)?
+                })),
                 AggregateMode::Partial => {
-                    let states =
-                        HashAggregate::new(input, group_by, aggregates)?.into_grouped_states()?;
+                    let aggregate = if let Some(memory) = memory {
+                        HashAggregate::new_with_memory(
+                            input,
+                            group_by,
+                            aggregates,
+                            memory.operator("fragment-partial-hash-aggregate")?,
+                        )?
+                    } else {
+                        HashAggregate::new(input, group_by, aggregates)?
+                    };
+                    let states = aggregate.into_grouped_states()?;
                     let batch = grouped_aggregate_states_to_batch(&states)?;
                     Ok(Box::new(BatchInput::new(batch.schema(), vec![batch])))
                 }
@@ -186,18 +251,48 @@ fn compile_node(
             }
         }
         FragmentOperator::Sort { keys } => Ok(Box::new(SortOperator::new(
-            compile_input(node, 0, nodes, catalog, exchanges, scan_partition)?,
+            compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?,
             sort_expressions(keys),
         )?)),
         FragmentOperator::TopN { keys, limit } => Ok(Box::new(TopNOperator::new(
-            compile_input(node, 0, nodes, catalog, exchanges, scan_partition)?,
+            compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?,
             sort_expressions(keys),
             *limit,
         )?)),
         FragmentOperator::Limit { limit } => Ok(Box::new(LimitOperator::new(
-            compile_input(node, 0, nodes, catalog, exchanges, scan_partition)?,
+            compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?,
             *limit,
         ))),
+        FragmentOperator::Offset { offset } => Ok(Box::new(OffsetOperator::new(
+            compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?,
+            *offset,
+        ))),
+        FragmentOperator::Distinct => Ok(Box::new(DistinctOperator::new(compile_input(
+            node,
+            0,
+            nodes,
+            catalog,
+            exchanges,
+            scan_partition,
+            memory,
+        )?))),
+        FragmentOperator::Union => {
+            let mut operators: Vec<Box<dyn BatchOperator>> = Vec::new();
+            for &input_id in &node.inputs {
+                operators.push(compile_node(
+                    input_id,
+                    nodes,
+                    catalog,
+                    exchanges,
+                    scan_partition,
+                    memory,
+                )?);
+            }
+            if operators.is_empty() {
+                return Err(exec_err("Union requires at least one input"));
+            }
+            Ok(Box::new(UnionOperator::new(operators)))
+        }
         FragmentOperator::HashJoin(join) => {
             if join.residual.is_some() {
                 return Err(exec_err(
@@ -214,12 +309,40 @@ fn compile_node(
                 .iter()
                 .map(expression_column)
                 .collect::<Result<Vec<_>>>()?;
-            Ok(Box::new(HashJoin::try_new(
-                compile_input(node, 0, nodes, catalog, exchanges, scan_partition)?,
-                compile_input(node, 1, nodes, catalog, exchanges, scan_partition)?,
-                join_type(join.join_type)?,
-                left_keys.into_iter().zip(right_keys).collect(),
-            )?))
+            let left = compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?;
+            let right = compile_input(node, 1, nodes, catalog, exchanges, scan_partition, memory)?;
+            let keys = left_keys.into_iter().zip(right_keys).collect();
+            Ok(Box::new(if let Some(memory) = memory {
+                HashJoin::try_new_qualified_with_memory(
+                    left,
+                    right,
+                    join_type(join.join_type)?,
+                    keys,
+                    None,
+                    None,
+                    memory.operator("fragment-hash-join")?,
+                )?
+            } else {
+                HashJoin::try_new(left, right, join_type(join.join_type)?, keys)?
+            }))
+        }
+        FragmentOperator::Window => {
+            let input = compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?;
+            Ok(Box::new(WindowOperator::new(input, vec![])))
+        }
+        FragmentOperator::Intersect => {
+            let left = compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?;
+            let right = compile_input(node, 1, nodes, catalog, exchanges, scan_partition, memory)?;
+            Ok(Box::new(SetOpOperator::new(
+                left,
+                right,
+                SetOpMode::Intersect,
+            )))
+        }
+        FragmentOperator::Except => {
+            let left = compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?;
+            let right = compile_input(node, 1, nodes, catalog, exchanges, scan_partition, memory)?;
+            Ok(Box::new(SetOpOperator::new(left, right, SetOpMode::Except)))
         }
         FragmentOperator::ExchangeOutput(_) => Err(exec_err(
             "ExchangeOutput is supported only as the fragment root",
@@ -385,6 +508,7 @@ fn compile_input(
     catalog: &CatalogManager,
     exchanges: &dyn ExchangeInputProvider,
     scan_partition: ScanPartition,
+    memory: Option<&QueryMemoryPool>,
 ) -> Result<Box<dyn BatchOperator>> {
     compile_node(
         node.inputs[index],
@@ -392,6 +516,7 @@ fn compile_input(
         catalog,
         exchanges,
         scan_partition,
+        memory,
     )
 }
 

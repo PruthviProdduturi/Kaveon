@@ -216,7 +216,7 @@ fn record_selection_metrics(
     metrics.selected(rows, bytes);
 }
 
-fn projection_indices(schema: &SchemaRef, columns: &[String]) -> Result<Vec<usize>> {
+pub(crate) fn projection_indices(schema: &SchemaRef, columns: &[String]) -> Result<Vec<usize>> {
     if columns.is_empty() {
         return Err(storage_error("projection must contain at least one column"));
     }
@@ -236,7 +236,7 @@ fn projection_indices(schema: &SchemaRef, columns: &[String]) -> Result<Vec<usiz
         .collect()
 }
 
-fn validate_predicate(predicate: &StoragePredicate, schema: &SchemaRef) -> Result<()> {
+pub(crate) fn validate_predicate(predicate: &StoragePredicate, schema: &SchemaRef) -> Result<()> {
     match predicate {
         StoragePredicate::Compare { column, value, .. } => {
             validate_column_value(column, value, schema)
@@ -283,7 +283,7 @@ fn validate_column_value(column: &str, value: &ScalarValue, schema: &SchemaRef) 
     Ok(())
 }
 
-fn matching_row_groups(
+pub(crate) fn matching_row_groups(
     metadata: &ParquetMetaData,
     schema: &SchemaRef,
     predicate: &StoragePredicate,
