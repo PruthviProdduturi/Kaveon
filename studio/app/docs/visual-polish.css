@@ -1,22 +1,20 @@
 /* Integration layer for docs.css. Keep imported after docs.css. */
 
 .docs-root {
-  --docs-reading-width: 82ch;
   line-height: 1.5;
   text-rendering: optimizeLegibility;
 }
 
+/* Prose fills the content column. It previously carried a second, narrower cap
+   (82ch on paragraphs, 66ch on the lead) inside a 960px box, which broke lines
+   well short of the edge and left the column looking half empty. text-wrap
+   balance/pretty compounded it by pulling words down to even out the ragged
+   edge -- correct for a headline, wrong for body copy that should run on. */
 .docs-content { width: min(100%, var(--docs-content-max)); }
-.docs-prose > header,
-.docs-prose > p,
-.docs-prose > ul,
-.docs-prose > ol { max-width: var(--docs-reading-width); }
-.docs-prose h1 { font-size: clamp(2rem, 3vw, 2.45rem); text-wrap: balance; }
-.docs-prose h2 { line-height: 1.25; text-wrap: balance; }
+.docs-prose h1 { font-size: clamp(2rem, 3vw, 2.45rem); }
+.docs-prose h2 { line-height: 1.25; }
 .docs-prose h3 { line-height: 1.35; }
-.docs-lead { max-width: 66ch; line-height: 1.65; text-wrap: pretty; }
-.docs-prose p,
-.docs-prose li { text-wrap: pretty; }
+.docs-lead { line-height: 1.65; }
 
 .docs-sidebar,
 .docs-toc { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
