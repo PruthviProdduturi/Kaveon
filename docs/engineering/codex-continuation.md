@@ -8,6 +8,12 @@ This is the durable Engineer 2 continuation record. Read `HANDSHAKE.md` first on
 
 ## Product boundary
 
+For the Windows toolchain provisioned on September 4 and reproducible local
+correctness gates, read [Development environment and qualification baseline](development-environment.md).
+It records installed prerequisites, passing build checks, the independent
+Trino/DuckDB regression harness, and five observed SQL failures. Environment
+readiness does not change the Engine's alpha designation.
+
 Kaveon is one platform with three cooperating pillars:
 
 - Kaveon Engine: distributed vectorized SQL over customer-controlled lake storage.
