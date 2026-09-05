@@ -25,7 +25,6 @@
    and must keep light text in every theme. */
 :global([data-theme="light"]) .docsHeader {
   --text-primary: #1a1a2e;
-  border-bottom-color: var(--border, #e0ddd8) !important;
   background: #f8f7f5 !important;
 }
 :global([data-theme="light"]) .docsHeader .link { color: var(--text-secondary, #4a5568); }
@@ -62,4 +61,6 @@
    !important background -- which is what makes the About header render reliably.
    This marker class exists so the light theme can still target docs alone; the
    About page stays a theme-independent dark surface. */
-.docsHeader { }
+.header.aboutHeader.docsHeader {
+  border-bottom: 2px solid var(--accent, #4A9EE8) !important;
+}
