@@ -34,3 +34,37 @@
 :global([data-theme="light"]) .header:not(.aboutHeader) .link:focus-visible,
 :global([data-theme="light"]) .header:not(.aboutHeader) .active { color: var(--text-primary, #1a1a2e); }
 :global([data-theme="light"]) .header:not(.aboutHeader) .launch { color: #fff; }
+
+/* Dark docs header: solid, no backdrop filter — the same treatment the About header
+   uses. blur(16px) samples the prose and sidebar behind the bar and smears them
+   upward, which lifts it off pure black into a grey haze even though the colour
+   underneath is already #0a0a0a. */
+:global([data-theme="dark"]) .header:not(.aboutHeader) {
+  background: #0a0a0a;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* The wordmark is a mark, not a button — it never takes a surface. It lifts and
+   picks up the brand glow instead. */
+.brand,
+.brand:hover,
+.brand:focus,
+.brand:focus-visible,
+.aboutHeader .brand:hover {
+  background: transparent !important;
+  border-color: transparent !important;
+}
+.brand {
+  transition: transform 320ms cubic-bezier(.22,1,.36,1), filter 320ms ease;
+  will-change: transform, filter;
+}
+.brand:hover {
+  transform: translateY(-1px) scale(1.025);
+  filter: drop-shadow(0 0 16px rgba(74,158,232,.5)) drop-shadow(0 0 3px rgba(74,158,232,.35));
+}
+.brand:active { transform: translateY(0) scale(.995); }
+@media (prefers-reduced-motion: reduce) {
+  .brand { transition: none; will-change: auto; }
+  .brand:hover { transform: none; }
+}
