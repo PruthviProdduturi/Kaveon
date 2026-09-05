@@ -15,7 +15,7 @@ export function PublicHeader({ active, onBrandClick }: PublicHeaderProps) {
   return (
     <header className={`${styles.header} ${isAbout ? styles.aboutHeader : ""}`}>
       <Link
-        href={isAbout ? "/about" : "/"}
+        href="/about"
         className={styles.brand}
         aria-label={isAbout ? "Kaveon about, back to top" : "Kaveon home"}
         onClick={onBrandClick}
