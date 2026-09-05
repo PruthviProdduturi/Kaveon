@@ -185,3 +185,18 @@
 }
 @media (max-width: 520px) { .docs-breadcrumb span:nth-of-type(1), .docs-breadcrumb span:nth-of-type(2) { display: none; } }
 @media (prefers-reduced-motion: reduce) { .docs-root *, .docs-root *::before, .docs-root *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; } }
+
+/* ── About-matched ground ─────────────────────────────────
+   Docs inherits the app-wide dark ground (#171717), but the shared PublicHeader
+   is near-black (rgba(10,10,10,.88)) — so dark docs stacked two different blacks
+   and neither matched the About page. Pin the docs surface to About's #0a0a0a:
+   the header then composites to exactly #0a0a0a over it and the chrome reads as
+   one continuous surface. Scoped to .docs-root so the rest of the app is
+   untouched, and expressed through the existing tokens so every rule in this
+   file keeps working. */
+[data-theme="dark"] .docs-root,
+[data-theme="dark"] .docs-sidebar {
+  --bg-primary: #0a0a0a;
+  --bg-surface: #101010;
+  --bg-elevated: #161616;
+}

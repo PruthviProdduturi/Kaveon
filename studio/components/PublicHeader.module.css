@@ -15,3 +15,22 @@
 .launch:hover { background: #62acec; transform: translateY(-1px); }
 @media (max-width: 680px) { .header { min-height: 60px; padding: 0 16px; } .aboutHeader { min-height: 64px; padding: 0 16px; } .nav { gap: 14px; } .aboutNav { margin-left: auto; gap: 2px; } .aboutNav .link { padding: 8px; font-size: 13px; } .aboutNav .launch { margin-left: 4px; padding: 8px 12px; font-size: 13px; white-space: nowrap; } .aboutSectionLink, .github { display: none; } .launch { padding: 8px 12px; white-space: nowrap; } }
 @media (prefers-reduced-motion: reduce) { .link, .launch { transition: none; } .launch:hover { transform: none; } }
+
+/* On the dark docs ground the header is the same #0a0a0a as the page, so the divider is
+   the only seam left. Drop it there to match the About page's seamless header. */
+:global([data-theme="dark"]) .header:not(.aboutHeader) { border-bottom-color: transparent; }
+
+/* Light theme, docs header only. The base rule above is the dark treatment (also the
+   pre-hydration default), so only an explicit light theme flips it — no SSR flash.
+   The About header is excluded: it is a theme-independent #0a0a0a surface by design
+   and must keep light text in every theme. */
+:global([data-theme="light"]) .header:not(.aboutHeader) {
+  --text-primary: #1a1a2e;
+  border-bottom-color: var(--border, #e0ddd8);
+  background: rgba(248,247,245,.88);
+}
+:global([data-theme="light"]) .header:not(.aboutHeader) .link { color: var(--text-secondary, #4a5568); }
+:global([data-theme="light"]) .header:not(.aboutHeader) .link:hover,
+:global([data-theme="light"]) .header:not(.aboutHeader) .link:focus-visible,
+:global([data-theme="light"]) .header:not(.aboutHeader) .active { color: var(--text-primary, #1a1a2e); }
+:global([data-theme="light"]) .header:not(.aboutHeader) .launch { color: #fff; }
