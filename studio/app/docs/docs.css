@@ -4,7 +4,7 @@
 .docs-root {
   --docs-sidebar-w: 272px;
   --docs-toc-w: 232px;
-  --docs-content-max: 880px;
+  --docs-content-max: 960px;
   background: var(--bg-primary, #f5f5f7);
   min-height: 100vh;
   color: var(--text-primary, #1a1a2e);
@@ -19,7 +19,7 @@
   display: grid;
   grid-template-columns: var(--docs-sidebar-w) minmax(0, 1fr) var(--docs-toc-w);
   align-items: start;
-  max-width: 1440px;
+  max-width: 1680px;
   margin: 65px auto 0;
 }
 
