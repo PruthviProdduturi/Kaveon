@@ -1,5 +1,6 @@
 #![deny(clippy::all)]
 
+pub mod adls_reader;
 pub mod delta_reader;
 pub mod metrics;
 pub mod parquet_reader;
@@ -60,3 +61,4 @@ mod tests {
         assert!(ScanPartition::new(2, 2).is_err());
     }
 }
+pub use adls_reader::{AdlsAuthMode, AdlsBatchSource, AdlsBatchStream, AdlsParquetReader};

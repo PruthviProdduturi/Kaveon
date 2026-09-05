@@ -9,6 +9,9 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+const DEFAULT_QUERY_MEMORY_LIMIT_BYTES: u64 = 512 * 1_024 * 1_024;
+const DEFAULT_MEMORY_ADMISSION_LIMIT_BYTES: u64 = 4 * 1_024 * 1_024 * 1_024;
+
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub node_id: String,
@@ -22,6 +25,8 @@ pub struct ServerConfig {
     pub catalog_database_path: PathBuf,
     pub catalog_admin_token: Option<String>,
     pub exchange_token: Option<String>,
+    pub query_memory_limit_bytes: u64,
+    pub memory_admission_limit_bytes: u64,
 }
 
 impl Default for ServerConfig {
@@ -38,6 +43,8 @@ impl Default for ServerConfig {
             catalog_database_path: PathBuf::from("kaveon-catalog.db"),
             catalog_admin_token: None,
             exchange_token: None,
+            query_memory_limit_bytes: DEFAULT_QUERY_MEMORY_LIMIT_BYTES,
+            memory_admission_limit_bytes: DEFAULT_MEMORY_ADMISSION_LIMIT_BYTES,
         }
     }
 }
@@ -49,6 +56,7 @@ struct RawConfig {
     discovery: Option<DiscoveryConfig>,
     storage: Option<StorageConfig>,
     exchange: Option<ExchangeConfig>,
+    memory: Option<MemoryConfig>,
     catalog: Option<NativeCatalogConfig>,
 }
 
@@ -80,6 +88,12 @@ struct StorageConfig {
 #[derive(Deserialize)]
 struct ExchangeConfig {
     token: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct MemoryConfig {
+    query_limit_bytes: Option<u64>,
+    admission_limit_bytes: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -135,6 +149,14 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
         if let Some(exchange) = raw.exchange {
             config.exchange_token = exchange.token;
         }
+        if let Some(memory) = raw.memory {
+            if let Some(limit) = memory.query_limit_bytes {
+                config.query_memory_limit_bytes = limit;
+            }
+            if let Some(limit) = memory.admission_limit_bytes {
+                config.memory_admission_limit_bytes = limit;
+            }
+        }
         if let Some(catalog) = raw.catalog {
             if let Some(path) = catalog.database_path {
                 config.catalog_database_path = PathBuf::from(path);
@@ -177,6 +199,22 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     }
     if let Ok(v) = std::env::var("KAVEON_EXCHANGE_TOKEN") {
         config.exchange_token = Some(v);
+    }
+    if let Ok(v) = std::env::var("KAVEON_QUERY_MEMORY_LIMIT_BYTES") {
+        config.query_memory_limit_bytes = v.parse().map_err(|_| {
+            anyhow::anyhow!("KAVEON_QUERY_MEMORY_LIMIT_BYTES must be an unsigned integer")
+        })?;
+    }
+    if let Ok(v) = std::env::var("KAVEON_MEMORY_ADMISSION_LIMIT_BYTES") {
+        config.memory_admission_limit_bytes = v.parse().map_err(|_| {
+            anyhow::anyhow!("KAVEON_MEMORY_ADMISSION_LIMIT_BYTES must be an unsigned integer")
+        })?;
+    }
+    if config.query_memory_limit_bytes == 0 {
+        anyhow::bail!("query memory limit must be greater than zero");
+    }
+    if config.memory_admission_limit_bytes < config.query_memory_limit_bytes {
+        anyhow::bail!("memory admission limit must be at least the per-query limit");
     }
 
     Ok(config)

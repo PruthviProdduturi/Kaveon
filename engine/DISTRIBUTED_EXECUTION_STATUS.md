@@ -8,8 +8,8 @@ This file is the durable handoff for Kaveon's path from the current alpha execut
 - Execution unit: Arrow `RecordBatch`
 - Storage partitioning: deterministic Parquet row-group and Delta active-file partitions
 - Coordinator/worker transport: HTTP task submission and Arrow IPC task results
-- Shipped distributed query shapes: scan/filter/project, partial/final grouped and global aggregates, Sort/TopN/limit, and repartitioned or broadcast hash joins
-- Shipped local query shapes: filters, projections, aggregates, sort/TopN, and hash joins
+- Shipped distributed query shapes: scan/filter/project, partial/final grouped and global aggregates, Sort/TopN/limit, repartitioned or broadcast hash joins, window functions, INTERSECT/EXCEPT set operations
+- Shipped local query shapes: filters, projections, aggregates (including DISTINCT on SUM/AVG), sort/TopN, hash joins, window functions (ROW_NUMBER/RANK/DENSE_RANK/LAG/LEAD/SUM/AVG/COUNT/MIN/MAX OVER with ROWS/RANGE/GROUPS frame specs), INTERSECT/EXCEPT, EXTRACT, DATE_TRUNC/DATE_PART/TO_CHAR/NOW/CURRENT_DATE/CURRENT_TIMESTAMP, Decimal128 type and literals, IN/NOT IN/EXISTS/NOT EXISTS subqueries via semi/anti join
 - Existing exchange primitives: deterministic multi-column hash partitioning and a byte-bounded in-process exchange buffer
 
 This is a functioning distributed slice, not yet a Trino-class distributed runtime. The missing capabilities below remain explicit release gates.
@@ -44,9 +44,9 @@ Every workstream must land with:
 
 - `cargo fmt --check`: passed
 - Strict Clippy for `kaveon-core`, `kaveon-exec`, and `kaveon-server`, including all targets: passed
-- `cargo test --workspace --no-fail-fast`: 164 passed, 0 failed
+- `cargo test --workspace --no-fail-fast`: 228 passed, 0 failed
 - `cargo clippy --workspace --all-targets -- -D warnings`: passed
-- Focused coverage includes graph/fragment agreement, partition-correct scans, weighted AVG and exact distinct partial/final execution, empty Arrow schemas, exchange identity/corruption/byte bounds, broadcast routing, fixed-fan-in spill compaction, retry cleanup, and deterministic split steal/requeue
+- Focused coverage includes graph/fragment agreement, partition-correct scans, weighted AVG and exact distinct partial/final execution, empty Arrow schemas, exchange identity/corruption/byte bounds, broadcast routing, fixed-fan-in spill compaction, retry cleanup, deterministic split steal/requeue, window functions (ROW_NUMBER/RANK/DENSE_RANK/LAG/LEAD with PARTITION BY and ORDER BY), INTERSECT/EXCEPT set operations, EXTRACT over timestamps and dates, date/time scalar functions, and DISTINCT on SUM/AVG aggregates
 - Two-worker Docker correctness on `F:\kaveon-data`: exact DISTINCT returned 100,000; grouped weighted AVG + TopN returned five rows through three stages; TopN returned five rows; repartitioned customer/order join returned 5,000,000 rows. Worker-loss, spill-pressure, concurrency, and comparative performance evidence remain open.
 
 The second integrated gate passed 69 focused tests across core, exec, and server and 112 tests across the full workspace after distributed TopN, authenticated exchange endpoints, memory reservations, and split leasing were added. Strict Clippy passed; Windows emitted filesystem-only incremental-cache hard-link warnings and copied the files instead.
@@ -58,6 +58,10 @@ The fourth gate passed 96 focused tests across core, exec, and server and 139 te
 The fifth gate passed 106 focused tests across core, exec, and server and 149 tests across the full workspace after executable fragments, canonical grouped aggregate states, lazy spill merging, HTTP lifecycle integration, and terminal cleanup were added. Strict Clippy and formatting passed. Spill merge retains one cursor batch per run, so fixed fan-in/multi-pass compaction remains required for a strict constant ceiling.
 
 The sixth gate passed 164 tests across the full workspace after general coordinator/worker fragment execution, exchange v2 routing, distributed partial/final aggregates and joins, fixed-fan-in spill compaction, and local split enumeration were added. Strict workspace Clippy and formatting passed. The Rust 1.88 release image built and a coordinator plus two workers completed representative Delta queries over the real local dataset. This run exposed and closed release-toolchain compatibility, aggregate projection, HTTP exchange-body, and grouped-state partition-key defects. Worker-loss, concurrency, pressure, and comparative performance evidence have not yet been run.
+
+The seventh gate passed 216 tests across the full workspace after SQL coverage expansion: window functions (ROW_NUMBER, RANK, DENSE_RANK, LAG, LEAD, and aggregate windows with PARTITION BY/ORDER BY), INTERSECT/EXCEPT set operations, DISTINCT on SUM/AVG aggregates, EXTRACT over all date fields, and date/time scalar functions (NOW, CURRENT_DATE, CURRENT_TIMESTAMP, DATE_TRUNC, DATE_PART, TO_CHAR/DATE_FORMAT). All new plan types are wired through the optimizer, local CLI planner, distributed server planner, fragment executor, and server API. Strict workspace Clippy and formatting passed.
+
+The eighth gate passed 228 tests across the full workspace after window frame specifications (ROWS/RANGE/GROUPS BETWEEN with all bound types), Decimal128 type support (literals, casting, aggregation), and IN/NOT IN/EXISTS/NOT EXISTS subquery rewriting to semi/anti joins were added. SemiJoinOperator uses hash-based build/probe. Distributed semi/anti joins return explicit unsupported errors; local execution is fully wired. Strict workspace Clippy and formatting passed.
 
 ## Continuation point
 

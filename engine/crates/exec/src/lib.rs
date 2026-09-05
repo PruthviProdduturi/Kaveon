@@ -1,11 +1,16 @@
 pub mod aggregate;
+pub mod distinct;
 pub mod exchange;
 pub mod expr_eval;
 pub mod filter;
 pub mod join;
 pub mod limit;
+pub mod offset;
 pub mod project;
 pub mod scan;
+pub mod setop;
 pub mod sort;
 pub mod spill;
 pub mod topn;
+pub mod union;
+pub mod window;

@@ -3,15 +3,22 @@ use kaveon_core::{
     TableReference,
 };
 use kaveon_exec::aggregate::{AggExpr, AggFunc, HashAggregate};
+use kaveon_exec::distinct::DistinctOperator;
 use kaveon_exec::filter::FilterOperator;
 use kaveon_exec::join::{HashJoin, JoinType as PhysicalJoinType};
 use kaveon_exec::limit::LimitOperator;
+use kaveon_exec::offset::OffsetOperator;
 use kaveon_exec::project::ProjectOperator;
 use kaveon_exec::scan::ScanOperator;
+use kaveon_exec::setop::{SetOpMode, SetOpOperator};
 use kaveon_exec::sort::{SortExpr, SortOperator};
 use kaveon_exec::topn::TopNOperator;
+use kaveon_exec::union::UnionOperator;
+use kaveon_exec::window::WindowOperator;
 use kaveon_sql::logical_plan::{AggregateExpr, JoinType, LogicalPlan};
 use kaveon_storage::{DeltaTableReader, ParquetReader};
+
+const AGGREGATE_FUNCTIONS: &[&str] = &["COUNT", "SUM", "AVG", "MIN", "MAX"];
 
 pub fn plan_to_operator(
     plan: &LogicalPlan,
@@ -89,26 +96,7 @@ pub fn plan_to_operator(
                 return Ok(source);
             }
 
-            let exprs: Vec<Expr> = columns
-                .iter()
-                .map(|e| match e {
-                    Expr::Function { name, args } => {
-                        let col = agg_output_name(name, args);
-                        Expr::Column(col)
-                    }
-                    Expr::Alias { expr, name } => match expr.as_ref() {
-                        Expr::Function { name: fname, args } => {
-                            let col = agg_output_name(fname, args);
-                            Expr::Alias {
-                                expr: Box::new(Expr::Column(col)),
-                                name: name.clone(),
-                            }
-                        }
-                        _ => e.clone(),
-                    },
-                    _ => e.clone(),
-                })
-                .collect();
+            let exprs: Vec<Expr> = columns.iter().map(|e| rewrite_agg_refs(e)).collect();
 
             Ok(Box::new(ProjectOperator::new(source, exprs)?))
         }
@@ -163,6 +151,101 @@ pub fn plan_to_operator(
             let source = plan_to_operator(input, catalog)?;
             Ok(Box::new(LimitOperator::new(source, *count)))
         }
+
+        LogicalPlan::Offset { input, count } => {
+            let source = plan_to_operator(input, catalog)?;
+            Ok(Box::new(OffsetOperator::new(source, *count)))
+        }
+
+        LogicalPlan::Distinct { input } => {
+            let source = plan_to_operator(input, catalog)?;
+            Ok(Box::new(DistinctOperator::new(source)))
+        }
+
+        LogicalPlan::Union { inputs, .. } => {
+            let operators: Vec<Box<dyn BatchOperator>> = inputs
+                .iter()
+                .map(|p| plan_to_operator(p, catalog))
+                .collect::<Result<_>>()?;
+            Ok(Box::new(UnionOperator::new(operators)))
+        }
+
+        LogicalPlan::Window {
+            input,
+            window_exprs,
+        } => {
+            let source = plan_to_operator(input, catalog)?;
+            Ok(Box::new(WindowOperator::new(source, window_exprs.clone())))
+        }
+
+        LogicalPlan::Intersect { left, right } => {
+            let left = plan_to_operator(left, catalog)?;
+            let right = plan_to_operator(right, catalog)?;
+            Ok(Box::new(SetOpOperator::new(
+                left,
+                right,
+                SetOpMode::Intersect,
+            )))
+        }
+
+        LogicalPlan::Except { left, right } => {
+            let left = plan_to_operator(left, catalog)?;
+            let right = plan_to_operator(right, catalog)?;
+            Ok(Box::new(SetOpOperator::new(left, right, SetOpMode::Except)))
+        }
+    }
+}
+
+fn rewrite_agg_refs(expr: &Expr) -> Expr {
+    match expr {
+        Expr::Function { name, args } => {
+            if AGGREGATE_FUNCTIONS.contains(&name.as_str()) {
+                let col = agg_output_name(name, args);
+                Expr::Column(col)
+            } else {
+                expr.clone()
+            }
+        }
+        Expr::Alias { expr: inner, name } => match inner.as_ref() {
+            Expr::Function { name: fname, args }
+                if AGGREGATE_FUNCTIONS.contains(&fname.as_str()) =>
+            {
+                let col = agg_output_name(fname, args);
+                Expr::Alias {
+                    expr: Box::new(Expr::Column(col)),
+                    name: name.clone(),
+                }
+            }
+            _ => Expr::Alias {
+                expr: Box::new(rewrite_agg_refs(inner)),
+                name: name.clone(),
+            },
+        },
+        Expr::BinaryOp { left, op, right } => Expr::BinaryOp {
+            left: Box::new(rewrite_agg_refs(left)),
+            op: *op,
+            right: Box::new(rewrite_agg_refs(right)),
+        },
+        Expr::Case {
+            operand,
+            when_then,
+            else_expr,
+        } => Expr::Case {
+            operand: operand.as_ref().map(|e| Box::new(rewrite_agg_refs(e))),
+            when_then: when_then
+                .iter()
+                .map(|(w, t)| (rewrite_agg_refs(w), rewrite_agg_refs(t)))
+                .collect(),
+            else_expr: else_expr.as_ref().map(|e| Box::new(rewrite_agg_refs(e))),
+        },
+        Expr::Cast {
+            expr: inner,
+            data_type,
+        } => Expr::Cast {
+            expr: Box::new(rewrite_agg_refs(inner)),
+            data_type: *data_type,
+        },
+        _ => expr.clone(),
     }
 }
 
@@ -172,8 +255,8 @@ fn logical_agg_to_exec(
 ) -> Result<AggExpr> {
     let (func, expr, distinct) = match agg {
         AggregateExpr::Count { expr, distinct } => (AggFunc::Count, expr, *distinct),
-        AggregateExpr::Sum(e) => (AggFunc::Sum, e, false),
-        AggregateExpr::Avg(e) => (AggFunc::Avg, e, false),
+        AggregateExpr::Sum { expr, distinct } => (AggFunc::Sum, expr, *distinct),
+        AggregateExpr::Avg { expr, distinct } => (AggFunc::Avg, expr, *distinct),
         AggregateExpr::Min(e) => (AggFunc::Min, e, false),
         AggregateExpr::Max(e) => (AggFunc::Max, e, false),
     };

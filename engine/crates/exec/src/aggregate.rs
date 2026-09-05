@@ -6,7 +6,7 @@ use arrow::datatypes::{DataType, Field, Float64Type, Int32Type, Int64Type, Schem
 use arrow::ipc::reader::StreamReader;
 use arrow::ipc::writer::StreamWriter;
 use arrow::record_batch::RecordBatch;
-use kaveon_core::{BatchOperator, KaveonError, Result};
+use kaveon_core::{BatchOperator, KaveonError, MemoryReservation, OperatorMemoryAccount, Result};
 use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::sync::Arc;
@@ -105,6 +105,8 @@ pub enum AggregateState {
     Max(Option<f64>),
     Avg { sum: f64, count: u64 },
     CountDistinct(HashSet<AggregateValue>),
+    SumDistinct(HashSet<AggregateValue>),
+    AvgDistinct(HashSet<AggregateValue>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -134,6 +136,8 @@ impl AggregateState {
             (AggFunc::Max, false) => Self::Max(None),
             (AggFunc::Avg, false) => Self::Avg { sum: 0.0, count: 0 },
             (AggFunc::Count, true) => Self::CountDistinct(HashSet::new()),
+            (AggFunc::Sum, true) => Self::SumDistinct(HashSet::new()),
+            (AggFunc::Avg, true) => Self::AvgDistinct(HashSet::new()),
             (_, true) => unreachable!("aggregate validation rejects unsupported DISTINCT"),
         }
     }
@@ -173,7 +177,7 @@ impl AggregateState {
 
     pub fn update_distinct(&mut self, value: AggregateValue) -> Result<()> {
         match self {
-            Self::CountDistinct(values) => {
+            Self::CountDistinct(values) | Self::SumDistinct(values) | Self::AvgDistinct(values) => {
                 if !matches!(value, AggregateValue::Null) {
                     values.insert(value);
                 }
@@ -215,7 +219,9 @@ impl AggregateState {
                     *value = Some(value.map_or(*other, |current| current.max(*other)));
                 }
             }
-            (Self::CountDistinct(values), Self::CountDistinct(other)) => {
+            (Self::CountDistinct(values), Self::CountDistinct(other))
+            | (Self::SumDistinct(values), Self::SumDistinct(other))
+            | (Self::AvgDistinct(values), Self::AvgDistinct(other)) => {
                 values.extend(other.iter().cloned());
             }
             _ => return Err(exec_err("cannot merge incompatible aggregate states")),
@@ -238,6 +244,26 @@ impl AggregateState {
             Self::Sum { sum, count } => Ok((*count > 0).then_some(*sum)),
             Self::Min(value) | Self::Max(value) => Ok(*value),
             Self::Avg { sum, count } => Ok((*count > 0).then(|| *sum / *count as f64)),
+            Self::SumDistinct(values) => {
+                if values.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(
+                        values
+                            .iter()
+                            .map(|v| aggregate_value_to_f64(v))
+                            .sum::<f64>(),
+                    ))
+                }
+            }
+            Self::AvgDistinct(values) => {
+                if values.is_empty() {
+                    Ok(None)
+                } else {
+                    let sum: f64 = values.iter().map(|v| aggregate_value_to_f64(v)).sum();
+                    Ok(Some(sum / values.len() as f64))
+                }
+            }
             _ => Err(exec_err(
                 "numeric result requested from a count aggregate state",
             )),
@@ -398,6 +424,18 @@ fn validate_group_layouts(groups: &[GroupedAggregateState]) -> Result<()> {
     Ok(())
 }
 
+fn aggregate_value_to_f64(v: &AggregateValue) -> f64 {
+    match v {
+        AggregateValue::Int32(n) => *n as f64,
+        AggregateValue::Int64(n) => *n as f64,
+        AggregateValue::Float64Bits(b) => f64::from_bits(*b),
+        _ => 0.0,
+    }
+}
+
+const STATE_SUM_DISTINCT: u8 = 7;
+const STATE_AVG_DISTINCT: u8 = 8;
+
 fn state_layout(states: &[AggregateState]) -> Result<Vec<u8>> {
     if states.is_empty() {
         return Err(exec_err(
@@ -413,6 +451,8 @@ fn state_layout(states: &[AggregateState]) -> Result<Vec<u8>> {
             AggregateState::Max(_) => STATE_MAX,
             AggregateState::Avg { .. } => STATE_AVG,
             AggregateState::CountDistinct(_) => STATE_COUNT_DISTINCT,
+            AggregateState::SumDistinct(_) => STATE_SUM_DISTINCT,
+            AggregateState::AvgDistinct(_) => STATE_AVG_DISTINCT,
         })
         .collect())
 }
@@ -429,6 +469,9 @@ pub fn finalize_grouped_aggregate_states(
                 .map(|state| match state {
                     AggregateState::Count(_) | AggregateState::CountDistinct(_) => {
                         state.count_result().map(FinalAggregateValue::Count)
+                    }
+                    AggregateState::SumDistinct(_) | AggregateState::AvgDistinct(_) => {
+                        state.numeric_result().map(FinalAggregateValue::Numeric)
                     }
                     _ => state.numeric_result().map(FinalAggregateValue::Numeric),
                 })
@@ -562,8 +605,16 @@ pub fn encode_aggregate_states(states: &[AggregateState]) -> Result<Vec<u8>> {
                 extrema.push(None);
                 distinct_payloads.push(None);
             }
-            AggregateState::CountDistinct(values) => {
-                kinds.push(STATE_COUNT_DISTINCT);
+            AggregateState::CountDistinct(values)
+            | AggregateState::SumDistinct(values)
+            | AggregateState::AvgDistinct(values) => {
+                let tag = match state {
+                    AggregateState::CountDistinct(_) => STATE_COUNT_DISTINCT,
+                    AggregateState::SumDistinct(_) => STATE_SUM_DISTINCT,
+                    AggregateState::AvgDistinct(_) => STATE_AVG_DISTINCT,
+                    _ => unreachable!(),
+                };
+                kinds.push(tag);
                 sums.push(None);
                 counts.push(None);
                 extrema.push(None);
@@ -633,6 +684,18 @@ pub fn decode_aggregate_states(bytes: &[u8]) -> Result<Vec<AggregateState>> {
                         return Err(exec_err("COUNT DISTINCT state payload cannot be null"));
                     }
                     AggregateState::CountDistinct(decode_distinct_values(distinct.value(row))?)
+                }
+                STATE_SUM_DISTINCT => {
+                    if distinct.is_null(row) {
+                        return Err(exec_err("SUM DISTINCT state payload cannot be null"));
+                    }
+                    AggregateState::SumDistinct(decode_distinct_values(distinct.value(row))?)
+                }
+                STATE_AVG_DISTINCT => {
+                    if distinct.is_null(row) {
+                        return Err(exec_err("AVG DISTINCT state payload cannot be null"));
+                    }
+                    AggregateState::AvgDistinct(decode_distinct_values(distinct.value(row))?)
                 }
                 kind => return Err(exec_err(format!("unknown aggregate state kind {kind}"))),
             };
@@ -810,11 +873,16 @@ fn read_u64(bytes: &[u8], offset: &mut usize) -> Result<u64> {
 
 type Accumulator = AggregateState;
 
+const HASH_ENTRY_OVERHEAD_BYTES: u64 = 64;
+const VECTOR_OVERHEAD_BYTES: u64 = 24;
+const DISTINCT_ENTRY_OVERHEAD_BYTES: u64 = 32;
+
 pub struct HashAggregate {
     source: Box<dyn BatchOperator>,
     group_by: Vec<String>,
     aggregates: Vec<AggExpr>,
     output_schema: SchemaRef,
+    memory: Option<OperatorMemoryAccount>,
     emitted: bool,
 }
 
@@ -836,8 +904,8 @@ impl HashAggregate {
                 .map_err(|_| exec_err(format!("group-by column '{col}' not in input")))?;
         }
         for agg in &aggregates {
-            if agg.distinct && !matches!(agg.func, AggFunc::Count) {
-                return Err(exec_err("DISTINCT is currently supported only for COUNT"));
+            if agg.distinct && matches!(agg.func, AggFunc::Min | AggFunc::Max) {
+                return Err(exec_err("DISTINCT is not supported for MIN/MAX"));
             }
             if agg.distinct && agg.column == "*" {
                 return Err(exec_err("COUNT(DISTINCT *) is not supported"));
@@ -877,13 +945,25 @@ impl HashAggregate {
             group_by,
             aggregates,
             output_schema,
+            memory: None,
             emitted: false,
         })
     }
 
+    pub fn new_with_memory(
+        source: Box<dyn BatchOperator>,
+        group_by: Vec<String>,
+        aggregates: Vec<AggExpr>,
+        memory: OperatorMemoryAccount,
+    ) -> Result<Self> {
+        let mut operator = Self::new(source, group_by, aggregates)?;
+        operator.memory = Some(memory);
+        Ok(operator)
+    }
+
     /// Consumes the input and returns mergeable per-group accumulator state.
     pub fn into_grouped_states(mut self) -> Result<Vec<GroupedAggregateState>> {
-        let groups = self.collect_states()?;
+        let (groups, _reservations) = self.collect_states()?;
         if groups.is_empty() && !self.group_by.is_empty() {
             return Ok(Vec::new());
         }
@@ -904,8 +984,14 @@ impl HashAggregate {
             .collect())
     }
 
-    fn collect_states(&mut self) -> Result<HashMap<Vec<GroupKey>, Vec<Accumulator>>> {
+    fn collect_states(
+        &mut self,
+    ) -> Result<(
+        HashMap<Vec<GroupKey>, Vec<Accumulator>>,
+        Vec<MemoryReservation>,
+    )> {
         let mut groups: HashMap<Vec<GroupKey>, Vec<Accumulator>> = HashMap::new();
+        let mut reservations = Vec::new();
         while let Some(batch) = self.source.next_batch()? {
             let schema = batch.schema();
             let group_arrays = self
@@ -926,6 +1012,12 @@ impl HashAggregate {
                     .iter()
                     .map(|array| extract_key(array, row))
                     .collect::<Vec<_>>();
+                if !groups.contains_key(&key)
+                    && let Some(memory) = &self.memory
+                {
+                    reservations
+                        .push(memory.reserve(estimated_group_bytes(&key, self.aggregates.len()))?);
+                }
                 let accumulators = groups
                     .entry(key)
                     .or_insert_with(|| self.aggregates.iter().map(AggregateState::new).collect());
@@ -935,13 +1027,17 @@ impl HashAggregate {
                     } else if let Some(array) = aggregate_arrays[index]
                         && !array.is_null(row)
                     {
-                        if matches!(aggregate.func, AggFunc::Count) {
-                            if aggregate.distinct {
-                                accumulators[index]
-                                    .update_distinct(extract_key(array, row).into())?;
-                            } else {
-                                accumulators[index].update_count()?;
+                        if aggregate.distinct {
+                            let value: AggregateValue = extract_key(array, row).into();
+                            if distinct_value_is_new(&accumulators[index], &value)
+                                && let Some(memory) = &self.memory
+                            {
+                                reservations
+                                    .push(memory.reserve(estimated_distinct_value_bytes(&value))?);
                             }
+                            accumulators[index].update_distinct(value)?;
+                        } else if matches!(aggregate.func, AggFunc::Count) {
+                            accumulators[index].update_count()?;
                         } else {
                             accumulators[index].update_numeric(extract_f64(array, row)?)?;
                         }
@@ -949,7 +1045,7 @@ impl HashAggregate {
                 }
             }
         }
-        Ok(groups)
+        Ok((groups, reservations))
     }
 }
 
@@ -964,7 +1060,7 @@ impl BatchOperator for HashAggregate {
         }
         self.emitted = true;
 
-        let groups = self.collect_states()?;
+        let (groups, _reservations) = self.collect_states()?;
         let num_aggs = self.aggregates.len();
 
         if groups.is_empty() && !self.group_by.is_empty() {
@@ -1020,6 +1116,54 @@ enum GroupKey {
     Int64(i64),
     Utf8(String),
     Float64Bits(u64),
+}
+
+fn estimated_group_bytes(key: &[GroupKey], aggregate_count: usize) -> u64 {
+    let key_bytes = key
+        .iter()
+        .map(|value| match value {
+            GroupKey::Utf8(value) => value.len() as u64,
+            GroupKey::Null => 0,
+            GroupKey::Bool(_) => 1,
+            GroupKey::Int32(_) => 4,
+            GroupKey::Int64(_) | GroupKey::Float64Bits(_) => 8,
+        })
+        .sum::<u64>();
+    let fixed_keys = u64::try_from(key.len())
+        .unwrap_or(u64::MAX)
+        .saturating_mul(std::mem::size_of::<GroupKey>() as u64);
+    let accumulators = u64::try_from(aggregate_count)
+        .unwrap_or(u64::MAX)
+        .saturating_mul(std::mem::size_of::<Accumulator>() as u64);
+    HASH_ENTRY_OVERHEAD_BYTES
+        .saturating_add(VECTOR_OVERHEAD_BYTES.saturating_mul(2))
+        .saturating_add(fixed_keys)
+        .saturating_add(key_bytes)
+        .saturating_add(accumulators)
+}
+
+fn distinct_value_is_new(state: &AggregateState, value: &AggregateValue) -> bool {
+    !matches!(value, AggregateValue::Null)
+        && matches!(
+            state,
+            AggregateState::CountDistinct(values)
+            | AggregateState::SumDistinct(values)
+            | AggregateState::AvgDistinct(values)
+            if !values.contains(value)
+        )
+}
+
+fn estimated_distinct_value_bytes(value: &AggregateValue) -> u64 {
+    let payload = match value {
+        AggregateValue::Utf8(value) => value.len() as u64,
+        AggregateValue::Null => 0,
+        AggregateValue::Bool(_) => 1,
+        AggregateValue::Int32(_) => 4,
+        AggregateValue::Int64(_) | AggregateValue::Float64Bits(_) => 8,
+    };
+    DISTINCT_ENTRY_OVERHEAD_BYTES
+        .saturating_add(std::mem::size_of::<AggregateValue>() as u64)
+        .saturating_add(payload)
 }
 
 impl From<GroupKey> for AggregateValue {
@@ -1210,6 +1354,37 @@ mod tests {
                 .value(0),
             2
         );
+    }
+
+    #[test]
+    fn memory_aware_aggregate_bounds_group_and_distinct_state() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("group_key", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(vec!["a", "b", "c"])),
+                Arc::new(StringArray::from(vec!["one", "two", "three"])),
+            ],
+        )
+        .unwrap();
+        let pool = kaveon_core::QueryMemoryPool::new("bounded-aggregate", 256).unwrap();
+        let account = pool.operator("hash-aggregate").unwrap();
+        let mut aggregate = HashAggregate::new_with_memory(
+            Box::new(Input::new(batch)),
+            vec!["group_key".into()],
+            vec![AggExpr::new(AggFunc::Count, "value").distinct()],
+            account,
+        )
+        .unwrap();
+
+        let error = aggregate.next_batch().unwrap_err().to_string();
+        assert!(error.contains("query 'bounded-aggregate' operator 'hash-aggregate'"));
+        drop(aggregate);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+        assert!(pool.snapshot().peak_bytes <= pool.snapshot().limit_bytes);
     }
 
     #[test]

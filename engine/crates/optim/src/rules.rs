@@ -3,10 +3,6 @@ use std::collections::{HashMap, HashSet};
 use kaveon_core::{BinaryOp, CompareOp, Expr, ScalarValue, StoragePredicate};
 use kaveon_sql::logical_plan::LogicalPlan;
 
-/// Moves filters through semantics-preserving plan nodes toward their scans.
-///
-/// The filter is deliberately retained above the scan. Storage predicates only
-/// eliminate row groups; they do not replace row-level predicate evaluation.
 pub fn push_filter_down(plan: LogicalPlan) -> LogicalPlan {
     match plan {
         LogicalPlan::Filter { input, predicate } => {
@@ -34,6 +30,32 @@ pub fn push_filter_down(plan: LogicalPlan) -> LogicalPlan {
             input: Box::new(push_filter_down(*input)),
             count,
         },
+        LogicalPlan::Offset { input, count } => LogicalPlan::Offset {
+            input: Box::new(push_filter_down(*input)),
+            count,
+        },
+        LogicalPlan::Distinct { input } => LogicalPlan::Distinct {
+            input: Box::new(push_filter_down(*input)),
+        },
+        LogicalPlan::Window {
+            input,
+            window_exprs,
+        } => LogicalPlan::Window {
+            input: Box::new(push_filter_down(*input)),
+            window_exprs,
+        },
+        LogicalPlan::Union { inputs, all } => LogicalPlan::Union {
+            inputs: inputs.into_iter().map(push_filter_down).collect(),
+            all,
+        },
+        LogicalPlan::Intersect { left, right } => LogicalPlan::Intersect {
+            left: Box::new(push_filter_down(*left)),
+            right: Box::new(push_filter_down(*right)),
+        },
+        LogicalPlan::Except { left, right } => LogicalPlan::Except {
+            left: Box::new(push_filter_down(*left)),
+            right: Box::new(push_filter_down(*right)),
+        },
         LogicalPlan::Join {
             left,
             right,
@@ -49,7 +71,6 @@ pub fn push_filter_down(plan: LogicalPlan) -> LogicalPlan {
     }
 }
 
-/// Restricts scans to columns required by projections, filters, sorting, and aggregates.
 pub fn push_projection_down(plan: LogicalPlan) -> LogicalPlan {
     prune_columns(plan, None)
 }
@@ -109,8 +130,8 @@ fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> Logica
             for aggregate in &aggregates {
                 let expression = match aggregate {
                     kaveon_sql::logical_plan::AggregateExpr::Count { expr, .. }
-                    | kaveon_sql::logical_plan::AggregateExpr::Sum(expr)
-                    | kaveon_sql::logical_plan::AggregateExpr::Avg(expr)
+                    | kaveon_sql::logical_plan::AggregateExpr::Sum { expr, .. }
+                    | kaveon_sql::logical_plan::AggregateExpr::Avg { expr, .. }
                     | kaveon_sql::logical_plan::AggregateExpr::Min(expr)
                     | kaveon_sql::logical_plan::AggregateExpr::Max(expr) => expr,
                 };
@@ -135,6 +156,41 @@ fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> Logica
         LogicalPlan::Limit { input, count } => LogicalPlan::Limit {
             input: Box::new(prune_columns(*input, required)),
             count,
+        },
+        LogicalPlan::Offset { input, count } => LogicalPlan::Offset {
+            input: Box::new(prune_columns(*input, required)),
+            count,
+        },
+        LogicalPlan::Distinct { input } => LogicalPlan::Distinct {
+            input: Box::new(prune_columns(*input, required)),
+        },
+        LogicalPlan::Window {
+            input,
+            window_exprs,
+        } => {
+            let mut columns = required.unwrap_or_default();
+            for expr in &window_exprs {
+                collect_columns(expr, &mut columns);
+            }
+            LogicalPlan::Window {
+                input: Box::new(prune_columns(*input, Some(columns))),
+                window_exprs,
+            }
+        }
+        LogicalPlan::Intersect { left, right } => LogicalPlan::Intersect {
+            left: Box::new(prune_columns(*left, required.clone())),
+            right: Box::new(prune_columns(*right, required)),
+        },
+        LogicalPlan::Except { left, right } => LogicalPlan::Except {
+            left: Box::new(prune_columns(*left, required.clone())),
+            right: Box::new(prune_columns(*right, required)),
+        },
+        LogicalPlan::Union { inputs, all } => LogicalPlan::Union {
+            inputs: inputs
+                .into_iter()
+                .map(|p| prune_columns(p, required.clone()))
+                .collect(),
+            all,
         },
         LogicalPlan::Join {
             left,
@@ -193,12 +249,65 @@ fn collect_columns(expression: &Expr, columns: &mut HashSet<String>) {
         | Expr::Not(expression)
         | Expr::Alias {
             expr: expression, ..
+        }
+        | Expr::Cast {
+            expr: expression, ..
         } => collect_columns(expression, columns),
         Expr::Function { args, .. } => {
             for argument in args {
                 collect_columns(argument, columns);
             }
         }
+        Expr::Case {
+            operand,
+            when_then,
+            else_expr,
+        } => {
+            if let Some(op) = operand {
+                collect_columns(op, columns);
+            }
+            for (when, then) in when_then {
+                collect_columns(when, columns);
+                collect_columns(then, columns);
+            }
+            if let Some(e) = else_expr {
+                collect_columns(e, columns);
+            }
+        }
+        Expr::Like { expr, pattern, .. } => {
+            collect_columns(expr, columns);
+            collect_columns(pattern, columns);
+        }
+        Expr::Between {
+            expr, low, high, ..
+        } => {
+            collect_columns(expr, columns);
+            collect_columns(low, columns);
+            collect_columns(high, columns);
+        }
+        Expr::InList { expr, list, .. } => {
+            collect_columns(expr, columns);
+            for item in list {
+                collect_columns(item, columns);
+            }
+        }
+        Expr::WindowFunction {
+            args,
+            partition_by,
+            order_by,
+            ..
+        } => {
+            for arg in args {
+                collect_columns(arg, columns);
+            }
+            for expr in partition_by {
+                collect_columns(expr, columns);
+            }
+            for (expr, _) in order_by {
+                collect_columns(expr, columns);
+            }
+        }
+        Expr::Extract { expr, .. } => collect_columns(expr, columns),
         Expr::Literal(_) | Expr::Star => {}
     }
 }
@@ -214,7 +323,6 @@ fn plan_qualifier(plan: &LogicalPlan) -> Option<String> {
     }
 }
 
-/// Converts an expression to the conservative predicate understood by storage.
 pub fn to_storage_predicate(expr: &Expr) -> Option<StoragePredicate> {
     match expr {
         Expr::BinaryOp { left, op, right } => comparison(left, *op, right),
@@ -231,11 +339,72 @@ pub fn to_storage_predicate(expr: &Expr) -> Option<StoragePredicate> {
         Expr::Not(expr) => {
             to_storage_predicate(expr).map(|predicate| StoragePredicate::Not(Box::new(predicate)))
         }
+        Expr::InList {
+            expr,
+            list,
+            negated,
+        } => {
+            let column = column_name(expr)?;
+            let values: Vec<ScalarValue> = list
+                .iter()
+                .filter_map(|e| match e {
+                    Expr::Literal(v) if !matches!(v, ScalarValue::Null) => Some(v.clone()),
+                    _ => None,
+                })
+                .collect();
+            if values.len() != list.len() {
+                return None;
+            }
+            let pred = StoragePredicate::In { column, values };
+            if *negated {
+                Some(StoragePredicate::Not(Box::new(pred)))
+            } else {
+                Some(pred)
+            }
+        }
+        Expr::Between {
+            expr,
+            low,
+            high,
+            negated,
+        } => {
+            let col = column_name(expr)?;
+            let lo_val = match low.as_ref() {
+                Expr::Literal(v) if !matches!(v, ScalarValue::Null) => v.clone(),
+                _ => return None,
+            };
+            let hi_val = match high.as_ref() {
+                Expr::Literal(v) if !matches!(v, ScalarValue::Null) => v.clone(),
+                _ => return None,
+            };
+            let pred = StoragePredicate::And(vec![
+                StoragePredicate::Compare {
+                    column: col.clone(),
+                    op: CompareOp::Ge,
+                    value: lo_val,
+                },
+                StoragePredicate::Compare {
+                    column: col,
+                    op: CompareOp::Le,
+                    value: hi_val,
+                },
+            ]);
+            if *negated {
+                Some(StoragePredicate::Not(Box::new(pred)))
+            } else {
+                Some(pred)
+            }
+        }
         Expr::Column(_)
         | Expr::Literal(_)
         | Expr::Function { .. }
         | Expr::Star
-        | Expr::Alias { .. } => None,
+        | Expr::Alias { .. }
+        | Expr::Case { .. }
+        | Expr::Like { .. }
+        | Expr::Cast { .. }
+        | Expr::WindowFunction { .. }
+        | Expr::Extract { .. } => None,
     }
 }
 
@@ -311,7 +480,73 @@ fn rewrite_columns(expr: &Expr, names: &HashMap<String, String>) -> Option<Expr>
             Box::new(rewrite_columns(left, names)?),
             Box::new(rewrite_columns(right, names)?),
         )),
-        Expr::Function { .. } | Expr::Star | Expr::Alias { .. } => None,
+        Expr::Like {
+            expr,
+            pattern,
+            negated,
+            case_insensitive,
+        } => Some(Expr::Like {
+            expr: Box::new(rewrite_columns(expr, names)?),
+            pattern: Box::new(rewrite_columns(pattern, names)?),
+            negated: *negated,
+            case_insensitive: *case_insensitive,
+        }),
+        Expr::Between {
+            expr,
+            low,
+            high,
+            negated,
+        } => Some(Expr::Between {
+            expr: Box::new(rewrite_columns(expr, names)?),
+            low: Box::new(rewrite_columns(low, names)?),
+            high: Box::new(rewrite_columns(high, names)?),
+            negated: *negated,
+        }),
+        Expr::InList {
+            expr,
+            list,
+            negated,
+        } => {
+            let e = rewrite_columns(expr, names)?;
+            let items: Option<Vec<Expr>> = list.iter().map(|i| rewrite_columns(i, names)).collect();
+            Some(Expr::InList {
+                expr: Box::new(e),
+                list: items?,
+                negated: *negated,
+            })
+        }
+        Expr::Cast { expr, data_type } => Some(Expr::Cast {
+            expr: Box::new(rewrite_columns(expr, names)?),
+            data_type: *data_type,
+        }),
+        Expr::Case {
+            operand,
+            when_then,
+            else_expr,
+        } => {
+            let op = operand
+                .as_ref()
+                .and_then(|e| rewrite_columns(e, names).map(Box::new));
+            let wt: Option<Vec<(Expr, Expr)>> = when_then
+                .iter()
+                .map(|(w, t)| Some((rewrite_columns(w, names)?, rewrite_columns(t, names)?)))
+                .collect();
+            let el = else_expr
+                .as_ref()
+                .and_then(|e| rewrite_columns(e, names).map(Box::new));
+            Some(Expr::Case {
+                operand: op,
+                when_then: wt?,
+                else_expr: el,
+            })
+        }
+        Expr::Extract { field, expr } => Some(Expr::Extract {
+            field: *field,
+            expr: Box::new(rewrite_columns(expr, names)?),
+        }),
+        Expr::Function { .. } | Expr::Star | Expr::Alias { .. } | Expr::WindowFunction { .. } => {
+            None
+        }
     }
 }
 
@@ -348,7 +583,8 @@ fn to_compare_op(op: BinaryOp) -> Option<CompareOp> {
         | BinaryOp::Minus
         | BinaryOp::Multiply
         | BinaryOp::Divide
-        | BinaryOp::Modulo => None,
+        | BinaryOp::Modulo
+        | BinaryOp::StringConcat => None,
     }
 }
 
@@ -595,5 +831,38 @@ mod tests {
             }
             other => panic!("expected one residual filter, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn converts_in_list_to_storage_predicate() {
+        let expr = Expr::InList {
+            expr: Box::new(column("status")),
+            list: vec![
+                Expr::Literal(ScalarValue::Utf8("active".into())),
+                Expr::Literal(ScalarValue::Utf8("pending".into())),
+            ],
+            negated: false,
+        };
+        match to_storage_predicate(&expr) {
+            Some(StoragePredicate::In { column, values }) => {
+                assert_eq!(column, "status");
+                assert_eq!(values.len(), 2);
+            }
+            other => panic!("expected In predicate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn converts_between_to_storage_predicate() {
+        let expr = Expr::Between {
+            expr: Box::new(column("amount")),
+            low: Box::new(int(10)),
+            high: Box::new(int(100)),
+            negated: false,
+        };
+        assert!(matches!(
+            to_storage_predicate(&expr),
+            Some(StoragePredicate::And(_))
+        ));
     }
 }

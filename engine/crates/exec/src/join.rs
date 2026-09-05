@@ -2,9 +2,13 @@ use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, UInt64Array};
 use arrow::compute::{concat_batches, take};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use kaveon_core::{BatchOperator, KaveonError, Result};
+use kaveon_core::{BatchOperator, KaveonError, MemoryReservation, OperatorMemoryAccount, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
+
+const HASH_ROW_OVERHEAD_BYTES: u64 = 64;
+const OUTPUT_INDEX_BYTES_PER_ROW: u64 = 32;
+const OUTPUT_INDEX_GROWTH_ROWS: usize = 1_024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JoinType {
@@ -21,6 +25,7 @@ pub struct HashJoin {
     join_type: JoinType,
     keys: Vec<(usize, usize)>,
     schema: SchemaRef,
+    memory: Option<OperatorMemoryAccount>,
     emitted: bool,
 }
 
@@ -79,8 +84,30 @@ impl HashJoin {
             join_type,
             keys: key_indices,
             schema: Arc::new(Schema::new(fields)),
+            memory: None,
             emitted: false,
         })
+    }
+
+    pub fn try_new_qualified_with_memory(
+        left: Box<dyn BatchOperator>,
+        right: Box<dyn BatchOperator>,
+        join_type: JoinType,
+        keys: Vec<(String, String)>,
+        left_qualifier: Option<&str>,
+        right_qualifier: Option<&str>,
+        memory: OperatorMemoryAccount,
+    ) -> Result<Self> {
+        let mut operator = Self::try_new_qualified(
+            left,
+            right,
+            join_type,
+            keys,
+            left_qualifier,
+            right_qualifier,
+        )?;
+        operator.memory = Some(memory);
+        Ok(operator)
     }
 }
 
@@ -128,17 +155,30 @@ impl BatchOperator for HashJoin {
             return Ok(None);
         }
         self.emitted = true;
-        let left = collect_input(&mut self.left)?;
-        let right = collect_input(&mut self.right)?;
+        let (left, _left_memory) = collect_input(&mut self.left, self.memory.as_ref())?;
+        let (right, _right_memory) = collect_input(&mut self.right, self.memory.as_ref())?;
+        let _index_memory = reserve_join_index(self.memory.as_ref(), &right, &self.keys)?;
+        let _matched_memory = reserve_bytes(
+            self.memory.as_ref(),
+            u64::try_from(right.num_rows())
+                .map_err(|_| exec_err("join build row count exceeds u64"))?,
+        )?;
         let mut left_rows = Vec::new();
         let mut right_rows = Vec::new();
+        let mut output_reservations = Vec::new();
         let mut matched_right = vec![false; right.num_rows()];
 
         if self.join_type == JoinType::Cross {
             for left_row in 0..left.num_rows() {
                 for right_row in 0..right.num_rows() {
-                    left_rows.push(Some(left_row as u64));
-                    right_rows.push(Some(right_row as u64));
+                    push_output_pair(
+                        &mut left_rows,
+                        &mut right_rows,
+                        Some(left_row as u64),
+                        Some(right_row as u64),
+                        self.memory.as_ref(),
+                        &mut output_reservations,
+                    )?;
                 }
             }
         } else {
@@ -153,20 +193,38 @@ impl BatchOperator for HashJoin {
                     .and_then(|key| right_index.get(&key));
                 if let Some(right_matches) = matches {
                     for &right_row in right_matches {
-                        left_rows.push(Some(left_row as u64));
-                        right_rows.push(Some(right_row as u64));
+                        push_output_pair(
+                            &mut left_rows,
+                            &mut right_rows,
+                            Some(left_row as u64),
+                            Some(right_row as u64),
+                            self.memory.as_ref(),
+                            &mut output_reservations,
+                        )?;
                         matched_right[right_row] = true;
                     }
                 } else if matches!(self.join_type, JoinType::Left | JoinType::Full) {
-                    left_rows.push(Some(left_row as u64));
-                    right_rows.push(None);
+                    push_output_pair(
+                        &mut left_rows,
+                        &mut right_rows,
+                        Some(left_row as u64),
+                        None,
+                        self.memory.as_ref(),
+                        &mut output_reservations,
+                    )?;
                 }
             }
             if matches!(self.join_type, JoinType::Right | JoinType::Full) {
                 for (right_row, matched) in matched_right.into_iter().enumerate() {
                     if !matched {
-                        left_rows.push(None);
-                        right_rows.push(Some(right_row as u64));
+                        push_output_pair(
+                            &mut left_rows,
+                            &mut right_rows,
+                            None,
+                            Some(right_row as u64),
+                            self.memory.as_ref(),
+                            &mut output_reservations,
+                        )?;
                     }
                 }
             }
@@ -192,17 +250,84 @@ impl BatchOperator for HashJoin {
     }
 }
 
-fn collect_input(source: &mut Box<dyn BatchOperator>) -> Result<RecordBatch> {
+fn collect_input(
+    source: &mut Box<dyn BatchOperator>,
+    memory: Option<&OperatorMemoryAccount>,
+) -> Result<(RecordBatch, Option<MemoryReservation>)> {
     let schema = Arc::clone(source.schema());
     let mut batches = Vec::new();
+    let mut batch_reservations = Vec::new();
+    let mut total_bytes = 0_u64;
     while let Some(batch) = source.next_batch()? {
+        let bytes = u64::try_from(batch.get_array_memory_size())
+            .map_err(|_| exec_err("join input batch memory size exceeds u64"))?;
+        total_bytes = total_bytes
+            .checked_add(bytes)
+            .ok_or_else(|| exec_err("join input memory estimate overflow"))?;
+        if let Some(reservation) = reserve_bytes(memory, bytes)? {
+            batch_reservations.push(reservation);
+        }
         batches.push(batch);
     }
     if batches.is_empty() {
-        Ok(RecordBatch::new_empty(schema))
+        Ok((RecordBatch::new_empty(schema), reserve_bytes(memory, 0)?))
     } else {
-        Ok(concat_batches(&schema, &batches)?)
+        let concatenated_reservation = reserve_bytes(memory, total_bytes)?;
+        let concatenated = concat_batches(&schema, &batches)?;
+        drop(batch_reservations);
+        Ok((concatenated, concatenated_reservation))
     }
+}
+
+fn reserve_join_index(
+    memory: Option<&OperatorMemoryAccount>,
+    right: &RecordBatch,
+    keys: &[(usize, usize)],
+) -> Result<Option<MemoryReservation>> {
+    let key_bytes = keys.iter().try_fold(0_u64, |total, (_, right_index)| {
+        let bytes = u64::try_from(right.column(*right_index).get_array_memory_size())
+            .map_err(|_| exec_err("join key memory size exceeds u64"))?;
+        total
+            .checked_add(bytes)
+            .ok_or_else(|| exec_err("join key memory estimate overflow"))
+    })?;
+    let row_overhead = u64::try_from(right.num_rows())
+        .map_err(|_| exec_err("join build row count exceeds u64"))?
+        .checked_mul(HASH_ROW_OVERHEAD_BYTES)
+        .ok_or_else(|| exec_err("join index memory estimate overflow"))?;
+    reserve_bytes(memory, key_bytes.saturating_add(row_overhead))
+}
+
+fn reserve_bytes(
+    memory: Option<&OperatorMemoryAccount>,
+    bytes: u64,
+) -> Result<Option<MemoryReservation>> {
+    memory.map(|account| account.reserve(bytes)).transpose()
+}
+
+fn push_output_pair(
+    left_rows: &mut Vec<Option<u64>>,
+    right_rows: &mut Vec<Option<u64>>,
+    left: Option<u64>,
+    right: Option<u64>,
+    memory: Option<&OperatorMemoryAccount>,
+    reservations: &mut Vec<MemoryReservation>,
+) -> Result<()> {
+    if left_rows.len() == left_rows.capacity() {
+        let growth = left_rows.capacity().max(OUTPUT_INDEX_GROWTH_ROWS);
+        let bytes = u64::try_from(growth)
+            .map_err(|_| exec_err("join output capacity exceeds u64"))?
+            .checked_mul(OUTPUT_INDEX_BYTES_PER_ROW)
+            .ok_or_else(|| exec_err("join output memory estimate overflow"))?;
+        if let Some(reservation) = reserve_bytes(memory, bytes)? {
+            reservations.push(reservation);
+        }
+        left_rows.reserve_exact(growth);
+        right_rows.reserve_exact(growth);
+    }
+    left_rows.push(left);
+    right_rows.push(right);
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -362,5 +487,27 @@ mod tests {
         )
         .unwrap();
         assert_eq!(join.next_batch().unwrap().unwrap().num_rows(), 6);
+    }
+
+    #[test]
+    fn memory_aware_join_fails_before_unbounded_output_growth() {
+        let pool = kaveon_core::QueryMemoryPool::new("bounded-join", 512).unwrap();
+        let account = pool.operator("hash-join").unwrap();
+        let mut join = HashJoin::try_new_qualified_with_memory(
+            Box::new(input(vec![Some(1), Some(1)], vec!["a", "b"], "left_name")),
+            Box::new(input(vec![Some(1), Some(1)], vec!["x", "y"], "right_name")),
+            JoinType::Inner,
+            vec![("id".into(), "id".into())],
+            None,
+            None,
+            account,
+        )
+        .unwrap();
+
+        let error = join.next_batch().unwrap_err().to_string();
+        assert!(error.contains("query 'bounded-join' operator 'hash-join'"));
+        drop(join);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+        assert!(pool.snapshot().peak_bytes <= pool.snapshot().limit_bytes);
     }
 }

@@ -25,6 +25,7 @@ pub struct AppState {
     pub catalog_store: kaveon_catalog::CatalogStore,
     pub exchange_store: exchange::ExchangeStore,
     pub lifecycle: lifecycle::WorkerLifecycle<(Vec<u8>, u64)>,
+    pub memory_admission: kaveon_core::MemoryAdmissionController,
 }
 
 #[tokio::main]
@@ -74,6 +75,9 @@ async fn main() {
     }
     println!();
 
+    let memory_admission =
+        kaveon_core::MemoryAdmissionController::new(config.memory_admission_limit_bytes)
+            .expect("validated memory admission configuration");
     let state = Arc::new(AppState {
         config,
         cluster: RwLock::new(cluster),
@@ -81,6 +85,7 @@ async fn main() {
         catalog_store,
         exchange_store: exchange::ExchangeStore::default(),
         lifecycle: lifecycle::WorkerLifecycle::default(),
+        memory_admission,
     });
 
     if !state.config.coordinator {

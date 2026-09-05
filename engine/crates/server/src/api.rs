@@ -519,11 +519,22 @@ async fn execute_fragment_task(
     }
     let execution = {
         let catalog = state.catalog.read().await;
-        crate::fragment_exec::execute_fragment(
+        let memory = kaveon_core::QueryMemoryPool::new(
+            format!(
+                "{}:{}:{}",
+                req.query_id,
+                req.stage_id,
+                requested_partition_index(req)
+            ),
+            state.config.query_memory_limit_bytes,
+        )
+        .map_err(|error| error.to_string())?;
+        crate::fragment_exec::execute_fragment_with_memory(
             fragment,
             &catalog,
             &PrefetchedExchangeInputs { inputs },
             partition,
+            Some(&memory),
         )
         .map_err(|error| error.to_string())?
     };
@@ -662,6 +673,22 @@ async fn submit_statement(
     }
 
     let query_id = Uuid::new_v4().to_string();
+    let query_memory = match state
+        .memory_admission
+        .admit(query_id.clone(), state.config.query_memory_limit_bytes)
+    {
+        Ok(memory) => memory,
+        Err(error) => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(serde_json::json!({
+                    "error": error.to_string(),
+                    "code": "MEMORY_ADMISSION_REJECTED"
+                })),
+            )
+                .into_response();
+        }
+    };
     let sql = req.query.trim().trim_end_matches(';').to_owned();
     let submitted_at_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -986,16 +1013,18 @@ async fn submit_statement(
     let planned_execution = {
         let catalog = state.catalog.read().await;
         let planning_start = Instant::now();
-        crate::planner::plan_query(&plan, &catalog).map(|planned| {
-            let planning_us = elapsed_us(planning_start);
-            let scan_handles = planned.scan_metrics;
-            let mut operator = planned.operator;
-            let execution_start = Instant::now();
-            let result = collect_batches(&mut *operator);
-            let execution_us = elapsed_us(execution_start);
-            let scans = scan_handles.iter().map(scan_telemetry).collect::<Vec<_>>();
-            (planning_us, execution_us, scans, result)
-        })
+        crate::planner::plan_query_with_memory(&plan, &catalog, query_memory.pool()).map(
+            |planned| {
+                let planning_us = elapsed_us(planning_start);
+                let scan_handles = planned.scan_metrics;
+                let mut operator = planned.operator;
+                let execution_start = Instant::now();
+                let result = collect_batches(&mut *operator);
+                let execution_us = elapsed_us(execution_start);
+                let scans = scan_handles.iter().map(scan_telemetry).collect::<Vec<_>>();
+                (planning_us, execution_us, scans, result)
+            },
+        )
     };
     let (planning_us, execution_us, scans, exec_result) = match planned_execution {
         Ok(execution) => execution,
@@ -2329,10 +2358,16 @@ fn general_distributed_eligible(plan: &LogicalPlan) -> bool {
         LogicalPlan::Project { input, .. }
         | LogicalPlan::Filter { input, .. }
         | LogicalPlan::Sort { input, .. }
-        | LogicalPlan::Limit { input, .. } => general_distributed_eligible(input),
-        LogicalPlan::Join { left, right, .. } => {
+        | LogicalPlan::Limit { input, .. }
+        | LogicalPlan::Offset { input, .. }
+        | LogicalPlan::Distinct { input, .. }
+        | LogicalPlan::Window { input, .. } => general_distributed_eligible(input),
+        LogicalPlan::Join { left, right, .. }
+        | LogicalPlan::Intersect { left, right }
+        | LogicalPlan::Except { left, right } => {
             general_distributed_eligible(left) && general_distributed_eligible(right)
         }
+        LogicalPlan::Union { inputs, .. } => inputs.iter().all(general_distributed_eligible),
         LogicalPlan::Scan { .. } => true,
     }
 }
@@ -2728,10 +2763,14 @@ fn aggregate_merge_contract(plan: &LogicalPlan) -> Option<(usize, Vec<MergeOpera
             AggregateExpr::Count {
                 distinct: false, ..
             }
-            | AggregateExpr::Sum(_) => Some(MergeOperation::Add),
+            | AggregateExpr::Sum {
+                distinct: false, ..
+            } => Some(MergeOperation::Add),
             AggregateExpr::Min(_) => Some(MergeOperation::Min),
             AggregateExpr::Max(_) => Some(MergeOperation::Max),
-            AggregateExpr::Avg(_) | AggregateExpr::Count { distinct: true, .. } => None,
+            AggregateExpr::Avg { .. }
+            | AggregateExpr::Count { distinct: true, .. }
+            | AggregateExpr::Sum { distinct: true, .. } => None,
         })
         .collect::<Option<Vec<_>>>()?;
     Some((group_by.len(), operations))
@@ -2773,8 +2812,8 @@ fn projected_aggregate_matches(expr: &kaveon_core::Expr, aggregate: &AggregateEx
     };
     let expected_name = match aggregate {
         AggregateExpr::Count { .. } => "count",
-        AggregateExpr::Sum(_) => "sum",
-        AggregateExpr::Avg(_) => "avg",
+        AggregateExpr::Sum { .. } => "sum",
+        AggregateExpr::Avg { .. } => "avg",
         AggregateExpr::Min(_) => "min",
         AggregateExpr::Max(_) => "max",
     };
@@ -2783,8 +2822,8 @@ fn projected_aggregate_matches(expr: &kaveon_core::Expr, aggregate: &AggregateEx
     }
     let expected_expr = match aggregate {
         AggregateExpr::Count { expr, .. }
-        | AggregateExpr::Sum(expr)
-        | AggregateExpr::Avg(expr)
+        | AggregateExpr::Sum { expr, .. }
+        | AggregateExpr::Avg { expr, .. }
         | AggregateExpr::Min(expr)
         | AggregateExpr::Max(expr) => expr,
     };
@@ -2803,7 +2842,13 @@ fn distributed_scan_input(plan: &LogicalPlan) -> bool {
         LogicalPlan::Join { .. }
         | LogicalPlan::Aggregate { .. }
         | LogicalPlan::Sort { .. }
-        | LogicalPlan::Limit { .. } => false,
+        | LogicalPlan::Limit { .. }
+        | LogicalPlan::Offset { .. }
+        | LogicalPlan::Distinct { .. }
+        | LogicalPlan::Window { .. }
+        | LogicalPlan::Union { .. }
+        | LogicalPlan::Intersect { .. }
+        | LogicalPlan::Except { .. } => false,
     }
 }
 
