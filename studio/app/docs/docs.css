@@ -204,3 +204,25 @@
   --bg-surface: #101010;
   --bg-elevated: #161616;
 }
+
+/* ── Collapsible nav groups ───────────────────────────────
+   The label is a <summary>, so the group is keyboard operable and works with
+   no JS. Collapsed groups sit tight together; an open one gets its old spacing
+   back so the active section still reads as a block. */
+.docs-navgroup { margin-bottom: 2px; }
+.docs-navgroup[open] { margin-bottom: 18px; }
+.docs-navgroup-label {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 5px 8px 6px; border-radius: 6px;
+  cursor: pointer; user-select: none; list-style: none;
+}
+.docs-navgroup-label::-webkit-details-marker { display: none; }
+.docs-navgroup-label:hover { color: var(--text-primary); background: var(--bg-hover, rgba(0,0,0,.04)); }
+.docs-navgroup-label:focus-visible { outline: 3px solid rgba(var(--accent-rgb,74,158,232), .5); outline-offset: 2px; }
+.docs-navgroup-label::after {
+  content: ""; flex-shrink: 0; width: 6px; height: 6px; margin-left: 10px;
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg); transition: transform 160ms ease;
+}
+.docs-navgroup[open] > .docs-navgroup-label::after { transform: rotate(45deg); }
+@media (prefers-reduced-motion: reduce) { .docs-navgroup-label::after { transition: none; } }

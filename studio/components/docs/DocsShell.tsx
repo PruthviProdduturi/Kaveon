@@ -95,7 +95,16 @@ export function DocsShell({ children }: { children: React.ReactNode }) {
     </div>}
   </div>;
 
-  const Nav = () => <nav aria-label="Documentation">{DOCS_NAV.map((group) => <div className="docs-navgroup" key={group.label}><div className="docs-navgroup-label">{group.label}</div>{group.items.map((item) => <Link key={item.href} href={item.href} title={item.description} aria-current={item.href === pathname ? "page" : undefined} className={`docs-navlink${item.href === pathname ? " active" : ""}`}>{item.title}</Link>)}</div>)}</nav>;
+  // Groups collapse by default so the whole map is legible at a glance; the group
+  // holding the current page opens so you always see where you are. Keyed on
+  // pathname so following a link into a closed group opens it.
+  const Nav = () => <nav aria-label="Documentation">{DOCS_NAV.map((group) => {
+    const holdsCurrent = group.items.some((item) => item.href === pathname);
+    return <details className="docs-navgroup" key={`${group.label}-${pathname}`} open={holdsCurrent}>
+      <summary className="docs-navgroup-label">{group.label}</summary>
+      {group.items.map((item) => <Link key={item.href} href={item.href} title={item.description} aria-current={item.href === pathname ? "page" : undefined} className={`docs-navlink${item.href === pathname ? " active" : ""}`}>{item.title}</Link>)}
+    </details>;
+  })}</nav>;
 
   return <div className="docs-root">
     <a className="docs-skip" href="#docs-content">Skip to documentation</a>
