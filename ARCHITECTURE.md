@@ -66,7 +66,7 @@ flowchart LR
     Workers -->|Root Arrow results| Coordinator
 ```
 
-Today the Engine queries local Parquet tables and multi-file Delta tables. The coordinator builds validated stage DAGs and versioned fragments for scan/filter/project, partial/final aggregates, Sort/TopN/limit, and repartitioned or broadcast joins. Workers execute deterministic partitions, exchange Arrow IPC payloads, and support bounded retry/cancellation lifecycle behavior. Delta snapshot resolution still requires complete JSON commit history from version 0; checkpoints are unsupported. Studio and FastAPI do not yet route user queries to the Engine, and Python bindings remain a scaffold. ADLS Gen2, S3, and Iceberg are non-executable target paths.
+Today the Engine queries local Parquet and multi-file Delta tables, plus individual Parquet objects in ADLS Gen2 through ranged object-store reads. The coordinator builds validated stage DAGs and versioned fragments for scan/filter/project, partial/final aggregates, Sort/TopN/limit, and repartitioned or broadcast joins. Workers execute deterministic partitions, exchange Arrow IPC payloads, and support bounded retry/cancellation lifecycle behavior. Delta snapshot resolution still requires complete local JSON commit history from version 0; cloud Delta checkpoints are unsupported. Studio and FastAPI do not yet route user queries to the Engine, and Python bindings remain a scaffold. S3 and Iceberg remain non-executable target paths.
 
 HTTP query records are inserted at submission and retain measured analysis, physical-planning, execution, and result-serialization durations. Completed storage scans report files opened, row groups considered/read/pruned, selected compressed Parquet bytes, emitted rows and batches, Delta snapshot time, footer time, read time, and throughput. Completed distributed stages report their worker tasks, partitions, elapsed time, output rows, Arrow batches, and transport bytes. The shared telemetry types distinguish a measured zero from an unavailable value. Physical operator CPU/memory, blocked time, spill, and live task updates are not yet emitted.
 
@@ -120,7 +120,7 @@ pub trait BatchOperator {
 | Local Delta scan | **Alpha** | JSON-log snapshot replay and streaming across active Parquet files; complete history from version 0 required, checkpoints unsupported |
 | Row-group pruning | **Implemented** | Conservative statistics pruning; planner supplies pushed filters and retains residual evaluation |
 | Filter and projection | **Implemented** | Batch operators |
-| Hash aggregate | **Alpha** | Local and distributed partial/final COUNT/SUM/MIN/MAX/weighted AVG/exact DISTINCT; aggregate spill absent |
+| Hash aggregate | **Alpha** | Local and distributed partial/final COUNT/SUM/MIN/MAX/weighted AVG/exact DISTINCT; opt-in group/distinct-state accounting fails closed at the query limit; aggregate spill absent |
 | Limit | **Implemented** | Physical operator |
 | Sort / TopN | **Alpha** | Vectorized local execution, distributed partial/final TopN, and fixed-fan-in external merge |
 | Filter pushdown | **Implemented** | Wired optimizer pass converts safe predicates while retaining the row filter |
@@ -235,7 +235,7 @@ The metadata plane stores product configuration, semantic definitions, DLM artif
 | Parquet batches | Pull-based storage boundary | Preserve bounded execution end to end |
 | Object metadata | Not implemented | Cache by object identity/eTag; never mix snapshots |
 
-The Engine still collects root results for synchronous response materialization. Production integration requires paged/streaming delivery, admission queues, operator-wide memory enforcement, aggregate/join spill, and exchange streaming flow control.
+The Engine still collects root results for synchronous response materialization. A thread-safe admission controller reserves query budgets at coordinator submission, and local plans plus worker fragments propagate query/operator reservations into hash aggregate and hash join. Production integration still requires queued admission/resource groups, aggregate/join spill, paged/streaming delivery, and exchange streaming flow control.
 
 ## Deployment and startup
 
@@ -310,7 +310,7 @@ Performance claims must name dataset, hardware, version, cache state, concurrenc
 - Engine query execution is not integrated with Studio/FastAPI identity, and Python bindings remain a scaffold.
 - The platform PostgreSQL source registry and Engine native catalog need a revision-aware synchronization bridge.
 - ADLS Gen2/S3 readers and broader Delta/Iceberg protocol semantics are not executable.
-- Aggregate/join spill, admission control, exchange streaming flow control, dynamic filtering, and cost-based optimization are absent.
+- Aggregate/join spill, coordinator-wired admission, exchange streaming flow control, dynamic filtering, and cost-based optimization are absent. The admission and aggregate/join accounting foundations are opt-in and fail closed when enabled.
 - Engine statement HTTP lacks end-user authentication, TLS, authorization, resource groups, and quotas.
 - Query responses still materialize root results synchronously; retained history is process-local.
 - Multi-coordinator metadata requires an external transactional catalog service; SQLite is intentionally single-coordinator.

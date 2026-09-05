@@ -21,7 +21,9 @@ pub use exchange::{
     ExchangeDescriptor, ExchangeId, Partitioning, SplitDescriptor, SplitId, StageFragment,
     StageGraph, StageId, TaskAssignment, TaskId, TaskState, TaskStatus,
 };
-pub use expr::{BinaryOp, CastTarget, DateField, Expr};
+pub use expr::{
+    BinaryOp, CastTarget, DateField, Expr, WindowFrame, WindowFrameBound, WindowFrameUnits,
+};
 pub use fragment::{
     AggregateFunction, AggregateMode, AggregateSpec, EXECUTABLE_FRAGMENT_VERSION, ExchangeInput,
     ExchangeOutput, ExecutableFragment, FragmentNode, FragmentNodeId, FragmentOperator, JoinSpec,

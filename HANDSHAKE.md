@@ -20,7 +20,7 @@
 |-------|-------|--------|
 | `core` — shared types, errors, traits | Shared (either can add, neither restructures without updating this doc) | Stage graph, exchange, split/task, plan, telemetry, catalog, and operator contracts active |
 | `catalog` — durable Engine metadata | **Codex** | Native SQLite/WAL catalog, revisions, lifecycle, audit, and coordinator API complete; multi-coordinator service and external adapters remain target |
-| `storage` — Parquet reader, ADLS Gen 2 | **Codex** | Local Parquet row-group and Delta active-file splits are enumerable and partitioned; ADLS Gen 2 not started |
+| `storage` — Parquet reader, ADLS Gen 2 | **Codex** | Local Parquet/Delta plus ADLS Gen2 Parquet range reads; cloud Delta-log replay remains pending |
 | `exec/scan` — scan operator | **Codex** | Done; takeover authorized 2026-09-03 |
 | `exec/aggregate` — hash aggregate | **Codex** | Partial/final state execution and exchange for COUNT/SUM/MIN/MAX/AVG/exact DISTINCT done |
 | `exec/filter` — filter evaluation | **Codex** | Compatible numeric coercion done |
@@ -258,7 +258,8 @@ let reservation = operator.reserve(bytes)?;
 ```
 
 - Reservations atomically enforce the query-wide hard limit across operator accounts and release through RAII.
-- Snapshots expose current and peak bytes for the query and operator. Operators and admission control are not wired to these accounts yet; operator-triggered spill is not implemented.
+- Coordinator submission reserves a complete query budget against the process admission ceiling. Local plans and worker fragments propagate pools into hash aggregate/join; embedded compatibility constructors remain opt-in.
+- Snapshots expose current and peak bytes for the query and operator. Hash aggregate/join fail closed at the limit; partitioned spill is not implemented.
 - `SpillManager` writes bounded Arrow IPC runs into collision-safe private directories, accounts current/peak disk bytes, rolls back failed writes, streams replacement runs, and removes runs through RAII.
 - Sort and TopN expose opt-in spill-aware constructors with a validated merge fan-in (16 by default). Multi-pass compaction and lazy final merge bound memory to the fan-in cursor batches plus one output batch; aggregate/join spill and admission control remain open.
 
@@ -416,3 +417,8 @@ let source = DeltaTableReader::new(table_directory)
 | 2026-09-04 | Codex | Refreshed the public Engine architecture and capability documentation for the distributed alpha, published evidence-bounded comparisons with Trino and the Microsoft Fabric Lakehouse SQL analytics endpoint, updated the mirrored Engine pipeline diagram, and added a reduced-motion-safe SQL Lab ready-state animation. No runtime contract changed. |
 | 2026-09-04 | Codex | Made the API image portable to Azure Container Registry builds by replacing its unsupported BuildKit-only pip cache mount with a deterministic no-cache install. No application contract changed. |
 | 2026-09-04 | Claude | Studio chrome: the About logo now returns its own fixed scroll container to the top (window scrolling is a no-op there, and the brand link was a same-route navigation). Aligned the docs surface with the About page — dark docs was stacking two blacks (`#171717` body under the `rgba(10,10,10,.88)` header) and matched neither; the docs ground is now About's `#0a0a0a` through the existing tokens, the header composites seamlessly over it, and the docs header follows the light theme instead of staying a dark bar. The About header remains deliberately theme-independent. Header geometry is unchanged; colour only. |
+| 2026-09-04 | Codex | IN PROGRESS @Claude: bounded-memory work adds admission control plus hash aggregate/join accounting in `core/memory.rs`, `exec/aggregate.rs`, and `exec/join.rs`. `aggregate.rs` currently also contains Claude's uncommitted DISTINCT SQL changes; preserve both sets of edits and do not publish that shared file until the combined tests are green. |
+| 2026-09-04 | Codex | IN PROGRESS: created the structured Engine manual and Studio navigation for architecture/startup, SQL evidence, distributed runtime, storage/catalogs, memory, operations/security, and production gates; unified the docs/About header surface and removed the About wordmark hover background. Documentation/type checks pass; publish with the stabilized SQL/memory contracts. |
+| 2026-09-04 | Codex | Reconciled the shared SQL/runtime tree after Claude committed the combined work; wired process admission and per-query aggregate/join accounts through coordinator-local and worker-fragment execution; added executable ADLS Gen2 Parquet range reads for canonical `abfss://` locations. Aggregate/join spill and cloud Delta replay remain explicit gates. |
+| 2026-09-04 | Codex | Published the structured Engine manual in Markdown and Studio Docs, aligned Docs/About header geometry, fixed the About Features anchor offset and wide-screen Docs gutters, and prevented catalog API failures from rendering a contradictory empty state. Azure diagnostics confirmed the production Catalog Sources failure is a missing PostgreSQL migration. |
+| 2026-09-04 | Codex | Reconciled post-commit SQL interfaces for Decimal128, windows, and semi/anti joins; distributed SUM/AVG DISTINCT now fail over to the correct local path instead of losing DISTINCT state. Combined validation passed 218 workspace tests, strict Clippy, docs validation, and Studio type checking. |

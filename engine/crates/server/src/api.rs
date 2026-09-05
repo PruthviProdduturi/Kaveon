@@ -2354,7 +2354,18 @@ async fn release_dispatch_outputs(client: &reqwest::Client, token: &str, dispatc
 
 fn general_distributed_eligible(plan: &LogicalPlan) -> bool {
     match plan {
-        LogicalPlan::Aggregate { input, .. } => general_distributed_eligible(input),
+        LogicalPlan::Aggregate {
+            input, aggregates, ..
+        } => {
+            let supported = aggregates.iter().all(|aggregate| {
+                !matches!(
+                    aggregate,
+                    AggregateExpr::Sum { distinct: true, .. }
+                        | AggregateExpr::Avg { distinct: true, .. }
+                )
+            });
+            supported && general_distributed_eligible(input)
+        }
         LogicalPlan::Project { input, .. }
         | LogicalPlan::Filter { input, .. }
         | LogicalPlan::Sort { input, .. }
@@ -2367,6 +2378,7 @@ fn general_distributed_eligible(plan: &LogicalPlan) -> bool {
         | LogicalPlan::Except { left, right } => {
             general_distributed_eligible(left) && general_distributed_eligible(right)
         }
+        LogicalPlan::SemiJoin { .. } | LogicalPlan::AntiJoin { .. } => false,
         LogicalPlan::Union { inputs, .. } => inputs.iter().all(general_distributed_eligible),
         LogicalPlan::Scan { .. } => true,
     }
@@ -2849,6 +2861,7 @@ fn distributed_scan_input(plan: &LogicalPlan) -> bool {
         | LogicalPlan::Union { .. }
         | LogicalPlan::Intersect { .. }
         | LogicalPlan::Except { .. } => false,
+        LogicalPlan::SemiJoin { .. } | LogicalPlan::AntiJoin { .. } => false,
     }
 }
 
@@ -3099,6 +3112,10 @@ mod tests {
             catalog_store: kaveon_catalog::CatalogStore::open_in_memory().unwrap(),
             exchange_store: crate::exchange::ExchangeStore::default(),
             lifecycle: crate::lifecycle::WorkerLifecycle::default(),
+            memory_admission: kaveon_core::MemoryAdmissionController::new(
+                config.memory_admission_limit_bytes,
+            )
+            .unwrap(),
             config,
         }
     }

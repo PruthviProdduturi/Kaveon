@@ -67,6 +67,28 @@ pub fn push_filter_down(plan: LogicalPlan) -> LogicalPlan {
             join_type,
             condition,
         },
+        LogicalPlan::SemiJoin {
+            left,
+            right,
+            left_key,
+            right_key,
+        } => LogicalPlan::SemiJoin {
+            left: Box::new(push_filter_down(*left)),
+            right: Box::new(push_filter_down(*right)),
+            left_key,
+            right_key,
+        },
+        LogicalPlan::AntiJoin {
+            left,
+            right,
+            left_key,
+            right_key,
+        } => LogicalPlan::AntiJoin {
+            left: Box::new(push_filter_down(*left)),
+            right: Box::new(push_filter_down(*right)),
+            left_key,
+            right_key,
+        },
         scan @ LogicalPlan::Scan { .. } => scan,
     }
 }
@@ -230,6 +252,40 @@ fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> Logica
                 right: Box::new(prune_columns(*right, right_required)),
                 join_type,
                 condition,
+            }
+        }
+        LogicalPlan::SemiJoin {
+            left,
+            right,
+            left_key,
+            right_key,
+        } => {
+            let mut left_columns = required.clone().unwrap_or_default();
+            let mut right_columns = required.unwrap_or_default();
+            collect_columns(&left_key, &mut left_columns);
+            collect_columns(&right_key, &mut right_columns);
+            LogicalPlan::SemiJoin {
+                left: Box::new(prune_columns(*left, Some(left_columns))),
+                right: Box::new(prune_columns(*right, Some(right_columns))),
+                left_key,
+                right_key,
+            }
+        }
+        LogicalPlan::AntiJoin {
+            left,
+            right,
+            left_key,
+            right_key,
+        } => {
+            let mut left_columns = required.clone().unwrap_or_default();
+            let mut right_columns = required.unwrap_or_default();
+            collect_columns(&left_key, &mut left_columns);
+            collect_columns(&right_key, &mut right_columns);
+            LogicalPlan::AntiJoin {
+                left: Box::new(prune_columns(*left, Some(left_columns))),
+                right: Box::new(prune_columns(*right, Some(right_columns))),
+                left_key,
+                right_key,
             }
         }
     }

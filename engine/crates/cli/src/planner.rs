@@ -10,6 +10,7 @@ use kaveon_exec::limit::LimitOperator;
 use kaveon_exec::offset::OffsetOperator;
 use kaveon_exec::project::ProjectOperator;
 use kaveon_exec::scan::ScanOperator;
+use kaveon_exec::semijoin::SemiJoinOperator;
 use kaveon_exec::setop::{SetOpMode, SetOpOperator};
 use kaveon_exec::sort::{SortExpr, SortOperator};
 use kaveon_exec::topn::TopNOperator;
@@ -96,7 +97,7 @@ pub fn plan_to_operator(
                 return Ok(source);
             }
 
-            let exprs: Vec<Expr> = columns.iter().map(|e| rewrite_agg_refs(e)).collect();
+            let exprs: Vec<Expr> = columns.iter().map(rewrite_agg_refs).collect();
 
             Ok(Box::new(ProjectOperator::new(source, exprs)?))
         }
@@ -193,6 +194,24 @@ pub fn plan_to_operator(
             let right = plan_to_operator(right, catalog)?;
             Ok(Box::new(SetOpOperator::new(left, right, SetOpMode::Except)))
         }
+        LogicalPlan::SemiJoin {
+            left,
+            right,
+            left_key,
+            right_key,
+        }
+        | LogicalPlan::AntiJoin {
+            left,
+            right,
+            left_key,
+            right_key,
+        } => Ok(Box::new(SemiJoinOperator::new(
+            plan_to_operator(left, catalog)?,
+            plan_to_operator(right, catalog)?,
+            left_key.clone(),
+            right_key.clone(),
+            matches!(plan, LogicalPlan::AntiJoin { .. }),
+        ))),
     }
 }
 

@@ -974,7 +974,7 @@ export default function AboutPage() {
       </Section>
 
       {/* ─── Features Grid ─── */}
-      <section id="features" ref={r4} style={{ padding: "100px 24px", background: "#0a0a0a" }}>
+      <section id="features" ref={r4} style={{ padding: "100px 24px", background: "#0a0a0a", scrollMarginTop: 72 }}>
         <div style={{ maxWidth: 1100, margin: "0 auto" }}>
           <div style={{ textAlign: "center", marginBottom: 56 }}>
             <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: B, marginBottom: 12 }}>Platform</div>

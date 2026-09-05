@@ -45,7 +45,7 @@
 | Physical operator, stage, and task telemetry | 🧪 Alpha | Completed distributed stages/tasks report worker, partition, elapsed time, rows, Arrow batches, and bytes; live and per-operator metrics remain target |
 | Sort and TopN | 🧪 Alpha | Local and distributed execution with fixed-fan-in external merge |
 | Filter-pushdown optimizer pass | 🧪 Alpha | Wired conservative pushdown with residual row-level evaluation |
-| ADLS Gen2 / S3 readers | 📋 Planning | Local validation precedes cloud object storage |
+| ADLS Gen2 / S3 readers | 🚧 Alpha | ADLS Gen2 Parquet ranged reads are executable; cloud Delta and S3 remain pending |
 | Cloud Delta Lake / Iceberg readers | 📋 Planning | ADLS/S3 Delta, checkpoint replay, and Iceberg manifest semantics not implemented |
 | Distributed scheduling, exchange, retry | 🧪 Alpha | Versioned fragments execute scans, partial/final aggregates including AVG/exact DISTINCT, Sort/TopN, and repartitioned/broadcast joins; retry/cancellation wired |
 | Hash exchange | 🧪 Alpha | Authenticated Arrow IPC v2, stable partitioning, bounded payloads, idempotent upload, and cleanup; streaming flow control remains target |
@@ -124,7 +124,7 @@
 | In-process rate limiting not shared across replicas | Redis fixes this |
 | Engine server has no auth/TLS | Keep behind a trusted local boundary during alpha |
 | Platform catalog-source registry is not synchronized to Engine catalog | Add an authenticated revision-aware API-to-Engine bridge |
-| Engine aggregate/join memory is bounded only through opt-in constructors | Wire admission and accounts through every coordinator/worker plan, then add partitioned aggregate/join spill before production scale claims |
+| Hash aggregate/join stop at their configured query budget instead of spilling | Add partitioned aggregate/join spill before production scale claims |
 
 ---
 

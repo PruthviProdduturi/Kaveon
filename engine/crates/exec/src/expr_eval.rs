@@ -1,5 +1,6 @@
 use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, Float64Array, Int32Array, Int64Array, StringArray,
+    Array, ArrayRef, AsArray, BooleanArray, Decimal128Array, Float64Array, Int32Array, Int64Array,
+    StringArray,
 };
 use arrow::compute;
 use arrow::datatypes::{DataType, Float64Type, Int32Type, Int64Type};
@@ -130,6 +131,14 @@ fn literal_to_array(value: &ScalarValue, len: usize) -> Result<ArrayRef> {
         ScalarValue::Int64(v) => Ok(Arc::new(Int64Array::from(vec![*v; len]))),
         ScalarValue::Float64(v) => Ok(Arc::new(Float64Array::from(vec![*v; len]))),
         ScalarValue::Utf8(v) => Ok(Arc::new(StringArray::from(vec![v.as_str(); len]))),
+        ScalarValue::Decimal128 {
+            value,
+            precision,
+            scale,
+        } => Ok(Arc::new(
+            Decimal128Array::from(vec![*value; len])
+                .with_precision_and_scale(*precision, *scale)?,
+        )),
     }
 }
 
@@ -271,6 +280,7 @@ fn is_numeric(data_type: &DataType) -> bool {
             | DataType::Float16
             | DataType::Float32
             | DataType::Float64
+            | DataType::Decimal128(_, _)
     )
 }
 
@@ -624,10 +634,8 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             if args.is_empty() {
                 return Ok(Arc::new(StringArray::from(vec![""; num_rows])));
             }
-            let string_args: Vec<StringArray> = args
-                .iter()
-                .map(|a| cast_to_string(a))
-                .collect::<Result<_>>()?;
+            let string_args: Vec<StringArray> =
+                args.iter().map(cast_to_string).collect::<Result<_>>()?;
             let result: StringArray = (0..num_rows)
                 .map(|i| {
                     let mut s = String::new();
@@ -1124,16 +1132,16 @@ fn extract_from_micros(micros: i64, field: DateField) -> i64 {
         DateField::Hour => time_of_day / 3600,
         DateField::Minute => (time_of_day % 3600) / 60,
         DateField::Second => time_of_day % 60,
-        DateField::DayOfWeek => ((days % 7 + 4 + 7) % 7) as i64,
+        DateField::DayOfWeek => (days % 7 + 4 + 7) % 7,
         DateField::DayOfYear => {
             let jan1 = ymd_to_days(year, 1, 1);
-            (days - jan1 + 1) as i64
+            days - jan1 + 1
         }
         DateField::Quarter => ((month - 1) / 3 + 1) as i64,
         DateField::Week => {
             let jan1 = ymd_to_days(year, 1, 1);
             let doy = days - jan1;
-            (doy / 7 + 1) as i64
+            doy / 7 + 1
         }
         DateField::Epoch => secs,
     }
@@ -1160,7 +1168,7 @@ fn ymd_to_days(y: i32, m: u32, d: u32) -> i64 {
     let era = if y >= 0 { y } else { y - 399 } / 400;
     let yoe = (y - era * 400) as u32;
     let m_adj = if m > 2 { m - 3 } else { m + 9 } as u32;
-    let doy = (153 * m_adj + 2) / 5 + d as u32 - 1;
+    let doy = (153 * m_adj + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     era * 146097 + doe as i64 - 719468
 }
@@ -1201,7 +1209,7 @@ fn truncate_micros(us: i64, unit: &str) -> i64 {
         }
         "MONTH" => ymd_to_days(year, month, 1) * 86_400_000_000,
         "WEEK" => {
-            let dow = ((days % 7 + 4 + 7) % 7) as i64;
+            let dow = (days % 7 + 4 + 7) % 7;
             (days - dow) * 86_400_000_000
         }
         "DAY" => days * 86_400_000_000,
@@ -1415,8 +1423,8 @@ mod tests {
         };
         let result = evaluate(&expr, &string_batch()).unwrap();
         let bools = as_boolean(&result).unwrap();
-        assert_eq!(bools.value(0), true);
-        assert_eq!(bools.value(1), false);
+        assert!(bools.value(0));
+        assert!(!bools.value(1));
         assert!(bools.is_null(2));
     }
 
