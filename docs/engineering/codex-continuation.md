@@ -33,7 +33,8 @@ The working tree is shared when Claude and Codex use the same machine. Do not re
 - `22e7d8d`: reconciled SQL coverage commit after rebase. It includes Claude's SQL work and the first combined memory/ADLS foundations because those changes shared files before Claude committed.
 - `62569ed`: bounded Engine cloud execution, Engine manual, Docs/About polish, Catalog Sources error-state correction, and SQL integration repairs.
 - `e2ccb8a`: newer Docs header correction from Claude; deployed after `62569ed`.
-- `origin/dev` was `e2ccb8a` when this brief was written. Always treat `origin/dev` as authoritative.
+- `bd41410`: made the production catalog migration independent of `pgcrypto` and ordered the additive Engine control-plane table before legacy-table reconciliation.
+- `origin/dev` was `bd41410` when this brief was last verified. Always treat `origin/dev` as authoritative.
 
 Verified on the combined tree before the final rebase:
 
@@ -98,7 +99,7 @@ ACR: kaveonacr.azurecr.io
 Container Apps environment: kaveon-env
 API: kaveon-api
 PostgreSQL: kaveon-db
-Migration job: kaveon-migrate
+Migration job: none; the obsolete `kaveon-migrate` job was removed
 ```
 
 The Azure CLI context can be changed by another concurrent shell. Always scope the subscription in the same command sequence before Azure operations:
@@ -107,31 +108,26 @@ The Azure CLI context can be changed by another concurrent shell. Always scope t
 az account set --subscription 4ed07f02-b111-4eea-98ce-1c177d573a51
 ```
 
-Engine ACR build `ccc2` was still running when this brief was written. It builds from the public Git context to avoid traversing roughly 24 GiB of local ignored Cargo targets:
+Engine ACR build `ccc2` succeeded. It built from the public Git context to avoid traversing roughly 24 GiB of local ignored Cargo targets:
 
 ```powershell
 az acr task show-run --registry kaveonacr --run-id ccc2 -o table
 az acr repository show-tags --name kaveonacr --repository kaveon-engine -o table
 ```
 
-Expected tags are `62569ed` and `latest`. Do not claim publication until run `ccc2` succeeds and both tags resolve.
-
-## Production Catalog Sources incident
-
-Azure API logs proved the deployed request failure:
+Published tags `62569ed` and `latest` resolve to:
 
 ```text
-UndefinedTable — GET /api/v1/catalog-sources
+sha256:04bcf399d7e365934f37a026002947c01896defb4b73acb28879ebf595ab3484
 ```
 
-The API is otherwise healthy. The production `kaveonmeta` database is missing the additive `catalog_sources` schema. The existing `kaveon-migrate` job execution `kaveon-migrate-h2yz3uq` failed. Its current image is `kaveonacr.azurecr.io/kaveon-migrate:latest`; diagnose its logs or rebuild it from current `dev`, run it, and verify the authenticated route. Do not mask this with the empty state.
+The digest was pulled and started locally. `/health` returned HTTP 200 with Engine `0.1.0`, and `/v1/node` returned HTTP 200 with coordinator identity and measured RSS. `/ready` correctly returned not ready because the isolated smoke container had no catalog. The disposable smoke container was removed.
 
-Required completion evidence:
+## Production Catalog Sources incident — closed
 
-1. Migration job reports `Succeeded`.
-2. API logs no longer show `UndefinedTable` for `/api/v1/catalog-sources`.
-3. An authenticated GET returns HTTP 200 and `{ "success": true, "catalogSources": [...] }`.
-4. Studio renders either real sources or the clean empty state, never the error and empty state together.
+Azure API logs proved that `kaveonmeta` lacked `catalog_sources`. Commit `bd41410` removed the unnecessary `pgcrypto` dependency and made this additive control-plane table the first PostgreSQL schema operation, preventing unrelated legacy-table drift from blocking it. The production schema was applied through the API's managed-identity database path. An authenticated `GET /api/v1/catalog-sources` now returns HTTP 200 and `{ "success": true, "catalogSources": [] }`.
+
+The obsolete `kaveon-migrate` Container Apps job and `kaveon-migrate` ACR repository were removed. The legacy image embedded database credentials and targeted the wrong destination database, so it must never be restored or rerun. The exposed Azure PostgreSQL administrator password was rotated and the replacement stored as `postgres-admin-password` in `kaveon-kv`; the API remained healthy because it uses managed identity. The separately embedded legacy Neon credential cannot be rotated from Azure and must be rotated or revoked in Neon before considering the incident fully contained outside Kaveon's Azure boundary. Never copy either credential into source, logs, issues, or this brief.
 
 ## Honest open gates
 
@@ -142,16 +138,16 @@ Required completion evidence:
 5. Admission queues/resource groups; current overload policy rejects with 429.
 6. Streaming exchange flow control and paged/streamed root results.
 7. Distributed semi/anti join and distributed SUM/AVG DISTINCT state contracts.
-8. Engine image run verification after ACR publication.
-9. Five-worker AKS fault, concurrency, skew, memory-pressure, and comparative performance qualification.
-10. Platform PostgreSQL source registry to Engine catalog synchronization bridge.
+8. Five-worker AKS fault, concurrency, skew, memory-pressure, and comparative performance qualification.
+9. Platform PostgreSQL source registry to Engine catalog synchronization bridge.
+10. Replace the monolithic setup-schema replay with versioned production metadata migrations; legacy table drift still prevents a complete replay even though Catalog Sources is repaired.
 
 Do not call Kaveon Trino-class or production-ready until the relevant gates have measured evidence. Current wording is distributed alpha.
 
 ## Next execution order
 
-1. Confirm ACR run `ccc2`, tags, image digest, and a container `/v1/info` smoke test.
-2. Repair/rebuild the Azure migration image; run the job and close Catalog Sources production failure.
+1. Rotate or revoke the exposed legacy Neon database credential in Neon.
+2. Implement versioned production metadata migrations instead of replaying the monolithic setup schema.
 3. Implement aggregate spill with deterministic hash partitions and recursive merge tests under tiny memory limits.
 4. Implement grace hash-join spill with inner/outer correctness, null/duplicate semantics, skew limits, and cleanup tests.
 5. Add ADLS integration tests against a real container, then cloud Delta log/checkpoint support.
