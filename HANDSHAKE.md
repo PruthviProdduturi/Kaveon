@@ -66,6 +66,15 @@
 
 ## Interface contracts
 
+### Local port allocation — September 8
+
+User requested Engine UI on localhost:8080 and Studio on localhost:3000.
+Docker API previously occupied 8080 with plain HTTP, causing TLS protocol errors.
+Moved Compose API host mapping to 8082; container API port stays 8080, so Studio's
+internal API connection is unchanged. Updated Compose CI health URL. Recreated
+only the local API while preserving its existing environment/credential keyring;
+health passes. AKS pods remain Ready with zero restarts; no cloud redeploy needed.
+
 ### Client service name — September 8
 
 User requested `service/kaveon` for port-forwarding. Added that client-facing

@@ -44,7 +44,7 @@ jobs:
       - name: Smoke-test public endpoints
         run: |
           curl --fail http://localhost:3000/docs
-          curl --fail http://localhost:8080/api/health
+          curl --fail http://localhost:8082/api/health
           curl --fail http://localhost:8081/health
       - name: Print container logs after failure
         if: failure()
