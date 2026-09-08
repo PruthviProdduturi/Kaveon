@@ -223,6 +223,9 @@ td.nl{color:var(--text-muted);font-style:italic}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 @media(max-width:900px){.telemetry,.qd-columns{grid-template-columns:1fr}}
 @media(max-width:700px){.mast,.qd-header{align-items:flex-start;flex-direction:column}.section-row{align-items:flex-start;flex-direction:column}.query-tools{width:100%}.query-tools input{width:100%}.query-body{grid-template-columns:1fr}.query-meta{border-right:0;border-bottom:1px solid var(--border)}.main{padding:20px}.header{padding:0 18px}.gauges{padding:12px 18px}.qd-inner{padding:16px}.qd-tabs{overflow-x:auto}.qd-tab{white-space:nowrap}.qd-definition{grid-template-columns:1fr}.qd-definition dt{border-bottom:0;padding-bottom:2px}.qd-definition dd{padding-top:0}.plan-shell{padding:14px}.plan-node{min-width:210px}}
+.auth{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:14px 24px;border-bottom:1px solid var(--border)}
+.auth input{padding:8px;background:var(--bg-surface);color:var(--text);border:1px solid var(--border);border-radius:6px}
+.auth small{color:var(--text-muted)}
 </style>
 </head>
 <body>
@@ -239,6 +242,14 @@ td.nl{color:var(--text-muted);font-style:italic}
   </div>
 </div>
 
+<form class="auth" id="auth-form">
+  <label for="auth-token">Engine access token</label>
+  <input id="auth-token" type="password" autocomplete="off" spellcheck="false" aria-describedby="auth-help">
+  <button class="refresh" type="submit">Connect</button>
+  <button class="refresh" type="button" id="disconnect">Disconnect</button>
+  <small id="auth-help">Kept only in this page's memory. Leave empty only for a trusted local bridge or development server.</small>
+  <span id="auth-status" role="status" aria-live="polite">Enter your token to connect.</span>
+</form>
 <div class="gauges">
   <div class="gauge">
     <div class="gauge-ring"><svg viewBox="0 0 56 56"><circle class="track" cx="28" cy="28" r="24"/><circle class="val" cx="28" cy="28" r="24" stroke="var(--success)" stroke-dasharray="150.8" id="g-workers-ring"/></svg><span class="gauge-num" style="color:var(--success)" id="g-workers">0</span></div>
@@ -283,6 +294,43 @@ td.nl{color:var(--text-muted);font-style:italic}
 
 <script>
 const API='';
+let accessToken='',session=0,connected=false,pollTimer=null;
+function disconnect(message='Disconnected'){
+  session++;connected=false;accessToken='';clearInterval(pollTimer);pollTimer=null;
+  document.getElementById('auth-token').value='';
+  queries={};qorder=[];samples.queries=[];samples.memory=[];
+  document.getElementById('view-detail').innerHTML='';
+  document.getElementById('view-detail').style.display='none';
+  document.getElementById('view-list').style.display='';
+  document.getElementById('qsearch').value='';
+  document.getElementById('qstate').value='ALL';
+  ['ver','env-l','chart-queries','chart-memory'].forEach(id=>document.getElementById(id).textContent='');
+  ['g-workers','g-queries','g-failed'].forEach(id=>setGauge(id,0,0));
+  ['g-memory','cv-memory'].forEach(id=>document.getElementById(id).textContent='0 B');
+  document.getElementById('cv-queries').textContent='0';
+  document.getElementById('header-uptime').textContent='Uptime —';
+  document.getElementById('cd').className='conn-dot err';
+  document.getElementById('ct').textContent='Disconnected';
+  document.getElementById('auth-status').textContent=message;
+  renderHistory();
+}
+async function apiJson(path){
+  if(!connected)throw new Error('Disconnected');
+  const current=session;
+  const headers=accessToken?{Authorization:'Bearer '+accessToken}:{};
+  const response=await fetch(API+path,{headers,cache:'no-store',credentials:'omit'});
+  if(current!==session)throw new Error('Session changed');
+  if(response.status===401||response.status===403){
+    disconnect('Access denied. Enter a valid engine token and reconnect.');
+    throw new Error('Access denied');
+  }
+  if(!response.ok)throw new Error('Request failed: '+response.status);
+  const data=await response.json();
+  if(current!==session)throw new Error('Session changed');
+  return data;
+}
+function refresh(){if(connected){fetchCluster();fetchHistory();}}
+
 let queries={},qorder=[];
 const MAX_SAMPLES=60,samples={queries:[],memory:[]};
 
@@ -344,13 +392,15 @@ function renderPlan(plan){
 }
 
 async function fetchCluster(){
+  const current=session;
   try{
-    const r=await fetch(API+'/v1/cluster');
-    const d=await r.json();
+    const d=await apiJson('/v1/cluster');
+    if(current!==session)return;
     document.getElementById('ver').textContent='v'+d.coordinator.version;
     document.getElementById('env-l').textContent=' · '+d.environment;
     document.getElementById('cd').className='conn-dot';
     document.getElementById('ct').textContent='Connected';
+    document.getElementById('auth-status').textContent='Connected';
 
     const failed=qorder.filter(id=>queries[id]&&queries[id].state==='FAILED').length;
     document.getElementById('header-uptime').textContent='Uptime '+fmt(d.coordinator.uptime_secs);
@@ -365,6 +415,7 @@ async function fetchCluster(){
     spark('chart-queries',samples.queries);spark('chart-memory',samples.memory);
 
   }catch{
+    if(current!==session)return;
     document.getElementById('cd').className='conn-dot err';
     document.getElementById('ct').textContent='Disconnected';
   }
@@ -547,9 +598,9 @@ function renderHistory(){
 
 async function fetchHistory(){
   try{
-    const response=await fetch(API+'/v1/query');
-    if(!response.ok)return;
-    const records=await response.json();
+    const current=session;
+    const records=await apiJson('/v1/query');
+    if(current!==session)return;
     queries={};qorder=[];
     records.forEach(record=>{
       queries[record.id]={...record,columns:record.columns||[],rows:record.rows||[]};
@@ -559,12 +610,19 @@ async function fetchHistory(){
   }catch{}
 }
 
-fetchCluster();
-fetchHistory();
+disconnect('Enter your token to connect.');
+document.getElementById('auth-form').addEventListener('submit',event=>{
+  event.preventDefault();
+  const token=document.getElementById('auth-token').value.trim();
+  disconnect();accessToken=token;connected=true;
+  document.getElementById('auth-status').textContent='Connecting…';
+  refresh();pollTimer=setInterval(refresh,5000);
+});
+document.getElementById('disconnect').addEventListener('click',()=>disconnect());
+window.addEventListener('pagehide',()=>disconnect());
 document.getElementById('qsearch').addEventListener('input',renderHistory);
 document.getElementById('qstate').addEventListener('change',renderHistory);
-document.getElementById('refresh').addEventListener('click',()=>{fetchCluster();fetchHistory();});
-setInterval(()=>{fetchCluster();fetchHistory();},5000);
+document.getElementById('refresh').addEventListener('click',refresh);
 </script>
 </body>
 </html>
