@@ -5,6 +5,7 @@ from middleware.auth import require_auth
 from middleware.permissions import require_min_role
 import database.metadata as db
 import database.pool as pool
+from services.credentials import encrypt, CredentialError
 
 router = APIRouter()
 NO_CACHE = {
@@ -123,13 +124,18 @@ def create_data_source(data: dict, ctx=Depends(require_min_role("Admin"))):
         raise HTTPException(status_code=400, detail='Region must be either "WW" or "EU"')
 
     try:
+        connection_string = encrypt(connection_string)
+    except CredentialError:
+        raise HTTPException(503, "Credential encryption is unavailable") from None
+
+    try:
         # Use OUTPUT INSERTED but only return public fields (not connection_string)
         db.execute("""
             INSERT INTO data_sources (name, type, connection_string, database_name,
                                       region, description, created_by, is_active)
-            VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6, 1)
+            VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6, @param7)
         """, [name, ds_type, connection_string, data.get("database_name"), region,
-              data.get("description"), user])
+              data.get("description"), user, True])
         inserted = db.query_one(
             f"SELECT TOP 1 {_PUBLIC_FIELDS} FROM data_sources ds WHERE ds.name = @param0 AND ds.created_by = @param1 ORDER BY ds.id DESC",
             [name, user]
@@ -149,6 +155,14 @@ def update_data_source(ds_id: str, data: dict, ctx=Depends(require_min_role("Adm
     if region and region not in ("WW", "EU"):
         raise HTTPException(status_code=400, detail='Region must be either "WW" or "EU"')
 
+    if "connection_string" in data:
+        if not isinstance(data["connection_string"], str) or not data["connection_string"]:
+            raise HTTPException(400, "connection_string must be nonempty")
+        try:
+            data = {**data, "connection_string": encrypt(data["connection_string"])}
+        except CredentialError:
+            raise HTTPException(503, "Credential encryption is unavailable") from None
+
     updates, params, i = [], [], 0
     for field, col in [("name", "name"), ("type", "type"),
                        ("connection_string", "connection_string"),
@@ -157,7 +171,7 @@ def update_data_source(ds_id: str, data: dict, ctx=Depends(require_min_role("Adm
         if field in data:
             updates.append(f"{col} = @param{i}"); params.append(data[field] or None); i += 1
     if "is_active" in data:
-        updates.append(f"is_active = @param{i}"); params.append(1 if data["is_active"] else 0); i += 1
+        updates.append(f"is_active = @param{i}"); params.append(bool(data["is_active"])); i += 1
 
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
