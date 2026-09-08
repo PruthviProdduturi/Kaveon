@@ -510,6 +510,7 @@ fn execute_query(sql: &str, catalog: &CatalogManager) {
     };
     let plan = kaveon_optim::rules::push_filter_down(plan);
     let plan = kaveon_optim::rules::push_projection_down(plan);
+    let plan = kaveon_optim::statistics::optimize_join_builds(plan, catalog);
 
     let mut operator = match planner::plan_to_operator(&plan, catalog) {
         Ok(op) => op,

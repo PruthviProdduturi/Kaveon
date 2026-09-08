@@ -157,10 +157,7 @@ fn set_expr_to_plan(
             let right_plan = set_expr_to_plan(right, ctes)?;
             match op {
                 ast::SetOperator::Union => {
-                    let all = matches!(
-                        set_quantifier,
-                        ast::SetQuantifier::All | ast::SetQuantifier::None
-                    );
+                    let all = matches!(set_quantifier, ast::SetQuantifier::All);
                     let plan = LogicalPlan::Union {
                         inputs: vec![left_plan, right_plan],
                         all,
@@ -174,6 +171,9 @@ fn set_expr_to_plan(
                     }
                 }
                 ast::SetOperator::Intersect => {
+                    if matches!(set_quantifier, ast::SetQuantifier::All) {
+                        return Err(sql_err("INTERSECT ALL is unsupported"));
+                    }
                     let plan = LogicalPlan::Intersect {
                         left: Box::new(left_plan),
                         right: Box::new(right_plan),
@@ -187,6 +187,9 @@ fn set_expr_to_plan(
                     }
                 }
                 ast::SetOperator::Except => {
+                    if matches!(set_quantifier, ast::SetQuantifier::All) {
+                        return Err(sql_err("EXCEPT ALL is unsupported"));
+                    }
                     let plan = LogicalPlan::Except {
                         left: Box::new(left_plan),
                         right: Box::new(right_plan),
@@ -208,7 +211,7 @@ fn set_expr_to_plan(
 
 fn select_to_plan(select: &ast::Select, ctes: &HashMap<String, ast::Query>) -> Result<LogicalPlan> {
     let plan = build_from_clause(select, ctes)?;
-    let plan = build_where(plan, select)?;
+    let plan = build_where(plan, select, ctes)?;
 
     let has_aggregates = select.projection.iter().any(contains_aggregate_select_item)
         || matches!(&select.group_by, ast::GroupByExpr::Expressions(exprs, _) if !exprs.is_empty());
@@ -241,7 +244,7 @@ fn select_to_plan(select: &ast::Select, ctes: &HashMap<String, ast::Query>) -> R
         plan
     };
 
-    Ok(plan)
+    Ok(lower_aggregate_expressions(plan)?.0)
 }
 
 fn build_from_clause(
@@ -355,13 +358,17 @@ fn apply_joins(
     Ok(left)
 }
 
-fn build_where(plan: LogicalPlan, select: &ast::Select) -> Result<LogicalPlan> {
+fn build_where(
+    plan: LogicalPlan,
+    select: &ast::Select,
+    ctes: &HashMap<String, ast::Query>,
+) -> Result<LogicalPlan> {
     match &select.selection {
         None => Ok(plan),
         Some(expr) => {
             let mut plan = plan;
             let mut remaining = Vec::new();
-            extract_subquery_predicates(expr, &mut plan, &mut remaining)?;
+            extract_subquery_predicates(expr, &mut plan, &mut remaining, ctes)?;
             if remaining.is_empty() {
                 Ok(plan)
             } else {
@@ -382,6 +389,7 @@ fn extract_subquery_predicates(
     expr: &ast::Expr,
     plan: &mut LogicalPlan,
     remaining: &mut Vec<Expr>,
+    ctes: &HashMap<String, ast::Query>,
 ) -> Result<()> {
     match expr {
         ast::Expr::BinaryOp {
@@ -389,8 +397,8 @@ fn extract_subquery_predicates(
             op: ast::BinaryOperator::And,
             right,
         } => {
-            extract_subquery_predicates(left, plan, remaining)?;
-            extract_subquery_predicates(right, plan, remaining)?;
+            extract_subquery_predicates(left, plan, remaining, ctes)?;
+            extract_subquery_predicates(right, plan, remaining, ctes)?;
             Ok(())
         }
         ast::Expr::InSubquery {
@@ -399,8 +407,10 @@ fn extract_subquery_predicates(
             negated,
         } => {
             let left_key = ast_expr_to_expr(lhs)?;
-            let sub_plan = query_to_plan(subquery, &HashMap::new())?;
-            let right_key = first_output_column(&sub_plan);
+            let sub_plan = query_to_plan(subquery, ctes)?;
+            validate_uncorrelated(&sub_plan)?;
+            // The physical operator binds the sole projected output by position.
+            let right_key = Expr::Column("*".into());
             let current = std::mem::replace(
                 plan,
                 LogicalPlan::Scan {
@@ -427,8 +437,11 @@ fn extract_subquery_predicates(
             Ok(())
         }
         ast::Expr::Exists { subquery, negated } => {
-            let sub_plan = query_to_plan(subquery, &HashMap::new())?;
-            let right_key = first_output_column(&sub_plan);
+            let sub_plan = query_to_plan(subquery, ctes)?;
+            validate_uncorrelated(&sub_plan)?;
+            // Existence depends on row cardinality, including NULL-valued rows.
+            // The independently planned RHS cannot resolve correlated outer columns.
+            let right_key = Expr::Literal(ScalarValue::Int64(1));
             let left_key = right_key.clone();
             let current = std::mem::replace(
                 plan,
@@ -455,7 +468,7 @@ fn extract_subquery_predicates(
             }
             Ok(())
         }
-        ast::Expr::Nested(inner) => extract_subquery_predicates(inner, plan, remaining),
+        ast::Expr::Nested(inner) => extract_subquery_predicates(inner, plan, remaining, ctes),
         other => {
             remaining.push(ast_expr_to_expr(other)?);
             Ok(())
@@ -495,6 +508,232 @@ fn build_having(plan: LogicalPlan, select: &ast::Select) -> Result<LogicalPlan> 
                 predicate,
             })
         }
+    }
+}
+
+type ExpressionBindings = Vec<(Expr, Expr)>;
+
+/// Compute aggregate/group expressions once below aggregation, then bind
+/// references above it to the resulting columns. Both execution paths receive
+/// column-only aggregate arguments while preserving the original SQL types.
+fn lower_aggregate_expressions(plan: LogicalPlan) -> Result<(LogicalPlan, ExpressionBindings)> {
+    match plan {
+        LogicalPlan::Project { input, columns } => {
+            let (input, bindings) = lower_aggregate_expressions(*input)?;
+            let columns = columns
+                .into_iter()
+                .map(|e| replace_bound_expression(e, &bindings))
+                .collect();
+            Ok((
+                LogicalPlan::Project {
+                    input: Box::new(input),
+                    columns,
+                },
+                bindings,
+            ))
+        }
+        LogicalPlan::Filter { input, predicate } => {
+            let (input, bindings) = lower_aggregate_expressions(*input)?;
+            let predicate = replace_bound_expression(predicate, &bindings);
+            Ok((
+                LogicalPlan::Filter {
+                    input: Box::new(input),
+                    predicate,
+                },
+                bindings,
+            ))
+        }
+        LogicalPlan::Distinct { input } => {
+            let (input, bindings) = lower_aggregate_expressions(*input)?;
+            Ok((
+                LogicalPlan::Distinct {
+                    input: Box::new(input),
+                },
+                bindings,
+            ))
+        }
+        LogicalPlan::Window {
+            input,
+            window_exprs,
+        } => {
+            let (input, bindings) = lower_aggregate_expressions(*input)?;
+            let window_exprs = window_exprs
+                .into_iter()
+                .map(|e| replace_bound_expression(e, &bindings))
+                .collect();
+            Ok((
+                LogicalPlan::Window {
+                    input: Box::new(input),
+                    window_exprs,
+                },
+                bindings,
+            ))
+        }
+        LogicalPlan::Aggregate {
+            input,
+            mut group_by,
+            mut aggregates,
+        } => {
+            let complex = group_by.iter().any(|e| !matches!(e, Expr::Column(_)))
+                || aggregates.iter().any(|a| {
+                    let e = match a {
+                        AggregateExpr::Count { expr, .. }
+                        | AggregateExpr::Sum { expr, .. }
+                        | AggregateExpr::Avg { expr, .. }
+                        | AggregateExpr::Min(expr)
+                        | AggregateExpr::Max(expr) => expr,
+                    };
+                    !matches!(e, Expr::Column(_) | Expr::Star)
+                });
+            if !complex {
+                return Ok((
+                    LogicalPlan::Aggregate {
+                        input,
+                        group_by,
+                        aggregates,
+                    },
+                    vec![],
+                ));
+            }
+            let mut projection = Vec::new();
+            let mut bindings = Vec::new();
+            for (i, expr) in group_by.iter_mut().enumerate() {
+                let name = match expr {
+                    Expr::Column(name) => name.clone(),
+                    _ => format!("__kaveon_group_{i}"),
+                };
+                projection.push(Expr::Alias {
+                    expr: Box::new(expr.clone()),
+                    name: name.clone(),
+                });
+                let column = Expr::Column(name);
+                bindings.push((expr.clone(), column.clone()));
+                *expr = column;
+            }
+            for (i, aggregate) in aggregates.iter_mut().enumerate() {
+                let (function, expr) = match aggregate {
+                    AggregateExpr::Count { expr, .. } => ("COUNT", expr),
+                    AggregateExpr::Sum { expr, .. } => ("SUM", expr),
+                    AggregateExpr::Avg { expr, .. } => ("AVG", expr),
+                    AggregateExpr::Min(expr) => ("MIN", expr),
+                    AggregateExpr::Max(expr) => ("MAX", expr),
+                };
+                if matches!(expr, Expr::Star) {
+                    continue;
+                }
+                let original = Expr::Function {
+                    name: function.into(),
+                    args: vec![expr.clone()],
+                };
+                let name = format!("__kaveon_arg_{i}");
+                projection.push(Expr::Alias {
+                    expr: Box::new(expr.clone()),
+                    name: name.clone(),
+                });
+                *expr = Expr::Column(name.clone());
+                bindings.push((
+                    original,
+                    Expr::Column(format!("{}_{name}", function.to_lowercase())),
+                ));
+            }
+            Ok((
+                LogicalPlan::Aggregate {
+                    input: Box::new(LogicalPlan::Project {
+                        input,
+                        columns: projection,
+                    }),
+                    group_by,
+                    aggregates,
+                },
+                bindings,
+            ))
+        }
+        other => Ok((other, vec![])),
+    }
+}
+
+fn replace_bound_expression(expr: Expr, bindings: &ExpressionBindings) -> Expr {
+    if let Some((_, replacement)) = bindings.iter().find(|(original, _)| original == &expr) {
+        return replacement.clone();
+    }
+    match expr {
+        Expr::Alias { expr, name } => Expr::Alias {
+            expr: Box::new(replace_bound_expression(*expr, bindings)),
+            name,
+        },
+        Expr::Cast { expr, data_type } => Expr::Cast {
+            expr: Box::new(replace_bound_expression(*expr, bindings)),
+            data_type,
+        },
+        Expr::Extract { expr, field } => Expr::Extract {
+            expr: Box::new(replace_bound_expression(*expr, bindings)),
+            field,
+        },
+        Expr::BinaryOp { left, op, right } => Expr::BinaryOp {
+            left: Box::new(replace_bound_expression(*left, bindings)),
+            op,
+            right: Box::new(replace_bound_expression(*right, bindings)),
+        },
+        Expr::IsNull(expr) => Expr::IsNull(Box::new(replace_bound_expression(*expr, bindings))),
+        Expr::IsNotNull(expr) => {
+            Expr::IsNotNull(Box::new(replace_bound_expression(*expr, bindings)))
+        }
+        Expr::Not(expr) => Expr::Not(Box::new(replace_bound_expression(*expr, bindings))),
+        Expr::And(a, b) => Expr::And(
+            Box::new(replace_bound_expression(*a, bindings)),
+            Box::new(replace_bound_expression(*b, bindings)),
+        ),
+        Expr::Or(a, b) => Expr::Or(
+            Box::new(replace_bound_expression(*a, bindings)),
+            Box::new(replace_bound_expression(*b, bindings)),
+        ),
+        Expr::Function { name, args } => Expr::Function {
+            name,
+            args: args
+                .into_iter()
+                .map(|e| replace_bound_expression(e, bindings))
+                .collect(),
+        },
+        Expr::WindowFunction {
+            name,
+            args,
+            partition_by,
+            order_by,
+            frame,
+        } => Expr::WindowFunction {
+            name,
+            args: args
+                .into_iter()
+                .map(|e| replace_bound_expression(e, bindings))
+                .collect(),
+            partition_by: partition_by
+                .into_iter()
+                .map(|e| replace_bound_expression(e, bindings))
+                .collect(),
+            order_by: order_by
+                .into_iter()
+                .map(|(e, b)| (replace_bound_expression(e, bindings), b))
+                .collect(),
+            frame,
+        },
+        Expr::Case {
+            operand,
+            when_then,
+            else_expr,
+        } => Expr::Case {
+            operand: operand.map(|e| Box::new(replace_bound_expression(*e, bindings))),
+            when_then: when_then
+                .into_iter()
+                .map(|(a, b)| {
+                    (
+                        replace_bound_expression(a, bindings),
+                        replace_bound_expression(b, bindings),
+                    )
+                })
+                .collect(),
+            else_expr: else_expr.map(|e| Box::new(replace_bound_expression(*e, bindings))),
+        },
+        other => other,
     }
 }
 
@@ -868,6 +1107,21 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
     };
 
     if let Some(over) = &func.over {
+        if func.null_treatment.is_some() || func.filter.is_some() || !func.within_group.is_empty() {
+            return Err(sql_err(
+                "window NULL treatment, FILTER, and WITHIN GROUP are unsupported",
+            ));
+        }
+        if let ast::FunctionArguments::List(list) = &func.args
+            && (matches!(
+                list.duplicate_treatment,
+                Some(ast::DuplicateTreatment::Distinct)
+            ) || !list.clauses.is_empty())
+        {
+            return Err(sql_err(
+                "DISTINCT and argument clauses in window functions are unsupported",
+            ));
+        }
         let (partition_by, order_by, frame) = match over {
             ast::WindowType::WindowSpec(spec) => {
                 let partition_by = spec
@@ -879,6 +1133,9 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
                     .order_by
                     .iter()
                     .map(|ob| {
+                        if ob.nulls_first == Some(true) {
+                            return Err(sql_err("window NULLS FIRST ordering is unsupported"));
+                        }
                         let expr = ast_expr_to_expr(&ob.expr)?;
                         let asc = ob.asc.unwrap_or(true);
                         Ok((expr, asc))
@@ -1072,7 +1329,9 @@ fn collect_windows_from_ast_expr(expr: &ast::Expr, out: &mut Vec<Expr>) -> Resul
             collect_windows_from_ast_expr(left, out)?;
             collect_windows_from_ast_expr(right, out)
         }
-        ast::Expr::Nested(inner) => collect_windows_from_ast_expr(inner, out),
+        ast::Expr::Nested(inner)
+        | ast::Expr::Cast { expr: inner, .. }
+        | ast::Expr::UnaryOp { expr: inner, .. } => collect_windows_from_ast_expr(inner, out),
         ast::Expr::Case {
             operand,
             conditions,
@@ -1158,27 +1417,174 @@ fn ast_window_frame_bound(bound: &ast::WindowFrameBound) -> Result<WindowFrameBo
     }
 }
 
-fn first_output_column(plan: &LogicalPlan) -> Expr {
-    match plan {
-        LogicalPlan::Project { columns, .. } => columns.first().cloned(),
-        LogicalPlan::Aggregate { aggregates, .. } => aggregates.first().map(|a| match a {
-            AggregateExpr::Count { expr, .. }
-            | AggregateExpr::Sum { expr, .. }
-            | AggregateExpr::Avg { expr, .. }
-            | AggregateExpr::Min(expr)
-            | AggregateExpr::Max(expr) => expr.clone(),
-        }),
-        LogicalPlan::Filter { input, .. }
-        | LogicalPlan::Sort { input, .. }
-        | LogicalPlan::Limit { input, .. }
-        | LogicalPlan::Offset { input, .. }
-        | LogicalPlan::Distinct { input, .. } => Some(first_output_column(input)),
-        LogicalPlan::Scan { columns, .. } => columns
-            .as_ref()
-            .and_then(|c| c.first().map(|n| Expr::Column(n.clone()))),
-        _ => None,
+fn validate_uncorrelated(plan: &LogicalPlan) -> Result<()> {
+    fn visit<'a>(
+        plan: &'a LogicalPlan,
+        relations: &mut Vec<String>,
+        expressions: &mut Vec<&'a Expr>,
+    ) {
+        match plan {
+            LogicalPlan::Scan { table, alias, .. } => {
+                relations.push(alias.clone().unwrap_or_else(|| table.clone()));
+                if alias.is_none() {
+                    relations.push(table.rsplit('.').next().unwrap().to_owned());
+                }
+            }
+            LogicalPlan::Filter { input, predicate } => {
+                expressions.push(predicate);
+                visit(input, relations, expressions);
+            }
+            LogicalPlan::Project { input, columns } => {
+                expressions.extend(columns);
+                visit(input, relations, expressions);
+            }
+            LogicalPlan::Sort { input, order_by } => {
+                expressions.extend(order_by.iter().map(|(e, _)| e));
+                visit(input, relations, expressions);
+            }
+            LogicalPlan::Window {
+                input,
+                window_exprs,
+            } => {
+                expressions.extend(window_exprs);
+                visit(input, relations, expressions);
+            }
+            LogicalPlan::Aggregate {
+                input,
+                group_by,
+                aggregates,
+            } => {
+                expressions.extend(group_by);
+                expressions.extend(aggregates.iter().map(|a| match a {
+                    AggregateExpr::Count { expr, .. }
+                    | AggregateExpr::Sum { expr, .. }
+                    | AggregateExpr::Avg { expr, .. }
+                    | AggregateExpr::Min(expr)
+                    | AggregateExpr::Max(expr) => expr,
+                }));
+                visit(input, relations, expressions);
+            }
+            LogicalPlan::Limit { input, .. }
+            | LogicalPlan::Offset { input, .. }
+            | LogicalPlan::Distinct { input } => visit(input, relations, expressions),
+            LogicalPlan::Union { inputs, .. } => {
+                for input in inputs {
+                    visit(input, relations, expressions);
+                }
+            }
+            LogicalPlan::Join {
+                left,
+                right,
+                condition,
+                ..
+            } => {
+                expressions.extend(condition);
+                visit(left, relations, expressions);
+                visit(right, relations, expressions);
+            }
+            LogicalPlan::SemiJoin {
+                left,
+                right,
+                left_key,
+                right_key,
+            }
+            | LogicalPlan::AntiJoin {
+                left,
+                right,
+                left_key,
+                right_key,
+            } => {
+                expressions.extend([left_key, right_key]);
+                visit(left, relations, expressions);
+                visit(right, relations, expressions);
+            }
+            LogicalPlan::Intersect { left, right } | LogicalPlan::Except { left, right } => {
+                visit(left, relations, expressions);
+                visit(right, relations, expressions);
+            }
+        }
     }
-    .unwrap_or_else(|| Expr::Column("*".into()))
+    fn check(expr: &Expr, relations: &[String]) -> Result<()> {
+        match expr {
+            Expr::Column(name) => {
+                if let Some((qualifier, _)) = name.rsplit_once('.')
+                    && !relations.iter().any(|r| r.eq_ignore_ascii_case(qualifier))
+                {
+                    return Err(sql_err(format!(
+                        "correlated subqueries are unsupported: {name}"
+                    )));
+                }
+            }
+            Expr::BinaryOp { left, right, .. } | Expr::And(left, right) | Expr::Or(left, right) => {
+                check(left, relations)?;
+                check(right, relations)?;
+            }
+            Expr::IsNull(e)
+            | Expr::IsNotNull(e)
+            | Expr::Not(e)
+            | Expr::Alias { expr: e, .. }
+            | Expr::Cast { expr: e, .. }
+            | Expr::Extract { expr: e, .. } => check(e, relations)?,
+            Expr::Function { args, .. } => {
+                for e in args {
+                    check(e, relations)?;
+                }
+            }
+            Expr::WindowFunction {
+                args,
+                partition_by,
+                order_by,
+                ..
+            } => {
+                for e in args
+                    .iter()
+                    .chain(partition_by)
+                    .chain(order_by.iter().map(|(e, _)| e))
+                {
+                    check(e, relations)?;
+                }
+            }
+            Expr::Case {
+                operand,
+                when_then,
+                else_expr,
+            } => {
+                for e in operand.iter().chain(else_expr) {
+                    check(e, relations)?;
+                }
+                for (a, b) in when_then {
+                    check(a, relations)?;
+                    check(b, relations)?;
+                }
+            }
+            Expr::Like { expr, pattern, .. } => {
+                check(expr, relations)?;
+                check(pattern, relations)?;
+            }
+            Expr::Between {
+                expr, low, high, ..
+            } => {
+                check(expr, relations)?;
+                check(low, relations)?;
+                check(high, relations)?;
+            }
+            Expr::InList { expr, list, .. } => {
+                check(expr, relations)?;
+                for e in list {
+                    check(e, relations)?;
+                }
+            }
+            Expr::Literal(_) | Expr::Star => {}
+        }
+        Ok(())
+    }
+    let mut relations = Vec::new();
+    let mut expressions = Vec::new();
+    visit(plan, &mut relations, &mut expressions);
+    for expr in expressions {
+        check(expr, &relations)?;
+    }
+    Ok(())
 }
 
 fn sql_err(msg: impl Into<String>) -> KaveonError {
@@ -1188,6 +1594,38 @@ fn sql_err(msg: impl Into<String>) -> KaveonError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn union_defaults_to_distinct_and_unsupported_multisets_fail() {
+        assert!(matches!(
+            sql_to_logical_plan("SELECT x FROM a UNION SELECT x FROM b").unwrap(),
+            LogicalPlan::Distinct { .. }
+        ));
+        assert!(sql_to_logical_plan("SELECT x FROM a INTERSECT ALL SELECT x FROM b").is_err());
+        assert!(sql_to_logical_plan("SELECT x FROM a EXCEPT ALL SELECT x FROM b").is_err());
+    }
+
+    #[test]
+    fn lowers_group_and_aggregate_expressions_below_aggregation() {
+        let plan = sql_to_logical_plan("SELECT CAST(CAST(x AS DECIMAL(20,4)) AS VARCHAR) AS k, SUM(CAST(x AS DECIMAL(20,4))) FROM t GROUP BY CAST(x AS DECIMAL(20,4))").unwrap();
+        let LogicalPlan::Project { input, columns } = plan else {
+            panic!("project");
+        };
+        let LogicalPlan::Aggregate {
+            input,
+            group_by,
+            aggregates,
+        } = *input
+        else {
+            panic!("aggregate");
+        };
+        assert!(matches!(&*input, LogicalPlan::Project { .. }));
+        assert!(matches!(&group_by[0], Expr::Column(name) if name == "__kaveon_group_0"));
+        assert!(
+            matches!(&aggregates[0], AggregateExpr::Sum { expr: Expr::Column(name), .. } if name == "__kaveon_arg_0")
+        );
+        assert!(matches!(&columns[1], Expr::Column(name) if name == "sum___kaveon_arg_0"));
+    }
 
     #[test]
     fn parses_simple_select() {
@@ -1625,10 +2063,35 @@ mod tests {
     #[test]
     fn parses_exists_subquery() {
         let plan = sql_to_logical_plan(
-            "SELECT * FROM orders WHERE EXISTS (SELECT 1 FROM users WHERE users.id = orders.user_id)",
+            "SELECT * FROM orders WHERE EXISTS (SELECT NULL FROM users WHERE users.id = 1)",
         )
         .unwrap();
         assert!(matches!(plan, LogicalPlan::SemiJoin { .. }));
+    }
+
+    #[test]
+    fn rejects_correlated_subqueries_instead_of_rebinding_outer_columns() {
+        for sql in [
+            "SELECT * FROM orders WHERE EXISTS (SELECT 1 FROM users WHERE users.id = orders.user_id)",
+            "SELECT * FROM orders o WHERE o.id IN (SELECT u.id FROM users u WHERE u.id = o.id)",
+        ] {
+            assert!(
+                sql_to_logical_plan(sql)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("correlated")
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unimplemented_window_modifiers() {
+        for sql in [
+            "SELECT COUNT(DISTINCT x) OVER () FROM t",
+            "SELECT COUNT(*) OVER (ORDER BY x NULLS FIRST) FROM t",
+        ] {
+            assert!(sql_to_logical_plan(sql).is_err());
+        }
     }
 
     #[test]

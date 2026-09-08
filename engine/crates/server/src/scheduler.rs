@@ -1,7 +1,6 @@
 use crate::cluster::NodeInfo;
 use kaveon_core::{
-    DataFormat, ExchangeId, KaveonError, Result, SplitDescriptor, SplitId, StageId, TaskAssignment,
-    TaskId,
+    DataFormat, ExchangeId, Result, SplitDescriptor, SplitId, StageId, TaskAssignment, TaskId,
 };
 use kaveon_storage::{DeltaTableReader, ParquetReader};
 use std::collections::{BTreeMap, VecDeque};
@@ -20,9 +19,28 @@ pub fn enumerate_local_splits(
     match format {
         DataFormat::Parquet => enumerate_parquet_splits(source),
         DataFormat::Delta => enumerate_delta_splits(source),
-        DataFormat::Iceberg => Err(KaveonError::Storage(
-            "local Iceberg split enumeration is not implemented".into(),
-        )),
+        DataFormat::Iceberg => {
+            let snapshot =
+                kaveon_storage::IcebergReader::new(source.to_string_lossy().into_owned())
+                    .snapshot()?;
+            Ok(snapshot
+                .files
+                .iter()
+                .enumerate()
+                .map(|(index, _)| SplitDescriptor {
+                    id: SplitId(format!("iceberg-file-{index}")),
+                    source_uri: local_file_uri(source),
+                    properties: BTreeMap::from([
+                        (FORMAT_PROPERTY.into(), "iceberg".into()),
+                        (FILE_INDEX_PROPERTY.into(), index.to_string()),
+                        (
+                            "snapshot_id".into(),
+                            snapshot.snapshot_id.unwrap_or(-1).to_string(),
+                        ),
+                    ]),
+                })
+                .collect())
+        }
     }
 }
 

@@ -1,0 +1,75 @@
+import unittest
+from unittest.mock import patch
+from fastapi import HTTPException
+from services import engine_bridge as bridge
+
+
+class EngineBridgeTests(unittest.TestCase):
+    def setUp(self):
+        self.source = {"id": "abc", "engine_catalog": "warehouse", "storage_type": "local",
+                       "storage_config": {"base_path": "/data"}, "adapter_type": "native",
+                       "lifecycle": "draft"}
+
+    def test_stable_mapping_and_secret_fields_rejected(self):
+        self.assertEqual(bridge.definition(self.source)["id"], "platform-abc")
+        self.source["storage_config"]["password"] = "forbidden"
+        with self.assertRaises(HTTPException):
+            bridge.definition(self.source)
+
+    def test_create_retry_is_idempotent(self):
+        current = bridge.definition(self.source)
+        with patch.object(bridge, "_request", side_effect=[None, current]) as request:
+            self.assertEqual(bridge.sync_catalog(self.source, "admin")["catalog"], current)
+            self.assertEqual(request.call_count, 2)
+        with patch.object(bridge, "_request", return_value=current) as request:
+            self.assertFalse(bridge.sync_catalog(self.source, "admin")["changed"])
+            self.assertEqual(request.call_count, 1)
+
+    def test_revision_conflict_prevents_overwrite(self):
+        current = bridge.definition(self.source)
+        self.source["engine_catalog"] = "renamed"
+        with patch.object(bridge, "_request", return_value=current) as request:
+            with self.assertRaises(HTTPException) as error:
+                bridge.sync_catalog(self.source, "admin", 9)
+            self.assertEqual(error.exception.status_code, 409)
+            self.assertEqual(request.call_count, 1)
+
+    def test_update_sends_compare_and_swap_and_actor(self):
+        current = bridge.definition(self.source)
+        self.source["lifecycle"] = "active"
+        updated = {**current, "lifecycle": "Active", "revision": 2}
+        with patch.object(bridge, "_request", side_effect=[current, updated]) as request:
+            self.assertTrue(bridge.sync_catalog(self.source, "admin", 1)["changed"])
+            args, kwargs = request.call_args
+            self.assertEqual(args[0], "PUT")
+            self.assertEqual(args[3], "admin")
+            self.assertEqual(kwargs["revision"], 1)
+            self.assertEqual(kwargs["payload"]["revision"], 2)
+
+    def test_replayed_update_does_not_increment_revision(self):
+        current = {**bridge.definition(self.source), "revision": 5}
+        with patch.object(bridge, "_request", return_value=current) as request:
+            self.assertFalse(bridge.sync_catalog(self.source, "admin", 4)["changed"])
+            self.assertEqual(request.call_count, 1)
+
+    def test_viewer_and_unknown_roles_cannot_delegate_sql(self):
+        for role in ["Viewer", "NoAccess", "Owner"]:
+            with patch.object(bridge, "_request") as request:
+                with self.assertRaises(HTTPException):
+                    bridge.execute("SELECT 1", "warehouse", "alice", role)
+                request.assert_not_called()
+
+    def test_verified_actor_and_role_forwarded(self):
+        with patch.object(bridge, "_request", return_value={"id": "query"}) as request:
+            bridge.execute("SELECT 1", "warehouse", "alice", "Analyst")
+            self.assertEqual(request.call_args.args[3], "alice")
+            self.assertEqual(request.call_args.kwargs["role"], "analyst")
+
+    def test_external_plaintext_transport_fails_closed(self):
+        with patch.dict("os.environ", {"KAVEON_ENGINE_URL": "http://engine.example", "KAVEON_ENGINE_PRIVATE_HTTP": "false"}):
+            with self.assertRaises(HTTPException):
+                bridge._endpoint()
+
+
+if __name__ == "__main__":
+    unittest.main()

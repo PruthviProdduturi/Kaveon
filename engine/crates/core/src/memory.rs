@@ -1,7 +1,8 @@
 use std::sync::{
-    Arc,
+    Arc, Mutex, OnceLock,
     atomic::{AtomicU64, Ordering},
 };
+use std::{any::Any, collections::HashMap};
 
 use crate::{KaveonError, Result};
 
@@ -18,6 +19,32 @@ struct QueryMemoryInner {
     limit_bytes: u64,
     current_bytes: AtomicU64,
     peak_bytes: AtomicU64,
+    _admission: Option<AdmissionLease>,
+    resources: QueryResources,
+    cancellation: CancellationProbe,
+}
+
+#[derive(Default)]
+struct CancellationProbe(OnceLock<Arc<dyn Fn() -> bool + Send + Sync>>);
+
+impl std::fmt::Debug for CancellationProbe {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CancellationProbe")
+            .field("installed", &self.0.get().is_some())
+            .finish()
+    }
+}
+
+#[derive(Default)]
+struct QueryResources(Mutex<HashMap<&'static str, Arc<dyn Any + Send + Sync>>>);
+
+impl std::fmt::Debug for QueryResources {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("QueryResources")
+            .finish_non_exhaustive()
+    }
 }
 
 /// A thread-safe hard memory limit shared by every operator in one query.
@@ -66,7 +93,7 @@ impl MemoryAdmissionController {
                 self.inner.limit_bytes
             )));
         }
-        let pool = QueryMemoryPool::new(query_id, query_limit_bytes)?;
+        let mut pool = QueryMemoryPool::new(query_id, query_limit_bytes)?;
         let mut current = self.inner.admitted_bytes.load(Ordering::Acquire);
         loop {
             let Some(next) = current.checked_add(query_limit_bytes) else {
@@ -85,11 +112,13 @@ impl MemoryAdmissionController {
                     self.inner
                         .peak_admitted_bytes
                         .fetch_max(next, Ordering::AcqRel);
-                    return Ok(AdmittedQueryMemory {
+                    Arc::get_mut(&mut pool.inner)
+                        .expect("new query pool is uniquely owned")
+                        ._admission = Some(AdmissionLease {
                         controller: self.clone(),
-                        pool,
                         admitted_bytes: query_limit_bytes,
                     });
+                    return Ok(AdmittedQueryMemory { pool });
                 }
                 Err(observed) => current = observed,
             }
@@ -121,8 +150,15 @@ impl MemoryAdmissionController {
 /// An admitted query budget that releases cluster capacity through RAII.
 #[derive(Debug)]
 pub struct AdmittedQueryMemory {
-    controller: MemoryAdmissionController,
     pool: QueryMemoryPool,
+}
+
+// Held by the shared pool, including operator accounts and live reservations.
+// Canceling/dropping a request must not release admission while its worker still
+// owns query memory and has not observed cancellation.
+#[derive(Debug)]
+struct AdmissionLease {
+    controller: MemoryAdmissionController,
     admitted_bytes: u64,
 }
 
@@ -133,7 +169,7 @@ impl AdmittedQueryMemory {
     }
 }
 
-impl Drop for AdmittedQueryMemory {
+impl Drop for AdmissionLease {
     fn drop(&mut self) {
         self.controller.release(self.admitted_bytes);
     }
@@ -159,6 +195,9 @@ impl QueryMemoryPool {
                 limit_bytes,
                 current_bytes: AtomicU64::new(0),
                 peak_bytes: AtomicU64::new(0),
+                _admission: None,
+                resources: QueryResources::default(),
+                cancellation: CancellationProbe::default(),
             }),
         })
     }
@@ -168,6 +207,24 @@ impl QueryMemoryPool {
         &self.inner.query_id
     }
 
+    /// Connects synchronous operator loops to an external cancellation token.
+    /// The callback must be fast, nonblocking, and must not retain this pool.
+    pub fn set_cancellation_probe(
+        &self,
+        probe: impl Fn() -> bool + Send + Sync + 'static,
+    ) -> Result<()> {
+        self.inner.cancellation.0.set(Arc::new(probe)).map_err(|_| {
+            KaveonError::Execution("query cancellation probe already installed".into())
+        })
+    }
+
+    pub fn check_cancelled(&self) -> Result<()> {
+        if self.inner.cancellation.0.get().is_some_and(|probe| probe()) {
+            return Err(KaveonError::Execution("query canceled".into()));
+        }
+        Ok(())
+    }
+
     #[must_use]
     pub fn snapshot(&self) -> MemorySnapshot {
         MemorySnapshot {
@@ -175,6 +232,28 @@ impl QueryMemoryPool {
             peak_bytes: self.inner.peak_bytes.load(Ordering::Acquire),
             limit_bytes: self.inner.limit_bytes,
         }
+    }
+
+    /// Shares a typed, query-lifetime resource (for example a spill quota) among
+    /// operators. Resource initializers must not recursively access this pool.
+    /// Resources must not retain the pool itself, which would create a cycle.
+    pub fn shared_resource<T: Any + Send + Sync>(
+        &self,
+        key: &'static str,
+        initialize: impl FnOnce() -> Result<T>,
+    ) -> Result<Arc<T>> {
+        let mut resources =
+            self.inner.resources.0.lock().map_err(|_| {
+                KaveonError::Execution("query resource registry lock poisoned".into())
+            })?;
+        if let Some(resource) = resources.get(key) {
+            return Arc::clone(resource).downcast::<T>().map_err(|_| {
+                KaveonError::Execution(format!("query resource '{key}' has an incompatible type"))
+            });
+        }
+        let resource = Arc::new(initialize()?);
+        resources.insert(key, resource.clone());
+        Ok(resource)
     }
 
     pub fn operator(&self, operator_id: impl Into<String>) -> Result<OperatorMemoryAccount> {
@@ -194,6 +273,7 @@ impl QueryMemoryPool {
     }
 
     fn try_reserve(&self, bytes: u64, operator_id: &str) -> Result<()> {
+        self.check_cancelled()?;
         let mut current = self.inner.current_bytes.load(Ordering::Acquire);
         loop {
             let Some(next) = current.checked_add(bytes) else {
@@ -219,7 +299,7 @@ impl QueryMemoryPool {
     }
 
     fn limit_error(&self, operator_id: &str, requested: u64, current: u64) -> KaveonError {
-        KaveonError::Execution(format!(
+        KaveonError::MemoryLimit(format!(
             "query '{}' operator '{}' cannot reserve {requested} bytes: {current} of {} bytes already reserved",
             self.query_id(),
             operator_id,
@@ -243,6 +323,9 @@ pub struct OperatorMemoryAccount {
 }
 
 impl OperatorMemoryAccount {
+    pub fn check_cancelled(&self) -> Result<()> {
+        self.query.check_cancelled()
+    }
     #[must_use]
     pub fn operator_id(&self) -> &str {
         &self.operator_id
@@ -323,6 +406,59 @@ mod tests {
     }
 
     #[test]
+    fn admission_lives_until_last_worker_reservation_is_released() {
+        let admission = MemoryAdmissionController::new(1024).unwrap();
+        let admitted = admission.admit("canceling", 1024).unwrap();
+        let account = admitted.pool().operator("worker").unwrap();
+        let reservation = account.reserve(64).unwrap();
+        drop(admitted);
+        drop(account);
+        assert_eq!(admission.snapshot().current_bytes, 1024);
+        assert!(admission.admit("premature", 1024).is_err());
+        drop(reservation);
+        assert_eq!(admission.snapshot().current_bytes, 0);
+        assert!(admission.admit("next", 1024).is_ok());
+    }
+
+    #[test]
+    fn query_resources_initialize_once_and_reject_type_collisions() {
+        let pool = QueryMemoryPool::new("resources", 1024).unwrap();
+        let first = pool
+            .shared_resource("disk", || Ok(AtomicU64::new(7)))
+            .unwrap();
+        let clone = pool.clone();
+        let second = clone
+            .shared_resource::<AtomicU64>("disk", || panic!("already initialized"))
+            .unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(second.load(Ordering::Relaxed), 7);
+        assert!(pool.shared_resource("disk", || Ok(String::new())).is_err());
+        assert!(
+            pool.shared_resource::<u64>("retry", || Err(KaveonError::Execution("failed".into())))
+                .is_err()
+        );
+        assert_eq!(*pool.shared_resource("retry", || Ok(9_u64)).unwrap(), 9);
+    }
+
+    #[test]
+    fn cancellation_probe_stops_new_reservations_without_leaking_existing_ones() {
+        let pool = QueryMemoryPool::new("cancel", 1024).unwrap();
+        let canceled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let signal = canceled.clone();
+        pool.set_cancellation_probe(move || signal.load(Ordering::Acquire))
+            .unwrap();
+        let account = pool.operator("operator").unwrap();
+        let reservation = account.reserve(64).unwrap();
+        canceled.store(true, Ordering::Release);
+        assert!(account.check_cancelled().is_err());
+        assert!(account.reserve(0).is_err());
+        assert_eq!(pool.snapshot().current_bytes, 64);
+        drop(reservation);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+        assert!(pool.set_cancellation_probe(|| false).is_err());
+    }
+
+    #[test]
     fn reservations_track_current_and_peak_then_release_on_drop() {
         let pool = QueryMemoryPool::new("query", QUERY_LIMIT).unwrap();
         let account = pool.operator("hash-aggregate").unwrap();
@@ -349,8 +485,9 @@ mod tests {
         let sort = pool.operator("sort").unwrap();
         let _join_memory = join.reserve(768).unwrap();
 
-        let error = sort.reserve(512).unwrap_err().to_string();
-        assert!(error.contains("query 'query' operator 'sort'"));
+        let error = sort.reserve(512).unwrap_err();
+        assert!(matches!(&error, KaveonError::MemoryLimit(_)));
+        assert!(error.to_string().contains("query 'query' operator 'sort'"));
         assert_eq!(pool.snapshot().current_bytes, 768);
         assert_eq!(sort.snapshot().current_bytes, 0);
     }

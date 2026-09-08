@@ -1,864 +1,850 @@
-use std::collections::HashMap;
+use std::{cmp::Ordering, sync::Arc};
 
-use arrow::array::{Array, ArrayRef, AsArray, Float64Array, Int64Array, RecordBatch, StringArray};
-use arrow::datatypes::{DataType, Field, Float64Type, Int64Type, Schema, SchemaRef};
-use kaveon_core::{BatchOperator, Expr, KaveonError, Result};
-use std::sync::Arc;
+use arrow::{
+    array::{Array, ArrayRef, AsArray, Float64Array, Int64Array, RecordBatch, UInt32Array},
+    compute::{SortColumn, SortOptions, concat_batches, lexsort_to_indices, take},
+    datatypes::{
+        DataType, Field, Float64Type, Int32Type, Int64Type, Schema, SchemaRef, UInt64Type,
+    },
+};
+use kaveon_core::{
+    BatchOperator, Expr, KaveonError, Result, WindowFrame, WindowFrameBound, WindowFrameUnits,
+};
 
-use crate::aggregate::AggregateValue;
+fn error(message: impl Into<String>) -> KaveonError {
+    KaveonError::Execution(message.into())
+}
+
+/// Full expression identity keeps different frames/partitions from sharing a result column.
+pub(crate) fn window_output_name(expr: &Expr) -> String {
+    format!("__kaveon_window_{expr:?}")
+}
 
 pub struct WindowOperator {
     source: Box<dyn BatchOperator>,
-    window_exprs: Vec<Expr>,
-    output_schema: Option<SchemaRef>,
-    buffered: Vec<RecordBatch>,
+    expressions: Vec<Expr>,
+    schema: SchemaRef,
     emitted: bool,
+    memory: Option<kaveon_core::OperatorMemoryAccount>,
 }
 
 impl WindowOperator {
-    pub fn new(source: Box<dyn BatchOperator>, window_exprs: Vec<Expr>) -> Self {
-        Self {
-            source,
-            window_exprs,
-            output_schema: None,
-            buffered: Vec::new(),
-            emitted: false,
+    pub fn new(source: Box<dyn BatchOperator>, expressions: Vec<Expr>) -> Result<Self> {
+        let empty = RecordBatch::new_empty(source.schema().clone());
+        let mut fields = source
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.as_ref().clone())
+            .collect::<Vec<_>>();
+        for expr in &expressions {
+            let output = evaluate_window(expr, &empty)?;
+            fields.push(Field::new(
+                window_output_name(expr),
+                output.data_type().clone(),
+                true,
+            ));
         }
+        Ok(Self {
+            source,
+            expressions,
+            schema: Arc::new(Schema::new(fields)),
+            emitted: false,
+            memory: None,
+        })
+    }
+
+    pub fn with_memory(mut self, memory: kaveon_core::OperatorMemoryAccount) -> Self {
+        self.memory = Some(memory);
+        self
     }
 }
 
 impl BatchOperator for WindowOperator {
     fn schema(&self) -> &SchemaRef {
-        if let Some(ref schema) = self.output_schema {
-            return schema;
-        }
-        self.source.schema()
+        &self.schema
     }
-
     fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
-        if self.emitted {
-            return Ok(None);
-        }
-
-        while let Some(batch) = self.source.next_batch()? {
-            self.buffered.push(batch);
-        }
-
-        if self.buffered.is_empty() {
+        let expression_memory = self.memory.clone();
+        crate::expr_eval::with_expression_memory(expression_memory.as_ref(), || {
+            if self.emitted {
+                return Ok(None);
+            }
             self.emitted = true;
-            return Ok(None);
-        }
-
-        let combined = arrow::compute::concat_batches(self.source.schema(), &self.buffered)
-            .map_err(|e| KaveonError::Execution(format!("window concat: {e}")))?;
-        self.buffered.clear();
-
-        let num_rows = combined.num_rows();
-        let mut result_columns: Vec<ArrayRef> = combined.columns().to_vec();
-        let mut fields: Vec<Field> = combined
-            .schema()
-            .fields()
-            .iter()
-            .map(|f| f.as_ref().clone())
-            .collect();
-
-        for (idx, expr) in self.window_exprs.iter().enumerate() {
-            let Expr::WindowFunction {
-                name,
-                args,
-                partition_by,
-                order_by,
-                frame,
-            } = expr
-            else {
-                return Err(KaveonError::Execution(
-                    "window_exprs must contain WindowFunction expressions".into(),
-                ));
-            };
-
-            let partitions = compute_partitions(&combined, partition_by)?;
-            let sort_indices = if order_by.is_empty() {
-                None
-            } else {
-                Some(compute_sort_within_partitions(
-                    &combined,
-                    &partitions,
-                    order_by,
-                )?)
-            };
-
-            let result = evaluate_window_function(
-                name,
-                args,
-                &combined,
-                &partitions,
-                sort_indices.as_deref(),
-                num_rows,
-                frame.as_ref(),
-            )?;
-
-            let col_name = window_output_name(name, args, idx);
-            fields.push(Field::new(&col_name, result.data_type().clone(), true));
-            result_columns.push(result);
-        }
-
-        let output_schema = Arc::new(Schema::new(fields));
-        let result = RecordBatch::try_new(output_schema.clone(), result_columns)
-            .map_err(|e| KaveonError::Execution(format!("window result batch: {e}")))?;
-        self.output_schema = Some(output_schema);
-        self.emitted = true;
-        Ok(Some(result))
-    }
-}
-
-fn window_output_name(name: &str, args: &[Expr], idx: usize) -> String {
-    let arg_str = args
-        .iter()
-        .map(|a| match a {
-            Expr::Column(c) => c.clone(),
-            Expr::Star => "*".into(),
-            _ => "expr".into(),
+            let mut batches = Vec::new();
+            let mut reservations = Vec::new();
+            let mut total_bytes = 0_u64;
+            let mut total_rows = 0_u64;
+            while let Some(batch) = self.source.next_batch()? {
+                total_bytes = total_bytes.saturating_add(batch.get_array_memory_size() as u64);
+                total_rows = total_rows.saturating_add(batch.num_rows() as u64);
+                if let Some(memory) = &self.memory {
+                    reservations.push(memory.reserve(batch.get_array_memory_size() as u64)?);
+                }
+                batches.push(batch);
+            }
+            self.emitted = true;
+            if batches.is_empty() {
+                return Ok(None);
+            }
+            // Keep admission across concatenation, sorting/permutation, frame
+            // indices and aggregate temporaries, and all output columns. Frame work
+            // remains quadratic in CPU for broad frames but is not retained per row.
+            let output_bytes = self
+                .schema
+                .fields()
+                .iter()
+                .skip(self.source.schema().fields().len())
+                .fold(0_u64, |bytes, field| {
+                    bytes.saturating_add(match field.data_type() {
+                        DataType::Utf8
+                        | DataType::LargeUtf8
+                        | DataType::Binary
+                        | DataType::LargeBinary => {
+                            total_bytes.saturating_add(16).saturating_mul(total_rows)
+                        }
+                        _ => total_rows.saturating_mul(32),
+                    })
+                });
+            let workspace = total_bytes
+                .saturating_mul(8)
+                .saturating_add(total_rows.saturating_mul(2048))
+                .saturating_add(output_bytes);
+            let _workspace = self
+                .memory
+                .as_ref()
+                .map(|memory| memory.reserve(workspace))
+                .transpose()?;
+            let batch = concat_batches(self.source.schema(), &batches)?;
+            drop(batches);
+            let mut columns = batch.columns().to_vec();
+            for expr in &self.expressions {
+                columns.push(evaluate_window(expr, &batch)?);
+            }
+            Ok(Some(RecordBatch::try_new(self.schema.clone(), columns)?))
         })
-        .collect::<Vec<_>>()
-        .join("_");
-    if arg_str.is_empty() {
-        format!("{}_{}", name.to_lowercase(), idx)
-    } else {
-        format!("{}_{}", name.to_lowercase(), arg_str)
     }
 }
 
-type PartitionMap = Vec<(Vec<AggregateValue>, Vec<usize>)>;
-
-fn compute_partitions(batch: &RecordBatch, partition_by: &[Expr]) -> Result<PartitionMap> {
-    if partition_by.is_empty() {
-        let all: Vec<usize> = (0..batch.num_rows()).collect();
-        return Ok(vec![(Vec::new(), all)]);
-    }
-
-    let partition_cols: Vec<ArrayRef> = partition_by
+fn columns(exprs: &[Expr], batch: &RecordBatch) -> Result<Vec<ArrayRef>> {
+    exprs
         .iter()
         .map(|e| crate::expr_eval::evaluate(e, batch))
-        .collect::<Result<_>>()?;
-
-    let mut groups: HashMap<Vec<AggregateValue>, Vec<usize>> = HashMap::new();
-    let mut order: Vec<Vec<AggregateValue>> = Vec::new();
-
-    for row in 0..batch.num_rows() {
-        let key: Vec<AggregateValue> = partition_cols
-            .iter()
-            .map(|col| extract_value(col.as_ref(), row))
-            .collect::<Result<_>>()?;
-        if !groups.contains_key(&key) {
-            order.push(key.clone());
-        }
-        groups.entry(key).or_default().push(row);
-    }
-
-    Ok(order
-        .into_iter()
-        .map(|k| {
-            let rows = groups.remove(&k).unwrap();
-            (k, rows)
-        })
-        .collect())
+        .collect()
 }
 
-fn compute_sort_within_partitions(
-    batch: &RecordBatch,
-    partitions: &PartitionMap,
-    order_by: &[(Expr, bool)],
-) -> Result<Vec<usize>> {
-    let sort_cols: Vec<ArrayRef> = order_by
-        .iter()
-        .map(|(e, _)| crate::expr_eval::evaluate(e, batch))
-        .collect::<Result<_>>()?;
-
-    let mut global_order = vec![0usize; batch.num_rows()];
-
-    for (_, rows) in partitions {
-        let mut sorted_rows = rows.clone();
-        sorted_rows.sort_by(|&a, &b| {
-            for (col_idx, (_, asc)) in order_by.iter().enumerate() {
-                let col = &sort_cols[col_idx];
-                let cmp = compare_array_values(col.as_ref(), a, b);
-                let cmp = if *asc { cmp } else { cmp.reverse() };
-                if cmp != std::cmp::Ordering::Equal {
-                    return cmp;
-                }
-            }
-            std::cmp::Ordering::Equal
+fn compare(col: &ArrayRef, left: usize, right: usize) -> Result<Ordering> {
+    // Arrow comparators preserve integer/decimal precision and SQL peer equality.
+    if col.is_null(left) || col.is_null(right) {
+        return Ok(match (col.is_null(left), col.is_null(right)) {
+            (true, true) => Ordering::Equal,
+            (true, false) => Ordering::Greater,
+            _ => Ordering::Less,
         });
-        for (rank, &row) in sorted_rows.iter().enumerate() {
-            global_order[row] = rank;
+    }
+    let comparator = arrow::array::make_comparator(
+        col.as_ref(),
+        col.as_ref(),
+        SortOptions {
+            descending: false,
+            nulls_first: false,
+        },
+    )?;
+    Ok(comparator(left, right))
+}
+
+fn peers(cols: &[ArrayRef], left: usize, right: usize) -> Result<bool> {
+    for col in cols {
+        if compare(col, left, right)? != Ordering::Equal {
+            return Ok(false);
         }
     }
-
-    Ok(global_order)
+    Ok(true)
 }
 
-fn evaluate_window_function(
-    name: &str,
-    args: &[Expr],
-    batch: &RecordBatch,
-    partitions: &PartitionMap,
-    sort_order: Option<&[usize]>,
-    num_rows: usize,
-    frame: Option<&kaveon_core::WindowFrame>,
-) -> Result<ArrayRef> {
-    match name.to_uppercase().as_str() {
-        "ROW_NUMBER" => {
-            let mut result = vec![0i64; num_rows];
-            for (_, rows) in partitions {
-                let mut sorted = rows.clone();
-                if let Some(order) = sort_order {
-                    sorted.sort_by_key(|&r| order[r]);
-                }
-                for (i, &row) in sorted.iter().enumerate() {
-                    result[row] = (i + 1) as i64;
-                }
-            }
-            Ok(Arc::new(Int64Array::from(result)))
-        }
-        "RANK" => {
-            let mut result = vec![0i64; num_rows];
-            let sort_cols: Vec<ArrayRef> = args
-                .iter()
-                .chain(std::iter::empty())
-                .filter_map(|_| None::<ArrayRef>)
-                .collect();
-            let _ = sort_cols;
-            for (_, rows) in partitions {
-                let mut sorted = rows.clone();
-                if let Some(order) = sort_order {
-                    sorted.sort_by_key(|&r| order[r]);
-                }
-                if sorted.is_empty() {
-                    continue;
-                }
-                result[sorted[0]] = 1;
-                for i in 1..sorted.len() {
-                    let same = sort_order
-                        .map(|o| o[sorted[i]] == o[sorted[i - 1]])
-                        .unwrap_or(false);
-                    result[sorted[i]] = if same {
-                        result[sorted[i - 1]]
-                    } else {
-                        (i + 1) as i64
-                    };
-                }
-            }
-            Ok(Arc::new(Int64Array::from(result)))
-        }
-        "DENSE_RANK" => {
-            let mut result = vec![0i64; num_rows];
-            for (_, rows) in partitions {
-                let mut sorted = rows.clone();
-                if let Some(order) = sort_order {
-                    sorted.sort_by_key(|&r| order[r]);
-                }
-                if sorted.is_empty() {
-                    continue;
-                }
-                result[sorted[0]] = 1;
-                let mut rank = 1i64;
-                for i in 1..sorted.len() {
-                    let same = sort_order
-                        .map(|o| o[sorted[i]] == o[sorted[i - 1]])
-                        .unwrap_or(false);
-                    if !same {
-                        rank += 1;
-                    }
-                    result[sorted[i]] = rank;
-                }
-            }
-            Ok(Arc::new(Int64Array::from(result)))
-        }
-        "NTILE" => {
-            if args.is_empty() {
-                return Err(KaveonError::Execution("NTILE requires one argument".into()));
-            }
-            let n = match &args[0] {
-                Expr::Literal(kaveon_core::predicate::ScalarValue::Int64(v)) => *v as usize,
-                _ => {
-                    return Err(KaveonError::Execution(
-                        "NTILE argument must be an integer literal".into(),
-                    ));
-                }
-            };
-            if n == 0 {
-                return Err(KaveonError::Execution(
-                    "NTILE argument must be positive".into(),
-                ));
-            }
-            let mut result = vec![0i64; num_rows];
-            for (_, rows) in partitions {
-                let mut sorted = rows.clone();
-                if let Some(order) = sort_order {
-                    sorted.sort_by_key(|&r| order[r]);
-                }
-                let count = sorted.len();
-                for (i, &row) in sorted.iter().enumerate() {
-                    result[row] = (i * n / count + 1) as i64;
-                }
-            }
-            Ok(Arc::new(Int64Array::from(result)))
-        }
-        "LAG" | "LEAD" => {
-            if args.is_empty() {
-                return Err(KaveonError::Execution(format!(
-                    "{name} requires at least one argument"
-                )));
-            }
-            let col = crate::expr_eval::evaluate(&args[0], batch)?;
-            let offset = if args.len() > 1 {
-                match &args[1] {
-                    Expr::Literal(kaveon_core::predicate::ScalarValue::Int64(v)) => *v as usize,
-                    _ => 1,
-                }
-            } else {
-                1
-            };
-            let is_lag = name.eq_ignore_ascii_case("LAG");
-
-            eval_lag_lead(&col, partitions, sort_order, num_rows, offset, is_lag)
-        }
-        "FIRST_VALUE" => {
-            if args.is_empty() {
-                return Err(KaveonError::Execution(
-                    "FIRST_VALUE requires one argument".into(),
-                ));
-            }
-            let col = crate::expr_eval::evaluate(&args[0], batch)?;
-            eval_first_last_value(&col, partitions, sort_order, num_rows, true)
-        }
-        "LAST_VALUE" => {
-            if args.is_empty() {
-                return Err(KaveonError::Execution(
-                    "LAST_VALUE requires one argument".into(),
-                ));
-            }
-            let col = crate::expr_eval::evaluate(&args[0], batch)?;
-            eval_first_last_value(&col, partitions, sort_order, num_rows, false)
-        }
-        "SUM" | "COUNT" | "AVG" | "MIN" | "MAX" => {
-            eval_aggregate_window(name, args, batch, partitions, sort_order, frame)
-        }
-        _ => Err(KaveonError::Execution(format!(
-            "unsupported window function: {name}"
-        ))),
-    }
-}
-
-fn eval_lag_lead(
-    col: &ArrayRef,
-    partitions: &PartitionMap,
-    sort_order: Option<&[usize]>,
-    num_rows: usize,
-    offset: usize,
-    is_lag: bool,
-) -> Result<ArrayRef> {
-    match col.data_type() {
-        DataType::Int64 => {
-            let arr = col.as_primitive::<Int64Type>();
-            let mut result: Vec<Option<i64>> = vec![None; num_rows];
-            for (_, rows) in partitions {
-                let mut sorted = rows.clone();
-                if let Some(order) = sort_order {
-                    sorted.sort_by_key(|&r| order[r]);
-                }
-                for (i, &row) in sorted.iter().enumerate() {
-                    let source_idx = if is_lag {
-                        if i >= offset {
-                            Some(sorted[i - offset])
-                        } else {
-                            None
-                        }
-                    } else if i + offset < sorted.len() {
-                        Some(sorted[i + offset])
-                    } else {
-                        None
-                    };
-                    result[row] = source_idx.and_then(|idx| {
-                        if arr.is_null(idx) {
-                            None
-                        } else {
-                            Some(arr.value(idx))
-                        }
-                    });
-                }
-            }
-            Ok(Arc::new(Int64Array::from(result)))
-        }
-        DataType::Float64 => {
-            let arr = col.as_primitive::<Float64Type>();
-            let mut result: Vec<Option<f64>> = vec![None; num_rows];
-            for (_, rows) in partitions {
-                let mut sorted = rows.clone();
-                if let Some(order) = sort_order {
-                    sorted.sort_by_key(|&r| order[r]);
-                }
-                for (i, &row) in sorted.iter().enumerate() {
-                    let source_idx = if is_lag {
-                        if i >= offset {
-                            Some(sorted[i - offset])
-                        } else {
-                            None
-                        }
-                    } else if i + offset < sorted.len() {
-                        Some(sorted[i + offset])
-                    } else {
-                        None
-                    };
-                    result[row] = source_idx.and_then(|idx| {
-                        if arr.is_null(idx) {
-                            None
-                        } else {
-                            Some(arr.value(idx))
-                        }
-                    });
-                }
-            }
-            Ok(Arc::new(Float64Array::from(result)))
-        }
-        DataType::Utf8 => {
-            let arr = col.as_any().downcast_ref::<StringArray>().expect("Utf8");
-            let mut result: Vec<Option<String>> = vec![None; num_rows];
-            for (_, rows) in partitions {
-                let mut sorted = rows.clone();
-                if let Some(order) = sort_order {
-                    sorted.sort_by_key(|&r| order[r]);
-                }
-                for (i, &row) in sorted.iter().enumerate() {
-                    let source_idx = if is_lag {
-                        if i >= offset {
-                            Some(sorted[i - offset])
-                        } else {
-                            None
-                        }
-                    } else if i + offset < sorted.len() {
-                        Some(sorted[i + offset])
-                    } else {
-                        None
-                    };
-                    result[row] = source_idx.and_then(|idx| {
-                        if arr.is_null(idx) {
-                            None
-                        } else {
-                            Some(arr.value(idx).to_owned())
-                        }
-                    });
-                }
-            }
-            Ok(Arc::new(StringArray::from(
-                result.iter().map(|v| v.as_deref()).collect::<Vec<_>>(),
-            )))
-        }
-        dt => Err(KaveonError::Execution(format!(
-            "LAG/LEAD not supported for type {dt}"
-        ))),
-    }
-}
-
-fn eval_first_last_value(
-    col: &ArrayRef,
-    partitions: &PartitionMap,
-    sort_order: Option<&[usize]>,
-    num_rows: usize,
-    first: bool,
-) -> Result<ArrayRef> {
-    let indices = arrow::array::UInt32Array::from(
-        (0..num_rows)
-            .map(|row| {
-                for (_, rows) in partitions {
-                    if rows.contains(&row) {
-                        let mut sorted = rows.clone();
-                        if let Some(order) = sort_order {
-                            sorted.sort_by_key(|&r| order[r]);
-                        }
-                        return if first {
-                            *sorted.first().unwrap() as u32
-                        } else {
-                            *sorted.last().unwrap() as u32
-                        };
-                    }
-                }
-                row as u32
-            })
-            .collect::<Vec<_>>(),
-    );
-    arrow::compute::take(col.as_ref(), &indices, None)
-        .map_err(|e| KaveonError::Execution(format!("first/last value: {e}")))
-}
-
-fn eval_aggregate_window(
-    name: &str,
-    args: &[Expr],
-    batch: &RecordBatch,
-    partitions: &PartitionMap,
-    sort_order: Option<&[usize]>,
-    frame: Option<&kaveon_core::WindowFrame>,
-) -> Result<ArrayRef> {
-    let col = if args.is_empty() || matches!(&args[0], Expr::Star) {
-        None
-    } else {
-        Some(crate::expr_eval::evaluate(&args[0], batch)?)
+fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
+    let Expr::WindowFunction {
+        name,
+        args,
+        partition_by,
+        order_by,
+        frame,
+    } = expr
+    else {
+        return Err(error("window operator requires window expressions"));
     };
-
-    let num_rows = batch.num_rows();
-    let has_frame = frame.is_some() || sort_order.is_some();
-
-    if has_frame {
-        return eval_framed_aggregate(name, &col, partitions, sort_order, num_rows, frame);
+    let name = name.to_uppercase();
+    let partition_cols = columns(partition_by, batch)?;
+    let order_cols = columns(
+        &order_by.iter().map(|(e, _)| e.clone()).collect::<Vec<_>>(),
+        batch,
+    )?;
+    let mut sorts = partition_cols
+        .iter()
+        .map(|c| SortColumn {
+            values: c.clone(),
+            options: Some(SortOptions {
+                descending: false,
+                nulls_first: false,
+            }),
+        })
+        .collect::<Vec<_>>();
+    sorts.extend(
+        order_cols
+            .iter()
+            .zip(order_by)
+            .map(|(c, (_, asc))| SortColumn {
+                values: c.clone(),
+                options: Some(SortOptions {
+                    descending: !asc,
+                    nulls_first: false,
+                }),
+            }),
+    );
+    let sorted = if sorts.is_empty() {
+        (0..batch.num_rows()).collect::<Vec<_>>()
+    } else {
+        lexsort_to_indices(&sorts, None)?
+            .values()
+            .iter()
+            .map(|&n| n as usize)
+            .collect()
+    };
+    let mut partitions: Vec<Vec<usize>> = Vec::new();
+    for (index, row) in sorted.into_iter().enumerate() {
+        if index % 1024 == 0 {
+            crate::expr_eval::check_expression_cancelled()?;
+        }
+        if let Some(last) = partitions.last_mut()
+            && peers(&partition_cols, last[0], row)?
+        {
+            last.push(row);
+        } else {
+            partitions.push(vec![row]);
+        }
     }
-
-    match name.to_uppercase().as_str() {
-        "COUNT" => {
-            let mut result = vec![0i64; num_rows];
-            for (_, rows) in partitions {
-                let count = if let Some(ref col) = col {
-                    rows.iter().filter(|&&r| !col.is_null(r)).count() as i64
-                } else {
-                    rows.len() as i64
-                };
-                for &row in rows {
-                    result[row] = count;
-                }
-            }
-            Ok(Arc::new(Int64Array::from(result)))
-        }
-        "SUM" => {
-            let col =
-                col.ok_or_else(|| KaveonError::Execution("SUM requires a column argument".into()))?;
-            let mut result = vec![0.0f64; num_rows];
-            for (_, rows) in partitions {
-                let sum = sum_values(&col, rows)?;
-                for &row in rows {
-                    result[row] = sum;
-                }
-            }
-            Ok(Arc::new(Float64Array::from(result)))
-        }
-        "AVG" => {
-            let col =
-                col.ok_or_else(|| KaveonError::Execution("AVG requires a column argument".into()))?;
-            let mut result: Vec<Option<f64>> = vec![None; num_rows];
-            for (_, rows) in partitions {
-                let (sum, count) = sum_count_values(&col, rows)?;
-                let avg = if count > 0 {
-                    Some(sum / count as f64)
-                } else {
-                    None
-                };
-                for &row in rows {
-                    result[row] = avg;
-                }
-            }
-            Ok(Arc::new(Float64Array::from(result)))
-        }
-        "MIN" => {
-            let col =
-                col.ok_or_else(|| KaveonError::Execution("MIN requires a column argument".into()))?;
-            let mut result: Vec<Option<f64>> = vec![None; num_rows];
-            for (_, rows) in partitions {
-                let min = min_max_values(&col, rows, true)?;
-                for &row in rows {
-                    result[row] = min;
-                }
-            }
-            Ok(Arc::new(Float64Array::from(result)))
-        }
-        "MAX" => {
-            let col =
-                col.ok_or_else(|| KaveonError::Execution("MAX requires a column argument".into()))?;
-            let mut result: Vec<Option<f64>> = vec![None; num_rows];
-            for (_, rows) in partitions {
-                let max = min_max_values(&col, rows, false)?;
-                for &row in rows {
-                    result[row] = max;
-                }
-            }
-            Ok(Arc::new(Float64Array::from(result)))
-        }
-        _ => Err(KaveonError::Execution(format!(
-            "unsupported aggregate window: {name}"
-        ))),
-    }
-}
-
-fn eval_framed_aggregate(
-    name: &str,
-    col: &Option<ArrayRef>,
-    partitions: &PartitionMap,
-    sort_order: Option<&[usize]>,
-    num_rows: usize,
-    frame: Option<&kaveon_core::WindowFrame>,
-) -> Result<ArrayRef> {
-    use kaveon_core::{WindowFrameBound, WindowFrameUnits};
-
-    let default_frame = kaveon_core::WindowFrame {
+    let default_frame = WindowFrame {
         units: WindowFrameUnits::Range,
         start: WindowFrameBound::UnboundedPreceding,
         end: WindowFrameBound::CurrentRow,
     };
-    let frame = frame.unwrap_or(&default_frame);
-
-    let upper = name.to_uppercase();
-
-    match upper.as_str() {
-        "COUNT" => {
-            let mut result = vec![0i64; num_rows];
-            for (_, rows) in partitions {
-                let sorted = sort_partition(rows, sort_order);
-                for (pos, &row) in sorted.iter().enumerate() {
-                    let (start, end) = frame_bounds(frame, pos, sorted.len());
-                    let count = if let Some(c) = col {
-                        (start..=end).filter(|&i| !c.is_null(sorted[i])).count() as i64
+    let frame = frame.as_ref().unwrap_or(&default_frame);
+    validate_frame(frame, &order_cols, order_by.len())?;
+    let col = args
+        .first()
+        .filter(|e| !matches!(e, Expr::Star))
+        .map(|e| crate::expr_eval::evaluate(e, batch))
+        .transpose()?;
+    let mut indices = vec![None; batch.num_rows()];
+    let mut ints = vec![0i64; batch.num_rows()];
+    let mut aggregate_results: Vec<(usize, ArrayRef)> = Vec::new();
+    let offset = if name == "LAG" || name == "LEAD" {
+        literal_offset(args.get(1), 1, false)?
+    } else {
+        0
+    };
+    let tiles = if name == "NTILE" {
+        literal_offset(args.first(), 0, true)?
+    } else {
+        1
+    };
+    if matches!(
+        name.as_str(),
+        "LAG" | "LEAD" | "FIRST_VALUE" | "LAST_VALUE" | "SUM" | "AVG" | "MIN" | "MAX"
+    ) && col.is_none()
+    {
+        return Err(error(format!("{name} requires a value argument")));
+    }
+    for rows in partitions {
+        let mut starts = vec![0];
+        let mut group = vec![0; rows.len()];
+        for i in 1..rows.len() {
+            if !peers(&order_cols, rows[i - 1], rows[i])? {
+                starts.push(i);
+            }
+            group[i] = starts.len() - 1;
+        }
+        starts.push(rows.len());
+        for (pos, &row) in rows.iter().enumerate() {
+            if pos % 64 == 0 {
+                crate::expr_eval::check_expression_cancelled()?;
+            }
+            match name.as_str() {
+                "ROW_NUMBER" => ints[row] = pos as i64 + 1,
+                "RANK" => ints[row] = starts[group[pos]] as i64 + 1,
+                "DENSE_RANK" => ints[row] = group[pos] as i64 + 1,
+                "NTILE" => {
+                    let large = rows.len() % tiles;
+                    let size = rows.len() / tiles;
+                    let boundary = (size + 1) * large;
+                    ints[row] = if pos < boundary {
+                        pos / (size + 1) + 1
                     } else {
-                        (end - start + 1) as i64
-                    };
-                    result[row] = count;
+                        large + (pos - boundary) / size + 1
+                    } as i64;
                 }
-            }
-            Ok(Arc::new(Int64Array::from(result)))
-        }
-        "SUM" => {
-            let col = col
-                .as_ref()
-                .ok_or_else(|| KaveonError::Execution("SUM requires a column".into()))?;
-            let mut result = vec![0.0f64; num_rows];
-            for (_, rows) in partitions {
-                let sorted = sort_partition(rows, sort_order);
-                for (pos, &row) in sorted.iter().enumerate() {
-                    let (start, end) = frame_bounds(frame, pos, sorted.len());
-                    let window_rows: Vec<usize> = (start..=end).map(|i| sorted[i]).collect();
-                    result[row] = sum_values(col, &window_rows)?;
-                }
-            }
-            Ok(Arc::new(Float64Array::from(result)))
-        }
-        "AVG" => {
-            let col = col
-                .as_ref()
-                .ok_or_else(|| KaveonError::Execution("AVG requires a column".into()))?;
-            let mut result: Vec<Option<f64>> = vec![None; num_rows];
-            for (_, rows) in partitions {
-                let sorted = sort_partition(rows, sort_order);
-                for (pos, &row) in sorted.iter().enumerate() {
-                    let (start, end) = frame_bounds(frame, pos, sorted.len());
-                    let window_rows: Vec<usize> = (start..=end).map(|i| sorted[i]).collect();
-                    let (sum, count) = sum_count_values(col, &window_rows)?;
-                    result[row] = if count > 0 {
-                        Some(sum / count as f64)
+                "LAG" | "LEAD" => {
+                    let source = if name == "LAG" {
+                        pos.checked_sub(offset)
                     } else {
-                        None
+                        pos.checked_add(offset).filter(|&i| i < rows.len())
                     };
+                    indices[row] = source.map(|i| rows[i] as u32);
                 }
-            }
-            Ok(Arc::new(Float64Array::from(result)))
-        }
-        "MIN" => {
-            let col = col
-                .as_ref()
-                .ok_or_else(|| KaveonError::Execution("MIN requires a column".into()))?;
-            let mut result: Vec<Option<f64>> = vec![None; num_rows];
-            for (_, rows) in partitions {
-                let sorted = sort_partition(rows, sort_order);
-                for (pos, &row) in sorted.iter().enumerate() {
-                    let (start, end) = frame_bounds(frame, pos, sorted.len());
-                    let window_rows: Vec<usize> = (start..=end).map(|i| sorted[i]).collect();
-                    result[row] = min_max_values(col, &window_rows, true)?;
+                "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "FIRST_VALUE" | "LAST_VALUE" => {
+                    let (start, end) =
+                        frame_bounds(frame, pos, &rows, &starts, &group, &order_cols, order_by)?;
+                    let selected = &rows[start..end];
+                    match name.as_str() {
+                        "COUNT" => {
+                            ints[row] = selected
+                                .iter()
+                                .filter(|&&i| col.as_ref().is_none_or(|c| !c.is_null(i)))
+                                .count() as i64
+                        }
+                        "FIRST_VALUE" => indices[row] = selected.first().map(|&i| i as u32),
+                        "LAST_VALUE" => indices[row] = selected.last().map(|&i| i as u32),
+                        _ => aggregate_results
+                            .push((row, aggregate(&name, col.as_ref().unwrap(), selected)?)),
+                    }
                 }
+                _ => return Err(error(format!("unsupported window function: {name}"))),
             }
-            Ok(Arc::new(Float64Array::from(result)))
         }
-        "MAX" => {
-            let col = col
-                .as_ref()
-                .ok_or_else(|| KaveonError::Execution("MAX requires a column".into()))?;
-            let mut result: Vec<Option<f64>> = vec![None; num_rows];
-            for (_, rows) in partitions {
-                let sorted = sort_partition(rows, sort_order);
-                for (pos, &row) in sorted.iter().enumerate() {
-                    let (start, end) = frame_bounds(frame, pos, sorted.len());
-                    let window_rows: Vec<usize> = (start..=end).map(|i| sorted[i]).collect();
-                    result[row] = min_max_values(col, &window_rows, false)?;
-                }
+    }
+    match name.as_str() {
+        "ROW_NUMBER" | "RANK" | "DENSE_RANK" | "NTILE" | "COUNT" => {
+            Ok(Arc::new(Int64Array::from(ints)))
+        }
+        "LAG" | "LEAD" | "FIRST_VALUE" | "LAST_VALUE" => {
+            let col = col.as_ref().unwrap();
+            let output = take(col.as_ref(), &UInt32Array::from(indices.clone()), None)?;
+            if matches!(name.as_str(), "LAG" | "LEAD")
+                && let Some(default) = args.get(2)
+            {
+                let defaults = crate::expr_eval::evaluate(default, batch)?;
+                let defaults = arrow::compute::cast(&defaults, col.data_type())?;
+                let missing = arrow::array::BooleanArray::from(
+                    indices.iter().map(Option::is_none).collect::<Vec<_>>(),
+                );
+                return Ok(arrow::compute::kernels::zip::zip(
+                    &missing, &defaults, &output,
+                )?);
             }
-            Ok(Arc::new(Float64Array::from(result)))
+            Ok(output)
         }
-        _ => Err(KaveonError::Execution(format!(
-            "unsupported framed aggregate window: {name}"
-        ))),
+        "SUM" | "AVG" | "MIN" | "MAX" => {
+            if aggregate_results.is_empty() {
+                return Ok(arrow::array::new_empty_array(
+                    aggregate(&name, col.as_ref().unwrap(), &[])?.data_type(),
+                ));
+            }
+            aggregate_results.sort_by_key(|(row, _)| *row);
+            let arrays = aggregate_results
+                .iter()
+                .map(|(_, a)| a.as_ref())
+                .collect::<Vec<_>>();
+            Ok(arrow::compute::concat(&arrays)?)
+        }
+        _ => Err(error(format!("unsupported window function: {name}"))),
     }
 }
 
-fn sort_partition(rows: &[usize], sort_order: Option<&[usize]>) -> Vec<usize> {
-    let mut sorted = rows.to_vec();
-    if let Some(order) = sort_order {
-        sorted.sort_by_key(|&r| order[r]);
+fn literal_offset(expr: Option<&Expr>, default: usize, positive: bool) -> Result<usize> {
+    let value = match expr {
+        None => default,
+        Some(Expr::Literal(kaveon_core::predicate::ScalarValue::Int64(n))) if *n >= 0 => {
+            usize::try_from(*n).map_err(|_| error("window offset too large"))?
+        }
+        _ => return Err(error("window offset must be a nonnegative integer literal")),
+    };
+    if positive && value == 0 {
+        return Err(error("NTILE requires a positive integer"));
     }
-    sorted
+    Ok(value)
+}
+
+fn validate_frame(frame: &WindowFrame, cols: &[ArrayRef], order_count: usize) -> Result<()> {
+    use WindowFrameBound::*;
+    if matches!(frame.start, UnboundedFollowing) || matches!(frame.end, UnboundedPreceding) {
+        return Err(error("invalid unbounded window frame"));
+    }
+    let position = |b| match b {
+        UnboundedPreceding => i128::MIN,
+        Preceding(n) => -(n as i128),
+        CurrentRow => 0,
+        Following(n) => n as i128,
+        UnboundedFollowing => i128::MAX,
+    };
+    if position(frame.start) > position(frame.end) {
+        return Err(error("window frame start follows its end"));
+    }
+    if matches!(frame.units, WindowFrameUnits::Groups) && order_count == 0 {
+        return Err(error("GROUPS frame requires ORDER BY"));
+    }
+    if matches!(frame.units, WindowFrameUnits::Range)
+        && matches!(frame.start, Preceding(_) | Following(_))
+        || matches!(frame.units, WindowFrameUnits::Range)
+            && matches!(frame.end, Preceding(_) | Following(_))
+    {
+        if order_count != 1 {
+            return Err(error(
+                "RANGE with offsets requires exactly one ORDER BY expression",
+            ));
+        }
+        if !matches!(
+            cols[0].data_type(),
+            DataType::Int32
+                | DataType::Int64
+                | DataType::UInt64
+                | DataType::Float64
+                | DataType::Decimal128(_, _)
+        ) {
+            return Err(error(
+                "RANGE offsets support integer, decimal, and Float64 ordering",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn frame_bounds(
-    frame: &kaveon_core::WindowFrame,
+    frame: &WindowFrame,
     pos: usize,
-    partition_len: usize,
-) -> (usize, usize) {
-    use kaveon_core::WindowFrameBound;
-
-    let start = match frame.start {
-        WindowFrameBound::UnboundedPreceding => 0,
-        WindowFrameBound::Preceding(n) => pos.saturating_sub(n as usize),
-        WindowFrameBound::CurrentRow => pos,
-        WindowFrameBound::Following(n) => (pos + n as usize).min(partition_len - 1),
-        WindowFrameBound::UnboundedFollowing => partition_len - 1,
-    };
-    let end = match frame.end {
-        WindowFrameBound::UnboundedPreceding => 0,
-        WindowFrameBound::Preceding(n) => pos.saturating_sub(n as usize),
-        WindowFrameBound::CurrentRow => pos,
-        WindowFrameBound::Following(n) => (pos + n as usize).min(partition_len - 1),
-        WindowFrameBound::UnboundedFollowing => partition_len - 1,
-    };
-    (start, end)
-}
-
-fn sum_values(col: &ArrayRef, rows: &[usize]) -> Result<f64> {
-    let mut sum = 0.0;
-    for &row in rows {
-        if col.is_null(row) {
-            continue;
+    rows: &[usize],
+    starts: &[usize],
+    groups: &[usize],
+    cols: &[ArrayRef],
+    order: &[(Expr, bool)],
+) -> Result<(usize, usize)> {
+    use WindowFrameBound::*;
+    let bound = |b: WindowFrameBound, end: bool| -> Result<usize> {
+        if matches!(b, UnboundedPreceding) {
+            return Ok(0);
         }
-        sum += to_f64(col, row)?;
-    }
-    Ok(sum)
-}
-
-fn sum_count_values(col: &ArrayRef, rows: &[usize]) -> Result<(f64, usize)> {
-    let mut sum = 0.0;
-    let mut count = 0;
-    for &row in rows {
-        if col.is_null(row) {
-            continue;
+        if matches!(b, UnboundedFollowing) {
+            return Ok(rows.len());
         }
-        sum += to_f64(col, row)?;
-        count += 1;
-    }
-    Ok((sum, count))
-}
-
-fn min_max_values(col: &ArrayRef, rows: &[usize], is_min: bool) -> Result<Option<f64>> {
-    let mut result: Option<f64> = None;
-    for &row in rows {
-        if col.is_null(row) {
-            continue;
+        if matches!(
+            frame.units,
+            WindowFrameUnits::Rows | WindowFrameUnits::Groups
+        ) {
+            let base = if matches!(frame.units, WindowFrameUnits::Rows) {
+                pos
+            } else {
+                groups[pos]
+            } as i128;
+            let target =
+                base + match b {
+                    Preceding(n) => -(n as i128),
+                    Following(n) => n as i128,
+                    _ => 0,
+                } + i128::from(end);
+            let count = if matches!(frame.units, WindowFrameUnits::Rows) {
+                rows.len()
+            } else {
+                starts.len() - 1
+            };
+            let index = target.clamp(0, count as i128) as usize;
+            return Ok(if matches!(frame.units, WindowFrameUnits::Rows) {
+                index
+            } else {
+                starts[index]
+            });
         }
-        let v = to_f64(col, row)?;
-        result = Some(match result {
-            None => v,
-            Some(current) => {
-                if is_min {
-                    current.min(v)
-                } else {
-                    current.max(v)
-                }
+        if matches!(b, CurrentRow) || cols.first().is_some_and(|c| c.is_null(rows[pos])) {
+            return Ok(starts[groups[pos] + usize::from(end)]);
+        }
+        let amount = match b {
+            Preceding(n) => -(n as i128),
+            Following(n) => n as i128,
+            _ => unreachable!(),
+        };
+        let ascending = order[0].1;
+        for (i, &row) in rows.iter().enumerate() {
+            // NULLS LAST independently of direction; a finite boundary never includes NULL.
+            if cols[0].is_null(row) {
+                return Ok(i);
             }
-        });
-    }
-    Ok(result)
+            let mut cmp = compare_offset(
+                &cols[0],
+                row,
+                rows[pos],
+                if ascending { amount } else { -amount },
+            )?;
+            if !ascending {
+                cmp = cmp.reverse();
+            }
+            if cmp == Ordering::Greater || (!end && cmp == Ordering::Equal) {
+                return Ok(i);
+            }
+        }
+        Ok(rows.len())
+    };
+    let start = bound(frame.start, false)?;
+    let end = bound(frame.end, true)?;
+    Ok((start.min(end), end))
 }
 
-fn to_f64(col: &ArrayRef, row: usize) -> Result<f64> {
-    match col.data_type() {
-        DataType::Int32 => Ok(col.as_primitive::<arrow::datatypes::Int32Type>().value(row) as f64),
-        DataType::Int64 => Ok(col.as_primitive::<Int64Type>().value(row) as f64),
-        DataType::UInt64 => Ok(col
-            .as_primitive::<arrow::datatypes::UInt64Type>()
-            .value(row) as f64),
-        DataType::Float64 => Ok(col.as_primitive::<Float64Type>().value(row)),
+fn compare_offset(col: &ArrayRef, row: usize, current: usize, offset: i128) -> Result<Ordering> {
+    let pair = match col.data_type() {
+        DataType::Int32 => (
+            col.as_primitive::<Int32Type>().value(row) as i128,
+            col.as_primitive::<Int32Type>().value(current) as i128,
+            offset,
+        ),
+        DataType::Int64 => (
+            col.as_primitive::<Int64Type>().value(row) as i128,
+            col.as_primitive::<Int64Type>().value(current) as i128,
+            offset,
+        ),
+        DataType::UInt64 => (
+            col.as_primitive::<UInt64Type>().value(row) as i128,
+            col.as_primitive::<UInt64Type>().value(current) as i128,
+            offset,
+        ),
         DataType::Decimal128(_, scale) => {
-            let arr = col
-                .as_any()
-                .downcast_ref::<arrow::array::Decimal128Array>()
-                .expect("Decimal128");
-            Ok(arr.value(row) as f64 / 10f64.powi(*scale as i32))
-        }
-        dt => Err(KaveonError::Execution(format!(
-            "cannot convert {dt} to numeric for window aggregate"
-        ))),
-    }
-}
-
-fn extract_value(array: &dyn Array, row: usize) -> Result<AggregateValue> {
-    if array.is_null(row) {
-        return Ok(AggregateValue::Null);
-    }
-    match array.data_type() {
-        DataType::Boolean => Ok(AggregateValue::Bool(array.as_boolean().value(row))),
-        DataType::Int32 => Ok(AggregateValue::Int32(
-            array
-                .as_primitive::<arrow::datatypes::Int32Type>()
-                .value(row),
-        )),
-        DataType::Int64 => Ok(AggregateValue::Int64(
-            array.as_primitive::<Int64Type>().value(row),
-        )),
-        DataType::UInt64 => Ok(AggregateValue::Int64(
-            array
-                .as_primitive::<arrow::datatypes::UInt64Type>()
-                .value(row) as i64,
-        )),
-        DataType::Float64 => {
-            let v = array.as_primitive::<Float64Type>().value(row);
-            Ok(AggregateValue::Float64Bits(v.to_bits()))
-        }
-        DataType::Utf8 => Ok(AggregateValue::Utf8(
-            array
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .expect("Utf8")
-                .value(row)
-                .to_owned(),
-        )),
-        dt => Err(KaveonError::Execution(format!(
-            "unsupported type for partitioning: {dt}"
-        ))),
-    }
-}
-
-fn compare_array_values(array: &dyn Array, a: usize, b: usize) -> std::cmp::Ordering {
-    if array.is_null(a) && array.is_null(b) {
-        return std::cmp::Ordering::Equal;
-    }
-    if array.is_null(a) {
-        return std::cmp::Ordering::Greater;
-    }
-    if array.is_null(b) {
-        return std::cmp::Ordering::Less;
-    }
-    match array.data_type() {
-        DataType::Int32 => {
-            let arr = array.as_primitive::<arrow::datatypes::Int32Type>();
-            arr.value(a).cmp(&arr.value(b))
-        }
-        DataType::Int64 => {
-            let arr = array.as_primitive::<Int64Type>();
-            arr.value(a).cmp(&arr.value(b))
-        }
-        DataType::UInt64 => {
-            let arr = array.as_primitive::<arrow::datatypes::UInt64Type>();
-            arr.value(a).cmp(&arr.value(b))
+            if *scale < 0 {
+                return Err(error(
+                    "RANGE offsets with negative decimal scale are unsupported",
+                ));
+            }
+            let factor = 10i128
+                .checked_pow(*scale as u32)
+                .ok_or_else(|| error("decimal RANGE offset overflow"))?;
+            let col = col.as_primitive::<arrow::datatypes::Decimal128Type>();
+            (
+                col.value(row),
+                col.value(current),
+                offset
+                    .checked_mul(factor)
+                    .ok_or_else(|| error("decimal RANGE offset overflow"))?,
+            )
         }
         DataType::Float64 => {
-            let arr = array.as_primitive::<Float64Type>();
-            arr.value(a).total_cmp(&arr.value(b))
+            let col = col.as_primitive::<Float64Type>();
+            let left = col.value(row);
+            let right = col.value(current) + offset as f64;
+            return Ok(if left.is_nan() {
+                if right.is_nan() {
+                    Ordering::Equal
+                } else {
+                    Ordering::Greater
+                }
+            } else if right.is_nan() {
+                Ordering::Less
+            } else {
+                left.partial_cmp(&right).unwrap()
+            });
         }
-        DataType::Utf8 => {
-            let arr = array.as_any().downcast_ref::<StringArray>().expect("Utf8");
-            arr.value(a).cmp(arr.value(b))
+        _ => return Err(error("unsupported RANGE offset type")),
+    };
+    Ok(match pair.1.checked_add(pair.2) {
+        Some(target) => pair.0.cmp(&target),
+        None if pair.2 > 0 => Ordering::Less,
+        None => Ordering::Greater,
+    })
+}
+
+fn aggregate(name: &str, col: &ArrayRef, rows: &[usize]) -> Result<ArrayRef> {
+    let rows = rows
+        .iter()
+        .copied()
+        .filter(|&r| !col.is_null(r))
+        .collect::<Vec<_>>();
+    if name == "MIN" || name == "MAX" {
+        let mut selected = rows.first().copied();
+        for &row in &rows {
+            if let Some(best) = selected
+                && compare(col, row, best)?
+                    == if name == "MIN" {
+                        Ordering::Less
+                    } else {
+                        Ordering::Greater
+                    }
+            {
+                selected = Some(row);
+            }
         }
-        _ => std::cmp::Ordering::Equal,
+        return Ok(take(
+            col.as_ref(),
+            &UInt32Array::from(vec![selected.map(|r| r as u32)]),
+            None,
+        )?);
+    }
+    if name == "SUM" && matches!(col.data_type(), DataType::Int32 | DataType::Int64) {
+        let mut sum = 0i128;
+        for &row in &rows {
+            sum += if matches!(col.data_type(), DataType::Int32) {
+                col.as_primitive::<Int32Type>().value(row) as i128
+            } else {
+                col.as_primitive::<Int64Type>().value(row) as i128
+            };
+        }
+        let sum = i64::try_from(sum).map_err(|_| error("window SUM integer overflow"))?;
+        return Ok(Arc::new(Int64Array::from(vec![
+            (!rows.is_empty()).then_some(sum),
+        ])));
+    }
+    if name == "SUM"
+        && let DataType::Decimal128(_, scale) = col.data_type()
+    {
+        let values = col.as_primitive::<arrow::datatypes::Decimal128Type>();
+        let mut sum = 0i128;
+        for &row in &rows {
+            sum = sum
+                .checked_add(values.value(row))
+                .ok_or_else(|| error("window decimal SUM overflow"))?;
+        }
+        let array = arrow::array::Decimal128Array::from(vec![(!rows.is_empty()).then_some(sum)])
+            .with_precision_and_scale(38, *scale)?;
+        array.validate_decimal_precision(38)?;
+        return Ok(Arc::new(array));
+    }
+    if !matches!(
+        col.data_type(),
+        DataType::Int32 | DataType::Int64 | DataType::UInt64 | DataType::Float64
+    ) {
+        return Err(error(format!(
+            "{name} window does not support {}",
+            col.data_type()
+        )));
+    }
+    if name == "SUM" && matches!(col.data_type(), DataType::UInt64) {
+        return Err(error("UInt64 window SUM requires an explicit cast"));
+    }
+    let cast = arrow::compute::cast(col, &DataType::Float64)?;
+    let values = cast.as_primitive::<Float64Type>();
+    let sum: f64 = rows.iter().map(|&r| values.value(r)).sum();
+    Ok(Arc::new(Float64Array::from(vec![
+        (!rows.is_empty()).then_some(if name == "AVG" {
+            sum / rows.len() as f64
+        } else {
+            sum
+        }),
+    ])))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kaveon_core::predicate::ScalarValue;
+    fn batch(values: Vec<Option<i64>>) -> RecordBatch {
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, true)])),
+            vec![Arc::new(Int64Array::from(values))],
+        )
+        .unwrap()
+    }
+    fn expression(name: &str, frame: Option<WindowFrame>) -> Expr {
+        Expr::WindowFunction {
+            name: name.into(),
+            args: vec![if name == "COUNT" {
+                Expr::Star
+            } else {
+                Expr::Column("x".into())
+            }],
+            partition_by: vec![],
+            order_by: vec![(Expr::Column("x".into()), true)],
+            frame,
+        }
+    }
+    fn ints(expr: Expr, input: &RecordBatch) -> Vec<Option<i64>> {
+        evaluate_window(&expr, input)
+            .unwrap()
+            .as_primitive::<Int64Type>()
+            .iter()
+            .collect()
+    }
+    fn frame(
+        units: WindowFrameUnits,
+        start: WindowFrameBound,
+        end: WindowFrameBound,
+    ) -> Option<WindowFrame> {
+        Some(WindowFrame { units, start, end })
+    }
+    #[test]
+    fn range_default_and_groups_preserve_null_and_duplicate_peers() {
+        use WindowFrameBound::*;
+        use WindowFrameUnits::*;
+        let input = batch(vec![Some(1), Some(1), Some(2), Some(4), None]);
+        assert_eq!(
+            ints(expression("COUNT", None), &input),
+            vec![Some(2), Some(2), Some(3), Some(4), Some(5)]
+        );
+        assert_eq!(
+            ints(
+                expression("COUNT", frame(Groups, Preceding(1), CurrentRow)),
+                &input
+            ),
+            vec![Some(2), Some(2), Some(3), Some(2), Some(2)]
+        );
+        assert_eq!(
+            ints(
+                expression("COUNT", frame(Range, Preceding(1), CurrentRow)),
+                &input
+            ),
+            vec![Some(2), Some(2), Some(3), Some(1), Some(1)]
+        );
+        assert_eq!(
+            ints(
+                expression("COUNT", frame(Range, CurrentRow, CurrentRow)),
+                &input
+            ),
+            vec![Some(2), Some(2), Some(1), Some(1), Some(1)]
+        );
+    }
+    #[test]
+    fn empty_frames_and_all_null_sum_follow_sql() {
+        use WindowFrameBound::*;
+        use WindowFrameUnits::*;
+        let input = batch(vec![Some(1), Some(2), None]);
+        let following = frame(Rows, Following(1), Following(1));
+        assert_eq!(
+            ints(expression("COUNT", following), &input),
+            vec![Some(1), Some(1), Some(0)]
+        );
+        assert_eq!(
+            ints(expression("SUM", following), &input),
+            vec![Some(2), None, None]
+        );
+        let preceding = frame(Rows, Preceding(2), Preceding(1));
+        assert_eq!(
+            ints(expression("COUNT", preceding), &input),
+            vec![Some(0), Some(1), Some(2)]
+        );
+        assert_eq!(
+            ints(
+                expression(
+                    "COUNT",
+                    frame(Rows, Following(u64::MAX), Following(u64::MAX))
+                ),
+                &input
+            ),
+            vec![Some(0); 3]
+        );
+    }
+    #[test]
+    fn ranks_tiles_and_value_functions() {
+        use WindowFrameBound::*;
+        use WindowFrameUnits::*;
+        let input = batch(vec![Some(1), Some(1), Some(2), Some(3), Some(4), Some(5)]);
+        assert_eq!(
+            ints(expression("RANK", None), &input),
+            vec![Some(1), Some(1), Some(3), Some(4), Some(5), Some(6)]
+        );
+        assert_eq!(
+            ints(expression("DENSE_RANK", None), &input),
+            vec![Some(1), Some(1), Some(2), Some(3), Some(4), Some(5)]
+        );
+        let mut tile = expression("NTILE", None);
+        if let Expr::WindowFunction { args, .. } = &mut tile {
+            *args = vec![Expr::Literal(ScalarValue::Int64(4))];
+        }
+        assert_eq!(
+            ints(tile, &input),
+            vec![Some(1), Some(1), Some(2), Some(2), Some(3), Some(4)]
+        );
+        assert_eq!(
+            ints(
+                expression("LAST_VALUE", frame(Rows, CurrentRow, CurrentRow)),
+                &input
+            ),
+            vec![Some(1), Some(1), Some(2), Some(3), Some(4), Some(5)]
+        );
+        let mut lag = expression("LAG", None);
+        if let Expr::WindowFunction { args, .. } = &mut lag {
+            args.extend([
+                Expr::Literal(ScalarValue::Int64(1)),
+                Expr::Literal(ScalarValue::Int64(99)),
+            ]);
+        }
+        assert_eq!(
+            ints(lag, &input),
+            vec![Some(99), Some(1), Some(1), Some(2), Some(3), Some(4)]
+        );
+    }
+    #[test]
+    fn range_descending_and_large_integer_precision() {
+        use WindowFrameBound::*;
+        use WindowFrameUnits::*;
+        let input = batch(vec![
+            Some(9007199254740992),
+            Some(9007199254740993),
+            Some(9007199254740994),
+            None,
+        ]);
+        let mut expr = expression("COUNT", frame(Range, CurrentRow, Following(1)));
+        if let Expr::WindowFunction { order_by, .. } = &mut expr {
+            order_by[0].1 = false;
+        }
+        assert_eq!(ints(expr, &input), vec![Some(1), Some(2), Some(2), Some(1)]);
+        assert_eq!(
+            ints(expression("MIN", None), &input),
+            vec![Some(9007199254740992); 4]
+        );
+    }
+    #[test]
+    fn invalid_frames_and_offsets_fail_even_on_empty_input() {
+        use WindowFrameBound::*;
+        use WindowFrameUnits::*;
+        let input = batch(vec![]);
+        assert!(
+            evaluate_window(
+                &expression("COUNT", frame(Rows, Following(1), CurrentRow)),
+                &input
+            )
+            .is_err()
+        );
+        let mut lag = expression("LAG", None);
+        if let Expr::WindowFunction { args, .. } = &mut lag {
+            args.push(Expr::Literal(ScalarValue::Int64(-1)));
+        }
+        assert!(evaluate_window(&lag, &input).is_err());
+    }
+    struct Source {
+        schema: SchemaRef,
+        batch: Option<RecordBatch>,
+    }
+    impl BatchOperator for Source {
+        fn schema(&self) -> &SchemaRef {
+            &self.schema
+        }
+        fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+            Ok(self.batch.take())
+        }
+    }
+    #[test]
+    fn projection_binds_distinct_frames_before_execution() {
+        use WindowFrameBound::*;
+        use WindowFrameUnits::*;
+        let input = batch(vec![Some(1), Some(1), Some(2)]);
+        let first = expression("COUNT", None);
+        let second = expression("COUNT", frame(Rows, CurrentRow, CurrentRow));
+        let source = Box::new(Source {
+            schema: input.schema(),
+            batch: Some(input),
+        });
+        let window = WindowOperator::new(source, vec![first.clone(), second.clone()]).unwrap();
+        let mut project =
+            crate::project::ProjectOperator::new(Box::new(window), vec![first, second]).unwrap();
+        assert_eq!(project.schema().fields().len(), 2);
+        let result = project.next_batch().unwrap().unwrap();
+        assert_eq!(
+            result
+                .column(0)
+                .as_primitive::<Int64Type>()
+                .values()
+                .as_ref(),
+            &[2, 2, 3]
+        );
+        assert_eq!(
+            result
+                .column(1)
+                .as_primitive::<Int64Type>()
+                .values()
+                .as_ref(),
+            &[1, 1, 1]
+        );
     }
 }

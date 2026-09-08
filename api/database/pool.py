@@ -884,6 +884,7 @@ def _resolve_data_source(database: str) -> Optional[Dict[str, Any]]:
     Dialect-aware: uses %s / TRUE against a Postgres/MySQL metadata DB and ? / 1
     against Fabric/Azure SQL.
     """
+    from services.credentials import source_for_use, CredentialError
     meta_db = _live_meta_db()
     if meta_db not in _pools:
         return None
@@ -896,25 +897,27 @@ def _resolve_data_source(database: str) -> Optional[Dict[str, Any]]:
         conn = meta_pool.get_connection()
         # Try by database_name first, then by id (callers may pass either)
         result = conn.execute_query(
-            f"SELECT type, connection_string, database_name "
+            f"SELECT id, type, connection_string, database_name "
             f"FROM data_sources "
             f"WHERE database_name = {ph} AND is_active = {active} ORDER BY id DESC",
             [database],
         )
         rows = result["rows_objects"]
         if rows:
-            return rows[0]
+            return source_for_use(rows[0], conn, ph)
         # Fallback: try matching by id (e.g. "31" passed as database)
         if database.isdigit():
             result = conn.execute_query(
-                f"SELECT type, connection_string, database_name "
+                f"SELECT id, type, connection_string, database_name "
                 f"FROM data_sources "
                 f"WHERE id = {ph} AND is_active = {active} ORDER BY id DESC",
                 [int(database)],
             )
             rows = result["rows_objects"]
-            return rows[0] if rows else None
+            return source_for_use(rows[0], conn, ph) if rows else None
         return None
+    except CredentialError:
+        raise
     except Exception as e:
         print(f"[Pool] Could not resolve data source {database}: {e}")
         return None
@@ -925,6 +928,7 @@ def _resolve_data_source(database: str) -> Optional[Dict[str, Any]]:
 
 def _resolve_endpoint(database: str) -> str:
     """Query data_sources in the metadata DB to find the endpoint for *database*."""
+    from services.credentials import source_for_use, CredentialError
     meta_db = _live_meta_db()
     if meta_db not in _pools:
         # Metadata pool not yet created — fall back to env var
@@ -935,14 +939,16 @@ def _resolve_endpoint(database: str) -> str:
     try:
         conn = meta_pool.get_connection()
         result = conn.execute_query(
-            "SELECT connection_string FROM data_sources "
+            "SELECT id, connection_string FROM data_sources "
             "WHERE database_name = ? AND is_active = 1 "
             "ORDER BY id DESC",
             [database],
         )
         if result["rows_objects"]:
-            return result["rows_objects"][0].get("connection_string", "")
+            return source_for_use(result["rows_objects"][0], conn, "?")["connection_string"]
         return settings.DATAWAREHOUSE_ENDPOINT or ""
+    except CredentialError:
+        raise
     except Exception as e:
         print(f"[Pool] Could not resolve endpoint for {database}: {e}")
         return settings.DATAWAREHOUSE_ENDPOINT or ""

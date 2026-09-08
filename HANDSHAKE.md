@@ -66,6 +66,58 @@
 
 ## Interface contracts
 
+### Paused validation checkpoint — September 8
+
+Latest user instruction supersedes automatic performance pursuit: properly test
+the current checkpoint, commit/push all changes, then pause for a joint review.
+328 workspace tests, formatting and strict Clippy pass. Fresh frozen-native
+qualification passes 37 five-worker SQL cases plus concurrency/worker loss,
+11 local pressure cases, 10 distributed pressure cases, and a 600-second soak
+with 4,171 exact queries/23 cancellation cycles/zero retained files. Claude's
+01bdd86 boolean data-source change passes actual Studio/API/PostgreSQL CRUD and
+encryption checks. Preserve Claude's four Studio documentation edits in this
+commit. See `docs/engineering/checkpoint-2026-09-08.md` and the new AKS plan.
+Do not resume features, performance tuning or AKS provisioning until the user
+resumes that work. The 8/10 and 1.9× targets remain unproved.
+
+### Active multi-agent qualification work — 2026-09-05
+
+September 8 continuation: the interrupted adaptive implementation is validated
+(98 executor tests, 36 core tests, strict Clippy). Combined workspace tests and
+strict Clippy pass. Full local Compose is healthy and an actual Studio/API/Engine
+fixture query returns exact results. API async-job ownership/deletion races are
+fixed with five new tests (26 API checks total). The first parallelism=4 matched
+benchmark exposed a local/final aggregate output-name mismatch; benchmark review
+owns the narrow planner/finalizer correction and end-to-end regression. Preserve
+the failed r3 report; neither the 8/10 nor 1.9× throughput target is yet proved.
+
+Later September 8: fixed the parallel name/nullability mismatch, implemented
+8192-row streaming hash joins with complete adaptive/spill draining, typed Int64
+TopN selection, exact local metadata COUNT(*) and Delta row-group predicate
+propagation (local/object readers, server/CLI/fragments). r6 passes all12 extended
+queries on five million rows/100,000 customers. Rating estimate remains7.4/10;
+the old six-query ratio ~1.05× is diagnostic, not the publication gate. Stability
+agent owns current frozen-native smoke/pressure/600s soak. Avoid engine edits
+during this checkpoint; primary owns broader benchmark protocol/reporting.
+
+The architect authorized all production-readiness work with multiple agents.
+SQL correctness owns SQL planning, window/semi-join execution and the corresponding
+CLI/server planner wiring. Memory work owns core memory and aggregate/join/spill
+operators. Security/integration owns server auth/config/API and API-to-Engine
+identity/catalog integration; this explicitly extends the API ownership boundary
+for that work. The primary agent owns storage, optimizer, qualification and final
+integration. Coordinate shared-file edits before applying them. Preserve unrelated
+concurrent changes and do not publish or claim production qualification without
+measured evidence.
+
+The architect subsequently requested persistence until an evidence-backed 8/10
+rating and a measured “90% better than Trino” result. The performance metric is
+pending clarification; no blanket superiority claim is authorized by current
+evidence. See `docs/engineering/engine-readiness-qualification.md`. SQL correctness
+also owns Iceberg reader/wiring; security/integration owns exchange retry/disk
+transport fixes; memory owns the pressure harness. The primary agent retains
+Delta snapshots, conservative join optimization and cross-engine qualification.
+
 ### Catalog hierarchy (Trino-style)
 
 ```rust
@@ -156,6 +208,41 @@ pub enum StoragePredicate {
 - **Codex** uses this for filter pushdown in optim
 
 ### SQL → Exec boundary
+
+Executable fragment protocol is v5 (snapshot pins and join qualifiers): `FragmentOperator::Window` carries complete
+window expressions; coordinators/workers must upgrade together. Window schemas
+are available before execution and projection resolves results by complete
+expression identity. `AntiJoin` implements SQL NULL-aware `NOT IN`; uncorrelated
+EXISTS/NOT EXISTS use constant keys for cardinality. Qualified correlated
+subqueries fail explicitly. ROWS/RANGE/GROUPS frames preserve peers and empty
+frames; unsupported window modifiers/type combinations fail explicitly.
+Grouped aggregate state format v2 carries declared Arrow key types in its key
+field metadata, including empty/all-NULL partitions. Exact UInt64/Decimal128 and
+date/timestamp keys preserve precision, scale, unit and timezone across partial
+encoding and final reconstruction. Mixed declared key schemas fail closed.
+Accumulator format v2 preserves result types in empty partials. Signed integer
+SUM/MIN/MAX and SUM DISTINCT remain exact above 2^53. UInt64 SUM/MIN/MAX and SUM
+DISTINCT preserve the unsigned domain. Decimal128 SUM/MIN/MAX and SUM DISTINCT
+use exact i128 state and preserve scale. Result overflow fails explicitly.
+Global aggregation avoids per-row empty-key hashing, and COUNT
+reduces whole batches.
+
+Server-local aggregation can opt into `KAVEON_LOCAL_PARALLELISM` (default 1,
+capped at available CPUs and 16). Worker channels hold at most two 8,192-row
+slices each; slices share one backing-buffer reservation. Operators are created
+inside worker threads and share the query memory/spill budgets. Typed partials
+use the same lazy final merge as distributed execution. Worker failures,
+cancellation and early drop join workers and release queued reservations.
+Upstream scans remain serial; CLI and distributed fragment execution do not
+use this opt-in local fanout.
+
+Iceberg reads require an immutable committed metadata JSON URI and pin its
+selected snapshot into worker fragments. Local, S3 and ADLS paths use v1/v2
+Avro manifests and Parquet. Flat field-ID evolution supports rename/reorder,
+nullable additions, integer/float widening and same-scale decimal widening.
+Active delete files, encryption, nested/default-valued fields and non-Parquet
+data fail explicitly. Injected object-store tests pass; live cloud credentials
+remain a separate qualification gate. Iceberg REST discovery is not implemented.
 
 ```rust
 // Defined in kaveon-sql::logical_plan
@@ -258,10 +345,11 @@ let reservation = operator.reserve(bytes)?;
 ```
 
 - Reservations atomically enforce the query-wide hard limit across operator accounts and release through RAII.
-- Coordinator submission reserves a complete query budget against the process admission ceiling. Local plans and worker fragments propagate pools into hash aggregate/join; embedded compatibility constructors remain opt-in.
-- Snapshots expose current and peak bytes for the query and operator. Hash aggregate/join fail closed at the limit; partitioned spill is not implemented.
+- Coordinator submission reserves a complete query budget against the process admission ceiling. Accounts/reservations retain the admission lease until the last worker reference is released. Local plans and worker fragments propagate pools through aggregate/join, sort/TopN, window, distinct/set/semi-join and expression workspaces.
+- `QueryMemoryPool::shared_resource` shares typed resources for the query lifetime. `KAVEON_HASH_SPILL_ROOT/BYTES/PARTITIONS` enables bounded Single/Partial/Final aggregate, join and sort/TopN paths. Fixed partitions fail closed under unsplittable skew; logical reservations are not a universal process RSS ceiling.
+- Query pool admission failures use `KaveonError::MemoryLimit`; adaptive hash aggregate/join retry only this variant before returning output. `KAVEON_HASH_ADAPTIVE_BYTES` bounds retained input prefixes (default pool/16 capped at 64 MiB, maximum pool/4, 64 batches/input); replay never rereads upstream. Semantic, I/O and cancellation failures do not trigger fallback.
 - `SpillManager` writes bounded Arrow IPC runs into collision-safe private directories, accounts current/peak disk bytes, rolls back failed writes, streams replacement runs, and removes runs through RAII.
-- Sort and TopN expose opt-in spill-aware constructors with a validated merge fan-in (16 by default). Multi-pass compaction and lazy final merge bound memory to the fan-in cursor batches plus one output batch; aggregate/join spill and admission control remain open.
+- Sort and TopN expose opt-in spill-aware constructors with a validated merge fan-in (16 by default). Cursor/workspace reservations, multi-pass compaction and copied output batches bound retained merge state; oversized input batches fail closed. See `docs/engineering/engine-memory-and-spill.md` for exact guarantees and remaining decoder/source/output-retention gaps.
 
 ### Distributed stage planning
 
@@ -348,6 +436,7 @@ let source = DeltaTableReader::new(table_directory)
 
 | Date | Engineer | What changed |
 |------|----------|-------------|
+| 2026-09-04 | Codex | Provisioned Windows Rust/MSVC, Python 3.11/ODBC, and Node 22 tooling; added session/environment checks and isolated Trino/PostgreSQL qualification services. 228 Rust tests, strict Clippy, native release/benchmark gates and Studio Docker build passed. New DuckDB/Trino reference harness passes five basic local/distributed cases and reproduces two wrong-result subqueries plus three window execution failures. See docs/engineering/development-environment.md. No Engine execution contract changed. |
 | 2026-09-01 | Claude | Created HANDSHAKE.md, defined shared types in core (BatchSource, BatchOperator, StoragePredicate) |
 | 2026-09-01 | Codex | Storage reader in progress against BatchSource/StoragePredicate contracts; fixed CatalogList::catalog_mut trait-object lifetime blocking workspace compilation |
 | 2026-09-01 | Claude | Added Expr/BinaryOp to core. Built production hash aggregate (GroupKey hashing, SUM/COUNT/AVG/MIN/MAX, null handling). Rewrote scan to consume BatchSource trait. Built filter operator with expression evaluator. Implemented SQL→LogicalPlan translator (SELECT/WHERE/GROUP BY/ORDER BY/LIMIT). Removed sql→exec circular dep. |

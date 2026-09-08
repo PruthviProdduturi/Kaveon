@@ -29,6 +29,7 @@ pub struct ParquetBatchIterator {
     schema: SchemaRef,
     inner: ParquetRecordBatchReader,
     metrics: ScanMetrics,
+    output_projection: Option<Vec<usize>>,
 }
 
 impl Iterator for ParquetBatchIterator {
@@ -44,6 +45,12 @@ impl Iterator for ParquetBatchIterator {
                     self.metrics.emitted(batch.num_rows());
                 })
                 .map_err(|error| storage_error(error.to_string()))
+                .and_then(|batch| match &self.output_projection {
+                    Some(indices) => batch
+                        .project(indices)
+                        .map_err(|e| storage_error(e.to_string())),
+                    None => Ok(batch),
+                })
         })
     }
 }
@@ -123,11 +130,13 @@ impl ParquetReader {
         metrics.file_opened();
         let builder = self.configure_builder(builder, &metrics)?;
         let inner = builder.build().map_err(parquet_error)?;
-        let schema = inner.schema();
+        let (schema, output_projection) =
+            ordered_projection(inner.schema(), self.columns.as_deref())?;
         Ok(ParquetBatchIterator {
             schema,
             inner,
             metrics,
+            output_projection,
         })
     }
 
@@ -214,6 +223,27 @@ fn record_selection_metrics(
         }
     }
     metrics.selected(rows, bytes);
+}
+
+/// Parquet ProjectionMask selects columns in physical file order. Reorder the
+/// decoded arrays and advertised schema together to honor requested scan order.
+pub(crate) fn ordered_projection(
+    schema: SchemaRef,
+    columns: Option<&[String]>,
+) -> Result<(SchemaRef, Option<Vec<usize>>)> {
+    let Some(columns) = columns else {
+        return Ok((schema, None));
+    };
+    let indices = projection_indices(&schema, columns)?;
+    if indices.iter().copied().eq(0..schema.fields().len()) {
+        return Ok((schema, None));
+    }
+    let output = Arc::new(
+        schema
+            .project(&indices)
+            .map_err(|e| storage_error(e.to_string()))?,
+    );
+    Ok((output, Some(indices)))
 }
 
 pub(crate) fn projection_indices(schema: &SchemaRef, columns: &[String]) -> Result<Vec<usize>> {
@@ -548,6 +578,42 @@ mod tests {
         assert_eq!(metadata.row_count, 6);
         assert_eq!(metadata.row_group_count, 2);
         assert_eq!(metadata.schema.fields().len(), 2);
+    }
+
+    #[test]
+    fn reversed_projection_agrees_for_empty_and_nonempty_partitions() {
+        let file = fixture();
+        let mut seen = Vec::new();
+        let mut schema = None;
+        for partition in 0..3 {
+            let mut source = ParquetReader::new(&file.0)
+                .with_columns(vec!["label".into(), "id".into()])
+                .with_partition(ScanPartition::new(partition, 3).unwrap())
+                .read()
+                .unwrap();
+            assert_eq!(source.schema().field(0).name(), "label");
+            assert_eq!(source.schema().field(1).name(), "id");
+            if let Some(schema) = &schema {
+                assert_eq!(source.schema(), schema);
+            } else {
+                schema = Some(source.schema().clone());
+            }
+            while let Some(batch) = source.next_batch().unwrap() {
+                assert_eq!(batch.schema(), schema.clone().unwrap());
+                seen.extend(
+                    batch
+                        .column(1)
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .unwrap()
+                        .values()
+                        .iter()
+                        .copied(),
+                );
+            }
+        }
+        seen.sort_unstable();
+        assert_eq!(seen, vec![0, 1, 2, 3, 4, 5]);
     }
 
     #[test]

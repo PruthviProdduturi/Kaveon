@@ -669,11 +669,28 @@ impl ResolvedTable {
                 container,
                 root_path,
             } => format!(
-                "abfss://{container}@{account}.dfs.core.windows.net/{root_path}/{}",
-                self.table.location
+                "abfss://{container}@{account}.dfs.core.windows.net/{}",
+                [
+                    root_path.trim_matches('/'),
+                    self.table.location.trim_matches('/')
+                ]
+                .into_iter()
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join("/")
             ),
             StorageType::S3 { bucket, prefix, .. } => {
-                format!("s3://{bucket}/{prefix}/{}", self.table.location)
+                format!(
+                    "s3://{bucket}/{}",
+                    [
+                        prefix.trim_matches('/'),
+                        self.table.location.trim_matches('/')
+                    ]
+                    .into_iter()
+                    .filter(|part| !part.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("/")
+                )
             }
         }
     }
@@ -843,7 +860,7 @@ mod tests {
         let resolved = mgr.resolve_table(&TableReference::parse("events")).unwrap();
         assert_eq!(
             resolved.full_path(),
-            "abfss://data@kaveonsa.dfs.core.windows.net/warehouse/events/"
+            "abfss://data@kaveonsa.dfs.core.windows.net/warehouse/events"
         );
         assert_eq!(resolved.table.access, AccessPattern::Optimized);
         assert_eq!(resolved.table.format, DataFormat::Delta);

@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use arrow::array::{ArrayRef, UInt32Builder};
+use arrow::array::{ArrayRef, AsArray, Float32Array, Float64Array, UInt32Builder};
 use arrow::compute::take;
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, SortField};
@@ -50,7 +50,51 @@ impl HashPartitioner {
         let key_columns = self
             .key_indices
             .iter()
-            .map(|index| batch.column(*index).clone())
+            .map(|index| {
+                let column = batch.column(*index);
+                // SQL hash equality treats signed zero and NaN payloads as the
+                // same key. Canonicalize before row encoding so partitions agree
+                // with hash aggregate/join key equality on every worker.
+                match column.data_type() {
+                    arrow::datatypes::DataType::Float64 => {
+                        std::sync::Arc::new(Float64Array::from_iter(
+                            column
+                                .as_primitive::<arrow::datatypes::Float64Type>()
+                                .iter()
+                                .map(|value| {
+                                    value.map(|value| {
+                                        if value == 0.0 {
+                                            0.0
+                                        } else if value.is_nan() {
+                                            f64::NAN
+                                        } else {
+                                            value
+                                        }
+                                    })
+                                }),
+                        )) as ArrayRef
+                    }
+                    arrow::datatypes::DataType::Float32 => {
+                        std::sync::Arc::new(Float32Array::from_iter(
+                            column
+                                .as_primitive::<arrow::datatypes::Float32Type>()
+                                .iter()
+                                .map(|value| {
+                                    value.map(|value| {
+                                        if value == 0.0 {
+                                            0.0
+                                        } else if value.is_nan() {
+                                            f32::NAN
+                                        } else {
+                                            value
+                                        }
+                                    })
+                                }),
+                        )) as ArrayRef
+                    }
+                    _ => column.clone(),
+                }
+            })
             .collect::<Vec<ArrayRef>>();
         let fields = key_columns
             .iter()
@@ -150,6 +194,34 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use std::sync::Arc;
+
+    #[test]
+    fn sql_equal_floats_share_hash_partitions() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "key",
+            DataType::Float64,
+            false,
+        )]));
+        let partitioner = HashPartitioner::try_new(&schema, &["key".into()], 17).unwrap();
+        let partition = |value| {
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(arrow::array::Float64Array::from(vec![value]))],
+            )
+            .unwrap();
+            partitioner
+                .partition(&batch)
+                .unwrap()
+                .iter()
+                .position(|batch| batch.num_rows() == 1)
+                .unwrap()
+        };
+        assert_eq!(partition(-0.0), partition(0.0));
+        assert_eq!(
+            partition(f64::NAN),
+            partition(f64::from_bits(0x7ff8_0000_0000_1234))
+        );
+    }
 
     fn batch() -> RecordBatch {
         let schema = Arc::new(Schema::new(vec![

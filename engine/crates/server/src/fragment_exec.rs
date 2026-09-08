@@ -2,9 +2,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use arrow::array::{
-    ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, StringArray, UInt64Array,
-};
+use arrow::array::{ArrayRef, Float64Array, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use kaveon_core::{
@@ -13,24 +11,29 @@ use kaveon_core::{
     Partitioning, QueryMemoryPool, Result,
 };
 use kaveon_exec::aggregate::{
-    AggExpr, AggFunc, AggregateState, AggregateValue, FinalAggregateValue, GroupedAggregateState,
-    HashAggregate, finalize_grouped_aggregate_states, grouped_aggregate_states_from_batches,
-    grouped_aggregate_states_to_batch, merge_grouped_aggregate_states,
+    AggExpr, AggFunc, AggregateState, FinalAggregateValue, GroupedAggregateState, HashAggregate,
+    finalize_grouped_aggregate_states, grouped_aggregate_key_types,
+};
+#[cfg(test)]
+use kaveon_exec::aggregate::{
+    grouped_aggregate_states_to_batch, grouped_aggregate_states_to_typed_batch,
 };
 use kaveon_exec::distinct::DistinctOperator;
 use kaveon_exec::exchange::HashPartitioner;
 use kaveon_exec::filter::FilterOperator;
-use kaveon_exec::join::{HashJoin, JoinType};
+use kaveon_exec::join::JoinType;
 use kaveon_exec::limit::LimitOperator;
 use kaveon_exec::offset::OffsetOperator;
 use kaveon_exec::project::ProjectOperator;
 use kaveon_exec::scan::ScanOperator;
 use kaveon_exec::setop::{SetOpMode, SetOpOperator};
-use kaveon_exec::sort::{SortExpr, SortOperator};
-use kaveon_exec::topn::TopNOperator;
+use kaveon_exec::sort::SortExpr;
 use kaveon_exec::union::UnionOperator;
 use kaveon_exec::window::WindowOperator;
-use kaveon_storage::{AdlsParquetReader, DeltaTableReader, ParquetReader, ScanPartition};
+use kaveon_storage::{
+    AdlsParquetReader, DeltaTableReader, ObjectDeltaReader, ObjectParquetReader, ParquetReader,
+    ScanPartition,
+};
 
 pub struct ExchangeBatches {
     pub schema: SchemaRef,
@@ -39,6 +42,14 @@ pub struct ExchangeBatches {
 
 pub trait ExchangeInputProvider {
     fn read(&self, exchange_id: &ExchangeId) -> Result<ExchangeBatches>;
+
+    /// Opens an exchange as a batch stream. Network-backed providers override
+    /// this to decode disk-spooled producer payloads one at a time; the default
+    /// preserves the in-memory test/embedded provider contract.
+    fn open(&self, exchange_id: &ExchangeId) -> Result<Box<dyn BatchOperator>> {
+        let input = self.read(exchange_id)?;
+        Ok(Box::new(BatchInput::new(input.schema, input.batches)))
+    }
 }
 
 pub struct FragmentExecution {
@@ -125,6 +136,20 @@ fn compile_node(
         FragmentOperator::Scan(scan) => {
             let source: Box<dyn kaveon_core::BatchSource> = match scan.format {
                 DataFormat::Parquet => {
+                    if scan.source_uri.starts_with("s3://") {
+                        let mut reader = ObjectParquetReader::from_uri(&scan.source_uri)?
+                            .with_partition(scan_partition);
+                        if !scan.projection.is_empty() {
+                            reader = reader.with_columns(scan.projection.clone());
+                        }
+                        if let Some(predicate) = &scan.predicate {
+                            reader = reader.with_predicate(predicate.clone());
+                        }
+                        return Ok(Box::new(ScanOperator::new(
+                            Box::new(reader.read_blocking()?),
+                            None,
+                        )?));
+                    }
                     if scan.source_uri.starts_with("abfss://") {
                         let mut reader = AdlsParquetReader::from_abfss_uri(&scan.source_uri)?
                             .with_partition(scan_partition);
@@ -150,42 +175,79 @@ fn compile_node(
                     Box::new(reader.read()?)
                 }
                 DataFormat::Delta => {
-                    if scan.source_uri.starts_with("abfss://") {
-                        return Err(exec_err(
-                            "fragment Delta snapshots over ADLS Gen2 are not implemented",
-                        ));
+                    if scan.source_uri.starts_with("abfss://")
+                        || scan.source_uri.starts_with("s3://")
+                    {
+                        let mut reader = ObjectDeltaReader::from_uri(&scan.source_uri)?
+                            .with_partition(scan_partition);
+                        if let Some(predicate) = &scan.predicate {
+                            reader = reader.with_predicate(predicate.clone());
+                        }
+                        if let Some(version) = scan.delta_version {
+                            reader = reader.with_version(version);
+                        }
+                        if !scan.projection.is_empty() {
+                            reader = reader.with_columns(scan.projection.clone());
+                        }
+                        return Ok(Box::new(ScanOperator::new(
+                            Box::new(reader.read_blocking()?),
+                            None,
+                        )?));
                     }
                     let path = local_path(&scan.source_uri)?;
                     let mut reader = DeltaTableReader::new(path).with_partition(scan_partition);
+                    if let Some(predicate) = &scan.predicate {
+                        reader = reader.with_predicate(predicate.clone());
+                    }
+                    if let Some(version) = scan.delta_version {
+                        reader = reader.with_version(version);
+                    }
                     if !scan.projection.is_empty() {
                         reader = reader.with_columns(scan.projection.clone());
                     }
                     Box::new(reader.read()?)
                 }
                 DataFormat::Iceberg => {
-                    return Err(exec_err("fragment Iceberg scans are not implemented"));
+                    let mut reader = kaveon_storage::IcebergReader::new(&scan.source_uri)
+                        .with_partition(scan_partition);
+                    if let Some(id) = scan.iceberg_snapshot_id {
+                        reader = reader.with_snapshot_id(id);
+                    }
+                    if !scan.projection.is_empty() {
+                        reader = reader.with_columns(scan.projection.clone());
+                    }
+                    Box::new(reader.read_blocking()?)
                 }
             };
             Ok(Box::new(ScanOperator::new(source, None)?))
         }
-        FragmentOperator::ExchangeInput(input) => {
-            let input = exchanges.read(&input.exchange_id)?;
-            Ok(Box::new(BatchInput::new(input.schema, input.batches)))
+        FragmentOperator::ExchangeInput(input) => exchanges.open(&input.exchange_id),
+        FragmentOperator::Filter { predicate } => {
+            let mut operator = FilterOperator::new(
+                compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?,
+                predicate.clone(),
+            );
+            if let Some(memory) = memory {
+                operator = operator.with_memory(memory.operator("fragment-filter")?);
+            }
+            Ok(Box::new(operator))
         }
-        FragmentOperator::Filter { predicate } => Ok(Box::new(FilterOperator::new(
-            compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?,
-            predicate.clone(),
-        ))),
-        FragmentOperator::Project { expressions } => Ok(Box::new(ProjectOperator::new(
-            compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?,
-            expressions
-                .iter()
-                .map(|named| Expr::Alias {
-                    expr: Box::new(named.expression.clone()),
-                    name: named.name.clone(),
-                })
-                .collect(),
-        )?)),
+        FragmentOperator::Project { expressions } => {
+            let mut operator = ProjectOperator::new(
+                compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?,
+                expressions
+                    .iter()
+                    .map(|named| Expr::Alias {
+                        expr: Box::new(named.expression.clone()),
+                        name: named.name.clone(),
+                    })
+                    .collect(),
+            )?;
+            if let Some(memory) = memory {
+                operator = operator.with_memory(memory.operator("fragment-project")?);
+            }
+            Ok(Box::new(operator))
+        }
         FragmentOperator::Aggregate {
             mode,
             group_by,
@@ -222,17 +284,44 @@ fn compile_node(
                 .collect::<Result<_>>()?;
             let input = compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?;
             match mode {
-                AggregateMode::Single => Ok(Box::new(if let Some(memory) = memory {
-                    HashAggregate::new_with_memory(
-                        input,
-                        group_by,
-                        aggregates,
-                        memory.operator("fragment-hash-aggregate")?,
-                    )?
-                } else {
-                    HashAggregate::new(input, group_by, aggregates)?
-                })),
+                AggregateMode::Single => kaveon_exec::partitioned::hash_aggregate(
+                    input,
+                    group_by,
+                    aggregates,
+                    memory
+                        .map(|memory| memory.operator("fragment-hash-aggregate"))
+                        .transpose()?,
+                ),
                 AggregateMode::Partial => {
+                    let output_types = kaveon_exec::aggregate::aggregate_output_types(
+                        &aggregates,
+                        input.schema(),
+                    )?;
+                    let group_types = group_by
+                        .iter()
+                        .map(|name| {
+                            input
+                                .schema()
+                                .field_with_name(name)
+                                .map(|field| field.data_type().clone())
+                                .map_err(KaveonError::from)
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    if let Some(memory) = memory
+                        && let Some((spill, count)) =
+                            kaveon_exec::partitioned::spill_from_environment(memory)?
+                    {
+                        return Ok(Box::new(
+                            kaveon_exec::partitioned::PartitionedHashAggregate::new_partial(
+                                input,
+                                group_by,
+                                aggregates,
+                                memory.operator("fragment-partial-hash-aggregate")?,
+                                spill,
+                                count,
+                            )?,
+                        ));
+                    }
                     let aggregate = if let Some(memory) = memory {
                         HashAggregate::new_with_memory(
                             input,
@@ -243,22 +332,55 @@ fn compile_node(
                     } else {
                         HashAggregate::new(input, group_by, aggregates)?
                     };
-                    let states = aggregate.into_grouped_states()?;
-                    let batch = grouped_aggregate_states_to_batch(&states)?;
-                    Ok(Box::new(BatchInput::new(batch.schema(), vec![batch])))
+                    let (states, state_memory) =
+                        aggregate.into_grouped_states_with_reservations()?;
+                    let encoding_memory = memory
+                        .map(|memory| {
+                            let bytes = state_memory
+                                .iter()
+                                .map(|reservation| reservation.bytes())
+                                .sum::<u64>()
+                                .saturating_mul(4)
+                                .saturating_add((states.len() as u64).saturating_mul(4096));
+                            memory
+                                .operator("fragment-partial-state-encoding")?
+                                .reserve(bytes)
+                        })
+                        .transpose()?;
+                    let batch = kaveon_exec::aggregate::grouped_aggregate_states_to_schema_batch(
+                        &states,
+                        &group_types,
+                        &output_types,
+                    )?;
+                    drop(states);
+                    drop(state_memory);
+                    drop(encoding_memory);
+                    Ok(Box::new(BatchInput::with_memory(
+                        batch.schema(),
+                        vec![batch],
+                        memory,
+                    )?))
                 }
-                AggregateMode::Final => compile_final_aggregate(input, group_by, aggregates),
+                AggregateMode::Final => {
+                    compile_final_aggregate(input, group_by, aggregates, memory)
+                }
             }
         }
-        FragmentOperator::Sort { keys } => Ok(Box::new(SortOperator::new(
+        FragmentOperator::Sort { keys } => kaveon_exec::partitioned::sort_operator(
             compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?,
             sort_expressions(keys),
-        )?)),
-        FragmentOperator::TopN { keys, limit } => Ok(Box::new(TopNOperator::new(
+            memory
+                .map(|memory| memory.operator("fragment-sort"))
+                .transpose()?,
+        ),
+        FragmentOperator::TopN { keys, limit } => kaveon_exec::partitioned::top_n_operator(
             compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?,
             sort_expressions(keys),
             *limit,
-        )?)),
+            memory
+                .map(|memory| memory.operator("fragment-topn"))
+                .transpose()?,
+        ),
         FragmentOperator::Limit { limit } => Ok(Box::new(LimitOperator::new(
             compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?,
             *limit,
@@ -267,15 +389,14 @@ fn compile_node(
             compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?,
             *offset,
         ))),
-        FragmentOperator::Distinct => Ok(Box::new(DistinctOperator::new(compile_input(
-            node,
-            0,
-            nodes,
-            catalog,
-            exchanges,
-            scan_partition,
-            memory,
-        )?))),
+        FragmentOperator::Distinct => {
+            let input = compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?;
+            let mut operator = DistinctOperator::new(input);
+            if let Some(memory) = memory {
+                operator = operator.with_memory(memory.operator("fragment-distinct")?);
+            }
+            Ok(Box::new(operator))
+        }
         FragmentOperator::Union => {
             let mut operators: Vec<Box<dyn BatchOperator>> = Vec::new();
             for &input_id in &node.inputs {
@@ -312,37 +433,43 @@ fn compile_node(
             let left = compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?;
             let right = compile_input(node, 1, nodes, catalog, exchanges, scan_partition, memory)?;
             let keys = left_keys.into_iter().zip(right_keys).collect();
-            Ok(Box::new(if let Some(memory) = memory {
-                HashJoin::try_new_qualified_with_memory(
-                    left,
-                    right,
-                    join_type(join.join_type)?,
-                    keys,
-                    None,
-                    None,
-                    memory.operator("fragment-hash-join")?,
-                )?
-            } else {
-                HashJoin::try_new(left, right, join_type(join.join_type)?, keys)?
-            }))
+            kaveon_exec::partitioned::hash_join(
+                left,
+                right,
+                join_type(join.join_type)?,
+                keys,
+                join.left_qualifier.as_deref(),
+                join.right_qualifier.as_deref(),
+                memory
+                    .map(|memory| memory.operator("fragment-hash-join"))
+                    .transpose()?,
+            )
         }
-        FragmentOperator::Window => {
+        FragmentOperator::Window { window_exprs } => {
             let input = compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?;
-            Ok(Box::new(WindowOperator::new(input, vec![])))
+            let mut operator = WindowOperator::new(input, window_exprs.clone())?;
+            if let Some(memory) = memory {
+                operator = operator.with_memory(memory.operator("fragment-window")?);
+            }
+            Ok(Box::new(operator))
         }
         FragmentOperator::Intersect => {
             let left = compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?;
             let right = compile_input(node, 1, nodes, catalog, exchanges, scan_partition, memory)?;
-            Ok(Box::new(SetOpOperator::new(
-                left,
-                right,
-                SetOpMode::Intersect,
-            )))
+            let mut operator = SetOpOperator::new(left, right, SetOpMode::Intersect);
+            if let Some(memory) = memory {
+                operator = operator.with_memory(memory.operator("fragment-set-operation")?);
+            }
+            Ok(Box::new(operator))
         }
         FragmentOperator::Except => {
             let left = compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?;
             let right = compile_input(node, 1, nodes, catalog, exchanges, scan_partition, memory)?;
-            Ok(Box::new(SetOpOperator::new(left, right, SetOpMode::Except)))
+            let mut operator = SetOpOperator::new(left, right, SetOpMode::Except);
+            if let Some(memory) = memory {
+                operator = operator.with_memory(memory.operator("fragment-set-operation")?);
+            }
+            Ok(Box::new(operator))
         }
         FragmentOperator::ExchangeOutput(_) => Err(exec_err(
             "ExchangeOutput is supported only as the fragment root",
@@ -350,39 +477,269 @@ fn compile_node(
     }
 }
 
-fn compile_final_aggregate(
+pub(crate) fn compile_final_aggregate(
+    input: Box<dyn BatchOperator>,
+    group_by: Vec<String>,
+    aggregates: Vec<AggExpr>,
+    memory: Option<&QueryMemoryPool>,
+) -> Result<Box<dyn BatchOperator>> {
+    if let Some(memory) = memory
+        && let Some((spill, count)) = kaveon_exec::partitioned::spill_from_environment(memory)?
+    {
+        return partitioned_final_aggregate(input, group_by, aggregates, memory, &spill, count);
+    }
+    compile_final_aggregate_in_memory(input, group_by, aggregates, memory)
+}
+
+fn partitioned_final_aggregate(
+    input: Box<dyn BatchOperator>,
+    group_by: Vec<String>,
+    aggregates: Vec<AggExpr>,
+    memory: &QueryMemoryPool,
+    spill: &kaveon_exec::spill::SpillManager,
+    count: usize,
+) -> Result<Box<dyn BatchOperator>> {
+    let group_types = grouped_aggregate_key_types(input.schema())?;
+    if group_types.len() != group_by.len() {
+        return Err(exec_err("final aggregate group types do not match plan"));
+    }
+    let output_types = final_output_types(input.schema(), &aggregates)?;
+    let schema =
+        finalized_aggregate_batch(&group_by, &group_types, &aggregates, &output_types, &[])?
+            .schema();
+    let keys = if group_by.is_empty() {
+        Vec::new()
+    } else {
+        vec!["group_keys".into()]
+    };
+    let inputs = kaveon_exec::partitioned::partition_sources(
+        input,
+        &keys,
+        count,
+        &memory.operator("fragment-final-partition")?,
+        spill,
+    )?;
+    Ok(Box::new(FinalAggregatePartitions {
+        inputs,
+        schema,
+        group_by,
+        aggregates,
+        memory: memory.clone(),
+    }))
+}
+
+struct FinalAggregatePartitions {
+    inputs: VecDeque<Box<dyn BatchOperator>>,
+    schema: SchemaRef,
+    group_by: Vec<String>,
+    aggregates: Vec<AggExpr>,
+    memory: QueryMemoryPool,
+}
+
+impl BatchOperator for FinalAggregatePartitions {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+    fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        let Some(input) = self.inputs.pop_front() else {
+            return Ok(None);
+        };
+        let result = (|| {
+            let mut aggregate = compile_final_aggregate_in_memory(
+                input,
+                self.group_by.clone(),
+                self.aggregates.clone(),
+                Some(&self.memory),
+            )?;
+            let batch = aggregate.next_batch()?;
+            if let Some(batch) = &batch
+                && batch.schema() != self.schema
+            {
+                return Err(exec_err(
+                    "partitioned final aggregate output schema changed",
+                ));
+            }
+            Ok(batch)
+        })();
+        if result.is_err() {
+            self.inputs.clear();
+        }
+        result
+    }
+}
+
+fn compile_final_aggregate_in_memory(
     mut input: Box<dyn BatchOperator>,
     group_by: Vec<String>,
     aggregates: Vec<AggExpr>,
+    memory: Option<&QueryMemoryPool>,
 ) -> Result<Box<dyn BatchOperator>> {
-    let batches = collect(&mut *input)?;
-    let mut states = grouped_aggregate_states_from_batches(&batches)?;
-    if states.is_empty() && group_by.is_empty() {
-        states.push(GroupedAggregateState {
-            group_keys: Vec::new(),
-            states: aggregates.iter().map(AggregateState::new).collect(),
-        });
+    let group_types = grouped_aggregate_key_types(input.schema())?;
+    let output_types = final_output_types(input.schema(), &aggregates)?;
+    if group_types.len() != group_by.len() {
+        return Err(exec_err("final aggregate group types do not match plan"));
     }
-    let merged = merge_grouped_aggregate_states(states)?;
-    let finalized = finalize_grouped_aggregate_states(&merged)?;
-    let batch = finalized_aggregate_batch(&group_by, &aggregates, &finalized)?;
-    Ok(Box::new(BatchInput::new(batch.schema(), vec![batch])))
+    let account = memory
+        .map(|memory| memory.operator("fragment-final-aggregate"))
+        .transpose()?;
+    kaveon_exec::expr_eval::with_expression_memory(account.as_ref(), || {
+        let mut merger =
+            kaveon_exec::incremental_aggregate::IncrementalAggregateMerger::new(account.clone());
+        while let Some(batch) = input.next_batch()? {
+            if grouped_aggregate_key_types(&batch.schema())? != group_types {
+                return Err(exec_err("final aggregate input key schema changed"));
+            }
+            if final_output_types(&batch.schema(), &aggregates)? != output_types {
+                return Err(exec_err("final aggregate input output schema changed"));
+            }
+            merger.push_batch(&batch)?;
+        }
+        let (mut merged, reservations) = merger.finish()?;
+        if merged.is_empty() && group_by.is_empty() {
+            merged.push(GroupedAggregateState {
+                group_keys: Vec::new(),
+                states: aggregates
+                    .iter()
+                    .zip(&output_types)
+                    .map(|(agg, ty)| AggregateState::new_typed(agg, ty))
+                    .collect(),
+            });
+        }
+        let finalized = finalize_grouped_aggregate_states(&merged)?;
+        let batch = finalized_aggregate_batch(
+            &group_by,
+            &group_types,
+            &aggregates,
+            &output_types,
+            &finalized,
+        )?;
+        drop(merged);
+        drop(finalized);
+        drop(reservations);
+        Ok(Box::new(BatchInput::with_memory(
+            batch.schema(),
+            vec![batch],
+            memory,
+        )?) as Box<dyn BatchOperator>)
+    })
+}
+
+fn final_output_types(schema: &SchemaRef, aggregates: &[AggExpr]) -> Result<Vec<DataType>> {
+    let types = kaveon_exec::aggregate::grouped_aggregate_output_types(schema)?;
+    if types.is_empty() {
+        return Ok(aggregates
+            .iter()
+            .map(|a| {
+                if matches!(a.func, AggFunc::Count) {
+                    DataType::UInt64
+                } else {
+                    DataType::Float64
+                }
+            })
+            .collect());
+    }
+    if types.len() != aggregates.len() {
+        return Err(exec_err("final aggregate output type count mismatch"));
+    }
+    Ok(types)
 }
 
 fn finalized_aggregate_batch(
     group_by: &[String],
+    group_types: &[DataType],
     aggregates: &[AggExpr],
+    output_types: &[DataType],
     groups: &[kaveon_exec::aggregate::FinalizedAggregateGroup],
 ) -> Result<RecordBatch> {
     let mut fields = Vec::with_capacity(group_by.len() + aggregates.len());
     let mut columns = Vec::with_capacity(group_by.len() + aggregates.len());
     for (index, name) in group_by.iter().enumerate() {
-        let data_type = infer_group_type(groups, index);
+        let data_type = group_types
+            .get(index)
+            .ok_or_else(|| exec_err("missing final aggregate key type"))?;
         fields.push(Field::new(name, data_type.clone(), true));
-        columns.push(group_column(groups, index, &data_type));
+        columns.push(group_column(groups, index, data_type)?);
     }
     for (index, aggregate) in aggregates.iter().enumerate() {
-        if matches!(aggregate.func, AggFunc::Count) {
+        if matches!(output_types[index], DataType::Int32 | DataType::Int64) {
+            let values = groups
+                .iter()
+                .map(|group| match group.values.get(index) {
+                    Some(FinalAggregateValue::Integer(value)) => Ok(*value),
+                    _ => Err(exec_err("integer final state type mismatch")),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let column: ArrayRef = if output_types[index] == DataType::Int32 {
+                Arc::new(arrow::array::Int32Array::from(
+                    values
+                        .into_iter()
+                        .map(|v| {
+                            v.map(|n| {
+                                i32::try_from(n).map_err(|_| exec_err("integer aggregate overflow"))
+                            })
+                            .transpose()
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                ))
+            } else {
+                Arc::new(arrow::array::Int64Array::from(
+                    values
+                        .into_iter()
+                        .map(|v| {
+                            v.map(|n| {
+                                i64::try_from(n).map_err(|_| exec_err("integer SUM overflow"))
+                            })
+                            .transpose()
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                ))
+            };
+            fields.push(Field::new(
+                aggregate_output_name(aggregate),
+                output_types[index].clone(),
+                true,
+            ));
+            columns.push(column);
+        } else if let DataType::Decimal128(precision, scale) = output_types[index] {
+            let values = groups
+                .iter()
+                .map(|group| match group.values.get(index) {
+                    Some(FinalAggregateValue::Decimal(value, actual)) if *actual == scale => {
+                        Ok(*value)
+                    }
+                    _ => Err(exec_err("decimal final state type/scale mismatch")),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let array = arrow::array::Decimal128Array::from(values)
+                .with_precision_and_scale(precision, scale)?;
+            array.validate_decimal_precision(precision)?;
+            fields.push(Field::new(
+                aggregate_output_name(aggregate),
+                DataType::Decimal128(precision, scale),
+                true,
+            ));
+            columns.push(Arc::new(array) as ArrayRef);
+        } else if output_types[index] == DataType::UInt64
+            && !matches!(aggregate.func, AggFunc::Count)
+        {
+            let values = groups
+                .iter()
+                .map(|group| match group.values.get(index) {
+                    Some(FinalAggregateValue::Integer(value)) => value
+                        .map(|n| {
+                            u64::try_from(n).map_err(|_| exec_err("UInt64 aggregate overflow"))
+                        })
+                        .transpose(),
+                    _ => Err(exec_err("UInt64 final state mismatch")),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            fields.push(Field::new(
+                aggregate_output_name(aggregate),
+                DataType::UInt64,
+                true,
+            ));
+            columns.push(Arc::new(UInt64Array::from(values)));
+        } else if matches!(aggregate.func, AggFunc::Count) {
             let values = groups
                 .iter()
                 .map(|group| match group.values.get(index) {
@@ -423,82 +780,25 @@ fn finalized_aggregate_batch(
 }
 
 fn aggregate_output_name(aggregate: &AggExpr) -> String {
-    aggregate
-        .alias
-        .clone()
-        .unwrap_or_else(|| "aggregate".into())
-}
-
-fn infer_group_type(
-    groups: &[kaveon_exec::aggregate::FinalizedAggregateGroup],
-    index: usize,
-) -> DataType {
-    groups
-        .iter()
-        .filter_map(|group| group.group_keys.get(index))
-        .find_map(|value| match value {
-            AggregateValue::Null => None,
-            AggregateValue::Bool(_) => Some(DataType::Boolean),
-            AggregateValue::Int32(_) => Some(DataType::Int32),
-            AggregateValue::Int64(_) => Some(DataType::Int64),
-            AggregateValue::Utf8(_) => Some(DataType::Utf8),
-            AggregateValue::Float64Bits(_) => Some(DataType::Float64),
-        })
-        .unwrap_or(DataType::Utf8)
+    aggregate.output_name()
 }
 
 fn group_column(
     groups: &[kaveon_exec::aggregate::FinalizedAggregateGroup],
     index: usize,
     data_type: &DataType,
-) -> ArrayRef {
-    match data_type {
-        DataType::Boolean => Arc::new(BooleanArray::from(
-            groups
-                .iter()
-                .map(|group| match group.group_keys.get(index) {
-                    Some(AggregateValue::Bool(value)) => Some(*value),
-                    _ => None,
-                })
-                .collect::<Vec<_>>(),
-        )),
-        DataType::Int32 => Arc::new(Int32Array::from(
-            groups
-                .iter()
-                .map(|group| match group.group_keys.get(index) {
-                    Some(AggregateValue::Int32(value)) => Some(*value),
-                    _ => None,
-                })
-                .collect::<Vec<_>>(),
-        )),
-        DataType::Int64 => Arc::new(Int64Array::from(
-            groups
-                .iter()
-                .map(|group| match group.group_keys.get(index) {
-                    Some(AggregateValue::Int64(value)) => Some(*value),
-                    _ => None,
-                })
-                .collect::<Vec<_>>(),
-        )),
-        DataType::Float64 => Arc::new(Float64Array::from(
-            groups
-                .iter()
-                .map(|group| match group.group_keys.get(index) {
-                    Some(AggregateValue::Float64Bits(value)) => Some(f64::from_bits(*value)),
-                    _ => None,
-                })
-                .collect::<Vec<_>>(),
-        )),
-        _ => Arc::new(StringArray::from(
-            groups
-                .iter()
-                .map(|group| match group.group_keys.get(index) {
-                    Some(AggregateValue::Utf8(value)) => Some(value.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>(),
-        )),
-    }
+) -> Result<ArrayRef> {
+    let keys = groups
+        .iter()
+        .map(|group| {
+            group
+                .group_keys
+                .get(index)
+                .cloned()
+                .ok_or_else(|| exec_err("missing final group key"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    kaveon_exec::aggregate::aggregate_key_column(&keys, data_type)
 }
 
 fn compile_input(
@@ -598,6 +898,7 @@ fn partition_batches(
 struct BatchInput {
     schema: SchemaRef,
     batches: VecDeque<RecordBatch>,
+    _memory: Vec<kaveon_core::MemoryReservation>,
 }
 
 impl BatchInput {
@@ -605,7 +906,25 @@ impl BatchInput {
         Self {
             schema,
             batches: batches.into(),
+            _memory: Vec::new(),
         }
+    }
+
+    fn with_memory(
+        schema: SchemaRef,
+        batches: Vec<RecordBatch>,
+        memory: Option<&QueryMemoryPool>,
+    ) -> Result<Self> {
+        let mut input = Self::new(schema, batches);
+        if let Some(memory) = memory {
+            let account = memory.operator("fragment-retained-batches")?;
+            for batch in &input.batches {
+                input
+                    ._memory
+                    .push(account.reserve(batch.get_array_memory_size() as u64)?);
+            }
+        }
+        Ok(input)
     }
 }
 
@@ -625,6 +944,7 @@ fn exec_err(message: impl Into<String>) -> KaveonError {
 
 #[cfg(test)]
 mod tests {
+    use kaveon_exec::aggregate::AggregateValue;
     use std::fs::{self, File};
     use std::sync::Arc;
 
@@ -1065,28 +1385,28 @@ mod tests {
             result
                 .column(2)
                 .as_any()
-                .downcast_ref::<Float64Array>()
+                .downcast_ref::<Int64Array>()
                 .unwrap()
                 .value(west),
-            150.0
+            150
         );
         assert_eq!(
             result
                 .column(3)
                 .as_any()
-                .downcast_ref::<Float64Array>()
+                .downcast_ref::<Int64Array>()
                 .unwrap()
                 .value(west),
-            10.0
+            10
         );
         assert_eq!(
             result
                 .column(4)
                 .as_any()
-                .downcast_ref::<Float64Array>()
+                .downcast_ref::<Int64Array>()
                 .unwrap()
                 .value(west),
-            100.0
+            100
         );
         assert_eq!(
             result
@@ -1170,10 +1490,399 @@ mod tests {
     }
 
     #[test]
+    fn partitioned_final_aggregate_keeps_typed_null_keys_and_bounds_merge_memory() {
+        let mut batches = Vec::new();
+        for _ in 0..2 {
+            for start in (0..100).step_by(5) {
+                let groups = (start..start + 5)
+                    .map(|key| GroupedAggregateState {
+                        group_keys: vec![if key == 0 {
+                            AggregateValue::Null
+                        } else {
+                            AggregateValue::Int64(key)
+                        }],
+                        states: vec![AggregateState::Count(1)],
+                    })
+                    .collect::<Vec<_>>();
+                batches.push(
+                    grouped_aggregate_states_to_typed_batch(&groups, &[DataType::Int64]).unwrap(),
+                );
+            }
+        }
+        let schema = batches[0].schema();
+        let pool = QueryMemoryPool::new("final-spill", 4 * 1024 * 1024).unwrap();
+        let expressions = vec![AggExpr::new(AggFunc::Count, "*").with_alias("count")];
+        drop(
+            compile_final_aggregate_in_memory(
+                Box::new(BatchInput::new(schema.clone(), batches.clone())),
+                vec!["key".into()],
+                expressions.clone(),
+                Some(&pool),
+            )
+            .unwrap(),
+        );
+        assert_eq!(pool.snapshot().current_bytes, 0);
+        let spill = kaveon_exec::spill::SpillManager::new(
+            std::env::temp_dir().join("kaveon-final-spill-tests"),
+            64 * 1024 * 1024,
+        )
+        .unwrap();
+        let mut operator = partitioned_final_aggregate(
+            Box::new(BatchInput::new(schema, batches)),
+            vec!["key".into()],
+            expressions,
+            &pool,
+            &spill,
+            16,
+        )
+        .unwrap();
+        let mut rows = 0;
+        let mut nulls = 0;
+        while let Some(batch) = operator.next_batch().unwrap() {
+            assert_eq!(batch.schema().field(0).data_type(), &DataType::Int64);
+            rows += batch.num_rows();
+            nulls += batch.column(0).null_count();
+            let counts = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap();
+            assert!(counts.values().iter().all(|count| *count == 2));
+        }
+        assert_eq!((rows, nulls), (100, 1));
+        assert_eq!(pool.snapshot().current_bytes, 0);
+        assert!(pool.snapshot().peak_bytes <= 4 * 1024 * 1024);
+        assert_eq!(spill.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn final_aggregate_repeated_scalar_key_merges_without_retaining_input() {
+        let batch = grouped_aggregate_states_to_typed_batch(
+            &[GroupedAggregateState {
+                group_keys: vec![AggregateValue::Int64(1)],
+                states: vec![AggregateState::Count(1)],
+            }],
+            &[DataType::Int64],
+        )
+        .unwrap();
+        let pool = QueryMemoryPool::new("final-skew", 1024 * 1024).unwrap();
+        let spill = kaveon_exec::spill::SpillManager::new(
+            std::env::temp_dir().join("kaveon-final-spill-tests"),
+            64 * 1024 * 1024,
+        )
+        .unwrap();
+        let mut operator = partitioned_final_aggregate(
+            Box::new(BatchInput::new(batch.schema(), vec![batch; 100])),
+            vec!["key".into()],
+            vec![AggExpr::new(AggFunc::Count, "*")],
+            &pool,
+            &spill,
+            16,
+        )
+        .unwrap();
+        let output = operator.next_batch().unwrap().unwrap();
+        assert_eq!(
+            output
+                .column(1)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap()
+                .value(0),
+            100
+        );
+        assert!(operator.next_batch().unwrap().is_none());
+        assert_eq!(pool.snapshot().current_bytes, 0);
+        assert_eq!(spill.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn final_grouped_aggregate_preserves_empty_and_all_null_key_types() {
+        for data_type in [
+            DataType::Int32,
+            DataType::Int64,
+            DataType::Boolean,
+            DataType::Float64,
+            DataType::LargeUtf8,
+            DataType::UInt64,
+            DataType::Decimal128(38, 7),
+            DataType::Date32,
+            DataType::Date64,
+            DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, Some("UTC".into())),
+        ] {
+            for null_group in [false, true] {
+                let groups = if null_group {
+                    vec![GroupedAggregateState {
+                        group_keys: vec![AggregateValue::Null],
+                        states: vec![AggregateState::Count(2)],
+                    }]
+                } else {
+                    vec![]
+                };
+                let batch = grouped_aggregate_states_to_typed_batch(
+                    &groups,
+                    std::slice::from_ref(&data_type),
+                )
+                .unwrap();
+                let input = Box::new(BatchInput::new(batch.schema(), vec![batch]));
+                let mut output = compile_final_aggregate(
+                    input,
+                    vec!["key".into()],
+                    vec![AggExpr::new(AggFunc::Count, "*")],
+                    None,
+                )
+                .unwrap();
+                assert_eq!(output.schema().field(0).data_type(), &data_type);
+                let batch = output.next_batch().unwrap().unwrap();
+                assert_eq!(batch.num_rows(), usize::from(null_group));
+                if null_group {
+                    assert_eq!(batch.column(0).null_count(), 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn final_grouped_aggregate_rejects_mixed_key_schemas() {
+        let first = grouped_aggregate_states_to_typed_batch(&[], &[DataType::Int64]).unwrap();
+        let second = grouped_aggregate_states_to_typed_batch(&[], &[DataType::Utf8]).unwrap();
+        let input = Box::new(BatchInput::new(first.schema(), vec![first, second]));
+        assert!(
+            compile_final_aggregate(
+                input,
+                vec!["key".into()],
+                vec![AggExpr::new(AggFunc::Count, "*")],
+                None
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn local_parallel_lazy_final_matches_serial_results() {
+        use kaveon_exec::local_parallel::{LazyFinalAggregate, ParallelPartials};
+        let batch = RecordBatch::try_from_iter(vec![(
+            "v",
+            Arc::new(UInt64Array::from(vec![1; 100000])) as ArrayRef,
+        )])
+        .unwrap();
+        let expressions = vec![
+            AggExpr::new(AggFunc::Sum, "v").with_alias("total"),
+            AggExpr::new(AggFunc::Count, "v")
+                .distinct()
+                .with_alias("distinct_count"),
+        ];
+        let probe = HashAggregate::new(
+            Box::new(BatchInput::new(batch.schema(), vec![])),
+            vec![],
+            expressions.clone(),
+        )
+        .unwrap();
+        let pool = QueryMemoryPool::new("local-parallel-final", 4 * 1024 * 1024).unwrap();
+        let partials = ParallelPartials::new(
+            Box::new(BatchInput::new(batch.schema(), vec![batch])),
+            vec![],
+            expressions.clone(),
+            pool.clone(),
+            4,
+        )
+        .unwrap();
+        let merge_pool = pool.clone();
+        let mut operator = LazyFinalAggregate::new(
+            probe.schema().clone(),
+            Box::new(partials),
+            Box::new(move |input| {
+                compile_final_aggregate(input, vec![], expressions, Some(&merge_pool))
+            }),
+        );
+        assert_eq!(pool.snapshot().current_bytes, 0);
+        let result = operator.next_batch().unwrap().unwrap();
+        assert_eq!(result.schema(), *operator.schema());
+        assert_eq!(
+            result
+                .column(0)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap()
+                .value(0),
+            100000
+        );
+        assert_eq!(
+            result
+                .column(1)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap()
+                .value(0),
+            1
+        );
+        assert!(operator.next_batch().unwrap().is_none());
+        drop(operator);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn exact_unsigned_and_decimal_final_results_keep_types_and_overflow_checks() {
+        use kaveon_exec::aggregate::{
+            aggregate_output_types, grouped_aggregate_states_to_schema_batch,
+        };
+        let arrays: Vec<ArrayRef> = vec![
+            Arc::new(UInt64Array::from(vec![
+                Some(u64::MAX - 2),
+                Some(1),
+                Some(1),
+                None,
+            ])),
+            Arc::new(
+                arrow::array::Decimal128Array::from(vec![
+                    Some(100000000000000000001i128),
+                    Some(-100000000000000000000i128),
+                    Some(2),
+                    Some(2),
+                    None,
+                ])
+                .with_precision_and_scale(30, 7)
+                .unwrap(),
+            ),
+        ];
+        for array in arrays {
+            let input = RecordBatch::try_from_iter(vec![("v", array)]).unwrap();
+            let expressions = vec![
+                AggExpr::new(AggFunc::Sum, "v").with_alias("total"),
+                AggExpr::new(AggFunc::Min, "v").with_alias("low"),
+                AggExpr::new(AggFunc::Max, "v").with_alias("high"),
+                AggExpr::new(AggFunc::Sum, "v")
+                    .distinct()
+                    .with_alias("unique_total"),
+            ];
+            let types = aggregate_output_types(&expressions, &input.schema()).unwrap();
+            let mut partials = Vec::new();
+            for row in 0..input.num_rows() {
+                let groups = HashAggregate::new(
+                    Box::new(BatchInput::new(input.schema(), vec![input.slice(row, 1)])),
+                    vec![],
+                    expressions.clone(),
+                )
+                .unwrap()
+                .into_grouped_states()
+                .unwrap();
+                partials
+                    .push(grouped_aggregate_states_to_schema_batch(&groups, &[], &types).unwrap());
+            }
+            let mut final_operator = compile_final_aggregate_in_memory(
+                Box::new(BatchInput::new(partials[0].schema(), partials)),
+                vec![],
+                expressions.clone(),
+                None,
+            )
+            .unwrap();
+            let result = final_operator.next_batch().unwrap().unwrap();
+            assert_eq!(
+                result
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|f| f.data_type().clone())
+                    .collect::<Vec<_>>(),
+                types
+            );
+            if types[0] == DataType::UInt64 {
+                assert_eq!(
+                    result
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<UInt64Array>()
+                        .unwrap()
+                        .value(0),
+                    u64::MAX
+                );
+                assert_eq!(
+                    result
+                        .column(3)
+                        .as_any()
+                        .downcast_ref::<UInt64Array>()
+                        .unwrap()
+                        .value(0),
+                    u64::MAX - 1
+                );
+            } else {
+                assert_eq!(
+                    result
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<arrow::array::Decimal128Array>()
+                        .unwrap()
+                        .value(0),
+                    5
+                );
+                assert_eq!(
+                    result
+                        .column(3)
+                        .as_any()
+                        .downcast_ref::<arrow::array::Decimal128Array>()
+                        .unwrap()
+                        .value(0),
+                    3
+                );
+            }
+            let empty = grouped_aggregate_states_to_schema_batch(&[], &[], &types).unwrap();
+            let mut empty_final = compile_final_aggregate_in_memory(
+                Box::new(BatchInput::new(empty.schema(), vec![empty])),
+                vec![],
+                expressions,
+                None,
+            )
+            .unwrap();
+            let result = empty_final.next_batch().unwrap().unwrap();
+            assert!(result.columns().iter().all(|a| a.is_null(0)));
+        }
+    }
+
+    #[test]
+    fn decimal_final_aggregate_preserves_typed_empty_and_large_values() {
+        for value in [None, Some(100000000000000000001i128)] {
+            let groups = value
+                .map(|sum| {
+                    vec![GroupedAggregateState {
+                        group_keys: vec![],
+                        states: vec![AggregateState::DecimalSum {
+                            sum,
+                            count: 1,
+                            scale: 4,
+                        }],
+                    }]
+                })
+                .unwrap_or_default();
+            let batch = kaveon_exec::aggregate::grouped_aggregate_states_to_schema_batch(
+                &groups,
+                &[],
+                &[DataType::Decimal128(38, 4)],
+            )
+            .unwrap();
+            let input = Box::new(BatchInput::new(batch.schema(), vec![batch]));
+            let mut output =
+                compile_final_aggregate(input, vec![], vec![AggExpr::new(AggFunc::Sum, "v")], None)
+                    .unwrap();
+            assert_eq!(
+                output.schema().field(0).data_type(),
+                &DataType::Decimal128(38, 4)
+            );
+            let batch = output.next_batch().unwrap().unwrap();
+            let col = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<arrow::array::Decimal128Array>()
+                .unwrap();
+            assert_eq!(col.iter().collect::<Vec<_>>(), vec![value]);
+        }
+    }
+
+    #[test]
     fn rejects_residual_and_unsupported_join_modes_explicitly() {
         let result = join_type(kaveon_core::JoinType::Semi);
         assert!(result.is_err());
         let _ = JoinSpec {
+            left_qualifier: None,
+            right_qualifier: None,
             join_type: kaveon_core::JoinType::Inner,
             left_keys: vec![Expr::Column("key".into())],
             right_keys: vec![Expr::Column("key".into())],
@@ -1221,6 +1930,8 @@ mod tests {
                 FragmentOperator::Scan(ScanSpec {
                     source_uri: path.to_string_lossy().into_owned(),
                     format: DataFormat::Parquet,
+                    delta_version: None,
+                    iceberg_snapshot_id: None,
                     table: ScanTable {
                         catalog: "test".into(),
                         schema: "default".into(),

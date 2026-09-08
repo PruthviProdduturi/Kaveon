@@ -11,6 +11,10 @@ node_modules
 **/node_modules
 .pnpm-store
 .turbo
+**/.next
+**/target
+tmp
+temp
 **/.next/cache
 **/.next/server
 **/.next/types

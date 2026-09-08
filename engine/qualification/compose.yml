@@ -1,0 +1,35 @@
+name: kaveon-qualification
+services:
+  trino:
+    image: trinodb/trino:483@sha256:db58cc93e593a2706553745f276bb119c9810e69918be56ecde088ba7ccb0534
+    ports:
+      - "127.0.0.1:18080:8080"
+    cpus: 4
+    mem_limit: 8g
+    volumes:
+      - ./catalog/lake.properties:/etc/trino/catalog/lake.properties:ro
+      - ../../tmp/qualification-lake:/qualification-lake:ro
+    healthcheck:
+      test: ["CMD", "trino", "--execute", "SELECT 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+  postgres:
+    image: postgres:17@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+    ports:
+      - "127.0.0.1:15432:5432"
+    environment:
+      POSTGRES_USER: qualification
+      POSTGRES_PASSWORD: qualification-local-only
+      POSTGRES_DB: qualification
+    cpus: 2
+    mem_limit: 2g
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qualification -d qualification"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+volumes:
+  postgres-data:

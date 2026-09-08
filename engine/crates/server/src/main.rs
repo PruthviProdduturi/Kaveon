@@ -1,13 +1,17 @@
 mod api;
 pub mod cluster;
 mod config;
+pub mod disk_exchange;
 pub mod exchange;
 pub mod fragment_exec;
 pub mod lifecycle;
 pub mod orchestrator;
 pub mod planner;
+pub mod results;
 pub mod runtime;
 pub mod scheduler;
+pub mod security;
+pub mod transport;
 mod ui;
 
 use std::net::SocketAddr;
@@ -19,17 +23,21 @@ use cluster::ClusterState;
 use config::ServerConfig;
 
 pub struct AppState {
+    pub disk_exchange_store: Option<disk_exchange::DiskExchangeStore>,
+    pub results: results::ResultStore,
+    pub principal_admission: security::PrincipalAdmission,
     pub config: ServerConfig,
     pub cluster: RwLock<ClusterState>,
     pub catalog: RwLock<kaveon_core::CatalogManager>,
     pub catalog_store: kaveon_catalog::CatalogStore,
     pub exchange_store: exchange::ExchangeStore,
-    pub lifecycle: lifecycle::WorkerLifecycle<(Vec<u8>, u64)>,
+    pub lifecycle: lifecycle::WorkerLifecycle<transport::CachedTaskResult>,
     pub memory_admission: kaveon_core::MemoryAdmissionController,
 }
 
 #[tokio::main]
 async fn main() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let config_path = std::env::args()
         .nth(1)
         .map(PathBuf::from)
@@ -44,7 +52,10 @@ async fn main() {
         }
     };
 
-    let addr: SocketAddr = format!("0.0.0.0:{}", config.http_port).parse().unwrap();
+    let addr = SocketAddr::new(
+        config.bind_host.parse().expect("validated bind address"),
+        config.http_port,
+    );
     let cluster = ClusterState::new(&config);
     let (catalog_store, catalog) = match config::open_catalog(&config) {
         Ok(catalog) => catalog,
@@ -68,7 +79,12 @@ async fn main() {
         }
     );
     println!("Environment: {}", config.environment);
-    println!("Listening:   http://{addr}");
+    let scheme = if config.tls_cert_path.is_some() {
+        "https"
+    } else {
+        "http"
+    };
+    println!("Listening:   {scheme}://{addr}");
     println!("Catalog DB:  {}", config.catalog_database_path.display());
     if !config.coordinator {
         println!("Coordinator: {}", config.discovery_uri);
@@ -78,7 +94,21 @@ async fn main() {
     let memory_admission =
         kaveon_core::MemoryAdmissionController::new(config.memory_admission_limit_bytes)
             .expect("validated memory admission configuration");
+    let disk_exchange_store = if config.coordinator && config.coordinator_exchange_spool {
+        Some(
+            disk_exchange::DiskExchangeStore::new(
+                &config.exchange_spool_root,
+                config.exchange_disk_limit_bytes,
+            )
+            .expect("exchange spool can be initialized"),
+        )
+    } else {
+        None
+    };
     let state = Arc::new(AppState {
+        disk_exchange_store,
+        results: results::ResultStore::default(),
+        principal_admission: security::PrincipalAdmission::default(),
         config,
         cluster: RwLock::new(cluster),
         catalog: RwLock::new(catalog),
@@ -95,8 +125,28 @@ async fn main() {
         });
     }
 
+    let cleanup_state = state.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            cleanup_state.results.cleanup();
+            if let Some(store) = &cleanup_state.disk_exchange_store {
+                store.cleanup();
+            }
+        }
+    });
     let app = api::build_router(Arc::clone(&state));
 
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    if let (Some(cert), Some(key)) = (&state.config.tls_cert_path, &state.config.tls_key_path) {
+        let tls = axum_server::tls_rustls::RustlsConfig::from_pem_file(cert, key)
+            .await
+            .expect("valid TLS certificate and private key");
+        axum_server::bind_rustls(addr, tls)
+            .serve(app.into_make_service())
+            .await
+            .unwrap();
+    } else {
+        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+        axum::serve(listener, app).await.unwrap();
+    }
 }

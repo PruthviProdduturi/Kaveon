@@ -6,7 +6,7 @@ use crate::{
     DataFormat, ExchangeId, Expr, KaveonError, Partitioning, Result, StageId, StoragePredicate,
 };
 
-pub const EXECUTABLE_FRAGMENT_VERSION: u16 = 2;
+pub const EXECUTABLE_FRAGMENT_VERSION: u16 = 5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct FragmentNodeId(pub u32);
@@ -57,7 +57,9 @@ pub enum FragmentOperator {
     },
     Distinct,
     Union,
-    Window,
+    Window {
+        window_exprs: Vec<Expr>,
+    },
     Intersect,
     Except,
     ExchangeOutput(ExchangeOutput),
@@ -68,6 +70,9 @@ pub enum FragmentOperator {
 pub struct ScanSpec {
     pub source_uri: String,
     pub format: DataFormat,
+    /// Coordinator-selected Delta version shared by every split and retry.
+    pub delta_version: Option<u64>,
+    pub iceberg_snapshot_id: Option<i64>,
     pub table: ScanTable,
     pub projection: Vec<String>,
     pub predicate: Option<StoragePredicate>,
@@ -145,6 +150,8 @@ pub enum JoinType {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct JoinSpec {
     pub join_type: JoinType,
+    pub left_qualifier: Option<String>,
+    pub right_qualifier: Option<String>,
     pub left_keys: Vec<Expr>,
     pub right_keys: Vec<Expr>,
     pub residual: Option<Expr>,
@@ -264,7 +271,7 @@ impl FragmentNode {
             FragmentOperator::Offset { .. } => 1,
             FragmentOperator::Distinct => 1,
             FragmentOperator::Union => 0,
-            FragmentOperator::Window => 1,
+            FragmentOperator::Window { .. } => 1,
             FragmentOperator::Intersect => 0,
             FragmentOperator::Except => 0,
         };
@@ -282,6 +289,18 @@ impl FragmentNode {
 impl ScanSpec {
     fn validate(&self) -> Result<()> {
         validate_name(&self.source_uri, "scan source URI")?;
+        if (self.format == DataFormat::Delta) != self.delta_version.is_some() {
+            return invalid(
+                "Delta scans require a pinned version; other formats cannot set delta_version",
+            );
+        }
+        if (self.format == DataFormat::Iceberg) != self.iceberg_snapshot_id.is_some()
+            || self.iceberg_snapshot_id.is_some_and(|id| id < -1)
+        {
+            return invalid(
+                "Iceberg scans require a pinned snapshot ID (-1 for empty); other formats cannot set it",
+            );
+        }
         validate_name(&self.table.catalog, "scan catalog")?;
         validate_name(&self.table.schema, "scan schema")?;
         validate_name(&self.table.table, "scan table")?;
@@ -369,6 +388,8 @@ mod tests {
             operator: FragmentOperator::Scan(ScanSpec {
                 source_uri: "file:///events.parquet".into(),
                 format: DataFormat::Parquet,
+                delta_version: None,
+                iceberg_snapshot_id: None,
                 table: ScanTable {
                     catalog: "local".into(),
                     schema: "default".into(),
@@ -447,6 +468,8 @@ mod tests {
             id: FragmentNodeId(3),
             inputs: vec![FragmentNodeId(1), FragmentNodeId(2)],
             operator: FragmentOperator::HashJoin(JoinSpec {
+                left_qualifier: None,
+                right_qualifier: None,
                 join_type: JoinType::Inner,
                 left_keys: vec![],
                 right_keys: vec![],

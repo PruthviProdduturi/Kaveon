@@ -3,12 +3,16 @@ services:
     build: .
     container_name: kaveon-coordinator
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       KAVEON_NODE_ID: coordinator-1
       KAVEON_ENVIRONMENT: docker
       KAVEON_COORDINATOR: "true"
       KAVEON_HTTP_PORT: "8080"
+      KAVEON_BIND_HOST: "0.0.0.0"
+      KAVEON_INSECURE_DEVELOPMENT: "true"
+      KAVEON_ADVERTISED_URI: http://coordinator:8080
+      KAVEON_EXCHANGE_TOKEN: ${KAVEON_EXCHANGE_TOKEN:-kaveon-local-exchange}
       KAVEON_DATA_DIR: /data
       KAVEON_CATALOG_DIR: /etc/kaveon/catalogs
       KAVEON_CATALOG_ADMIN_TOKEN: ${KAVEON_CATALOG_ADMIN_TOKEN:-kaveon-local-catalog-admin}
@@ -31,6 +35,9 @@ services:
         condition: service_healthy
     environment:
       KAVEON_NODE_ID: worker-1
+      KAVEON_BIND_HOST: "0.0.0.0"
+      KAVEON_INSECURE_DEVELOPMENT: "true"
+      KAVEON_EXCHANGE_TOKEN: ${KAVEON_EXCHANGE_TOKEN:-kaveon-local-exchange}
       KAVEON_ENVIRONMENT: docker
       KAVEON_COORDINATOR: "false"
       KAVEON_HTTP_PORT: "8080"
@@ -51,6 +58,9 @@ services:
         condition: service_healthy
     environment:
       KAVEON_NODE_ID: worker-2
+      KAVEON_BIND_HOST: "0.0.0.0"
+      KAVEON_INSECURE_DEVELOPMENT: "true"
+      KAVEON_EXCHANGE_TOKEN: ${KAVEON_EXCHANGE_TOKEN:-kaveon-local-exchange}
       KAVEON_ENVIRONMENT: docker
       KAVEON_COORDINATOR: "false"
       KAVEON_HTTP_PORT: "8080"

@@ -47,10 +47,17 @@ impl ClusterState {
                 } else {
                     NodeRole::Worker
                 },
-                address: config
-                    .advertised_uri
-                    .clone()
-                    .unwrap_or_else(|| format!("http://127.0.0.1:{}", config.http_port)),
+                address: config.advertised_uri.clone().unwrap_or_else(|| {
+                    format!(
+                        "{}://127.0.0.1:{}",
+                        if config.tls_cert_path.is_some() {
+                            "https"
+                        } else {
+                            "http"
+                        },
+                        config.http_port
+                    )
+                }),
                 environment: config.environment.clone(),
                 version: env!("CARGO_PKG_VERSION").to_owned(),
                 uptime_secs: 0,
@@ -117,7 +124,11 @@ pub async fn worker_heartbeat_loop(state: Arc<AppState>) {
         };
 
         let url = format!("{}/v1/node/heartbeat", state.config.discovery_uri);
-        match client.post(&url).json(&info).send().await {
+        let mut request = client.post(&url).json(&info);
+        if let Some(token) = &state.config.exchange_token {
+            request = request.bearer_auth(token);
+        }
+        match request.send().await {
             Ok(resp) if resp.status().is_success() => {}
             Ok(resp) => {
                 eprintln!("heartbeat failed: coordinator returned {}", resp.status());

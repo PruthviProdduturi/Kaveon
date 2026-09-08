@@ -5,23 +5,26 @@ use kaveon_core::{
     JoinSpec, JoinType as FragmentJoinType, KaveonError, NamedExpr, Partitioning, QueryMemoryPool,
     Result, ScanSpec, ScanTable, SortSpec, StageFragment, StageGraph, StageId, TableReference,
 };
-use kaveon_exec::aggregate::{AggExpr, AggFunc, HashAggregate};
+use kaveon_exec::aggregate::{AggExpr, AggFunc};
 use kaveon_exec::distinct::DistinctOperator;
 use kaveon_exec::filter::FilterOperator;
-use kaveon_exec::join::{HashJoin, JoinType as PhysicalJoinType};
+use kaveon_exec::join::JoinType as PhysicalJoinType;
 use kaveon_exec::limit::LimitOperator;
 use kaveon_exec::offset::OffsetOperator;
 use kaveon_exec::project::ProjectOperator;
 use kaveon_exec::scan::ScanOperator;
 use kaveon_exec::semijoin::SemiJoinOperator;
 use kaveon_exec::setop::{SetOpMode, SetOpOperator};
-use kaveon_exec::sort::{SortExpr, SortOperator};
-use kaveon_exec::topn::TopNOperator;
+use kaveon_exec::sort::SortExpr;
 use kaveon_exec::union::UnionOperator;
 use kaveon_exec::window::WindowOperator;
 use kaveon_optim::rules::to_storage_predicate;
 use kaveon_sql::logical_plan::{AggregateExpr, JoinType, LogicalPlan};
-use kaveon_storage::{AdlsParquetReader, DeltaTableReader, ParquetReader, ScanPartition};
+const AGGREGATE_FUNCTIONS: &[&str] = &["COUNT", "SUM", "AVG", "MIN", "MAX"];
+use kaveon_storage::{
+    AdlsParquetReader, DeltaTableReader, ObjectDeltaReader, ObjectParquetReader, ParquetReader,
+    ScanPartition,
+};
 use std::collections::BTreeMap;
 
 const GROUPED_AGGREGATE_STATE_KEY_COLUMN: &str = "group_keys";
@@ -56,6 +59,15 @@ pub fn plan_partitioned_query(
     partition: ScanPartition,
 ) -> Result<PlannedQuery> {
     plan_query_inner(plan, catalog, Some(partition), None)
+}
+
+pub fn plan_partitioned_query_with_memory(
+    plan: &LogicalPlan,
+    catalog: &CatalogManager,
+    partition: ScanPartition,
+    memory: &QueryMemoryPool,
+) -> Result<PlannedQuery> {
+    plan_query_inner(plan, catalog, Some(partition), Some(memory))
 }
 
 pub fn qualify_tables(plan: &mut LogicalPlan, catalog: &str, schema: &str) {
@@ -154,6 +166,8 @@ pub fn build_executable_fragments(
         catalog,
         fragments: BTreeMap::new(),
         next_stage: 0,
+        delta_versions: BTreeMap::new(),
+        iceberg_snapshots: BTreeMap::new(),
     };
     let root = builder.build(plan)?;
     if root != graph.root_stage || builder.fragments.len() != graph.stages.len() {
@@ -200,6 +214,8 @@ struct ExecutableFragmentBuilder<'a> {
     catalog: &'a CatalogManager,
     fragments: BTreeMap<StageId, ExecutableFragment>,
     next_stage: u32,
+    delta_versions: BTreeMap<String, u64>,
+    iceberg_snapshots: BTreeMap<String, i64>,
 }
 
 impl ExecutableFragmentBuilder<'_> {
@@ -208,9 +224,47 @@ impl ExecutableFragmentBuilder<'_> {
             LogicalPlan::Scan { table, columns, .. } => {
                 let reference = TableReference::parse(table);
                 let resolved = self.catalog.resolve_table(&reference)?;
+                let source_uri = resolved.full_path();
+                let delta_version = if resolved.table.format == DataFormat::Delta {
+                    if let Some(version) = self.delta_versions.get(&source_uri) {
+                        Some(*version)
+                    } else {
+                        let version = if source_uri.starts_with("s3://")
+                            || source_uri.starts_with("abfss://")
+                        {
+                            kaveon_storage::ObjectDeltaReader::from_uri(&source_uri)?
+                                .snapshot()?
+                                .version
+                        } else {
+                            kaveon_storage::DeltaTableReader::new(
+                                source_uri.strip_prefix("file://").unwrap_or(&source_uri),
+                            )
+                            .snapshot_version()?
+                        };
+                        self.delta_versions.insert(source_uri.clone(), version);
+                        Some(version)
+                    }
+                } else {
+                    None
+                };
                 let scan = ScanSpec {
-                    source_uri: resolved.full_path(),
+                    iceberg_snapshot_id: if resolved.table.format == DataFormat::Iceberg {
+                        Some(if let Some(id) = self.iceberg_snapshots.get(&source_uri) {
+                            *id
+                        } else {
+                            let id = kaveon_storage::IcebergReader::new(&source_uri)
+                                .snapshot()?
+                                .snapshot_id
+                                .unwrap_or(-1);
+                            self.iceberg_snapshots.insert(source_uri.clone(), id);
+                            id
+                        })
+                    } else {
+                        None
+                    },
+                    source_uri,
                     format: resolved.table.format,
+                    delta_version,
                     table: ScanTable {
                         catalog: resolved.catalog,
                         schema: resolved.schema,
@@ -391,9 +445,16 @@ impl ExecutableFragmentBuilder<'_> {
                 target_draft.push(FragmentOperator::Union, vec![]);
                 Ok(self.add_fragment(target_draft))
             }
-            LogicalPlan::Window { input, .. } => {
-                self.build_single_exchange(input, FragmentOperator::Window, None)
-            }
+            LogicalPlan::Window {
+                input,
+                window_exprs,
+            } => self.build_single_exchange(
+                input,
+                FragmentOperator::Window {
+                    window_exprs: window_exprs.clone(),
+                },
+                None,
+            ),
             LogicalPlan::Intersect { left, right } => {
                 let left_stage = self.build(left)?;
                 let right_stage = self.build(right)?;
@@ -542,6 +603,8 @@ impl ExecutableFragmentBuilder<'_> {
         target_draft.push(
             FragmentOperator::HashJoin(JoinSpec {
                 join_type: fragment_join_type(join_type),
+                left_qualifier: relation_qualifier(left),
+                right_qualifier: relation_qualifier(right),
                 left_keys: left_keys.into_iter().map(Expr::Column).collect(),
                 right_keys: right_keys.into_iter().map(Expr::Column).collect(),
                 residual: None,
@@ -638,14 +701,14 @@ fn fragment_project_expressions(expressions: &[Expr]) -> Vec<NamedExpr> {
         .into_iter()
         .map(|mut named| {
             named.expression = match named.expression {
-                Expr::Function { name, args } => {
+                Expr::Function { name, args } if AGGREGATE_FUNCTIONS.contains(&name.as_str()) => {
                     Expr::Column(fragment_aggregate_output_name(&name, &args))
                 }
                 Expr::Alias { expr, name } => match *expr {
                     Expr::Function {
                         name: function,
                         args,
-                    } => Expr::Alias {
+                    } if AGGREGATE_FUNCTIONS.contains(&function.as_str()) => Expr::Alias {
                         expr: Box::new(Expr::Column(fragment_aggregate_output_name(
                             &function, &args,
                         ))),
@@ -1108,6 +1171,27 @@ fn plan_query_with_predicate(
 
             let (source, scan_metrics): (Box<dyn BatchSource>, _) = match resolved.table.format {
                 DataFormat::Parquet => {
+                    if path.starts_with("s3://") {
+                        let mut reader = ObjectParquetReader::from_uri(&path)?;
+                        if let Some(cols) = columns {
+                            reader = reader.with_columns(cols.clone());
+                        }
+                        if let Some(predicate) = storage_predicate {
+                            reader = reader.with_predicate(predicate.clone());
+                        }
+                        if let Some(partition) = partition {
+                            reader = reader.with_partition(partition);
+                        }
+                        let source = reader.read_blocking()?;
+                        let metrics = source.metrics();
+                        return Ok(PlannedQuery {
+                            operator: Box::new(ScanOperator::new(
+                                Box::new(source),
+                                columns.as_deref(),
+                            )?),
+                            scan_metrics: vec![metrics],
+                        });
+                    }
                     if path.starts_with("abfss://") {
                         let mut reader = AdlsParquetReader::from_abfss_uri(&path)?;
                         if let Some(cols) = columns {
@@ -1148,12 +1232,31 @@ fn plan_query_with_predicate(
                     (Box::new(source), vec![metrics])
                 }
                 DataFormat::Delta => {
-                    if path.starts_with("abfss://") {
-                        return Err(KaveonError::Execution(
-                            "Delta snapshots over ADLS Gen2 are not implemented; register Parquet objects for the current ADLS reader".into(),
-                        ));
+                    if path.starts_with("abfss://") || path.starts_with("s3://") {
+                        let mut reader = ObjectDeltaReader::from_uri(&path)?;
+                        if let Some(predicate) = storage_predicate {
+                            reader = reader.with_predicate(predicate.clone());
+                        }
+                        if let Some(cols) = columns {
+                            reader = reader.with_columns(cols.clone());
+                        }
+                        if let Some(partition) = partition {
+                            reader = reader.with_partition(partition);
+                        }
+                        let source = reader.read_blocking()?;
+                        let metrics = source.metrics();
+                        return Ok(PlannedQuery {
+                            operator: Box::new(ScanOperator::new(
+                                Box::new(source),
+                                columns.as_deref(),
+                            )?),
+                            scan_metrics: vec![metrics],
+                        });
                     }
                     let mut reader = DeltaTableReader::new(&path);
+                    if let Some(predicate) = storage_predicate {
+                        reader = reader.with_predicate(predicate.clone());
+                    }
                     if let Some(cols) = columns {
                         reader = reader.with_columns(cols.clone());
                     }
@@ -1167,9 +1270,16 @@ fn plan_query_with_predicate(
                     (Box::new(source), vec![metrics])
                 }
                 DataFormat::Iceberg => {
-                    return Err(KaveonError::Execution(
-                        "local Iceberg scans are not implemented".into(),
-                    ));
+                    let mut reader = kaveon_storage::IcebergReader::new(&path);
+                    if let Some(columns) = columns {
+                        reader = reader.with_columns(columns.clone());
+                    }
+                    if let Some(partition) = partition {
+                        reader = reader.with_partition(partition);
+                    }
+                    let source = reader.read_blocking()?;
+                    let metrics = source.metrics();
+                    (Box::new(source), vec![metrics])
                 }
             };
             let scan = ScanOperator::new(source, columns.as_deref())?;
@@ -1193,26 +1303,17 @@ fn plan_query_with_predicate(
             let mut scan_metrics = left.scan_metrics;
             scan_metrics.extend(right.scan_metrics);
             Ok(PlannedQuery {
-                operator: Box::new(if let Some(memory) = memory {
-                    HashJoin::try_new_qualified_with_memory(
-                        left.operator,
-                        right.operator,
-                        physical_join_type(*join_type),
-                        keys,
-                        left_qualifier.as_deref(),
-                        right_qualifier.as_deref(),
-                        memory.operator("hash-join")?,
-                    )?
-                } else {
-                    HashJoin::try_new_qualified(
-                        left.operator,
-                        right.operator,
-                        physical_join_type(*join_type),
-                        keys,
-                        left_qualifier.as_deref(),
-                        right_qualifier.as_deref(),
-                    )?
-                }),
+                operator: kaveon_exec::partitioned::hash_join(
+                    left.operator,
+                    right.operator,
+                    physical_join_type(*join_type),
+                    keys,
+                    left_qualifier.as_deref(),
+                    right_qualifier.as_deref(),
+                    memory
+                        .map(|memory| memory.operator("hash-join"))
+                        .transpose()?,
+                )?,
                 scan_metrics,
             })
         }
@@ -1221,8 +1322,12 @@ fn plan_query_with_predicate(
             let pushed = to_storage_predicate(predicate);
             let planned =
                 plan_query_with_predicate(input, catalog, pushed.as_ref(), partition, memory)?;
+            let mut operator = FilterOperator::new(planned.operator, predicate.clone());
+            if let Some(memory) = memory {
+                operator = operator.with_memory(memory.operator("filter")?);
+            }
             Ok(PlannedQuery {
-                operator: Box::new(FilterOperator::new(planned.operator, predicate.clone())),
+                operator: Box::new(operator),
                 scan_metrics: planned.scan_metrics,
             })
         }
@@ -1238,12 +1343,16 @@ fn plan_query_with_predicate(
             let exprs: Vec<Expr> = columns
                 .iter()
                 .map(|e| match e {
-                    Expr::Function { name, args } => {
+                    Expr::Function { name, args }
+                        if AGGREGATE_FUNCTIONS.contains(&name.as_str()) =>
+                    {
                         let col = agg_output_name(name, args);
                         Expr::Column(col)
                     }
                     Expr::Alias { expr, name } => match expr.as_ref() {
-                        Expr::Function { name: fname, args } => {
+                        Expr::Function { name: fname, args }
+                            if AGGREGATE_FUNCTIONS.contains(&fname.as_str()) =>
+                        {
                             let col = agg_output_name(fname, args);
                             Expr::Alias {
                                 expr: Box::new(Expr::Column(col)),
@@ -1256,8 +1365,12 @@ fn plan_query_with_predicate(
                 })
                 .collect();
 
+            let mut operator = ProjectOperator::new(planned.operator, exprs)?;
+            if let Some(memory) = memory {
+                operator = operator.with_memory(memory.operator("project")?);
+            }
             Ok(PlannedQuery {
-                operator: Box::new(ProjectOperator::new(planned.operator, exprs)?),
+                operator: Box::new(operator),
                 scan_metrics: planned.scan_metrics,
             })
         }
@@ -1267,6 +1380,35 @@ fn plan_query_with_predicate(
             group_by,
             aggregates,
         } => {
+            if group_by.is_empty()
+                && !aggregates.is_empty()
+                && aggregates.iter().all(|aggregate| {
+                    matches!(
+                        aggregate,
+                        AggregateExpr::Count {
+                            expr: Expr::Star,
+                            distinct: false
+                        }
+                    )
+                })
+                && let LogicalPlan::Scan { table, columns, .. } = input.as_ref()
+                && partition.is_none()
+                && storage_predicate.is_none()
+                && let Some(operator) = kaveon_exec::metadata_count::MetadataCount::try_new(
+                    catalog,
+                    table,
+                    columns.as_deref(),
+                    aggregates.len(),
+                    memory
+                        .map(|pool| pool.operator("metadata-count"))
+                        .transpose()?,
+                )?
+            {
+                return Ok(PlannedQuery {
+                    operator: Box::new(operator),
+                    scan_metrics: Vec::new(),
+                });
+            }
             let planned = plan_query_inner(input, catalog, partition, memory)?;
 
             let group_cols: Vec<String> = group_by
@@ -1284,17 +1426,54 @@ fn plan_query_with_predicate(
                 .map(|aggregate| logical_agg_to_exec(aggregate, planned.operator.schema()))
                 .collect::<Result<_>>()?;
 
+            let parallelism = kaveon_exec::local_parallel::configured_parallelism()?;
+            let operator = if parallelism > 1 {
+                let pool = memory
+                    .ok_or_else(|| {
+                        KaveonError::Execution(
+                            "local parallel aggregation requires a query memory pool".into(),
+                        )
+                    })?
+                    .clone();
+                let probe = kaveon_exec::aggregate::HashAggregate::new(
+                    Box::new(kaveon_exec::local_parallel::EmptyInput(
+                        planned.operator.schema().clone(),
+                    )),
+                    group_cols.clone(),
+                    agg_exprs.clone(),
+                )?;
+                let schema = probe.schema().clone();
+                let partials = kaveon_exec::local_parallel::ParallelPartials::new(
+                    planned.operator,
+                    group_cols.clone(),
+                    agg_exprs.clone(),
+                    pool.clone(),
+                    parallelism,
+                )?;
+                Box::new(kaveon_exec::local_parallel::LazyFinalAggregate::new(
+                    schema,
+                    Box::new(partials),
+                    Box::new(move |input| {
+                        crate::fragment_exec::compile_final_aggregate(
+                            input,
+                            group_cols,
+                            agg_exprs,
+                            Some(&pool),
+                        )
+                    }),
+                )) as Box<dyn BatchOperator>
+            } else {
+                kaveon_exec::partitioned::hash_aggregate(
+                    planned.operator,
+                    group_cols,
+                    agg_exprs,
+                    memory
+                        .map(|memory| memory.operator("hash-aggregate"))
+                        .transpose()?,
+                )?
+            };
             Ok(PlannedQuery {
-                operator: Box::new(if let Some(memory) = memory {
-                    HashAggregate::new_with_memory(
-                        planned.operator,
-                        group_cols,
-                        agg_exprs,
-                        memory.operator("hash-aggregate")?,
-                    )?
-                } else {
-                    HashAggregate::new(planned.operator, group_cols, agg_exprs)?
-                }),
+                operator,
                 scan_metrics: planned.scan_metrics,
             })
         }
@@ -1306,7 +1485,11 @@ fn plan_query_with_predicate(
                 .map(|(expr, ascending)| SortExpr::new(expr.clone(), *ascending))
                 .collect();
             Ok(PlannedQuery {
-                operator: Box::new(SortOperator::new(planned.operator, sort_exprs)?),
+                operator: kaveon_exec::partitioned::sort_operator(
+                    planned.operator,
+                    sort_exprs,
+                    memory.map(|memory| memory.operator("sort")).transpose()?,
+                )?,
                 scan_metrics: planned.scan_metrics,
             })
         }
@@ -1323,7 +1506,12 @@ fn plan_query_with_predicate(
                     .map(|(expr, ascending)| SortExpr::new(expr.clone(), *ascending))
                     .collect();
                 return Ok(PlannedQuery {
-                    operator: Box::new(TopNOperator::new(planned.operator, sort_exprs, *count)?),
+                    operator: kaveon_exec::partitioned::top_n_operator(
+                        planned.operator,
+                        sort_exprs,
+                        *count,
+                        memory.map(|memory| memory.operator("topn")).transpose()?,
+                    )?,
                     scan_metrics: planned.scan_metrics,
                 });
             }
@@ -1344,8 +1532,12 @@ fn plan_query_with_predicate(
 
         LogicalPlan::Distinct { input } => {
             let planned = plan_query_inner(input, catalog, partition, memory)?;
+            let mut operator = DistinctOperator::new(planned.operator);
+            if let Some(memory) = memory {
+                operator = operator.with_memory(memory.operator("distinct")?);
+            }
             Ok(PlannedQuery {
-                operator: Box::new(DistinctOperator::new(planned.operator)),
+                operator: Box::new(operator),
                 scan_metrics: planned.scan_metrics,
             })
         }
@@ -1369,8 +1561,12 @@ fn plan_query_with_predicate(
             window_exprs,
         } => {
             let planned = plan_query_inner(input, catalog, partition, memory)?;
+            let mut operator = WindowOperator::new(planned.operator, window_exprs.clone())?;
+            if let Some(memory) = memory {
+                operator = operator.with_memory(memory.operator("window")?);
+            }
             Ok(PlannedQuery {
-                operator: Box::new(WindowOperator::new(planned.operator, window_exprs.clone())),
+                operator: Box::new(operator),
                 scan_metrics: planned.scan_metrics,
             })
         }
@@ -1380,12 +1576,16 @@ fn plan_query_with_predicate(
             let right_planned = plan_query_inner(right, catalog, partition, memory)?;
             let mut scan_metrics = left_planned.scan_metrics;
             scan_metrics.extend(right_planned.scan_metrics);
+            let mut operator = SetOpOperator::new(
+                left_planned.operator,
+                right_planned.operator,
+                SetOpMode::Intersect,
+            );
+            if let Some(memory) = memory {
+                operator = operator.with_memory(memory.operator("set-operation")?);
+            }
             Ok(PlannedQuery {
-                operator: Box::new(SetOpOperator::new(
-                    left_planned.operator,
-                    right_planned.operator,
-                    SetOpMode::Intersect,
-                )),
+                operator: Box::new(operator),
                 scan_metrics,
             })
         }
@@ -1395,12 +1595,16 @@ fn plan_query_with_predicate(
             let right_planned = plan_query_inner(right, catalog, partition, memory)?;
             let mut scan_metrics = left_planned.scan_metrics;
             scan_metrics.extend(right_planned.scan_metrics);
+            let mut operator = SetOpOperator::new(
+                left_planned.operator,
+                right_planned.operator,
+                SetOpMode::Except,
+            );
+            if let Some(memory) = memory {
+                operator = operator.with_memory(memory.operator("set-operation")?);
+            }
             Ok(PlannedQuery {
-                operator: Box::new(SetOpOperator::new(
-                    left_planned.operator,
-                    right_planned.operator,
-                    SetOpMode::Except,
-                )),
+                operator: Box::new(operator),
                 scan_metrics,
             })
         }
@@ -1420,14 +1624,18 @@ fn plan_query_with_predicate(
             let right_planned = plan_query_inner(right, catalog, partition, memory)?;
             let mut scan_metrics = left_planned.scan_metrics;
             scan_metrics.extend(right_planned.scan_metrics);
+            let mut operator = SemiJoinOperator::new(
+                left_planned.operator,
+                right_planned.operator,
+                left_key.clone(),
+                right_key.clone(),
+                matches!(plan, LogicalPlan::AntiJoin { .. }),
+            )?;
+            if let Some(memory) = memory {
+                operator = operator.with_memory(memory.operator("semi-join")?);
+            }
             Ok(PlannedQuery {
-                operator: Box::new(SemiJoinOperator::new(
-                    left_planned.operator,
-                    right_planned.operator,
-                    left_key.clone(),
-                    right_key.clone(),
-                    matches!(plan, LogicalPlan::AntiJoin { .. }),
-                )),
+                operator: Box::new(operator),
                 scan_metrics,
             })
         }
@@ -1643,6 +1851,211 @@ mod tests {
         let mut catalog = CatalogManager::new("test", "default");
         catalog.register_catalog(Box::new(memory));
         Fixture { directory, catalog }
+    }
+
+    #[test]
+    fn metadata_count_sql_is_exact_snapshot_pinned_and_filter_safe() {
+        let mut fixture = fixture();
+        let schema = fixture
+            .catalog
+            .resolve_table(&TableReference::parse("test.default.items"))
+            .unwrap()
+            .table
+            .arrow_schema
+            .clone();
+        let mut writer = ArrowWriter::try_new(
+            File::create(fixture.directory.join("empty.parquet")).unwrap(),
+            schema.clone(),
+            None,
+        )
+        .unwrap();
+        writer
+            .write(&RecordBatch::new_empty(schema.clone()))
+            .unwrap();
+        writer.close().unwrap();
+        let delta = fixture.directory.join("delta");
+        fs::create_dir_all(delta.join("_delta_log")).unwrap();
+        for name in ["a.parquet", "b.parquet"] {
+            fs::copy(fixture.directory.join("items.parquet"), delta.join(name)).unwrap();
+        }
+        let logical_schema = serde_json::json!({"type":"struct","fields":[{"name":"id","type":"long","nullable":true,"metadata":{}}]});
+        let actions = [
+            serde_json::json!({"protocol":{"minReaderVersion":1,"minWriterVersion":2}}),
+            serde_json::json!({"metaData":{"id":"count-test","schemaString":logical_schema.to_string(),"partitionColumns":[],"configuration":{}}}),
+            serde_json::json!({"add":{"path":"a.parquet"}}),
+            serde_json::json!({"add":{"path":"b.parquet"}}),
+        ];
+        fs::write(
+            delta.join("_delta_log/00000000000000000000.json"),
+            actions
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        let mut catalog = MemoryCatalog::new(
+            "counts",
+            StorageType::Local {
+                base_path: fixture.directory.clone(),
+            },
+        )
+        .with_schema("default");
+        for (name, location, format) in [
+            ("empty", "empty.parquet", DataFormat::Parquet),
+            ("delta", "delta", DataFormat::Delta),
+        ] {
+            catalog
+                .register_table(
+                    "default",
+                    TableMeta {
+                        name: name.into(),
+                        arrow_schema: schema.clone(),
+                        location: location.into(),
+                        access: AccessPattern::Shortcut,
+                        format,
+                    },
+                )
+                .unwrap();
+        }
+        fixture.catalog.register_catalog(Box::new(catalog));
+        let plan_sql = |sql| {
+            let plan = kaveon_sql::logical_plan::sql_to_logical_plan(sql).unwrap();
+            plan_query(&plan, &fixture.catalog)
+        };
+        let count = |mut planned: PlannedQuery| {
+            let batches = collect_batches(&mut *planned.operator).unwrap();
+            assert_eq!(batches.len(), 1);
+            batches[0]
+                .column(0)
+                .as_any()
+                .downcast_ref::<arrow::array::UInt64Array>()
+                .unwrap()
+                .value(0)
+        };
+        let plain = plan_sql("SELECT COUNT(*) AS total FROM test.default.items").unwrap();
+        assert!(plain.scan_metrics.is_empty());
+        assert_eq!(plain.operator.schema().field(0).name(), "total");
+        assert_eq!(count(plain), 4);
+        assert_eq!(
+            count(plan_sql("SELECT COUNT(*) FROM counts.default.empty").unwrap()),
+            0
+        );
+        for (sql, expected) in [
+            ("SELECT COUNT(*) FROM test.default.items WHERE id > 100", 1),
+            ("SELECT COUNT(id) FROM test.default.items", 4),
+            ("SELECT COUNT(DISTINCT id) FROM test.default.items", 4),
+        ] {
+            let planned = plan_sql(sql).unwrap();
+            assert!(
+                !planned.scan_metrics.is_empty(),
+                "{sql} must retain scan execution"
+            );
+            assert_eq!(count(planned), expected);
+        }
+        let pinned = plan_sql("SELECT COUNT(*) FROM counts.default.delta").unwrap();
+        fs::write(
+            delta.join("_delta_log/00000000000000000001.json"),
+            r#"{"remove":{"path":"b.parquet"}}"#,
+        )
+        .unwrap();
+        assert_eq!(count(pinned), 8);
+        assert_eq!(
+            count(plan_sql("SELECT COUNT(*) FROM counts.default.delta").unwrap()),
+            4
+        );
+        fs::write(
+            delta.join("_delta_log/00000000000000000002.json"),
+            r#"{"remove":{"path":"a.parquet"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            count(plan_sql("SELECT COUNT(*) FROM counts.default.delta").unwrap()),
+            0
+        );
+        fs::write(delta.join("_delta_log/00000000000000000003.json"), r#"{"protocol":{"minReaderVersion":3,"minWriterVersion":7,"readerFeatures":["deletionVectors"]}}"#).unwrap();
+        assert!(plan_sql("SELECT COUNT(*) FROM counts.default.delta").is_err());
+    }
+
+    #[test]
+    fn parallel_sql_aggregates_preserve_projection_bindings() {
+        const CHILD: &str = "KAVEON_PARALLEL_SQL_REGRESSION_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "planner::tests::parallel_sql_aggregates_preserve_projection_bindings",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env("KAVEON_LOCAL_PARALLELISM", "4")
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            return;
+        }
+        let fixture = fixture();
+        let pool = QueryMemoryPool::new("parallel-sql-regression", 64 * 1024 * 1024).unwrap();
+        for sql in [
+            "SELECT COUNT(*), SUM(id), MIN(id), MAX(id), AVG(id) FROM items",
+            "SELECT COUNT(DISTINCT id), SUM(DISTINCT id) FROM items",
+            "SELECT id, COUNT(*), SUM(id) FROM items GROUP BY id ORDER BY id",
+            "SELECT COUNT(*) AS total, SUM(id) AS amount FROM items WHERE id > 100",
+            "SELECT COUNT(*), SUM(id) FROM items WHERE id > 1000",
+            "SELECT COUNT(*), SUM(i.id) FROM items i JOIN customers c ON i.id=c.id",
+        ] {
+            let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(sql).unwrap();
+            qualify_tables(&mut plan, "test", "default");
+            let mut planned = plan_query_with_memory(&plan, &fixture.catalog, &pool).unwrap();
+            let expected_schema = planned.operator.schema().clone();
+            let batches = collect_batches(&mut *planned.operator).unwrap();
+            assert!(!batches.is_empty(), "{sql}");
+            for batch in &batches {
+                assert_eq!(batch.schema(), expected_schema, "{sql}");
+            }
+            let first = &batches[0];
+            if sql.contains("GROUP BY") {
+                assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 4);
+            } else {
+                let count = first
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<arrow::array::UInt64Array>()
+                    .unwrap()
+                    .value(0);
+                assert_eq!(
+                    count,
+                    if sql.contains("> 1000") {
+                        0
+                    } else if sql.contains("> 100") {
+                        1
+                    } else {
+                        4
+                    },
+                    "{sql}"
+                );
+                let sum = first
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap();
+                if sql.contains("> 1000") {
+                    assert!(arrow::array::Array::is_null(sum, 0));
+                } else {
+                    assert_eq!(
+                        sum.value(0),
+                        if sql.contains("> 100") { 101 } else { 204 },
+                        "{sql}"
+                    );
+                }
+            }
+            drop(planned);
+        }
     }
 
     #[test]

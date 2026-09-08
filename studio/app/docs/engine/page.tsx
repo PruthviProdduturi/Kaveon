@@ -5,21 +5,23 @@ export const metadata = { title: "Kaveon Engine" };
 export default function EngineDocs() {
   return <div className="docs-prose">
     <PageHeader
-      eyebrow="Engine Manual"
+      eyebrow="Engine"
       title="Kaveon Engine"
       lead="A vectorized columnar query engine in Rust: its own SQL parser, planner, optimizer, catalog, and distributed runtime, reading Parquet and Delta directly over Arrow."
     />
 
     <Callout type="warn">
       <strong>Alpha.</strong> Engine is not yet Studio&rsquo;s execution backend — queries you run in the UI do
-      not go through it. It also has no end-user authentication or TLS, so keep the server on a trusted
-      network. Cloud object storage, Iceberg, admission control, and aggregate/join spill are open gates.
+      not automatically go through it. An opt-in platform bridge delegates authenticated queries and
+      catalog synchronization. Engine now supports authenticated principals, TLS, queued resource groups,
+      and partitioned aggregate/join spill. Live cloud qualification, broader SQL coverage, and sustained
+      production-scale performance remain open gates.
     </Callout>
 
     <Diagram
       src="/docs/architecture/kaveon-engine-pipeline.svg"
       alt="Kaveon Engine coordinator, distributed vectorized execution, exchange, catalog, and lake-read pipeline"
-      caption="The coordinator plans versioned fragments; workers execute Arrow batches and exchange partitions. Cloud storage and advanced optimizer capabilities remain targets."
+      caption="The coordinator pins versioned fragments and table snapshots; workers execute Arrow batches and exchange partitions. Cloud deployment qualification and advanced optimization remain targets."
     />
 
     <h2>Why it exists</h2>
@@ -111,13 +113,15 @@ kaveon --server http://localhost:8080`}</Code>
         <tr>
           <td>
             <code>SELECT</code> with projection and aliases · <code>WHERE</code> · <code>GROUP BY</code> ·{" "}
-            <code>SUM</code>/<code>COUNT</code>/<code>AVG</code>/<code>MIN</code>/<code>MAX</code> ·{" "}
-            <code>COUNT(DISTINCT)</code> · <code>ORDER BY</code> with null placement · <code>LIMIT</code>/TopN ·
-            equi and cross joins · arithmetic · <code>catalog.schema.table</code>
+            <code>HAVING</code> · <code>SUM</code>/<code>COUNT</code>/<code>AVG</code>/<code>MIN</code>/<code>MAX</code> ·{" "}
+            <code>COUNT/SUM/AVG(DISTINCT)</code> · <code>ORDER BY</code> with null placement ·{" "}
+            <code>LIMIT</code>/TopN · equi and cross joins · window functions · set operations ·{" "}
+            <code>CASE</code> · date/time functions · <code>CAST</code> · arithmetic ·{" "}
+            <code>catalog.schema.table</code>
           </td>
           <td>
-            CTEs · subqueries · window functions · <code>HAVING</code> · <code>SELECT DISTINCT</code> ·{" "}
-            <code>CASE</code> · set operations · DDL and DML · non-equality join conditions
+            Scalar and correlated subqueries · non-equality join conditions · DDL and DML ·
+            comprehensive decimal and date/time edge cases
           </td>
         </tr>
       </tbody>
@@ -143,7 +147,7 @@ kaveon --server http://localhost:8080`}</Code>
     </tbody></table>
     <Code lang="bash">{`curl -s localhost:8080/v1/statement \\
   -H 'content-type: application/json' \\
-  -d '{"sql":"SELECT count(*) FROM warehouse.default.orders"}'`}</Code>
+  -d '{"query":"SELECT count(*) FROM warehouse.default.orders"}'`}</Code>
     <Callout type="warn">
       Internal task/exchange routes and catalog mutations carry bearer tokens, but{" "}
       <code>/v1/statement</code> is not an end-user security boundary. Anyone who can reach the port can run
@@ -159,6 +163,6 @@ kaveon --server http://localhost:8080`}</Code>
       <li><a href="/docs/memory">Engine Memory</a> — reservations, spill, and safety boundaries.</li>
     </ul>
 
-    <Pager prev={{ href: "/docs/connectors", title: "Connector Matrix" }} next={{ href: "/docs/engine/architecture", title: "Engine Architecture" }} />
+    <Pager prev={{ href: "/docs/freshness", title: "Freshness Algorithm" }} next={{ href: "/docs/engine/architecture", title: "Engine Architecture" }} />
   </div>;
 }

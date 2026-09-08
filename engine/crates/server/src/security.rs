@@ -1,0 +1,421 @@
+//! Authentication at the Engine boundary. Forwarded identity is accepted only
+//! from the separately authenticated platform bridge, never from a user token.
+use crate::AppState;
+use axum::{
+    extract::{Request, State},
+    http::{HeaderMap, Method, StatusCode},
+    middleware::Next,
+    response::{IntoResponse, Response},
+};
+use serde::Deserialize;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SecurityConfig {
+    #[serde(default)]
+    pub insecure_development: bool,
+    #[serde(default)]
+    pub principals: Vec<PrincipalCredential>,
+    pub bridge_token: Option<String>,
+    #[serde(default)]
+    pub resource_groups: Vec<ResourceGroupConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceGroupConfig {
+    pub name: String,
+    pub principals: Vec<String>,
+    pub max_running: usize,
+    pub max_queued: usize,
+    pub queue_timeout_ms: u64,
+}
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrincipalCredential {
+    pub token: String,
+    pub principal: String,
+    pub role: Role,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    Reader,
+    Analyst,
+    Admin,
+}
+#[derive(Clone, Debug)]
+pub struct Identity {
+    pub principal: String,
+    pub role: Role,
+}
+impl Identity {
+    pub fn can_view(&self, owner: Option<&str>) -> bool {
+        self.role == Role::Admin || owner == Some(self.principal.as_str())
+    }
+}
+pub fn bearer(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("authorization")?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")
+}
+pub fn token_matches(actual: Option<&str>, expected: Option<&str>) -> bool {
+    let Some(expected) = expected.filter(|v| !v.is_empty()) else {
+        return false;
+    };
+    let Some(actual) = actual else {
+        return false;
+    };
+    let mut diff = actual.len() ^ expected.len();
+    for (a, b) in actual.bytes().zip(expected.bytes()) {
+        diff |= usize::from(a ^ b);
+    }
+    diff == 0
+}
+impl SecurityConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        let mut group_names = std::collections::HashSet::new();
+        let mut grouped_principals = std::collections::HashSet::new();
+        for group in &self.resource_groups {
+            anyhow::ensure!(
+                !group.name.trim().is_empty() && group_names.insert(&group.name),
+                "resource group names must be nonempty and unique"
+            );
+            anyhow::ensure!(
+                group.max_running > 0
+                    && group.max_running <= 10000
+                    && group.max_queued <= 10000
+                    && group.queue_timeout_ms > 0
+                    && group.queue_timeout_ms <= 300000,
+                "invalid resource group bounds"
+            );
+            for principal in &group.principals {
+                anyhow::ensure!(
+                    !principal.trim().is_empty() && grouped_principals.insert(principal),
+                    "each principal may belong to only one resource group"
+                );
+            }
+        }
+        let mut tokens = std::collections::HashSet::new();
+        for credential in &self.principals {
+            anyhow::ensure!(
+                credential.token.len() >= 32 && !credential.principal.trim().is_empty(),
+                "security principals require nonempty names and tokens of at least 32 bytes"
+            );
+            anyhow::ensure!(
+                tokens.insert(credential.token.as_str()),
+                "duplicate security token"
+            );
+        }
+        if let Some(token) = &self.bridge_token {
+            anyhow::ensure!(
+                token.len() >= 32 && tokens.insert(token),
+                "bridge token must be distinct and at least 32 bytes"
+            );
+        }
+        Ok(())
+    }
+    pub fn authenticate(&self, headers: &HeaderMap) -> Result<Identity, StatusCode> {
+        let token = bearer(headers);
+        if token_matches(token, self.bridge_token.as_deref()) {
+            let principal = headers
+                .get("x-kaveon-principal")
+                .and_then(|v| v.to_str().ok())
+                .filter(|v| !v.trim().is_empty())
+                .ok_or(StatusCode::UNAUTHORIZED)?;
+            let role = match headers.get("x-kaveon-role").and_then(|v| v.to_str().ok()) {
+                Some("reader") => Role::Reader,
+                Some("analyst") => Role::Analyst,
+                Some("admin") => Role::Admin,
+                _ => return Err(StatusCode::FORBIDDEN),
+            };
+            return Ok(Identity {
+                principal: principal.into(),
+                role,
+            });
+        }
+        for credential in &self.principals {
+            if token_matches(token, Some(&credential.token)) {
+                return Ok(Identity {
+                    principal: credential.principal.clone(),
+                    role: credential.role,
+                });
+            }
+        }
+        if self.insecure_development && token.is_none() {
+            return Ok(Identity {
+                principal: "development".into(),
+                role: Role::Admin,
+            });
+        }
+        Err(StatusCode::UNAUTHORIZED)
+    }
+}
+
+pub async fn authorize(
+    State(state): State<Arc<AppState>>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let path = request.uri().path();
+    if matches!(path, "/health" | "/ready") {
+        return next.run(request).await;
+    }
+    let internal = path == "/v1/task"
+        || path == "/v1/node/heartbeat"
+        || path.starts_with("/v1/internal/")
+        || path.starts_with("/v1/exchange")
+        || (!state.config.coordinator
+            && path.starts_with("/v1/query/")
+            && request.method() == Method::DELETE);
+    if internal {
+        if !token_matches(
+            bearer(request.headers()),
+            state.config.exchange_token.as_deref(),
+        ) {
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+        request.extensions_mut().insert(Identity {
+            principal: "internal".into(),
+            role: Role::Admin,
+        });
+        return next.run(request).await;
+    }
+    // The catalog service credential is confined to the metadata API.
+    if path.starts_with("/v1/catalog/")
+        && token_matches(
+            bearer(request.headers()),
+            state.config.catalog_admin_token.as_deref(),
+        )
+    {
+        return next.run(request).await;
+    }
+    let identity = match state.config.security.authenticate(request.headers()) {
+        Ok(identity) => identity,
+        Err(status) => return status.into_response(),
+    };
+    if path == "/v1/statement" && identity.role == Role::Reader {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    request.extensions_mut().insert(identity);
+    next.run(request).await
+}
+
+#[derive(Default)]
+pub struct PrincipalAdmission {
+    active: Arc<Mutex<HashMap<String, usize>>>,
+    groups: Mutex<HashMap<String, Arc<GroupGate>>>,
+}
+struct GroupGate {
+    running: Arc<tokio::sync::Semaphore>,
+    queued: Arc<std::sync::atomic::AtomicUsize>,
+}
+struct QueueGuard(Arc<std::sync::atomic::AtomicUsize>);
+impl Drop for QueueGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+pub struct PrincipalPermit {
+    active: Arc<Mutex<HashMap<String, usize>>>,
+    principal: String,
+}
+impl PrincipalAdmission {
+    pub async fn admit_group(
+        &self,
+        principal: &str,
+        config: &SecurityConfig,
+    ) -> Result<Option<tokio::sync::OwnedSemaphorePermit>, StatusCode> {
+        let Some(group) = config
+            .resource_groups
+            .iter()
+            .find(|group| group.principals.iter().any(|member| member == principal))
+        else {
+            return Ok(None);
+        };
+        let gate = {
+            let mut gates = self
+                .groups
+                .lock()
+                .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+            gates
+                .entry(group.name.clone())
+                .or_insert_with(|| {
+                    Arc::new(GroupGate {
+                        running: Arc::new(tokio::sync::Semaphore::new(group.max_running)),
+                        queued: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                    })
+                })
+                .clone()
+        };
+        if let Ok(permit) = gate.running.clone().try_acquire_owned() {
+            return Ok(Some(permit));
+        }
+        gate.queued
+            .fetch_update(
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+                |queued| (queued < group.max_queued).then_some(queued + 1),
+            )
+            .map_err(|_| StatusCode::TOO_MANY_REQUESTS)?;
+        let _waiting = QueueGuard(gate.queued.clone());
+        match tokio::time::timeout(
+            std::time::Duration::from_millis(group.queue_timeout_ms),
+            gate.running.clone().acquire_owned(),
+        )
+        .await
+        {
+            Ok(Ok(permit)) => Ok(Some(permit)),
+            Ok(Err(_)) => Err(StatusCode::SERVICE_UNAVAILABLE),
+            Err(_) => Err(StatusCode::TOO_MANY_REQUESTS),
+        }
+    }
+    pub fn admit(&self, principal: &str, limit: usize) -> Result<PrincipalPermit, StatusCode> {
+        let mut active = self
+            .active
+            .lock()
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        let count = active.entry(principal.into()).or_default();
+        if *count >= limit {
+            return Err(StatusCode::TOO_MANY_REQUESTS);
+        }
+        *count += 1;
+        Ok(PrincipalPermit {
+            active: self.active.clone(),
+            principal: principal.into(),
+        })
+    }
+}
+impl Drop for PrincipalPermit {
+    fn drop(&mut self) {
+        if let Ok(mut active) = self.active.lock()
+            && let Some(count) = active.get_mut(&self.principal)
+        {
+            *count -= 1;
+            if *count == 0 {
+                active.remove(&self.principal);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn rejects_missing_wrong_and_untrusted_forwarded_identity() {
+        let config = SecurityConfig {
+            principals: vec![PrincipalCredential {
+                token: "a".repeat(32),
+                principal: "alice".into(),
+                role: Role::Analyst,
+            }],
+            ..Default::default()
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("x-kaveon-principal", "admin".parse().unwrap());
+        assert_eq!(
+            config.authenticate(&headers).unwrap_err(),
+            StatusCode::UNAUTHORIZED
+        );
+        headers.insert(
+            "authorization",
+            format!("Bearer {}", "a".repeat(32)).parse().unwrap(),
+        );
+        let identity = config.authenticate(&headers).unwrap();
+        assert_eq!(identity.principal, "alice");
+        assert!(!identity.can_view(Some("bob")));
+        assert!(identity.can_view(Some("alice")));
+    }
+    #[test]
+    fn bridge_requires_identity_and_known_role() {
+        let config = SecurityConfig {
+            bridge_token: Some("b".repeat(32)),
+            ..Default::default()
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            format!("Bearer {}", "b".repeat(32)).parse().unwrap(),
+        );
+        assert!(config.authenticate(&headers).is_err());
+        headers.insert("x-kaveon-principal", "alice".parse().unwrap());
+        headers.insert("x-kaveon-role", "owner".parse().unwrap());
+        assert!(config.authenticate(&headers).is_err());
+        headers.insert("x-kaveon-role", "analyst".parse().unwrap());
+        assert_eq!(config.authenticate(&headers).unwrap().role, Role::Analyst);
+    }
+    #[test]
+    fn quota_is_per_principal_and_releases() {
+        let admission = PrincipalAdmission::default();
+        let alice = admission.admit("alice", 1).unwrap();
+        assert!(admission.admit("alice", 1).is_err());
+        let _bob = admission.admit("bob", 1).unwrap();
+        drop(alice);
+        assert!(admission.admit("alice", 1).is_ok());
+    }
+
+    #[tokio::test]
+    async fn resource_group_queue_is_bounded_and_recovers_after_timeout() {
+        let admission = PrincipalAdmission::default();
+        let config = SecurityConfig {
+            resource_groups: vec![ResourceGroupConfig {
+                name: "interactive".into(),
+                principals: vec!["alice".into(), "bob".into()],
+                max_running: 1,
+                max_queued: 1,
+                queue_timeout_ms: 10,
+            }],
+            ..Default::default()
+        };
+        config.validate().unwrap();
+        let first = admission.admit_group("alice", &config).await.unwrap();
+        assert_eq!(
+            admission.admit_group("bob", &config).await.unwrap_err(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        drop(first);
+        assert!(admission.admit_group("bob", &config).await.is_ok());
+        assert_eq!(
+            admission.groups.lock().unwrap()["interactive"]
+                .queued
+                .load(std::sync::atomic::Ordering::Acquire),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn queued_group_request_runs_when_slot_releases() {
+        let admission = Arc::new(PrincipalAdmission::default());
+        let config = Arc::new(SecurityConfig {
+            resource_groups: vec![ResourceGroupConfig {
+                name: "interactive".into(),
+                principals: vec!["alice".into()],
+                max_running: 1,
+                max_queued: 1,
+                queue_timeout_ms: 1000,
+            }],
+            ..Default::default()
+        });
+        let first = admission.admit_group("alice", &config).await.unwrap();
+        let waiter_admission = admission.clone();
+        let waiter_config = config.clone();
+        let waiting =
+            tokio::spawn(
+                async move { waiter_admission.admit_group("alice", &waiter_config).await },
+            );
+        tokio::task::yield_now().await;
+        assert_eq!(
+            admission.admit_group("alice", &config).await.unwrap_err(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        drop(first);
+        assert!(waiting.await.unwrap().is_ok());
+    }
+}

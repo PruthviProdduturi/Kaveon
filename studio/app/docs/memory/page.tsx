@@ -4,8 +4,8 @@ export const metadata = { title: "Engine Memory" };
 
 export default function EngineMemoryDocs() {
   return <div className="docs-prose">
-    <PageHeader eyebrow="Engine Manual" title="Engine memory management" lead="Kaveon reserves retained execution state against explicit query budgets and fails closed when a bounded operator cannot continue safely." />
-    <Callout type="warn"><strong>Alpha boundary:</strong> admission and hash aggregate/join accounting exist as opt-in execution contracts, but coordinator and worker planning do not yet propagate them universally. Aggregate and join spill remain release gates.</Callout>
+    <PageHeader eyebrow="Engine" title="Engine memory management" lead="Kaveon reserves retained execution state against explicit query budgets and fails closed when a bounded operator cannot continue safely." />
+    <Callout type="warn"><strong>Alpha boundary:</strong> coordinator and worker execution propagate query budgets into retained operator state. Logical reservations are not a universal process RSS ceiling: decoders, runtime overhead, and retained caller buffers require separate limits and measurement.</Callout>
 
     <h2>Budget hierarchy</h2>
     <ol>
@@ -18,13 +18,14 @@ export default function EngineMemoryDocs() {
     <h2>Operator behavior</h2>
     <table><thead><tr><th>Operator</th><th>Current bounded behavior</th></tr></thead><tbody>
       <tr><td>Sort / TopN</td><td>Opt-in reservations, bounded Arrow IPC spill runs, and fixed-fan-in merge.</td></tr>
-      <tr><td>Hash aggregate</td><td>Accounts group and exact-distinct state; rejects growth beyond the query limit.</td></tr>
-      <tr><td>Hash join</td><td>Accounts retained inputs, build index, match bitmap, and output-index growth; rejects growth beyond the query limit.</td></tr>
-      <tr><td>Exchange</td><td>Independent byte and exchange-count ceilings with cleanup accounting.</td></tr>
+      <tr><td>Hash aggregate</td><td>Accounts typed group/distinct state; opt-in partitioned Single/Partial/Final spill. Unsplittable skew fails closed.</td></tr>
+      <tr><td>Hash join</td><td>Accounts retained inputs, build index, match bitmap, and output growth; opt-in partitioned spill.</td></tr>
+      <tr><td>Window / set operations</td><td>Accounts buffered state and expression workspaces; cancellation checks interrupt long loops.</td></tr>
+      <tr><td>Exchange</td><td>Bounded disk-backed coordinator exchange storage, query quotas, download leases, and cleanup accounting.</td></tr>
     </tbody></table>
 
     <h2>What remains</h2>
-    <p>Production readiness requires universal planner wiring, queued admission, partitioned aggregate and join spill, measured operator telemetry, and stress evidence for skew, concurrency, cancellation, retry, and worker loss. Until then, deployments must not claim global memory enforcement.</p>
+    <p>Pressure and worker-loss fixtures provide local evidence, including fail-closed skew and disk-quota cases. High-cardinality distributed aggregation, full pipeline backpressure, sustained soak tests, and cloud fault testing remain qualification gates. Do not equate a configured query budget with a hard process RSS limit.</p>
     <Pager prev={{ href: "/docs/engine/storage", title: "Storage & Catalogs" }} next={{ href: "/docs/sql-compatibility", title: "SQL Compatibility" }} />
   </div>;
 }
