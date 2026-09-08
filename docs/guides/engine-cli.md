@@ -1,10 +1,82 @@
 # Kaveon Engine CLI
 
-Status: **Alpha**. The Kaveon CLI is an interactive SQL shell for the standalone
-Rust Engine. Its catalog navigation follows familiar Trino commands, while query
-execution currently reads local Parquet files and local Delta Lake tables.
+Status: **Alpha**. Kaveon CLI is an interactive client for a Kaveon Engine
+coordinator. Remote mode is the default; `--local` runs the embedded Engine for
+local Parquet and Delta work.
 
-## Build and start the CLI
+## Install the remote client
+
+Windows x64 does not require a source clone or Rust toolchain. In PowerShell,
+install the current `engine-dev` preview client:
+
+```powershell
+irm https://raw.githubusercontent.com/PruthviProdduturi/Kaveon/dev/scripts/install.ps1 | iex
+$env:PATH = "$env:LOCALAPPDATA\kaveon\bin;$env:PATH"
+kaveon --version
+```
+
+On Linux x64 or Apple Silicon macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/PruthviProdduturi/Kaveon/dev/scripts/install.sh | bash
+```
+
+For a complete AKS connection walkthrough, including the public CA certificate,
+see [Kaveon on Azure: deploy, connect and test](../engineering/azure-deployment-guide.md).
+
+## Connect to a coordinator
+
+Remote mode submits SQL to the coordinator and is the default:
+
+```bash
+kaveon --server https://engine.example.com --catalog medallion --schema test
+```
+
+When the coordinator enables Microsoft sign-in, `--auth auto` (the default)
+first reuses the current Azure CLI login and renews through it when necessary;
+it falls back to Microsoft device sign-in. Use `--auth azure-cli` to require that
+Azure CLI path, or `--auth microsoft` to use device sign-in directly. The client
+keeps tokens only in process memory. `--user` is session metadata and never
+grants access or changes ownership.
+
+For an AKS port-forward that uses the test private CA:
+
+```powershell
+kubectl -n kaveon port-forward service/kaveon 18443:8080 --address 127.0.0.1
+kaveon --server https://localhost:18443 --ca-cert ./kaveon-ca.crt --catalog medallion --schema test
+```
+
+Use the [Azure deployment guide](../engineering/azure-deployment-guide.md) for
+certificate handling, Azure login, and the full port-forward procedure.
+
+In the remote shell, the prompt displays the selected schema. `help`, `clear`,
+`exit`, and `quit` accept an optional trailing semicolon; `.help`/`.h`,
+`.clear`, and `.quit`/`.exit`/`.q` are equivalent shortcuts. Human-readable
+output includes blank-line separation and aligned numeric metadata values.
+
+## Remote catalog navigation
+
+The following commands work in the remote CLI through authenticated catalog GET
+APIs. They are client metadata commands, not SQL support provided by
+`POST /v1/statement`:
+
+```sql
+SHOW CATALOGS;
+SHOW SCHEMAS IN medallion;
+SHOW TABLES FROM medallion.test;
+USE medallion.test;
+```
+
+`SHOW SCHEMAS` and `SHOW TABLES` accept `IN` or `FROM`; unqualified commands use
+the validated session catalog and schema. Dot aliases are `.catalogs`,
+`.schemas [catalog]`, `.tables [[catalog.]schema]`, and `.use <catalog.schema>`.
+`USE` validates its target before changing the prompt context.
+
+After a completed remote query, the CLI can show the returned row count and JSON
+result bytes with rates, plus reported node/task counts. Scan metrics are shown
+only when the coordinator reports them.
+
+## Embedded local mode
 
 From the repository root:
 
@@ -149,9 +221,9 @@ CLI loads its `.toml` and `.properties` files as separate catalogs. Otherwise,
 the CLI can load the older single-file `[[catalog]]` layout shown in
 `engine/kaveon.example.toml`.
 
-## Trino-familiar commands
+## Local catalog commands
 
-These commands end with a semicolon:
+In local mode, these commands end with a semicolon:
 
 | Command | Purpose |
 |---|---|
@@ -184,7 +256,7 @@ semicolon:
 defaults without unloading registered catalogs. `USE catalog;` preserves the
 current default schema and validates that it exists in the selected catalog.
 
-## Verify a catalog
+## Verify a local catalog
 
 After starting the shell, use a short discovery and query sequence:
 
@@ -208,9 +280,10 @@ error in the terminal.
 
 ## Current boundaries
 
-- The CLI embeds and executes the Engine in its own process. It does not submit
-  statements to `kaveon-server`, so CLI queries do not appear in the Engine web
-  UI query history.
+- `--local` embeds and executes the Engine in its own process. It does not submit
+  statements to `kaveon-server`, so those local queries do not appear in Engine
+  query history. Remote history is process-local and bounded; it is not a
+  durable audit log.
 - Queries submitted through the Engine HTTP API appear immediately as running
   records. Completed records retain measured lifecycle timings, the logical
   plan, and Parquet/Delta scan statistics. Physical operator and distributed
@@ -224,3 +297,5 @@ error in the terminal.
 - SQL support is intentionally narrower than Trino. See
   [Engine SQL compatibility](../reference/engine-sql-compatibility.md) before
   relying on joins, sorting, DDL, or DML.
+- The client does not provide query-history editing, completion, `LIKE` metadata
+  filtering, batch execution, or full Trino command parity.

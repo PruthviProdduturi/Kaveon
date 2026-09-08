@@ -33,10 +33,10 @@ export default function EngineDocs() {
     </p>
 
     <h2>Install</h2>
-    <Code lang="bash">{`# macOS / Linux — installs to ~/.local/bin
+    <Code lang="bash">{`# Linux x64 / Apple Silicon macOS — installs to ~/.local/bin
 curl -sSf https://raw.githubusercontent.com/PruthviProdduturi/Kaveon/dev/scripts/install.sh | sh
 
-# Windows (PowerShell)
+# Windows x64 (PowerShell; no source clone required)
 irm https://raw.githubusercontent.com/PruthviProdduturi/Kaveon/dev/scripts/install.ps1 | iex
 
 # From source
@@ -64,6 +64,22 @@ format   = "delta"       # parquet | delta | iceberg
 access   = "shortcut"    # read in place, no rewrite`}</Code>
 
     <h2>Run a query</h2>
+    <p>
+      The installed client connects to a coordinator by default. With Microsoft authentication enabled,
+      <code>--auth auto</code> reuses Azure CLI login when possible, then falls back to Microsoft device
+      sign-in. Use <code>--auth azure-cli</code> to require Azure CLI or <code>--auth microsoft</code> to
+      choose device sign-in. The UI identifies the client as Kaveon CLI and shows the signed Entra username;
+      immutable Entra object identity remains the ownership key.
+    </p>
+    <Code lang="bash">{`kaveon --server https://engine.example.com --catalog medallion --schema test
+
+# AKS port-forward with the deployment CA
+kubectl -n kaveon port-forward service/kaveon 18443:8080 --address 127.0.0.1
+kaveon --server https://localhost:18443 --ca-cert ./kaveon-ca.crt --catalog medallion --schema test`}</Code>
+    <p>
+      See the <a href="https://github.com/PruthviProdduturi/Kaveon/blob/dev/docs/engineering/azure-deployment-guide.md">Azure deployment guide</a> for
+      certificate handling and the full connection procedure.
+    </p>
     <p>The CLI runs embedded with <code>--local</code>, which needs no server:</p>
     <Code lang="bash">{`kaveon --local --data-dir /data/warehouse`}</Code>
     <Code lang="sql">{`SHOW CATALOGS;
@@ -77,7 +93,9 @@ LIMIT  5;`}</Code>
       <code>SHOW CATALOGS</code>, <code>SHOW SCHEMAS</code>, <code>SHOW TABLES</code>,{" "}
       <code>DESCRIBE</code> and <code>USE catalog.schema</code> are resolved by the CLI against the catalog,
       not by the SQL engine. They work in the shell but are not statements you can POST to{" "}
-      <code>/v1/statement</code>.
+      <code>/v1/statement</code>. Remote CLI metadata supports <code>IN</code>/<code>FROM</code> targets and
+      validates <code>USE</code> before updating its prompt. It does not add SQL <code>SHOW</code> or
+      <code>USE</code> support to the server.
     </Callout>
     <p>Or execute one statement and exit — useful in scripts:</p>
     <Code lang="bash">{`kaveon --local --data-dir /data/warehouse -e "SELECT count(*) FROM orders"`}</Code>
@@ -148,10 +166,12 @@ kaveon --server http://localhost:8080`}</Code>
     <Code lang="bash">{`curl -s localhost:8080/v1/statement \\
   -H 'content-type: application/json' \\
   -d '{"query":"SELECT count(*) FROM warehouse.default.orders"}'`}</Code>
-    <Callout type="warn">
-      Internal task/exchange routes and catalog mutations carry bearer tokens, but{" "}
-      <code>/v1/statement</code> is not an end-user security boundary. Anyone who can reach the port can run
-      SQL against every registered catalog.
+    <Callout type="note">
+      Production Engine deployments use TLS and authenticated principals. Optional Entra delegated sign-in
+      maps approved object IDs to Engine roles; query ownership remains tied to that immutable identity.
+      Static and bridge credentials are also supported for their configured boundaries. The explicit
+      <code> insecure_development </code> setting is for local development only and must not be exposed as a
+      production access path.
     </Callout>
 
     <h2>Read next</h2>

@@ -65,6 +65,14 @@ restore or recovery of interrupted queries.
 
 ## Stop and resume
 
+The September 8 CLI/UI follow-up deployed coordinator image
+`kvtestegmf6oweugsno.azurecr.io/kaveon-engine@sha256:909cf21c79cc87d5bf4085f7f155aa23e90a9ed00f1ea968c0fea10327e2883a`
+from `ad3d9c8`. Workers retained their qualified image. Live query history and a
+real Edge browser check show **Kaveon CLI** and the signed Entra username; an
+explicit spoofed request username is ignored. Three workers are active. The
+coordinator restart preserves catalog data but in-memory query history starts
+afresh, so attribution checks use newly submitted queries.
+
 To stop compute between sessions (after queries finish):
 
 ```powershell

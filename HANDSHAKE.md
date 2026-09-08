@@ -96,6 +96,17 @@ See docs/engineering/engine-entra-sign-in.md and azure-deployment-guide.md.
 
 ### Preview distribution — September 8
 
+CLI/UI basics wrap-up: 29 CLI tests pass (one subprocess fixture ignored standalone),
+96 server tests pass, strict Clippy/formatting, documentation validation and Studio
+type checking pass. Live CLI metadata/USE/error recovery/exit and footer/spacing pass.
+Footer uses recorded unique execution nodes and stage tasks; returned JSON bytes
+are explicitly result bytes, with absent scan metrics marked unreported. Machine
+formats unchanged. Coordinator ad3d9c8 image digest
+`sha256:909cf21c79cc87d5bf4085f7f155aa23e90a9ed00f1ea968c0fea10327e2883a`
+is deployed; real Edge verifies three workers, client label and signed username,
+with spoofed request user ignored. Updated CLI/public Docs/Azure/UI/operations
+guides, release notes and docs index; advanced parity gaps remain explicit.
+
 CLI usability/query attribution update: SQL-style metadata commands and validated
 USE are handled by the remote CLI over existing catalog APIs, with aligned output,
 schema prompt and help/exit/quit/clear aliases. Full Trino CLI parity is not claimed;
