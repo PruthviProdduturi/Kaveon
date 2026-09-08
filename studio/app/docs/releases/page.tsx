@@ -4,7 +4,7 @@ export const metadata = { title: "Releases and Changelog" };
 
 export default function ReleaseDocs() {
   return <div className="docs-prose">
-    <PageHeader eyebrow="Release policy" title="Releases and changelog" lead="There is not yet a canonical historical changelog or stable platform release channel. Release notes must separate shipped behavior from alpha Engine work and roadmap targets." />
+    <PageHeader eyebrow="Deploy &amp; Operate" title="Releases and changelog" lead="There is not yet a canonical historical changelog or stable platform release channel. Release notes must separate shipped behavior from alpha Engine work and roadmap targets." />
     <h2>Current channels</h2>
     <ul><li>Platform workflows build/deploy from <code>dev</code>; workflow success is not a versioned release note.</li><li>Engine CI publishes a moving <code>engine-dev</code> prerelease after successful dev builds.</li><li>No stable support window or API deprecation period is declared.</li></ul>
     <h2>What every release note needs</h2>

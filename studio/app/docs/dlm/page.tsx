@@ -6,7 +6,7 @@ export default function DlmDocs() {
   return (
     <div className="docs-prose">
       <PageHeader
-        eyebrow="Data Intelligence"
+        eyebrow="Intelligence"
         title="Data Language Model (DLM)"
         lead="The Data Language Model is Kaveon's deterministic semantic compilation and resolution layer. It indexes configured dataset metadata and values, builds eligible context artifacts, and resolves supported questions without a hosted model call. It complements—not replaces—the analytical Engine."
       />
@@ -265,10 +265,7 @@ Tie-break: narrowest dataset (fewest columns) wins.`}</Code>
         </tbody>
       </table>
 
-      <Pager
-        prev={{ href: "/docs/nl-to-sql", title: "DLM · NL→SQL" }}
-        next={{ href: "/docs/freshness", title: "Freshness Algorithm" }}
-      />
+      <Pager prev={{ href: "/docs/data-sources", title: "Data Sources" }} next={{ href: "/docs/nl-to-sql", title: "DLM · NL→SQL" }} />
     </div>
   );
 }

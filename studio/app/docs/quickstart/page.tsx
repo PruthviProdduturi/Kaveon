@@ -180,10 +180,7 @@ docker compose down -v       # stop and delete the PostgreSQL volume`}</Code>
         </tbody>
       </table>
 
-      <Pager
-        prev={{ href: "/docs", title: "Introduction" }}
-        next={{ href: "/docs/concepts", title: "Core Concepts" }}
-      />
+      <Pager prev={{ href: "/docs", title: "Introduction" }} next={{ href: "/docs/concepts", title: "Core Concepts" }} />
     </div>
   );
 }

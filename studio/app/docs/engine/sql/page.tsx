@@ -5,7 +5,7 @@ export const metadata = { title: "Engine SQL" };
 export default function EngineSqlDocs() {
   return <div className="docs-prose">
     <PageHeader
-      eyebrow="Engine Manual"
+      eyebrow="Engine"
       title="SQL and execution"
       lead="What Kaveon Engine SQL can execute today, with the standard it holds itself to: a feature counts only when parsing, semantics, physical execution, distributed fragments, tests, and documentation all agree."
     />

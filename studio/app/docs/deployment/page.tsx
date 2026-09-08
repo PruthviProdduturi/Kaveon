@@ -6,7 +6,7 @@ export default function DeploymentDocs() {
   return (
     <div className="docs-prose">
       <PageHeader
-        eyebrow="Platform"
+        eyebrow="Deploy &amp; Operate"
         title="Deployment"
         lead="The shipping platform uses Vercel, Azure Container Apps, and PostgreSQL. The Rust Engine has a separate local/Docker alpha topology and is not yet in the production request path."
       />
@@ -89,7 +89,7 @@ docker compose up --build
         over connection strings.
       </p>
 
-      <Pager prev={{ href: "/docs/auth", title: "Auth & RBAC" }} next={{ href: "/docs/operations", title: "Operations" }} />
+      <Pager prev={{ href: "/docs/sql-compatibility", title: "SQL Compatibility" }} next={{ href: "/docs/auth", title: "Auth & RBAC" }} />
     </div>
   );
 }

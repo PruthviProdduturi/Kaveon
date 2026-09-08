@@ -4,7 +4,7 @@ export const metadata = { title: "Kaveon Engine vs Fabric SQL Endpoint" };
 
 export default function KaveonVsFabricSqlDocs() {
   return <div className="docs-prose">
-    <PageHeader eyebrow="Research · Architecture" title="Kaveon Engine vs Fabric SQL analytics endpoint" lead="A precise comparison between Kaveon&rsquo;s self-hostable analytical engine and the managed SQL endpoint attached to a Microsoft Fabric Lakehouse." />
+    <PageHeader eyebrow="Research" title="Kaveon Engine vs Fabric SQL analytics endpoint" lead="A precise comparison between Kaveon&rsquo;s self-hostable analytical engine and the managed SQL endpoint attached to a Microsoft Fabric Lakehouse." />
     <Callout type="note">This compares engines and SQL-serving boundaries. Fabric&rsquo;s Spark, pipelines, mirroring, Power BI, and governance are surrounding platform workloads; Kaveon DLM and Studio are likewise above Engine.</Callout>
 
     <table><thead><tr><th>Dimension</th><th>Kaveon Engine</th><th>Fabric SQL analytics endpoint</th></tr></thead><tbody>

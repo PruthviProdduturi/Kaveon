@@ -6,7 +6,7 @@ export default function DataSourcesDocs() {
   return (
     <div className="docs-prose">
       <PageHeader
-        eyebrow="Features"
+        eyebrow="Studio"
         title="Data Sources"
         lead="A data source is a database connection Kaveon can query. You need at least one before creating datasets, charts, or using NL→SQL. Register and test them from the UI — no .env edits, no restart."
       />
@@ -59,10 +59,7 @@ StarRocks    mysql://user:pass@host:9030/db`}</Code>
         and appears in the sidebar quick-access.
       </p>
 
-      <Pager
-        prev={{ href: "/docs/datasets", title: "Semantic Datasets" }}
-        next={{ href: "/docs/architecture", title: "Architecture" }}
-      />
+      <Pager prev={{ href: "/docs/datasets", title: "Semantic Datasets" }} next={{ href: "/docs/dlm", title: "Data Language Model" }} />
     </div>
   );
 }

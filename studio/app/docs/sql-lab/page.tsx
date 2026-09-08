@@ -6,7 +6,7 @@ export default function SqlLabDocs() {
   return (
     <div className="docs-prose">
       <PageHeader
-        eyebrow="Features"
+        eyebrow="Studio"
         title="SQL Lab"
         lead="A full query editor for exploring your data sources directly — Monaco-powered, multi-tab, with a live schema browser, cancellable execution, and inline AI. Open it from Lab in the sidebar."
       />
@@ -108,10 +108,7 @@ export default function SqlLabDocs() {
         <a href="/docs/nl-to-sql">DLM · NL→SQL</a>.
       </p>
 
-      <Pager
-        prev={{ href: "/docs/concepts", title: "Core Concepts" }}
-        next={{ href: "/docs/nl-to-sql", title: "DLM · NL→SQL" }}
-      />
+      <Pager prev={{ href: "/docs/connectors", title: "Connector Matrix" }} next={{ href: "/docs/charts", title: "Chart Builder" }} />
     </div>
   );
 }

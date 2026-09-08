@@ -4,7 +4,7 @@ export const metadata = { title: "Operations" };
 
 export default function OperationsDocs() {
   return <div className="docs-prose">
-    <PageHeader eyebrow="Build & Operate" title="Operations" lead="A practical operating checklist for verifying Kaveon, protecting its trust boundaries, and diagnosing failures." />
+    <PageHeader eyebrow="Deploy &amp; Operate" title="Operations" lead="A practical operating checklist for verifying Kaveon, protecting its trust boundaries, and diagnosing failures." />
 
     <h2>Know your deployment</h2>
     <p>The production application path is Browser → Vercel Studio → private FastAPI → metadata database and registered sources. Kaveon Engine is a separate alpha runtime until platform integration ships.</p>
@@ -34,6 +34,6 @@ curl -fsS https://<engine-host>/ready`}</Code>
       <li>Reproduce with the smallest read-only request and compare health versus readiness.</li>
     </ol>
     <Callout type="note">Use repository <code>STATUS.md</code> as the capability ledger, <code>SECURITY.md</code> for trust boundaries, and <code>DEPLOYMENT.md</code> for current topology.</Callout>
-    <Pager prev={{ href: "/docs/deployment", title: "Deployment" }} next={{ href: "/docs/research", title: "Papers & Patents" }} />
+    <Pager prev={{ href: "/docs/auth", title: "Auth & RBAC" }} next={{ href: "/docs/troubleshooting", title: "Troubleshooting" }} />
   </div>;
 }
