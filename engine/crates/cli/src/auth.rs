@@ -244,6 +244,15 @@ impl Entra {
         format!("{} offline_access", self.scope)
     }
 }
+fn is_microsoft_device_uri(uri: &str) -> bool {
+    matches!(
+        uri,
+        "https://microsoft.com/devicelogin"
+            | "https://www.microsoft.com/devicelogin"
+            | "https://login.microsoft.com/device"
+    )
+}
+
 fn device_login(
     client: &Client,
     entra: &Entra,
@@ -265,9 +274,7 @@ fn device_login(
         .json()
         .map_err(|_| "invalid Microsoft device-code response")?;
     // Display only Microsoft's known verification site, never an arbitrary URL from the Engine.
-    if device.verification_uri != "https://microsoft.com/devicelogin"
-        && device.verification_uri != "https://www.microsoft.com/devicelogin"
-    {
+    if !is_microsoft_device_uri(&device.verification_uri) {
         return Err("unexpected Microsoft device verification URL".into());
     }
     eprintln!(
@@ -322,6 +329,24 @@ fn device_login(
 mod tests {
     use super::*;
     use std::io::{Read, Write};
+    #[test]
+    fn device_verification_sites_exclude_lookalikes_and_insecure_urls() {
+        for uri in [
+            "https://microsoft.com/devicelogin",
+            "https://www.microsoft.com/devicelogin",
+            "https://login.microsoft.com/device",
+        ] {
+            assert!(is_microsoft_device_uri(uri));
+        }
+        for uri in [
+            "http://login.microsoft.com/device",
+            "https://login.microsoft.com.evil.example/device",
+            "https://login.microsoft.com@evil.example/device",
+            "https://login.microsoft.com/device?redirect=evil",
+        ] {
+            assert!(!is_microsoft_device_uri(uri));
+        }
+    }
     fn entra() -> Entra {
         Entra {
             tenant_id: "11111111-1111-1111-1111-111111111111".into(),
@@ -366,7 +391,7 @@ mod tests {
     #[test]
     fn device_flow_polls_pending_and_slow_down_then_obtains_token() {
         let (url, thread) = mock(vec![
-            (200, r#"{"device_code":"device-secret","user_code":"TEST","verification_uri":"https://microsoft.com/devicelogin","expires_in":900,"interval":2}"#.into()),
+            (200, r#"{"device_code":"device-secret","user_code":"TEST","verification_uri":"https://login.microsoft.com/device","expires_in":900,"interval":2}"#.into()),
             (400, r#"{"error":"authorization_pending"}"#.into()),
             (400, r#"{"error":"slow_down"}"#.into()),
             (200, r#"{"access_token":"access-secret","expires_in":3600,"refresh_token":"refresh-secret"}"#.into()),

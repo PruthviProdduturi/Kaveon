@@ -96,6 +96,12 @@ See docs/engineering/engine-entra-sign-in.md and azure-deployment-guide.md.
 
 ### Preview distribution — September 8
 
+Follow-up CLI compatibility fix: the live Microsoft device endpoint returns
+`https://login.microsoft.com/device`. Added that exact URL to the verification-site
+allowlist, retaining rejection of HTTP and lookalike hosts. All 15 CLI tests and
+strict Clippy pass. Proxy bypass for localhost resolved the user's discovery
+failure; Windows curl separately needs best-effort revocation checks with test PKI.
+
 CLI binaries for Windows x64, Linux x64 and macOS ARM64 from tested commit
 `c71c3fa` are published in `engine-dev`. Verified all release asset digests against
 passed CI artifacts and installed the Windows package from GitHub successfully.
