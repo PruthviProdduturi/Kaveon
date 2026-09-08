@@ -774,7 +774,17 @@ export default function LabPage() {
     return `[${table.schema}].[${table.name}]`;
   };
 
+  // Selecting a table is an exploration action: it highlights the table and shows
+  // its columns. It deliberately does not touch the editor or execute anything --
+  // clicking to look at a schema should never rewrite the query you are editing.
   const selectTable = async (table: TableInfo) => {
+    setSelectedTableId(table.id);
+    setResultError(null);
+    await toggleTableColumns(table);
+  };
+
+  // The explicit action, from the row's preview button or a drag into the editor.
+  const previewTable = async (table: TableInfo) => {
     setSelectedTableId(table.id);
     setResultError(null);
     const qualified = buildQualifiedName(table);
@@ -1822,6 +1832,18 @@ return;
                                 </span>
                               </div>
                             </div>
+                            <button
+                              type="button"
+                              className="table-preview-btn"
+                              title={`Preview 100 rows from ${t.schema}.${t.name}`}
+                              aria-label={`Preview ${t.name}`}
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                await previewTable(t);
+                              }}
+                            >
+                              <i className="fas fa-play" />
+                            </button>
                             <div
                               className="column-toggle-icon"
                               onClick={async (e) => {

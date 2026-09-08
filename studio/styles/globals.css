@@ -5064,3 +5064,36 @@ main.main-wide {
     gap: 1rem;
   }
 }
+
+/* Explicit preview action on a schema-browser table row. Selecting a table only
+   explores it; writing a query into the editor is deliberate, so the control is
+   visible on hover or keyboard focus rather than firing on the row click. */
+.table-preview-btn {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.table-item:hover .table-preview-btn,
+.table-preview-btn:focus-visible {
+  opacity: 1;
+}
+.table-preview-btn:hover {
+  background: color-mix(in srgb, var(--lens-primary, #0078D4) 14%, transparent);
+  color: var(--lens-primary, #0078D4);
+}
+.table-preview-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--lens-primary, #0078D4) 60%, transparent);
+  outline-offset: 1px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .table-preview-btn { transition: none; }
+}
