@@ -100,6 +100,11 @@ def main():
         def do_GET(self):
             if self.headers.get('Host') not in [f'127.0.0.1:{args.port}', f'localhost:{args.port}']:
                 return self.send(403, '{}')
+            if self.path == '/v1/auth/config':
+                return self.send(200, '{"entra":null}')
+            if self.path == '/ui/msal-browser.min.js':
+                asset = ROOT / 'engine/crates/server/src/vendor/msal-browser.min.js'
+                return self.send(200, asset.read_text(encoding='utf-8'), 'application/javascript; charset=utf-8')
             if self.path in ['/', '/ui']:
                 html = (ROOT / 'engine/crates/server/src/ui.html').read_text(encoding='utf-8')
                 banner = '<div style="padding:10px;text-align:center;background:#172554;color:#fff">Read-only AKS viewer · Azure snapshots every ' + str(args.interval) + ' seconds · <span id="aks-snapshot">Sign in to see refresh status</span></div>'

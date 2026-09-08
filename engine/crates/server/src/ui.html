@@ -242,14 +242,20 @@ td.nl{color:var(--text-muted);font-style:italic}
   </div>
 </div>
 
-<form class="auth" id="auth-form">
+<div class="auth">
+  <button class="refresh" type="button" id="microsoft-sign-in" hidden>Sign in with Microsoft</button>
+  <button class="refresh" type="button" id="disconnect">Disconnect</button>
+  <span id="auth-status" role="status" aria-live="polite">Loading sign-in options…</span>
+  <details id="advanced-auth">
+  <summary>Advanced: engine access token</summary>
+<form id="auth-form">
   <label for="auth-token">Engine access token</label>
   <input id="auth-token" type="password" autocomplete="off" spellcheck="false" aria-describedby="auth-help">
   <button class="refresh" type="submit">Connect</button>
-  <button class="refresh" type="button" id="disconnect">Disconnect</button>
   <small id="auth-help">Kept only in this page's memory. Leave empty only for a trusted local bridge or development server.</small>
-  <span id="auth-status" role="status" aria-live="polite">Enter your token to connect.</span>
 </form>
+  </details>
+</div>
 <div class="gauges">
   <div class="gauge">
     <div class="gauge-ring"><svg viewBox="0 0 56 56"><circle class="track" cx="28" cy="28" r="24"/><circle class="val" cx="28" cy="28" r="24" stroke="var(--success)" stroke-dasharray="150.8" id="g-workers-ring"/></svg><span class="gauge-num" style="color:var(--success)" id="g-workers">0</span></div>
@@ -292,11 +298,13 @@ td.nl{color:var(--text-muted);font-style:italic}
   <div id="view-detail" style="display:none"></div>
 </div>
 
+<script src="/ui/msal-browser.min.js"></script>
 <script>
 const API='';
 let accessToken='',session=0,connected=false,pollTimer=null;
+let identityClient=null,identityConfig=null,identityAccount=null;
 function disconnect(message='Disconnected'){
-  session++;connected=false;accessToken='';clearInterval(pollTimer);pollTimer=null;
+  session++;connected=false;accessToken='';identityAccount=null;clearInterval(pollTimer);pollTimer=null;
   document.getElementById('auth-token').value='';
   queries={};qorder=[];samples.queries=[];samples.memory=[];
   document.getElementById('view-detail').innerHTML='';
@@ -317,11 +325,21 @@ function disconnect(message='Disconnected'){
 async function apiJson(path){
   if(!connected)throw new Error('Disconnected');
   const current=session;
+  if(identityAccount){
+    try{
+      const token=await identityClient.acquireTokenSilent({scopes:[identityConfig.scope],account:identityAccount});
+      if(current!==session)throw new Error('Session changed');
+      accessToken=token.accessToken;
+    }catch(error){
+      if(current===session)disconnect('Your session needs sign-in. Click Sign in with Microsoft.');
+      throw error;
+    }
+  }
   const headers=accessToken?{Authorization:'Bearer '+accessToken}:{};
   const response=await fetch(API+path,{headers,cache:'no-store',credentials:'omit'});
   if(current!==session)throw new Error('Session changed');
   if(response.status===401||response.status===403){
-    disconnect('Access denied. Enter a valid engine token and reconnect.');
+    disconnect('Access denied. Sign in again or ask the engine administrator to check your access.');
     throw new Error('Access denied');
   }
   if(!response.ok)throw new Error('Request failed: '+response.status);
@@ -610,15 +628,57 @@ async function fetchHistory(){
   }catch{}
 }
 
-disconnect('Enter your token to connect.');
+function connect(token,account=null){
+  disconnect();accessToken=token;identityAccount=account;connected=true;
+  document.getElementById('auth-status').textContent='Connecting…';
+  refresh();pollTimer=setInterval(refresh,5000);
+}
+async function initializeSignIn(){
+  disconnect('Loading sign-in options…');
+  try{
+    const response=await fetch('/v1/auth/config',{cache:'no-store',credentials:'omit'});
+    if(!response.ok)throw new Error('Sign-in configuration unavailable');
+    const config=await response.json();
+    if(!config.entra){
+      document.getElementById('advanced-auth').open=true;
+      document.getElementById('auth-status').textContent='Enter your engine token to connect.';
+      return;
+    }
+    identityConfig=config.entra;
+    identityClient=new msal.PublicClientApplication({
+      auth:{clientId:identityConfig.client_id,authority:'https://login.microsoftonline.com/'+identityConfig.tenant_id,redirectUri:location.origin+'/ui'},
+      cache:{cacheLocation:'memoryStorage',temporaryCacheLocation:'memoryStorage',storeAuthStateInCookie:false}
+    });
+    await identityClient.initialize();
+    document.getElementById('microsoft-sign-in').hidden=false;
+    document.getElementById('auth-status').textContent='Sign in with your Microsoft work account.';
+  }catch{
+    document.getElementById('auth-status').textContent='Microsoft sign-in could not initialize. Refresh or contact your engine administrator.';
+  }
+}
+document.getElementById('microsoft-sign-in').addEventListener('click',async()=>{
+  const button=document.getElementById('microsoft-sign-in');
+  disconnect('Opening Microsoft sign-in…');
+  const current=session;
+  button.disabled=true;
+  try{
+    const result=await identityClient.loginPopup({scopes:[identityConfig.scope],prompt:'select_account'});
+    if(current===session)connect(result.accessToken,result.account);
+    else await identityClient.clearCache();
+  }catch{
+    if(current===session)disconnect('Sign-in was not completed. Allow the Microsoft sign-in popup and try again.');
+  }finally{button.disabled=false;}
+});
+initializeSignIn();
 document.getElementById('auth-form').addEventListener('submit',event=>{
   event.preventDefault();
   const token=document.getElementById('auth-token').value.trim();
-  disconnect();accessToken=token;connected=true;
-  document.getElementById('auth-status').textContent='Connecting…';
-  refresh();pollTimer=setInterval(refresh,5000);
+  connect(token);
 });
-document.getElementById('disconnect').addEventListener('click',()=>disconnect());
+document.getElementById('disconnect').addEventListener('click',async()=>{
+  disconnect();
+  if(identityClient)await identityClient.clearCache();
+});
 window.addEventListener('pagehide',()=>disconnect());
 document.getElementById('qsearch').addEventListener('input',renderHistory);
 document.getElementById('qstate').addEventListener('change',renderHistory);

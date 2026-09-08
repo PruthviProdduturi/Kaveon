@@ -16,6 +16,7 @@ use std::{
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SecurityConfig {
+    pub entra: Option<crate::entra::EntraConfig>,
     #[serde(default)]
     pub insecure_development: bool,
     #[serde(default)]
@@ -80,6 +81,9 @@ pub fn token_matches(actual: Option<&str>, expected: Option<&str>) -> bool {
 }
 impl SecurityConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
+        if let Some(entra) = &self.entra {
+            entra.validate()?;
+        }
         let mut group_names = std::collections::HashSet::new();
         let mut grouped_principals = std::collections::HashSet::new();
         for group in &self.resource_groups {
@@ -165,7 +169,10 @@ pub async fn authorize(
 ) -> Response {
     let path = request.uri().path();
     // Only the static login shell is public; dashboard data stays authenticated.
-    if matches!(path, "/health" | "/ready") || (path == "/ui" && request.method() == Method::GET) {
+    if matches!(path, "/health" | "/ready")
+        || (matches!(path, "/ui" | "/ui/msal-browser.min.js" | "/v1/auth/config")
+            && request.method() == Method::GET)
+    {
         return next.run(request).await;
     }
     let internal = path == "/v1/task"
@@ -199,7 +206,18 @@ pub async fn authorize(
     }
     let identity = match state.config.security.authenticate(request.headers()) {
         Ok(identity) => identity,
-        Err(status) => return status.into_response(),
+        Err(status) => {
+            let Some(entra) = &state.config.security.entra else {
+                return status.into_response();
+            };
+            let Some(token) = bearer(request.headers()) else {
+                return status.into_response();
+            };
+            match entra.authenticate(token).await {
+                Ok(identity) => identity,
+                Err(status) => return status.into_response(),
+            }
+        }
     };
     if path == "/v1/statement" && identity.role == Role::Reader {
         return StatusCode::FORBIDDEN.into_response();
@@ -313,6 +331,15 @@ mod tests {
     async fn dashboard_shell_is_public_but_data_requires_authentication() {
         let config = crate::config::ServerConfig {
             security: SecurityConfig {
+                entra: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "tenant_id": "11111111-1111-1111-1111-111111111111",
+                        "client_id": "22222222-2222-2222-2222-222222222222",
+                        "required_scope": "access_as_user",
+                        "principals": {"33333333-3333-3333-3333-333333333333": "analyst"}
+                    }))
+                    .unwrap(),
+                ),
                 principals: vec![PrincipalCredential {
                     token: "a".repeat(32),
                     principal: "alice".into(),
@@ -341,9 +368,21 @@ mod tests {
         });
         let app = axum::Router::new()
             .route("/ui", axum::routing::get(crate::ui::dashboard))
+            .route(
+                "/ui/msal-browser.min.js",
+                axum::routing::get(crate::ui::msal_script),
+            )
+            .route(
+                "/v1/auth/config",
+                axum::routing::get(crate::entra::public_config),
+            )
             .route("/v1/cluster", axum::routing::get(|| async { "protected" }))
             .route("/v1/query", axum::routing::get(|| async { "protected" }))
-            .layer(axum::middleware::from_fn_with_state(state, authorize));
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                authorize,
+            ))
+            .with_state(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -355,6 +394,27 @@ mod tests {
             .unwrap();
         assert_eq!(shell.status(), StatusCode::OK);
         assert!(shell.text().await.unwrap().contains("id=\"auth-token\""));
+        let auth = client
+            .get(format!("http://{address}/v1/auth/config"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(auth.status(), StatusCode::OK);
+        let auth: serde_json::Value = auth.json().await.unwrap();
+        assert_eq!(
+            auth["entra"]["scope"],
+            "api://22222222-2222-2222-2222-222222222222/access_as_user"
+        );
+        assert_eq!(auth["entra"].as_object().unwrap().len(), 3);
+        assert_eq!(
+            client
+                .get(format!("http://{address}/ui/msal-browser.min.js"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
         for path in ["/v1/cluster", "/v1/query"] {
             let url = format!("http://{address}{path}");
             assert_eq!(

@@ -66,6 +66,17 @@
 
 ## Interface contracts
 
+### Engine Microsoft sign-in implementation — September 8
+
+User requested Microsoft sign-in instead of pasted Engine tokens. Added optional
+Entra JWT validation (tenant/audience/issuer/expiry/scope/object-ID role allowlist),
+public auth configuration and locally vendored MSAL popup/PKCE sign-in. Existing
+static/internal auth remains. Browser mocked-auth regression passes. Live setup
+is blocked by Microsoft tenant app registration requiring a Service Tree ownership
+ID (ServiceTreeValueMissing); user has been asked for that ID or an approved existing
+application. Do not claim live SSO enabled until registration/consent and actual
+interactive sign-in succeed. See docs/engineering/engine-entra-sign-in.md.
+
 ### Local port allocation — September 8
 
 User requested Engine UI on localhost:8080 and Studio on localhost:3000.

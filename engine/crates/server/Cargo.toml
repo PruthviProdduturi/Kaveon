@@ -29,6 +29,10 @@ anyhow = { workspace = true }
 axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 futures = { workspace = true }
+jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
 
 [dev-dependencies]
 parquet = { workspace = true }
+rsa = "0.9"
+rand = "0.8"
+base64 = "0.22"
