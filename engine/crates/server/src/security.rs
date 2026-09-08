@@ -52,9 +52,14 @@ pub enum Role {
 #[derive(Clone, Debug)]
 pub struct Identity {
     pub principal: String,
+    /// Display-only identity from a validated authentication source. Never use for authorization.
+    pub display_identity: Option<String>,
     pub role: Role,
 }
 impl Identity {
+    pub fn display_name(&self) -> &str {
+        self.display_identity.as_deref().unwrap_or(&self.principal)
+    }
     pub fn can_view(&self, owner: Option<&str>) -> bool {
         self.role == Role::Admin || owner == Some(self.principal.as_str())
     }
@@ -141,6 +146,7 @@ impl SecurityConfig {
             };
             return Ok(Identity {
                 principal: principal.into(),
+                display_identity: None,
                 role,
             });
         }
@@ -148,6 +154,7 @@ impl SecurityConfig {
             if token_matches(token, Some(&credential.token)) {
                 return Ok(Identity {
                     principal: credential.principal.clone(),
+                    display_identity: None,
                     role: credential.role,
                 });
             }
@@ -155,6 +162,7 @@ impl SecurityConfig {
         if self.insecure_development && token.is_none() {
             return Ok(Identity {
                 principal: "development".into(),
+                display_identity: None,
                 role: Role::Admin,
             });
         }
@@ -191,6 +199,7 @@ pub async fn authorize(
         }
         request.extensions_mut().insert(Identity {
             principal: "internal".into(),
+            display_identity: None,
             role: Role::Admin,
         });
         return next.run(request).await;

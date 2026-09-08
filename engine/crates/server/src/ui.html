@@ -439,6 +439,14 @@ async function fetchCluster(){
   }
 }
 
+function queryClient(q){
+  const c=q.context||{};
+  if(c.client==='kaveon-cli')return 'Kaveon CLI';
+  if(c.client==='kaveon-api')return c.source==='studio'?'Kaveon Studio':'Kaveon API';
+  return c.client||'HTTP API';
+}
+function queryUser(q){const c=q.context||{};return c.user||c.principal||'Unavailable';}
+
 function showDetail(id){
   const q=queries[id];if(!q)return;
   document.getElementById('view-list').style.display='none';
@@ -471,7 +479,7 @@ function showDetail(id){
     <div class="qd-section"><div class="qd-label">Query</div><div class="qd-sql">${esc(q.sql)}</div></div>
     <div class="qd-columns">
       <section class="qd-panel"><div class="qd-label">Session</div>${definition([
-        ['Principal',present(context.principal)],['Source',present(context.source)],['Client',present(context.client)],
+        ['User',esc(queryUser(q))],['Principal',present(context.principal)],['Source',present(context.source)],['Client',esc(queryClient(q))],
         ['Catalog',present(context.catalog)],['Schema',present(context.schema)],['Time zone',present(context.time_zone)],
         ['Client address',present(context.client_address)],['Client tags',present(tags)],['Result delivery',present(context.result_delivery)]
       ])}</section>
@@ -601,7 +609,8 @@ function renderHistory(){
         <span class="query-stat"><span class="query-stat-label">Elapsed</span><span class="query-stat-value">${q.elapsed_ms||0} ms</span></span>
         <span class="query-stat"><span class="query-stat-label">Returned</span><span class="query-stat-value">${q.rows?q.rows.length:0} rows</span></span>
         <span class="query-stat"><span class="query-stat-label">Columns</span><span class="query-stat-value">${q.columns?q.columns.length:0}</span></span>
-        <span class="query-stat"><span class="query-stat-label">Entry point</span><span class="query-stat-value">HTTP API</span></span>
+        <span class="query-stat"><span class="query-stat-label">Entry point</span><span class="query-stat-value">${esc(queryClient(q))}</span></span>
+        <span class="query-stat"><span class="query-stat-label">User</span><span class="query-stat-value" style="overflow-wrap:anywhere">${esc(queryUser(q))}</span></span>
       </span><span class="query-main"><span class="query-state${stateClass}"><span>${q.state}</span><span>Query text</span></span><span class="query-sql">${preview}</span></span></span>
     </button>`;
   });

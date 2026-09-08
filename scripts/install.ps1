@@ -60,9 +60,9 @@ if ($installDir -notin ($env:PATH -split ';')) {
 }
 
 Write-Host ""
-Write-Host "  Done! Restart your terminal, then:" -ForegroundColor White
+Write-Host "  Done! Verify the installation:" -ForegroundColor White
 Write-Host "    kaveon --version" -ForegroundColor DarkGray
-Write-Host "    kaveon --local --data-dir C:\path\to\parquet\files" -ForegroundColor DarkGray
-Write-Host "    kaveon --server https://localhost:8080 --ca-cert C:\path\to\ca.crt" -ForegroundColor DarkGray
-Write-Host "  For Microsoft sign-in, follow the CLI prompt when your server enables it." -ForegroundColor DarkGray
+Write-Host "  Connection steps (including your server and public CA):" -ForegroundColor White
+Write-Host "    https://github.com/$repo/blob/dev/docs/engineering/azure-deployment-guide.md" -ForegroundColor DarkGray
+Write-Host "  Kaveon reuses your Azure login when the server enables Microsoft authentication." -ForegroundColor DarkGray
 Write-Host ""
