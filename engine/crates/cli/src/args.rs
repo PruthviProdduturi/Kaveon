@@ -69,8 +69,11 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             }
             "--auth" => {
                 options.auth = take_value(args, &mut index, option)?;
-                if !matches!(options.auth.as_str(), "auto" | "microsoft" | "none") {
-                    return Err("--auth expects auto, microsoft, or none".to_owned());
+                if !matches!(
+                    options.auth.as_str(),
+                    "auto" | "azure-cli" | "microsoft" | "none"
+                ) {
+                    return Err("--auth expects auto, azure-cli, microsoft, or none".to_owned());
                 }
             }
             "--ca-cert" => {
@@ -200,5 +203,14 @@ mod tests {
     fn rejects_unknown_output_format() {
         let error = parse(&strings(&["kaveon", "--output-format", "xml"])).unwrap_err();
         assert!(error.contains("unsupported output format"));
+    }
+
+    #[test]
+    fn accepts_azure_cli_auth() {
+        let Command::Run(options) = parse(&strings(&["kaveon", "--auth", "azure-cli"])).unwrap()
+        else {
+            panic!("expected run command")
+        };
+        assert_eq!(options.auth, "azure-cli");
     }
 }

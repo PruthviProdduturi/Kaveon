@@ -3,7 +3,12 @@ use reqwest::blocking::{Client, RequestBuilder};
 use reqwest::{Method, Url};
 use serde::Deserialize;
 use std::cell::RefCell;
+use std::io::Read;
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
+
+const MAX_AZURE_CLI_OUTPUT_BYTES: u64 = 1024 * 1024;
 
 #[derive(Clone, Deserialize)]
 struct Entra {
@@ -33,16 +38,31 @@ struct Token {
     expires_in: u64,
     refresh_token: Option<String>,
 }
+#[derive(Deserialize)]
+struct AzureCliToken {
+    #[serde(rename = "accessToken")]
+    access_token: String,
+    expires_on: serde_json::Value,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CredentialSource {
+    Environment,
+    AzureCli,
+    MicrosoftDevice,
+}
 struct Credentials {
     access_token: String,
     expires: Option<Instant>,
     refresh_token: Option<String>,
+    source: CredentialSource,
 }
 pub struct Session {
     client: Client,
     identity_client: Client,
     entra: Option<Entra>,
     credentials: RefCell<Option<Credentials>>,
+    auth: String,
+    timeout: Duration,
 }
 impl Session {
     pub fn connect(options: &Options) -> Result<Self, String> {
@@ -50,6 +70,10 @@ impl Session {
         let mut builder = Client::builder()
             .timeout(options.timeout)
             .redirect(reqwest::redirect::Policy::none());
+        if is_loopback_server(&options.server) {
+            // Corporate proxy settings must not intercept a local Engine.
+            builder = builder.no_proxy();
+        }
         if let Some(path) = &options.ca_cert {
             let pem = std::fs::read(path)
                 .map_err(|e| format!("cannot read CA certificate {}: {e}", path.display()))?;
@@ -76,6 +100,8 @@ impl Session {
             identity_client,
             entra: None,
             credentials: RefCell::new(None),
+            auth: options.auth.clone(),
+            timeout: options.timeout,
         };
         if options.auth == "none" {
             return Ok(session);
@@ -88,6 +114,7 @@ impl Session {
                 access_token: token,
                 expires: None,
                 refresh_token: None,
+                source: CredentialSource::Environment,
             });
             return Ok(session);
         }
@@ -115,7 +142,7 @@ impl Session {
             entra.validate()?;
             session.entra = Some(entra);
             session.ensure_token()?;
-        } else if options.auth == "microsoft" {
+        } else if matches!(options.auth.as_str(), "microsoft" | "azure-cli") {
             return Err("this Engine has no Microsoft sign-in configured".into());
         }
         Ok(session)
@@ -138,12 +165,14 @@ impl Session {
                 if token.expires.is_none_or(|expires| Instant::now() < expires) {
                     return Ok(());
                 }
-                token.refresh_token.clone()
+                (token.source, token.refresh_token.clone())
             } else {
-                None
+                (CredentialSource::MicrosoftDevice, None)
             }
         };
-        let token = if let Some(refresh) = refresh {
+        let token = if refresh.0 == CredentialSource::AzureCli {
+            self.azure_cli_or_device(entra)?
+        } else if let Some(refresh) = refresh.1 {
             let response = self
                 .identity_client
                 .post(format!("{}/token", entra.authority()))
@@ -162,42 +191,196 @@ impl Session {
                 if token.refresh_token.is_none() {
                     token.refresh_token = Some(refresh);
                 }
-                token
+                Credentials::from_device(token)?
             } else {
                 let body: serde_json::Value = response.json().unwrap_or_default();
                 if body["error"] != "invalid_grant" {
                     return Err("Microsoft token refresh failed; restart CLI to sign in".into());
                 }
-                device_login(
+                Credentials::from_device(device_login(
                     &self.identity_client,
                     entra,
                     &entra.authority(),
                     std::thread::sleep,
-                )?
+                )?)?
             }
         } else {
-            device_login(
+            self.azure_cli_or_device(entra)?
+        };
+        *self.credentials.borrow_mut() = Some(token);
+        Ok(())
+    }
+
+    fn azure_cli_or_device(&self, entra: &Entra) -> Result<Credentials, String> {
+        match self.auth.as_str() {
+            "azure-cli" => azure_cli_login(entra, self.timeout),
+            "auto" => azure_cli_login(entra, self.timeout).or_else(|_| {
+                eprintln!("Azure CLI session unavailable; using Microsoft device sign-in.");
+                Credentials::from_device(device_login(
+                    &self.identity_client,
+                    entra,
+                    &entra.authority(),
+                    std::thread::sleep,
+                )?)
+            }),
+            "microsoft" => Credentials::from_device(device_login(
                 &self.identity_client,
                 entra,
                 &entra.authority(),
                 std::thread::sleep,
-            )?
-        };
+            )?),
+            _ => Err("invalid authentication mode".into()),
+        }
+    }
+}
+impl Credentials {
+    fn from_device(token: Token) -> Result<Self, String> {
         if token.access_token.is_empty() || token.expires_in == 0 {
             return Err("Microsoft returned an empty or expired access token".into());
         }
         let lifetime = token.expires_in.saturating_sub(60).clamp(1, 86_400);
-        *self.credentials.borrow_mut() = Some(Credentials {
+        Ok(Self {
             access_token: token.access_token,
             expires: Some(Instant::now() + Duration::from_secs(lifetime)),
             refresh_token: token.refresh_token,
-        });
-        Ok(())
+            source: CredentialSource::MicrosoftDevice,
+        })
     }
+}
+fn azure_cli_login(entra: &Entra, timeout: Duration) -> Result<Credentials, String> {
+    let executable = if cfg!(windows) { "az.cmd" } else { "az" };
+    let mut child = Command::new(executable)
+        .args([
+            "account",
+            "get-access-token",
+            "--tenant",
+            &entra.tenant_id,
+            "--scope",
+            &entra.scope,
+            "--output",
+            "json",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| azure_cli_help("Azure CLI is unavailable", entra))?;
+    let (status, stdout) =
+        collect_bounded_stdout(&mut child, timeout).map_err(|error| match error {
+            AzureCliCommandError::TimedOut => {
+                azure_cli_help("Azure CLI token command timed out", entra)
+            }
+            AzureCliCommandError::Failed => "Azure CLI token command failed".to_owned(),
+            AzureCliCommandError::OutputTooLarge => {
+                "Azure CLI returned excessive token data".to_owned()
+            }
+        })?;
+    if !status.success() {
+        return Err(azure_cli_help("Azure CLI could not obtain a token", entra));
+    }
+    let token: AzureCliToken = serde_json::from_slice(&stdout)
+        .map_err(|_| "Azure CLI returned invalid token data".to_owned())?;
+    azure_cli_credentials(token)
+}
+#[derive(Debug)]
+enum AzureCliCommandError {
+    TimedOut,
+    Failed,
+    OutputTooLarge,
+}
+fn collect_bounded_stdout(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> Result<(std::process::ExitStatus, Vec<u8>), AzureCliCommandError> {
+    let stdout = child.stdout.take().ok_or(AzureCliCommandError::Failed)?;
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let result = stdout
+            .take(MAX_AZURE_CLI_OUTPUT_BYTES + 1)
+            .read_to_end(&mut output)
+            .map(|_| output);
+        let _ = sender.send(result);
+    });
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() >= deadline => {
+                abort_child(child);
+                return Err(AzureCliCommandError::TimedOut);
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+            Err(_) => {
+                abort_child(child);
+                return Err(AzureCliCommandError::Failed);
+            }
+        }
+    };
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let output = receiver
+        .recv_timeout(remaining)
+        .map_err(|_| AzureCliCommandError::TimedOut)?
+        .map_err(|_| AzureCliCommandError::Failed)?;
+    if output.len() as u64 > MAX_AZURE_CLI_OUTPUT_BYTES {
+        return Err(AzureCliCommandError::OutputTooLarge);
+    }
+    Ok((status, output))
+}
+fn abort_child(child: &mut std::process::Child) {
+    terminate_process_tree(child);
+    let _ = child.wait();
+}
+#[cfg(windows)]
+fn terminate_process_tree(child: &mut std::process::Child) {
+    let _ = Command::new("taskkill")
+        .args(["/PID", &child.id().to_string(), "/T", "/F"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+#[cfg(not(windows))]
+fn terminate_process_tree(child: &mut std::process::Child) {
+    let _ = child.kill();
+}
+fn azure_cli_help(problem: &str, entra: &Entra) -> String {
+    format!(
+        "{problem}; run az login --tenant {} --scope {} or use --auth microsoft",
+        entra.tenant_id, entra.scope
+    )
+}
+fn azure_cli_credentials(token: AzureCliToken) -> Result<Credentials, String> {
+    if token.access_token.trim().is_empty() {
+        return Err("Azure CLI returned an empty access token".into());
+    }
+    let epoch = match token.expires_on {
+        serde_json::Value::String(value) => value.parse::<u64>().ok(),
+        serde_json::Value::Number(value) => value.as_u64(),
+        _ => None,
+    }
+    .ok_or_else(|| "Azure CLI returned an invalid token expiry".to_owned())?;
+    let expiry = std::time::SystemTime::UNIX_EPOCH
+        .checked_add(Duration::from_secs(epoch))
+        .ok_or_else(|| "Azure CLI returned an invalid token expiry".to_owned())?;
+    let remaining = expiry
+        .duration_since(std::time::SystemTime::now())
+        .map_err(|_| "Azure CLI returned an expired access token; run az login".to_owned())?;
+    if remaining <= Duration::from_secs(60) {
+        return Err(
+            "Azure CLI returned an access token that expires too soon; run az login".into(),
+        );
+    }
+    Ok(Credentials {
+        access_token: token.access_token,
+        expires: Some(Instant::now() + remaining.saturating_sub(Duration::from_secs(60))),
+        refresh_token: None,
+        source: CredentialSource::AzureCli,
+    })
 }
 fn validate_server(server: &str) -> Result<(), String> {
     let url = Url::parse(server).map_err(|_| "invalid Engine URL")?;
-    let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+    let loopback = is_loopback_server(server);
     if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
         return Err(
             "Engine URL requires HTTPS (HTTP is allowed only for local development)".into(),
@@ -213,6 +396,12 @@ fn validate_server(server: &str) -> Result<(), String> {
         );
     }
     Ok(())
+}
+fn is_loopback_server(server: &str) -> bool {
+    Url::parse(server)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .is_some_and(|host| matches!(host.as_str(), "localhost" | "127.0.0.1" | "[::1]" | "::1"))
 }
 impl Entra {
     fn validate(&self) -> Result<(), String> {
@@ -437,7 +626,10 @@ mod tests {
                 access_token: "test-token".into(),
                 expires: None,
                 refresh_token: None,
+                source: CredentialSource::Environment,
             })),
+            auth: "auto".into(),
+            timeout: Duration::from_secs(30),
         };
         for path in ["/v1/statement", "/v1/catalog"] {
             let request = session
@@ -460,7 +652,64 @@ mod tests {
         assert!(validate_server("http://remote.example:8080").is_err());
         assert!(validate_server("https://user:password@example.com").is_err());
         assert!(validate_server("http://127.0.0.1:8080").is_ok());
+        assert!(is_loopback_server("http://localhost:8080"));
+        assert!(!is_loopback_server("https://engine.example"));
     }
+
+    #[test]
+    fn azure_cli_token_json_uses_epoch_expiry_and_keeps_token_in_memory() {
+        let future = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 3600;
+        let token: AzureCliToken = serde_json::from_str(&format!(
+            r#"{{"accessToken":"access-secret","expires_on":"{future}"}}"#
+        ))
+        .unwrap();
+        let credentials = azure_cli_credentials(token).unwrap();
+        assert_eq!(credentials.access_token, "access-secret");
+        assert_eq!(credentials.source, CredentialSource::AzureCli);
+        assert!(credentials.refresh_token.is_none());
+        assert!(credentials.expires.unwrap() > Instant::now());
+    }
+
+    #[test]
+    fn azure_cli_token_json_rejects_invalid_or_expired_expiry() {
+        for expires_on in [r#""not-an-epoch""#, "0"] {
+            let token: AzureCliToken = serde_json::from_str(&format!(
+                r#"{{"accessToken":"access-secret","expires_on":{expires_on}}}"#
+            ))
+            .unwrap();
+            assert!(azure_cli_credentials(token).is_err());
+        }
+    }
+
+    #[test]
+    fn azure_cli_stdout_is_drained_while_child_is_running() {
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "auth::tests::azure_cli_stdout_fixture",
+                "--exact",
+                "--ignored",
+                "--nocapture",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let (status, output) = collect_bounded_stdout(&mut child, Duration::from_secs(5)).unwrap();
+        assert!(status.success());
+        assert!(output.len() > 64 * 1024);
+    }
+
+    #[test]
+    #[ignore]
+    fn azure_cli_stdout_fixture() {
+        print!("{}", "x".repeat(128 * 1024));
+    }
+
     #[test]
     fn remote_execution_uses_server_inline_protocol() {
         let (url, thread) = mock(vec![(200, r#"{"id":"query-1","state":"FINISHED","columns":[{"name":"answer","type":"Int64"}],"data":[[42]],"error":null,"elapsed_ms":1}"#.into())]);

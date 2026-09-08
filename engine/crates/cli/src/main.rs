@@ -112,7 +112,7 @@ fn print_usage() {
     println!("      --client-tags <TAGS>    Comma-separated client tags");
     println!("  -e, --execute <SQL>         Execute SQL and exit");
     println!("      --output-format <TYPE>  table, csv, tsv, or json");
-    println!("      --auth <MODE>           auto (default), microsoft device login, or none");
+    println!("      --auth <MODE>           auto (default), azure-cli, microsoft, or none");
     println!("      --ca-cert <PATH>        Trusted PEM CA (or KAVEON_CA_CERT)");
     println!("      KAVEON_ACCESS_TOKEN     Engine bearer token for unattended use");
     println!("      --timeout <SECONDS>     HTTP request timeout (default: 30)");

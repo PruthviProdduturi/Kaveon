@@ -8,12 +8,23 @@ test environment. Commands below are for PowerShell. The Engine UI uses port
 
 ### 1. Install the client tools
 
-You need Azure CLI, kubectl, kubelogin and the Kaveon CLI. Install kubectl/kubelogin
-with `az aks install-cli` if needed, then reopen your terminal so PATH updates apply.
-On Windows, install the development CLI with:
+You need Azure CLI, kubectl, kubelogin and the Kaveon CLI. On Windows x64,
+install Azure CLI if it is missing, then reopen PowerShell:
 
 ```powershell
+winget install --exact --id Microsoft.AzureCLI
+```
+
+Install the remaining tools and make them available in this terminal:
+
+```powershell
+az aks install-cli
+$env:PATH = "$HOME\.azure-kubectl;$HOME\.azure-kubelogin;$env:PATH"
 irm https://raw.githubusercontent.com/PruthviProdduturi/Kaveon/dev/scripts/install.ps1 | iex
+$env:PATH = "$env:LOCALAPPDATA\kaveon\bin;$env:PATH"
+kubectl version --client
+kubelogin --version
+kaveon --version
 ```
 
 The installer downloads the latest `engine-dev` preview release. Confirm
@@ -54,6 +65,16 @@ kubectl port-forward service/kaveon 8080:8080 -n kaveon --address 127.0.0.1
 Leave this terminal open. If 8080 is occupied, stop or move the identified local
 application first. Kaveon's local Docker API now uses 8082 to avoid this conflict.
 
+If Docker or another application holds 8080, use 18443 without stopping it:
+
+```powershell
+kubectl --context kaveon-test-aks -n kaveon port-forward service/kaveon 18443:8080 --address 127.0.0.1
+```
+
+Wait for `Forwarding from 127.0.0.1:18443 -> 8080` and leave that terminal open.
+Use `https://localhost:18443` for both the CLI and UI in the following steps.
+Docker is not required to connect to AKS; do not kill Docker's backend to free a port.
+
 ### 4. Open the Engine UI
 
 Open **https://localhost:8080/ui**, then select **Sign in with Microsoft**.
@@ -83,14 +104,28 @@ certificate does not require this step. Certificates in this test expire after
 kaveon --server https://localhost:8080 --ca-cert ./kaveon-ca.crt --catalog medallion --schema test
 ```
 
-The CLI discovers Microsoft authentication from the Engine. On first use it shows
-a Microsoft device sign-in URL and code; complete that work-account sign-in. It
-keeps access/refresh tokens in memory for that process. Your Azure CLI login grants
-AKS access; Engine sign-in requests a separate token for the Engine API. Neither
-Azure Resource Manager tokens nor an arbitrary `--user` value grant Engine access.
+The CLI discovers Microsoft authentication from the Engine and first tries your
+existing `az login` session for an Engine-scoped token. It renews that token through
+Azure CLI when needed. If the session cannot provide a token, it falls back to a
+Microsoft device sign-in URL and code. Kaveon keeps tokens in process memory.
+Use `--auth azure-cli` to require Azure CLI authentication, or `--auth microsoft`
+to choose device sign-in explicitly. Loopback Engine requests bypass proxies.
+Neither Graph/Resource Manager tokens nor an arbitrary `--user` grant Engine access.
+
+If Azure requests interactive consent, sign in for the Engine scope once:
+
+```powershell
+az login --tenant YOUR-TENANT-ID --scope "api://YOUR-APP-CLIENT-ID/access_as_user"
+```
 
 For a publicly trusted server certificate, omit `--ca-cert`. On the original
 deployment workstation, the existing `tmp/aks-private-v2/ca.crt` also works.
+
+For the alternate port, with the public CA saved in your home directory:
+
+```powershell
+kaveon --server https://localhost:18443 --ca-cert "$HOME\kaveon-ca.crt" --catalog medallion --schema test
+```
 
 ### 6. Run a query
 
@@ -154,7 +189,10 @@ In Entra **App registrations**, create or select your approved application:
 3. Under **Authentication**, add a **Single-page application** platform with
    `https://localhost:8080/ui` and `https://localhost:18443/ui` as redirect URLs.
 4. Enable **Allow public client flows** for the CLI's device sign-in.
-5. Keep existing settings when using a shared application. A dedicated application
+5. Under **Expose an API → Authorized client applications**, add Microsoft Azure CLI
+   (`04b07795-8ddb-461a-bbee-02f9e1bf7b46`) for the `access_as_user` scope so users
+   can reuse Azure login. This does not assign Engine roles or change tenant policies.
+6. Keep existing settings when using a shared application. A dedicated application
    is preferable for independent deployments. No browser/CLI client secret is needed.
 
 Microsoft's corporate tenant also requires valid Service Tree ownership for new app
@@ -307,3 +345,16 @@ availability requirements. The single coordinator is not highly available.
 | Microsoft consent required | Ask the Entra application/tenant administrator; AKS roles are separate |
 | Engine returns 403 after sign-in | Check the delegated scope and user object-ID role assignment |
 | CLI still asks for a static token or rejects `--auth` | Install a release containing the new CLI authentication support |
+| CLI says `unexpected Microsoft device verification URL` | Reinstall the updated CLI, which accepts Microsoft's `https://login.microsoft.com/device` URL |
+
+For a connection diagnostic, this public endpoint returns no credentials:
+
+```powershell
+Test-NetConnection 127.0.0.1 -Port 18443
+curl.exe --noproxy "*" --ssl-revoke-best-effort --resolve localhost:18443:127.0.0.1 --cacert "$HOME\kaveon-ca.crt" https://localhost:18443/v1/auth/config
+```
+
+Windows curl may report unknown revocation status for the test CA. The diagnostic
+uses best-effort revocation checks while retaining CA and hostname verification.
+It does not disable TLS verification. The CLI uses a separate TLS library and
+automatically bypasses proxies for loopback Engine connections.
