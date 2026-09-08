@@ -1,5 +1,12 @@
 # Engine UI access
 
+Preferred ports: AKS Engine UI `https://localhost:8080/ui`, Studio
+`http://localhost:3000`, local Docker API `http://localhost:8082`. Start the
+engine tunnel with `kubectl -n kaveon port-forward service/kaveon 8080:8080
+--address 127.0.0.1`. Use HTTPS; the AKS listener requires TLS. Each workstation
+must free its own port 8080. Stop or reconfigure the identified application;
+do not terminate Docker Desktop merely because it owns a published port.
+
 The native Engine dashboard is `/ui`. Its static HTML shell accepts unauthenticated
 GET requests so browsers can show the token sign-in form. Cluster and query APIs
 remain authenticated. Connect keeps the supplied token only in page memory;
