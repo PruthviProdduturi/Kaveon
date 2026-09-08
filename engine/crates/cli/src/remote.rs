@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::tokenizer::{Token, Tokenizer};
+use std::collections::BTreeSet;
 use std::io::{self, BufRead, IsTerminal, Write};
+use std::time::Duration;
 
 #[derive(Clone, Debug, Deserialize)]
 struct Column {
@@ -51,6 +53,35 @@ struct SchemaList {
 #[derive(Deserialize)]
 struct TableList {
     tables: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct QueryTelemetry {
+    #[serde(default)]
+    stages: Vec<StageTelemetry>,
+    #[serde(default)]
+    scans: Vec<ScanTelemetry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StageTelemetry {
+    #[serde(default)]
+    task_count: usize,
+    #[serde(default)]
+    completed_tasks: usize,
+    #[serde(default)]
+    tasks: Vec<TaskTelemetry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TaskTelemetry {
+    node_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ScanTelemetry {
+    rows_selected: u64,
+    compressed_bytes_selected: u64,
 }
 
 #[derive(Debug, PartialEq)]
@@ -117,6 +148,7 @@ fn repl(client: &Session, options: &mut Options) -> Result<(), String> {
         if sql.is_empty() && is_repl_alias(trimmed, "clear", "clear") {
             if let Err(error) = clear_terminal() {
                 eprintln!("error: {error}");
+                eprintln!();
             }
             continue;
         }
@@ -124,7 +156,10 @@ fn repl(client: &Session, options: &mut Options) -> Result<(), String> {
             match handle_meta_command(client, options, trimmed) {
                 Ok(true) => return Ok(()),
                 Ok(false) => {}
-                Err(error) => eprintln!("error: {error}"),
+                Err(error) => {
+                    eprintln!("error: {error}");
+                    eprintln!();
+                }
             }
             continue;
         }
@@ -136,6 +171,7 @@ fn repl(client: &Session, options: &mut Options) -> Result<(), String> {
                 && let Err(error) = execute(client, options, &statement)
             {
                 eprintln!("error: {error}");
+                eprintln!();
             }
         }
     }
@@ -232,6 +268,10 @@ fn execute(client: &Session, options: &mut Options, sql: &str) -> Result<(), Str
                 "rows"
             },
         );
+        if let Ok(telemetry) = get_query_telemetry(client, options, &response.id) {
+            print!("{}", format_query_telemetry(&telemetry, &response));
+        }
+        println!();
     }
     Ok(())
 }
@@ -252,6 +292,19 @@ fn get_json_url<T: for<'de> Deserialize<'de>>(client: &Session, url: &str) -> Re
     decode_response(response)
 }
 
+fn get_json_url_with_timeout<T: for<'de> Deserialize<'de>>(
+    client: &Session,
+    url: &str,
+    timeout: Duration,
+) -> Result<T, String> {
+    let response = client
+        .request(reqwest::Method::GET, url)?
+        .timeout(timeout)
+        .send()
+        .map_err(connection_error)?;
+    decode_response(response)
+}
+
 fn metadata_url(options: &Options, segments: &[&str]) -> Result<String, String> {
     let mut url = reqwest::Url::parse(&endpoint(options, "/v1/catalog"))
         .map_err(|error| format!("invalid coordinator URL: {error}"))?;
@@ -264,6 +317,73 @@ fn metadata_url(options: &Options, segments: &[&str]) -> Result<String, String> 
         }
     }
     Ok(url.into())
+}
+
+fn get_query_telemetry(
+    client: &Session,
+    options: &Options,
+    query_id: &str,
+) -> Result<QueryTelemetry, String> {
+    let mut url = reqwest::Url::parse(&endpoint(options, "/v1/query"))
+        .map_err(|error| format!("invalid coordinator URL: {error}"))?;
+    url.path_segments_mut()
+        .map_err(|_| "coordinator URL cannot accept query paths".to_owned())?
+        .push(query_id);
+    get_json_url_with_timeout(client, url.as_str(), Duration::from_secs(3))
+}
+
+fn format_query_telemetry(telemetry: &QueryTelemetry, response: &StatementResponse) -> String {
+    let (nodes, tasks) = if telemetry.stages.is_empty() {
+        ("N/A".to_owned(), "N/A".to_owned())
+    } else {
+        let nodes = telemetry
+            .stages
+            .iter()
+            .flat_map(|stage| stage.tasks.iter().map(|task| task.node_id.as_str()))
+            .collect::<BTreeSet<_>>()
+            .len();
+        let tasks: usize = telemetry.stages.iter().map(|stage| stage.task_count).sum();
+        let completed: usize = telemetry
+            .stages
+            .iter()
+            .map(|stage| stage.completed_tasks)
+            .sum();
+        let progress = if tasks > 0 {
+            format!("{:.2}%", completed as f64 * 100.0 / tasks as f64)
+        } else {
+            "N/A".to_owned()
+        };
+        (
+            nodes.to_string(),
+            format!("{tasks} total, {completed} done ({progress})"),
+        )
+    };
+    let result_bytes = serde_json::to_vec(&response.data).map_or(0, |value| value.len());
+    let elapsed_seconds = response.elapsed_ms as f64 / 1_000.0;
+    let rates = if elapsed_seconds > 0.0 {
+        format!(
+            "{:.1} rows/s, {:.1} JSON result bytes/s",
+            response.data.len() as f64 / elapsed_seconds,
+            result_bytes as f64 / elapsed_seconds
+        )
+    } else {
+        "N/A (elapsed time is 0 ms)".to_owned()
+    };
+    let scan = if telemetry.scans.is_empty() {
+        "Scan metrics: not reported".to_owned()
+    } else {
+        let rows: u64 = telemetry.scans.iter().map(|scan| scan.rows_selected).sum();
+        let bytes: u64 = telemetry
+            .scans
+            .iter()
+            .map(|scan| scan.compressed_bytes_selected)
+            .sum();
+        format!("Scan selected: {rows} rows, {bytes} compressed bytes")
+    };
+    format!(
+        "Nodes: {nodes}  Tasks: {tasks}\nRows: {} returned  JSON result bytes: {result_bytes}  Rates: {rates}\n{scan}\n",
+        response.data.len()
+    )
 }
 
 fn run_meta_command(
@@ -298,6 +418,7 @@ fn run_meta_command(
             options.schema = schema;
             if options.output_format == OutputFormat::Table {
                 println!("Using {}.{}", options.catalog, options.schema);
+                println!();
             }
         }
     }
@@ -641,6 +762,9 @@ fn print_metadata(header: &str, names: Vec<String>, format: OutputFormat) {
         "{}",
         format_result(&response, format).expect("metadata output is serializable")
     );
+    if format == OutputFormat::Table {
+        println!();
+    }
 }
 
 fn print_remote_help() {
@@ -780,6 +904,70 @@ mod tests {
     }
 
     #[test]
+    fn telemetry_footer_deduplicates_task_nodes_and_reports_scan_metrics() {
+        let telemetry = QueryTelemetry {
+            stages: vec![
+                StageTelemetry {
+                    task_count: 3,
+                    completed_tasks: 3,
+                    tasks: vec![
+                        TaskTelemetry {
+                            node_id: "worker-a".to_owned(),
+                        },
+                        TaskTelemetry {
+                            node_id: "worker-b".to_owned(),
+                        },
+                    ],
+                },
+                StageTelemetry {
+                    task_count: 1,
+                    completed_tasks: 1,
+                    tasks: vec![TaskTelemetry {
+                        node_id: "worker-a".to_owned(),
+                    }],
+                },
+            ],
+            scans: vec![ScanTelemetry {
+                rows_selected: 12,
+                compressed_bytes_selected: 34,
+            }],
+        };
+        let footer = format_query_telemetry(&telemetry, &response());
+        assert!(footer.contains("Nodes: 2  Tasks: 4 total, 4 done (100.00%)"));
+        assert!(footer.contains("Scan selected: 12 rows, 34 compressed bytes"));
+        assert!(footer.ends_with('\n'));
+    }
+
+    #[test]
+    fn telemetry_footer_handles_missing_metrics_and_zero_elapsed() {
+        let mut result = response();
+        result.elapsed_ms = 0;
+        let footer = format_query_telemetry(
+            &QueryTelemetry {
+                stages: Vec::new(),
+                scans: Vec::new(),
+            },
+            &result,
+        );
+        assert!(footer.contains("Nodes: N/A  Tasks: N/A"));
+        assert!(footer.contains("Scan metrics: not reported"));
+        assert!(footer.contains("Rates: N/A"));
+    }
+
+    #[test]
+    fn table_footer_has_a_trailing_blank_line() {
+        let footer = format_query_telemetry(
+            &QueryTelemetry {
+                stages: Vec::new(),
+                scans: Vec::new(),
+            },
+            &response(),
+        );
+        let rendered = format!("{}Query summary\n{}\n", format_table(&response()), footer);
+        assert!(rendered.ends_with("\n\n"));
+    }
+
+    #[test]
     fn metadata_http_paths_work_and_failed_use_preserves_context() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -789,6 +977,7 @@ mod tests {
                 "/v1/catalog/medallion/schema/test/table",
                 "/v1/catalog/medallion/schema",
                 "/v1/catalog/medallion/schema",
+                "/v1/query/query%2F1",
             ];
             for path in expected {
                 let (mut stream, _) = listener.accept().unwrap();
@@ -800,7 +989,9 @@ mod tests {
                     .next()
                     .unwrap();
                 assert_eq!(line, format!("GET {path} HTTP/1.1"));
-                let body = if path.ends_with("/table") {
+                let body = if path.starts_with("/v1/query/") {
+                    r#"{"stages":[{"task_count":1,"completed_tasks":1,"tasks":[{"node_id":"worker"}]}],"scans":[]}"#
+                } else if path.ends_with("/table") {
                     r#"{"tables":["orders"]}"#
                 } else {
                     r#"{"schemas":["test"]}"#
@@ -856,6 +1047,8 @@ mod tests {
         assert!(error.contains("not found"));
         assert_eq!(options.catalog, "medallion");
         assert_eq!(options.schema, "test");
+        let telemetry = get_query_telemetry(&client, &options, "query/1").unwrap();
+        assert_eq!(telemetry.stages[0].tasks[0].node_id, "worker");
         server.join().unwrap();
     }
 

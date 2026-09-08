@@ -4,14 +4,22 @@ Preferred ports: AKS Engine UI `https://localhost:8080/ui`, Studio
 `http://localhost:3000`, local Docker API `http://localhost:8082`. Start the
 engine tunnel with `kubectl -n kaveon port-forward service/kaveon 8080:8080
 --address 127.0.0.1`. Use HTTPS; the AKS listener requires TLS. Each workstation
-must free its own port 8080. Stop or reconfigure the identified application;
-do not terminate Docker Desktop merely because it owns a published port.
+can use `18443:8080` and `https://localhost:18443/ui` when 8080 is occupied.
+Do not terminate Docker Desktop merely because it owns a published port.
 
 The native Engine dashboard is `/ui`. Its static HTML shell accepts unauthenticated
-GET requests so browsers can show the token sign-in form. Cluster and query APIs
-remain authenticated. Connect keeps the supplied token only in page memory;
+GET requests so browsers can show **Sign in with Microsoft** when Entra is configured.
+The manual token form remains under Advanced for diagnostics. Cluster and query APIs
+remain authenticated. Sign-in keeps tokens only in page memory;
 Disconnect clears query/telemetry displays, cancels polling and invalidates pending
 responses. Tokens are not saved in browser storage or URLs.
+
+Query history shows **Kaveon CLI** for CLI submissions and the authenticated **User**.
+The user label comes from validated Entra username/name claims and falls back to the
+immutable principal when absent. The query detail view retains that principal.
+Client/source labels are reported metadata; roles and ownership use authenticated
+identity, never the CLI's editable `--user` field. A coordinator restart clears
+in-memory query history, so newly submitted queries carry the new display fields.
 
 ## This workstation and AKS
 
@@ -56,7 +64,7 @@ directory's ACLs and are piped to curl through stdin, never command-line token
 arguments. Keep `tmp/aks-private-v2` private and excluded from Git.
 
 Use ordinary port-forwarding and the native TLS
-endpoint at `https://localhost:18443/ui`. Trust the test CA and enter the same token.
+endpoint at `https://localhost:18443/ui`. Trust the test CA and select Microsoft sign-in.
 The local viewer remains an optional read-only fallback.
 
 ## Validation and deployment
@@ -68,7 +76,7 @@ visible after authentication, empty browser storage, cleared data on Disconnect,
 and no JavaScript errors. The live viewer reads the deployed AKS cluster.
 
 The coordinator UI/auth image digest is
-`sha256:61663d0d4d87310bad297c4594db39bea053d0c9903958d8f2e79540288b0c7e`.
+`sha256:909cf21c79cc87d5bf4085f7f155aa23e90a9ed00f1ea968c0fea10327e2883a`.
 The chart supports `coordinator.imageDigest` for this compatible coordinator-only
 update; workers retain the previously qualified engine image. Future full engine
 upgrades should update both roles as required by their protocol compatibility.
@@ -77,7 +85,11 @@ The coordinator-only AKS rollout completed successfully. A verified HTTPS GET
 of its native `/ui` returned the new sign-in form; coordinator and all three
 worker pods were Ready. Raw rollout evidence is `tmp/aks-ui-rollout.json`.
 
-This workstation's default kubectl context is a separate cluster,
-`aks-helio-orch-DSEng-dev`. Keep `--kubeconfig tmp/aks-kubeconfig` on direct
-Kaveon kubectl commands; the dedicated file selects `kaveon-test-aks`.
+Always check `kubectl config current-context` before operating on a cluster.
+The repository's dedicated `--kubeconfig tmp/aks-kubeconfig` selects `kaveon-test-aks`;
+other machines can use their standard kubeconfig with that explicit context.
 The viewer always names the Kaveon subscription/resource group/cluster explicitly.
+
+The latest live browser check verified three active workers, **Kaveon CLI**, and
+the signed username. An explicit spoofed request username did not replace the
+authenticated identity. See the [complete connection guide](azure-deployment-guide.md).
