@@ -1,10 +1,20 @@
 # Microsoft Entra sign-in for the Engine
 
-Status: implementation and automated validation complete; live tenant registration
-and interactive sign-in are pending. The Microsoft tenant rejected app creation
-with `ServiceTreeValueMissing`: a valid `serviceManagementReference` (Service Tree
-ownership ID) is required. Do not invent an ownership ID or change tenant policies.
-An approved existing application may be used only with authorization from its owner.
+Status: implementation and automated validation complete; existing Entra application
+configured for this test deployment. The user supplied client ID
+`d0ce7c35-cc10-4ae7-b6be-60d002f43059` (Forge-Dev), owned by the deploying user.
+Added the Kaveon delegated permission and SPA redirects while preserving Forge and
+Trino scopes, existing redirects and token version 2. The ID is an application ID,
+not a Service Tree ID. New-app creation was rejected by Microsoft tenant Service Tree
+requirements; using the authorized existing app resolves that registration blocker.
+Interactive Microsoft sign-in/consent still needs validation with the actual user.
+
+This is a reusable configuration pattern, not a dependency on Forge-Dev. Another
+deployment supplies its own tenant, approved app/client ID, SPA redirect URIs and
+user object-ID role map. A separate app registration per deployment is preferable
+for isolation. Service Tree ownership is specific to Microsoft's corporate tenant;
+other tenants enforce their own registration/consent policies. Engine authorization
+is separate from Azure subscription/AKS role assignments.
 
 ## Identity contract
 
@@ -38,9 +48,9 @@ redirect URIs, not Web/confidential-client redirects:
 - `https://localhost:8080/ui`
 - `https://localhost:18443/ui`
 
-The initial request manifest is available locally in
-`tmp/kaveon-entra-app-request.json`. Add the approved `serviceManagementReference`
-before submitting it. The failed creation did not produce an application/client ID.
+For this deployment, use the existing client ID above; do not resubmit the failed
+new-app request in `tmp/kaveon-entra-app-request.json`. For a new application in a
+tenant requiring Service Tree ownership, add the approved `serviceManagementReference`.
 After creation, update its identifier URI using the returned client ID and ensure
 the delegated permission has the consent required by the tenant. No client secret
 is needed in the browser. A tenant administrator may need to grant consent;
@@ -64,7 +74,10 @@ principal and bridge credentials. Supply the real client ID; do not deploy place
 }
 ```
 
-For this AKS chart, update the `security.json` key in Secret `kaveon-engine-auth`.
+For this AKS deployment, the coordinator uses Secret `kaveon-coordinator-auth`,
+selected by Helm value `coordinator.credentialsSecret`. Update its `security.json`
+key. Workers retain the original `kaveon-engine-auth` Secret and existing credentials;
+they do not need interactive user authentication configuration.
 Use a private file and `kubectl apply --server-side`; never print existing Secret
 values or commit them. Deploy an image containing this implementation and restart
 the coordinator to load the configuration. Internal worker/exchange credentials
@@ -89,3 +102,8 @@ and authenticated data boundaries.
 Python Playwright with a mocked identity provider. It verifies Microsoft sign-in,
 the delegated Authorization header, memory-only cache, Disconnect, token-renewal
 failure and 401 polling cancellation. This is not an interactive Entra sign-in test.
+
+The deployed coordinator also passed TLS verification with its public CA and a
+real Edge/MSAL smoke check that opened Microsoft's sign-in page. The configured
+application's device-authorization endpoint accepted the CLI scope. Completing
+interactive user sign-in and tenant consent remains a user validation step.

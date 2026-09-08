@@ -122,6 +122,7 @@ Studio runs on `http://localhost:3000`; the API defaults to `http://localhost:80
 - [Full platform architecture](ARCHITECTURE.md)
 - [Engine execution pipeline](docs/reference/kaveon-engine-pipeline.svg)
 - [Deployment topology](docs/reference/kaveon-deployment-topology.svg)
+- [Azure Engine deployment and connection guide](docs/engineering/azure-deployment-guide.md)
 - [DLM flow](docs/reference/kaveon-dlm-flow.svg)
 
 ## Current compatibility

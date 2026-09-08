@@ -71,11 +71,16 @@
 User requested Microsoft sign-in instead of pasted Engine tokens. Added optional
 Entra JWT validation (tenant/audience/issuer/expiry/scope/object-ID role allowlist),
 public auth configuration and locally vendored MSAL popup/PKCE sign-in. Existing
-static/internal auth remains. Browser mocked-auth regression passes. Live setup
-is blocked by Microsoft tenant app registration requiring a Service Tree ownership
-ID (ServiceTreeValueMissing); user has been asked for that ID or an approved existing
-application. Do not claim live SSO enabled until registration/consent and actual
-interactive sign-in succeed. See docs/engineering/engine-entra-sign-in.md.
+static/internal auth remains. User authorized existing Forge-Dev application
+`d0ce7c35-cc10-4ae7-b6be-60d002f43059`; added Engine delegated scope, localhost SPA
+redirects and public-client flow while preserving existing application settings.
+Coordinator now loads Entra configuration from its separate credentials Secret;
+workers retain their original credentials. Live TLS/UI/MSAL popup and Microsoft
+device-authorization initialization pass; actual user sign-in/consent is still an
+interactive validation step. CLI has automatic device sign-in, memory-only refresh,
+custom CA trust and bearer requests; 14 tests and strict Clippy pass. Release binary
+queried live AKS over verified TLS: 10000 orders, sum(amount_cents)=486727696.
+See docs/engineering/engine-entra-sign-in.md and azure-deployment-guide.md.
 
 ### Local port allocation — September 8
 

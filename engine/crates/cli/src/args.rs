@@ -24,6 +24,8 @@ pub enum Command {
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct Options {
+    pub auth: String,
+    pub ca_cert: Option<PathBuf>,
     pub local: bool,
     pub server: String,
     pub catalog: String,
@@ -40,6 +42,8 @@ pub struct Options {
 
 pub fn parse(args: &[String]) -> Result<Command, String> {
     let mut options = Options {
+        auth: "auto".to_owned(),
+        ca_cert: std::env::var_os("KAVEON_CA_CERT").map(PathBuf::from),
         local: false,
         server: DEFAULT_SERVER.to_owned(),
         catalog: DEFAULT_CATALOG.to_owned(),
@@ -62,6 +66,15 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             "--local" => {
                 options.local = true;
                 index += 1;
+            }
+            "--auth" => {
+                options.auth = take_value(args, &mut index, option)?;
+                if !matches!(options.auth.as_str(), "auto" | "microsoft" | "none") {
+                    return Err("--auth expects auto, microsoft, or none".to_owned());
+                }
+            }
+            "--ca-cert" => {
+                options.ca_cert = Some(PathBuf::from(take_value(args, &mut index, option)?))
             }
             "--server" => options.server = take_value(args, &mut index, option)?,
             "--catalog" => options.catalog = take_value(args, &mut index, option)?,
