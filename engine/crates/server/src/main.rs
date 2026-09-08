@@ -2,6 +2,7 @@ mod api;
 pub mod cluster;
 mod config;
 pub mod disk_exchange;
+pub mod entra;
 pub mod exchange;
 pub mod fragment_exec;
 pub mod lifecycle;

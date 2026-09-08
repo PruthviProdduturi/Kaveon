@@ -203,6 +203,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             get(list_tables),
         )
         .route("/ui", get(crate::ui::dashboard))
+        .route("/ui/msal-browser.min.js", get(crate::ui::msal_script))
+        .route("/v1/auth/config", get(crate::entra::public_config))
         .route("/health", get(health))
         .route("/ready", get(ready))
         .layer(axum::middleware::from_fn_with_state(
