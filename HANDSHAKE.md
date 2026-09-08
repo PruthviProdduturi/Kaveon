@@ -96,6 +96,14 @@ See docs/engineering/engine-entra-sign-in.md and azure-deployment-guide.md.
 
 ### Preview distribution — September 8
 
+Azure CLI reuse follow-up: preauthorized Microsoft Azure CLI for the existing
+Engine app's `access_as_user` scope only, retaining other app settings and all
+Engine role assignments. After propagation, the existing Azure login acquired
+an Engine token without additional interaction; live TLS SQL returned
+`[[10000,486727696]]`. CLI auto mode now tries Azure CLI and renews through it,
+with device sign-in fallback and explicit `--auth azure-cli`/`--auth microsoft`.
+Loopback Engine requests bypass proxies; identity-provider TLS is unchanged.
+
 Follow-up CLI compatibility fix: the live Microsoft device endpoint returns
 `https://login.microsoft.com/device`. Added that exact URL to the verification-site
 allowlist, retaining rejection of HTTP and lookalike hosts. All 15 CLI tests and

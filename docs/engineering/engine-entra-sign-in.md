@@ -93,6 +93,14 @@ to the browser.
 
 ## Validation
 
+The CLI's default authentication tries the current Azure CLI session before device
+sign-in, acquiring a token for this Engine's delegated scope and configured tenant.
+Administrators can preauthorize Microsoft Azure CLI application
+`04b07795-8ddb-461a-bbee-02f9e1bf7b46` for `access_as_user` on the Engine API app.
+Existing tenant authentication requirements still apply; a fresh scoped Azure
+login may be required. This application-level setting was added to the existing
+test app without changing subscription policies or Engine user-role assignments.
+
 Signed-token server tests cover accepted tokens and wrong issuer/audience/tenant,
 expiry/not-before, missing scope/identity, unassigned users, algorithm and signature
 failures, plus key-cache behavior. Existing HTTP security tests protect public assets
