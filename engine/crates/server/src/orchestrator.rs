@@ -52,7 +52,9 @@ pub struct CoordinatorOrchestrator {
     fragments: BTreeMap<StageId, ExecutableFragment>,
     workers: Vec<NodeInfo>,
     assignments: BTreeMap<(StageId, usize), TaskAssignment>,
+    exchange_workers: BTreeMap<(StageId, usize), String>,
     runtime: StageRuntime,
+    exchange_store_uri: Option<String>,
 }
 
 impl CoordinatorOrchestrator {
@@ -81,13 +83,23 @@ impl CoordinatorOrchestrator {
             assignments.values().cloned().collect(),
             max_task_attempts,
         )?;
+        let exchange_workers = assignments
+            .iter()
+            .map(|(key, assignment)| (*key, assignment.worker_id.clone()))
+            .collect();
         Ok(Self {
+            exchange_store_uri: None,
+            exchange_workers,
             graph,
             fragments,
             workers,
             assignments,
             runtime,
         })
+    }
+
+    pub fn set_exchange_store_uri(&mut self, uri: String) {
+        self.exchange_store_uri = Some(uri);
     }
 
     pub fn ready_dispatches(&self) -> Result<Vec<TaskDispatch>> {
@@ -161,7 +173,7 @@ impl CoordinatorOrchestrator {
                             exchange_id: exchange.id.clone(),
                             producer: producer.task_id.clone(),
                             output_partition,
-                            worker_uri: assignment_worker_uri(consumer, &self.workers)?,
+                            worker_uri: self.exchange_worker_uri(consumer)?,
                         });
                     }
                 }
@@ -214,7 +226,7 @@ impl CoordinatorOrchestrator {
                     exchange_id: exchange.id.clone(),
                     producer: producer.task_id.clone(),
                     output_partition,
-                    worker_uri: assignment_worker_uri(assignment, &self.workers)?,
+                    worker_uri: self.exchange_worker_uri(assignment)?,
                 });
             }
         }
@@ -241,7 +253,7 @@ impl CoordinatorOrchestrator {
                     exchange_id: exchange.id.clone(),
                     producer: assignment.task_id.clone(),
                     output_partition,
-                    worker_uri: assignment_worker_uri(consumer, &self.workers)?,
+                    worker_uri: self.exchange_worker_uri(consumer)?,
                 });
             }
         }
@@ -261,6 +273,21 @@ impl CoordinatorOrchestrator {
             .find(|stage| stage.id == stage_id)
             .map(|stage| stage.task_count)
             .ok_or_else(|| execution_error("task references an unknown stage"))
+    }
+
+    fn exchange_worker_uri(&self, consumer: &TaskAssignment) -> Result<String> {
+        if let Some(uri) = &self.exchange_store_uri {
+            return Ok(uri.clone());
+        }
+        let worker_id = self
+            .exchange_workers
+            .get(&(consumer.task_id.stage_id, consumer.task_id.partition))
+            .ok_or_else(|| execution_error("exchange references unknown consumer placement"))?;
+        self.workers
+            .iter()
+            .find(|worker| &worker.node_id == worker_id)
+            .map(|worker| worker.address.clone())
+            .ok_or_else(|| execution_error("exchange references unknown worker"))
     }
 
     fn retry_worker(&self, task_id: &TaskId) -> Option<String> {
@@ -360,14 +387,6 @@ fn validate_workers(workers: &[NodeInfo]) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn assignment_worker_uri(assignment: &TaskAssignment, workers: &[NodeInfo]) -> Result<String> {
-    workers
-        .iter()
-        .find(|worker| worker.node_id == assignment.worker_id)
-        .map(|worker| worker.address.clone())
-        .ok_or_else(|| execution_error("task assignment references an unknown worker"))
 }
 
 fn execution_error(message: &str) -> KaveonError {
@@ -515,6 +534,61 @@ mod tests {
         let mut missing = fragments();
         missing.remove(&StageId(1));
         assert!(CoordinatorOrchestrator::new(graph(), missing, vec![worker("worker-a")]).is_err());
+    }
+
+    #[test]
+    fn consumer_retry_reads_original_exchange_placement_and_cleanup_matches() {
+        let mut orchestrator = CoordinatorOrchestrator::new(
+            graph(),
+            fragments(),
+            vec![worker("worker-a"), worker("worker-b")],
+        )
+        .unwrap();
+        let producers = orchestrator.ready_dispatches().unwrap();
+        for producer in producers {
+            orchestrator
+                .start_task(&producer.assignment.task_id)
+                .unwrap();
+            orchestrator
+                .finish_task(&producer.assignment.task_id)
+                .unwrap();
+        }
+        let consumers = orchestrator.ready_dispatches().unwrap();
+        let first = &consumers[0];
+        orchestrator.start_task(&first.assignment.task_id).unwrap();
+        assert!(
+            orchestrator
+                .fail_task(&first.assignment.task_id, "temporary pressure")
+                .unwrap()
+        );
+        let retry = orchestrator
+            .ready_dispatches()
+            .unwrap()
+            .into_iter()
+            .find(|dispatch| {
+                dispatch.assignment.task_id.partition == first.assignment.task_id.partition
+            })
+            .unwrap();
+        assert_ne!(retry.assignment.worker_id, first.assignment.worker_id);
+        assert_eq!(retry.exchange_inputs, first.exchange_inputs);
+        orchestrator.start_task(&retry.assignment.task_id).unwrap();
+        orchestrator.finish_task(&retry.assignment.task_id).unwrap();
+        for consumer in consumers.into_iter().skip(1) {
+            orchestrator
+                .start_task(&consumer.assignment.task_id)
+                .unwrap();
+            orchestrator
+                .finish_task(&consumer.assignment.task_id)
+                .unwrap();
+        }
+        let cleanup = orchestrator.drain_exchange_cleanup().unwrap();
+        for location in retry.exchange_inputs {
+            assert!(
+                cleanup
+                    .iter()
+                    .any(|cleanup| cleanup.locations.contains(&location))
+            );
+        }
     }
 
     #[test]

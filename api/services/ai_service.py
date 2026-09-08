@@ -5,17 +5,14 @@ Key resolution order (highest priority wins):
   1. User's personal key  (user_ai_keys table)
   2. Admin global key     (ai_providers table)
 
-Encryption: Fernet symmetric encryption using a key derived from AI_ENCRYPTION_SECRET.
+Encryption: versioned Fernet envelopes using the explicit credential keyring.
 HTTP client: httpx (already in requirements) — no extra SDK needed.
 """
 
-import base64
-import hashlib
 import json
 from typing import Optional
 
 import httpx
-from cryptography.fernet import Fernet, InvalidToken
 
 import database.metadata as db
 from config import settings
@@ -23,25 +20,14 @@ from config import settings
 
 # ── Encryption helpers ────────────────────────────────────────────────────────
 
-def _fernet() -> Fernet:
-    """Derive a stable Fernet key from the app's encryption secret."""
-    secret = getattr(settings, "AI_ENCRYPTION_SECRET", "") or (
-        settings.AZURE_TENANT_ID + settings.AZURE_CLIENT_ID
-    )
-    raw = hashlib.sha256(secret.encode()).digest()   # 32 bytes
-    key = base64.urlsafe_b64encode(raw)
-    return Fernet(key)
-
-
 def _encrypt(plaintext: str) -> str:
-    return _fernet().encrypt(plaintext.encode()).decode()
+    from services.credentials import encrypt
+    return encrypt(plaintext)
 
 
-def _decrypt(token: str) -> str:
-    try:
-        return _fernet().decrypt(token.encode()).decode()
-    except (InvalidToken, Exception):
-        return ""
+def _decrypt(ciphertext: str) -> str:
+    from services.credentials import decrypt
+    return decrypt(ciphertext)
 
 
 def _mask(api_key: str) -> str:

@@ -9,6 +9,72 @@ use kaveon_core::predicate::ScalarValue;
 use kaveon_core::{BinaryOp, CastTarget, DateField, Expr, KaveonError, Result};
 use std::sync::Arc;
 
+struct ExpressionBudget {
+    account: kaveon_core::OperatorMemoryAccount,
+    reservations: Vec<kaveon_core::MemoryReservation>,
+}
+
+thread_local! {
+    static EXPRESSION_MEMORY: std::cell::RefCell<Option<ExpressionBudget>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Synchronous expression evaluation inherits its caller's query budget,
+/// including recursively nested function calls. The prior scope is restored
+/// even when evaluation returns an error or unwinds.
+pub fn with_expression_memory<T>(
+    memory: Option<&kaveon_core::OperatorMemoryAccount>,
+    action: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    struct Restore(Option<ExpressionBudget>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            EXPRESSION_MEMORY.with(|slot| {
+                slot.replace(self.0.take());
+            });
+        }
+    }
+    let Some(memory) = memory else {
+        return action();
+    };
+    let _restore = Restore(EXPRESSION_MEMORY.with(|slot| {
+        slot.replace(Some(ExpressionBudget {
+            account: memory.clone(),
+            reservations: Vec::new(),
+        }))
+    }));
+    action()
+}
+
+pub fn check_expression_cancelled() -> Result<()> {
+    EXPRESSION_MEMORY.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .map(|budget| budget.account.check_cancelled())
+            .unwrap_or(Ok(()))
+    })
+}
+
+fn reserve_string_expansion(bytes: u64, rows: usize) -> Result<()> {
+    const MAX_EXPANSION_BYTES: u64 = 64 * 1024 * 1024;
+    if bytes > MAX_EXPANSION_BYTES {
+        return Err(KaveonError::Execution(format!(
+            "string expression output exceeds {MAX_EXPANSION_BYTES} bytes per batch"
+        )));
+    }
+    let workspace = bytes
+        .checked_mul(2)
+        .and_then(|bytes| bytes.checked_add((rows as u64).saturating_mul(16)))
+        .ok_or_else(|| {
+            KaveonError::Execution("string expression memory estimate overflow".into())
+        })?;
+    EXPRESSION_MEMORY.with(|slot| {
+        if let Some(budget) = slot.borrow_mut().as_mut() {
+            budget.reservations.push(budget.account.reserve(workspace)?);
+        }
+        Ok(())
+    })
+}
+
 pub fn evaluate(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
     match expr {
         Expr::Column(name) => resolve_column(name, batch),
@@ -73,9 +139,9 @@ pub fn evaluate(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
         }
         Expr::Alias { expr, .. } => evaluate(expr, batch),
         Expr::Extract { field, expr } => eval_extract(*field, expr, batch),
-        Expr::WindowFunction { name, .. } => Err(KaveonError::Execution(format!(
-            "window function {name} must be evaluated by the WindowOperator, not inline"
-        ))),
+        Expr::WindowFunction { .. } => {
+            resolve_column(&crate::window::window_output_name(expr), batch)
+        }
         Expr::Star => Err(KaveonError::Execution(
             "star (*) cannot be evaluated as an expression".into(),
         )),
@@ -126,11 +192,17 @@ fn resolve_column(name: &str, batch: &RecordBatch) -> Result<ArrayRef> {
 
 fn literal_to_array(value: &ScalarValue, len: usize) -> Result<ArrayRef> {
     match value {
-        ScalarValue::Null => Ok(Arc::new(BooleanArray::new_null(len))),
+        ScalarValue::Null => Ok(arrow::array::new_null_array(&DataType::Null, len)),
         ScalarValue::Bool(v) => Ok(Arc::new(BooleanArray::from(vec![*v; len]))),
         ScalarValue::Int64(v) => Ok(Arc::new(Int64Array::from(vec![*v; len]))),
         ScalarValue::Float64(v) => Ok(Arc::new(Float64Array::from(vec![*v; len]))),
-        ScalarValue::Utf8(v) => Ok(Arc::new(StringArray::from(vec![v.as_str(); len]))),
+        ScalarValue::Utf8(v) => {
+            let bytes = (v.len() as u64)
+                .checked_mul(len as u64)
+                .ok_or_else(|| KaveonError::Execution("string literal size overflow".into()))?;
+            reserve_string_expansion(bytes, len)?;
+            Ok(Arc::new(StringArray::from(vec![v.as_str(); len])))
+        }
         ScalarValue::Decimal128 {
             value,
             precision,
@@ -167,6 +239,10 @@ fn eval_binary_op(left: &ArrayRef, op: BinaryOp, right: &ArrayRef) -> Result<Arr
 fn eval_string_concat(left: &ArrayRef, right: &ArrayRef) -> Result<ArrayRef> {
     let left_str = cast_to_string(left)?;
     let right_str = cast_to_string(right)?;
+    reserve_string_expansion(
+        (left_str.value_data().len() as u64).saturating_add(right_str.value_data().len() as u64),
+        left_str.len(),
+    )?;
     let result: StringArray = (0..left_str.len())
         .map(|i| match (left_str.is_null(i), right_str.is_null(i)) {
             (true, _) | (_, true) => None,
@@ -254,6 +330,18 @@ fn arithmetic(left: &ArrayRef, op: BinaryOp, right: &ArrayRef) -> Result<ArrayRe
 }
 
 fn coerce_numeric_pair(left: &ArrayRef, right: &ArrayRef) -> Result<(ArrayRef, ArrayRef)> {
+    if left.data_type() == &DataType::Null {
+        return Ok((
+            arrow::array::new_null_array(right.data_type(), left.len()),
+            right.clone(),
+        ));
+    }
+    if right.data_type() == &DataType::Null {
+        return Ok((
+            left.clone(),
+            arrow::array::new_null_array(left.data_type(), right.len()),
+        ));
+    }
     if left.data_type() == right.data_type() {
         return Ok((Arc::clone(left), Arc::clone(right)));
     }
@@ -532,7 +620,7 @@ fn eval_in_list(
         let item_arr = evaluate(item, batch)?;
         let (val_c, item_c) = coerce_numeric_pair(&val, &item_arr)?;
         let eq = comparison(&val_c, &item_c, CompareKind::Eq)?;
-        result = compute::or(&result, &eq)?;
+        result = compute::or_kleene(&result, &eq)?;
     }
     if negated {
         Ok(Arc::new(compute::not(&result)?))
@@ -636,6 +724,10 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             }
             let string_args: Vec<StringArray> =
                 args.iter().map(cast_to_string).collect::<Result<_>>()?;
+            let bytes = string_args.iter().fold(0_u64, |bytes, array| {
+                bytes.saturating_add(array.value_data().len() as u64)
+            });
+            reserve_string_expansion(bytes, num_rows)?;
             let result: StringArray = (0..num_rows)
                 .map(|i| {
                     let mut s = String::new();
@@ -655,6 +747,23 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let arr = as_string_array(&args[0])?;
             let from = as_string_array(&args[1])?;
             let to = as_string_array(&args[2])?;
+            let bytes = (0..num_rows).try_fold(0_u64, |total, index| {
+                if arr.is_null(index) || from.is_null(index) || to.is_null(index) {
+                    return Ok(total);
+                }
+                let source = arr.value(index);
+                let matches = if from.value(index).is_empty() {
+                    source.chars().count() + 1
+                } else {
+                    source.len() / from.value(index).len()
+                };
+                (matches as u64)
+                    .checked_mul(to.value(index).len() as u64)
+                    .and_then(|bytes| bytes.checked_add(source.len() as u64))
+                    .and_then(|bytes| total.checked_add(bytes))
+                    .ok_or_else(|| KaveonError::Execution("REPLACE output size overflow".into()))
+            })?;
+            reserve_string_expansion(bytes, num_rows)?;
             let result: StringArray = (0..num_rows)
                 .map(|i| {
                     if arr.is_null(i) || from.is_null(i) || to.is_null(i) {
@@ -705,6 +814,17 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let arr = as_string_array(&args[0])?;
             let lens = args[1].as_primitive::<Int64Type>();
             let pads = as_string_array(&args[2])?;
+            let bytes = (0..num_rows).try_fold(0_u64, |total, index| {
+                if arr.is_null(index) || lens.is_null(index) || pads.is_null(index) {
+                    return Ok(total);
+                }
+                (lens.value(index).max(0) as u64)
+                    .checked_mul(4)
+                    .and_then(|bytes| bytes.checked_add(arr.value(index).len() as u64))
+                    .and_then(|bytes| total.checked_add(bytes))
+                    .ok_or_else(|| KaveonError::Execution("padding output size overflow".into()))
+            })?;
+            reserve_string_expansion(bytes, num_rows)?;
             let result: StringArray = (0..num_rows)
                 .map(|i| {
                     if arr.is_null(i) || lens.is_null(i) || pads.is_null(i) {
@@ -731,6 +851,17 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let arr = as_string_array(&args[0])?;
             let lens = args[1].as_primitive::<Int64Type>();
             let pads = as_string_array(&args[2])?;
+            let bytes = (0..num_rows).try_fold(0_u64, |total, index| {
+                if arr.is_null(index) || lens.is_null(index) || pads.is_null(index) {
+                    return Ok(total);
+                }
+                (lens.value(index).max(0) as u64)
+                    .checked_mul(4)
+                    .and_then(|bytes| bytes.checked_add(arr.value(index).len() as u64))
+                    .and_then(|bytes| total.checked_add(bytes))
+                    .ok_or_else(|| KaveonError::Execution("padding output size overflow".into()))
+            })?;
+            reserve_string_expansion(bytes, num_rows)?;
             let result: StringArray = (0..num_rows)
                 .map(|i| {
                     if arr.is_null(i) || lens.is_null(i) || pads.is_null(i) {
@@ -828,6 +959,17 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             check_arity(name, args, 2)?;
             let arr = as_string_array(&args[0])?;
             let counts = args[1].as_primitive::<Int64Type>();
+            let bytes = (0..num_rows).try_fold(0_u64, |total, index| {
+                if arr.is_null(index) || counts.is_null(index) {
+                    return Ok(total);
+                }
+                let bytes = (arr.value(index).len() as u64)
+                    .checked_mul(counts.value(index).max(0) as u64)
+                    .and_then(|bytes| total.checked_add(bytes))
+                    .ok_or_else(|| KaveonError::Execution("REPEAT output size overflow".into()))?;
+                Ok::<_, KaveonError>(bytes)
+            })?;
+            reserve_string_expansion(bytes, num_rows)?;
             let result: StringArray = (0..num_rows)
                 .map(|i| {
                     if arr.is_null(i) || counts.is_null(i) {
@@ -1356,6 +1498,64 @@ fn make_null_array(dt: &DataType, len: usize) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn in_list_uses_three_valued_null_logic() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("x", DataType::Int64, true),
+        ]));
+        let input = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int64Array::from(vec![Some(1), Some(2), None]))],
+        )
+        .unwrap();
+        for negated in [false, true] {
+            let expr = Expr::InList {
+                expr: Box::new(Expr::Column("x".into())),
+                list: vec![
+                    Expr::Literal(ScalarValue::Int64(1)),
+                    Expr::Literal(ScalarValue::Null),
+                ],
+                negated,
+            };
+            let values = evaluate(&expr, &input).unwrap();
+            assert_eq!(
+                values.as_boolean().iter().collect::<Vec<_>>(),
+                vec![Some(!negated), None, None]
+            );
+        }
+    }
+
+    #[test]
+    fn expanding_strings_check_overflow_caps_and_query_budget_before_allocation() {
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
+        let repeat = |count| Expr::Function {
+            name: "REPEAT".into(),
+            args: vec![
+                Expr::Literal(ScalarValue::Utf8("xx".into())),
+                Expr::Literal(ScalarValue::Int64(count)),
+            ],
+        };
+        assert!(evaluate(&repeat(i64::MAX), &batch).is_err());
+        assert!(evaluate(&repeat(100_000_000), &batch).is_err());
+        let pool = kaveon_core::QueryMemoryPool::new("string-budget", 128).unwrap();
+        let memory = pool.operator("expressions").unwrap();
+        assert!(with_expression_memory(Some(&memory), || evaluate(&repeat(100), &batch)).is_err());
+        assert_eq!(pool.snapshot().current_bytes, 0);
+        // Error restores the thread-local scope; a later standalone expression
+        // must not inherit the failed query's tiny budget.
+        let value = evaluate(&repeat(100), &batch).unwrap();
+        assert_eq!(value.as_string::<i32>().value(0).len(), 200);
+        assert_eq!(
+            evaluate(&repeat(-1), &batch)
+                .unwrap()
+                .as_string::<i32>()
+                .value(0),
+            ""
+        );
+    }
     use arrow::datatypes::{Field, Schema};
 
     fn batch() -> RecordBatch {

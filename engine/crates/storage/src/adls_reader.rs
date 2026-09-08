@@ -31,6 +31,7 @@ pub struct AdlsBatchStream {
     schema: SchemaRef,
     inner: Pin<Box<dyn Stream<Item = parquet::errors::Result<RecordBatch>> + Send>>,
     metrics: ScanMetrics,
+    output_projection: Option<Vec<usize>>,
 }
 
 impl AdlsBatchStream {
@@ -51,14 +52,22 @@ impl AdlsBatchStream {
         if let Some(batch) = &result {
             self.metrics.emitted(batch.num_rows());
         }
-        Ok(result)
+        result
+            .map(|batch| match &self.output_projection {
+                Some(indices) => batch
+                    .project(indices)
+                    .map_err(|e| storage_error(e.to_string())),
+                None => Ok(batch),
+            })
+            .transpose()
     }
 }
 
 pub struct AdlsBatchSource {
     schema: SchemaRef,
-    receiver: mpsc::Receiver<Result<RecordBatch>>,
+    receiver: mpsc::Receiver<Result<Option<RecordBatch>>>,
     metrics: ScanMetrics,
+    exhausted: bool,
 }
 
 impl AdlsBatchSource {
@@ -74,10 +83,14 @@ impl BatchSource for AdlsBatchSource {
     }
 
     fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
-        match self.receiver.recv() {
-            Ok(result) => result.map(Some),
-            Err(_) => Ok(None),
+        if self.exhausted {
+            return Ok(None);
         }
+        let batch = self.receiver.recv().map_err(|_| {
+            storage_error("ADLS reader terminated without an end-of-stream marker")
+        })??;
+        self.exhausted = batch.is_none();
+        Ok(batch)
     }
 }
 
@@ -214,11 +227,15 @@ impl AdlsParquetReader {
         builder = builder.with_row_groups(row_groups);
         let stream: ParquetRecordBatchStream<ParquetObjectReader> =
             builder.build().map_err(parquet_error)?;
-        let schema = Arc::clone(stream.schema());
+        let (schema, output_projection) = crate::parquet_reader::ordered_projection(
+            Arc::clone(stream.schema()),
+            self.columns.as_deref(),
+        )?;
         Ok(AdlsBatchStream {
             schema,
             inner: Box::pin(stream),
             metrics,
+            output_projection,
         })
     }
 
@@ -257,11 +274,14 @@ impl AdlsParquetReader {
                     loop {
                         match stream.next_batch().await {
                             Ok(Some(batch)) => {
-                                if batch_sender.send(Ok(batch)).is_err() {
+                                if batch_sender.send(Ok(Some(batch))).is_err() {
                                     return;
                                 }
                             }
-                            Ok(None) => return,
+                            Ok(None) => {
+                                let _ = batch_sender.send(Ok(None));
+                                return;
+                            }
                             Err(error) => {
                                 let _ = batch_sender.send(Err(error));
                                 return;
@@ -278,6 +298,7 @@ impl AdlsParquetReader {
             schema,
             receiver: batch_receiver,
             metrics,
+            exhausted: false,
         })
     }
 

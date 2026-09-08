@@ -17,13 +17,21 @@ use kaveon_exec::topn::TopNOperator;
 use kaveon_exec::union::UnionOperator;
 use kaveon_exec::window::WindowOperator;
 use kaveon_sql::logical_plan::{AggregateExpr, JoinType, LogicalPlan};
-use kaveon_storage::{DeltaTableReader, ParquetReader};
+use kaveon_storage::{DeltaTableReader, ObjectDeltaReader, ObjectParquetReader, ParquetReader};
 
 const AGGREGATE_FUNCTIONS: &[&str] = &["COUNT", "SUM", "AVG", "MIN", "MAX"];
 
 pub fn plan_to_operator(
     plan: &LogicalPlan,
     catalog: &CatalogManager,
+) -> Result<Box<dyn BatchOperator>> {
+    plan_with_predicate(plan, catalog, None)
+}
+
+fn plan_with_predicate(
+    plan: &LogicalPlan,
+    catalog: &CatalogManager,
+    storage_predicate: Option<&kaveon_core::StoragePredicate>,
 ) -> Result<Box<dyn BatchOperator>> {
     match plan {
         LogicalPlan::Scan { table, columns, .. } => {
@@ -33,7 +41,23 @@ pub fn plan_to_operator(
 
             let source: Box<dyn BatchSource> = match resolved.table.format {
                 DataFormat::Parquet => {
+                    if path.starts_with("s3://") || path.starts_with("abfss://") {
+                        let mut reader = ObjectParquetReader::from_uri(&path)?;
+                        if let Some(predicate) = storage_predicate {
+                            reader = reader.with_predicate(predicate.clone());
+                        }
+                        if let Some(cols) = columns {
+                            reader = reader.with_columns(cols.clone());
+                        }
+                        return Ok(Box::new(ScanOperator::new(
+                            Box::new(reader.read_blocking()?),
+                            columns.as_deref(),
+                        )?));
+                    }
                     let mut reader = ParquetReader::new(&path);
+                    if let Some(predicate) = storage_predicate {
+                        reader = reader.with_predicate(predicate.clone());
+                    }
                     if let Some(cols) = columns {
                         reader = reader.with_columns(cols.clone());
                     }
@@ -42,7 +66,23 @@ pub fn plan_to_operator(
                     })?)
                 }
                 DataFormat::Delta => {
+                    if path.starts_with("s3://") || path.starts_with("abfss://") {
+                        let mut reader = ObjectDeltaReader::from_uri(&path)?;
+                        if let Some(predicate) = storage_predicate {
+                            reader = reader.with_predicate(predicate.clone());
+                        }
+                        if let Some(cols) = columns {
+                            reader = reader.with_columns(cols.clone());
+                        }
+                        return Ok(Box::new(ScanOperator::new(
+                            Box::new(reader.read_blocking()?),
+                            columns.as_deref(),
+                        )?));
+                    }
                     let mut reader = DeltaTableReader::new(&path);
+                    if let Some(predicate) = storage_predicate {
+                        reader = reader.with_predicate(predicate.clone());
+                    }
                     if let Some(cols) = columns {
                         reader = reader.with_columns(cols.clone());
                     }
@@ -51,9 +91,11 @@ pub fn plan_to_operator(
                     })?)
                 }
                 DataFormat::Iceberg => {
-                    return Err(KaveonError::Execution(
-                        "local Iceberg scans are not implemented".into(),
-                    ));
+                    let mut reader = kaveon_storage::IcebergReader::new(&path);
+                    if let Some(columns) = columns {
+                        reader = reader.with_columns(columns.clone());
+                    }
+                    Box::new(reader.read_blocking()?)
                 }
             };
             let scan = ScanOperator::new(source, columns.as_deref())?;
@@ -81,7 +123,8 @@ pub fn plan_to_operator(
         }
 
         LogicalPlan::Filter { input, predicate } => {
-            let source = plan_to_operator(input, catalog)?;
+            let pushed = kaveon_optim::rules::to_storage_predicate(predicate);
+            let source = plan_with_predicate(input, catalog, pushed.as_ref())?;
             Ok(Box::new(FilterOperator::new(source, predicate.clone())))
         }
 
@@ -107,6 +150,29 @@ pub fn plan_to_operator(
             group_by,
             aggregates,
         } => {
+            if group_by.is_empty()
+                && !aggregates.is_empty()
+                && storage_predicate.is_none()
+                && aggregates.iter().all(|aggregate| {
+                    matches!(
+                        aggregate,
+                        AggregateExpr::Count {
+                            expr: Expr::Star,
+                            distinct: false
+                        }
+                    )
+                })
+                && let LogicalPlan::Scan { table, columns, .. } = input.as_ref()
+                && let Some(operator) = kaveon_exec::metadata_count::MetadataCount::try_new(
+                    catalog,
+                    table,
+                    columns.as_deref(),
+                    aggregates.len(),
+                    None,
+                )?
+            {
+                return Ok(Box::new(operator));
+            }
             let source = plan_to_operator(input, catalog)?;
 
             let group_cols: Vec<String> = group_by
@@ -176,7 +242,7 @@ pub fn plan_to_operator(
             window_exprs,
         } => {
             let source = plan_to_operator(input, catalog)?;
-            Ok(Box::new(WindowOperator::new(source, window_exprs.clone())))
+            Ok(Box::new(WindowOperator::new(source, window_exprs.clone())?))
         }
 
         LogicalPlan::Intersect { left, right } => {
@@ -211,7 +277,7 @@ pub fn plan_to_operator(
             left_key.clone(),
             right_key.clone(),
             matches!(plan, LogicalPlan::AntiJoin { .. }),
-        ))),
+        )?)),
     }
 }
 

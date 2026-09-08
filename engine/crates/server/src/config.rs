@@ -14,6 +14,14 @@ const DEFAULT_MEMORY_ADMISSION_LIMIT_BYTES: u64 = 4 * 1_024 * 1_024 * 1_024;
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
+    pub security: crate::security::SecurityConfig,
+    pub bind_host: String,
+    pub tls_cert_path: Option<PathBuf>,
+    pub tls_key_path: Option<PathBuf>,
+    pub principal_query_limit: usize,
+    pub coordinator_exchange_spool: bool,
+    pub exchange_spool_root: PathBuf,
+    pub exchange_disk_limit_bytes: u64,
     pub node_id: String,
     pub environment: String,
     pub coordinator: bool,
@@ -32,6 +40,14 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
+            security: crate::security::SecurityConfig::default(),
+            bind_host: "127.0.0.1".into(),
+            tls_cert_path: None,
+            tls_key_path: None,
+            principal_query_limit: 4,
+            coordinator_exchange_spool: true,
+            exchange_spool_root: std::env::temp_dir(),
+            exchange_disk_limit_bytes: 10 * 1024 * 1024 * 1024,
             node_id: uuid::Uuid::new_v4().to_string(),
             environment: "production".into(),
             coordinator: true,
@@ -217,6 +233,75 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
         anyhow::bail!("memory admission limit must be at least the per-query limit");
     }
 
+    if let Ok(value) = std::env::var("KAVEON_SECURITY_JSON") {
+        config.security = serde_json::from_str(&value)?;
+    }
+    if let Ok(value) = std::env::var("KAVEON_INSECURE_DEVELOPMENT") {
+        anyhow::ensure!(
+            matches!(value.as_str(), "true" | "false"),
+            "KAVEON_INSECURE_DEVELOPMENT must be true or false"
+        );
+        config.security.insecure_development = value == "true";
+    }
+    if let Ok(value) = std::env::var("KAVEON_BIND_HOST") {
+        config.bind_host = value;
+    }
+    if let Ok(value) = std::env::var("KAVEON_PRINCIPAL_QUERY_LIMIT") {
+        config.principal_query_limit = value.parse()?;
+    }
+    anyhow::ensure!(
+        config.principal_query_limit > 0,
+        "principal query limit must be positive"
+    );
+    config.tls_cert_path = std::env::var("KAVEON_TLS_CERT_PATH")
+        .ok()
+        .map(PathBuf::from);
+    config.tls_key_path = std::env::var("KAVEON_TLS_KEY_PATH").ok().map(PathBuf::from);
+    anyhow::ensure!(
+        config.tls_cert_path.is_some() == config.tls_key_path.is_some(),
+        "TLS requires both KAVEON_TLS_CERT_PATH and KAVEON_TLS_KEY_PATH"
+    );
+    let mut credentials = std::collections::HashSet::new();
+    for token in config
+        .security
+        .principals
+        .iter()
+        .map(|value| value.token.as_str())
+        .chain(config.security.bridge_token.as_deref())
+        .chain(config.catalog_admin_token.as_deref())
+        .chain(config.exchange_token.as_deref())
+    {
+        anyhow::ensure!(
+            !token.is_empty() && credentials.insert(token),
+            "public, bridge, catalog and exchange tokens must be nonempty and distinct"
+        );
+    }
+    let address: std::net::IpAddr = config.bind_host.parse()?;
+    anyhow::ensure!(
+        address.is_loopback()
+            || config.tls_cert_path.is_some()
+            || config.security.insecure_development
+            || std::env::var("KAVEON_TLS_PROXY_BOUNDARY").as_deref() == Ok("true"),
+        "external HTTP binding requires KAVEON_TLS_PROXY_BOUNDARY=true and a network-isolated TLS proxy, or explicit insecure development mode"
+    );
+    if let Ok(value) = std::env::var("KAVEON_COORDINATOR_EXCHANGE_SPOOL") {
+        anyhow::ensure!(
+            matches!(value.as_str(), "true" | "false"),
+            "KAVEON_COORDINATOR_EXCHANGE_SPOOL must be true or false"
+        );
+        config.coordinator_exchange_spool = value == "true";
+    }
+    if let Ok(value) = std::env::var("KAVEON_EXCHANGE_SPOOL_ROOT") {
+        config.exchange_spool_root = value.into();
+    }
+    if let Ok(value) = std::env::var("KAVEON_EXCHANGE_DISK_LIMIT_BYTES") {
+        config.exchange_disk_limit_bytes = value.parse()?;
+    }
+    anyhow::ensure!(
+        config.exchange_disk_limit_bytes > 0,
+        "exchange disk limit must be positive"
+    );
+    config.security.validate()?;
     Ok(config)
 }
 
@@ -557,11 +642,16 @@ fn build_catalog_from_toml(name: &str, content: &str) -> anyhow::Result<MemoryCa
         let arrow_schema = if let StorageType::Local { ref base_path } = storage {
             let full_path = base_path.join(&t.location);
             match format {
-                DataFormat::Delta => DeltaTableReader::new(&full_path).metadata(),
-                DataFormat::Parquet => ParquetReader::new(&full_path).metadata(),
-                DataFormat::Iceberg => anyhow::bail!("local Iceberg metadata is not implemented"),
+                DataFormat::Delta => DeltaTableReader::new(&full_path)
+                    .metadata()
+                    .map(|m| m.schema),
+                DataFormat::Parquet => ParquetReader::new(&full_path).metadata().map(|m| m.schema),
+                DataFormat::Iceberg => {
+                    kaveon_storage::IcebergReader::new(full_path.to_string_lossy().into_owned())
+                        .snapshot()
+                        .map(|m| m.schema)
+                }
             }
-            .map(|m| m.schema)
             .unwrap_or_else(|_| Arc::new(arrow::datatypes::Schema::empty()))
         } else {
             Arc::new(arrow::datatypes::Schema::empty())

@@ -1,12 +1,13 @@
 use crate::AppState;
 use crate::cluster::{NodeInfo, NodeRole};
 use crate::lifecycle::{CancellationToken, TaskClaim, TaskOutcome, TaskOwner};
+use crate::security::Identity;
 use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use kaveon_catalog::CascadePolicy;
 use kaveon_core::collect_batches;
 use kaveon_core::{
@@ -20,11 +21,12 @@ use kaveon_sql::logical_plan::{AggregateExpr, LogicalPlan};
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap};
+#[cfg(test)]
 use std::io::Cursor;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use tower_http::cors::CorsLayer;
+
 use uuid::Uuid;
 
 use tokio::sync::RwLock;
@@ -37,6 +39,7 @@ struct QueryStore {
 
 #[derive(Clone, Serialize)]
 struct QueryRecord {
+    rows_are_preview: bool,
     id: String,
     sql: String,
     state: QueryState,
@@ -158,6 +161,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         )
         .route("/v1/query", get(list_queries))
         .route("/v1/query/{query_id}", get(get_query))
+        .route("/v1/query/{query_id}/results/{page}", get(get_result_page))
         .route("/v1/query/{query_id}", delete(cancel_query))
         .route("/v1/cluster", get(get_cluster))
         .route("/v1/node", get(get_node))
@@ -201,7 +205,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/ui", get(crate::ui::dashboard))
         .route("/health", get(health))
         .route("/ready", get(ready))
-        .layer(CorsLayer::permissive())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::security::authorize,
+        ))
         .with_state(state)
 }
 
@@ -214,8 +221,6 @@ struct StatementRequest {
     catalog: Option<String>,
     #[serde(default)]
     schema: Option<String>,
-    #[serde(default)]
-    user: Option<String>,
     #[serde(default)]
     source: Option<String>,
     #[serde(default)]
@@ -276,6 +281,8 @@ struct TaskResponse {
 
 #[derive(Serialize)]
 struct StatementResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_uri: Option<String>,
     id: String,
     state: QueryState,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -370,7 +377,7 @@ async fn finish_worker_query(
 async fn execute_owned_task(
     state: &Arc<AppState>,
     req: TaskRequest,
-    owner: TaskOwner<(Vec<u8>, u64)>,
+    owner: TaskOwner<crate::transport::CachedTaskResult>,
     cancellation: CancellationToken,
 ) -> Response {
     let requested_partition = req
@@ -390,9 +397,32 @@ async fn execute_owned_task(
             return task_failure_response(StatusCode::BAD_REQUEST, &message);
         }
     };
+    let admitted = match state.memory_admission.admit(
+        format!(
+            "{}:{}:{}:{}",
+            req.query_id, req.stage_id, req.partition_index, req.attempt
+        ),
+        state.config.query_memory_limit_bytes,
+    ) {
+        Ok(admitted) => admitted,
+        Err(error) => {
+            let message = error.to_string();
+            let _ = owner.complete(TaskOutcome::Failed(Arc::from(message.clone())));
+            return task_failure_response(StatusCode::TOO_MANY_REQUESTS, &message);
+        }
+    };
+    let memory_cancellation = cancellation.clone();
+    if let Err(error) = admitted
+        .pool()
+        .set_cancellation_probe(move || memory_cancellation.is_cancelled())
+    {
+        let message = error.to_string();
+        let _ = owner.complete(TaskOutcome::Failed(Arc::from(message.clone())));
+        return lifecycle_error_response(message);
+    }
     let started = Instant::now();
     if let Some(fragment) = req.fragment.as_ref() {
-        let result = execute_fragment_task(state, &req, fragment, partition).await;
+        let result = execute_fragment_task(state, &req, fragment, partition, admitted.pool()).await;
         if cancellation.is_cancelled() {
             let _ = owner.complete(TaskOutcome::Failed(Arc::from("query canceled")));
             return canceled_task_response();
@@ -410,14 +440,33 @@ async fn execute_owned_task(
     crate::planner::qualify_tables(&mut plan, &req.catalog, &req.schema);
     let plan = kaveon_optim::rules::push_filter_down(plan);
     let plan = kaveon_optim::rules::push_projection_down(plan);
-    let result = {
+    let plan = {
         let catalog = state.catalog.read().await;
-        crate::planner::plan_partitioned_query(&plan, &catalog, partition).and_then(
-            |mut planned| {
-                let schema = planned.operator.schema().clone();
-                collect_batches(&mut *planned.operator).map(|batches| (schema, batches))
-            },
+        kaveon_optim::statistics::optimize_join_builds(plan, &catalog)
+    };
+    let execution_state = Arc::clone(state);
+    let result = tokio::task::spawn_blocking(move || {
+        let catalog = execution_state.catalog.blocking_read();
+        let result = crate::planner::plan_partitioned_query_with_memory(
+            &plan,
+            &catalog,
+            partition,
+            admitted.pool(),
         )
+        .and_then(|mut planned| {
+            let schema = planned.operator.schema().clone();
+            collect_batches(&mut *planned.operator).map(|batches| (schema, batches))
+        });
+        (result, admitted)
+    })
+    .await;
+    let (result, _admitted) = match result {
+        Ok(result) => result,
+        Err(error) => {
+            let message = format!("task execution failed: {error}");
+            let _ = owner.complete(TaskOutcome::Failed(Arc::from(message.clone())));
+            return task_failure_response(StatusCode::INTERNAL_SERVER_ERROR, &message);
+        }
     };
     if cancellation.is_cancelled() {
         let _ = owner.complete(TaskOutcome::Failed(Arc::from("query canceled")));
@@ -427,7 +476,14 @@ async fn execute_owned_task(
         Ok((schema, batches)) => match encode_arrow_stream(&schema, &batches) {
             Ok(bytes) => {
                 let elapsed = elapsed_us(started);
-                let outcome = TaskOutcome::Success(Arc::new((bytes, elapsed)));
+                let cached = match crate::transport::CachedTaskResult::new(bytes, elapsed) {
+                    Ok(cached) => cached,
+                    Err(error) => {
+                        let _ = owner.complete(TaskOutcome::Failed(Arc::from(error.clone())));
+                        return task_failure_response(StatusCode::SERVICE_UNAVAILABLE, &error);
+                    }
+                };
+                let outcome = TaskOutcome::Success(Arc::new(cached));
                 let response = task_outcome_response(outcome.clone());
                 let _ = owner.complete(outcome);
                 response
@@ -446,24 +502,78 @@ async fn execute_owned_task(
 }
 
 struct PrefetchedExchangeInputs {
-    inputs: HashMap<ExchangeId, crate::fragment_exec::ExchangeBatches>,
+    inputs: HashMap<ExchangeId, Vec<crate::transport::ArrowPayload>>,
+    memory: kaveon_core::OperatorMemoryAccount,
 }
 
+struct DiskExchangeInput {
+    schema: arrow::datatypes::SchemaRef,
+    payloads: std::collections::VecDeque<crate::transport::ArrowPayload>,
+    memory: kaveon_core::OperatorMemoryAccount,
+    encoded: Option<kaveon_core::MemoryReservation>,
+    decoded_extra: Option<kaveon_core::MemoryReservation>,
+}
+impl kaveon_core::BatchOperator for DiskExchangeInput {
+    fn schema(&self) -> &arrow::datatypes::SchemaRef {
+        &self.schema
+    }
+    fn next_batch(&mut self) -> kaveon_core::Result<Option<arrow::record_batch::RecordBatch>> {
+        self.decoded_extra = None;
+        self.memory.check_cancelled()?;
+        while let Some(payload) = self.payloads.front_mut() {
+            if self.encoded.is_none() {
+                self.encoded = Some(self.memory.reserve(payload.bytes() as u64)?);
+            }
+            if let Some(batch) = payload
+                .next_batch()
+                .map_err(kaveon_core::KaveonError::Execution)?
+            {
+                let extra =
+                    (batch.get_array_memory_size() as u64).saturating_sub(payload.bytes() as u64);
+                if extra > 0 {
+                    self.decoded_extra = Some(self.memory.reserve(extra)?);
+                }
+                return Ok(Some(batch));
+            }
+            self.payloads.pop_front();
+            self.encoded = None;
+        }
+        Ok(None)
+    }
+}
 impl crate::fragment_exec::ExchangeInputProvider for PrefetchedExchangeInputs {
     fn read(
         &self,
-        exchange_id: &ExchangeId,
+        _exchange_id: &ExchangeId,
     ) -> kaveon_core::Result<crate::fragment_exec::ExchangeBatches> {
-        let input = self.inputs.get(exchange_id).ok_or_else(|| {
-            kaveon_core::KaveonError::Execution(format!(
-                "exchange input '{}' was not supplied to the fragment task",
-                exchange_id.0
-            ))
+        Err(kaveon_core::KaveonError::Execution(
+            "disk exchange inputs require streaming open".into(),
+        ))
+    }
+    fn open(
+        &self,
+        exchange_id: &ExchangeId,
+    ) -> kaveon_core::Result<Box<dyn kaveon_core::BatchOperator>> {
+        let inputs = self.inputs.get(exchange_id).ok_or_else(|| {
+            kaveon_core::KaveonError::Execution(format!("missing exchange {}", exchange_id.0))
         })?;
-        Ok(crate::fragment_exec::ExchangeBatches {
-            schema: input.schema.clone(),
-            batches: input.batches.clone(),
-        })
+        let schema = inputs
+            .first()
+            .ok_or_else(|| {
+                kaveon_core::KaveonError::Execution("empty exchange payload set".into())
+            })?
+            .schema();
+        let payloads = inputs
+            .iter()
+            .map(|payload| payload.fork().map_err(kaveon_core::KaveonError::Execution))
+            .collect::<kaveon_core::Result<_>>()?;
+        Ok(Box::new(DiskExchangeInput {
+            schema,
+            payloads,
+            memory: self.memory.clone(),
+            encoded: None,
+            decoded_extra: None,
+        }))
     }
 }
 
@@ -472,6 +582,7 @@ async fn execute_fragment_task(
     req: &TaskRequest,
     fragment: &ExecutableFragment,
     partition: kaveon_storage::ScanPartition,
+    memory: &kaveon_core::QueryMemoryPool,
 ) -> Result<
     (
         arrow::datatypes::SchemaRef,
@@ -485,15 +596,18 @@ async fn execute_fragment_task(
         .exchange_token
         .as_deref()
         .ok_or_else(|| "fragment execution requires an exchange bearer token".to_owned())?;
-    let mut inputs = HashMap::<ExchangeId, crate::fragment_exec::ExchangeBatches>::new();
+    let mut inputs = HashMap::<ExchangeId, Vec<crate::transport::ArrowPayload>>::new();
+    let input_account = memory
+        .operator("prefetched-exchanges")
+        .map_err(|error| error.to_string())?;
     for location in &req.exchange_inputs {
         let identity = crate::exchange::ExchangeIdentity {
             exchange_id: location.exchange_id.clone(),
             task_id: location.producer.clone(),
             output_partition: location.output_partition,
         };
-        let (schema, mut batches) =
-            crate::exchange::fetch_batches(&client, &location.worker_uri, token, &identity)
+        let payload =
+            crate::exchange::fetch_payload(&client, &location.worker_uri, token, &identity)
                 .await
                 .map_err(|error| {
                     format!(
@@ -501,43 +615,41 @@ async fn execute_fragment_task(
                         location.exchange_id.0
                     )
                 })?;
-        match inputs.get_mut(&location.exchange_id) {
-            Some(input) if input.schema != schema => {
-                return Err(format!(
-                    "exchange '{}' producers returned incompatible schemas",
-                    location.exchange_id.0
-                ));
-            }
-            Some(input) => input.batches.append(&mut batches),
-            None => {
-                inputs.insert(
-                    location.exchange_id.clone(),
-                    crate::fragment_exec::ExchangeBatches { schema, batches },
-                );
-            }
+        let schema = payload.schema();
+        let entry = inputs.entry(location.exchange_id.clone()).or_default();
+        if let Some(first) = entry.first()
+            && first.schema() != schema
+        {
+            return Err(format!(
+                "exchange '{}' producers returned incompatible schemas: expected {:?}, producer {} returned {:?}",
+                location.exchange_id.0,
+                first.schema(),
+                location.producer,
+                schema
+            ));
         }
+        entry.push(payload);
     }
-    let execution = {
-        let catalog = state.catalog.read().await;
-        let memory = kaveon_core::QueryMemoryPool::new(
-            format!(
-                "{}:{}:{}",
-                req.query_id,
-                req.stage_id,
-                requested_partition_index(req)
-            ),
-            state.config.query_memory_limit_bytes,
-        )
-        .map_err(|error| error.to_string())?;
+    let execution_state = Arc::clone(state);
+    let execution_fragment = fragment.clone();
+    let execution_memory = memory.clone();
+    let execution = tokio::task::spawn_blocking(move || {
+        let catalog = execution_state.catalog.blocking_read();
         crate::fragment_exec::execute_fragment_with_memory(
-            fragment,
+            &execution_fragment,
             &catalog,
-            &PrefetchedExchangeInputs { inputs },
+            &PrefetchedExchangeInputs {
+                inputs,
+                memory: input_account,
+            },
             partition,
-            Some(&memory),
+            Some(&execution_memory),
         )
-        .map_err(|error| error.to_string())?
-    };
+        .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("fragment execution task failed: {error}"))?;
+    let execution = execution?;
     for (exchange_id, output) in execution.exchange_outputs {
         for (output_partition, batches) in output.partitions.iter().enumerate() {
             let destinations = req.exchange_outputs.iter().filter(|location| {
@@ -596,7 +708,7 @@ fn requested_partition_index(req: &TaskRequest) -> usize {
 }
 
 fn complete_owned_task(
-    owner: TaskOwner<(Vec<u8>, u64)>,
+    owner: TaskOwner<crate::transport::CachedTaskResult>,
     started: Instant,
     result: Result<
         (
@@ -610,7 +722,14 @@ fn complete_owned_task(
         Ok((schema, batches)) => match encode_arrow_stream(&schema, &batches) {
             Ok(bytes) => {
                 let elapsed = elapsed_us(started);
-                let outcome = TaskOutcome::Success(Arc::new((bytes, elapsed)));
+                let cached = match crate::transport::CachedTaskResult::new(bytes, elapsed) {
+                    Ok(cached) => cached,
+                    Err(error) => {
+                        let _ = owner.complete(TaskOutcome::Failed(Arc::from(error.clone())));
+                        return task_failure_response(StatusCode::SERVICE_UNAVAILABLE, &error);
+                    }
+                };
+                let outcome = TaskOutcome::Success(Arc::new(cached));
                 let response = task_outcome_response(outcome.clone());
                 let _ = owner.complete(outcome);
                 response
@@ -627,13 +746,23 @@ fn complete_owned_task(
     }
 }
 
-fn task_outcome_response(outcome: TaskOutcome<(Vec<u8>, u64)>) -> Response {
+fn task_outcome_response(outcome: TaskOutcome<crate::transport::CachedTaskResult>) -> Response {
     match outcome {
         TaskOutcome::Success(result) => Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "application/vnd.apache.arrow.stream")
-            .header("x-kaveon-task-elapsed-us", result.1)
-            .body(Body::from(result.0.clone()))
+            .header("x-kaveon-task-elapsed-us", result.elapsed_us)
+            .body(Body::from_stream(futures::stream::unfold(
+                (result, 0usize),
+                |(result, offset)| async move {
+                    if offset >= result.bytes.len() {
+                        return None;
+                    }
+                    let end = (offset + 64 * 1024).min(result.bytes.len());
+                    let chunk = axum::body::Bytes::copy_from_slice(&result.bytes[offset..end]);
+                    Some((Ok::<_, std::io::Error>(chunk), (result, end)))
+                },
+            )))
             .unwrap_or_else(|error| lifecycle_error_response(error.to_string())),
         TaskOutcome::Failed(message) => {
             task_failure_response(StatusCode::INTERNAL_SERVER_ERROR, &message)
@@ -657,8 +786,23 @@ fn task_failure_response(status: StatusCode, message: &str) -> Response {
     (status, Json(serde_json::json!({ "error": message }))).into_response()
 }
 
+// Release the bounded query registry on every statement exit, including
+// parser/planner errors and dropped HTTP futures. Active blocking operators
+// retain a token clone and observe cancellation cooperatively.
+struct StatementLifecycleGuard {
+    state: Arc<AppState>,
+    query_id: String,
+}
+impl Drop for StatementLifecycleGuard {
+    fn drop(&mut self) {
+        let _ = self.state.lifecycle.cancellations.cancel(&self.query_id);
+        let _ = self.state.lifecycle.finish_query(&self.query_id);
+    }
+}
+
 async fn submit_statement(
     State(state): State<Arc<AppState>>,
+    Extension(identity): Extension<Identity>,
     Json(req): Json<StatementRequest>,
 ) -> impl IntoResponse {
     if !state.config.coordinator {
@@ -672,6 +816,33 @@ async fn submit_statement(
             .into_response();
     }
 
+    if !matches!(
+        req.result_delivery.as_deref(),
+        None | Some("inline") | Some("paged")
+    ) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "result_delivery must be inline or paged",
+        )
+            .into_response();
+    }
+    prune_query_history().await;
+    let paged = req.result_delivery.as_deref() == Some("paged");
+    let _principal_permit = match state
+        .principal_admission
+        .admit(&identity.principal, state.config.principal_query_limit)
+    {
+        Ok(permit) => permit,
+        Err(status) => return status.into_response(),
+    };
+    let _group_permit = match state
+        .principal_admission
+        .admit_group(&identity.principal, &state.config.security)
+        .await
+    {
+        Ok(permit) => permit,
+        Err(status) => return status.into_response(),
+    };
     let query_id = Uuid::new_v4().to_string();
     let query_memory = match state
         .memory_admission
@@ -734,8 +905,8 @@ async fn submit_statement(
         QueryContext {
             engine_version: env!("CARGO_PKG_VERSION").to_owned(),
             environment: state.config.environment.clone(),
-            principal: None,
-            user: req.user.clone(),
+            principal: Some(identity.principal.clone()),
+            user: Some(identity.principal.clone()),
             source: req.source,
             client: req.client,
             catalog: catalog_name.to_owned(),
@@ -746,13 +917,26 @@ async fn submit_statement(
             result_delivery: req.result_delivery,
         }
     };
-    if let Err(error) = state.lifecycle.cancellations.token(&query_id) {
+    let cancellation = match state.lifecycle.cancellations.token(&query_id) {
+        Ok(token) => token,
+        Err(error) => return lifecycle_error_response(error.to_string()),
+    };
+    let _lifecycle_guard = StatementLifecycleGuard {
+        state: Arc::clone(&state),
+        query_id: query_id.clone(),
+    };
+    let memory_cancellation = cancellation.clone();
+    if let Err(error) = query_memory
+        .pool()
+        .set_cancellation_probe(move || memory_cancellation.is_cancelled())
+    {
         return lifecycle_error_response(error.to_string());
     }
 
     QUERY_STORE.write().await.queries.insert(
         query_id.clone(),
         QueryRecord {
+            rows_are_preview: true,
             id: query_id.clone(),
             sql: sql.clone(),
             state: QueryState::Running,
@@ -800,6 +984,10 @@ async fn submit_statement(
     let logical_plan = crate::planner::logical_plan_tree(&plan);
     let plan = kaveon_optim::rules::push_filter_down(plan);
     let plan = kaveon_optim::rules::push_projection_down(plan);
+    let plan = {
+        let catalog = state.catalog.read().await;
+        kaveon_optim::statistics::optimize_join_builds(plan, &catalog)
+    };
     let optimized_plan = crate::planner::optimized_plan_tree(&plan);
     let physical_plan = crate::planner::physical_plan_tree(&plan);
     if let Some(record) = QUERY_STORE.write().await.queries.get_mut(&query_id) {
@@ -814,13 +1002,39 @@ async fn submit_statement(
     {
         match distributed {
             Ok((result, stages, planning_us)) => {
+                let mut result = result;
+                let next_uri = if paged {
+                    match spool_rows(&state, &query_id, &identity.principal, &mut result.data) {
+                        Ok(uri) => Some(uri),
+                        Err(error) => {
+                            finish_failed_query(
+                                &query_id,
+                                error.to_string(),
+                                start,
+                                Some(analysis_us),
+                                None,
+                                None,
+                            )
+                            .await;
+                            cleanup_distributed_query(&state, &query_id).await;
+                            return task_failure_response(
+                                StatusCode::INSUFFICIENT_STORAGE,
+                                "result disk quota or write failure",
+                            );
+                        }
+                    }
+                } else {
+                    None
+                };
+
                 let elapsed = start.elapsed().as_millis() as u64;
                 let record = QueryRecord {
+                    rows_are_preview: true,
                     id: query_id.clone(),
                     sql,
                     state: QueryState::Finished,
                     columns: result.columns.clone(),
-                    rows: result.data.clone(),
+                    rows: history_preview(&result.data),
                     error: None,
                     elapsed_ms: elapsed,
                     submitted_at_ms,
@@ -840,13 +1054,14 @@ async fn submit_statement(
                     stages,
                     context,
                 };
-                QUERY_STORE
-                    .write()
-                    .await
-                    .queries
-                    .insert(query_id.clone(), record);
+                if !commit_query_record(record).await {
+                    state.results.remove(&query_id);
+                    cleanup_distributed_query(&state, &query_id).await;
+                    return canceled_task_response();
+                }
                 cleanup_distributed_query(&state, &query_id).await;
                 return Json(StatementResponse {
+                    next_uri,
                     id: query_id,
                     state: QueryState::Finished,
                     columns: Some(result.columns),
@@ -867,6 +1082,9 @@ async fn submit_statement(
                 )
                 .await;
                 cleanup_distributed_query(&state, &query_id).await;
+                if cancellation.is_cancelled() {
+                    return canceled_task_response();
+                }
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({ "error": error, "code": "DISTRIBUTED_EXECUTION_ERROR" })),
@@ -881,13 +1099,39 @@ async fn submit_statement(
     {
         match distributed {
             Ok((result, stage)) => {
+                let mut result = result;
+                let next_uri = if paged {
+                    match spool_rows(&state, &query_id, &identity.principal, &mut result.data) {
+                        Ok(uri) => Some(uri),
+                        Err(error) => {
+                            finish_failed_query(
+                                &query_id,
+                                error.to_string(),
+                                start,
+                                Some(analysis_us),
+                                None,
+                                None,
+                            )
+                            .await;
+                            cleanup_distributed_query(&state, &query_id).await;
+                            return task_failure_response(
+                                StatusCode::INSUFFICIENT_STORAGE,
+                                "result disk quota or write failure",
+                            );
+                        }
+                    }
+                } else {
+                    None
+                };
+
                 let elapsed = start.elapsed().as_millis() as u64;
                 let record = QueryRecord {
+                    rows_are_preview: true,
                     id: query_id.clone(),
                     sql,
                     state: QueryState::Finished,
                     columns: result.columns.clone(),
-                    rows: result.data.clone(),
+                    rows: history_preview(&result.data),
                     error: None,
                     elapsed_ms: elapsed,
                     submitted_at_ms,
@@ -907,13 +1151,14 @@ async fn submit_statement(
                     stages: vec![stage],
                     context,
                 };
-                QUERY_STORE
-                    .write()
-                    .await
-                    .queries
-                    .insert(query_id.clone(), record);
+                if !commit_query_record(record).await {
+                    state.results.remove(&query_id);
+                    cleanup_distributed_query(&state, &query_id).await;
+                    return canceled_task_response();
+                }
                 cleanup_distributed_query(&state, &query_id).await;
                 return Json(StatementResponse {
+                    next_uri,
                     id: query_id,
                     state: QueryState::Finished,
                     columns: Some(result.columns),
@@ -934,6 +1179,9 @@ async fn submit_statement(
                 )
                 .await;
                 cleanup_distributed_query(&state, &query_id).await;
+                if cancellation.is_cancelled() {
+                    return canceled_task_response();
+                }
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({ "error": error, "code": "DISTRIBUTED_EXECUTION_ERROR" })),
@@ -948,13 +1196,39 @@ async fn submit_statement(
     {
         match distributed {
             Ok((result, stage)) => {
+                let mut result = result;
+                let next_uri = if paged {
+                    match spool_rows(&state, &query_id, &identity.principal, &mut result.data) {
+                        Ok(uri) => Some(uri),
+                        Err(error) => {
+                            finish_failed_query(
+                                &query_id,
+                                error.to_string(),
+                                start,
+                                Some(analysis_us),
+                                None,
+                                None,
+                            )
+                            .await;
+                            cleanup_distributed_query(&state, &query_id).await;
+                            return task_failure_response(
+                                StatusCode::INSUFFICIENT_STORAGE,
+                                "result disk quota or write failure",
+                            );
+                        }
+                    }
+                } else {
+                    None
+                };
+
                 let elapsed = start.elapsed().as_millis() as u64;
                 let record = QueryRecord {
+                    rows_are_preview: true,
                     id: query_id.clone(),
                     sql,
                     state: QueryState::Finished,
                     columns: result.columns.clone(),
-                    rows: result.data.clone(),
+                    rows: history_preview(&result.data),
                     error: None,
                     elapsed_ms: elapsed,
                     submitted_at_ms,
@@ -974,13 +1248,14 @@ async fn submit_statement(
                     stages: vec![stage],
                     context,
                 };
-                QUERY_STORE
-                    .write()
-                    .await
-                    .queries
-                    .insert(query_id.clone(), record);
+                if !commit_query_record(record).await {
+                    state.results.remove(&query_id);
+                    cleanup_distributed_query(&state, &query_id).await;
+                    return canceled_task_response();
+                }
                 cleanup_distributed_query(&state, &query_id).await;
                 return Json(StatementResponse {
+                    next_uri,
                     id: query_id,
                     state: QueryState::Finished,
                     columns: Some(result.columns),
@@ -1001,6 +1276,9 @@ async fn submit_statement(
                 )
                 .await;
                 cleanup_distributed_query(&state, &query_id).await;
+                if cancellation.is_cancelled() {
+                    return canceled_task_response();
+                }
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({ "error": error, "code": "DISTRIBUTED_EXECUTION_ERROR" })),
@@ -1010,21 +1288,82 @@ async fn submit_statement(
         }
     }
 
-    let planned_execution = {
-        let catalog = state.catalog.read().await;
-        let planning_start = Instant::now();
-        crate::planner::plan_query_with_memory(&plan, &catalog, query_memory.pool()).map(
-            |planned| {
-                let planning_us = elapsed_us(planning_start);
-                let scan_handles = planned.scan_metrics;
-                let mut operator = planned.operator;
-                let execution_start = Instant::now();
-                let result = collect_batches(&mut *operator);
-                let execution_us = elapsed_us(execution_start);
-                let scans = scan_handles.iter().map(scan_telemetry).collect::<Vec<_>>();
-                (planning_us, execution_us, scans, result)
-            },
+    let mut result_writer = if paged {
+        match state.results.writer() {
+            Ok(writer) => Some(writer),
+            Err(_) => return StatusCode::INSUFFICIENT_STORAGE.into_response(),
+        }
+    } else {
+        None
+    };
+    let execution_state = Arc::clone(&state);
+    // Build non-Send operators inside the blocking task. Retain admission until
+    // both execution and result publication complete, even if the HTTP future drops.
+    let local_execution = tokio::task::spawn_blocking(move || {
+        let mut local_columns = Vec::new();
+        let planned_execution = {
+            let catalog = execution_state.catalog.blocking_read();
+            let planning_start = Instant::now();
+            crate::planner::plan_query_with_memory(&plan, &catalog, query_memory.pool()).map(
+                |planned| {
+                    let planning_us = elapsed_us(planning_start);
+                    let scan_handles = planned.scan_metrics;
+                    let mut operator = planned.operator;
+                    local_columns = operator
+                        .schema()
+                        .fields()
+                        .iter()
+                        .map(|field| ColumnInfo {
+                            name: field.name().clone(),
+                            data_type: field.data_type().to_string(),
+                        })
+                        .collect();
+                    let execution_start = Instant::now();
+                    let result = if let Some(writer) = result_writer.as_mut() {
+                        spool_operator(&mut *operator, writer)
+                    } else {
+                        collect_inline_bounded(&mut *operator)
+                    };
+                    let execution_us = elapsed_us(execution_start);
+                    let scans = scan_handles.iter().map(scan_telemetry).collect::<Vec<_>>();
+                    (planning_us, execution_us, scans, result)
+                },
+            )
+        };
+        (
+            planned_execution,
+            local_columns,
+            result_writer,
+            query_memory,
+            _principal_permit,
+            _group_permit,
         )
+    })
+    .await;
+    let (
+        planned_execution,
+        local_columns,
+        result_writer,
+        _query_memory,
+        _principal_permit,
+        _group_permit,
+    ) = match local_execution {
+        Ok(execution) => execution,
+        Err(error) => {
+            finish_failed_query(
+                &query_id,
+                format!("local execution task failed: {error}"),
+                start,
+                Some(analysis_us),
+                None,
+                Some(logical_plan),
+            )
+            .await;
+            return task_failure_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "local execution task failed",
+            );
+        }
     };
     let (planning_us, execution_us, scans, exec_result) = match planned_execution {
         Ok(execution) => execution,
@@ -1055,6 +1394,7 @@ async fn submit_statement(
         Err(e) => {
             let elapsed = start.elapsed().as_millis() as u64;
             let record = QueryRecord {
+                rows_are_preview: true,
                 id: query_id.clone(),
                 sql: sql.clone(),
                 state: QueryState::Failed,
@@ -1079,11 +1419,11 @@ async fn submit_statement(
                 stages: vec![],
                 context: context.clone(),
             };
-            QUERY_STORE
-                .write()
-                .await
-                .queries
-                .insert(query_id.clone(), record);
+            if !commit_query_record(record).await {
+                state.results.remove(&query_id);
+                cleanup_distributed_query(&state, &query_id).await;
+                return canceled_task_response();
+            }
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({
@@ -1095,7 +1435,9 @@ async fn submit_statement(
         }
     };
 
-    let columns: Vec<ColumnInfo> = if let Some(first) = batches.first() {
+    let columns: Vec<ColumnInfo> = if paged {
+        local_columns
+    } else if let Some(first) = batches.first() {
         first
             .schema()
             .fields()
@@ -1111,15 +1453,37 @@ async fn submit_statement(
 
     let serialization_start = Instant::now();
     let rows = batches_to_json(&batches);
+    let next_uri = if let Some(writer) = result_writer {
+        if state
+            .results
+            .publish(&query_id, &identity.principal, writer)
+            .is_err()
+        {
+            finish_failed_query(
+                &query_id,
+                "result disk quota or write failure".into(),
+                start,
+                Some(analysis_us),
+                None,
+                None,
+            )
+            .await;
+            return StatusCode::INSUFFICIENT_STORAGE.into_response();
+        }
+        Some(format!("/v1/query/{query_id}/results/0"))
+    } else {
+        None
+    };
     let result_serialization_us = elapsed_us(serialization_start);
     let elapsed = start.elapsed().as_millis() as u64;
 
     let record = QueryRecord {
+        rows_are_preview: true,
         id: query_id.clone(),
         sql,
         state: QueryState::Finished,
         columns: columns.clone(),
-        rows: rows.clone(),
+        rows: history_preview(&rows),
         error: None,
         elapsed_ms: elapsed,
         submitted_at_ms,
@@ -1139,13 +1503,14 @@ async fn submit_statement(
         stages: vec![],
         context,
     };
-    QUERY_STORE
-        .write()
-        .await
-        .queries
-        .insert(query_id.clone(), record);
+    if !commit_query_record(record).await {
+        state.results.remove(&query_id);
+        cleanup_distributed_query(&state, &query_id).await;
+        return canceled_task_response();
+    }
 
     let resp = StatementResponse {
+        next_uri,
         id: query_id,
         state: QueryState::Finished,
         columns: Some(columns),
@@ -1157,19 +1522,128 @@ async fn submit_statement(
     Json(resp).into_response()
 }
 
-async fn list_queries() -> Json<Vec<QueryRecord>> {
+async fn commit_query_record(record: QueryRecord) -> bool {
+    let mut store = QUERY_STORE.write().await;
+    if store
+        .queries
+        .get(&record.id)
+        .is_some_and(|existing| matches!(existing.state, QueryState::Canceled))
+    {
+        return false;
+    }
+    store.queries.insert(record.id.clone(), record);
+    true
+}
+
+fn history_preview(rows: &[Vec<serde_json::Value>]) -> Vec<Vec<serde_json::Value>> {
+    let mut bytes = 0;
+    rows.iter()
+        .take(100)
+        .take_while(|row| {
+            bytes += serde_json::to_vec(row).map_or(usize::MAX / 2, |encoded| encoded.len());
+            bytes <= 64 * 1024
+        })
+        .cloned()
+        .collect()
+}
+
+async fn prune_query_history() {
+    let mut store = QUERY_STORE.write().await;
+    let mut terminal: Vec<_> = store
+        .queries
+        .values()
+        .filter(|record| !matches!(record.state, QueryState::Running))
+        .map(|record| (record.submitted_at_ms, record.id.clone()))
+        .collect();
+    terminal.sort_unstable();
+    let remove = terminal.len().saturating_sub(QUERY_HISTORY_LIMIT - 1);
+    for (_, id) in terminal.into_iter().take(remove) {
+        store.queries.remove(&id);
+    }
+}
+
+fn spool_rows(
+    state: &AppState,
+    id: &str,
+    principal: &str,
+    rows: &mut Vec<Vec<serde_json::Value>>,
+) -> std::io::Result<String> {
+    if state.results.contains(id) {
+        return Ok(format!("/v1/query/{id}/results/0"));
+    }
+    let mut writer = state.results.writer()?;
+    for row in rows.drain(..) {
+        writer.push(row)?;
+    }
+    state.results.publish(id, principal, writer)?;
+    Ok(format!("/v1/query/{id}/results/0"))
+}
+
+fn spool_operator(
+    operator: &mut dyn kaveon_core::BatchOperator,
+    writer: &mut crate::results::ResultWriter,
+) -> kaveon_core::Result<Vec<arrow::record_batch::RecordBatch>> {
+    while let Some(batch) = operator.next_batch()? {
+        for row in batches_to_json(&[batch]) {
+            writer
+                .push(row)
+                .map_err(|error| kaveon_core::KaveonError::Execution(error.to_string()))?;
+        }
+    }
+    Ok(Vec::new())
+}
+
+fn collect_inline_bounded(
+    operator: &mut dyn kaveon_core::BatchOperator,
+) -> kaveon_core::Result<Vec<arrow::record_batch::RecordBatch>> {
+    let mut batches = Vec::new();
+    let mut bytes = 0usize;
+    while let Some(batch) = operator.next_batch()? {
+        bytes = bytes.saturating_add(batch.get_array_memory_size());
+        if bytes > 16 * 1024 * 1024 {
+            return Err(kaveon_core::KaveonError::Execution(
+                "inline results exceed 16 MiB; request result_delivery=paged".into(),
+            ));
+        }
+        batches.push(batch);
+    }
+    Ok(batches)
+}
+
+async fn get_result_page(
+    State(state): State<Arc<AppState>>,
+    Path((id, page)): Path<(String, usize)>,
+    Extension(identity): Extension<Identity>,
+) -> Response {
+    match state.results.page(&id, page, &identity) {
+        Ok(value) => Json(value).into_response(),
+        Err(status) => status.into_response(),
+    }
+}
+
+async fn list_queries(Extension(identity): Extension<Identity>) -> Json<Vec<QueryRecord>> {
     let store = QUERY_STORE.read().await;
-    let mut queries: Vec<QueryRecord> = store.queries.values().cloned().collect();
+    let mut queries: Vec<QueryRecord> = store
+        .queries
+        .values()
+        .filter(|record| identity.can_view(record.context.principal.as_deref()))
+        .cloned()
+        .collect();
     queries.sort_unstable_by_key(|query| Reverse(query.submitted_at_ms));
     queries.truncate(QUERY_HISTORY_LIMIT);
     Json(queries)
 }
 
-async fn get_query(Path(query_id): Path<String>) -> impl IntoResponse {
+async fn get_query(
+    Path(query_id): Path<String>,
+    Extension(identity): Extension<Identity>,
+) -> impl IntoResponse {
     let store = QUERY_STORE.read().await;
     match store.queries.get(&query_id) {
-        Some(record) => Json(record.clone()).into_response(),
-        None => (
+        Some(record) if identity.can_view(record.context.principal.as_deref()) => {
+            Json(record.clone()).into_response()
+        }
+        _ => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({
                 "error": format!("query '{query_id}' not found"),
@@ -1182,6 +1656,7 @@ async fn get_query(Path(query_id): Path<String>) -> impl IntoResponse {
 
 async fn cancel_query(
     State(state): State<Arc<AppState>>,
+    Extension(identity): Extension<Identity>,
     Path(query_id): Path<String>,
 ) -> impl IntoResponse {
     if !state.config.coordinator {
@@ -1203,14 +1678,25 @@ async fn cancel_query(
         )
             .into_response();
     };
-    if matches!(record.state, QueryState::Running) {
+    if !identity.can_view(record.context.principal.as_deref()) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let was_running = matches!(record.state, QueryState::Running);
+    if was_running {
         record.state = QueryState::Canceled;
         record.error = Some("query canceled by client".into());
         record.completed_at_ms = unix_time_ms();
         let _ = state.lifecycle.cancellations.cancel(&query_id);
     }
     drop(store);
+    state.results.remove(&query_id);
 
+    if let Some(store) = &state.disk_exchange_store {
+        store.finish_query(&query_id);
+    }
+    if !was_running {
+        return StatusCode::NO_CONTENT.into_response();
+    }
     let workers = {
         let mut cluster = state.cluster.write().await;
         cluster.remove_stale_workers();
@@ -1222,7 +1708,11 @@ async fn cancel_query(
             "{}/v1/query/{query_id}",
             worker.address.trim_end_matches('/')
         );
-        let _ = client.delete(url).send().await;
+        let mut request = client.delete(url);
+        if let Some(token) = &state.config.exchange_token {
+            request = request.bearer_auth(token);
+        }
+        let _ = request.send().await;
     }
     StatusCode::NO_CONTENT.into_response()
 }
@@ -2016,7 +2506,8 @@ fn encode_arrow_stream(
     schema: &arrow::datatypes::SchemaRef,
     batches: &[arrow::record_batch::RecordBatch],
 ) -> Result<Vec<u8>, String> {
-    let mut bytes = Vec::new();
+    let mut bytes =
+        crate::transport::BoundedBuffer::new(crate::transport::MAX_PAYLOAD_BYTES as usize);
     {
         let mut writer = arrow::ipc::writer::StreamWriter::try_new(&mut bytes, schema)
             .map_err(|error| format!("cannot create Arrow stream: {error}"))?;
@@ -2029,9 +2520,10 @@ fn encode_arrow_stream(
             .finish()
             .map_err(|error| format!("cannot finish Arrow stream: {error}"))?;
     }
-    Ok(bytes)
+    Ok(bytes.into_bytes())
 }
 
+#[cfg(test)]
 fn decode_arrow_stream(
     bytes: &[u8],
 ) -> Result<
@@ -2089,6 +2581,22 @@ async fn execute_remote_task(
     ),
     RemoteTaskFailure,
 > {
+    let (payload, elapsed_us) =
+        execute_remote_task_payload(client, worker, request, exchange_token).await?;
+    let output_bytes = payload.bytes();
+    let (schema, batches) = payload.collect().map_err(|message| RemoteTaskFailure {
+        message,
+        retryable: false,
+    })?;
+    Ok((schema, batches, elapsed_us, output_bytes))
+}
+
+async fn execute_remote_task_payload(
+    client: &reqwest::Client,
+    worker: &NodeInfo,
+    request: &TaskRequest,
+    exchange_token: Option<&str>,
+) -> Result<(crate::transport::ArrowPayload, u64), RemoteTaskFailure> {
     let url = format!("{}/v1/task", worker.address.trim_end_matches('/'));
     let mut submission = client.post(url).json(request);
     if let Some(token) = exchange_token {
@@ -2107,7 +2615,14 @@ async fn execute_remote_task(
         let retryable = status.is_server_error()
             || status == StatusCode::REQUEST_TIMEOUT
             || status == StatusCode::TOO_MANY_REQUESTS;
-        let message = response.text().await.unwrap_or_default();
+        let mut response = response;
+        let message = response
+            .chunk()
+            .await
+            .ok()
+            .flatten()
+            .map(|chunk| String::from_utf8_lossy(&chunk[..chunk.len().min(8192)]).into_owned())
+            .unwrap_or_default();
         return Err(RemoteTaskFailure {
             message: format!(
                 "worker '{}' failed task with {status}: {message}",
@@ -2122,22 +2637,13 @@ async fn execute_remote_task(
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse().ok())
         .unwrap_or_default();
-    let bytes = response.bytes().await.map_err(|error| RemoteTaskFailure {
-        message: format!(
-            "worker '{}' result could not be read: {error}",
-            worker.node_id
-        ),
-        retryable: true,
-    })?;
-    let output_bytes = bytes.len();
-    let (schema, batches) = decode_arrow_stream(&bytes).map_err(|error| RemoteTaskFailure {
-        message: format!(
-            "worker '{}' returned an invalid Arrow stream: {error}",
-            worker.node_id
-        ),
-        retryable: false,
-    })?;
-    Ok((schema, batches, elapsed_us, output_bytes))
+    let payload = crate::transport::receive(response)
+        .await
+        .map_err(|message| RemoteTaskFailure {
+            retryable: message.starts_with("network receive:"),
+            message,
+        })?;
+    Ok((payload, elapsed_us))
 }
 
 async fn cleanup_distributed_query(state: &Arc<AppState>, query_id: &str) {
@@ -2162,6 +2668,9 @@ async fn cleanup_distributed_query(state: &Arc<AppState>, query_id: &str) {
             });
         }
         while cleanups.join_next().await.is_some() {}
+    }
+    if let Some(store) = &state.disk_exchange_store {
+        store.finish_query(query_id);
     }
     let _ = state.lifecycle.finish_query(query_id);
 }
@@ -2200,6 +2709,9 @@ async fn execute_distributed_fragments(
         Ok(orchestrator) => orchestrator,
         Err(error) => return Some(Err(format!("cannot initialize stage execution: {error}"))),
     };
+    if state.disk_exchange_store.is_some() {
+        orchestrator.set_exchange_store_uri(state.cluster.read().await.this_node.address.clone());
+    }
     let cancellation = match state.lifecycle.cancellations.token(query_id) {
         Ok(cancellation) => cancellation,
         Err(error) => return Some(Err(error.to_string())),
@@ -2208,8 +2720,18 @@ async fn execute_distributed_fragments(
     let execution_start = Instant::now();
     let mut stage_started = BTreeMap::<StageId, Instant>::new();
     let mut stage_tasks = BTreeMap::<StageId, Vec<TaskTelemetry>>::new();
+    let mut task_failures = Vec::new();
     let mut result_schema = None;
     let mut result_batches = Vec::new();
+    let mut result_bytes = 0usize;
+    let mut result_writer = if context.result_delivery.as_deref() == Some("paged") {
+        match state.results.writer() {
+            Ok(writer) => Some(writer),
+            Err(error) => return Some(Err(error.to_string())),
+        }
+    } else {
+        None
+    };
 
     while !orchestrator.is_terminal() {
         if cancellation.is_cancelled() {
@@ -2240,7 +2762,8 @@ async fn execute_distributed_fragments(
             let client = client.clone();
             let token = token.clone();
             tasks.spawn(async move {
-                let result = execute_remote_task(&client, &worker, &request, Some(&token)).await;
+                let result =
+                    execute_remote_task_payload(&client, &worker, &request, Some(&token)).await;
                 (dispatch, worker, result)
             });
         }
@@ -2254,8 +2777,13 @@ async fn execute_distributed_fragments(
             };
             let task_id = &dispatch.assignment.task_id;
             match result {
-                Ok((schema, batches, elapsed_us, output_bytes)) => {
-                    if dispatch.exchange_outputs.is_empty() {
+                Ok((mut payload, elapsed_us)) => {
+                    let schema = payload.schema();
+                    let output_bytes = payload.bytes();
+                    let mut output_rows = 0;
+                    let mut output_batches = 0;
+                    let root = dispatch.exchange_outputs.is_empty();
+                    if root {
                         if result_schema
                             .as_ref()
                             .is_some_and(|expected| expected != &schema)
@@ -2264,7 +2792,31 @@ async fn execute_distributed_fragments(
                             return Some(Err("root tasks returned incompatible schemas".into()));
                         }
                         result_schema.get_or_insert(schema);
-                        result_batches.extend(batches.iter().cloned());
+                    }
+                    loop {
+                        let batch = match payload.next_batch() {
+                            Ok(Some(batch)) => batch,
+                            Ok(None) => break,
+                            Err(error) => return Some(Err(error)),
+                        };
+                        output_rows += batch.num_rows();
+                        output_batches += 1;
+                        if root {
+                            if let Some(writer) = result_writer.as_mut() {
+                                for row in batches_to_json(&[batch]) {
+                                    if let Err(error) = writer.push(row) {
+                                        return Some(Err(error.to_string()));
+                                    }
+                                }
+                            } else {
+                                result_bytes =
+                                    result_bytes.saturating_add(batch.get_array_memory_size());
+                                if result_bytes > 16 * 1024 * 1024 {
+                                    return Some(Err("inline results exceed 16 MiB; request result_delivery=paged".into()));
+                                }
+                                result_batches.push(batch);
+                            }
+                        }
                     }
                     stage_tasks
                         .entry(task_id.stage_id)
@@ -2274,8 +2826,8 @@ async fn execute_distributed_fragments(
                             node_id: worker.node_id,
                             partition_index: task_id.partition,
                             elapsed_us,
-                            output_rows: batches.iter().map(|batch| batch.num_rows()).sum(),
-                            output_batches: batches.len(),
+                            output_rows,
+                            output_batches,
                             output_bytes,
                         });
                     if let Err(error) = orchestrator.finish_task(task_id) {
@@ -2283,6 +2835,8 @@ async fn execute_distributed_fragments(
                     }
                 }
                 Err(failure) => {
+                    eprintln!("distributed task {task_id} failed: {}", failure.message);
+                    task_failures.push(failure.message.clone());
                     release_dispatch_outputs(&client, &token, &dispatch).await;
                     if !failure.retryable {
                         orchestrator.cancel();
@@ -2290,7 +2844,7 @@ async fn execute_distributed_fragments(
                     }
                     match orchestrator.fail_task(task_id, &failure.message) {
                         Ok(true) => {}
-                        Ok(false) => return Some(Err(failure.message)),
+                        Ok(false) => return Some(Err(task_failures.join("; "))),
                         Err(error) => {
                             return Some(Err(format!(
                                 "cannot record distributed task failure: {error}"
@@ -2329,10 +2883,22 @@ async fn execute_distributed_fragments(
         })
         .collect::<Vec<_>>();
     stages.sort_unstable_by_key(|stage| stage.stage_id);
+    let data = if let Some(writer) = result_writer {
+        if let Err(error) = state.results.publish(
+            query_id,
+            context.principal.as_deref().unwrap_or("internal"),
+            writer,
+        ) {
+            return Some(Err(error.to_string()));
+        }
+        Vec::new()
+    } else {
+        batches_to_json(&result_batches)
+    };
     Some(Ok((
         TaskResponse {
             columns: columns_from_schema(&schema),
-            data: batches_to_json(&result_batches),
+            data,
             elapsed_us: execution_us,
         },
         stages,
@@ -3075,6 +3641,9 @@ async fn finish_failed_query(
     logical_plan: Option<kaveon_core::PlanNode>,
 ) {
     if let Some(record) = QUERY_STORE.write().await.queries.get_mut(query_id) {
+        if matches!(record.state, QueryState::Canceled) {
+            return;
+        }
         record.state = QueryState::Failed;
         record.error = Some(error);
         record.elapsed_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
@@ -3088,6 +3657,22 @@ async fn finish_failed_query(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn task_response_stream_retains_cache_until_slow_consumer_drops() {
+        use futures::StreamExt;
+        let cached = std::sync::Arc::new(
+            crate::transport::CachedTaskResult::new(vec![1; 200_000], 10).unwrap(),
+        );
+        let response =
+            super::task_outcome_response(crate::lifecycle::TaskOutcome::Success(cached.clone()));
+        let mut stream = response.into_body().into_data_stream();
+        assert_eq!(std::sync::Arc::strong_count(&cached), 2);
+        assert_eq!(stream.next().await.unwrap().unwrap().len(), 64 * 1024);
+        assert_eq!(std::sync::Arc::strong_count(&cached), 2);
+        drop(stream);
+        assert_eq!(std::sync::Arc::strong_count(&cached), 1);
+    }
+
     use super::{
         ColumnInfo, MergeOperation, TaskRequest, TaskResponse, aggregate_merge_contract,
         decode_arrow_stream, encode_arrow_stream, general_distributed_eligible,
@@ -3099,12 +3684,32 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use std::sync::Arc;
 
+    #[test]
+    fn statement_lifecycle_guard_releases_capacity_and_cancels_detached_work() {
+        let state = std::sync::Arc::new(catalog_test_state());
+        for index in 0..1200 {
+            let query_id = format!("completed-local-{index}");
+            let token = state.lifecycle.cancellations.token(&query_id).unwrap();
+            {
+                let _guard = super::StatementLifecycleGuard {
+                    state: state.clone(),
+                    query_id,
+                };
+                assert!(!token.is_cancelled());
+            }
+            assert!(token.is_cancelled());
+        }
+    }
+
     fn catalog_test_state() -> crate::AppState {
         let config = crate::config::ServerConfig {
             catalog_admin_token: Some("admin-token".into()),
             ..crate::config::ServerConfig::default()
         };
         crate::AppState {
+            disk_exchange_store: None,
+            results: crate::results::ResultStore::default(),
+            principal_admission: crate::security::PrincipalAdmission::default(),
             cluster: tokio::sync::RwLock::new(crate::cluster::ClusterState::new(&config)),
             catalog: tokio::sync::RwLock::new(kaveon_core::CatalogManager::new(
                 "kaveon", "default",

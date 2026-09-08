@@ -4,7 +4,9 @@ use arrow::compute::{SortColumn, SortOptions, concat_batches, lexsort_to_indices
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, Rows, SortField};
-use kaveon_core::{BatchOperator, Expr, KaveonError, OperatorMemoryAccount, Result};
+use kaveon_core::{
+    BatchOperator, Expr, KaveonError, MemoryReservation, OperatorMemoryAccount, Result,
+};
 
 use crate::expr_eval::evaluate;
 use crate::spill::{SpillManager, SpillRun, SpillRunReader};
@@ -45,6 +47,8 @@ pub struct SortOperator {
     spill: Option<(OperatorMemoryAccount, SpillManager)>,
     external_merge: Option<ExternalMerge>,
     merge_fan_in: usize,
+    memory: Option<OperatorMemoryAccount>,
+    output_memory: Vec<MemoryReservation>,
 }
 
 impl SortOperator {
@@ -65,6 +69,8 @@ impl SortOperator {
             spill: None,
             external_merge: None,
             merge_fan_in: DEFAULT_MERGE_FAN_IN,
+            memory: None,
+            output_memory: Vec::new(),
         })
     }
 
@@ -75,8 +81,14 @@ impl SortOperator {
         spill: SpillManager,
     ) -> Result<Self> {
         let mut operator = Self::new(source, sort_exprs)?;
+        operator.memory = Some(memory.clone());
         operator.spill = Some((memory, spill));
         Ok(operator)
+    }
+
+    pub fn with_memory(mut self, memory: OperatorMemoryAccount) -> Self {
+        self.memory = Some(memory);
+        self
     }
 
     pub fn with_output_batch_size(mut self, output_batch_size: usize) -> Result<Self> {
@@ -102,60 +114,52 @@ impl SortOperator {
     fn initialize(&mut self) -> Result<()> {
         let mut batches = Vec::new();
         let mut reservations = Vec::new();
+        let mut retained_bytes = 0_u64;
         let mut runs = Vec::new();
         while let Some(batch) = self.source.next_batch()? {
-            if batch.num_rows() > 0 {
-                if let Some((memory, spill)) = &self.spill {
-                    let bytes = u64::try_from(batch.get_array_memory_size()).map_err(|_| {
-                        KaveonError::Execution("sort batch memory size exceeds u64".into())
-                    })?;
-                    match memory.reserve(bytes) {
-                        Ok(reservation) => reservations.push(reservation),
-                        Err(_) if !batches.is_empty() => {
-                            let sorted = sort_batches(&self.schema, &batches, &self.sort_exprs)?;
-                            runs.push(spill.write_run(&self.schema, &[sorted])?);
-                            batches.clear();
-                            reservations.clear();
-                            match memory.reserve(bytes) {
-                                Ok(reservation) => reservations.push(reservation),
-                                Err(_) => {
-                                    let sorted = sort_batches(
-                                        &self.schema,
-                                        std::slice::from_ref(&batch),
-                                        &self.sort_exprs,
-                                    )?;
-                                    runs.push(spill.write_run(&self.schema, &[sorted])?);
-                                    continue;
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            let sorted = sort_batches(
-                                &self.schema,
-                                std::slice::from_ref(&batch),
-                                &self.sort_exprs,
-                            )?;
-                            runs.push(spill.write_run(&self.schema, &[sorted])?);
-                            continue;
-                        }
+            if batch.num_rows() == 0 {
+                continue;
+            }
+            let bytes = sort_workspace_bytes(&batch);
+            if let Some((memory, spill)) = &self.spill {
+                let target = memory.query().snapshot().limit_bytes / (self.merge_fan_in as u64 + 2);
+                if !batches.is_empty() && retained_bytes.saturating_add(bytes) > target {
+                    let sorted = sort_batches(&self.schema, &batches, &self.sort_exprs)?;
+                    runs.push(spill.write_run(&self.schema, &[sorted])?);
+                    batches.clear();
+                    reservations.clear();
+                    retained_bytes = 0;
+                    if runs.len() >= self.merge_fan_in.saturating_mul(2) {
+                        runs = compact_runs(
+                            runs,
+                            spill,
+                            self.schema.clone(),
+                            &self.sort_exprs,
+                            self.output_batch_size,
+                            self.merge_fan_in,
+                            None,
+                            self.memory.as_ref(),
+                        )?;
                     }
                 }
-                batches.push(batch);
             }
+            if let Some(memory) = &self.memory {
+                reservations.push(memory.reserve(bytes)?);
+            }
+            retained_bytes = retained_bytes.saturating_add(bytes);
+            batches.push(batch);
         }
         if batches.is_empty() && runs.is_empty() {
             return Ok(());
         }
-
         if !runs.is_empty() {
+            let spill = &self.spill.as_ref().expect("spill mode active").1;
             if !batches.is_empty() {
                 let sorted = sort_batches(&self.schema, &batches, &self.sort_exprs)?;
-                let spill = &self.spill.as_ref().expect("spill mode is active").1;
                 runs.push(spill.write_run(&self.schema, &[sorted])?);
             }
             batches.clear();
             reservations.clear();
-            let spill = &self.spill.as_ref().expect("spill mode is active").1;
             let runs = compact_runs(
                 runs,
                 spill,
@@ -164,6 +168,7 @@ impl SortOperator {
                 self.output_batch_size,
                 self.merge_fan_in,
                 None,
+                self.memory.as_ref(),
             )?;
             self.external_merge = Some(ExternalMerge::new(
                 runs,
@@ -171,20 +176,21 @@ impl SortOperator {
                 &self.sort_exprs,
                 self.output_batch_size,
                 None,
+                self.memory.clone(),
             )?);
             return Ok(());
         }
-
         let sorted = sort_batches(&self.schema, &batches, &self.sort_exprs)?;
-
         for offset in (0..sorted.num_rows()).step_by(self.output_batch_size) {
             let length = self.output_batch_size.min(sorted.num_rows() - offset);
             self.output.push_back(sorted.slice(offset, length));
         }
+        self.output_memory = reservations;
         Ok(())
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compact_runs(
     mut runs: Vec<SpillRun>,
     spill: &SpillManager,
@@ -193,6 +199,7 @@ pub(crate) fn compact_runs(
     output_batch_size: usize,
     fan_in: usize,
     limit: Option<usize>,
+    memory: Option<&OperatorMemoryAccount>,
 ) -> Result<Vec<SpillRun>> {
     while runs.len() > fan_in {
         let mut source = runs.into_iter();
@@ -206,8 +213,14 @@ pub(crate) fn compact_runs(
                 compacted.extend(group);
                 continue;
             }
-            let mut merge =
-                ExternalMerge::new(group, schema.clone(), sort_exprs, output_batch_size, limit)?;
+            let mut merge = ExternalMerge::new(
+                group,
+                schema.clone(),
+                sort_exprs,
+                output_batch_size,
+                limit,
+                memory.cloned(),
+            )?;
             let stream = std::iter::from_fn(|| match merge.next_batch() {
                 Ok(Some(batch)) => Some(Ok(batch)),
                 Ok(None) => None,
@@ -218,6 +231,13 @@ pub(crate) fn compact_runs(
         runs = compacted;
     }
     Ok(runs)
+}
+
+pub(crate) fn sort_workspace_bytes(batch: &RecordBatch) -> u64 {
+    (batch.get_array_memory_size() as u64)
+        .saturating_mul(4)
+        .saturating_add((batch.num_rows() as u64).saturating_mul(32))
+        .saturating_add(1024)
 }
 
 fn sort_batches(
@@ -253,14 +273,21 @@ impl BatchOperator for SortOperator {
     }
 
     fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
-        if !self.initialized {
-            self.initialized = true;
-            self.initialize()?;
-        }
-        if let Some(merge) = &mut self.external_merge {
-            return merge.next_batch();
-        }
-        Ok(self.output.pop_front())
+        let expression_memory = self.memory.clone();
+        crate::expr_eval::with_expression_memory(expression_memory.as_ref(), || {
+            if !self.initialized {
+                self.initialized = true;
+                self.initialize()?;
+            }
+            if let Some(merge) = &mut self.external_merge {
+                return merge.next_batch();
+            }
+            let batch = self.output.pop_front();
+            if batch.is_none() {
+                self.output_memory.clear();
+            }
+            Ok(batch)
+        })
     }
 }
 
@@ -269,6 +296,7 @@ struct MergeCursor {
     batch: Option<RecordBatch>,
     rows: Option<Rows>,
     row: usize,
+    memory: Option<MemoryReservation>,
 }
 
 pub(crate) struct ExternalMerge {
@@ -278,6 +306,7 @@ pub(crate) struct ExternalMerge {
     sort_exprs: Vec<SortExpr>,
     output_batch_size: usize,
     remaining: Option<usize>,
+    memory: Option<OperatorMemoryAccount>,
     // Declared last so readers are closed before run-file cleanup on Windows.
     _runs: Vec<SpillRun>,
 }
@@ -289,25 +318,9 @@ impl ExternalMerge {
         sort_exprs: &[SortExpr],
         output_batch_size: usize,
         remaining: Option<usize>,
+        memory: Option<OperatorMemoryAccount>,
     ) -> Result<Self> {
-        let mut readers = runs
-            .iter()
-            .map(SpillRun::reader)
-            .collect::<Result<Vec<_>>>()?;
-        let mut first_batch = None;
-        for reader in &mut readers {
-            if let Some(batch) = reader.next().transpose()?
-                && batch.num_rows() > 0
-            {
-                first_batch = Some(batch);
-                break;
-            }
-        }
-        let Some(probe) = first_batch else {
-            return Err(KaveonError::Execution(
-                "external merge requires at least one non-empty spill run".into(),
-            ));
-        };
+        let probe = RecordBatch::new_empty(schema.clone());
         let key_columns = evaluate_sort_columns(sort_exprs, &probe)?;
         let fields = key_columns
             .iter()
@@ -330,8 +343,9 @@ impl ExternalMerge {
                 batch: None,
                 rows: None,
                 row: 0,
+                memory: None,
             };
-            load_next_cursor_batch(&converter, sort_exprs, &mut cursor)?;
+            load_next_cursor_batch(&converter, sort_exprs, &mut cursor, memory.as_ref())?;
             cursors.push(cursor);
         }
         Ok(Self {
@@ -341,6 +355,7 @@ impl ExternalMerge {
             sort_exprs: sort_exprs.to_vec(),
             output_batch_size,
             remaining,
+            memory,
             _runs: runs,
         })
     }
@@ -350,22 +365,53 @@ impl ExternalMerge {
             remaining.min(self.output_batch_size)
         });
         if target == 0 {
+            self.cursors.clear();
+            self._runs.clear();
             return Ok(None);
         }
-        let mut rows = Vec::with_capacity(target);
+        let mut rows = Vec::new();
+        let mut output_memory = Vec::new();
         while rows.len() < target {
+            if rows.len() % 1024 == 0 {
+                crate::expr_eval::check_expression_cancelled()?;
+            }
             let Some(index) = self.best_cursor() else {
                 break;
             };
             let cursor = &mut self.cursors[index];
             let batch = cursor.batch.as_ref().expect("active cursor has a batch");
-            rows.push(batch.slice(cursor.row, 1));
+            // Deep-copy selected rows: slices would keep exhausted cursor batches
+            // alive after their cursor reservation was released.
+            let estimate = crate::join::estimated_output_bytes(batch, &[Some(cursor.row as u64)])?
+                .saturating_mul(2)
+                .saturating_add(1024);
+            if let Some(memory) = &self.memory {
+                match memory.reserve(estimate) {
+                    Ok(reservation) => output_memory.push(reservation),
+                    Err(_) if !rows.is_empty() => break,
+                    Err(error) => return Err(error),
+                }
+            }
+            let indices = arrow::array::UInt32Array::from(vec![cursor.row as u32]);
+            let columns = batch
+                .columns()
+                .iter()
+                .map(|column| take(column, &indices, None))
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            rows.push(RecordBatch::try_new(self.schema.clone(), columns)?);
             cursor.row += 1;
             if cursor.row == batch.num_rows() {
-                load_next_cursor_batch(&self.converter, &self.sort_exprs, cursor)?;
+                load_next_cursor_batch(
+                    &self.converter,
+                    &self.sort_exprs,
+                    cursor,
+                    self.memory.as_ref(),
+                )?;
             }
         }
         if rows.is_empty() {
+            self.cursors.clear();
+            self._runs.clear();
             return Ok(None);
         }
         if let Some(remaining) = &mut self.remaining {
@@ -410,7 +456,11 @@ fn load_next_cursor_batch(
     converter: &RowConverter,
     sort_exprs: &[SortExpr],
     cursor: &mut MergeCursor,
+    memory: Option<&OperatorMemoryAccount>,
 ) -> Result<()> {
+    cursor.batch = None;
+    cursor.rows = None;
+    cursor.memory = None;
     loop {
         let Some(batch) = cursor.reader.next().transpose()? else {
             cursor.batch = None;
@@ -420,6 +470,9 @@ fn load_next_cursor_batch(
         if batch.num_rows() == 0 {
             continue;
         }
+        cursor.memory = memory
+            .map(|memory| memory.reserve(sort_workspace_bytes(&batch)))
+            .transpose()?;
         let columns = if sort_exprs.is_empty() {
             return Err(KaveonError::Execution(
                 "external merge cannot advance without ordering expressions".into(),
@@ -662,7 +715,7 @@ mod tests {
     #[test]
     fn spill_aware_sort_preserves_order_when_memory_forces_runs() {
         let first = batch(vec![Some(4), Some(1)], vec!["d", "a"]);
-        let per_batch_bytes = u64::try_from(first.get_array_memory_size()).unwrap();
+        let memory_limit = 16 * 1024;
         let source = MockOperator::new(vec![
             first,
             batch(vec![Some(3), Some(2)], vec!["c", "b"]),
@@ -670,7 +723,7 @@ mod tests {
             batch(vec![Some(7), Some(6)], vec!["g", "f"]),
             batch(vec![Some(10), Some(9)], vec!["j", "i"]),
         ]);
-        let memory_pool = kaveon_core::QueryMemoryPool::new("sort-spill", per_batch_bytes).unwrap();
+        let memory_pool = kaveon_core::QueryMemoryPool::new("sort-spill", memory_limit).unwrap();
         let memory = memory_pool.operator("sort").unwrap();
         let spill = SpillManager::new(std::env::temp_dir(), 64 * 1_024).unwrap();
         let spill_metrics = spill.clone();
@@ -689,6 +742,6 @@ mod tests {
             (1..=10).map(Some).collect::<Vec<_>>()
         );
         assert!(spill_metrics.snapshot().peak_bytes > 0);
-        assert!(memory_pool.snapshot().peak_bytes <= per_batch_bytes);
+        assert!(memory_pool.snapshot().peak_bytes <= memory_limit);
     }
 }

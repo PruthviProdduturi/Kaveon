@@ -12,23 +12,34 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 const AGGREGATE_STATE_VERSION_KEY: &str = "kaveon.aggregate_state.version";
-const AGGREGATE_STATE_VERSION: &str = "1";
+const AGGREGATE_STATE_VERSION: &str = "2";
 const GROUPED_STATE_VERSION_KEY: &str = "kaveon.grouped_aggregate_state.version";
-const GROUPED_STATE_VERSION: &str = "1";
+const GROUPED_STATE_VERSION: &str = "3";
+#[path = "compact_state.rs"]
+mod compact_state;
+const GROUPED_KEY_TYPES: &str = "kaveon.grouped_aggregate_state.key_types";
+const GROUPED_OUTPUT_TYPES: &str = "kaveon.grouped_aggregate_state.output_types";
 const STATE_SUM: u8 = 1;
 const STATE_COUNT: u8 = 2;
 const STATE_MIN: u8 = 3;
 const STATE_MAX: u8 = 4;
 const STATE_AVG: u8 = 5;
 const STATE_COUNT_DISTINCT: u8 = 6;
+const STATE_DECIMAL_SUM: u8 = 9;
+const STATE_INTEGER_SUM: u8 = 10;
+const STATE_INTEGER_MIN: u8 = 11;
+const STATE_INTEGER_MAX: u8 = 12;
+const STATE_INTEGER_SUM_DISTINCT: u8 = 13;
 const VALUE_BOOL: u8 = 1;
 const VALUE_INT32: u8 = 2;
 const VALUE_INT64: u8 = 3;
 const VALUE_UTF8: u8 = 4;
 const VALUE_FLOAT64_BITS: u8 = 5;
+const VALUE_UINT64: u8 = 6;
+const VALUE_DECIMAL128: u8 = 7;
 const VALUE_NULL: u8 = 0;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AggFunc {
     Sum,
     Count,
@@ -65,7 +76,7 @@ impl AggExpr {
         self
     }
 
-    fn output_name(&self) -> String {
+    pub fn output_name(&self) -> String {
         if let Some(ref alias) = self.alias {
             return alias.clone();
         }
@@ -93,17 +104,43 @@ pub enum AggregateValue {
     Bool(bool),
     Int32(i32),
     Int64(i64),
+    UInt64(u64),
+    Decimal128(i128, i8),
     Utf8(String),
     Float64Bits(u64),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AggregateState {
-    Sum { sum: f64, count: u64 },
+    Sum {
+        sum: f64,
+        count: u64,
+    },
+    DecimalSum {
+        sum: i128,
+        count: u64,
+        scale: i8,
+    },
+    Exact {
+        function: AggFunc,
+        scale: Option<i8>,
+        value: Option<i128>,
+        distinct: Option<HashSet<AggregateValue>>,
+    },
+    IntegerSum {
+        sum: i128,
+        count: u64,
+    },
+    IntegerMin(Option<i64>),
+    IntegerMax(Option<i64>),
+    IntegerSumDistinct(HashSet<AggregateValue>),
     Count(u64),
     Min(Option<f64>),
     Max(Option<f64>),
-    Avg { sum: f64, count: u64 },
+    Avg {
+        sum: f64,
+        count: u64,
+    },
     CountDistinct(HashSet<AggregateValue>),
     SumDistinct(HashSet<AggregateValue>),
     AvgDistinct(HashSet<AggregateValue>),
@@ -115,10 +152,48 @@ pub struct GroupedAggregateState {
     pub states: Vec<AggregateState>,
 }
 
+pub fn aggregate_output_types(aggregates: &[AggExpr], input: &SchemaRef) -> Result<Vec<DataType>> {
+    aggregates
+        .iter()
+        .map(|agg| {
+            if let Ok(field) = input.field_with_name(&agg.column)
+                && matches!(field.data_type(), DataType::Int32 | DataType::Int64)
+            {
+                match agg.func {
+                    AggFunc::Sum => return Ok(DataType::Int64),
+                    AggFunc::Min | AggFunc::Max => return Ok(field.data_type().clone()),
+                    _ => {}
+                }
+            }
+            if let Ok(field) = input.field_with_name(&agg.column) {
+                if matches!(agg.func, AggFunc::Sum | AggFunc::Min | AggFunc::Max)
+                    && field.data_type() == &DataType::UInt64
+                {
+                    return Ok(DataType::UInt64);
+                }
+                if matches!(agg.func, AggFunc::Min | AggFunc::Max)
+                    && matches!(field.data_type(), DataType::Decimal128(_, _))
+                {
+                    return Ok(field.data_type().clone());
+                }
+            }
+            if matches!(agg.func, AggFunc::Sum)
+                && let Ok(field) = input.field_with_name(&agg.column)
+                && let DataType::Decimal128(_, scale) = field.data_type()
+            {
+                return Ok(DataType::Decimal128(38, *scale));
+            }
+            Ok(agg.output_type())
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum FinalAggregateValue {
     Count(u64),
     Numeric(Option<f64>),
+    Decimal(Option<i128>, i8),
+    Integer(Option<i128>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -128,6 +203,150 @@ pub struct FinalizedAggregateGroup {
 }
 
 impl AggregateState {
+    pub fn new_typed(expression: &AggExpr, output_type: &DataType) -> Self {
+        if output_type == &DataType::UInt64 && !matches!(expression.func, AggFunc::Count)
+            || matches!(output_type, DataType::Decimal128(_, _))
+                && (expression.distinct || matches!(expression.func, AggFunc::Min | AggFunc::Max))
+        {
+            return Self::Exact {
+                function: expression.func,
+                scale: match output_type {
+                    DataType::Decimal128(_, scale) => Some(*scale),
+                    _ => None,
+                },
+                value: None,
+                distinct: (expression.distinct && matches!(expression.func, AggFunc::Sum))
+                    .then(HashSet::new),
+            };
+        }
+        if matches!(output_type, DataType::Int32 | DataType::Int64) {
+            return match (expression.func, expression.distinct) {
+                (AggFunc::Sum, false) => Self::IntegerSum { sum: 0, count: 0 },
+                (AggFunc::Sum, true) => Self::IntegerSumDistinct(HashSet::new()),
+                (AggFunc::Min, _) => Self::IntegerMin(None),
+                (AggFunc::Max, _) => Self::IntegerMax(None),
+                _ => Self::new(expression),
+            };
+        }
+        if let DataType::Decimal128(_, scale) = output_type {
+            return Self::DecimalSum {
+                sum: 0,
+                count: 0,
+                scale: *scale,
+            };
+        }
+        Self::new(expression)
+    }
+    pub fn update_exact(&mut self, input: AggregateValue) -> Result<()> {
+        let Self::Exact {
+            function,
+            scale,
+            value,
+            distinct,
+        } = self
+        else {
+            return Err(exec_err("expected exact numeric state"));
+        };
+        let number = match (&input, *scale) {
+            (AggregateValue::UInt64(n), None) => *n as i128,
+            (AggregateValue::Decimal128(n, actual), Some(expected)) if *actual == expected => *n,
+            _ => return Err(exec_err("exact numeric input type mismatch")),
+        };
+        if let Some(values) = distinct {
+            values.insert(input);
+            return Ok(());
+        }
+        *value = Some(match (*function, *value) {
+            (AggFunc::Sum, Some(old)) => old
+                .checked_add(number)
+                .ok_or_else(|| exec_err("exact SUM overflow"))?,
+            (AggFunc::Min, Some(old)) => old.min(number),
+            (AggFunc::Max, Some(old)) => old.max(number),
+            (_, None) => number,
+            _ => return Err(exec_err("invalid exact aggregate function")),
+        });
+        Ok(())
+    }
+    pub fn exact_result(&self) -> Result<Option<i128>> {
+        let Self::Exact {
+            value, distinct, ..
+        } = self
+        else {
+            return Err(exec_err("expected exact numeric state"));
+        };
+        if let Some(values) = distinct {
+            let mut sum = 0i128;
+            for (index, value) in values.iter().enumerate() {
+                if index % 1024 == 0 {
+                    crate::expr_eval::check_expression_cancelled()?;
+                }
+                let number = match value {
+                    AggregateValue::UInt64(n) => *n as i128,
+                    AggregateValue::Decimal128(n, _) => *n,
+                    _ => return Err(exec_err("invalid exact distinct value")),
+                };
+                sum = sum
+                    .checked_add(number)
+                    .ok_or_else(|| exec_err("exact SUM DISTINCT overflow"))?;
+            }
+            Ok((!values.is_empty()).then_some(sum))
+        } else {
+            Ok(*value)
+        }
+    }
+    pub fn update_decimal(&mut self, value: i128) -> Result<()> {
+        let Self::DecimalSum { sum, count, .. } = self else {
+            return Err(exec_err("decimal update requires decimal SUM state"));
+        };
+        *sum = sum
+            .checked_add(value)
+            .ok_or_else(|| exec_err("decimal SUM overflow"))?;
+        *count = count
+            .checked_add(1)
+            .ok_or_else(|| exec_err("decimal SUM count overflow"))?;
+        Ok(())
+    }
+    pub fn update_integer(&mut self, value: i64) -> Result<()> {
+        match self {
+            Self::IntegerSum { sum, count } => {
+                *sum = sum
+                    .checked_add(value as i128)
+                    .ok_or_else(|| exec_err("integer SUM overflow"))?;
+                *count = count
+                    .checked_add(1)
+                    .ok_or_else(|| exec_err("integer SUM count overflow"))?;
+            }
+            Self::IntegerMin(current) => {
+                *current = Some(current.map_or(value, |old| old.min(value)))
+            }
+            Self::IntegerMax(current) => {
+                *current = Some(current.map_or(value, |old| old.max(value)))
+            }
+            _ => return Err(exec_err("integer update requires integer aggregate")),
+        }
+        Ok(())
+    }
+    pub fn integer_result(&self) -> Result<Option<i128>> {
+        match self {
+            Self::IntegerSum { sum, count } => Ok((*count > 0).then_some(*sum)),
+            Self::IntegerMin(value) | Self::IntegerMax(value) => Ok(value.map(i128::from)),
+            Self::IntegerSumDistinct(values) => {
+                let mut sum = 0i128;
+                for value in values {
+                    let n = match value {
+                        AggregateValue::Int32(n) => *n as i128,
+                        AggregateValue::Int64(n) => *n as i128,
+                        _ => return Err(exec_err("invalid integer SUM DISTINCT value")),
+                    };
+                    sum = sum
+                        .checked_add(n)
+                        .ok_or_else(|| exec_err("integer SUM DISTINCT overflow"))?;
+                }
+                Ok((!values.is_empty()).then_some(sum))
+            }
+            _ => Err(exec_err("integer result requires integer aggregate")),
+        }
+    }
     pub fn new(expression: &AggExpr) -> Self {
         match (expression.func, expression.distinct) {
             (AggFunc::Sum, false) => Self::Sum { sum: 0.0, count: 0 },
@@ -176,8 +395,14 @@ impl AggregateState {
     }
 
     pub fn update_distinct(&mut self, value: AggregateValue) -> Result<()> {
+        if matches!(self, Self::Exact { .. }) {
+            return self.update_exact(value);
+        }
         match self {
-            Self::CountDistinct(values) | Self::SumDistinct(values) | Self::AvgDistinct(values) => {
+            Self::CountDistinct(values)
+            | Self::SumDistinct(values)
+            | Self::AvgDistinct(values)
+            | Self::IntegerSumDistinct(values) => {
                 if !matches!(value, AggregateValue::Null) {
                     values.insert(value);
                 }
@@ -190,7 +415,82 @@ impl AggregateState {
     }
 
     pub fn merge(&mut self, partial: &Self) -> Result<()> {
+        if let (
+            Self::Exact {
+                function,
+                scale,
+                value,
+                distinct,
+            },
+            Self::Exact {
+                function: other,
+                scale: other_scale,
+                value: other_value,
+                distinct: other_distinct,
+            },
+        ) = (&mut *self, partial)
+        {
+            if function != other
+                || scale != other_scale
+                || distinct.is_some() != other_distinct.is_some()
+            {
+                return Err(exec_err("incompatible exact numeric partials"));
+            }
+            if let (Some(values), Some(other_values)) = (distinct, other_distinct) {
+                values.extend(other_values.iter().cloned());
+            } else if let Some(number) = other_value {
+                *value = Some(match (*function, *value) {
+                    (AggFunc::Sum, Some(old)) => old
+                        .checked_add(*number)
+                        .ok_or_else(|| exec_err("exact SUM overflow"))?,
+                    (AggFunc::Min, Some(old)) => old.min(*number),
+                    (AggFunc::Max, Some(old)) => old.max(*number),
+                    (_, None) => *number,
+                    _ => return Err(exec_err("invalid exact aggregate function")),
+                });
+            }
+            return Ok(());
+        }
         match (self, partial) {
+            (
+                Self::IntegerSum { sum, count },
+                Self::IntegerSum {
+                    sum: other,
+                    count: other_count,
+                },
+            ) => {
+                *sum = sum
+                    .checked_add(*other)
+                    .ok_or_else(|| exec_err("integer SUM merge overflow"))?;
+                *count = count
+                    .checked_add(*other_count)
+                    .ok_or_else(|| exec_err("integer SUM count overflow"))?;
+            }
+            (Self::IntegerMin(value), Self::IntegerMin(other)) => {
+                if let Some(n) = other {
+                    *value = Some(value.map_or(*n, |old| old.min(*n)));
+                }
+            }
+            (Self::IntegerMax(value), Self::IntegerMax(other)) => {
+                if let Some(n) = other {
+                    *value = Some(value.map_or(*n, |old| old.max(*n)));
+                }
+            }
+            (
+                Self::DecimalSum { sum, count, scale },
+                Self::DecimalSum {
+                    sum: other,
+                    count: other_count,
+                    scale: other_scale,
+                },
+            ) if scale == other_scale => {
+                *sum = sum
+                    .checked_add(*other)
+                    .ok_or_else(|| exec_err("decimal SUM merge overflow"))?;
+                *count = count
+                    .checked_add(*other_count)
+                    .ok_or_else(|| exec_err("decimal SUM count overflow"))?;
+            }
             (
                 Self::Sum { sum, count },
                 Self::Sum {
@@ -220,6 +520,7 @@ impl AggregateState {
                 }
             }
             (Self::CountDistinct(values), Self::CountDistinct(other))
+            | (Self::IntegerSumDistinct(values), Self::IntegerSumDistinct(other))
             | (Self::SumDistinct(values), Self::SumDistinct(other))
             | (Self::AvgDistinct(values), Self::AvgDistinct(other)) => {
                 values.extend(other.iter().cloned());
@@ -280,13 +581,46 @@ pub fn encode_grouped_aggregate_states(groups: &[GroupedAggregateState]) -> Resu
 
 /// Builds the canonical Arrow batch exchanged between partial and final aggregates.
 pub fn grouped_aggregate_states_to_batch(groups: &[GroupedAggregateState]) -> Result<RecordBatch> {
+    let count = groups.first().map_or(0, |g| g.group_keys.len());
+    let types = (0..count)
+        .map(|i| {
+            groups
+                .iter()
+                .filter_map(|g| g.group_keys.get(i))
+                .find_map(|value| match value {
+                    AggregateValue::Null => None,
+                    AggregateValue::Bool(_) => Some(DataType::Boolean),
+                    AggregateValue::Int32(_) => Some(DataType::Int32),
+                    AggregateValue::Int64(_) => Some(DataType::Int64),
+                    AggregateValue::Float64Bits(_) => Some(DataType::Float64),
+                    AggregateValue::Utf8(_) => Some(DataType::Utf8),
+                    AggregateValue::UInt64(_) => Some(DataType::UInt64),
+                    AggregateValue::Decimal128(_, scale) => Some(DataType::Decimal128(38, *scale)),
+                })
+                .unwrap_or(DataType::Null)
+        })
+        .collect::<Vec<_>>();
+    grouped_aggregate_states_to_typed_batch(groups, &types)
+}
+
+/// Explicit key types are mandatory on the execution path: no values exist from
+/// which to infer a type when a partition is empty or every group key is NULL.
+pub fn grouped_aggregate_states_to_typed_batch(
+    groups: &[GroupedAggregateState],
+    group_types: &[DataType],
+) -> Result<RecordBatch> {
     validate_group_layouts(groups)?;
+    validate_group_key_types(groups, group_types)?;
     let mut rows = groups
         .iter()
-        .map(|group| {
+        .enumerate()
+        .map(|(index, group)| {
+            if index % 1024 == 0 {
+                crate::expr_eval::check_expression_cancelled()?;
+            }
             Ok((
                 encode_group_keys(&group.group_keys)?,
-                encode_aggregate_states(&group.states)?,
+                compact_state::encode(&group.states)?,
             ))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -302,7 +636,32 @@ pub fn grouped_aggregate_states_to_batch(groups: &[GroupedAggregateState]) -> Re
         .iter()
         .map(|(_, states)| Some(states.as_slice()))
         .collect::<Vec<_>>();
-    let schema = grouped_state_schema();
+    let mut schema = grouped_state_schema().as_ref().clone();
+    let type_schema = Schema::new(
+        group_types
+            .iter()
+            .enumerate()
+            .map(|(i, t)| Field::new(i.to_string(), t.clone(), true))
+            .collect::<Vec<_>>(),
+    );
+    let mut type_bytes = Vec::new();
+    {
+        let mut writer = StreamWriter::try_new(&mut type_bytes, &type_schema)?;
+        writer.finish()?;
+    }
+    let names = type_bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let fields = vec![
+        schema
+            .field(0)
+            .clone()
+            .with_metadata(HashMap::from([(GROUPED_KEY_TYPES.into(), names)])),
+        schema.field(1).clone(),
+    ];
+    schema = Schema::new_with_metadata(fields, schema.metadata().clone());
+    let schema = Arc::new(schema);
     Ok(RecordBatch::try_new(
         schema.clone(),
         vec![
@@ -312,23 +671,196 @@ pub fn grouped_aggregate_states_to_batch(groups: &[GroupedAggregateState]) -> Re
     )?)
 }
 
+pub fn grouped_aggregate_key_types(schema: &SchemaRef) -> Result<Vec<DataType>> {
+    validate_grouped_state_schema(schema)?;
+    let types = schema
+        .field(0)
+        .metadata()
+        .get(GROUPED_KEY_TYPES)
+        .ok_or_else(|| exec_err("aggregate partial is missing group key types"))?;
+    if !types.is_ascii() || types.len() % 2 != 0 {
+        return Err(exec_err("invalid aggregate key type metadata"));
+    }
+    let bytes = (0..types.len())
+        .step_by(2)
+        .map(|i| {
+            u8::from_str_radix(&types[i..i + 2], 16)
+                .map_err(|_| exec_err("invalid aggregate key type metadata"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let reader = StreamReader::try_new(Cursor::new(bytes), None)?;
+    Ok(reader
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.data_type().clone())
+        .collect())
+}
+
+pub fn grouped_aggregate_states_to_schema_batch(
+    groups: &[GroupedAggregateState],
+    group_types: &[DataType],
+    output_types: &[DataType],
+) -> Result<RecordBatch> {
+    for group in groups {
+        if group.states.len() != output_types.len() {
+            return Err(exec_err("aggregate output type count mismatch"));
+        }
+        for (state, data_type) in group.states.iter().zip(output_types) {
+            let expected = match state {
+                AggregateState::Exact { scale: None, .. } => DataType::UInt64,
+                AggregateState::Exact {
+                    scale: Some(scale), ..
+                } if matches!(data_type, DataType::Decimal128(_, actual) if actual == scale) => {
+                    data_type.clone()
+                }
+                AggregateState::Count(_) | AggregateState::CountDistinct(_) => DataType::UInt64,
+                AggregateState::DecimalSum { scale, .. } => DataType::Decimal128(38, *scale),
+                AggregateState::IntegerSum { .. } | AggregateState::IntegerSumDistinct(_) => {
+                    DataType::Int64
+                }
+                AggregateState::IntegerMin(_) | AggregateState::IntegerMax(_)
+                    if matches!(data_type, DataType::Int32 | DataType::Int64) =>
+                {
+                    data_type.clone()
+                }
+                _ => DataType::Float64,
+            };
+            if &expected != data_type {
+                return Err(exec_err("aggregate state/output type mismatch"));
+            }
+        }
+    }
+    let batch = grouped_aggregate_states_to_typed_batch(groups, group_types)?;
+    let mut bytes = Vec::new();
+    let schema = Schema::new(
+        output_types
+            .iter()
+            .enumerate()
+            .map(|(i, t)| Field::new(i.to_string(), t.clone(), true))
+            .collect::<Vec<_>>(),
+    );
+    {
+        let mut writer = StreamWriter::try_new(&mut bytes, &schema)?;
+        writer.finish()?;
+    }
+    let types = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let old = batch.schema();
+    let schema = Arc::new(Schema::new_with_metadata(
+        vec![
+            old.field(0).clone(),
+            old.field(1)
+                .clone()
+                .with_metadata(HashMap::from([(GROUPED_OUTPUT_TYPES.into(), types)])),
+        ],
+        old.metadata().clone(),
+    ));
+    Ok(RecordBatch::try_new(schema, batch.columns().to_vec())?)
+}
+
+pub fn grouped_aggregate_output_types(schema: &SchemaRef) -> Result<Vec<DataType>> {
+    validate_grouped_state_schema(schema)?;
+    let Some(types) = schema.field(1).metadata().get(GROUPED_OUTPUT_TYPES) else {
+        return Ok(vec![]);
+    };
+    if !types.is_ascii() || types.len() % 2 != 0 {
+        return Err(exec_err("invalid aggregate output type metadata"));
+    }
+    let bytes = (0..types.len())
+        .step_by(2)
+        .map(|i| {
+            u8::from_str_radix(&types[i..i + 2], 16)
+                .map_err(|_| exec_err("invalid aggregate output type metadata"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let reader = StreamReader::try_new(Cursor::new(bytes), None)?;
+    Ok(reader
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.data_type().clone())
+        .collect())
+}
+
+fn validate_group_key_types(groups: &[GroupedAggregateState], types: &[DataType]) -> Result<()> {
+    for group in groups {
+        if group.group_keys.len() != types.len() {
+            return Err(exec_err("aggregate key count does not match typed schema"));
+        }
+        for (key, data_type) in group.group_keys.iter().zip(types) {
+            let decimal_matches = matches!((key, data_type), (AggregateValue::Decimal128(_, scale), DataType::Decimal128(_, expected)) if scale == expected);
+            if !decimal_matches
+                && !matches!(
+                    (key, data_type),
+                    (AggregateValue::Null, _)
+                        | (AggregateValue::Bool(_), DataType::Boolean)
+                        | (AggregateValue::Int32(_), DataType::Int32 | DataType::Date32)
+                        | (
+                            AggregateValue::Int64(_),
+                            DataType::Int64 | DataType::Date64 | DataType::Timestamp(_, _)
+                        )
+                        | (AggregateValue::UInt64(_), DataType::UInt64)
+                        | (AggregateValue::Float64Bits(_), DataType::Float64)
+                        | (
+                            AggregateValue::Utf8(_),
+                            DataType::Utf8 | DataType::LargeUtf8
+                        )
+                )
+            {
+                return Err(exec_err("aggregate key value does not match typed schema"));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Decodes canonical partial-aggregate Arrow batches received through an exchange.
+pub(crate) fn grouped_aggregate_state_row(
+    keys: &BinaryArray,
+    states: &BinaryArray,
+    row: usize,
+    types: &[DataType],
+) -> Result<GroupedAggregateState> {
+    if keys.is_null(row) || states.is_null(row) {
+        return Err(exec_err("grouped aggregate state row cannot contain nulls"));
+    }
+    let group = GroupedAggregateState {
+        group_keys: decode_group_keys(keys.value(row))?,
+        states: compact_state::decode(states.value(row))?,
+    };
+    validate_group_key_types(std::slice::from_ref(&group), types)?;
+    Ok(group)
+}
+
 pub fn grouped_aggregate_states_from_batches(
     batches: &[RecordBatch],
 ) -> Result<Vec<GroupedAggregateState>> {
     let mut groups = Vec::new();
+    let mut expected_types = None;
     for batch in batches {
         validate_grouped_state_schema(&batch.schema())?;
+        let types = grouped_aggregate_key_types(&batch.schema())?;
+        if expected_types
+            .as_ref()
+            .is_some_and(|expected| expected != &types)
+        {
+            return Err(exec_err("aggregate partial group key types differ"));
+        }
+        expected_types = Some(types.clone());
         let keys = batch.column(0).as_binary::<i32>();
         let states = batch.column(1).as_binary::<i32>();
         for row in 0..batch.num_rows() {
+            if row % 1024 == 0 {
+                crate::expr_eval::check_expression_cancelled()?;
+            }
             if keys.is_null(row) || states.is_null(row) {
                 return Err(exec_err("grouped aggregate state row cannot contain nulls"));
             }
             groups.push(GroupedAggregateState {
                 group_keys: decode_group_keys(keys.value(row))?,
-                states: decode_aggregate_states(states.value(row))?,
+                states: compact_state::decode(states.value(row))?,
             });
+            validate_group_key_types(&groups[groups.len() - 1..], &types)?;
         }
     }
     Ok(groups)
@@ -337,6 +869,7 @@ pub fn grouped_aggregate_states_from_batches(
 pub fn decode_grouped_aggregate_states(bytes: &[u8]) -> Result<Vec<GroupedAggregateState>> {
     let reader = StreamReader::try_new(Cursor::new(bytes), None)?;
     validate_grouped_state_schema(&reader.schema())?;
+    let types = grouped_aggregate_key_types(&reader.schema())?;
     let mut groups = Vec::new();
     let mut previous_key: Option<Vec<u8>> = None;
     for batch in reader {
@@ -345,6 +878,9 @@ pub fn decode_grouped_aggregate_states(bytes: &[u8]) -> Result<Vec<GroupedAggreg
         let keys = batch.column(0).as_binary::<i32>();
         let states = batch.column(1).as_binary::<i32>();
         for row in 0..batch.num_rows() {
+            if row % 1024 == 0 {
+                crate::expr_eval::check_expression_cancelled()?;
+            }
             if keys.is_null(row) || states.is_null(row) {
                 return Err(exec_err("grouped aggregate state row cannot contain nulls"));
             }
@@ -359,8 +895,9 @@ pub fn decode_grouped_aggregate_states(bytes: &[u8]) -> Result<Vec<GroupedAggreg
             }
             groups.push(GroupedAggregateState {
                 group_keys: decode_group_keys(encoded_key)?,
-                states: decode_aggregate_states(states.value(row))?,
+                states: compact_state::decode(states.value(row))?,
             });
+            validate_group_key_types(&groups[groups.len() - 1..], &types)?;
             previous_key = Some(encoded_key.to_vec());
         }
     }
@@ -372,7 +909,10 @@ pub fn merge_grouped_aggregate_states(
 ) -> Result<Vec<GroupedAggregateState>> {
     let mut merged = HashMap::<Vec<AggregateValue>, Vec<AggregateState>>::new();
     let mut expected_layout = None;
-    for partial in partials {
+    for (index, partial) in partials.into_iter().enumerate() {
+        if index % 1024 == 0 {
+            crate::expr_eval::check_expression_cancelled()?;
+        }
         let layout = state_layout(&partial.states)?;
         match &expected_layout {
             Some(expected) if expected != &layout => {
@@ -423,6 +963,8 @@ fn aggregate_value_to_f64(v: &AggregateValue) -> f64 {
     match v {
         AggregateValue::Int32(n) => *n as f64,
         AggregateValue::Int64(n) => *n as f64,
+        AggregateValue::UInt64(n) => *n as f64,
+        AggregateValue::Decimal128(n, scale) => *n as f64 / 10f64.powi(*scale as i32),
         AggregateValue::Float64Bits(b) => f64::from_bits(*b),
         _ => 0.0,
     }
@@ -431,7 +973,7 @@ fn aggregate_value_to_f64(v: &AggregateValue) -> f64 {
 const STATE_SUM_DISTINCT: u8 = 7;
 const STATE_AVG_DISTINCT: u8 = 8;
 
-fn state_layout(states: &[AggregateState]) -> Result<Vec<u8>> {
+fn state_layout(states: &[AggregateState]) -> Result<Vec<(u8, Option<i8>)>> {
     if states.is_empty() {
         return Err(exec_err(
             "grouped aggregate state requires at least one accumulator",
@@ -439,15 +981,39 @@ fn state_layout(states: &[AggregateState]) -> Result<Vec<u8>> {
     }
     Ok(states
         .iter()
-        .map(|state| match state {
-            AggregateState::Sum { .. } => STATE_SUM,
-            AggregateState::Count(_) => STATE_COUNT,
-            AggregateState::Min(_) => STATE_MIN,
-            AggregateState::Max(_) => STATE_MAX,
-            AggregateState::Avg { .. } => STATE_AVG,
-            AggregateState::CountDistinct(_) => STATE_COUNT_DISTINCT,
-            AggregateState::SumDistinct(_) => STATE_SUM_DISTINCT,
-            AggregateState::AvgDistinct(_) => STATE_AVG_DISTINCT,
+        .map(|state| {
+            (
+                match state {
+                    AggregateState::DecimalSum { .. } => STATE_DECIMAL_SUM,
+                    AggregateState::Exact {
+                        function, distinct, ..
+                    } => {
+                        14 + match function {
+                            AggFunc::Sum => 0,
+                            AggFunc::Min => 1,
+                            AggFunc::Max => 2,
+                            _ => 3,
+                        } + u8::from(distinct.is_some()) * 4
+                    }
+                    AggregateState::IntegerSum { .. } => STATE_INTEGER_SUM,
+                    AggregateState::IntegerMin(_) => STATE_INTEGER_MIN,
+                    AggregateState::IntegerMax(_) => STATE_INTEGER_MAX,
+                    AggregateState::IntegerSumDistinct(_) => STATE_INTEGER_SUM_DISTINCT,
+                    AggregateState::Sum { .. } => STATE_SUM,
+                    AggregateState::Count(_) => STATE_COUNT,
+                    AggregateState::Min(_) => STATE_MIN,
+                    AggregateState::Max(_) => STATE_MAX,
+                    AggregateState::Avg { .. } => STATE_AVG,
+                    AggregateState::CountDistinct(_) => STATE_COUNT_DISTINCT,
+                    AggregateState::SumDistinct(_) => STATE_SUM_DISTINCT,
+                    AggregateState::AvgDistinct(_) => STATE_AVG_DISTINCT,
+                },
+                match state {
+                    AggregateState::DecimalSum { scale, .. } => Some(*scale),
+                    AggregateState::Exact { scale, .. } => *scale,
+                    _ => None,
+                },
+            )
         })
         .collect())
 }
@@ -462,6 +1028,21 @@ pub fn finalize_grouped_aggregate_states(
                 .states
                 .iter()
                 .map(|state| match state {
+                    AggregateState::Exact { scale, .. } => {
+                        state.exact_result().map(|value| match scale {
+                            Some(scale) => FinalAggregateValue::Decimal(value, *scale),
+                            None => FinalAggregateValue::Integer(value),
+                        })
+                    }
+                    AggregateState::DecimalSum { sum, count, scale } => Ok(
+                        FinalAggregateValue::Decimal((*count > 0).then_some(*sum), *scale),
+                    ),
+                    AggregateState::IntegerSum { .. }
+                    | AggregateState::IntegerMin(_)
+                    | AggregateState::IntegerMax(_)
+                    | AggregateState::IntegerSumDistinct(_) => {
+                        state.integer_result().map(FinalAggregateValue::Integer)
+                    }
                     AggregateState::Count(_) | AggregateState::CountDistinct(_) => {
                         state.count_result().map(FinalAggregateValue::Count)
                     }
@@ -495,7 +1076,12 @@ fn grouped_state_schema() -> SchemaRef {
 
 fn validate_grouped_state_schema(schema: &SchemaRef) -> Result<()> {
     let expected = grouped_state_schema();
-    if schema.fields() != expected.fields()
+    if schema.fields().len() != expected.fields().len()
+        || schema.fields().iter().zip(expected.fields()).any(|(a, b)| {
+            a.name() != b.name()
+                || a.data_type() != b.data_type()
+                || a.is_nullable() != b.is_nullable()
+        })
         || schema
             .metadata()
             .get(GROUPED_STATE_VERSION_KEY)
@@ -524,6 +1110,11 @@ fn decode_group_keys(bytes: &[u8]) -> Result<Vec<AggregateValue>> {
     let mut offset = 0;
     let key_count = usize::try_from(read_u64(bytes, &mut offset)?)
         .map_err(|_| exec_err("aggregate group key count is too large"))?;
+    if key_count > bytes.len().saturating_sub(offset) / 9 {
+        return Err(exec_err(
+            "aggregate group key count exceeds encoded payload",
+        ));
+    }
     let mut keys = Vec::with_capacity(key_count);
     for _ in 0..key_count {
         let length = usize::try_from(read_u64(bytes, &mut offset)?)
@@ -565,6 +1156,70 @@ pub fn encode_aggregate_states(states: &[AggregateState]) -> Result<Vec<u8>> {
 
     for state in states {
         match state {
+            AggregateState::Exact {
+                function,
+                scale,
+                value,
+                distinct,
+            } => {
+                let mut payload = vec![
+                    AggregateValue::Int32(match function {
+                        AggFunc::Sum => 0,
+                        AggFunc::Min => 1,
+                        AggFunc::Max => 2,
+                        _ => return Err(exec_err("invalid exact aggregate")),
+                    }),
+                    AggregateValue::Int32(scale.map_or(256, i32::from)),
+                    AggregateValue::Bool(distinct.is_some()),
+                    value.map_or(AggregateValue::Null, |n| AggregateValue::Decimal128(n, 0)),
+                ];
+                if let Some(values) = distinct {
+                    let mut encoded = values
+                        .iter()
+                        .map(|v| Ok((encode_aggregate_value(v)?, v.clone())))
+                        .collect::<Result<Vec<_>>>()?;
+                    encoded.sort_by(|a, b| a.0.cmp(&b.0));
+                    payload.extend(encoded.into_iter().map(|(_, v)| v));
+                }
+                kinds.push(14);
+                sums.push(None);
+                counts.push(None);
+                extrema.push(None);
+                distinct_payloads.push(Some(encode_group_keys(&payload)?));
+            }
+            AggregateState::IntegerSum { sum, count } => {
+                kinds.push(STATE_INTEGER_SUM);
+                sums.push(None);
+                counts.push(Some(*count));
+                extrema.push(None);
+                distinct_payloads.push(Some(encode_aggregate_value(&AggregateValue::Decimal128(
+                    *sum, 0,
+                ))?));
+            }
+            AggregateState::IntegerMin(value) | AggregateState::IntegerMax(value) => {
+                kinds.push(if matches!(state, AggregateState::IntegerMin(_)) {
+                    STATE_INTEGER_MIN
+                } else {
+                    STATE_INTEGER_MAX
+                });
+                sums.push(None);
+                counts.push(None);
+                extrema.push(None);
+                distinct_payloads.push(
+                    value
+                        .map(|value| encode_aggregate_value(&AggregateValue::Int64(value)))
+                        .transpose()?,
+                );
+            }
+            AggregateState::DecimalSum { sum, count, scale } => {
+                kinds.push(STATE_DECIMAL_SUM);
+                sums.push(None);
+                counts.push(Some(*count));
+                extrema.push(None);
+                distinct_payloads.push(Some(encode_aggregate_value(&AggregateValue::Decimal128(
+                    *sum, *scale,
+                ))?));
+            }
             AggregateState::Sum { sum, count } => {
                 kinds.push(STATE_SUM);
                 sums.push(Some(*sum));
@@ -601,10 +1256,12 @@ pub fn encode_aggregate_states(states: &[AggregateState]) -> Result<Vec<u8>> {
                 distinct_payloads.push(None);
             }
             AggregateState::CountDistinct(values)
+            | AggregateState::IntegerSumDistinct(values)
             | AggregateState::SumDistinct(values)
             | AggregateState::AvgDistinct(values) => {
                 let tag = match state {
                     AggregateState::CountDistinct(_) => STATE_COUNT_DISTINCT,
+                    AggregateState::IntegerSumDistinct(_) => STATE_INTEGER_SUM_DISTINCT,
                     AggregateState::SumDistinct(_) => STATE_SUM_DISTINCT,
                     AggregateState::AvgDistinct(_) => STATE_AVG_DISTINCT,
                     _ => unreachable!(),
@@ -663,6 +1320,54 @@ pub fn decode_aggregate_states(bytes: &[u8]) -> Result<Vec<AggregateState>> {
                 return Err(exec_err("aggregate state kind cannot be null"));
             }
             let state = match kinds.value(row) {
+                14 => {
+                    if distinct.is_null(row) {
+                        return Err(exec_err("missing exact numeric payload"));
+                    }
+                    let values = decode_group_keys(distinct.value(row))?;
+                    let [
+                        AggregateValue::Int32(function),
+                        AggregateValue::Int32(scale),
+                        AggregateValue::Bool(is_distinct),
+                        value,
+                        tail @ ..,
+                    ] = values.as_slice()
+                    else {
+                        return Err(exec_err("invalid exact numeric payload"));
+                    };
+                    let function = match function {
+                        0 => AggFunc::Sum,
+                        1 => AggFunc::Min,
+                        2 => AggFunc::Max,
+                        _ => return Err(exec_err("invalid exact function")),
+                    };
+                    let scale = if *scale == 256 {
+                        None
+                    } else {
+                        Some(i8::try_from(*scale).map_err(|_| exec_err("invalid exact scale"))?)
+                    };
+                    let value = match value {
+                        AggregateValue::Null => None,
+                        AggregateValue::Decimal128(n, 0) => Some(*n),
+                        _ => return Err(exec_err("invalid exact value")),
+                    };
+                    if (!*is_distinct && !tail.is_empty())
+                        || (*is_distinct && (value.is_some() || !matches!(function, AggFunc::Sum)))
+                    {
+                        return Err(exec_err("invalid exact distinct state"));
+                    }
+                    let mut state = AggregateState::Exact {
+                        function,
+                        scale,
+                        value,
+                        distinct: is_distinct.then(HashSet::new),
+                    };
+                    for item in tail {
+                        state.update_exact(item.clone())?;
+                    }
+                    state
+                }
+
                 STATE_SUM => AggregateState::Sum {
                     sum: required_f64(sums, row, "sum")?,
                     count: required_u64(counts, row, "sum count")?,
@@ -680,11 +1385,65 @@ pub fn decode_aggregate_states(bytes: &[u8]) -> Result<Vec<AggregateState>> {
                     }
                     AggregateState::CountDistinct(decode_distinct_values(distinct.value(row))?)
                 }
-                STATE_SUM_DISTINCT => {
+                STATE_SUM_DISTINCT | STATE_INTEGER_SUM_DISTINCT => {
                     if distinct.is_null(row) {
                         return Err(exec_err("SUM DISTINCT state payload cannot be null"));
                     }
-                    AggregateState::SumDistinct(decode_distinct_values(distinct.value(row))?)
+                    let values = decode_distinct_values(distinct.value(row))?;
+                    if kinds.value(row) == STATE_INTEGER_SUM_DISTINCT {
+                        AggregateState::IntegerSumDistinct(values)
+                    } else {
+                        AggregateState::SumDistinct(values)
+                    }
+                }
+                STATE_INTEGER_SUM => {
+                    if distinct.is_null(row) {
+                        return Err(exec_err("integer SUM payload cannot be null"));
+                    }
+                    let AggregateValue::Decimal128(sum, 0) =
+                        decode_aggregate_value(distinct.value(row))?
+                    else {
+                        return Err(exec_err("invalid integer SUM payload"));
+                    };
+                    AggregateState::IntegerSum {
+                        sum,
+                        count: required_u64(counts, row, "count")?,
+                    }
+                }
+                STATE_INTEGER_MIN | STATE_INTEGER_MAX => {
+                    let value = if distinct.is_null(row) {
+                        None
+                    } else {
+                        let AggregateValue::Int64(value) =
+                            decode_aggregate_value(distinct.value(row))?
+                        else {
+                            return Err(exec_err("invalid integer extremum payload"));
+                        };
+                        Some(value)
+                    };
+                    if kinds.value(row) == STATE_INTEGER_MIN {
+                        AggregateState::IntegerMin(value)
+                    } else {
+                        AggregateState::IntegerMax(value)
+                    }
+                }
+                STATE_DECIMAL_SUM => {
+                    if distinct.is_null(row) {
+                        return Err(exec_err("decimal SUM payload cannot be null"));
+                    }
+                    let AggregateValue::Decimal128(sum, scale) =
+                        decode_aggregate_value(distinct.value(row))?
+                    else {
+                        return Err(exec_err("invalid decimal SUM payload"));
+                    };
+                    if !(-38..=38).contains(&scale) {
+                        return Err(exec_err("invalid decimal SUM scale"));
+                    }
+                    AggregateState::DecimalSum {
+                        sum,
+                        count: required_u64(counts, row, "count")?,
+                        scale,
+                    }
                 }
                 STATE_AVG_DISTINCT => {
                     if distinct.is_null(row) {
@@ -767,6 +1526,15 @@ fn encode_distinct_values(values: &HashSet<AggregateValue>) -> Result<Vec<u8>> {
 fn encode_aggregate_value(value: &AggregateValue) -> Result<Vec<u8>> {
     let mut output = Vec::new();
     match value {
+        AggregateValue::UInt64(value) => {
+            output.push(VALUE_UINT64);
+            output.extend_from_slice(&value.to_le_bytes());
+        }
+        AggregateValue::Decimal128(value, scale) => {
+            output.push(VALUE_DECIMAL128);
+            output.push(*scale as u8);
+            output.extend_from_slice(&value.to_le_bytes());
+        }
         AggregateValue::Null => return Err(exec_err("null cannot appear in a distinct state")),
         AggregateValue::Bool(value) => {
             output.push(VALUE_BOOL);
@@ -795,6 +1563,9 @@ fn encode_aggregate_value(value: &AggregateValue) -> Result<Vec<u8>> {
 fn decode_distinct_values(bytes: &[u8]) -> Result<HashSet<AggregateValue>> {
     let mut offset = 0;
     let value_count = read_u64(bytes, &mut offset)?;
+    if value_count > (bytes.len().saturating_sub(offset) / 9) as u64 {
+        return Err(exec_err("distinct state count exceeds encoded payload"));
+    }
     let mut values = HashSet::with_capacity(
         usize::try_from(value_count).map_err(|_| exec_err("distinct state is too large"))?,
     );
@@ -825,6 +1596,13 @@ fn decode_aggregate_value(bytes: &[u8]) -> Result<AggregateValue> {
         .split_first()
         .ok_or_else(|| exec_err("empty distinct value payload"))?;
     match tag {
+        VALUE_UINT64 if payload.len() == 8 => Ok(AggregateValue::UInt64(u64::from_le_bytes(
+            payload.try_into().unwrap(),
+        ))),
+        VALUE_DECIMAL128 if payload.len() == 17 => Ok(AggregateValue::Decimal128(
+            i128::from_le_bytes(payload[1..].try_into().unwrap()),
+            payload[0] as i8,
+        )),
         VALUE_NULL if payload.is_empty() => Ok(AggregateValue::Null),
         VALUE_BOOL if payload.len() == 1 && payload[0] <= 1 => {
             Ok(AggregateValue::Bool(payload[0] == 1))
@@ -879,9 +1657,24 @@ pub struct HashAggregate {
     output_schema: SchemaRef,
     memory: Option<OperatorMemoryAccount>,
     emitted: bool,
+    input_already_reserved: bool,
 }
 
 impl HashAggregate {
+    fn new_states(&self) -> Vec<AggregateState> {
+        self.aggregates
+            .iter()
+            .enumerate()
+            .map(|(i, expression)| {
+                AggregateState::new_typed(
+                    expression,
+                    self.output_schema
+                        .field(self.group_by.len() + i)
+                        .data_type(),
+                )
+            })
+            .collect()
+    }
     pub fn new(
         source: Box<dyn BatchOperator>,
         group_by: Vec<String>,
@@ -897,6 +1690,26 @@ impl HashAggregate {
             source_schema
                 .index_of(col)
                 .map_err(|_| exec_err(format!("group-by column '{col}' not in input")))?;
+            let data_type = source_schema.field_with_name(col)?.data_type();
+            if !matches!(
+                data_type,
+                DataType::Null
+                    | DataType::Boolean
+                    | DataType::Int32
+                    | DataType::Int64
+                    | DataType::UInt64
+                    | DataType::Decimal128(_, _)
+                    | DataType::Date32
+                    | DataType::Date64
+                    | DataType::Timestamp(_, _)
+                    | DataType::Float64
+                    | DataType::Utf8
+                    | DataType::LargeUtf8
+            ) {
+                return Err(exec_err(format!(
+                    "unsupported GROUP BY key type: {data_type}"
+                )));
+            }
         }
         for agg in &aggregates {
             if agg.distinct && matches!(agg.func, AggFunc::Min | AggFunc::Max) {
@@ -930,8 +1743,11 @@ impl HashAggregate {
                 f.clone()
             })
             .collect();
-        for agg in &aggregates {
-            fields.push(Field::new(agg.output_name(), agg.output_type(), true));
+        for (agg, data_type) in aggregates
+            .iter()
+            .zip(aggregate_output_types(&aggregates, &source_schema)?)
+        {
+            fields.push(Field::new(agg.output_name(), data_type, true));
         }
         let output_schema = Arc::new(Schema::new(fields));
 
@@ -942,6 +1758,7 @@ impl HashAggregate {
             output_schema,
             memory: None,
             emitted: false,
+            input_already_reserved: false,
         })
     }
 
@@ -956,33 +1773,57 @@ impl HashAggregate {
         Ok(operator)
     }
 
+    /// The source must retain a query reservation covering every yielded buffer
+    /// until its next next_batch call. Intended for guarded local worker channels.
+    pub(crate) fn with_reserved_input(mut self) -> Self {
+        self.input_already_reserved = true;
+        self
+    }
+
     /// Consumes the input and returns mergeable per-group accumulator state.
-    pub fn into_grouped_states(mut self) -> Result<Vec<GroupedAggregateState>> {
-        let (groups, _reservations) = self.collect_states()?;
+    pub fn into_grouped_states(self) -> Result<Vec<GroupedAggregateState>> {
+        self.into_grouped_states_with_reservations()
+            .map(|(groups, _)| groups)
+    }
+
+    /// Keeps accumulator reservations alive across partial-state serialization.
+    /// Callers retaining the states must retain the returned reservations too.
+    pub fn into_grouped_states_with_reservations(
+        mut self,
+    ) -> Result<(Vec<GroupedAggregateState>, Vec<MemoryReservation>)> {
+        let (groups, reservations) = self.collect_states()?;
         if groups.is_empty() && !self.group_by.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), reservations));
         }
         let groups = if groups.is_empty() {
-            vec![(
-                Vec::new(),
-                self.aggregates.iter().map(AggregateState::new).collect(),
-            )]
+            vec![(Vec::new(), self.new_states())]
         } else {
             groups.into_iter().collect()
         };
-        Ok(groups
-            .into_iter()
-            .map(|(keys, states)| GroupedAggregateState {
-                group_keys: keys.into_iter().map(AggregateValue::from).collect(),
-                states,
-            })
-            .collect())
+        Ok((
+            groups
+                .into_iter()
+                .map(|(keys, states)| GroupedAggregateState {
+                    group_keys: keys.into_iter().map(AggregateValue::from).collect(),
+                    states,
+                })
+                .collect(),
+            reservations,
+        ))
     }
 
     fn collect_states(&mut self) -> Result<(GroupStateMap, Vec<MemoryReservation>)> {
-        let mut groups: HashMap<Vec<GroupKey>, Vec<Accumulator>> = HashMap::new();
+        let mut groups: HashMap<InlineGroupKey, Vec<Accumulator>> = HashMap::new();
         let mut reservations = Vec::new();
         while let Some(batch) = self.source.next_batch()? {
+            let _input_memory = if self.input_already_reserved {
+                None
+            } else {
+                self.memory
+                    .as_ref()
+                    .map(|account| account.reserve(batch.get_array_memory_size() as u64))
+                    .transpose()?
+            };
             let schema = batch.schema();
             let group_arrays = self
                 .group_by
@@ -997,20 +1838,100 @@ impl HashAggregate {
                         .then(|| batch.column(schema.index_of(&aggregate.column).unwrap()))
                 })
                 .collect::<Vec<_>>();
-            for row in 0..batch.num_rows() {
-                let key = group_arrays
-                    .iter()
-                    .map(|array| extract_key(array, row))
-                    .collect::<Vec<_>>();
-                if !groups.contains_key(&key)
+            if self.group_by.is_empty() {
+                if groups.is_empty()
                     && let Some(memory) = &self.memory
                 {
                     reservations
-                        .push(memory.reserve(estimated_group_bytes(&key, self.aggregates.len()))?);
+                        .push(memory.reserve(estimated_group_bytes(&[], self.aggregates.len()))?);
                 }
-                let accumulators = groups
-                    .entry(key)
-                    .or_insert_with(|| self.aggregates.iter().map(AggregateState::new).collect());
+                let states = groups
+                    .entry(InlineGroupKey::Empty)
+                    .or_insert_with(|| self.new_states());
+                for (index, aggregate) in self.aggregates.iter().enumerate() {
+                    let state = &mut states[index];
+                    if let AggregateState::Count(count) = state {
+                        let count_batch = aggregate_arrays[index]
+                            .map_or(batch.num_rows(), |a| a.len() - a.null_count());
+                        *count = count
+                            .checked_add(count_batch as u64)
+                            .ok_or_else(|| exec_err("COUNT overflow"))?;
+                        continue;
+                    }
+                    let array =
+                        aggregate_arrays[index].expect("non-count aggregate requires input");
+                    for row in 0..batch.num_rows() {
+                        if row % 1024 == 0
+                            && let Some(memory) = &self.memory
+                        {
+                            memory.check_cancelled()?;
+                        }
+                        if array.is_null(row) {
+                            continue;
+                        }
+                        if aggregate.distinct {
+                            let value: AggregateValue = extract_key(array, row).into();
+                            if distinct_value_is_new(state, &value)
+                                && let Some(memory) = &self.memory
+                            {
+                                reservations
+                                    .push(memory.reserve(estimated_distinct_value_bytes(&value))?);
+                            }
+                            state.update_distinct(value)?;
+                        } else if matches!(state, AggregateState::Exact { .. }) {
+                            state.update_exact(extract_key(array, row).into())?;
+                        } else if matches!(state, AggregateState::DecimalSum { .. }) {
+                            state.update_decimal(
+                                array
+                                    .as_primitive::<arrow::datatypes::Decimal128Type>()
+                                    .value(row),
+                            )?;
+                        } else if matches!(
+                            state,
+                            AggregateState::IntegerSum { .. }
+                                | AggregateState::IntegerMin(_)
+                                | AggregateState::IntegerMax(_)
+                        ) {
+                            let value = if array.data_type() == &DataType::Int32 {
+                                array.as_primitive::<Int32Type>().value(row) as i64
+                            } else {
+                                array.as_primitive::<Int64Type>().value(row)
+                            };
+                            state.update_integer(value)?;
+                        } else {
+                            state.update_numeric(extract_f64(array, row)?)?;
+                        }
+                    }
+                }
+                continue;
+            }
+            for row in 0..batch.num_rows() {
+                if row % 1024 == 0
+                    && let Some(memory) = &self.memory
+                {
+                    memory.check_cancelled()?;
+                }
+                let key = if group_arrays.len() == 1 {
+                    InlineGroupKey::Single(extract_key(group_arrays[0], row))
+                } else {
+                    InlineGroupKey::Multiple(
+                        group_arrays
+                            .iter()
+                            .map(|array| extract_key(array, row))
+                            .collect(),
+                    )
+                };
+                if !groups.contains_key(&key)
+                    && let Some(memory) = &self.memory
+                {
+                    reservations.push(
+                        memory.reserve(estimated_group_bytes(
+                            key.as_slice(),
+                            self.aggregates.len(),
+                        ))?,
+                    );
+                }
+                let accumulators = groups.entry(key).or_insert_with(|| self.new_states());
                 for (index, aggregate) in self.aggregates.iter().enumerate() {
                     if matches!(aggregate.func, AggFunc::Count) && aggregate.column == "*" {
                         accumulators[index].update_count()?;
@@ -1028,6 +1949,26 @@ impl HashAggregate {
                             accumulators[index].update_distinct(value)?;
                         } else if matches!(aggregate.func, AggFunc::Count) {
                             accumulators[index].update_count()?;
+                        } else if matches!(accumulators[index], AggregateState::Exact { .. }) {
+                            accumulators[index].update_exact(extract_key(array, row).into())?;
+                        } else if matches!(accumulators[index], AggregateState::DecimalSum { .. }) {
+                            accumulators[index].update_decimal(
+                                array
+                                    .as_primitive::<arrow::datatypes::Decimal128Type>()
+                                    .value(row),
+                            )?;
+                        } else if matches!(
+                            accumulators[index],
+                            AggregateState::IntegerSum { .. }
+                                | AggregateState::IntegerMin(_)
+                                | AggregateState::IntegerMax(_)
+                        ) {
+                            let value = if array.data_type() == &DataType::Int32 {
+                                array.as_primitive::<Int32Type>().value(row) as i64
+                            } else {
+                                array.as_primitive::<Int64Type>().value(row)
+                            };
+                            accumulators[index].update_integer(value)?;
                         } else {
                             accumulators[index].update_numeric(extract_f64(array, row)?)?;
                         }
@@ -1035,7 +1976,13 @@ impl HashAggregate {
                 }
             }
         }
-        Ok((groups, reservations))
+        Ok((
+            groups
+                .into_iter()
+                .map(|(key, states)| (key.into_vec(), states))
+                .collect(),
+            reservations,
+        ))
     }
 }
 
@@ -1058,28 +2005,91 @@ impl BatchOperator for HashAggregate {
         }
 
         let entries: Vec<(Vec<GroupKey>, Vec<Accumulator>)> = if groups.is_empty() {
-            vec![(
-                vec![],
-                self.aggregates.iter().map(AggregateState::new).collect(),
-            )]
+            vec![(vec![], self.new_states())]
         } else {
             groups.into_iter().collect()
         };
 
+        let output_bytes = entries.iter().fold(0_u64, |bytes, (keys, _)| {
+            bytes.saturating_add(estimated_group_bytes(keys, num_aggs))
+        });
+        let _output_memory = self
+            .memory
+            .as_ref()
+            .map(|memory| memory.reserve(output_bytes))
+            .transpose()?;
         let mut columns: Vec<ArrayRef> = Vec::with_capacity(self.group_by.len() + num_aggs);
 
         for (gi, col_name) in self.group_by.iter().enumerate() {
             let field = self.output_schema.field_with_name(col_name).unwrap();
-            let arr = build_group_column(&entries, gi, field.data_type());
+            let arr = build_group_column(&entries, gi, field.data_type())?;
             columns.push(arr);
         }
 
-        for (ai, agg) in self.aggregates.iter().enumerate() {
-            match agg.output_type() {
-                DataType::UInt64 => {
-                    let values: Result<Vec<u64>> = entries
+        for ai in 0..self.aggregates.len() {
+            match self
+                .output_schema
+                .field(self.group_by.len() + ai)
+                .data_type()
+            {
+                DataType::Int32 => {
+                    let values = entries
                         .iter()
-                        .map(|(_, accums)| accums[ai].count_result())
+                        .map(|(_, states)| {
+                            states[ai]
+                                .integer_result()?
+                                .map(|v| {
+                                    i32::try_from(v)
+                                        .map_err(|_| exec_err("integer aggregate overflow"))
+                                })
+                                .transpose()
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    columns.push(Arc::new(Int32Array::from(values)));
+                }
+                DataType::Int64 => {
+                    let values = entries
+                        .iter()
+                        .map(|(_, states)| {
+                            states[ai]
+                                .integer_result()?
+                                .map(|v| {
+                                    i64::try_from(v).map_err(|_| exec_err("integer SUM overflow"))
+                                })
+                                .transpose()
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    columns.push(Arc::new(Int64Array::from(values)));
+                }
+                DataType::Decimal128(precision, scale) => {
+                    let values = entries
+                        .iter()
+                        .map(|(_, states)| match &states[ai] {
+                            AggregateState::Exact { .. } => states[ai].exact_result(),
+                            AggregateState::DecimalSum { sum, count, .. } => {
+                                Ok((*count > 0).then_some(*sum))
+                            }
+                            _ => Err(exec_err("decimal SUM output state mismatch")),
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let array = arrow::array::Decimal128Array::from(values)
+                        .with_precision_and_scale(*precision, *scale)?;
+                    array.validate_decimal_precision(*precision)?;
+                    columns.push(Arc::new(array));
+                }
+                DataType::UInt64 => {
+                    let values: Result<Vec<Option<u64>>> = entries
+                        .iter()
+                        .map(|(_, accums)| match &accums[ai] {
+                            AggregateState::Exact { .. } => accums[ai]
+                                .exact_result()?
+                                .map(|n| {
+                                    u64::try_from(n)
+                                        .map_err(|_| exec_err("UInt64 aggregate overflow"))
+                                })
+                                .transpose(),
+                            _ => accums[ai].count_result().map(Some),
+                        })
                         .collect();
                     columns.push(Arc::new(UInt64Array::from(values?)));
                 }
@@ -1104,11 +2114,36 @@ enum GroupKey {
     Bool(bool),
     Int32(i32),
     Int64(i64),
+    UInt64(u64),
+    Decimal128(i128, i8),
     Utf8(String),
     Float64Bits(u64),
 }
 
-type GroupStateMap = HashMap<Vec<GroupKey>, Vec<Accumulator>>;
+type GroupStateMap = Vec<(Vec<GroupKey>, Vec<Accumulator>)>;
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+enum InlineGroupKey {
+    Empty,
+    Single(GroupKey),
+    Multiple(Vec<GroupKey>),
+}
+impl InlineGroupKey {
+    fn as_slice(&self) -> &[GroupKey] {
+        match self {
+            Self::Empty => &[],
+            Self::Single(key) => std::slice::from_ref(key),
+            Self::Multiple(keys) => keys,
+        }
+    }
+    fn into_vec(self) -> Vec<GroupKey> {
+        match self {
+            Self::Empty => vec![],
+            Self::Single(key) => vec![key],
+            Self::Multiple(keys) => keys,
+        }
+    }
+}
 
 fn estimated_group_bytes(key: &[GroupKey], aggregate_count: usize) -> u64 {
     let key_bytes = key
@@ -1118,7 +2153,8 @@ fn estimated_group_bytes(key: &[GroupKey], aggregate_count: usize) -> u64 {
             GroupKey::Null => 0,
             GroupKey::Bool(_) => 1,
             GroupKey::Int32(_) => 4,
-            GroupKey::Int64(_) | GroupKey::Float64Bits(_) => 8,
+            GroupKey::Int64(_) | GroupKey::UInt64(_) | GroupKey::Float64Bits(_) => 8,
+            GroupKey::Decimal128(_, _) => 17,
         })
         .sum::<u64>();
     let fixed_keys = u64::try_from(key.len())
@@ -1135,10 +2171,18 @@ fn estimated_group_bytes(key: &[GroupKey], aggregate_count: usize) -> u64 {
 }
 
 fn distinct_value_is_new(state: &AggregateState, value: &AggregateValue) -> bool {
+    if let AggregateState::Exact {
+        distinct: Some(values),
+        ..
+    } = state
+    {
+        return !values.contains(value);
+    }
     !matches!(value, AggregateValue::Null)
         && matches!(
             state,
             AggregateState::CountDistinct(values)
+            | AggregateState::IntegerSumDistinct(values)
             | AggregateState::SumDistinct(values)
             | AggregateState::AvgDistinct(values)
             if !values.contains(value)
@@ -1151,7 +2195,8 @@ fn estimated_distinct_value_bytes(value: &AggregateValue) -> u64 {
         AggregateValue::Null => 0,
         AggregateValue::Bool(_) => 1,
         AggregateValue::Int32(_) => 4,
-        AggregateValue::Int64(_) | AggregateValue::Float64Bits(_) => 8,
+        AggregateValue::Int64(_) | AggregateValue::UInt64(_) | AggregateValue::Float64Bits(_) => 8,
+        AggregateValue::Decimal128(_, _) => 17,
     };
     DISTINCT_ENTRY_OVERHEAD_BYTES
         .saturating_add(std::mem::size_of::<AggregateValue>() as u64)
@@ -1165,6 +2210,8 @@ impl From<GroupKey> for AggregateValue {
             GroupKey::Bool(value) => Self::Bool(value),
             GroupKey::Int32(value) => Self::Int32(value),
             GroupKey::Int64(value) => Self::Int64(value),
+            GroupKey::UInt64(value) => Self::UInt64(value),
+            GroupKey::Decimal128(value, scale) => Self::Decimal128(value, scale),
             GroupKey::Utf8(value) => Self::Utf8(value),
             GroupKey::Float64Bits(value) => Self::Float64Bits(value),
         }
@@ -1184,8 +2231,46 @@ fn extract_key(arr: &ArrayRef, row: usize) -> GroupKey {
         ),
         DataType::Int32 => GroupKey::Int32(arr.as_primitive::<Int32Type>().value(row)),
         DataType::Int64 => GroupKey::Int64(arr.as_primitive::<Int64Type>().value(row)),
+        DataType::UInt64 => GroupKey::UInt64(
+            arr.as_primitive::<arrow::datatypes::UInt64Type>()
+                .value(row),
+        ),
+        DataType::Decimal128(_, scale) => GroupKey::Decimal128(
+            arr.as_primitive::<arrow::datatypes::Decimal128Type>()
+                .value(row),
+            *scale,
+        ),
+        DataType::Date32 => GroupKey::Int32(
+            arr.as_primitive::<arrow::datatypes::Date32Type>()
+                .value(row),
+        ),
+        DataType::Date64 => GroupKey::Int64(
+            arr.as_primitive::<arrow::datatypes::Date64Type>()
+                .value(row),
+        ),
+        DataType::Timestamp(unit, _) => GroupKey::Int64(match unit {
+            arrow::datatypes::TimeUnit::Second => arr
+                .as_primitive::<arrow::datatypes::TimestampSecondType>()
+                .value(row),
+            arrow::datatypes::TimeUnit::Millisecond => arr
+                .as_primitive::<arrow::datatypes::TimestampMillisecondType>()
+                .value(row),
+            arrow::datatypes::TimeUnit::Microsecond => arr
+                .as_primitive::<arrow::datatypes::TimestampMicrosecondType>()
+                .value(row),
+            arrow::datatypes::TimeUnit::Nanosecond => arr
+                .as_primitive::<arrow::datatypes::TimestampNanosecondType>()
+                .value(row),
+        }),
         DataType::Float64 => {
-            GroupKey::Float64Bits(arr.as_primitive::<Float64Type>().value(row).to_bits())
+            let value = arr.as_primitive::<Float64Type>().value(row);
+            GroupKey::Float64Bits(if value == 0.0 {
+                0
+            } else if value.is_nan() {
+                f64::NAN.to_bits()
+            } else {
+                value.to_bits()
+            })
         }
         DataType::Utf8 => GroupKey::Utf8(arr.as_string::<i32>().value(row).to_owned()),
         DataType::LargeUtf8 => GroupKey::Utf8(arr.as_string::<i64>().value(row).to_owned()),
@@ -1238,64 +2323,80 @@ fn build_group_column(
     entries: &[(Vec<GroupKey>, Vec<Accumulator>)],
     group_index: usize,
     data_type: &DataType,
-) -> ArrayRef {
-    match data_type {
-        DataType::Int32 => {
-            let values: Vec<Option<i32>> = entries
-                .iter()
-                .map(|(keys, _)| match &keys[group_index] {
-                    GroupKey::Int32(v) => Some(*v),
-                    GroupKey::Null => None,
+) -> Result<ArrayRef> {
+    let keys = entries
+        .iter()
+        .map(|(keys, _)| AggregateValue::from(keys[group_index].clone()))
+        .collect::<Vec<_>>();
+    aggregate_key_column(&keys, data_type)
+}
+
+/// Reconstruct exact typed grouping keys, including empty and all-NULL columns.
+pub fn aggregate_key_column(keys: &[AggregateValue], data_type: &DataType) -> Result<ArrayRef> {
+    macro_rules! values {
+        ($variant:ident) => {
+            keys.iter()
+                .map(|key| match key {
+                    AggregateValue::$variant(value) => Some(*value),
                     _ => None,
                 })
-                .collect();
-            Arc::new(Int32Array::from(values))
-        }
-        DataType::Int64 => {
-            let values: Vec<Option<i64>> = entries
-                .iter()
-                .map(|(keys, _)| match &keys[group_index] {
-                    GroupKey::Int64(v) => Some(*v),
-                    GroupKey::Null => None,
-                    _ => None,
-                })
-                .collect();
-            Arc::new(Int64Array::from(values))
-        }
-        DataType::Float64 => {
-            let values: Vec<Option<f64>> = entries
-                .iter()
-                .map(|(keys, _)| match &keys[group_index] {
-                    GroupKey::Float64Bits(bits) => Some(f64::from_bits(*bits)),
-                    GroupKey::Null => None,
-                    _ => None,
-                })
-                .collect();
-            Arc::new(Float64Array::from(values))
-        }
-        DataType::Boolean => {
-            let values: Vec<Option<bool>> = entries
-                .iter()
-                .map(|(keys, _)| match &keys[group_index] {
-                    GroupKey::Bool(v) => Some(*v),
-                    GroupKey::Null => None,
-                    _ => None,
-                })
-                .collect();
-            Arc::new(BooleanArray::from(values))
-        }
-        _ => {
-            let values: Vec<Option<&str>> = entries
-                .iter()
-                .map(|(keys, _)| match &keys[group_index] {
-                    GroupKey::Utf8(v) => Some(v.as_str()),
-                    GroupKey::Null => None,
-                    _ => None,
-                })
-                .collect();
-            Arc::new(StringArray::from(values))
-        }
+                .collect::<Vec<_>>()
+        };
     }
+    let result: ArrayRef = match data_type {
+        DataType::Null => arrow::array::new_null_array(data_type, keys.len()),
+        DataType::Boolean => Arc::new(BooleanArray::from(values!(Bool))),
+        DataType::Int32 => Arc::new(Int32Array::from(values!(Int32))),
+        DataType::Int64 => Arc::new(Int64Array::from(values!(Int64))),
+        DataType::UInt64 => Arc::new(UInt64Array::from(values!(UInt64))),
+        DataType::Decimal128(precision, scale) => {
+            let values = keys
+                .iter()
+                .map(|key| match key {
+                    AggregateValue::Decimal128(value, _) => Some(*value),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let array = arrow::array::Decimal128Array::from(values)
+                .with_precision_and_scale(*precision, *scale)?;
+            array.validate_decimal_precision(*precision)?;
+            Arc::new(array)
+        }
+        DataType::Date32 => arrow::compute::cast(&Int32Array::from(values!(Int32)), data_type)?,
+        DataType::Date64 | DataType::Timestamp(_, _) => {
+            arrow::compute::cast(&Int64Array::from(values!(Int64)), data_type)?
+        }
+        DataType::Float64 => Arc::new(Float64Array::from(
+            keys.iter()
+                .map(|key| match key {
+                    AggregateValue::Float64Bits(bits) => Some(f64::from_bits(*bits)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+        )),
+        DataType::Utf8 => Arc::new(StringArray::from(
+            keys.iter()
+                .map(|key| match key {
+                    AggregateValue::Utf8(value) => Some(value.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+        )),
+        DataType::LargeUtf8 => Arc::new(arrow::array::LargeStringArray::from(
+            keys.iter()
+                .map(|key| match key {
+                    AggregateValue::Utf8(value) => Some(value.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+        )),
+        _ => {
+            return Err(exec_err(format!(
+                "unsupported aggregate group type {data_type}"
+            )));
+        }
+    };
+    Ok(result)
 }
 
 fn exec_err(msg: impl Into<String>) -> KaveonError {
@@ -1305,6 +2406,380 @@ fn exec_err(msg: impl Into<String>) -> KaveonError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_unsigned_and_decimal_aggregates_survive_typed_partial_merges() {
+        let cases: Vec<(ArrayRef, Vec<i128>)> = vec![
+            (
+                Arc::new(UInt64Array::from(vec![
+                    Some(u64::MAX - 2),
+                    Some(1),
+                    Some(1),
+                    None,
+                ])),
+                vec![
+                    u64::MAX as i128,
+                    1,
+                    (u64::MAX - 2) as i128,
+                    (u64::MAX - 1) as i128,
+                ],
+            ),
+            (
+                Arc::new(
+                    arrow::array::Decimal128Array::from(vec![
+                        Some(100000000000000000001i128),
+                        Some(-100000000000000000000i128),
+                        Some(2),
+                        Some(2),
+                        None,
+                    ])
+                    .with_precision_and_scale(30, 7)
+                    .unwrap(),
+                ),
+                vec![5, -100000000000000000000, 100000000000000000001, 3],
+            ),
+        ];
+        for (array, expected) in cases {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "v",
+                array.data_type().clone(),
+                true,
+            )]));
+            let batch = RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
+            let expressions = vec![
+                AggExpr::new(AggFunc::Sum, "v"),
+                AggExpr::new(AggFunc::Min, "v"),
+                AggExpr::new(AggFunc::Max, "v"),
+                AggExpr::new(AggFunc::Sum, "v").distinct(),
+            ];
+            let types = aggregate_output_types(&expressions, &schema).unwrap();
+            let mut local = HashAggregate::new(
+                Box::new(Input::new(batch.clone())),
+                vec![],
+                expressions.clone(),
+            )
+            .unwrap();
+            let actual = local.next_batch().unwrap().unwrap();
+            for (index, expected) in expected.iter().enumerate() {
+                let value = match actual.column(index).data_type() {
+                    DataType::UInt64 => actual
+                        .column(index)
+                        .as_primitive::<arrow::datatypes::UInt64Type>()
+                        .value(0) as i128,
+                    DataType::Decimal128(_, _) => actual
+                        .column(index)
+                        .as_primitive::<arrow::datatypes::Decimal128Type>()
+                        .value(0),
+                    _ => panic!("lost exact type"),
+                };
+                assert_eq!(value, *expected);
+            }
+            let mut partials = Vec::new();
+            for start in 0..batch.num_rows() {
+                let groups = HashAggregate::new(
+                    Box::new(Input::new(batch.slice(start, 1))),
+                    vec![],
+                    expressions.clone(),
+                )
+                .unwrap()
+                .into_grouped_states()
+                .unwrap();
+                let encoded =
+                    grouped_aggregate_states_to_schema_batch(&groups, &[], &types).unwrap();
+                assert_eq!(
+                    grouped_aggregate_output_types(&encoded.schema()).unwrap(),
+                    types
+                );
+                partials.extend(grouped_aggregate_states_from_batches(&[encoded]).unwrap());
+            }
+            let merged = merge_grouped_aggregate_states(partials).unwrap();
+            let final_values = finalize_grouped_aggregate_states(&merged).unwrap();
+            for (value, expected) in final_values[0].values.iter().zip(expected) {
+                let actual = match value {
+                    FinalAggregateValue::Integer(Some(n))
+                    | FinalAggregateValue::Decimal(Some(n), _) => *n,
+                    _ => panic!("lost final exact value"),
+                };
+                assert_eq!(actual, expected);
+            }
+            for empty in [
+                RecordBatch::new_empty(schema.clone()),
+                RecordBatch::try_new(
+                    schema.clone(),
+                    vec![arrow::array::new_null_array(schema.field(0).data_type(), 3)],
+                )
+                .unwrap(),
+            ] {
+                let mut operator =
+                    HashAggregate::new(Box::new(Input::new(empty)), vec![], expressions.clone())
+                        .unwrap();
+                let result = operator.next_batch().unwrap().unwrap();
+                assert!(result.columns().iter().all(|array| array.is_null(0)));
+                assert_eq!(
+                    result
+                        .schema()
+                        .fields()
+                        .iter()
+                        .map(|f| f.data_type().clone())
+                        .collect::<Vec<_>>(),
+                    types
+                );
+            }
+        }
+        let batch = RecordBatch::try_from_iter(vec![(
+            "v",
+            Arc::new(UInt64Array::from(vec![u64::MAX, 1])) as ArrayRef,
+        )])
+        .unwrap();
+        let mut operator = HashAggregate::new(
+            Box::new(Input::new(batch)),
+            vec![],
+            vec![AggExpr::new(AggFunc::Sum, "v")],
+        )
+        .unwrap();
+        assert!(operator.next_batch().is_err());
+    }
+
+    #[test]
+    fn signed_integer_aggregates_and_distinct_are_exact_above_f64_precision() {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, true)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int64Array::from(vec![
+                Some(9007199254740993),
+                Some(-9007199254740992),
+                Some(2),
+                Some(2),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let expressions = vec![
+            AggExpr::new(AggFunc::Sum, "v"),
+            AggExpr::new(AggFunc::Min, "v"),
+            AggExpr::new(AggFunc::Max, "v"),
+            AggExpr::new(AggFunc::Sum, "v").distinct(),
+        ];
+        let mut local = HashAggregate::new(
+            Box::new(Input::new(batch.clone())),
+            vec![],
+            expressions.clone(),
+        )
+        .unwrap();
+        let output = local.next_batch().unwrap().unwrap();
+        let actual = output
+            .columns()
+            .iter()
+            .map(|a| a.as_primitive::<Int64Type>().value(0))
+            .collect::<Vec<_>>();
+        assert_eq!(actual, vec![5, -9007199254740992, 9007199254740993, 3]);
+        let partial = HashAggregate::new(Box::new(Input::new(batch)), vec![], expressions)
+            .unwrap()
+            .into_grouped_states()
+            .unwrap();
+        assert_eq!(
+            decode_aggregate_states(&encode_aggregate_states(&partial[0].states).unwrap()).unwrap(),
+            partial[0].states
+        );
+        let typed =
+            grouped_aggregate_states_to_schema_batch(&partial, &[], &vec![DataType::Int64; 4])
+                .unwrap();
+        assert_eq!(
+            grouped_aggregate_output_types(&typed.schema()).unwrap(),
+            vec![DataType::Int64; 4]
+        );
+        let overflow =
+            RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(vec![i64::MAX, 1]))])
+                .unwrap();
+        let mut aggregate = HashAggregate::new(
+            Box::new(Input::new(overflow)),
+            vec![],
+            vec![AggExpr::new(AggFunc::Sum, "v")],
+        )
+        .unwrap();
+        assert!(aggregate.next_batch().is_err());
+    }
+
+    #[test]
+    fn decimal_sum_preserves_precision_scale_partial_state_and_null_identity() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "v",
+            DataType::Decimal128(30, 4),
+            true,
+        )]));
+        let values = arrow::array::Decimal128Array::from(vec![
+            Some(100000000000000000001i128),
+            Some(2),
+            None,
+        ])
+        .with_precision_and_scale(30, 4)
+        .unwrap();
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(values)]).unwrap();
+        let expression = AggExpr::new(AggFunc::Sum, "v");
+        let mut local = HashAggregate::new(
+            Box::new(Input::new(batch.clone())),
+            vec![],
+            vec![expression.clone()],
+        )
+        .unwrap();
+        assert_eq!(
+            local.schema().field(0).data_type(),
+            &DataType::Decimal128(38, 4)
+        );
+        let output = local.next_batch().unwrap().unwrap();
+        assert_eq!(
+            output
+                .column(0)
+                .as_primitive::<arrow::datatypes::Decimal128Type>()
+                .value(0),
+            100000000000000000003i128
+        );
+        let partial = HashAggregate::new(
+            Box::new(Input::new(batch)),
+            vec![],
+            vec![expression.clone()],
+        )
+        .unwrap()
+        .into_grouped_states()
+        .unwrap();
+        let encoded =
+            grouped_aggregate_states_to_schema_batch(&partial, &[], &[DataType::Decimal128(38, 4)])
+                .unwrap();
+        assert_eq!(
+            grouped_aggregate_output_types(&encoded.schema()).unwrap(),
+            vec![DataType::Decimal128(38, 4)]
+        );
+        let decoded = grouped_aggregate_states_from_batches(&[encoded]).unwrap();
+        assert_eq!(decoded, partial);
+        let merged = merge_grouped_aggregate_states(decoded.into_iter().chain(partial)).unwrap();
+        assert_eq!(
+            finalize_grouped_aggregate_states(&merged).unwrap()[0].values,
+            vec![FinalAggregateValue::Decimal(
+                Some(200000000000000000006i128),
+                4
+            )]
+        );
+        let mut empty = HashAggregate::new(
+            Box::new(Input::new(RecordBatch::new_empty(schema))),
+            vec![],
+            vec![expression],
+        )
+        .unwrap();
+        assert!(empty.next_batch().unwrap().unwrap().column(0).is_null(0));
+        let mut state = AggregateState::DecimalSum {
+            sum: i128::MAX,
+            count: 1,
+            scale: 4,
+        };
+        assert!(state.update_decimal(1).is_err());
+    }
+
+    #[test]
+    fn typed_partial_schema_survives_empty_and_null_groups() {
+        for groups in [
+            vec![],
+            vec![GroupedAggregateState {
+                group_keys: vec![AggregateValue::Null],
+                states: vec![AggregateState::Count(1)],
+            }],
+        ] {
+            let batch =
+                grouped_aggregate_states_to_typed_batch(&groups, &[DataType::Int64]).unwrap();
+            let mut bytes = Vec::new();
+            {
+                let mut writer = StreamWriter::try_new(&mut bytes, &batch.schema()).unwrap();
+                writer.write(&batch).unwrap();
+                writer.finish().unwrap();
+            }
+            let reader = StreamReader::try_new(Cursor::new(&bytes), None).unwrap();
+            assert_eq!(
+                grouped_aggregate_key_types(&reader.schema()).unwrap(),
+                vec![DataType::Int64]
+            );
+            assert_eq!(decode_grouped_aggregate_states(&bytes).unwrap(), groups);
+        }
+        let wrong = vec![GroupedAggregateState {
+            group_keys: vec![AggregateValue::Utf8("x".into())],
+            states: vec![AggregateState::Count(1)],
+        }];
+        assert!(grouped_aggregate_states_to_typed_batch(&wrong, &[DataType::Int64]).is_err());
+    }
+
+    #[test]
+    fn malformed_state_counts_fail_before_allocating_declared_capacity() {
+        assert!(decode_group_keys(&u64::MAX.to_le_bytes()).is_err());
+        assert!(decode_distinct_values(&u64::MAX.to_le_bytes()).is_err());
+    }
+
+    #[test]
+    fn exact_typed_group_keys_round_trip_local_and_partial() {
+        use arrow::datatypes::TimeUnit;
+        let cases = [
+            (DataType::UInt64, AggregateValue::UInt64(u64::MAX)),
+            (
+                DataType::Decimal128(38, 7),
+                AggregateValue::Decimal128(9999999999999999999999999999999999999, 7),
+            ),
+            (DataType::Date32, AggregateValue::Int32(20000)),
+            (DataType::Date64, AggregateValue::Int64(1728000000000)),
+            (
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                AggregateValue::Int64(1728000000000000001),
+            ),
+            (
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                AggregateValue::Int64(-1728000000000001),
+            ),
+        ];
+        for (data_type, key) in cases {
+            let keys = vec![key.clone(), key.clone(), AggregateValue::Null];
+            let col = aggregate_key_column(&keys, &data_type).unwrap();
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "key",
+                data_type.clone(),
+                true,
+            )]));
+            let batch = RecordBatch::try_new(schema, vec![col]).unwrap();
+            let mut local = HashAggregate::new(
+                Box::new(Input::new(batch.clone())),
+                vec!["key".into()],
+                vec![AggExpr::new(AggFunc::Count, "*")],
+            )
+            .unwrap();
+            let output = local.next_batch().unwrap().unwrap();
+            assert_eq!(output.schema().field(0).data_type(), &data_type);
+            assert_eq!(output.num_rows(), 2);
+            let aggregate = HashAggregate::new(
+                Box::new(Input::new(batch)),
+                vec!["key".into()],
+                vec![AggExpr::new(AggFunc::Count, "*")],
+            )
+            .unwrap();
+            let partials = aggregate.into_grouped_states().unwrap();
+            assert!(
+                partials.iter().any(|g| g.group_keys == vec![key.clone()]
+                    && g.states == vec![AggregateState::Count(2)])
+            );
+            let encoded = grouped_aggregate_states_to_typed_batch(
+                &partials,
+                std::slice::from_ref(&data_type),
+            )
+            .unwrap();
+            assert_eq!(
+                grouped_aggregate_key_types(&encoded.schema()).unwrap(),
+                vec![data_type.clone()]
+            );
+            let decoded = grouped_aggregate_states_from_batches(&[encoded]).unwrap();
+            assert!(decoded.iter().any(|g| g.group_keys == vec![key.clone()]));
+            let empty =
+                grouped_aggregate_states_to_typed_batch(&[], std::slice::from_ref(&data_type))
+                    .unwrap();
+            assert_eq!(
+                grouped_aggregate_key_types(&empty.schema()).unwrap(),
+                vec![data_type]
+            );
+        }
+    }
     use std::collections::VecDeque;
 
     struct Input {

@@ -9,6 +9,7 @@ pub struct ProjectOperator {
     source: Box<dyn BatchOperator>,
     exprs: Vec<Expr>,
     output_schema: SchemaRef,
+    memory: Option<kaveon_core::OperatorMemoryAccount>,
 }
 
 impl ProjectOperator {
@@ -27,7 +28,13 @@ impl ProjectOperator {
             source,
             exprs,
             output_schema,
+            memory: None,
         })
+    }
+
+    pub fn with_memory(mut self, memory: kaveon_core::OperatorMemoryAccount) -> Self {
+        self.memory = Some(memory);
+        self
     }
 }
 
@@ -41,10 +48,25 @@ impl BatchOperator for ProjectOperator {
             return Ok(None);
         };
 
+        let _workspace = self
+            .memory
+            .as_ref()
+            .map(|memory| memory.reserve((batch.get_array_memory_size() as u64).saturating_mul(2)))
+            .transpose()?;
+        let mut reservations = Vec::new();
         let columns: Vec<_> = self
             .exprs
             .iter()
-            .map(|expr| evaluate(unaliased(expr), &batch))
+            .map(|expr| {
+                let column =
+                    crate::expr_eval::with_expression_memory(self.memory.as_ref(), || {
+                        evaluate(unaliased(expr), &batch)
+                    })?;
+                if let Some(memory) = &self.memory {
+                    reservations.push(memory.reserve(column.get_array_memory_size() as u64)?);
+                }
+                Ok(column)
+            })
             .collect::<Result<_>>()?;
 
         let projected = RecordBatch::try_new(self.output_schema.clone(), columns)?;
@@ -61,6 +83,11 @@ fn unaliased(expr: &Expr) -> &Expr {
 
 fn resolve_field(expr: &Expr, schema: &SchemaRef) -> Result<(Field, Option<String>)> {
     match expr {
+        Expr::WindowFunction { .. } => {
+            let name = crate::window::window_output_name(expr);
+            let field = schema.field_with_name(&name)?.clone();
+            Ok((field, None))
+        }
         Expr::Column(name) => {
             let field = schema
                 .field_with_name(name)
@@ -77,10 +104,10 @@ fn resolve_field(expr: &Expr, schema: &SchemaRef) -> Result<(Field, Option<Strin
         }
         Expr::Function { name, args } => {
             let output_name = format_function_name(name, args);
-            Ok((
-                Field::new(output_name, arrow::datatypes::DataType::Float64, true),
-                None,
-            ))
+            let data_type = evaluate(expr, &RecordBatch::new_empty(schema.clone()))?
+                .data_type()
+                .clone();
+            Ok((Field::new(output_name, data_type, true), None))
         }
         Expr::Star => Err(KaveonError::Execution(
             "star should be expanded before projection".into(),
@@ -89,7 +116,9 @@ fn resolve_field(expr: &Expr, schema: &SchemaRef) -> Result<(Field, Option<Strin
         Expr::BinaryOp { .. } => Ok((
             Field::new(
                 format!("{expr:?}"),
-                arrow::datatypes::DataType::Float64,
+                evaluate(expr, &RecordBatch::new_empty(schema.clone()))?
+                    .data_type()
+                    .clone(),
                 true,
             ),
             None,
@@ -97,7 +126,9 @@ fn resolve_field(expr: &Expr, schema: &SchemaRef) -> Result<(Field, Option<Strin
         _ => Ok((
             Field::new(
                 format!("{expr:?}"),
-                arrow::datatypes::DataType::Boolean,
+                evaluate(expr, &RecordBatch::new_empty(schema.clone()))?
+                    .data_type()
+                    .clone(),
                 true,
             ),
             None,

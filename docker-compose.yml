@@ -51,6 +51,12 @@ services:
       KAVEON_ENVIRONMENT: docker
       KAVEON_COORDINATOR: "true"
       KAVEON_HTTP_PORT: "8080"
+      # This Compose stack is explicitly local; published ports bind loopback.
+      KAVEON_BIND_HOST: "0.0.0.0"
+      KAVEON_INSECURE_DEVELOPMENT: "true"
+      KAVEON_ADVERTISED_URI: http://engine-coordinator:8080
+      KAVEON_SECURITY_JSON: >-
+        {"principals":[{"token":"${KAVEON_ENGINE_ADMIN_TOKEN:-kaveon-local-admin-token-not-for-production}","principal":"local-admin","role":"admin"}],"bridge_token":"${KAVEON_ENGINE_BRIDGE_TOKEN:-kaveon-local-bridge-token-not-for-production}"}
       KAVEON_DATA_DIR: /data
       KAVEON_EXCHANGE_TOKEN: ${KAVEON_EXCHANGE_TOKEN:-kaveon-local-exchange}
       KAVEON_CATALOG_ADMIN_TOKEN: ${KAVEON_CATALOG_ADMIN_TOKEN:-kaveon-local-catalog-admin}
@@ -80,6 +86,8 @@ services:
       KAVEON_ENVIRONMENT: docker
       KAVEON_COORDINATOR: "false"
       KAVEON_HTTP_PORT: "8080"
+      KAVEON_BIND_HOST: "0.0.0.0"
+      KAVEON_INSECURE_DEVELOPMENT: "true"
       KAVEON_DISCOVERY_URI: http://engine-coordinator:8080
       KAVEON_ADVERTISED_URI: http://engine-worker-1:8080
       KAVEON_DATA_DIR: /data
@@ -131,6 +139,11 @@ services:
       KAVEON_DEV_USER_NAME: ${KAVEON_DEV_USER_NAME:-Local Developer}
       KAVEON_DEV_USER_ROLE: Admin
       KAVEON_ENGINE_URL: http://engine-coordinator:8080
+      KAVEON_ENGINE_PRIVATE_HTTP: "true"
+      KAVEON_ENGINE_BRIDGE_TOKEN: ${KAVEON_ENGINE_BRIDGE_TOKEN:-kaveon-local-bridge-token-not-for-production}
+      KAVEON_ENGINE_CATALOG_TOKEN: ${KAVEON_CATALOG_ADMIN_TOKEN:-kaveon-local-catalog-admin}
+      KAVEON_CREDENTIAL_KEYS: ${KAVEON_CREDENTIAL_KEYS:-}
+      KAVEON_CREDENTIAL_ACTIVE_KEY: ${KAVEON_CREDENTIAL_ACTIVE_KEY:-}
     depends_on:
       metadata-migrate:
         condition: service_completed_successfully

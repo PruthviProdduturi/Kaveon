@@ -12,8 +12,6 @@ Env keys:
     AUTH_GOOGLE_CLIENT_SECRET   — Fernet-encrypted Google secret
 """
 
-import base64
-import hashlib
 import os
 import re
 from pathlib import Path
@@ -21,27 +19,21 @@ from typing import Optional
 
 from config import settings
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-ENV_PATH = _REPO_ROOT.parent.parent / ".env"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+# Explicit override supports a mounted config file; default stays in this repo.
+ENV_PATH = Path(os.environ.get("KAVEON_AUTH_ENV_PATH") or (_REPO_ROOT / ".env")).resolve()
 
 # ── Fernet key derivation ──────────────────────────────────────────────────────
 
-def _fernet_key() -> bytes:
-    secret = settings.AI_ENCRYPTION_SECRET or "kaveon-default-encryption-secret"
-    return base64.urlsafe_b64encode(hashlib.sha256(secret.encode()).digest())
-
-
 def _encrypt(plaintext: str) -> str:
-    from cryptography.fernet import Fernet
-    return Fernet(_fernet_key()).encrypt(plaintext.encode()).decode()
+    from services.credentials import encrypt
+    return encrypt(plaintext)
 
 
 def _decrypt(ciphertext: str) -> str:
-    from cryptography.fernet import Fernet
-    return Fernet(_fernet_key()).decrypt(ciphertext.encode()).decode()
+    from services.credentials import decrypt
+    return decrypt(ciphertext)
 
-
-# ── .env helpers ───────────────────────────────────────────────────────────────
 
 def _read_key(key: str) -> str:
     """Read a key from .env file first, then os.environ as fallback.

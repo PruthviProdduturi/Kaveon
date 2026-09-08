@@ -8,6 +8,9 @@ pub enum KaveonError {
     #[error("execution: {0}")]
     Execution(String),
 
+    #[error("execution: {0}")]
+    MemoryLimit(String),
+
     #[error("sql: {0}")]
     Sql(String),
 

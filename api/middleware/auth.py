@@ -16,6 +16,7 @@ Dependencies exported:
     require_user_context(ctx)   → UserContext          (401 if None)
 """
 
+import secrets
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -45,12 +46,12 @@ def _proxy_identity(request: Request) -> Optional[tuple[str, str, list[str], str
     """Return (email, role, roles, name) from trusted proxy headers, or None."""
     # Local dev bypass — no proxy, no secret.
     dev_email = settings.KAVEON_DEV_USER_EMAIL
-    if dev_email and "@" in dev_email:
+    if dev_email and "@" in dev_email and settings.NODE_ENV != "production":
         role = settings.KAVEON_DEV_USER_ROLE or "Admin"
         return (dev_email.lower(), role, [role], settings.KAVEON_DEV_USER_NAME or "Dev User")
 
     secret = settings.KAVEON_PROXY_SECRET
-    if secret and request.headers.get("x-proxy-secret", "") == secret:
+    if secret and secrets.compare_digest(request.headers.get("x-proxy-secret", ""), secret):
         email = request.headers.get("x-user-email", "")
         if email and "@" in email:
             role = request.headers.get("x-user-role", "") or "Viewer"
@@ -139,8 +140,12 @@ def _decode_azure_ad(token: str) -> Optional[tuple[str, list[str]]]:
             signing_key.key,
             algorithms=["RS256"],
             audience=_valid_audiences,
-            options={"verify_exp": True},
+            options={"verify_exp": True, "require": ["exp", "iss", "sub", "tid"]},
         )
+        if payload.get("iss") not in (f"https://login.microsoftonline.com/{settings.AZURE_TENANT_ID}/v2.0", f"https://sts.windows.net/{settings.AZURE_TENANT_ID}/"):
+            return None
+        if payload.get("tid") != settings.AZURE_TENANT_ID:
+            return None
         email = _email_from_payload(payload)
         if not email:
             return None
@@ -167,10 +172,14 @@ def _decode_google(token: str) -> Optional[tuple[str, list[str]]]:
             signing_key.key,
             algorithms=["RS256"],
             audience=google_client_id,
-            options={"verify_exp": True},
+            options={"verify_exp": True, "require": ["exp", "iss", "sub"]},
         )
+        if payload.get("iss") not in ("https://accounts.google.com", "accounts.google.com"):
+            return None
+        if payload.get("email_verified") is not True:
+            return None
         # Google JWTs use 'email' claim
-        email_raw = payload.get("email") or payload.get("preferred_username") or ""
+        email_raw = payload.get("email") or ""
         if not isinstance(email_raw, str) or "@" not in email_raw:
             return None
         email = email_raw.lower()
@@ -285,8 +294,8 @@ def get_user_context(request: Request) -> Optional[UserContext]:
         import services.users as users_svc
         role = users_svc.resolve_role(email, jwt_roles, provider)
     except Exception as e:
-        print(f"[Auth] Role resolution failed for {email}: {e}")
-        role = "Admin" if not _AAD_CONFIGURED else None
+        print(f"[Auth] Role resolution failed: {type(e).__name__}")
+        role = None
 
     # None means the user is authenticated but has no role assigned
     ctx = UserContext(email=email, role=role or "NoAccess", jwt_roles=jwt_roles)
@@ -301,4 +310,6 @@ def require_user_context(ctx: Optional[UserContext] = Depends(get_user_context))
             status_code=401,
             detail={"code": "unauthorized", "message": "Authentication required."},
         )
+    if ctx.role not in {"Viewer", "Analyst", "Editor", "Admin"}:
+        raise HTTPException(status_code=403, detail={"code": "no_role", "message": "No application role is assigned."})
     return ctx

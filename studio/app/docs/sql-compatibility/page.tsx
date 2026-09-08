@@ -5,7 +5,7 @@ export const metadata = { title: "Engine SQL Compatibility" };
 export default function SqlCompatibilityDocs() {
   return <div className="docs-prose">
     <PageHeader
-      eyebrow="Engine · Alpha"
+      eyebrow="Engine"
       title="SQL compatibility"
       lead="The executable surface of the standalone Rust Engine, feature by feature. Parser acceptance alone does not mean a feature is physically executed — this table tracks what actually runs."
     />
@@ -45,18 +45,20 @@ export default function SqlCompatibilityDocs() {
 
     <h2>Storage boundaries</h2>
     <p>
-      SQL support is independent of what the Engine can read. Local Parquet and local Delta work today; Delta
-      requires a complete JSON commit history from version 0, with no checkpoint replay. ADLS Gen2, S3, and
-      Iceberg are not readable yet, so no SQL feature reaches them. See{" "}
+      SQL support is independent of what the Engine can read. Local and object-store Parquet/Delta readers
+      and a restricted Iceberg snapshot reader are implemented. Delta supports classic and multipart
+      checkpoints, while unsupported table features fail explicitly. Live ADLS/S3 qualification remains
+      pending. See{" "}
       <a href="/docs/engine/storage">Storage &amp; Catalogs</a>.
     </p>
 
     <h2>Execution boundaries</h2>
     <p>
-      <code>POST /v1/statement</code> is synchronous and materializes the full root result before
-      serializing. Query history is process-local. Admission control, resource groups, aggregate and join
-      spill, cost-based optimization, dynamic filtering, and exchange streaming flow control remain open —
-      Sort and TopN are the only operators with bounded spill today. See{" "}
+      <code>POST /v1/statement</code> supports opt-in paged results with authenticated, replayable pages;
+      inline results remain bounded and materialized. Query history is bounded and process-local.
+      Admission, resource-group queues, and partitioned aggregate/join/sort spill are implemented.
+      Conservative statistics select the build side of supported inner joins. General cost optimization,
+      dynamic filtering, and fully pipelined exchanges remain targets. See{" "}
       <a href="/docs/memory">Engine Memory</a>.
     </p>
 

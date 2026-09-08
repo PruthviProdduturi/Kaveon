@@ -315,3 +315,18 @@ def get_audit_trail(cs_id: str, ctx: UserContext = Depends(require_min_role("Vie
         [cs_id],
     )
     return {"success": True, "events": result["rows"]}
+
+
+@router.post("/catalog-sources/{cs_id}/engine-sync")
+def sync_engine_catalog(cs_id: str, data: dict, ctx: UserContext = Depends(require_min_role("Admin"))):
+    from services.engine_bridge import sync_catalog
+    row = db.query_one(f"SELECT {_FIELDS} FROM catalog_sources WHERE id = @param0", [cs_id])
+    if not row:
+        raise HTTPException(404, "Catalog source not found")
+    revision = data.get("expected_revision")
+    if revision is not None and (type(revision) is not int or revision < 1):
+        raise HTTPException(400, "expected_revision must be a positive integer")
+    result = sync_catalog(row, ctx.email, revision)
+    _audit("engine_synchronized", cs_id, row["name"], ctx.email,
+           json.dumps({"engine_id": result["catalog"]["id"], "revision": result["catalog"]["revision"]}))
+    return {"success": True, **result}

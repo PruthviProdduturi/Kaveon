@@ -63,6 +63,28 @@ pub struct ExchangeIdentity {
 const DEFAULT_MAX_BUFFERED_EXCHANGES: usize = 1_024;
 const DEFAULT_MAX_BUFFERED_BYTES: usize = 512 * 1024 * 1024;
 const EXCHANGE_MEDIA_TYPE: &str = "application/vnd.kaveon.exchange.v2";
+static DOWNLOAD_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+struct DownloadPermit(usize);
+impl DownloadPermit {
+    fn new(bytes: usize) -> ExchangeResult<Self> {
+        DOWNLOAD_BYTES
+            .fetch_update(
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+                |used| {
+                    used.checked_add(bytes)
+                        .filter(|total| *total <= DEFAULT_MAX_BUFFERED_BYTES)
+                },
+            )
+            .map_err(|_| ExchangeError::StoreCapacityExceeded)?;
+        Ok(Self(bytes))
+    }
+}
+impl Drop for DownloadPermit {
+    fn drop(&mut self) {
+        DOWNLOAD_BYTES.fetch_sub(self.0, std::sync::atomic::Ordering::AcqRel);
+    }
+}
 
 #[derive(Debug, Default)]
 struct ExchangeStoreState {
@@ -193,6 +215,15 @@ async fn upload_exchange_chunk(
     if let Err(error) = authorize(&state, &headers) {
         return exchange_error_response(error);
     }
+    if let Some(store) = &state.disk_exchange_store {
+        return match ExchangeChunk::decode(&body, ExchangeLimits::default()) {
+            Ok(chunk) => match store.insert(chunk) {
+                Ok(()) => StatusCode::ACCEPTED.into_response(),
+                Err(error) => (StatusCode::INSUFFICIENT_STORAGE, error).into_response(),
+            },
+            Err(error) => exchange_error_response(error),
+        };
+    }
     match ExchangeChunk::decode(&body, ExchangeLimits::default())
         .and_then(|chunk| state.exchange_store.insert(chunk))
     {
@@ -210,13 +241,37 @@ async fn download_exchange(
         return exchange_error_response(error);
     }
     let identity = identity_from_path(path);
+    if let Some(store) = &state.disk_exchange_store {
+        return match store.body(&identity) {
+            Ok(Some(body)) => ([(header::CONTENT_TYPE, EXCHANGE_MEDIA_TYPE)], body).into_response(),
+            Ok(None) => StatusCode::NOT_FOUND.into_response(),
+            Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
+        };
+    }
     let result = state
         .exchange_store
         .get(&identity)
-        .and_then(|chunks| assemble_chunks(chunks, ExchangeLimits::default()));
+        .and_then(|chunks| ordered_chunks(chunks, ExchangeLimits::default()));
     match result {
-        Ok((_, payload)) => {
-            ([(header::CONTENT_TYPE, EXCHANGE_MEDIA_TYPE)], payload).into_response()
+        Ok(chunks) => {
+            let bytes = chunks.iter().map(|chunk| chunk.payload.len()).sum();
+            let permit = match DownloadPermit::new(bytes) {
+                Ok(permit) => permit,
+                Err(error) => return exchange_error_response(error),
+            };
+            let stream = futures::stream::unfold(
+                (chunks.into_iter(), permit),
+                |(mut chunks, permit)| async move {
+                    chunks
+                        .next()
+                        .map(|chunk| (Ok::<_, std::io::Error>(chunk.payload), (chunks, permit)))
+                },
+            );
+            (
+                [(header::CONTENT_TYPE, EXCHANGE_MEDIA_TYPE)],
+                axum::body::Body::from_stream(stream),
+            )
+                .into_response()
         }
         Err(error) => exchange_error_response(error),
     }
@@ -230,7 +285,15 @@ async fn delete_exchange(
     if let Err(error) = authorize(&state, &headers) {
         return exchange_error_response(error);
     }
-    match state.exchange_store.remove(&identity_from_path(path)) {
+    let identity = identity_from_path(path);
+    if let Some(store) = &state.disk_exchange_store {
+        return match store.remove(&identity) {
+            Ok(true) => StatusCode::NO_CONTENT.into_response(),
+            Ok(false) => StatusCode::NOT_FOUND.into_response(),
+            Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
+        };
+    }
+    match state.exchange_store.remove(&identity) {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
         Err(error) => exchange_error_response(error),
@@ -302,12 +365,12 @@ pub async fn upload_chunks(
     Ok(())
 }
 
-pub async fn fetch_batches(
+pub async fn fetch_payload(
     client: &reqwest::Client,
     worker_uri: &str,
     token: &str,
     identity: &ExchangeIdentity,
-) -> ExchangeResult<(SchemaRef, Vec<RecordBatch>)> {
+) -> ExchangeResult<crate::transport::ArrowPayload> {
     let response = client
         .get(exchange_url(worker_uri, identity))
         .bearer_auth(token)
@@ -317,17 +380,10 @@ pub async fn fetch_batches(
     if !response.status().is_success() {
         return Err(ExchangeError::HttpStatus(response.status().as_u16()));
     }
-    let payload = response
-        .bytes()
+    let payload = crate::transport::receive(response)
         .await
-        .map_err(|error| ExchangeError::Transport(error.to_string()))?;
-    let reader = StreamReader::try_new(Cursor::new(payload), None)
-        .map_err(|error| ExchangeError::Arrow(error.to_string()))?;
-    let schema = reader.schema();
-    let batches = reader
-        .map(|batch| batch.map_err(|error| ExchangeError::Arrow(error.to_string())))
-        .collect::<ExchangeResult<Vec<_>>>()?;
-    Ok((schema, batches))
+        .map_err(ExchangeError::Transport)?;
+    Ok(payload)
 }
 
 pub async fn release_exchange(
@@ -398,7 +454,7 @@ pub struct ExchangeChunk {
     pub identity: ExchangeIdentity,
     pub chunk_index: usize,
     pub chunk_count: usize,
-    pub payload: Vec<u8>,
+    pub payload: Bytes,
 }
 
 impl ExchangeChunk {
@@ -510,7 +566,7 @@ impl ExchangeChunk {
             },
             chunk_index,
             chunk_count,
-            payload: wire[exchange_end..].to_vec(),
+            payload: Bytes::copy_from_slice(&wire[exchange_end..]),
         };
         chunk.validate(limits)?;
         Ok(chunk)
@@ -540,7 +596,7 @@ pub fn encode_batches(
 ) -> ExchangeResult<Vec<ExchangeChunk>> {
     limits.validate()?;
     identity.validate()?;
-    let mut payload = Vec::new();
+    let mut payload = crate::transport::BoundedBuffer::new(limits.max_payload_bytes);
     {
         let mut writer = StreamWriter::try_new(&mut payload, schema)
             .map_err(|error| ExchangeError::Arrow(error.to_string()))?;
@@ -553,6 +609,7 @@ pub fn encode_batches(
             .finish()
             .map_err(|error| ExchangeError::Arrow(error.to_string()))?;
     }
+    let payload = Bytes::from(payload.into_bytes());
     if payload.len() > limits.max_payload_bytes {
         return Err(ExchangeError::PayloadTooLarge);
     }
@@ -560,14 +617,15 @@ pub fn encode_batches(
     if chunk_count > limits.max_chunks {
         return Err(ExchangeError::InvalidChunkCount);
     }
-    Ok(payload
-        .chunks(limits.max_chunk_bytes)
-        .enumerate()
-        .map(|(chunk_index, bytes)| ExchangeChunk {
+    Ok((0..chunk_count)
+        .map(|chunk_index| ExchangeChunk {
             identity: identity.clone(),
             chunk_index,
             chunk_count,
-            payload: bytes.to_vec(),
+            payload: payload.slice(
+                chunk_index * limits.max_chunk_bytes
+                    ..((chunk_index + 1) * limits.max_chunk_bytes).min(payload.len()),
+            ),
         })
         .collect())
 }
@@ -586,10 +644,10 @@ pub fn decode_batches(
     Ok((identity, schema, batches))
 }
 
-pub fn assemble_chunks(
+fn ordered_chunks(
     mut chunks: Vec<ExchangeChunk>,
     limits: ExchangeLimits,
-) -> ExchangeResult<(ExchangeIdentity, Vec<u8>)> {
+) -> ExchangeResult<Vec<ExchangeChunk>> {
     limits.validate()?;
     let first = chunks.first().ok_or(ExchangeError::MissingChunks)?;
     first.validate(limits)?;
@@ -605,20 +663,28 @@ pub fn assemble_chunks(
         }
     }
     chunks.sort_unstable_by_key(|chunk| chunk.chunk_index);
-    let mut payload = Vec::new();
-    for (expected_index, chunk) in chunks.into_iter().enumerate() {
-        if chunk.chunk_index != expected_index {
+    let mut bytes = 0usize;
+    for (index, chunk) in chunks.iter().enumerate() {
+        if chunk.chunk_index != index {
             return Err(ExchangeError::DuplicateChunk);
         }
-        let new_len = payload
-            .len()
+        bytes = bytes
             .checked_add(chunk.payload.len())
             .ok_or(ExchangeError::IntegerOverflow)?;
-        if new_len > limits.max_payload_bytes {
+        if bytes > limits.max_payload_bytes {
             return Err(ExchangeError::PayloadTooLarge);
         }
-        payload.extend_from_slice(&chunk.payload);
     }
+    Ok(chunks)
+}
+
+pub fn assemble_chunks(
+    chunks: Vec<ExchangeChunk>,
+    limits: ExchangeLimits,
+) -> ExchangeResult<(ExchangeIdentity, Vec<u8>)> {
+    let chunks = ordered_chunks(chunks, limits)?;
+    let identity = chunks[0].identity.clone();
+    let payload = chunks.into_iter().flat_map(|chunk| chunk.payload).collect();
     Ok((identity, payload))
 }
 
@@ -807,7 +873,7 @@ mod tests {
             identity: identity(),
             chunk_index: 1,
             chunk_count: 3,
-            payload: vec![1, 2, 3, 4],
+            payload: vec![1, 2, 3, 4].into(),
         };
         let first = chunk.encode(limits()).unwrap();
         let second = chunk.encode(limits()).unwrap();
@@ -821,7 +887,7 @@ mod tests {
             identity: identity(),
             chunk_index: 0,
             chunk_count: 1,
-            payload: vec![1],
+            payload: vec![1].into(),
         };
         let mut wire = chunk.encode(limits()).unwrap();
         wire[WIRE_MAGIC.len()..WIRE_MAGIC.len() + 2].copy_from_slice(&1_u16.to_be_bytes());
@@ -861,7 +927,7 @@ mod tests {
             identity: identity(),
             chunk_index: 0,
             chunk_count: 1,
-            payload: vec![1, 2, 3],
+            payload: vec![1, 2, 3].into(),
         };
         let mut wire = chunk.encode(limits()).unwrap();
         let last = wire.len() - 1;
@@ -878,7 +944,7 @@ mod tests {
             identity: identity(),
             chunk_index: 0,
             chunk_count: 2,
-            payload: vec![1],
+            payload: vec![1].into(),
         };
         assert_eq!(
             assemble_chunks(vec![first.clone(), first], limits()),
@@ -890,13 +956,13 @@ mod tests {
             identity: other,
             chunk_index: 1,
             chunk_count: 2,
-            payload: vec![2],
+            payload: vec![2].into(),
         };
         let first = ExchangeChunk {
             identity: identity(),
             chunk_index: 0,
             chunk_count: 2,
-            payload: vec![1],
+            payload: vec![1].into(),
         };
         assert_eq!(
             assemble_chunks(vec![first, second], limits()),
@@ -910,7 +976,7 @@ mod tests {
             identity: identity(),
             chunk_index: 0,
             chunk_count: 1,
-            payload: vec![0; limits().max_chunk_bytes + 1],
+            payload: vec![0; limits().max_chunk_bytes + 1].into(),
         };
         assert_eq!(chunk.encode(limits()), Err(ExchangeError::ChunkTooLarge));
     }
@@ -939,7 +1005,7 @@ mod tests {
             identity: identity(),
             chunk_index: 0,
             chunk_count: 1,
-            payload: vec![1, 2, 3],
+            payload: vec![1, 2, 3].into(),
         };
 
         store.insert(chunk.clone()).unwrap();
@@ -947,7 +1013,7 @@ mod tests {
         assert_eq!(store.get(&identity()).unwrap(), vec![chunk.clone()]);
 
         let conflicting = ExchangeChunk {
-            payload: vec![9],
+            payload: vec![9].into(),
             ..chunk
         };
         assert_eq!(
@@ -965,11 +1031,11 @@ mod tests {
             identity: identity(),
             chunk_index: 0,
             chunk_count: 1,
-            payload: vec![1],
+            payload: vec![1].into(),
         };
         let mut second = first.clone();
         second.identity.exchange_id = ExchangeId("exchange-10".into());
-        second.payload = vec![2];
+        second.payload = vec![2].into();
 
         store.insert(first.clone()).unwrap();
         store.insert(second.clone()).unwrap();
@@ -985,7 +1051,7 @@ mod tests {
             identity: identity(),
             chunk_index: 0,
             chunk_count: 2,
-            payload: vec![1, 2, 3],
+            payload: vec![1, 2, 3].into(),
         };
         store.insert(chunk.clone()).unwrap();
         store.insert(chunk).unwrap();
@@ -995,7 +1061,7 @@ mod tests {
             identity: identity(),
             chunk_index: 1,
             chunk_count: 2,
-            payload: vec![4, 5],
+            payload: vec![4, 5].into(),
         };
         assert_eq!(
             store.insert(second),
@@ -1014,7 +1080,7 @@ mod tests {
             identity: invalid,
             chunk_index: 0,
             chunk_count: 1,
-            payload: Vec::new(),
+            payload: Vec::new().into(),
         };
         assert!(matches!(
             chunk.encode(limits()),
@@ -1030,7 +1096,7 @@ mod tests {
             identity: invalid,
             chunk_index: 0,
             chunk_count: 1,
-            payload: Vec::new(),
+            payload: Vec::new().into(),
         };
         assert!(matches!(
             chunk.encode(limits()),

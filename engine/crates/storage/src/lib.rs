@@ -2,12 +2,19 @@
 
 pub mod adls_reader;
 pub mod delta_reader;
+pub mod delta_snapshot;
+pub mod iceberg_reader;
 pub mod metrics;
+pub mod object_delta;
+pub mod object_reader;
 pub mod parquet_reader;
 
 pub use adls_reader::{AdlsAuthMode, AdlsBatchSource, AdlsBatchStream, AdlsParquetReader};
 pub use delta_reader::{DeltaBatchIterator, DeltaTableReader};
+pub use iceberg_reader::{IcebergReader, IcebergSnapshot, IcebergSource};
 pub use metrics::{ScanMetrics, ScanMetricsSnapshot};
+pub use object_delta::{ObjectDeltaReader, ObjectDeltaSource};
+pub use object_reader::{ObjectBatchSource, ObjectLocation, ObjectParquetReader};
 pub use parquet_reader::{ParquetBatchIterator, ParquetFileMetadata, ParquetReader};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

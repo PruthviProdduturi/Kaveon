@@ -50,6 +50,18 @@ _ASYNC_JOBS: dict[str, dict] = {}
 _ASYNC_JOBS_LOCK = threading.Lock()
 
 def _async_job_run(job_id: str, data: SqlExecuteBody, user_id: str) -> None:
+    with _ASYNC_JOBS_LOCK:
+        job = _ASYNC_JOBS.get(job_id)
+        if not user_id or not job or job.get("owner") != user_id or job.get("status") != "running":
+            return
+
+    def finish(outcome: dict) -> None:
+        with _ASYNC_JOBS_LOCK:
+            # DELETE can remove the job while the database call is in flight.
+            # Never recreate its result or overwrite a replacement job.
+            if _ASYNC_JOBS.get(job_id) is job:
+                job.update(outcome, finished_at=time.time())
+
     start_time = int(time.time() * 1000)
     try:
         result = pool.execute_query(data.sql_text, data.database)
@@ -68,17 +80,15 @@ def _async_job_run(job_id: str, data: SqlExecuteBody, user_id: str) -> None:
             }, user_id)
         except Exception:
             pass
-        with _ASYNC_JOBS_LOCK:
-            _ASYNC_JOBS[job_id] = {
-                "status": "success",
-                "columns": result.get("columns") or [],
-                "rows": result.get("rows") or [],
-                "duration_ms": duration_ms,
-            }
+        finish({
+            "status": "success",
+            "columns": result.get("columns") or [],
+            "rows": result.get("rows") or [],
+            "duration_ms": duration_ms,
+        })
     except Exception as e:
         duration_ms = int(time.time() * 1000) - start_time
-        with _ASYNC_JOBS_LOCK:
-            _ASYNC_JOBS[job_id] = {"status": "error", "error": str(e), "duration_ms": duration_ms}
+        finish({"status": "error", "error": str(e), "duration_ms": duration_ms})
 
 _CANONICAL_SOURCE = {
     "dashboard": "dashboard-chart",
@@ -402,7 +412,7 @@ def execute_sql_async(
     sql_execute_limiter.check(user)
     job_id = str(uuid.uuid4())
     with _ASYNC_JOBS_LOCK:
-        _ASYNC_JOBS[job_id] = {"status": "running"}
+        _ASYNC_JOBS[job_id] = {"status": "running", "owner": user}
         # Evict completed jobs older than 10 minutes
         now = time.time()
         stale = [k for k, v in list(_ASYNC_JOBS.items())
@@ -414,20 +424,23 @@ def execute_sql_async(
 
 
 @router.get("/sql/async/{job_id}")
-def get_async_job(job_id: str, user: str = Depends(require_auth)):
+def get_async_job(job_id: str, ctx: UserContext = Depends(require_user_context)):
     """Poll the status and result of an async query job."""
     with _ASYNC_JOBS_LOCK:
-        job = dict(_ASYNC_JOBS.get(job_id, {}))
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return job
+        job = _ASYNC_JOBS.get(job_id)
+        if not ctx.email or not job or job.get("owner") != ctx.email:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return {key: value for key, value in job.items() if key != "owner"}
 
 
 @router.delete("/sql/async/{job_id}")
-def cancel_async_job(job_id: str, user: str = Depends(require_auth)):
-    """Remove a completed or running job from the store."""
+def cancel_async_job(job_id: str, ctx: UserContext = Depends(require_user_context)):
+    """Discard the owner's job/result; an in-flight database call may still finish."""
     with _ASYNC_JOBS_LOCK:
-        _ASYNC_JOBS.pop(job_id, None)
+        job = _ASYNC_JOBS.get(job_id)
+        if not ctx.email or not job or job.get("owner") != ctx.email:
+            raise HTTPException(status_code=404, detail="Job not found")
+        del _ASYNC_JOBS[job_id]
     return {"ok": True}
 
 
@@ -437,3 +450,19 @@ def invalidate_cache(ctx=Depends(require_min_role("Admin"))):
     with _QUERY_CACHE_LOCK:
         _QUERY_CACHE.clear()
     return {"ok": True, "cleared": True}
+
+
+@router.post("/sql/engine")
+def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Depends(require_user_context)):
+    """Explicit Engine execution; existing database execution remains unchanged."""
+    from services.engine_bridge import execute
+    assert_read_only(data.sql_text)
+    assert_no_platform_tables(data.sql_text, data.database)
+    sql_execute_limiter.check(ctx.email)
+    response.headers.update(NO_CACHE)
+    result = execute(data.sql_text, data.database, ctx.email, ctx.role)
+    rows = result.get("data") or []
+    if data.row_limit:
+        rows = rows[:data.row_limit]
+    return {"columns": result.get("columns") or [], "rows": rows,
+            "query_id": result["id"], "duration_ms": result.get("elapsed_ms", 0)}

@@ -26,7 +26,7 @@ ROLE_LEVELS: dict[str, int] = {
 
 
 def _level(role: str) -> int:
-    return ROLE_LEVELS.get(role, 0)
+    return ROLE_LEVELS.get(role, -1)
 
 
 def require_min_role(min_role: str):
@@ -43,7 +43,7 @@ def require_min_role(min_role: str):
                 status_code=401,
                 detail={"code": "unauthorized", "message": "Authentication required."},
             )
-        if ctx.role == "NoAccess":
+        if ctx.role not in ROLE_LEVELS:
             raise HTTPException(
                 status_code=403,
                 detail={

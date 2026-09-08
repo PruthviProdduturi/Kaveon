@@ -119,8 +119,11 @@ at 512 MiB in addition to the existing store cap. Encoding aborts at its byte
 limit. No exchange wire-version change is required.
 
 This bounds network/result retention but does not make operators fully pipelined:
-worker fragment execution and input exchange decoding still materialize bounded
-batches, and stage dependencies still wait for completed producer stages.
+worker fragment outputs still materialize bounded batches, and stage dependencies
+still wait for completed producer stages. Consumers open immutable IPC spools as
+batch operators and decode one producer stream at a time, charging the active
+encoded stream and decoded batch excess to query memory. Local and worker CPU
+execution runs in blocking tasks so HTTP cancellation remains responsive.
 
 ## Validation and remaining gates
 
@@ -139,3 +142,131 @@ These changes provide a credential-based security boundary, not production
 identity federation. Entra/OIDC JWT validation at the Engine, credential rotation
 without restart, per-catalog/table grants, row/column policies,
 durable query audit and fair workload scheduling remain explicit gates.
+
+## Coordinator exchange placement
+
+The coordinator now hosts query exchanges on private disk by default. Producers
+upload immutable checksummed chunks there, and retried consumers fetch them from
+the same location even after execution moves to another worker. This removes
+worker-local exchange storage as a dependency for retrying tasks. It centralizes
+exchange I/O on the coordinator; measure its disk and network throughput before
+scaling worker count.
+
+`KAVEON_EXCHANGE_SPOOL_ROOT` chooses the parent temporary directory.
+`KAVEON_EXCHANGE_DISK_LIMIT_BYTES` defaults to 10 GiB across active stored and
+download-retained chunks; each query is limited to 2 GiB. There are at most 1,024
+active exchange identities. Disk quota failures return explicit errors. Chunks
+expire after 15 minutes without an upload/read. Terminal query cleanup removes
+its entries and rejects late uploads; ongoing downloads retain their file leases
+until they finish or disconnect. Coordinator restart loses the in-memory index;
+this is worker-failure resilience, not coordinator HA or restart recovery.
+
+`KAVEON_COORDINATOR_EXCHANGE_SPOOL=false` restores worker-hosted memory exchange
+placement. Even in that mode, consumer retries retain the original exchange
+location instead of mistakenly fetching from the new execution worker.
+
+## Platform credential encryption
+
+Configure `KAVEON_CREDENTIAL_KEYS` as a JSON map of key IDs to random Fernet keys
+and `KAVEON_CREDENTIAL_ACTIVE_KEY` as the active map key. Store the keyring in
+the platform's secret manager, independent of metadata backups. Keys must be
+random 32-byte URL-safe base64 values; no tenant IDs, passwords, or fallback
+defaults are used. Key IDs contain only letters, digits, underscores or hyphens.
+
+New data-source connection strings are persisted in versioned encrypted
+envelopes. Missing or invalid key configuration rejects writes with HTTP 503.
+Source resolution requires the keyring: legacy plaintext is atomically replaced
+using a compare-and-swap update before being used to connect. A concurrent edit
+or failed migration stops resolution. Existing envelopes decrypt using their
+recorded key ID; on use they rotate to the active key. Retain older keys until
+all records have been migrated and required backups no longer need them. Idle
+rows are not migrated until used, and existing connection pools must restart to
+apply newly rotated connection credentials.
+
+Role-resolution failures now produce `NoAccess`, and role-aware dependencies
+reject unknown roles. Production ignores the development identity bypass.
+Run API validation from `api` with
+`./venv/Scripts/python.exe -m unittest services.test_credentials middleware.test_auth_security services.test_engine_bridge`.
+Credential tests exercise real SQLite CAS updates, tamper detection, migration,
+rotation, missing-key failure and concurrent-edit protection.
+
+
+## Platform token claims and legacy encrypted secrets
+
+The platform API validates Entra token issuer against the configured tenant's
+v1/v2 issuer URLs and requires matching `tid`, subject, and expiry. Google tokens
+require an accepted Google issuer, subject, expiry, and boolean verified-email
+claim. These checks follow [Microsoft's token validation guidance](https://learn.microsoft.com/en-us/entra/identity-platform/access-tokens)
+and [Google's ID-token guidance](https://developers.google.com/identity/gsi/web/guides/verify-google-id-token).
+The API still identifies users by email; immutable provider-subject identity mapping
+and issuer-specific authorization scopes need further work.
+
+AI provider/user keys and Google OAuth client secrets now use the same explicit
+versioned keyring as data source credentials. New writes have no derived/default
+key fallback. Legacy unversioned ciphertext is deliberately rejected at runtime;
+migrate it before rollout. From `api`, configure the new keyring and explicitly
+supply the exact original secret in `KAVEON_LEGACY_AI_ENCRYPTION_SECRET`, then run:
+
+```powershell
+./venv/Scripts/python.exe -m services.migrate_credentials --scope ai-db
+./venv/Scripts/python.exe -m services.migrate_credentials --scope ai-db --write
+./venv/Scripts/python.exe -m services.migrate_credentials --scope auth-env --auth-env-path PATH
+./venv/Scripts/python.exe -m services.migrate_credentials --scope auth-env --auth-env-path PATH --write
+```
+
+The first command for each scope validates decryption without writes. Database
+writes compare the original ciphertext before replacing each row; rerunning
+handles already-versioned rows. Quiesce auth configuration writes during file
+migration. Remove the legacy secret after migration and retain required prior
+keyring entries through rotation. The migration never guesses a historical
+fallback and prints counts or sanitized errors only. No environment or database
+migration has been executed as part of this change.
+
+
+## Operational soak qualification
+
+`engine/qualification/soak.py` starts an isolated authenticated coordinator and
+2 or 5 native workers using a copied, hashed binary. It repeatedly checks 100k-row
+scan, aggregate, join and paged results against DuckDB, using two principals in a
+bounded resource group. Active window cancellation holds the group slot while a
+second principal queues, then verifies canceled state and queued-query recovery.
+The harness kills one worker during a workload wave, samples process RSS/history/
+retained disk files each second, and verifies cleanup after deleting paged results.
+
+```powershell
+./engine/qualification/venv/Scripts/python.exe engine/qualification/soak.py --server-bin engine/target/debug/kaveon-server.exe --workers 2 --duration-seconds 120 --output tmp/soak-120s
+./engine/qualification/venv/Scripts/python.exe engine/qualification/soak.py --server-bin engine/target/debug/kaveon-server.exe --workers 5 --duration-seconds 600 --output tmp/soak-600s
+```
+
+The report records every result checksum/failure, fixture hashes, binary hash,
+source revision/diff/tree hashes, cancellation/queue outcomes, and RSS samples.
+Default operational thresholds are 256 MiB warm-to-tail RSS growth per process,
+2 GiB process peak RSS, at most 110 sampled history records, and zero retained
+result/exchange/spill files after cleanup. These are explicit soak thresholds,
+not promises that allocator RSS equals the logical query memory limit. Passing a
+short soak is bounded recovery/retention evidence, not proof of production
+availability or a comparative performance result.
+
+The completed September 5 report at `tmp/soak-two-workers-600s/report.json`
+passed all ten checks across 600.343 seconds, 4,231 exact-result queries and 23
+cancellation/queue cycles. One worker was killed at 300 seconds; surviving nodes
+completed the workload. History reached its 100-record bound and cleanup left no
+retained files. Peak process RSS was 71.9 MB. This report applies to binary
+`aa0cb28eb2d4185e4076f0de9f7b522a802cbc5c6396b5ef84f6d4f3714b32bf`;
+it does not certify later source changes or a five-worker soak.
+
+On September 8, current-source verification passed 89 server tests and 21 API
+credential/authentication/bridge tests. A fresh native build passed all six TLS
+checks and all eight real-HTTP bridge checks using binary
+`12b31a7fb461a9ef5be770432f90f97dcbce300b9d34fa954c2a3d50fb451120`.
+Those checks establish focused lifecycle, authorization and transport behavior;
+they do not replace a renewed soak after the execution changes or the remaining
+identity, authorization-policy and availability gates above.
+
+Platform asynchronous SQL results are now bound to the authenticated submitting
+user. Polling and deletion require a currently authorized identity and return
+the same 404 for missing jobs, another user's jobs and legacy ownerless entries.
+Background completion preserves ownership and cannot recreate a result deleted
+while its database call was in flight. Deletion discards the retained job/result;
+it does not interrupt the underlying database driver. Five route/threading
+regressions cover these boundaries; the focused API suite now passes 26 tests.
