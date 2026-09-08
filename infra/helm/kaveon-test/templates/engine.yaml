@@ -11,6 +11,22 @@ metadata:
     azure.workload.identity/client-id: {{ $client | quote }}
 automountServiceAccountToken: false
 ---
+# Stable client endpoint; coordinator DNS remains for internal discovery/TLS.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: coordinator
+  ports:
+    - name: https
+      port: 8080
+      targetPort: https
+---
 apiVersion: v1
 kind: Service
 metadata:
