@@ -1,0 +1,189 @@
+{{- $repo := required "image.repository is required" .Values.image.repository -}}
+{{- $digest := required "image.digest must be a sha256 digest" .Values.image.digest -}}
+{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" $digest) }}{{ fail "image.digest must be sha256 plus 64 lowercase hex digits" }}{{ end -}}
+{{- $client := required "workloadIdentity.clientId is required" .Values.workloadIdentity.clientId -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.serviceAccountName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    azure.workload.identity/client-id: {{ $client | quote }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-coordinator
+  namespace: {{ .Release.Namespace }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: coordinator
+  ports:
+    - name: https
+      port: 8080
+      targetPort: https
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-workers
+  namespace: {{ .Release.Namespace }}
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: worker
+  ports:
+    - name: https
+      port: 8080
+      targetPort: https
+{{ range $role := list "coordinator" "worker" }}
+{{ $isCoordinator := eq $role "coordinator" }}
+{{ $settings := ternary $.Values.coordinator $.Values.workers $isCoordinator }}
+{{ $service := printf "%s-workers" $.Release.Name }}
+{{ if $isCoordinator }}{{ $service = printf "%s-coordinator" $.Release.Name }}{{ end }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $.Release.Name }}-{{ $role }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  serviceName: {{ $service }}
+  replicas: {{ ternary 1 $.Values.workers.replicas $isCoordinator }}
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+      app.kubernetes.io/component: {{ $role }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ $.Release.Name }}
+        app.kubernetes.io/component: {{ $role }}
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: {{ $.Values.serviceAccountName }}
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      nodeSelector:
+        {{- toYaml $settings.nodeSelector | nindent 8 }}
+      {{- if not $isCoordinator }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/instance: {{ $.Release.Name }}
+                  app.kubernetes.io/component: worker
+      {{- end }}
+      containers:
+        - name: engine
+          image: {{ printf "%s@%s" $repo $digest | quote }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          ports:
+            - name: https
+              containerPort: 8080
+          env:
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: KAVEON_NODE_ID
+              value: "$(POD_NAME)"
+            - name: KAVEON_BIND_HOST
+              value: "0.0.0.0"
+            - name: KAVEON_COORDINATOR
+              value: {{ $isCoordinator | quote }}
+            - name: KAVEON_ENVIRONMENT
+              value: aks-test
+            - name: KAVEON_DISCOVERY_URI
+              value: "https://{{ $.Release.Name }}-coordinator.{{ $.Release.Namespace }}.svc.cluster.local:8080"
+            - name: KAVEON_ADVERTISED_URI
+              {{- if $isCoordinator }}
+              value: "https://{{ $service }}.{{ $.Release.Namespace }}.svc.cluster.local:8080"
+              {{- else }}
+              value: "https://$(POD_NAME).{{ $service }}.{{ $.Release.Namespace }}.svc.cluster.local:8080"
+              {{- end }}
+            - name: KAVEON_SECURITY_JSON
+              valueFrom: {secretKeyRef: {name: {{ $.Values.credentialsSecret }}, key: security.json}}
+            - name: KAVEON_EXCHANGE_TOKEN
+              valueFrom: {secretKeyRef: {name: {{ $.Values.credentialsSecret }}, key: exchange-token}}
+            - name: KAVEON_CATALOG_ADMIN_TOKEN
+              valueFrom: {secretKeyRef: {name: {{ $.Values.credentialsSecret }}, key: catalog-token}}
+            - name: KAVEON_TLS_CERT_PATH
+              value: /etc/kaveon/tls/tls.crt
+            - name: KAVEON_TLS_KEY_PATH
+              value: /etc/kaveon/tls/tls.key
+            - name: SSL_CERT_FILE
+              value: /etc/kaveon/tls/ca.crt
+            - name: CURL_CA_BUNDLE
+              value: /etc/kaveon/tls/ca.crt
+            - name: KAVEON_CATALOG_DATABASE_PATH
+              value: /state/catalog/kaveon-catalog.db
+            - name: KAVEON_COORDINATOR_EXCHANGE_SPOOL
+              value: "true"
+            - name: KAVEON_EXCHANGE_SPOOL_ROOT
+              value: /state/exchange
+            - name: KAVEON_EXCHANGE_DISK_LIMIT_BYTES
+              value: {{ $.Values.exchangeDiskLimitBytes | quote }}
+            - name: KAVEON_HASH_SPILL_ROOT
+              value: /tmp/spill
+            - name: KAVEON_HASH_SPILL_BYTES
+              value: {{ $.Values.spillDiskLimitBytes | quote }}
+            - name: KAVEON_QUERY_MEMORY_LIMIT_BYTES
+              value: {{ $.Values.queryMemoryLimitBytes | quote }}
+            - name: KAVEON_MEMORY_ADMISSION_LIMIT_BYTES
+              value: {{ $.Values.memoryAdmissionLimitBytes | quote }}
+          resources:
+            {{- toYaml $settings.resources | nindent 12 }}
+          startupProbe:
+            httpGet: {path: /health, port: https, scheme: HTTPS}
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet: {path: {{ ternary "/ready" "/health" $isCoordinator }}, port: https, scheme: HTTPS}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: https, scheme: HTTPS}
+            periodSeconds: 15
+            failureThreshold: 3
+          volumeMounts:
+            - {name: tls, mountPath: /etc/kaveon/tls, readOnly: true}
+            - {name: state, mountPath: /state}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ $.Values.tlsSecret }}
+            defaultMode: 0440
+        - name: tmp
+          emptyDir: {sizeLimit: 6Gi}
+        {{- if not $isCoordinator }}
+        - name: state
+          emptyDir: {sizeLimit: 12Gi}
+        {{- end }}
+  {{- if $isCoordinator }}
+  volumeClaimTemplates:
+    - metadata:
+        name: state
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: {{ $.Values.coordinator.storageClass }}
+        resources:
+          requests:
+            storage: {{ $.Values.coordinator.storageSize }}
+  {{- end }}
+{{ end }}

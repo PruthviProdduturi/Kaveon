@@ -1,0 +1,27 @@
+image:
+  repository: ""
+  digest: ""
+workloadIdentity:
+  clientId: ""
+serviceAccountName: kaveon-engine
+credentialsSecret: kaveon-engine-auth
+tlsSecret: kaveon-engine-tls
+coordinator:
+  nodeSelector:
+    kubernetes.azure.com/agentpool: system
+  storageClass: managed-csi
+  storageSize: 32Gi
+  resources:
+    requests: {cpu: "500m", memory: 1Gi, ephemeral-storage: 2Gi}
+    limits: {cpu: "2", memory: 4Gi, ephemeral-storage: 8Gi}
+workers:
+  replicas: 3
+  nodeSelector:
+    workload: kaveon-worker
+  resources:
+    requests: {cpu: "1", memory: 2Gi, ephemeral-storage: 4Gi}
+    limits: {cpu: "3", memory: 6Gi, ephemeral-storage: 20Gi}
+queryMemoryLimitBytes: "536870912"
+memoryAdmissionLimitBytes: "2147483648"
+exchangeDiskLimitBytes: "10737418240"
+spillDiskLimitBytes: "4294967296"
