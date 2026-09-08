@@ -105,19 +105,27 @@ jobs:
           chmod +x release/kaveon-linux-x64 release/kaveon-macos-arm64
 
       - name: Create dev release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: engine-dev
-          name: "Kaveon Engine (dev)"
-          body: |
-            Latest dev build of `kaveon` CLI.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cat > release-notes.md <<'NOTES'
+          Latest development preview of the `kaveon` CLI.
 
-            **Install:** Download the binary for your platform, place it on your PATH.
+          Download the binary for your platform and place it on your PATH.
 
-            ```
-            kaveon --local --data-dir /path/to/parquet/files
-            kaveon --server https://localhost:8080 --ca-cert /path/to/ca.crt
-            ```
-          prerelease: true
-          files: release/*
-          make_latest: false
+          ```
+          kaveon --local --data-dir /path/to/parquet/files
+          kaveon --server https://localhost:8080 --ca-cert /path/to/ca.crt
+          ```
+          NOTES
+          printf '\nSource commit: `%s`.\n' "$GITHUB_SHA" >> release-notes.md
+          if gh release view engine-dev > /dev/null 2>&1; then
+            gh release edit engine-dev --title 'Kaveon Engine (dev)' \
+              --prerelease --latest=false --notes-file release-notes.md
+          else
+            gh release create engine-dev --target "$GITHUB_SHA" \
+              --title 'Kaveon Engine (dev)' --prerelease --latest=false \
+              --notes-file release-notes.md
+          fi
+          gh release upload engine-dev release/* --clobber
