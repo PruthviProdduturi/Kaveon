@@ -5,6 +5,8 @@ param kubernetesVersion string = '1.35.7'
 param operatorObjectId string
 param operatorIpCidr string
 param additionalOperatorIpCidrs array = []
+@description('Enable only with stable, verified operator egress CIDRs. Entra authentication and Azure RBAC remain enabled either way.')
+param restrictApiToOperatorIps bool = false
 param nodeSize string = 'Standard_D4s_v3'
 
 var suffix = uniqueString(resourceGroup().id)
@@ -88,7 +90,9 @@ resource cluster 'Microsoft.ContainerService/managedClusters@2025-01-01' = {
     enableRBAC: true
     disableLocalAccounts: true
     aadProfile: { managed: true, enableAzureRBAC: true, tenantID: tenant().tenantId }
-    apiServerAccessProfile: { authorizedIPRanges: concat([operatorIpCidr], additionalOperatorIpCidrs) }
+    apiServerAccessProfile: {
+      authorizedIPRanges: restrictApiToOperatorIps ? concat([operatorIpCidr], additionalOperatorIpCidrs) : []
+    }
     oidcIssuerProfile: { enabled: true }
     securityProfile: { workloadIdentity: { enabled: true } }
     agentPoolProfiles: [{

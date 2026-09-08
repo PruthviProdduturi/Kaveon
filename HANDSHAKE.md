@@ -66,6 +66,16 @@
 
 ## Interface contracts
 
+### Direct AKS access restored — September 8
+
+The fixed cluster API IP allowlist blocked this workstation's varying egress.
+User authorized fixing direct access. Removed this test cluster's IP restriction;
+Entra/Azure RBAC remain enabled and local accounts disabled. No subscription
+policy or other cluster was changed. Direct kubectl lists all four Ready nodes;
+a real port-forward verifies trusted TLS GET /ui and authenticated cluster API
+with three workers. Bicep defaults restrictApiToOperatorIps=false for this test
+environment; storage firewall and private Engine Services remain unchanged.
+
 ### Engine UI access fix — September 8
 
 User authorized fixing secured dashboard access. GET `/ui` now serves a public

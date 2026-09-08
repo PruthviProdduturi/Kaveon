@@ -8,8 +8,16 @@ responses. Tokens are not saved in browser storage or URLs.
 
 ## This workstation and AKS
 
-Direct AKS API access still times out from this workstation despite resource-level
-allowlist updates for observed outbound IPs. No subscription policies were changed.
+Direct AKS API access is now working. The workstation uses varying outbound IPs;
+the fixed API IP allowlist was the blocker. Removing that restriction on this
+test cluster restored `kubectl get nodes` and actual service port-forwarding.
+The control-plane endpoint is internet-reachable, with Entra authentication and
+Azure RBAC still required and local accounts disabled. No subscription policies
+were changed. `restrictApiToOperatorIps` in the Bicep template defaults to false;
+enable it only with stable, verified egress ranges. Storage firewall rules and
+the private Engine Services were not changed.
+
+Before the network fix,
 `scripts/aks-engine-ui.py` provides a read-only local viewer through the working,
 authenticated Azure AKS Run Command channel. It is not a Kubernetes port-forward.
 
@@ -40,9 +48,9 @@ and the existing private token file. Temporary curl credentials inherit the priv
 directory's ACLs and are piped to curl through stdin, never command-line token
 arguments. Keep `tmp/aks-private-v2` private and excluded from Git.
 
-When the network path is restored, use ordinary port-forwarding and the native TLS
+Use ordinary port-forwarding and the native TLS
 endpoint at `https://localhost:18443/ui`. Trust the test CA and enter the same token.
-The local viewer is for inspection; it does not resolve the corporate network path.
+The local viewer remains an optional read-only fallback.
 
 ## Validation and deployment
 
