@@ -33,7 +33,11 @@ try {
         throw "The downloaded CLI could not run on this machine."
     }
     if (Test-Path -LiteralPath $dest) {
-        [IO.File]::Replace($tempBinary, $dest, $null)
+        # PowerShell can bind $null to an empty string for this .NET overload.
+        # Use a real backup path and remove it only after replacement succeeds.
+        $backupBinary = Join-Path $installDir (".kaveon-" + [Guid]::NewGuid().ToString("N") + ".bak")
+        [IO.File]::Replace($tempBinary, $dest, $backupBinary)
+        Remove-Item -LiteralPath $backupBinary -Force
     } else {
         [IO.File]::Move($tempBinary, $dest)
     }

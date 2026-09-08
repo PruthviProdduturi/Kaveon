@@ -96,6 +96,11 @@ See docs/engineering/engine-entra-sign-in.md and azure-deployment-guide.md.
 
 ### Preview distribution — September 8
 
+Windows installer upgrade fix: PowerShell bound the null File.Replace backup
+argument as an empty path on the user's machine. Replacement now uses a unique
+backup file, deleted only after success. Tested upgrading the existing installed
+CLI from the GitHub release; installed help confirms `azure-cli` support.
+
 Azure CLI reuse follow-up: preauthorized Microsoft Azure CLI for the existing
 Engine app's `access_as_user` scope only, retaining other app settings and all
 Engine role assignments. After propagation, the existing Azure login acquired
