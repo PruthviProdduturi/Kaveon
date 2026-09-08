@@ -12,6 +12,18 @@
 
 ---
 
+## User preference: conserve Codex allowance
+
+User explicitly authorized cost-conscious model routing on September 8, 2026:
+use GPT-5.6 Terra for routine delegated coding, deployment and documentation;
+use GPT-5.6 Sol for difficult Engine changes; reserve GPT-6 Astra for the hardest
+correctness/architecture work. Default to one agent; delegate only independent,
+bounded work that justifies the extra context. Pass focused context rather than
+the full conversation when selecting a delegated model. Avoid repeated broad
+tests, frequent CI polling and optional scope expansion. Preserve meaningful
+security/correctness checks. A parent agent cannot claim the current chat model
+changed unless the application actually changes it; the user controls that picker.
+
 ## Ownership map
 
 ### Engine (`engine/`)
