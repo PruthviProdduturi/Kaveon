@@ -66,6 +66,19 @@
 
 ## Interface contracts
 
+### AKS test deployment authorized — September 8
+
+User resumed AKS provisioning in Microsoft tenant / L1R_DSEng subscription
+`eaa4a83d-8511-497c-b0bc-40aa5f0deae1`, resource group `test-prproddu-test`,
+and explicitly prohibited subscription-level policy changes. Bicep deployed
+East US AKS 1.35.7 with one system plus three Standard_D4s_v3 worker nodes,
+ACR, ADLS Gen2 bronze/silver/gold, network and resource-scoped identities/RBAC.
+No subscription policies or subscription-scoped assignments were changed.
+The engine-only Helm chart uses TLS, workload identity and a persistent
+coordinator; synthetic medallion fixtures and validation scripts accompany it.
+See `docs/engineering/aks-test-deployment.md` for live evidence and limitations.
+This authorization does not resume the paused comparative performance goal.
+
 ### Paused validation checkpoint — September 8
 
 Latest user instruction supersedes automatic performance pursuit: properly test
