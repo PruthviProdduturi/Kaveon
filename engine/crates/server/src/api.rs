@@ -227,6 +227,9 @@ struct StatementRequest {
     source: Option<String>,
     #[serde(default)]
     client: Option<String>,
+    // Kept only for wire compatibility. The authenticated identity supplies query history user.
+    #[serde(default)]
+    user: Option<String>,
     #[serde(default)]
     time_zone: Option<String>,
     #[serde(default)]
@@ -807,6 +810,7 @@ async fn submit_statement(
     Extension(identity): Extension<Identity>,
     Json(req): Json<StatementRequest>,
 ) -> impl IntoResponse {
+    let _submitted_user = req.user.as_deref();
     if !state.config.coordinator {
         return (
             StatusCode::BAD_REQUEST,
@@ -908,7 +912,7 @@ async fn submit_statement(
             engine_version: env!("CARGO_PKG_VERSION").to_owned(),
             environment: state.config.environment.clone(),
             principal: Some(identity.principal.clone()),
-            user: Some(identity.principal.clone()),
+            user: Some(identity.display_name().to_owned()),
             source: req.source,
             client: req.client,
             catalog: catalog_name.to_owned(),
@@ -3681,6 +3685,7 @@ mod tests {
         merge_partial_aggregates, mutation_actor, task_request_from_dispatch, top_n_merge_contract,
         validate_replacement,
     };
+    use crate::security::Role;
     use arrow::array::{Int64Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -3858,6 +3863,23 @@ mod tests {
         assert_eq!(request.partition_count, 4);
         assert_eq!(request.execution_partition.unwrap().count, 4);
         assert!(request.fragment.is_some());
+    }
+
+    #[test]
+    fn submitted_user_cannot_override_authenticated_query_history_user() {
+        let request: super::StatementRequest = serde_json::from_value(serde_json::json!({
+            "query": "SELECT 1",
+            "user": "spoofed-admin"
+        }))
+        .unwrap();
+        let identity = crate::security::Identity {
+            principal: "entra:tenant:object".into(),
+            display_identity: Some("ada@example.com".into()),
+            role: Role::Analyst,
+        };
+        assert_eq!(request.user.as_deref(), Some("spoofed-admin"));
+        assert_eq!(identity.display_name(), "ada@example.com");
+        assert_ne!(request.user.as_deref(), Some(identity.display_name()));
     }
 
     #[test]

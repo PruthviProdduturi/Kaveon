@@ -50,6 +50,25 @@ with sync_playwright() as p:
     assert page.evaluate('testAuth.config.cache.temporaryCacheLocation') == 'memoryStorage'
     assert page.evaluate('testAuth.request.scopes') == [config['entra']['scope']]
     assert page.evaluate('localStorage.length+sessionStorage.length') == 0
+    # Client metadata is display-only; user comes from authenticated server context.
+    page.evaluate('''() => {
+      queries={'attribution-test':{id:'attribution-test',sql:'SELECT 1',state:'FINISHED',
+        elapsed_ms:1,submitted_at_ms:1,columns:[],rows:[],context:{
+          client:'kaveon-cli',user:'alice@example.test',principal:'entra:tenant:object'}}};
+      qorder=['attribution-test'];renderHistory();
+    }''')
+    assert page.locator('#qarea').inner_text().find('Kaveon CLI') >= 0
+    assert 'alice@example.test' in page.locator('#qarea').inner_text()
+    page.locator('[data-query-id="attribution-test"]').click()
+    assert 'alice@example.test' in page.locator('#view-detail').inner_text()
+    assert 'entra:tenant:object' in page.locator('#view-detail').inner_text()
+    assert page.evaluate("queryClient({context:{}})") == 'HTTP API'
+    assert page.evaluate("queryUser({context:{principal:'legacy'}})") == 'legacy'
+    page.evaluate('''() => {
+      queries['attribution-test'].context.user='<img src=x onerror=alert(1)>';
+      renderHistory();
+    }''')
+    assert page.locator('#qarea img').count() == 0
     page.locator('#disconnect').click()
     assert page.locator('#g-workers').inner_text() == '0'
     assert page.evaluate('testAuth.cleared')

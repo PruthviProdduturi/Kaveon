@@ -3,7 +3,9 @@ use crate::auth::Session;
 use reqwest::blocking::Response;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::io::{self, BufRead, Write};
+use sqlparser::dialect::GenericDialect;
+use sqlparser::tokenizer::{Token, Tokenizer};
+use std::io::{self, BufRead, IsTerminal, Write};
 
 #[derive(Clone, Debug, Deserialize)]
 struct Column {
@@ -51,6 +53,14 @@ struct TableList {
     tables: Vec<String>,
 }
 
+#[derive(Debug, PartialEq)]
+enum MetaCommand {
+    Catalogs,
+    Schemas { catalog: String },
+    Tables { catalog: String, schema: String },
+    Use { catalog: String, schema: String },
+}
+
 pub fn run(options: &mut Options) -> Result<(), String> {
     let client = crate::auth::Session::connect(options)?;
 
@@ -59,10 +69,16 @@ pub fn run(options: &mut Options) -> Result<(), String> {
         return Ok(());
     }
 
-    println!("Kaveon CLI v{}", env!("CARGO_PKG_VERSION"));
-    println!("Connected to {}", options.server);
-    println!("Catalog: {}  Schema: {}", options.catalog, options.schema);
-    println!("Type .help for commands; SQL statements end with semicolons.");
+    println!(
+        "Kaveon CLI v{} — {}.{}",
+        env!("CARGO_PKG_VERSION"),
+        options.catalog,
+        options.schema
+    );
+    println!(
+        "Connected to {}. Type .help for commands; terminate SQL with ;",
+        options.server
+    );
     println!();
     repl(&client, options)
 }
@@ -73,7 +89,7 @@ fn repl(client: &Session, options: &mut Options) -> Result<(), String> {
     let mut sql = String::new();
     loop {
         let prompt = if sql.is_empty() {
-            "kaveon> "
+            &format!("kaveon:{}> ", options.schema)
         } else {
             "     -> "
         };
@@ -91,9 +107,24 @@ fn repl(client: &Session, options: &mut Options) -> Result<(), String> {
         if trimmed.is_empty() {
             continue;
         }
+        if sql.is_empty() && is_repl_alias(trimmed, "exit", "quit") {
+            return Ok(());
+        }
+        if sql.is_empty() && is_repl_alias(trimmed, "help", "help") {
+            print_remote_help();
+            continue;
+        }
+        if sql.is_empty() && is_repl_alias(trimmed, "clear", "clear") {
+            if let Err(error) = clear_terminal() {
+                eprintln!("error: {error}");
+            }
+            continue;
+        }
         if sql.is_empty() && trimmed.starts_with('.') {
-            if handle_meta_command(client, options, trimmed)? {
-                return Ok(());
+            match handle_meta_command(client, options, trimmed) {
+                Ok(true) => return Ok(()),
+                Ok(false) => {}
+                Err(error) => eprintln!("error: {error}"),
             }
             continue;
         }
@@ -116,44 +147,57 @@ fn handle_meta_command(
     command: &str,
 ) -> Result<bool, String> {
     let parts: Vec<&str> = command.split_whitespace().collect();
-    match parts.as_slice() {
+    let meta = match parts.as_slice() {
         [".quit" | ".exit" | ".q"] => return Ok(true),
-        [".help" | ".h"] => print_remote_help(),
-        [".catalogs"] => {
-            let response: CatalogList = get_json(client, options, "/v1/catalog")?;
-            print_names("Catalog", &response.catalogs);
+        [".help" | ".h"] => {
+            print_remote_help();
+            return Ok(false);
         }
-        [".schemas"] => {
-            let path = format!("/v1/catalog/{}/schema", options.catalog);
-            let response: SchemaList = get_json(client, options, &path)?;
-            print_names("Schema", &response.schemas);
+        [".clear"] => {
+            clear_terminal()?;
+            return Ok(false);
         }
-        [".tables"] => {
-            let path = format!(
-                "/v1/catalog/{}/schema/{}/table",
-                options.catalog, options.schema
-            );
-            let response: TableList = get_json(client, options, &path)?;
-            print_names("Table", &response.tables);
+        [".catalogs"] => MetaCommand::Catalogs,
+        [".schemas"] => MetaCommand::Schemas {
+            catalog: options.catalog.clone(),
+        },
+        [".schemas", catalog] => MetaCommand::Schemas {
+            catalog: (*catalog).to_owned(),
+        },
+        [".tables"] => MetaCommand::Tables {
+            catalog: options.catalog.clone(),
+            schema: options.schema.clone(),
+        },
+        [".tables", target] => metadata_for_target(target, options, false)?,
+        [".use", target] => metadata_for_target(target, options, true)?,
+        _ => {
+            return Err(format!(
+                "unknown command '{command}'; type .help for commands"
+            ));
         }
-        [".use", target] => {
-            let values: Vec<&str> = target.split('.').collect();
-            match values.as_slice() {
-                [catalog, schema] => {
-                    options.catalog = (*catalog).to_owned();
-                    options.schema = (*schema).to_owned();
-                }
-                [schema] => options.schema = (*schema).to_owned(),
-                _ => return Err("usage: .use [catalog.]schema".to_owned()),
-            }
-            println!("Using {}.{}", options.catalog, options.schema);
-        }
-        _ => return Err(format!("unknown command '{command}'")),
-    }
+    };
+    run_meta_command(client, options, meta)?;
     Ok(false)
 }
 
-fn execute(client: &Session, options: &Options, sql: &str) -> Result<(), String> {
+fn is_repl_alias(input: &str, first: &str, second: &str) -> bool {
+    let input = input.trim_end_matches(';').trim();
+    input.eq_ignore_ascii_case(first) || input.eq_ignore_ascii_case(second)
+}
+
+fn clear_terminal() -> Result<(), String> {
+    if !io::stdout().is_terminal() {
+        return Err("CLEAR is available only in an interactive terminal".to_owned());
+    }
+    print!("\x1b[2J\x1b[H");
+    io::stdout().flush().map_err(|error| error.to_string())
+}
+
+fn execute(client: &Session, options: &mut Options, sql: &str) -> Result<(), String> {
+    if let Some(meta) = parse_sql_metadata(sql, options)? {
+        run_meta_command(client, options, meta)?;
+        return Ok(());
+    }
     let url = endpoint(options, "/v1/statement");
     let request = StatementRequest {
         query: sql,
@@ -177,8 +221,16 @@ fn execute(client: &Session, options: &Options, sql: &str) -> Result<(), String>
     print!("{}", format_result(&response, options.output_format)?);
     if options.output_format == OutputFormat::Table {
         println!(
-            "Query {} {} in {} ms",
-            response.id, response.state, response.elapsed_ms
+            "Query {} {} in {} ms ({} {} returned)",
+            response.id,
+            response.state,
+            response.elapsed_ms,
+            response.data.len(),
+            if response.data.len() == 1 {
+                "row"
+            } else {
+                "rows"
+            },
         );
     }
     Ok(())
@@ -189,11 +241,67 @@ fn get_json<T: for<'de> Deserialize<'de>>(
     options: &Options,
     path: &str,
 ) -> Result<T, String> {
+    get_json_url(client, &endpoint(options, path))
+}
+
+fn get_json_url<T: for<'de> Deserialize<'de>>(client: &Session, url: &str) -> Result<T, String> {
     let response = client
-        .request(reqwest::Method::GET, &endpoint(options, path))?
+        .request(reqwest::Method::GET, url)?
         .send()
         .map_err(connection_error)?;
     decode_response(response)
+}
+
+fn metadata_url(options: &Options, segments: &[&str]) -> Result<String, String> {
+    let mut url = reqwest::Url::parse(&endpoint(options, "/v1/catalog"))
+        .map_err(|error| format!("invalid coordinator URL: {error}"))?;
+    {
+        let mut path = url
+            .path_segments_mut()
+            .map_err(|_| "coordinator URL cannot accept catalog paths".to_owned())?;
+        for segment in segments {
+            path.push(segment);
+        }
+    }
+    Ok(url.into())
+}
+
+fn run_meta_command(
+    client: &Session,
+    options: &mut Options,
+    command: MetaCommand,
+) -> Result<(), String> {
+    match command {
+        MetaCommand::Catalogs => {
+            let response: CatalogList = get_json(client, options, "/v1/catalog")?;
+            print_metadata("Catalog", response.catalogs, options.output_format)
+        }
+        MetaCommand::Schemas { catalog } => {
+            let url = metadata_url(options, &[&catalog, "schema"])?;
+            let response: SchemaList = get_json_url(client, &url)?;
+            print_metadata("Schema", response.schemas, options.output_format)
+        }
+        MetaCommand::Tables { catalog, schema } => {
+            let url = metadata_url(options, &[&catalog, "schema", &schema, "table"])?;
+            let response: TableList = get_json_url(client, &url)?;
+            print_metadata("Table", response.tables, options.output_format)
+        }
+        MetaCommand::Use { catalog, schema } => {
+            let url = metadata_url(options, &[&catalog, "schema"])?;
+            let response: SchemaList = get_json_url(client, &url)?;
+            if !response.schemas.iter().any(|name| name == &schema) {
+                return Err(format!(
+                    "schema '{schema}' not found in catalog '{catalog}'"
+                ));
+            }
+            options.catalog = catalog;
+            options.schema = schema;
+            if options.output_format == OutputFormat::Table {
+                println!("Using {}.{}", options.catalog, options.schema);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn decode_response<T: for<'de> Deserialize<'de>>(response: Response) -> Result<T, String> {
@@ -228,6 +336,153 @@ fn connection_error(error: reqwest::Error) -> String {
 
 fn endpoint(options: &Options, path: &str) -> String {
     format!("{}{}", options.server.trim_end_matches('/'), path)
+}
+
+fn parse_sql_metadata(sql: &str, options: &Options) -> Result<Option<MetaCommand>, String> {
+    let mut tokenizer = Tokenizer::new(&GenericDialect {}, sql);
+    let mut tokens = tokenizer
+        .tokenize()
+        .map_err(|error| format!("invalid metadata statement: {error}"))?
+        .into_iter()
+        .filter(|token| !matches!(token, Token::Whitespace(_)))
+        .collect::<Vec<_>>();
+    if matches!(tokens.last(), Some(Token::SemiColon)) {
+        tokens.pop();
+    }
+    if tokens.iter().any(|token| matches!(token, Token::SemiColon)) {
+        return Err("metadata commands accept one statement at a time".to_owned());
+    }
+    if tokens.is_empty() {
+        return Ok(None);
+    }
+    let Some(first) = word(&tokens[0]) else {
+        return Ok(None);
+    };
+    if first.1.is_some() {
+        return Ok(None);
+    }
+    if first.0.eq_ignore_ascii_case("SHOW") {
+        return parse_show(&tokens[1..], options).map(Some);
+    }
+    if first.0.eq_ignore_ascii_case("USE") {
+        let names = parse_names(&tokens[1..])?;
+        return match names.as_slice() {
+            [schema] => Ok(Some(MetaCommand::Use {
+                catalog: options.catalog.clone(),
+                schema: schema.clone(),
+            })),
+            [catalog, schema] => Ok(Some(MetaCommand::Use {
+                catalog: catalog.clone(),
+                schema: schema.clone(),
+            })),
+            _ => Err("usage: USE [catalog.]schema".to_owned()),
+        };
+    }
+    Ok(None)
+}
+
+fn parse_show(tokens: &[Token], options: &Options) -> Result<MetaCommand, String> {
+    let Some((kind, quote_style)) = tokens.first().and_then(word) else {
+        return Err(
+            "usage: SHOW CATALOGS | SHOW SCHEMAS [IN catalog] | SHOW TABLES [IN [catalog.]schema]"
+                .to_owned(),
+        );
+    };
+    if quote_style.is_some() {
+        return Err("unsupported SHOW statement".to_owned());
+    }
+    if kind.eq_ignore_ascii_case("CATALOGS") {
+        if tokens.len() == 1 {
+            return Ok(MetaCommand::Catalogs);
+        }
+        return Err("unsupported SHOW CATALOGS clause".to_owned());
+    }
+    if !(kind.eq_ignore_ascii_case("SCHEMAS") || kind.eq_ignore_ascii_case("TABLES")) {
+        return Err("unsupported SHOW statement".to_owned());
+    }
+    let names = match &tokens[1..] {
+        [] => Vec::new(),
+        [Token::Word(connector), rest @ ..]
+            if connector.quote_style.is_none()
+                && (connector.value.eq_ignore_ascii_case("IN")
+                    || connector.value.eq_ignore_ascii_case("FROM")) =>
+        {
+            parse_names(rest)?
+        }
+        _ => {
+            return Err(format!(
+                "unsupported SHOW {} clause",
+                kind.to_ascii_uppercase()
+            ));
+        }
+    };
+    if kind.eq_ignore_ascii_case("SCHEMAS") {
+        return match names.as_slice() {
+            [] => Ok(MetaCommand::Schemas {
+                catalog: options.catalog.clone(),
+            }),
+            [catalog] => Ok(MetaCommand::Schemas {
+                catalog: catalog.clone(),
+            }),
+            _ => Err("usage: SHOW SCHEMAS [IN catalog]".to_owned()),
+        };
+    }
+    match names.as_slice() {
+        [] => Ok(MetaCommand::Tables {
+            catalog: options.catalog.clone(),
+            schema: options.schema.clone(),
+        }),
+        [schema] => Ok(MetaCommand::Tables {
+            catalog: options.catalog.clone(),
+            schema: schema.clone(),
+        }),
+        [catalog, schema] => Ok(MetaCommand::Tables {
+            catalog: catalog.clone(),
+            schema: schema.clone(),
+        }),
+        _ => Err("usage: SHOW TABLES [IN [catalog.]schema]".to_owned()),
+    }
+}
+
+fn metadata_for_target(
+    target: &str,
+    options: &Options,
+    use_command: bool,
+) -> Result<MetaCommand, String> {
+    let prefix = if use_command { "USE" } else { "SHOW TABLES IN" };
+    let meta = parse_sql_metadata(&format!("{prefix} {target}"), options)?
+        .ok_or_else(|| "invalid metadata target".to_owned())?;
+    Ok(meta)
+}
+
+fn parse_names(tokens: &[Token]) -> Result<Vec<String>, String> {
+    if tokens.is_empty() {
+        return Err("missing identifier".to_owned());
+    }
+    let mut names = Vec::new();
+    let mut expects_name = true;
+    for token in tokens {
+        if expects_name {
+            let Some((name, _)) = word(token) else {
+                return Err("expected an identifier".to_owned());
+            };
+            names.push(name.to_owned());
+        } else if !matches!(token, Token::Period) {
+            return Err("expected '.' between identifiers".to_owned());
+        }
+        expects_name = !expects_name;
+    }
+    if expects_name {
+        return Err("expected an identifier after '.'".to_owned());
+    }
+    Ok(names)
+}
+
+fn word(token: &Token) -> Option<(&str, Option<char>)> {
+    match token {
+        Token::Word(word) => Some((&word.value, word.quote_style)),
+        _ => None,
+    }
 }
 
 fn format_result(response: &StatementResponse, format: OutputFormat) -> Result<String, String> {
@@ -285,7 +540,7 @@ fn format_table(response: &StatementResponse) -> String {
     let mut widths: Vec<usize> = response
         .columns
         .iter()
-        .map(|column| column.name.len().max(column.data_type.len()))
+        .map(|column| column.name.len())
         .collect();
     let rows: Vec<Vec<String>> = response
         .data
@@ -315,21 +570,38 @@ fn format_table(response: &StatementResponse) -> String {
             .map(|column| column.name.clone())
             .collect::<Vec<_>>(),
         &widths,
+        &vec![false; response.columns.len()],
     ));
     output.push_str(&separator);
+    let numeric = response
+        .columns
+        .iter()
+        .map(|column| is_numeric_type(&column.data_type))
+        .collect::<Vec<_>>();
     for row in &rows {
-        output.push_str(&table_row(row, &widths));
+        output.push_str(&table_row(row, &widths, &numeric));
     }
     output.push_str(&separator);
-    output.push_str(&format!("({} rows)\n", rows.len()));
+    output.push_str(&format!(
+        "({} {})\n",
+        rows.len(),
+        if rows.len() == 1 { "row" } else { "rows" }
+    ));
     output
 }
 
-fn table_row(values: &[String], widths: &[usize]) -> String {
+fn table_row(values: &[String], widths: &[usize], numeric: &[bool]) -> String {
     let cells = widths
         .iter()
         .enumerate()
-        .map(|(index, width)| format!(" {:width$} ", values.get(index).map_or("", String::as_str)))
+        .map(|(index, width)| {
+            let value = values.get(index).map_or("", String::as_str);
+            if numeric.get(index).copied().unwrap_or(false) {
+                format!(" {value:>width$} ")
+            } else {
+                format!(" {value:<width$} ")
+            }
+        })
         .collect::<Vec<_>>()
         .join("|");
     format!("|{cells}|\n")
@@ -343,25 +615,50 @@ fn value_text(value: &Value) -> String {
     }
 }
 
-fn print_names(header: &str, names: &[String]) {
-    println!("{header}");
-    for name in names {
-        println!("{name}");
-    }
-    println!("({} rows)", names.len());
+fn is_numeric_type(data_type: &str) -> bool {
+    let type_name = data_type.to_ascii_lowercase();
+    ["int", "float", "double", "decimal", "numeric", "real"]
+        .iter()
+        .any(|needle| type_name.contains(needle))
+}
+
+fn print_metadata(header: &str, names: Vec<String>, format: OutputFormat) {
+    let response = StatementResponse {
+        id: String::new(),
+        state: String::new(),
+        columns: vec![Column {
+            name: header.to_owned(),
+            data_type: "varchar".to_owned(),
+        }],
+        data: names
+            .into_iter()
+            .map(|name| vec![Value::String(name)])
+            .collect(),
+        error: None,
+        elapsed_ms: 0,
+    };
+    print!(
+        "{}",
+        format_result(&response, format).expect("metadata output is serializable")
+    );
 }
 
 fn print_remote_help() {
-    println!(".catalogs              List catalogs");
-    println!(".schemas               List schemas in the current catalog");
-    println!(".tables                List tables in the current schema");
-    println!(".use [catalog.]schema  Change the session context");
-    println!(".quit                  Exit");
+    println!(
+        "SQL metadata: SHOW CATALOGS; SHOW SCHEMAS [IN catalog]; SHOW TABLES [IN [catalog.]schema]; USE [catalog.]schema;"
+    );
+    println!(
+        ".catalogs  .schemas [catalog]  .tables [[catalog.]schema]  .use [catalog.]schema  .clear  .quit"
+    );
+    println!("Aliases: HELP, CLEAR, EXIT, QUIT (a trailing ; is accepted).");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
 
     fn response() -> StatementResponse {
         StatementResponse {
@@ -402,7 +699,164 @@ mod tests {
         let output = format_result(&response(), OutputFormat::Table).unwrap();
         assert!(output.contains("name"));
         assert!(output.contains("a,b"));
-        assert!(output.contains("(1 rows)"));
+        assert!(output.contains("(1 row)"));
+    }
+
+    fn options() -> Options {
+        match crate::args::parse(&["kaveon".to_owned()]).unwrap() {
+            crate::args::Command::Run(options) => *options,
+            _ => panic!("expected options"),
+        }
+    }
+
+    #[test]
+    fn parses_case_insensitive_show_with_quoted_identifier_and_comment() {
+        let mut options = options();
+        options.catalog = "default_catalog".to_owned();
+        assert_eq!(
+            parse_sql_metadata(
+                "-- list\nshow tables from \"sales.catalog\".\"gold schema\";",
+                &options
+            )
+            .unwrap(),
+            Some(MetaCommand::Tables {
+                catalog: "sales.catalog".to_owned(),
+                schema: "gold schema".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_metadata_clauses_and_multiple_statements() {
+        let options = options();
+        assert!(
+            parse_sql_metadata("SHOW TABLES LIKE 'orders'", &options)
+                .unwrap_err()
+                .contains("unsupported")
+        );
+        assert!(
+            parse_sql_metadata("SHOW CATALOGS; USE other", &options)
+                .unwrap_err()
+                .contains("one statement")
+        );
+    }
+
+    #[test]
+    fn use_defaults_to_current_catalog_and_does_not_parse_injection() {
+        let mut options = options();
+        options.catalog = "medallion".to_owned();
+        assert_eq!(
+            parse_sql_metadata("USE \"test schema\"", &options).unwrap(),
+            Some(MetaCommand::Use {
+                catalog: "medallion".to_owned(),
+                schema: "test schema".to_owned(),
+            })
+        );
+        assert!(parse_sql_metadata("USE test; SELECT 1", &options).is_err());
+    }
+
+    #[test]
+    fn metadata_paths_percent_encode_identifier_segments() {
+        let mut options = options();
+        options.server = "https://engine.example/".to_owned();
+        assert_eq!(
+            metadata_url(&options, &["sales/catalog", "schema", "gold schema"]).unwrap(),
+            "https://engine.example/v1/catalog/sales%2Fcatalog/schema/gold%20schema"
+        );
+    }
+
+    #[test]
+    fn table_output_right_aligns_numeric_values() {
+        let output = format_table(&response());
+        assert!(output.contains("| a,b  |     2 |"));
+        assert!(!output.contains("Int64"));
+    }
+
+    #[test]
+    fn bare_repl_aliases_are_case_insensitive() {
+        assert!(is_repl_alias("EXIT;", "exit", "quit"));
+        assert!(is_repl_alias(" quit ", "exit", "quit"));
+        assert!(!is_repl_alias("exit now", "exit", "quit"));
+    }
+
+    #[test]
+    fn metadata_http_paths_work_and_failed_use_preserves_context() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let expected = [
+                "/v1/catalog/medallion/schema",
+                "/v1/catalog/medallion/schema/test/table",
+                "/v1/catalog/medallion/schema",
+                "/v1/catalog/medallion/schema",
+            ];
+            for path in expected {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 2048];
+                let bytes = stream.read(&mut request).unwrap();
+                let line = std::str::from_utf8(&request[..bytes])
+                    .unwrap()
+                    .lines()
+                    .next()
+                    .unwrap();
+                assert_eq!(line, format!("GET {path} HTTP/1.1"));
+                let body = if path.ends_with("/table") {
+                    r#"{"tables":["orders"]}"#
+                } else {
+                    r#"{"schemas":["test"]}"#
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(), body
+                )
+                .unwrap();
+            }
+        });
+        let mut options = options();
+        options.auth = "none".to_owned();
+        options.server = format!("http://{address}");
+        let client = Session::connect(&options).unwrap();
+
+        run_meta_command(
+            &client,
+            &mut options,
+            MetaCommand::Schemas {
+                catalog: "medallion".to_owned(),
+            },
+        )
+        .unwrap();
+        run_meta_command(
+            &client,
+            &mut options,
+            MetaCommand::Tables {
+                catalog: "medallion".to_owned(),
+                schema: "test".to_owned(),
+            },
+        )
+        .unwrap();
+        run_meta_command(
+            &client,
+            &mut options,
+            MetaCommand::Use {
+                catalog: "medallion".to_owned(),
+                schema: "test".to_owned(),
+            },
+        )
+        .unwrap();
+        let error = run_meta_command(
+            &client,
+            &mut options,
+            MetaCommand::Use {
+                catalog: "medallion".to_owned(),
+                schema: "missing".to_owned(),
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("not found"));
+        assert_eq!(options.catalog, "medallion");
+        assert_eq!(options.schema, "test");
+        server.join().unwrap();
     }
 
     #[test]

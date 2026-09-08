@@ -186,10 +186,12 @@ mod tests {
         store.publish("query", "alice", writer).unwrap();
         let alice = Identity {
             principal: "alice".into(),
+            display_identity: None,
             role: Role::Analyst,
         };
         let bob = Identity {
             principal: "bob".into(),
+            display_identity: None,
             role: Role::Analyst,
         };
         assert_eq!(

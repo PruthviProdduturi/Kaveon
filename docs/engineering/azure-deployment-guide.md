@@ -129,7 +129,23 @@ kaveon --server https://localhost:18443 --ca-cert "$HOME\kaveon-ca.crt" --catalo
 
 ### 6. Run a query
 
-In the CLI:
+In the CLI, discover catalogs and select your session context:
+
+```sql
+SHOW CATALOGS;
+SHOW SCHEMAS IN medallion;
+USE medallion.test;
+SHOW TABLES;
+```
+
+The prompt shows the selected schema, for example `kaveon:test>`. These metadata
+commands are handled by the CLI through authenticated catalog APIs; they do not
+imply that the Engine's SQL HTTP endpoint accepts `SHOW` or `USE`. The existing
+`.catalogs`, `.schemas`, `.tables` and `.use medallion.test` shortcuts still work.
+Output is printed directly without an external pager such as `less`.
+Use `help` for commands and `exit` or `quit` to leave; these do not need semicolons.
+
+Then run the fixture queries:
 
 ```sql
 SELECT COUNT(*), SUM(amount_cents) FROM orders;

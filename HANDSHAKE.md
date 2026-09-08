@@ -96,6 +96,15 @@ See docs/engineering/engine-entra-sign-in.md and azure-deployment-guide.md.
 
 ### Preview distribution — September 8
 
+CLI usability/query attribution update: SQL-style metadata commands and validated
+USE are handled by the remote CLI over existing catalog APIs, with aligned output,
+schema prompt and help/exit/quit/clear aliases. Full Trino CLI parity is not claimed;
+see docs/engineering/cli-compatibility.md. Query history now displays the reported
+client and authenticated user. Entra display username/name comes only from verified
+JWT claims; immutable tenant/object-ID principal still controls roles and ownership.
+Request `user` remains ignored for attribution. Existing records without a display
+name fall back to principal; no retroactive directory lookup is performed.
+
 Windows installer upgrade fix: PowerShell bound the null File.Replace backup
 argument as an empty path on the user's machine. Replacement now uses a unique
 backup file, deleted only after success. Tested upgrading the existing installed

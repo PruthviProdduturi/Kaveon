@@ -34,6 +34,18 @@ struct Claims {
     // Typed required claims also prevent accepting malformed NumericDate values.
     exp: u64,
     nbf: u64,
+    preferred_username: Option<serde_json::Value>,
+    name: Option<serde_json::Value>,
+}
+
+const MAX_DISPLAY_IDENTITY_BYTES: usize = 256;
+
+fn display_identity(value: Option<&serde_json::Value>) -> Option<String> {
+    let value = value?.as_str()?.trim();
+    (!value.is_empty()
+        && value.len() <= MAX_DISPLAY_IDENTITY_BYTES
+        && !value.chars().any(char::is_control))
+    .then(|| value.to_owned())
 }
 impl EntraConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
@@ -95,6 +107,8 @@ impl EntraConfig {
             .ok_or(StatusCode::FORBIDDEN)?;
         Ok(Identity {
             principal: format!("entra:{}:{}", claims.tid, claims.oid),
+            display_identity: display_identity(claims.preferred_username.as_ref())
+                .or_else(|| display_identity(claims.name.as_ref())),
             role,
         })
     }
@@ -233,6 +247,7 @@ mod tests {
         let identity = config.verify(&sign(&claims), &keys).unwrap();
         assert_eq!(identity.role, Role::Analyst);
         assert_eq!(identity.principal, format!("entra:{TENANT}:{OID}"));
+        assert_eq!(identity.display_identity, None);
         for (field, value) in [
             ("aud", serde_json::json!("https://management.azure.com/")),
             ("iss", serde_json::json!("https://attacker.invalid/v2.0")),
@@ -268,6 +283,40 @@ mod tests {
         assert!(
             config
                 .verify(std::str::from_utf8(&token).unwrap(), &keys)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn signed_display_claim_is_preferred_and_invalid_values_fall_back() {
+        let (config, keys, claims) = setup();
+        let mut named = claims.clone();
+        named["preferred_username"] = serde_json::json!("ada@example.com");
+        named["name"] = serde_json::json!("Ada Lovelace");
+        let identity = config.verify(&sign(&named), &keys).unwrap();
+        assert_eq!(
+            identity.display_identity.as_deref(),
+            Some("ada@example.com")
+        );
+
+        named["preferred_username"] = serde_json::json!(" \u{0007} ");
+        let identity = config.verify(&sign(&named), &keys).unwrap();
+        assert_eq!(identity.display_identity.as_deref(), Some("Ada Lovelace"));
+
+        named["name"] = serde_json::json!(" ");
+        let identity = config.verify(&sign(&named), &keys).unwrap();
+        assert_eq!(identity.display_identity, None);
+
+        named["preferred_username"] = serde_json::json!(123);
+        let identity = config.verify(&sign(&named), &keys).unwrap();
+        assert_eq!(identity.display_identity, None);
+
+        let mut tampered = sign(&named).into_bytes();
+        let last = tampered.len() - 10;
+        tampered[last] = if tampered[last] == b'A' { b'B' } else { b'A' };
+        assert!(
+            config
+                .verify(std::str::from_utf8(&tampered).unwrap(), &keys)
                 .is_err()
         );
     }
