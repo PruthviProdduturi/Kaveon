@@ -43,6 +43,11 @@ spec:
 {{ range $role := list "coordinator" "worker" }}
 {{ $isCoordinator := eq $role "coordinator" }}
 {{ $settings := ternary $.Values.coordinator $.Values.workers $isCoordinator }}
+{{ $roleDigest := $digest }}
+{{ if and $isCoordinator $.Values.coordinator.imageDigest }}
+{{ $roleDigest = $.Values.coordinator.imageDigest }}
+{{ if not (regexMatch "^sha256:[a-f0-9]{64}$" $roleDigest) }}{{ fail "coordinator.imageDigest must be a sha256 digest" }}{{ end }}
+{{ end }}
 {{ $service := printf "%s-workers" $.Release.Name }}
 {{ if $isCoordinator }}{{ $service = printf "%s-coordinator" $.Release.Name }}{{ end }}
 ---
@@ -89,7 +94,7 @@ spec:
       {{- end }}
       containers:
         - name: engine
-          image: {{ printf "%s@%s" $repo $digest | quote }}
+          image: {{ printf "%s@%s" $repo $roleDigest | quote }}
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

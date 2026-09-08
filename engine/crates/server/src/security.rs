@@ -164,7 +164,8 @@ pub async fn authorize(
     next: Next,
 ) -> Response {
     let path = request.uri().path();
-    if matches!(path, "/health" | "/ready") {
+    // Only the static login shell is public; dashboard data stays authenticated.
+    if matches!(path, "/health" | "/ready") || (path == "/ui" && request.method() == Method::GET) {
         return next.run(request).await;
     }
     let internal = path == "/v1/task"
@@ -308,6 +309,91 @@ impl Drop for PrincipalPermit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn dashboard_shell_is_public_but_data_requires_authentication() {
+        let config = crate::config::ServerConfig {
+            security: SecurityConfig {
+                principals: vec![PrincipalCredential {
+                    token: "a".repeat(32),
+                    principal: "alice".into(),
+                    role: Role::Analyst,
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let state = Arc::new(crate::AppState {
+            disk_exchange_store: None,
+            results: crate::results::ResultStore::default(),
+            principal_admission: PrincipalAdmission::default(),
+            cluster: tokio::sync::RwLock::new(crate::cluster::ClusterState::new(&config)),
+            catalog: tokio::sync::RwLock::new(kaveon_core::CatalogManager::new(
+                "kaveon", "default",
+            )),
+            catalog_store: kaveon_catalog::CatalogStore::open_in_memory().unwrap(),
+            exchange_store: crate::exchange::ExchangeStore::default(),
+            lifecycle: crate::lifecycle::WorkerLifecycle::default(),
+            memory_admission: kaveon_core::MemoryAdmissionController::new(
+                config.memory_admission_limit_bytes,
+            )
+            .unwrap(),
+            config,
+        });
+        let app = axum::Router::new()
+            .route("/ui", axum::routing::get(crate::ui::dashboard))
+            .route("/v1/cluster", axum::routing::get(|| async { "protected" }))
+            .route("/v1/query", axum::routing::get(|| async { "protected" }))
+            .layer(axum::middleware::from_fn_with_state(state, authorize));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = reqwest::Client::new();
+        let shell = client
+            .get(format!("http://{address}/ui"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(shell.status(), StatusCode::OK);
+        assert!(shell.text().await.unwrap().contains("id=\"auth-token\""));
+        for path in ["/v1/cluster", "/v1/query"] {
+            let url = format!("http://{address}{path}");
+            assert_eq!(
+                client.get(&url).send().await.unwrap().status(),
+                StatusCode::UNAUTHORIZED
+            );
+            assert_eq!(
+                client
+                    .get(&url)
+                    .bearer_auth("wrong")
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::UNAUTHORIZED
+            );
+            assert_eq!(
+                client
+                    .get(&url)
+                    .bearer_auth("a".repeat(32))
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::OK
+            );
+        }
+        assert_eq!(
+            client
+                .post(format!("http://{address}/ui"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        server.abort();
+    }
+
     #[test]
     fn rejects_missing_wrong_and_untrusted_forwarded_identity() {
         let config = SecurityConfig {

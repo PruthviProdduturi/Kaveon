@@ -66,6 +66,16 @@
 
 ## Interface contracts
 
+### Engine UI access fix — September 8
+
+User authorized fixing secured dashboard access. GET `/ui` now serves a public
+static token sign-in shell; data APIs remain authenticated, tokens stay in memory,
+and Disconnect clears displayed data. Six security tests and real Edge browser
+interaction pass. `scripts/aks-engine-ui.py` provides a loopback-only authenticated
+read-only viewer through AKS Run Command while direct API connectivity is blocked.
+Snapshots refresh once per minute and pause when idle; no subscription policy or
+public ingress changes. See `docs/engineering/engine-ui-access.md`.
+
 ### AKS test deployment authorized — September 8
 
 User resumed AKS provisioning in Microsoft tenant / L1R_DSEng subscription
