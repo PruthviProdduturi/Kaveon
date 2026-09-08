@@ -1,5 +1,16 @@
 # Private AKS engine test chart
 
+The client-facing Service is `kaveon` (the Helm release name):
+
+```powershell
+kubectl -n kaveon port-forward service/kaveon 18443:8080
+```
+
+Open `https://localhost:18443/ui`. The coordinator Service remains for internal
+discovery and its existing TLS DNS identity; this client alias requires no token,
+certificate or workload changes. Direct TLS clients must use a certificate-covered
+hostname rather than assuming the new Service name is in the certificate.
+
 Deploy into namespace `kaveon` with release name `kaveon` to match the Bicep workload identity subject. Supply `image.repository`, immutable `image.digest` and `workloadIdentity.clientId`. This chart creates one coordinator with a retained Azure Disk PVC and three workers on separate worker-pool nodes. It creates only private ClusterIP services. It does not deploy the Studio/API, provision Azure resources or initialize catalogs.
 
 Create existing Secret `kaveon-engine-auth` with keys `security.json`, `exchange-token` and `catalog-token`. The JSON uses the server's security schema, for example `{"principals":[{"principal":"test-admin","role":"admin","token":"<random token at least 32 bytes>"}]}`. Generate separate random credentials for every token domain. Do not put real credentials in values or version control.

@@ -66,6 +66,12 @@
 
 ## Interface contracts
 
+### Client service name — September 8
+
+User requested `service/kaveon` for port-forwarding. Added that client-facing
+Service to the chart and live namespace, selecting the existing coordinator.
+Retained coordinator DNS for internal discovery/TLS; no protocol changes.
+
 ### Direct AKS access restored — September 8
 
 The fixed cluster API IP allowlist blocked this workstation's varying egress.
