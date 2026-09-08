@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install Kaveon Engine CLI (macOS / Linux)
-# Usage: curl -sSf https://raw.githubusercontent.com/PruthviProdduturi/Kaveon/dev/scripts/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/PruthviProdduturi/Kaveon/dev/scripts/install.sh | bash
 #    or: ./scripts/install.sh
 set -euo pipefail
 
@@ -19,7 +19,6 @@ ARCH="$(uname -m)"
 case "${OS}-${ARCH}" in
     Linux-x86_64)   ASSET="kaveon-linux-x64" ;;
     Darwin-arm64)   ASSET="kaveon-macos-arm64" ;;
-    Darwin-x86_64)  ASSET="kaveon-macos-arm64" ;;  # Rosetta
     *)
         echo "  Unsupported platform: ${OS}-${ARCH}"
         echo "  Build from source: cd engine && cargo install --path crates/cli"
@@ -30,10 +29,15 @@ esac
 URL="https://github.com/${REPO}/releases/download/${TAG}/${ASSET}"
 
 mkdir -p "${INSTALL_DIR}"
+TEMP_BINARY="$(mktemp "${INSTALL_DIR}/.kaveon.XXXXXX")"
+trap 'rm -f -- "${TEMP_BINARY}"' EXIT
 
 echo "  Downloading ${ASSET}..."
-curl -sSL "${URL}" -o "${INSTALL_DIR}/kaveon"
-chmod +x "${INSTALL_DIR}/kaveon"
+curl -fsSL --retry 3 "${URL}" -o "${TEMP_BINARY}"
+test -s "${TEMP_BINARY}"
+chmod +x "${TEMP_BINARY}"
+"${TEMP_BINARY}" --version
+mv -f -- "${TEMP_BINARY}" "${INSTALL_DIR}/kaveon"
 
 echo "  Installed: ${INSTALL_DIR}/kaveon"
 
@@ -47,5 +51,7 @@ fi
 echo ""
 echo "  Done! Run:"
 echo "    kaveon --version"
-echo "    kaveon --data-dir /path/to/parquet/files"
+echo "    kaveon --local --data-dir /path/to/parquet/files"
+echo "    kaveon --server https://localhost:8080 --ca-cert /path/to/ca.crt"
+echo "  For Microsoft sign-in, follow the CLI prompt when your server enables it."
 echo ""

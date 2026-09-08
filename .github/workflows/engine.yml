@@ -115,7 +115,8 @@ jobs:
             **Install:** Download the binary for your platform, place it on your PATH.
 
             ```
-            kaveon --data-dir /path/to/parquet/files
+            kaveon --local --data-dir /path/to/parquet/files
+            kaveon --server https://localhost:8080 --ca-cert /path/to/ca.crt
             ```
           prerelease: true
           files: release/*

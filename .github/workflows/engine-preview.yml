@@ -1,0 +1,181 @@
+name: Engine preview packages
+
+on:
+  workflow_run:
+    workflows: [Engine]
+    types: [completed]
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: engine-preview
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository) ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Define immutable preview coordinates
+        id: coordinates
+        shell: bash
+        run: |
+          sha=$(git rev-parse HEAD)
+          owner=${GITHUB_REPOSITORY_OWNER,,}
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/$owner/kaveon-engine" >> "$GITHUB_OUTPUT"
+          echo "chart_registry=ghcr.io/$owner/charts" >> "$GITHUB_OUTPUT"
+          echo "chart_version=0.1.0-preview.g$sha" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish Linux amd64 Engine preview
+        id: image
+        uses: docker/build-push-action@v6
+        with:
+          context: engine
+          file: engine/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.coordinates.outputs.image }}:sha-${{ steps.coordinates.outputs.sha }}
+            ${{ steps.coordinates.outputs.image }}:preview
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.coordinates.outputs.sha }}
+            org.opencontainers.image.description=Kaveon Engine development preview; not a production release
+          cache-from: type=gha,scope=engine-preview
+          cache-to: type=gha,mode=max,scope=engine-preview
+
+      - uses: azure/setup-helm@v4.3.0
+        with:
+          version: v3.17.3
+
+      - name: Validate and publish the secure test chart
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ steps.coordinates.outputs.image }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          CHART_VERSION: ${{ steps.coordinates.outputs.chart_version }}
+          CHART_REGISTRY: ${{ steps.coordinates.outputs.chart_registry }}
+          SOURCE_SHA: ${{ steps.coordinates.outputs.sha }}
+        run: |
+          mkdir -p staging
+          cp -R infra/helm/kaveon-test staging/kaveon-test
+          python - <<'PY'
+          import json, os, pathlib
+          path = pathlib.Path('staging/kaveon-test/values.yaml')
+          contents = path.read_text()
+          for original, value in [('  repository: ""', os.environ['IMAGE']),
+                                  ('  digest: ""', os.environ['DIGEST'])]:
+              assert contents.count(original) == 1, 'Chart image defaults changed; review packaging'
+              contents = contents.replace(original, original.split(':')[0] + ': ' + json.dumps(value))
+          path.write_text(contents)
+          PY
+          helm lint staging/kaveon-test --strict \
+            --set workloadIdentity.clientId=00000000-0000-0000-0000-000000000001
+          mkdir -p release
+          helm package staging/kaveon-test --version "$CHART_VERSION" \
+            --app-version "$SOURCE_SHA" --destination release
+          printf '%s' "$GH_TOKEN" | helm registry login ghcr.io \
+            --username "$GITHUB_ACTOR" --password-stdin
+          helm push "release/kaveon-test-$CHART_VERSION.tgz" "oci://$CHART_REGISTRY"
+
+      - name: Assemble deployment bundle without credentials
+        shell: bash
+        env:
+          IMAGE: ${{ steps.coordinates.outputs.image }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          CHART_VERSION: ${{ steps.coordinates.outputs.chart_version }}
+          CHART_REGISTRY: ${{ steps.coordinates.outputs.chart_registry }}
+          SOURCE_SHA: ${{ steps.coordinates.outputs.sha }}
+        run: |
+          mkdir -p bundle/infra bundle/scripts bundle/docs/engineering
+          cp -R infra/bicep infra/helm bundle/infra/
+          tar -xzf "release/kaveon-test-$CHART_VERSION.tgz" -C bundle/infra/helm
+          cp scripts/aks-test-secrets.py scripts/configure-engine-entra.py \
+            scripts/aks-test-bundle.py scripts/generate-medallion-fixture.py \
+            scripts/verify-aks-test-results.py bundle/scripts/
+          cp docs/engineering/azure-deployment-guide.md \
+            docs/engineering/engine-entra-sign-in.md bundle/docs/engineering/
+          python - <<'PY'
+          import json, os, pathlib
+          metadata = {
+              'channel': 'preview',
+              'source_sha': os.environ['SOURCE_SHA'],
+              'platform': 'linux/amd64',
+              'image_repository': os.environ['IMAGE'],
+              'image_tag': 'sha-' + os.environ['SOURCE_SHA'],
+              'image_digest': os.environ['DIGEST'],
+              'image_reference': os.environ['IMAGE'] + '@' + os.environ['DIGEST'],
+              'chart_reference': 'oci://' + os.environ['CHART_REGISTRY'] + '/kaveon-test',
+              'chart_version': os.environ['CHART_VERSION'],
+          }
+          payload = json.dumps(metadata, indent=2) + '\n'
+          pathlib.Path('bundle/preview-artifacts.json').write_text(payload)
+          pathlib.Path('release/preview-artifacts.json').write_text(payload)
+          pathlib.Path('bundle/README.txt').write_text(
+              'Kaveon Azure development preview. Start with docs/engineering/azure-deployment-guide.md.\n'
+              'Pin the image digest and chart version in preview-artifacts.json.\n'
+              'GHCR package visibility is controlled separately; anonymous downloads require public packages.\n'
+              'Generate private credentials locally; no credentials are included.\n'
+          )
+          PY
+          (cd bundle && zip -qr ../release/kaveon-deploy.zip .)
+          (cd release && sha256sum kaveon-deploy.zip preview-artifacts.json kaveon-test-*.tgz > SHA256SUMS)
+
+      - name: Publish commit-specific preview bundle
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: engine-preview-${{ steps.coordinates.outputs.sha }}
+          target_commitish: ${{ steps.coordinates.outputs.sha }}
+          name: Engine preview ${{ steps.coordinates.outputs.sha }}
+          prerelease: true
+          make_latest: false
+          files: release/*
+          body: |
+            Development preview for Linux amd64. Download `kaveon-deploy.zip` for deployment without cloning.
+            Image digest and Helm OCI coordinates are in `preview-artifacts.json`.
+            The chart requires deployment-specific credentials, TLS and workload identity configuration.
+            GHCR packages must be made public by a package administrator before anonymous pulls work.
+            This is not a production qualification or availability guarantee.
+
+      - name: Update rolling preview downloads
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: engine-preview
+          target_commitish: ${{ steps.coordinates.outputs.sha }}
+          name: Engine preview (rolling)
+          prerelease: true
+          make_latest: false
+          files: |
+            release/kaveon-deploy.zip
+            release/preview-artifacts.json
+            release/SHA256SUMS
+            release/kaveon-test-*.tgz
+          body: |
+            Rolling development preview. Read `preview-artifacts.json` for the exact source commit,
+            Linux amd64 image digest and versioned Helm OCI chart. Commit-specific downloads are
+            published under `engine-preview-<source_sha>`. GHCR package visibility must be verified
+            before anonymous installation. No production readiness claim is implied.

@@ -8,6 +8,7 @@ credentialsSecret: kaveon-engine-auth
 tlsSecret: kaveon-engine-tls
 coordinator:
   imageDigest: ""
+  credentialsSecret: ""
   nodeSelector:
     kubernetes.azure.com/agentpool: system
   storageClass: managed-csi

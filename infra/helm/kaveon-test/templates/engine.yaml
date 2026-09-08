@@ -59,6 +59,8 @@ spec:
 {{ range $role := list "coordinator" "worker" }}
 {{ $isCoordinator := eq $role "coordinator" }}
 {{ $settings := ternary $.Values.coordinator $.Values.workers $isCoordinator }}
+{{ $credentials := $.Values.credentialsSecret }}
+{{ if and $isCoordinator $.Values.coordinator.credentialsSecret }}{{ $credentials = $.Values.coordinator.credentialsSecret }}{{ end }}
 {{ $roleDigest := $digest }}
 {{ if and $isCoordinator $.Values.coordinator.imageDigest }}
 {{ $roleDigest = $.Values.coordinator.imageDigest }}
@@ -139,11 +141,11 @@ spec:
               value: "https://$(POD_NAME).{{ $service }}.{{ $.Release.Namespace }}.svc.cluster.local:8080"
               {{- end }}
             - name: KAVEON_SECURITY_JSON
-              valueFrom: {secretKeyRef: {name: {{ $.Values.credentialsSecret }}, key: security.json}}
+              valueFrom: {secretKeyRef: {name: {{ $credentials }}, key: security.json}}
             - name: KAVEON_EXCHANGE_TOKEN
-              valueFrom: {secretKeyRef: {name: {{ $.Values.credentialsSecret }}, key: exchange-token}}
+              valueFrom: {secretKeyRef: {name: {{ $credentials }}, key: exchange-token}}
             - name: KAVEON_CATALOG_ADMIN_TOKEN
-              valueFrom: {secretKeyRef: {name: {{ $.Values.credentialsSecret }}, key: catalog-token}}
+              valueFrom: {secretKeyRef: {name: {{ $credentials }}, key: catalog-token}}
             - name: KAVEON_TLS_CERT_PATH
               value: /etc/kaveon/tls/tls.crt
             - name: KAVEON_TLS_KEY_PATH

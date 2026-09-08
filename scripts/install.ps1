@@ -21,26 +21,44 @@ New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
 # Download
 $dest = "$installDir\kaveon.exe"
+$tempBinary = Join-Path $installDir (".kaveon-" + [Guid]::NewGuid().ToString("N") + ".exe")
 Write-Host "  Downloading from $url" -ForegroundColor DarkGray
-Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
-
-if (-not (Test-Path $dest)) {
-    Write-Host "  Download failed." -ForegroundColor Red
-    exit 1
+try {
+    Invoke-WebRequest -Uri $url -OutFile $tempBinary -UseBasicParsing
+    if ((Get-Item -LiteralPath $tempBinary).Length -eq 0) {
+        throw "The downloaded CLI is empty."
+    }
+    & $tempBinary --version
+    if ($LASTEXITCODE -ne 0) {
+        throw "The downloaded CLI could not run on this machine."
+    }
+    if (Test-Path -LiteralPath $dest) {
+        [IO.File]::Replace($tempBinary, $dest, $null)
+    } else {
+        [IO.File]::Move($tempBinary, $dest)
+    }
+} finally {
+    if (Test-Path -LiteralPath $tempBinary) {
+        Remove-Item -LiteralPath $tempBinary -Force
+    }
 }
 
 Write-Host "  Installed: $dest" -ForegroundColor Green
 
 # Add to PATH
 $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-if ($userPath -notlike "*$installDir*") {
+if ($installDir -notin ($userPath -split ';')) {
     [Environment]::SetEnvironmentVariable("PATH", "$userPath;$installDir", "User")
-    $env:PATH = "$env:PATH;$installDir"
     Write-Host "  Added to PATH: $installDir" -ForegroundColor Green
+}
+if ($installDir -notin ($env:PATH -split ';')) {
+    $env:PATH = "$env:PATH;$installDir"
 }
 
 Write-Host ""
 Write-Host "  Done! Restart your terminal, then:" -ForegroundColor White
 Write-Host "    kaveon --version" -ForegroundColor DarkGray
-Write-Host "    kaveon --data-dir C:\path\to\parquet\files" -ForegroundColor DarkGray
+Write-Host "    kaveon --local --data-dir C:\path\to\parquet\files" -ForegroundColor DarkGray
+Write-Host "    kaveon --server https://localhost:8080 --ca-cert C:\path\to\ca.crt" -ForegroundColor DarkGray
+Write-Host "  For Microsoft sign-in, follow the CLI prompt when your server enables it." -ForegroundColor DarkGray
 Write-Host ""

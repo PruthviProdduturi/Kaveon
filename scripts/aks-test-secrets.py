@@ -18,6 +18,7 @@ from cryptography.x509.oid import NameOID
 
 p = argparse.ArgumentParser()
 p.add_argument('--output', type=pathlib.Path, required=True)
+p.add_argument('--image', default='kaveon-engine:aks-d567232', help='Local Engine image used to obtain public CA roots')
 args = p.parse_args()
 args.output.mkdir(parents=True, exist_ok=True)
 if any(args.output.iterdir()):
@@ -52,7 +53,7 @@ credentials = {'security.json': json.dumps(security),
                'exchange-token': tokens['exchange'],
                'catalog-token': tokens['catalog']}
 tls['ca.crt'] += subprocess.check_output(['docker', 'run', '--rm', '--entrypoint', 'cat',
-                                       'kaveon-engine:aks-d567232', '/etc/ssl/certs/ca-certificates.crt'])
+                                       args.image, '/etc/ssl/certs/ca-certificates.crt'])
 items = []
 for name, data in [('kaveon-engine-tls', tls), ('kaveon-engine-auth', {k: v.encode() for k, v in credentials.items()})]:
     items.append({'apiVersion': 'v1', 'kind': 'Secret', 'metadata': {'name': name, 'namespace': 'kaveon'},

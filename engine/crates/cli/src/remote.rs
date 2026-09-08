@@ -1,5 +1,6 @@
 use crate::args::{Options, OutputFormat};
-use reqwest::blocking::{Client, Response};
+use crate::auth::Session;
+use reqwest::blocking::Response;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
@@ -51,10 +52,7 @@ struct TableList {
 }
 
 pub fn run(options: &mut Options) -> Result<(), String> {
-    let client = Client::builder()
-        .timeout(options.timeout)
-        .build()
-        .map_err(|error| format!("cannot initialize HTTP client: {error}"))?;
+    let client = crate::auth::Session::connect(options)?;
 
     if let Some(sql) = options.execute.clone() {
         execute(&client, options, &sql)?;
@@ -69,7 +67,7 @@ pub fn run(options: &mut Options) -> Result<(), String> {
     repl(&client, options)
 }
 
-fn repl(client: &Client, options: &mut Options) -> Result<(), String> {
+fn repl(client: &Session, options: &mut Options) -> Result<(), String> {
     let stdin = io::stdin();
     let mut input = stdin.lock();
     let mut sql = String::new();
@@ -113,7 +111,7 @@ fn repl(client: &Client, options: &mut Options) -> Result<(), String> {
 }
 
 fn handle_meta_command(
-    client: &Client,
+    client: &Session,
     options: &mut Options,
     command: &str,
 ) -> Result<bool, String> {
@@ -155,7 +153,7 @@ fn handle_meta_command(
     Ok(false)
 }
 
-fn execute(client: &Client, options: &Options, sql: &str) -> Result<(), String> {
+fn execute(client: &Session, options: &Options, sql: &str) -> Result<(), String> {
     let url = endpoint(options, "/v1/statement");
     let request = StatementRequest {
         query: sql,
@@ -165,10 +163,10 @@ fn execute(client: &Client, options: &Options, sql: &str) -> Result<(), String> 
         source: &options.source,
         client: "kaveon-cli",
         client_tags: &options.client_tags,
-        result_delivery: "direct",
+        result_delivery: "inline",
     };
     let response = client
-        .post(url)
+        .request(reqwest::Method::POST, &url)?
         .json(&request)
         .send()
         .map_err(connection_error)?;
@@ -187,12 +185,12 @@ fn execute(client: &Client, options: &Options, sql: &str) -> Result<(), String> 
 }
 
 fn get_json<T: for<'de> Deserialize<'de>>(
-    client: &Client,
+    client: &Session,
     options: &Options,
     path: &str,
 ) -> Result<T, String> {
     let response = client
-        .get(endpoint(options, path))
+        .request(reqwest::Method::GET, &endpoint(options, path))?
         .send()
         .map_err(connection_error)?;
     decode_response(response)
