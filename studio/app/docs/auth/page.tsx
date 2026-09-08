@@ -6,7 +6,7 @@ export default function AuthDocs() {
   return (
     <div className="docs-prose">
       <PageHeader
-        eyebrow="Platform"
+        eyebrow="Deploy &amp; Operate"
         title="Auth & RBAC"
         lead="Sign-in is provider-based with no local passwords. Roles gate what you can do, and visibility gates what you can see. The recommended web path sends identity through a shared-secret-authenticated frontend proxy."
       />
@@ -80,10 +80,7 @@ kaveon-api  trusts X-User-* ONLY when the secret matches`}</Code>
         <li><strong>Information disclosure</strong> — new handlers should return stable client errors; some current handlers still expose formatted exception text and remain a hardening item.</li>
       </ul>
 
-      <Pager
-        prev={{ href: "/docs/architecture", title: "Architecture" }}
-        next={{ href: "/docs/deployment", title: "Deployment" }}
-      />
+      <Pager prev={{ href: "/docs/deployment", title: "Deployment" }} next={{ href: "/docs/operations", title: "Operations" }} />
     </div>
   );
 }

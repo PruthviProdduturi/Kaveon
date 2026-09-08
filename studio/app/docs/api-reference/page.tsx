@@ -4,7 +4,7 @@ export const metadata = { title: "API Reference" };
 
 export default function ApiReferenceDocs() {
   return <div className="docs-prose">
-    <PageHeader eyebrow="Build & Operate" title="API reference" lead="Kaveon has two distinct HTTP surfaces: the FastAPI platform API used by Studio and the standalone Rust Engine API." />
+    <PageHeader eyebrow="Platform" title="API reference" lead="Kaveon has two distinct HTTP surfaces: the FastAPI platform API used by Studio and the standalone Rust Engine API." />
     <Callout type="note">Do not send browser-created identity headers directly to FastAPI. Studio&rsquo;s same-origin proxy establishes identity server-side and seals trusted headers with <code>KAVEON_PROXY_SECRET</code>.</Callout>
 
     <h2>Choose the right surface</h2>
@@ -32,6 +32,6 @@ export default function ApiReferenceDocs() {
       <li>Use the Studio proxy for user-facing applications; never trust identity headers supplied by a browser.</li>
       <li>Keep Engine HTTP private during alpha. Internal exchange and catalog-mutation tokens do not replace end-user statement authentication, authorization, or TLS termination.</li>
     </ul>
-    <Pager prev={{ href: "/docs/engine", title: "Kaveon Engine" }} next={{ href: "/docs/auth", title: "Auth & RBAC" }} />
+    <Pager prev={{ href: "/docs/architecture", title: "Architecture" }} next={{ href: "/docs/connectors", title: "Connector Matrix" }} />
   </div>;
 }

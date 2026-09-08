@@ -145,10 +145,7 @@ SELECT count(*) FROM orders;`}</Code>
         <strong>Viewer</strong>. Full model in <a href="/docs/auth">Auth &amp; RBAC</a>.
       </p>
 
-      <Pager
-        prev={{ href: "/docs/quickstart", title: "Quickstart" }}
-        next={{ href: "/docs/architecture", title: "Architecture" }}
-      />
+      <Pager prev={{ href: "/docs/quickstart", title: "Quickstart" }} next={{ href: "/docs/architecture", title: "Architecture" }} />
     </div>
   );
 }

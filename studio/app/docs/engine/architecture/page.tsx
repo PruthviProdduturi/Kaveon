@@ -2,7 +2,7 @@ import { Callout, Code, PageHeader, Pager } from "../../../../components/docs/pr
 
 export const metadata = { title: "Engine Architecture" };
 export default function EngineArchitectureDocs() { return <div className="docs-prose">
-  <PageHeader eyebrow="Engine Manual" title="Architecture and startup" lead="The coordinator plans and schedules; workers execute validated vectorized fragments and exchange Arrow partitions." />
+  <PageHeader eyebrow="Engine" title="Architecture and startup" lead="The coordinator plans and schedules; workers execute validated vectorized fragments and exchange Arrow partitions." />
   <Code lang="text">{`Client → coordinator: catalog → SQL → optimizer → stage DAG
 Coordinator → workers: authenticated executable fragments
 Workers → workers: bounded Arrow IPC exchange

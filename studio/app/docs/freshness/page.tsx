@@ -6,7 +6,7 @@ export default function FreshnessDocs() {
   return (
     <div className="docs-prose">
       <PageHeader
-        eyebrow="Core Engine"
+        eyebrow="Intelligence"
         title="Freshness Algorithm"
         lead="DLM context elements carry a validity score in [0, 1]. For PostgreSQL sources, Kaveon estimates drift from catalog statistics instead of rescanning analytical tables, then routes eligible requests to context, hybrid, or live-query paths."
       />
@@ -254,10 +254,7 @@ WHERE schemaname = 'public'`}</Code>
         algorithm fully inspectable: you can see exactly why context is trusted or why a rebuild was triggered.
       </p>
 
-      <Pager
-        prev={{ href: "/docs/dlm", title: "Data Language Model" }}
-        next={{ href: "/docs/charts", title: "Chart Builder" }}
-      />
+      <Pager prev={{ href: "/docs/nl-to-sql", title: "DLM · NL→SQL" }} next={{ href: "/docs/engine", title: "Kaveon Engine" }} />
     </div>
   );
 }

@@ -27,6 +27,6 @@ export default function ResearchDocs() {
       <li><strong>Researcher:</strong> DLM paper → Curation paper → routing paper → patent disclosure.</li>
     </ul>
     <p>The Markdown sources remain the canonical long-form editions and render directly on the repository host. Studio documentation provides the operational interpretation and route into each topic.</p>
-    <Pager prev={{ href: "/docs/operations", title: "Operations" }} />
+    <Pager prev={{ href: "/docs/releases", title: "Releases" }} next={{ href: "/docs/research/trino", title: "Kaveon vs Trino" }} />
   </div>;
 }

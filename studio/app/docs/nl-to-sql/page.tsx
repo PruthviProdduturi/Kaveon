@@ -6,7 +6,7 @@ export default function NlToSqlDocs() {
   return (
     <div className="docs-prose">
       <PageHeader
-        eyebrow="Features"
+        eyebrow="Intelligence"
         title="DLM · NL→SQL"
         lead="The home page turns plain-English questions into charts with no hosted LLM. The primary engine is the DLM — a compiled per-dataset context artifact that answers the common questions from precomputed context with no database scan. A browser-side template parser is the fallback. Both are deterministic, fast, and inspectable."
       />
@@ -144,10 +144,7 @@ score += confidence   from the NL→SQL parser for this schema`}</Code>
         conversation.
       </p>
 
-      <Pager
-        prev={{ href: "/docs/sql-lab", title: "SQL Lab" }}
-        next={{ href: "/docs/dlm", title: "Data Language Model" }}
-      />
+      <Pager prev={{ href: "/docs/dlm", title: "Data Language Model" }} next={{ href: "/docs/freshness", title: "Freshness Algorithm" }} />
     </div>
   );
 }

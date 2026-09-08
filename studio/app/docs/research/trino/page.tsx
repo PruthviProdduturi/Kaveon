@@ -4,7 +4,7 @@ export const metadata = { title: "Kaveon vs Trino" };
 
 export default function KaveonVsTrinoDocs() {
   return <div className="docs-prose">
-    <PageHeader eyebrow="Research · Architecture" title="Kaveon vs Trino" lead="An evidence-bounded comparison of Kaveon&rsquo;s integrated Engine, DLM, and Studio architecture with Trino&rsquo;s mature distributed SQL engine." />
+    <PageHeader eyebrow="Research" title="Kaveon vs Trino" lead="An evidence-bounded comparison of Kaveon&rsquo;s integrated Engine, DLM, and Studio architecture with Trino&rsquo;s mature distributed SQL engine." />
     <Callout type="warn"><strong>No benchmark claim:</strong> Kaveon has not demonstrated general performance superiority over Trino. Comparative results require identical data, SQL, hardware, configuration, cache state, concurrency, and result validation.</Callout>
 
     <h2>The essential difference</h2>
@@ -30,6 +30,6 @@ export default function KaveonVsTrinoDocs() {
 
     <h2>Canonical paper</h2>
     <p>The full comparison, decision guide, proof standard, and primary references live in <a href="https://github.com/PruthviProdduturi/Kaveon/blob/dev/docs/research/kaveon-vs-trino.md">Kaveon and Trino: Architectural Comparison</a>.</p>
-    <Pager prev={{ href: "/docs/research", title: "Papers & Patents" }} next={{ href: "/docs/research/fabric-sql-endpoint", title: "Fabric SQL endpoint" }} />
+    <Pager prev={{ href: "/docs/research", title: "Papers & Patents" }} next={{ href: "/docs/research/fabric-sql-endpoint", title: "Engine vs Fabric SQL" }} />
   </div>;
 }

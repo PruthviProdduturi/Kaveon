@@ -6,7 +6,7 @@ export default function ChartsDocs() {
   return (
     <div className="docs-prose">
       <PageHeader
-        eyebrow="Features"
+        eyebrow="Studio"
         title="Chart Builder"
         lead="Charts are reusable visualizations built on top of a dataset. Save one and embed it in any number of dashboards, or share it as a standalone view. 37 built-in types, all interactive and themeable."
       />
@@ -76,10 +76,7 @@ export default function ChartsDocs() {
 const option = applyChartTheme(buildEChartsOptions(/* … */), isDark);
 return <ReactECharts option={option} style={{ height: 400 }} notMerge lazyUpdate />;`}</Code>
 
-      <Pager
-        prev={{ href: "/docs/freshness", title: "Freshness Algorithm" }}
-        next={{ href: "/docs/dashboards", title: "Dashboards" }}
-      />
+      <Pager prev={{ href: "/docs/sql-lab", title: "SQL Lab" }} next={{ href: "/docs/dashboards", title: "Dashboards" }} />
     </div>
   );
 }

@@ -60,7 +60,7 @@ local Parquet / Delta splits → root Arrow result`}</Code>
         <li>Current, alpha, and target behavior remain visibly distinct in product documentation.</li>
       </ul>
 
-      <Pager prev={{ href: "/docs/data-sources", title: "Data Sources" }} next={{ href: "/docs/engine", title: "Kaveon Engine" }} />
+      <Pager prev={{ href: "/docs/concepts", title: "Core Concepts" }} next={{ href: "/docs/api-reference", title: "API Reference" }} />
     </div>
   );
 }

@@ -6,7 +6,7 @@ export default function DatasetsDocs() {
   return (
     <div className="docs-prose">
       <PageHeader
-        eyebrow="Features"
+        eyebrow="Studio"
         title="Semantic Datasets"
         lead="A dataset is a reusable semantic layer over one or more tables — you name the dimensions, metrics, and filters once, and every chart, dashboard, and NL→SQL query builds on them without re-writing SQL."
       />
@@ -63,10 +63,7 @@ ORDER BY revenue DESC;`}</Code>
         (see <a href="/docs/auth">Auth &amp; RBAC</a>), this controls who can discover and build on each dataset.
       </p>
 
-      <Pager
-        prev={{ href: "/docs/dashboards", title: "Dashboards" }}
-        next={{ href: "/docs/data-sources", title: "Data Sources" }}
-      />
+      <Pager prev={{ href: "/docs/dashboards", title: "Dashboards" }} next={{ href: "/docs/data-sources", title: "Data Sources" }} />
     </div>
   );
 }

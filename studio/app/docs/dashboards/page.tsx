@@ -6,7 +6,7 @@ export default function DashboardsDocs() {
   return (
     <div className="docs-prose">
       <PageHeader
-        eyebrow="Features"
+        eyebrow="Studio"
         title="Dashboards"
         lead="Dashboards arrange charts on a drag-and-drop canvas with cross-filtering, dashboard-level filters, auto-refresh, and dark mode. Save as a draft or publish so every signed-in user can see it."
       />
@@ -72,10 +72,7 @@ export default function DashboardsDocs() {
         disrupt dragging.
       </p>
 
-      <Pager
-        prev={{ href: "/docs/charts", title: "Chart Builder" }}
-        next={{ href: "/docs/datasets", title: "Semantic Datasets" }}
-      />
+      <Pager prev={{ href: "/docs/charts", title: "Chart Builder" }} next={{ href: "/docs/datasets", title: "Semantic Datasets" }} />
     </div>
   );
 }
