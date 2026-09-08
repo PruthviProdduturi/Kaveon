@@ -16,15 +16,14 @@ On Windows, install the development CLI with:
 irm https://raw.githubusercontent.com/PruthviProdduturi/Kaveon/dev/scripts/install.ps1 | iex
 ```
 
-The installer downloads the latest `engine-dev` release. Microsoft sign-in requires
-a release whose `kaveon --help` includes `--auth` and `--ca-cert`. While release CI
-is building, build the current source with Rust installed:
+The installer downloads the latest `engine-dev` preview release. Confirm
+`kaveon --help` includes `--auth` and `--ca-cert` for Microsoft sign-in.
+On Linux x64 or Apple Silicon macOS, use:
 
-```powershell
-cargo install --path engine/crates/cli --locked
+```bash
+curl -fsSL https://raw.githubusercontent.com/PruthviProdduturi/Kaveon/dev/scripts/install.sh | bash
 ```
 
-Linux x64 and Apple Silicon macOS installers are documented in `scripts/install.sh`.
 Intel macOS and Linux ARM do not currently have prebuilt release assets.
 
 ### 2. Sign in and select Kaveon

@@ -82,6 +82,18 @@ custom CA trust and bearer requests; 14 tests and strict Clippy pass. Release bi
 queried live AKS over verified TLS: 10000 orders, sum(amount_cents)=486727696.
 See docs/engineering/engine-entra-sign-in.md and azure-deployment-guide.md.
 
+### Preview distribution — September 8
+
+CLI binaries for Windows x64, Linux x64 and macOS ARM64 from tested commit
+`c71c3fa` are published in `engine-dev`. Verified all release asset digests against
+passed CI artifacts and installed the Windows package from GitHub successfully.
+The release action failed twice updating metadata; recovered publication with
+GitHub CLI and replaced the action with explicit create/edit/upload operations.
+Engine tests and all platform builds passed; the original run still records the
+release-step failure. Preview image/Helm/bundle workflow is added; first publication
+and public GHCR access remain to be verified. No source clone is needed by clients;
+the deployment guide uses a downloadable infrastructure/setup bundle.
+
 ### Local port allocation — September 8
 
 User requested Engine UI on localhost:8080 and Studio on localhost:3000.

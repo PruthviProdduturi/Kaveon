@@ -146,36 +146,42 @@ jobs:
           (cd release && sha256sum kaveon-deploy.zip preview-artifacts.json kaveon-test-*.tgz > SHA256SUMS)
 
       - name: Publish commit-specific preview bundle
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: engine-preview-${{ steps.coordinates.outputs.sha }}
-          target_commitish: ${{ steps.coordinates.outputs.sha }}
-          name: Engine preview ${{ steps.coordinates.outputs.sha }}
-          prerelease: true
-          make_latest: false
-          files: release/*
-          body: |
-            Development preview for Linux amd64. Download `kaveon-deploy.zip` for deployment without cloning.
-            Image digest and Helm OCI coordinates are in `preview-artifacts.json`.
-            The chart requires deployment-specific credentials, TLS and workload identity configuration.
-            GHCR packages must be made public by a package administrator before anonymous pulls work.
-            This is not a production qualification or availability guarantee.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_SHA: ${{ steps.coordinates.outputs.sha }}
+        run: |
+          cat > preview-notes.md <<'NOTES'
+          Development preview for Linux amd64. Download `kaveon-deploy.zip` for deployment without cloning.
+          Image digest and Helm OCI coordinates are in `preview-artifacts.json`.
+          The chart requires deployment-specific credentials, TLS and workload identity configuration.
+          GHCR packages must be made public by a package administrator before anonymous pulls work.
+          This is not a production qualification or availability guarantee.
+          NOTES
+          tag="engine-preview-$SOURCE_SHA"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release edit "$tag" --title "Engine preview $SOURCE_SHA" \
+              --prerelease --latest=false --notes-file preview-notes.md
+          else
+            gh release create "$tag" --target "$SOURCE_SHA" \
+              --title "Engine preview $SOURCE_SHA" --prerelease --latest=false \
+              --notes-file preview-notes.md
+          fi
+          gh release upload "$tag" release/* --clobber
 
       - name: Update rolling preview downloads
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: engine-preview
-          target_commitish: ${{ steps.coordinates.outputs.sha }}
-          name: Engine preview (rolling)
-          prerelease: true
-          make_latest: false
-          files: |
-            release/kaveon-deploy.zip
-            release/preview-artifacts.json
-            release/SHA256SUMS
-            release/kaveon-test-*.tgz
-          body: |
-            Rolling development preview. Read `preview-artifacts.json` for the exact source commit,
-            Linux amd64 image digest and versioned Helm OCI chart. Commit-specific downloads are
-            published under `engine-preview-<source_sha>`. GHCR package visibility must be verified
-            before anonymous installation. No production readiness claim is implied.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_SHA: ${{ steps.coordinates.outputs.sha }}
+        run: |
+          printf '\nRolling preview source commit: `%s`.\n' "$SOURCE_SHA" >> preview-notes.md
+          if gh release view engine-preview > /dev/null 2>&1; then
+            gh release edit engine-preview --title 'Engine preview (rolling)' \
+              --prerelease --latest=false --notes-file preview-notes.md
+          else
+            gh release create engine-preview --target "$SOURCE_SHA" \
+              --title 'Engine preview (rolling)' --prerelease --latest=false \
+              --notes-file preview-notes.md
+          fi
+          gh release upload engine-preview release/* --clobber
