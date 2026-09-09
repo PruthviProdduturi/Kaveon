@@ -26,6 +26,21 @@ changed unless the application actually changes it; the user controls that picke
 
 ## Ownership map
 
+### Native engine target - superseding the metadata bridge
+
+User confirmed BOTH general-purpose OLTP and distributed analytics. The durable
+operation index now replaces the 64-hop replay dependence for new heads; tests
+cover 110+ commits and oldest-key replay. Missing/corrupt history is indeterminate,
+never a false rollback. Catalog tests: 18; strict Clippy passes. Shards remain
+bounded to 1,024 operations and need splitting before unbounded production use.
+
+User clarified that Kaveon itself must target best distributed and transactional
+execution. The transient SQLite/ADLS metadata bridge is preserved on local
+`wip/adls-product-metadata-prototype` at `c44d692`; it is not deployed or part of
+the final migration path. Native execution/correctness/performance/cutover gates
+are in `docs/engineering/native-engine-target.md`. Main remains ADLS conditional
+commit foundation plus native-engine work. PostgreSQL cutover is not complete.
+
 ### ADLS transaction foundation validated - September 8
 
 Internal conditional storage writes/reads, versioned snapshot preparation,

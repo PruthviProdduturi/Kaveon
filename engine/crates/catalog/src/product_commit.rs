@@ -5,11 +5,12 @@
 //! network outcome and must never be treated as committed. Object reads are
 //! bounded only after the storage layer returns bytes; a streaming read limit
 //! belongs in the storage layer.
-//! Deduplication is intentionally limited to the retained parent chain. When
-//! that chain exceeds the lookup budget, commits stop with `Indeterminate`
-//! until a durable operation index is introduced.
+//! Deduplication uses immutable, head-referenced SHA-256 operation shards.
+//! Each deterministic hash shard is bounded to 1,024 operation IDs; a full
+//! shard fails closed with `Indeterminate` until it is compacted into a new
+//! index format. This is a safe operational limit, not unbounded deduplication.
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use kaveon_storage::{AdlsConditionalCommit, CommitErrorKind, ObjectVersion};
 use serde::{Deserialize, Serialize};
@@ -22,7 +23,7 @@ use crate::{
 
 const MAX_HEAD_BYTES: usize = 64 * 1024;
 const MAX_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
-const DEFAULT_HISTORY_HOPS: usize = 64;
+const MAX_INDEX_SHARD_ENTRIES: usize = 1_024;
 
 #[derive(Clone)]
 pub struct ProductCatalogCommit {
@@ -55,12 +56,31 @@ pub enum OperationResolution {
 struct Head {
     snapshot: CatalogSnapshot,
     version: ObjectVersion,
+    operation_index: Option<BTreeMap<String, ImmutableIndexRef>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct HeadRecord {
     reference: SnapshotRef,
     snapshot_sha256: String,
+    #[serde(default)]
+    operation_index: Option<BTreeMap<String, ImmutableIndexRef>>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ImmutableIndexRef {
+    path: String,
+    sha256: String,
+}
+#[derive(Debug, Serialize, Deserialize)]
+struct OperationRecord {
+    request_digest: String,
+    snapshot: SnapshotRef,
+    snapshot_sha256: String,
+    result: Option<ImmutableIndexRef>,
+}
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct OperationShard {
+    entries: BTreeMap<String, OperationRecord>,
 }
 
 impl ProductCatalogCommit {
@@ -107,9 +127,10 @@ impl ProductCatalogCommit {
             Ok(_) => {}
             Err(error) => return finish_storage(attempt, error.kind),
         }
-        let head = match encode(&HeadRecord {
+        let head = match encode_head(&HeadRecord {
             reference: genesis.reference(),
             snapshot_sha256,
+            operation_index: Some(BTreeMap::new()),
         }) {
             Ok(bytes) => bytes,
             Err(()) => {
@@ -131,38 +152,36 @@ impl ProductCatalogCommit {
         let attempt = self.metrics.begin();
         let head = match self.read_head().await {
             Ok(head) => head,
-            Err(kind) => return finish_storage(attempt, kind),
+            Err(_) => return finish_indeterminate(attempt),
         };
-        let stale_base = request.base != head.snapshot.reference();
-        match self
-            .resolve_from(
-                head.snapshot.clone(),
-                &request.operation_id,
-                &request.request_digest,
-                DEFAULT_HISTORY_HOPS,
-            )
-            .await
-        {
-            Ok(OperationResolution::Committed(snapshot)) => {
-                attempt.finish(TransactionOutcome::Replayed);
-                return CommitOutcome::Replayed(snapshot);
-            }
-            Ok(OperationResolution::Conflict) => {
+        let Some(index) = &head.operation_index else {
+            attempt.finish(TransactionOutcome::Indeterminate);
+            return CommitOutcome::Indeterminate;
+        };
+        let shard_key = digest(request.operation_id.as_bytes())[..2].to_owned();
+        let mut shard = match self.read_shard(index.get(&shard_key)).await {
+            Ok(value) => value,
+            Err(_) => return finish_indeterminate(attempt),
+        };
+        if let Some(existing) = shard.entries.get(&request.operation_id) {
+            if existing.request_digest != request.request_digest {
                 attempt.finish(TransactionOutcome::Conflict);
                 return CommitOutcome::Conflict;
             }
-            Ok(OperationResolution::NotCommitted) if stale_base => {
-                attempt.finish(TransactionOutcome::Conflict);
-                return CommitOutcome::Conflict;
+            match self.read_snapshot_with_bytes(&existing.snapshot).await {
+                Ok((snapshot, bytes)) if digest(&bytes) == existing.snapshot_sha256 => {
+                    attempt.finish(TransactionOutcome::Replayed);
+                    return CommitOutcome::Replayed(snapshot);
+                }
+                Ok(_) => return finish_indeterminate(attempt),
+                Err(_) => return finish_indeterminate(attempt),
             }
-            Ok(OperationResolution::NotCommitted) => {}
-            Ok(OperationResolution::Unresolved) => {
-                attempt.finish(TransactionOutcome::Indeterminate);
-                return CommitOutcome::Indeterminate;
-            }
-            Err(kind) => return finish_storage(attempt, kind),
         }
-        let next = match head.snapshot.prepare(request) {
+        if request.base != head.snapshot.reference() {
+            attempt.finish(TransactionOutcome::Conflict);
+            return CommitOutcome::Conflict;
+        }
+        let next = match head.snapshot.prepare(request.clone()) {
             Ok(snapshot) => snapshot,
             Err(_) => {
                 attempt.finish(TransactionOutcome::Rejected);
@@ -177,13 +196,33 @@ impl ProductCatalogCommit {
             }
         };
         let snapshot_sha256 = digest(&bytes);
+        if shard.entries.len() >= MAX_INDEX_SHARD_ENTRIES {
+            attempt.finish(TransactionOutcome::Indeterminate);
+            return CommitOutcome::Indeterminate;
+        }
+        shard.entries.insert(
+            request.operation_id.clone(),
+            OperationRecord {
+                request_digest: request.request_digest.clone(),
+                snapshot: next.reference(),
+                snapshot_sha256: snapshot_sha256.clone(),
+                result: None,
+            },
+        );
+        let mut next_index = index.clone();
+        let shard_ref = match self.publish_shard(&shard).await {
+            Ok(value) => value,
+            Err(kind) => return finish_storage(attempt, kind),
+        };
+        next_index.insert(shard_key, shard_ref);
         match self.publish_snapshot(&next.snapshot_id, bytes).await {
             Ok(_) => {}
             Err(kind) => return finish_storage(attempt, kind),
         }
-        let head_bytes = match encode(&HeadRecord {
+        let head_bytes = match encode_head(&HeadRecord {
             reference: next.reference(),
             snapshot_sha256,
+            operation_index: Some(next_index),
         }) {
             Ok(bytes) => bytes,
             Err(()) => {
@@ -269,6 +308,7 @@ impl ProductCatalogCommit {
         Ok(Head {
             snapshot,
             version: object.version,
+            operation_index: record.operation_index,
         })
     }
 
@@ -328,6 +368,62 @@ impl ProductCatalogCommit {
         }
     }
 
+    async fn read_shard(
+        &self,
+        reference: Option<&ImmutableIndexRef>,
+    ) -> Result<OperationShard, CommitErrorKind> {
+        let Some(reference) = reference else {
+            return Ok(OperationShard::default());
+        };
+        if !valid_digest(&reference.sha256) {
+            return Err(CommitErrorKind::Invalid);
+        }
+        let bytes = self
+            .storage
+            .read_bounded(
+                &format!("{}/{}", self.prefix, reference.path),
+                MAX_HEAD_BYTES,
+            )
+            .await
+            .map_err(|error| error.kind)?
+            .bytes;
+        if digest(&bytes) != reference.sha256 {
+            return Err(CommitErrorKind::Invalid);
+        }
+        let shard: OperationShard =
+            decode(&bytes, MAX_HEAD_BYTES).ok_or(CommitErrorKind::Invalid)?;
+        if shard.entries.len() > MAX_INDEX_SHARD_ENTRIES {
+            return Err(CommitErrorKind::Invalid);
+        }
+        Ok(shard)
+    }
+    async fn publish_shard(
+        &self,
+        shard: &OperationShard,
+    ) -> Result<ImmutableIndexRef, CommitErrorKind> {
+        let bytes = encode(shard).map_err(|_| CommitErrorKind::Invalid)?;
+        let sha256 = digest(&bytes);
+        let path = format!("{}/operation-index/{sha256}.json", self.prefix);
+        match self.storage.create_immutable(&path, bytes.clone()).await {
+            Ok(_) => {}
+            Err(error) if error.kind == CommitErrorKind::Conflict => {
+                let old = self
+                    .storage
+                    .read_bounded(&path, MAX_HEAD_BYTES)
+                    .await
+                    .map_err(|error| error.kind)?;
+                if old.bytes != bytes {
+                    return Err(CommitErrorKind::Conflict);
+                }
+            }
+            Err(error) => return Err(error.kind),
+        }
+        Ok(ImmutableIndexRef {
+            path: format!("operation-index/{sha256}.json"),
+            sha256,
+        })
+    }
+
     fn head_path(&self) -> String {
         format!("{}/head.json", self.prefix)
     }
@@ -342,6 +438,11 @@ fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, ()> {
         return Err(());
     }
     Ok(bytes)
+}
+
+fn encode_head(value: &HeadRecord) -> Result<Vec<u8>, ()> {
+    let bytes = serde_json::to_vec(value).map_err(|_| ())?;
+    (bytes.len() <= MAX_HEAD_BYTES).then_some(bytes).ok_or(())
 }
 
 fn decode<T: for<'a> Deserialize<'a>>(bytes: &[u8], limit: usize) -> Option<T> {
@@ -368,6 +469,11 @@ fn valid_snapshot_id(value: &str) -> bool {
         && value != "."
         && value != ".."
         && !value.chars().any(char::is_control)
+}
+
+fn finish_indeterminate(attempt: crate::product_metrics::TransactionAttempt<'_>) -> CommitOutcome {
+    attempt.finish(TransactionOutcome::Indeterminate);
+    CommitOutcome::Indeterminate
 }
 
 fn finish_storage(
@@ -533,6 +639,7 @@ mod tests {
         let head = encode(&HeadRecord {
             reference: current.reference(),
             snapshot_sha256: digest(&encode(&current).unwrap()),
+            operation_index: None,
         })
         .unwrap();
         catalog
@@ -547,5 +654,75 @@ mod tests {
             CommitOutcome::Indeterminate
         ));
         assert_eq!(catalog.read_current().await.unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn indexed_oldest_operation_replays_after_more_than_one_hundred_commits() {
+        let catalog = catalog();
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        catalog.initialize(genesis.clone()).await;
+        let first = request(genesis.reference(), "op-0", "bronze.orders");
+        let mut current = match catalog.commit(first.clone()).await {
+            CommitOutcome::Committed(value) => value,
+            _ => panic!("first"),
+        };
+        for number in 1..=110 {
+            current = match catalog
+                .commit(request(
+                    current.reference(),
+                    &format!("op-{number}"),
+                    "bronze.orders",
+                ))
+                .await
+            {
+                CommitOutcome::Committed(value) => value,
+                _ => panic!("commit"),
+            };
+        }
+        assert!(matches!(
+            catalog.commit(first).await,
+            CommitOutcome::Replayed(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn missing_index_shard_refuses_to_advance_the_head() {
+        let catalog = catalog();
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        catalog.initialize(genesis.clone()).await;
+        let first = request(genesis.reference(), "op-1", "bronze.orders");
+        let current = match catalog.commit(first).await {
+            CommitOutcome::Committed(value) => value,
+            _ => panic!("first"),
+        };
+        let object = catalog
+            .storage
+            .read_bounded(&catalog.head_path(), MAX_HEAD_BYTES)
+            .await
+            .unwrap();
+        let mut head: HeadRecord = decode(&object.bytes, MAX_HEAD_BYTES).unwrap();
+        let key = digest(b"op-1")[..2].to_owned();
+        head.operation_index
+            .as_mut()
+            .unwrap()
+            .get_mut(&key)
+            .unwrap()
+            .path = "operation-index/missing.json".into();
+        catalog
+            .storage
+            .compare_and_swap(
+                &catalog.head_path(),
+                &object.version,
+                encode_head(&head).unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            catalog
+                .commit(request(current.reference(), "op-1", "bronze.orders"))
+                .await,
+            CommitOutcome::Indeterminate
+        ));
+        assert_eq!(catalog.read_current().await.unwrap(), current);
     }
 }
