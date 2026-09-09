@@ -171,6 +171,7 @@ static QUERY_STORE: std::sync::LazyLock<RwLock<QueryStore>> = std::sync::LazyLoc
 
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
+        .merge(crate::product_api::routes())
         .merge(crate::exchange::routes())
         .route("/v1/statement", post(submit_statement))
         .route("/v1/task", post(execute_task))
@@ -1841,7 +1842,7 @@ async fn list_catalogs(State(state): State<Arc<AppState>>) -> impl IntoResponse 
 
 const ACTOR_HEADER: &str = "x-kaveon-actor";
 
-fn mutation_actor<'a>(state: &AppState, headers: &'a HeaderMap) -> Result<&'a str, Box<Response>> {
+pub(crate) fn mutation_actor<'a>(state: &AppState, headers: &'a HeaderMap) -> Result<&'a str, Box<Response>> {
     if !state.config.coordinator {
         return Err(Box::new(
             (
@@ -3858,6 +3859,7 @@ mod tests {
             ..crate::config::ServerConfig::default()
         };
         crate::AppState {
+            product_catalog: None,
             disk_exchange_store: None,
             results: crate::results::ResultStore::default(),
             principal_admission: crate::security::PrincipalAdmission::default(),

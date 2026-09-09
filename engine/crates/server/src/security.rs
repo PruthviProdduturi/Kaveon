@@ -205,7 +205,7 @@ pub async fn authorize(
         return next.run(request).await;
     }
     // The catalog service credential is confined to the metadata API.
-    if path.starts_with("/v1/catalog/")
+    if (path.starts_with("/v1/catalog/") || path.starts_with("/v1/product/"))
         && token_matches(
             bearer(request.headers()),
             state.config.catalog_admin_token.as_deref(),
@@ -359,6 +359,7 @@ mod tests {
             ..Default::default()
         };
         let state = Arc::new(crate::AppState {
+            product_catalog: None,
             disk_exchange_store: None,
             results: crate::results::ResultStore::default(),
             principal_admission: PrincipalAdmission::default(),

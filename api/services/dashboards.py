@@ -19,6 +19,9 @@ def _ensure_thumbnail_dark_column() -> None:
     global _thumb_dark_ready
     if _thumb_dark_ready:
         return
+    if db.is_product_engine():
+        _thumb_dark_ready = True
+        return
     try:
         db.execute("ALTER TABLE dbo.dashboards ADD COLUMN IF NOT EXISTS thumbnail_dark TEXT")
     except Exception:
@@ -121,13 +124,14 @@ def create_dashboard(data: dict, user_id: str) -> dict:
             return v
         return json.dumps(v) if v is not None else "[]"
 
-    db.execute("""
+    insert_sql = """
         INSERT INTO dashboards (id, name, slug, description, layout, charts, filters,
                                theme, tags, visibility, is_published, is_archived,
                                created_by, modified_by, created_at, modified_at)
         VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6,
                 @param7, @param8, @param9, @param10, @param11, @param12, @param13, @param14, @param15)
-    """, [
+    """
+    insert_params = [
         d_id, data["name"], slug, data.get("description"),
         _to_str(data.get("layout", [])),
         _to_str(data.get("charts", [])),
@@ -136,7 +140,11 @@ def create_dashboard(data: dict, user_id: str) -> dict:
         bool(data.get("is_published")),
         bool(data.get("is_archived")),
         user_id, user_id, now, now,
-    ])
+    ]
+    if db.is_product_engine():
+        db.transaction([{"sql": insert_sql, "params": insert_params}])
+    else:
+        db.execute(insert_sql, insert_params)
     created = get_dashboard_by_id(d_id)
     if not created:
         raise RuntimeError("Failed to retrieve created dashboard")
@@ -180,11 +188,17 @@ def update_dashboard(dashboard_id: str, data: dict) -> Optional[dict]:
     updates.append(f"modified_at = @param{i}"); params.append(now); i += 1
     params.append(dashboard_id)
 
-    db.execute(f"UPDATE dashboards SET {', '.join(updates)} WHERE id = @param{i}", params)
+    sql = f"UPDATE dashboards SET {', '.join(updates)} WHERE id = @param{i}"
+    if db.is_product_engine():
+        db.transaction([{"sql": sql, "params": params}])
+    else:
+        db.execute(sql, params)
     return get_dashboard_by_id(dashboard_id)
 
 
 def delete_dashboard(dashboard_id: str) -> bool:
+    if db.is_product_engine():
+        return db.transaction([{"sql": "DELETE FROM dashboards WHERE id = @param0", "params": [dashboard_id]}])[0]["row_count"] > 0
     return db.execute("DELETE FROM dashboards WHERE id = @param0", [dashboard_id]) > 0
 
 

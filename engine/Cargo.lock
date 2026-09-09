@@ -1837,10 +1837,13 @@ dependencies = [
 name = "kaveon-catalog"
 version = "0.1.0"
 dependencies = [
+ "arrow",
  "arrow-schema",
+ "bytes",
  "kaveon-core",
  "kaveon-storage",
  "object_store",
+ "parquet",
  "rusqlite",
  "serde",
  "serde_json",

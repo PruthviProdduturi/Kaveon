@@ -1,4 +1,5 @@
 mod api;
+pub mod product_api;
 pub mod cluster;
 mod config;
 pub mod disk_exchange;
@@ -24,6 +25,7 @@ use cluster::ClusterState;
 use config::ServerConfig;
 
 pub struct AppState {
+    pub product_catalog: Option<Arc<kaveon_catalog::product_repository::ProductRepository>>,
     pub disk_exchange_store: Option<disk_exchange::DiskExchangeStore>,
     pub results: results::ResultStore,
     pub principal_admission: security::PrincipalAdmission,
@@ -106,7 +108,9 @@ async fn main() {
     } else {
         None
     };
+    let product_catalog = product_api::configured_repository().expect("valid ADLS product catalog configuration");
     let state = Arc::new(AppState {
+        product_catalog,
         disk_exchange_store,
         results: results::ResultStore::default(),
         principal_admission: security::PrincipalAdmission::default(),

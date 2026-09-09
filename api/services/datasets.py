@@ -215,6 +215,42 @@ def create_dataset(data: dict, user_id: str) -> dict:
     if visibility not in VALID_VISIBILITY:
         visibility = "internal"
 
+    if db.is_product_engine():
+        statements = [{"sql": """
+            INSERT INTO datasets (dataset_name, description, fact_table, schema_name, database_name,
+              date_column, tables_used, visibility, created_at, modified_at, created_by, modified_by)
+            VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6, @param7,
+              @param8, @param9, @param10, @param11) RETURNING id
+        """, "params": [name, data.get("description"), data.get("table_name") or "",
+            data.get("schema_name", "dbo"), data.get("database_name", ""), data.get("date_column"),
+            tables_used, visibility, now, now, user_id, user_id]}]
+        dataset_ref = {"$result": {"statement": 0, "column": "id"}}
+        for dim in data.get("dimensions") or []:
+            parts = (dim.get("dimension_table") or "").split(".")
+            dim_table = parts[1] if len(parts) > 1 else parts[0] if parts else ""
+            join_match = re.search(r"\[([^\]]+)\]\.?\s*=\s*.*\[([^\]]+)\]\s*$", dim.get("join_condition") or "")
+            statements.append({"sql": """INSERT INTO dataset_dimensions (dataset_id, dimension_table, table_name,
+                join_condition, fact_key, join_key, dim_name, display_name, created_at)
+                VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6, @param7, GETUTCDATE())""",
+                "params": [dataset_ref, dim.get("dimension_table"), dim_table, dim.get("join_condition"),
+                    join_match.group(1) if join_match else "", join_match.group(2) if join_match else "Key",
+                    dim_table, dim.get("display_name") or dim_table]})
+        for col in data.get("columns") or []:
+            statements.append({"sql": """INSERT INTO dataset_columns (dataset_id, table_name, column_name, data_type,
+                is_dimension, is_metric, semantic_type) VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6)""",
+                "params": [dataset_ref, col.get("table_name") or "", col.get("column_name") or "", col.get("data_type") or "",
+                    bool(col.get("is_dimension")), bool(col.get("is_metric")), col.get("semantic_type")]})
+        for metric in data.get("metrics") or []:
+            statements.append({"sql": """INSERT INTO dataset_metrics (dataset_id, metric_name, expression, metric_type, format)
+                VALUES (@param0, @param1, @param2, @param3, @param4)""",
+                "params": [dataset_ref, metric.get("name"), metric.get("expression"), metric.get("metric_type", "sum"), metric.get("format")]})
+        results = db.transaction(statements)
+        dataset_id = results[0]["rows"][0]["id"]
+        created = get_dataset_by_id(str(dataset_id))
+        if not created:
+            raise RuntimeError("Failed to retrieve created dataset")
+        return created
+
     base_name = data["name"]
     name = base_name
     for attempt in range(1, 100):
@@ -316,6 +352,31 @@ def update_dataset(dataset_id: str, data: dict, user_id: str) -> Optional[dict]:
     updates.append(f"modified_by = @param{i}"); params.append(user_id); i += 1
     params.append(did)
 
+    if db.is_product_engine():
+        statements = [{"sql": "SELECT id FROM datasets WHERE id = @param0", "params": [did]},
+                      {"sql": f"UPDATE datasets SET {', '.join(updates)} WHERE id = @param{i}", "params": params[:-1] + [{"$result": {"statement": 0, "column": "id"}}]}]
+        dataset_ref = {"$result": {"statement": 0, "column": "id"}}
+        if "dimensions" in data and isinstance(data["dimensions"], list):
+            statements.append({"sql": "DELETE FROM dataset_dimensions WHERE dataset_id = @param0", "params": [dataset_ref]})
+            for dim in data["dimensions"]:
+                parts = (dim.get("dimension_table") or "").split(".")
+                dim_table = parts[1] if len(parts) > 1 else parts[0] if parts else ""
+                join_match = re.search(r"\[([^\]]+)\]\.?\s*=\s*.*\[([^\]]+)\]\s*$", dim.get("join_condition") or "")
+                statements.append({"sql": """INSERT INTO dataset_dimensions (dataset_id, dimension_table, table_name, join_condition, fact_key, join_key, dim_name, display_name, created_at)
+                    VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6, @param7, GETUTCDATE())""",
+                    "params": [dataset_ref, dim.get("dimension_table"), dim_table, dim.get("join_condition"), join_match.group(1) if join_match else "", join_match.group(2) if join_match else "Key", dim_table, dim.get("display_name") or dim_table]})
+        if "columns" in data and isinstance(data["columns"], list):
+            statements.append({"sql": "DELETE FROM dataset_columns WHERE dataset_id = @param0", "params": [dataset_ref]})
+            for col in data["columns"]:
+                statements.append({"sql": """INSERT INTO dataset_columns (dataset_id, table_name, column_name, data_type, is_dimension, is_metric, semantic_type)
+                    VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6)""", "params": [dataset_ref, col.get("table_name"), col.get("column_name"), col.get("data_type"), bool(col.get("is_dimension")), bool(col.get("is_metric")), col.get("semantic_type")]})
+        if "metrics" in data and isinstance(data["metrics"], list):
+            statements.append({"sql": "DELETE FROM dataset_metrics WHERE dataset_id = @param0", "params": [dataset_ref]})
+            for metric in data["metrics"]:
+                statements.append({"sql": "INSERT INTO dataset_metrics (dataset_id, metric_name, expression, metric_type, format) VALUES (@param0, @param1, @param2, @param3, @param4)", "params": [dataset_ref, metric.get("name"), metric.get("expression"), metric.get("metric_type", "sum"), metric.get("format")]})
+        db.transaction(statements)
+        return get_dataset_by_id(dataset_id)
+
     db.execute(f"UPDATE datasets SET {', '.join(updates)} WHERE id = @param{i}", params)
 
     if "dimensions" in data and isinstance(data["dimensions"], list):
@@ -366,6 +427,8 @@ def update_dataset(dataset_id: str, data: dict, user_id: str) -> Optional[dict]:
 
 
 def delete_dataset(dataset_id: str) -> bool:
+    if db.is_product_engine():
+        return db.transaction([{"sql": "DELETE FROM datasets WHERE id = @param0", "params": [int(dataset_id)]}])[0]["row_count"] > 0
     return db.execute("DELETE FROM datasets WHERE id = @param0", [int(dataset_id)]) > 0
 
 

@@ -38,8 +38,8 @@ def _adapt_sql(sql: str, db_type: str) -> str:
         sql = re.sub(r"\bOUTPUT\s+INSERTED\.\w+\s*", "", sql, flags=re.IGNORECASE)
         sql = sql.rstrip().rstrip(";") + f" RETURNING {_out.group(1)}"
 
-    # GETDATE() / GETUTCDATE() → NOW()
-    sql = re.sub(r"\bGET(?:UTC)?DATE\(\)", "NOW()", sql, flags=re.IGNORECASE)
+    # GETDATE() / GETUTCDATE() → target current timestamp.
+    sql = re.sub(r"\bGET(?:UTC)?DATE\(\)", "CURRENT_TIMESTAMP" if db_type == "kaveon_engine" else "NOW()", sql, flags=re.IGNORECASE)
 
     # ISNULL(x, y) → COALESCE(x, y)
     sql = re.sub(r"\bISNULL\(", "COALESCE(", sql, flags=re.IGNORECASE)
@@ -50,7 +50,12 @@ def _adapt_sql(sql: str, db_type: str) -> str:
 
     # JSON_VALUE(col, '$.key') → PostgreSQL (col::json ->> 'key') / MySQL JSON_EXTRACT
     # TRY_CAST(x AS INT) → (x)::int  (safe-ish; our JSON values are numeric)
-    if db_type == "postgresql":
+    if db_type == "kaveon_engine":
+        sql = re.sub(r"JSON_VALUE\(\s*(.+?)\s*,\s*('\$\.[A-Za-z0-9_]+')\s*\)", r"json_extract(\1, \2)", sql, flags=re.IGNORECASE)
+        # Product records use numeric dataset IDs; this is the SQLite equivalent
+        # for the existing controlled JSON field expression.
+        sql = re.sub(r"TRY_CAST\(\s*(.+?)\s+AS\s+INT\s*\)", r"CAST(\1 AS INTEGER)", sql, flags=re.IGNORECASE)
+    elif db_type == "postgresql":
         sql = re.sub(r"JSON_VALUE\(\s*(.+?)\s*,\s*'\$\.([A-Za-z0-9_]+)'\s*\)", r"(\1::json ->> '\2')", sql, flags=re.IGNORECASE)
         sql = re.sub(r"TRY_CAST\(\s*(.+?)\s+AS\s+INT\s*\)", r"(\1)::int", sql, flags=re.IGNORECASE)
     elif db_type == "mysql":
@@ -70,6 +75,24 @@ def _adapt_sql(sql: str, db_type: str) -> str:
         sql = re.sub(r"\[([^\]]+)\]", r"`\1`", sql)
 
     return sql
+
+
+def is_product_engine() -> bool:
+    import os as _os
+    return (_os.environ.get("METADATA_DB_TYPE") or settings.METADATA_DB_TYPE or "").lower() == "kaveon_engine"
+
+
+def transaction(statements: list[dict], operation_id: str | None = None) -> list[dict]:
+    """Run an ordered, atomic Engine product transaction.
+
+    PostgreSQL callers keep their established direct-query behavior; services
+    select this API only when the Engine backend is configured.
+    """
+    if not is_product_engine():
+        raise RuntimeError("metadata transaction batching requires METADATA_DB_TYPE=kaveon_engine")
+    from database.product_engine import transaction as engine_transaction
+    adapted = [{"sql": _adapt_sql(item["sql"], "kaveon_engine"), "params": item.get("params", [])} for item in statements]
+    return engine_transaction(adapted, operation_id=operation_id)
 
 
 # ── Native parameter conversion ────────────────────────────────────────────────
@@ -109,6 +132,8 @@ def query(sql: str, params: Optional[List[Any]] = None) -> dict:
     import os as _os
     # Read from os.environ directly — settings is frozen at import time and will
     # hold stale values if the .env was changed after startup.
+    if is_product_engine():
+        return transaction([{"sql": sql, "params": params or []}])[0]
     db = _os.environ.get("METADATA_DATABASE") or settings.METADATA_DATABASE
     if not db:
         from fastapi import HTTPException

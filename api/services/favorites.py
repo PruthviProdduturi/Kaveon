@@ -62,10 +62,15 @@ def create_favorite(data: dict, user_id: str) -> dict:
 
     fav_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    db.execute("""
+    insert_sql = """
         INSERT INTO favorites (id, user_email, object_id, object_type, object_name, created_at)
         VALUES (@param0, @param1, @param2, @param3, @param4, @param5)
-    """, [fav_id, user_id, data["object_id"], data["object_type"], data["object_name"], now])
+    """
+    insert_params = [fav_id, user_id, data["object_id"], data["object_type"], data["object_name"], now]
+    if db.is_product_engine():
+        db.transaction([{"sql": insert_sql, "params": insert_params}])
+    else:
+        db.execute(insert_sql, insert_params)
 
     return {
         "id": fav_id,
@@ -86,6 +91,8 @@ def toggle_favorite(data: dict, user_id: str) -> dict:
 
 
 def delete_favorite(user_id: str, object_type: str, object_id: str) -> bool:
+    if db.is_product_engine():
+        return db.transaction([{"sql": "DELETE FROM favorites WHERE user_email = @param0 AND object_type = @param1 AND object_id = @param2", "params": [user_id, object_type, object_id]}])[0]["row_count"] > 0
     count = db.execute("""
         DELETE FROM favorites
         WHERE user_email = @param0 AND object_type = @param1 AND object_id = @param2
@@ -94,6 +101,8 @@ def delete_favorite(user_id: str, object_type: str, object_id: str) -> bool:
 
 
 def delete_favorite_by_id(fav_id: str, user_id: str) -> bool:
+    if db.is_product_engine():
+        return db.transaction([{"sql": "DELETE FROM favorites WHERE id = @param0 AND user_email = @param1", "params": [fav_id, user_id]}])[0]["row_count"] > 0
     count = db.execute("""
         DELETE FROM favorites WHERE id = @param0 AND user_email = @param1
     """, [fav_id, user_id])

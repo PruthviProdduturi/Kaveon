@@ -47,6 +47,9 @@ pub struct CatalogSnapshot {
     pub parent: Option<SnapshotRef>,
     pub operation_id: String,
     pub request_digest: String,
+    /// Immutable SQLite schema SQL required to reconstruct this snapshot.
+    #[serde(default)]
+    pub schema: Option<ImmutableFileRef>,
     pub tables: BTreeMap<String, TableManifestRef>,
 }
 
@@ -95,6 +98,7 @@ impl CatalogSnapshot {
             parent: None,
             operation_id: "genesis".to_owned(),
             request_digest: "0".repeat(64),
+            schema: None,
             tables: BTreeMap::new(),
         })
     }
@@ -156,6 +160,7 @@ impl CatalogSnapshot {
             parent: Some(self.reference()),
             operation_id: request.operation_id,
             request_digest: request.request_digest,
+            schema: self.schema.clone(),
             tables,
         };
         next.validate()?;
@@ -169,6 +174,12 @@ impl CatalogSnapshot {
         validate_snapshot_id("snapshot ID", &self.snapshot_id)?;
         validate_identifier("operation ID", &self.operation_id)?;
         validate_digest(&self.request_digest)?;
+        if let Some(schema) = &self.schema {
+            validate_file(schema, false)?;
+            if !schema.path.ends_with(".sql") {
+                return Err(error("schema reference must end in .sql"));
+            }
+        }
         if self.tables.len() > MAX_TABLES {
             return Err(error("snapshot table limit exceeded"));
         }
