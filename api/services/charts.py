@@ -100,17 +100,22 @@ def create_chart(data: dict, user_id: str) -> dict:
     if visibility not in VALID_VISIBILITY:
         visibility = "internal"
 
-    db.execute("""
+    insert_sql = """
         INSERT INTO charts (name, description, chart_type, query_config, viz_config,
                            visibility, created_on, created_by, changed_on, updated_by, created_at, updated_at)
         VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6, @param7, @param8, @param9, @param10, @param11)
-    """, [
+    """
+    insert_params = [
         data["name"], data.get("description"), data["chart_type"],
         json.dumps(query_config),
         json.dumps(data.get("viz_config") or {}),
         visibility,
         now, user_id, now, user_id, now, now,
-    ])
+    ]
+    if db.is_product_engine():
+        result = db.transaction([{"sql": insert_sql + " RETURNING id", "params": insert_params}])[0]
+        return get_chart_by_id(str(result["rows"][0]["id"]))
+    db.execute(insert_sql, insert_params)
     inserted = db.query_one(
         "SELECT TOP 1 id FROM charts WHERE name = @param0 AND created_by = @param1 ORDER BY id DESC",
         [data["name"], user_id],
@@ -143,11 +148,17 @@ def update_chart(chart_id: str, data: dict) -> Optional[dict]:
     updates.append(f"updated_at = @param{i}"); params.append(now); i += 1
     params.append(int(chart_id))
 
-    db.execute(f"UPDATE charts SET {', '.join(updates)} WHERE id = @param{i}", params)
+    sql = f"UPDATE charts SET {', '.join(updates)} WHERE id = @param{i}"
+    if db.is_product_engine():
+        db.transaction([{"sql": sql, "params": params}])
+    else:
+        db.execute(sql, params)
     return get_chart_by_id(chart_id)
 
 
 def delete_chart(chart_id: str) -> bool:
+    if db.is_product_engine():
+        return db.transaction([{"sql": "DELETE FROM charts WHERE id = @param0", "params": [int(chart_id)]}])[0]["row_count"] > 0
     return db.execute("DELETE FROM charts WHERE id = @param0", [int(chart_id)]) > 0
 
 
