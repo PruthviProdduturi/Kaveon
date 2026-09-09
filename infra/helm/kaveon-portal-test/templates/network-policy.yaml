@@ -1,0 +1,31 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kaveon-portal-api-ingress
+  namespace: kaveon
+spec:
+  podSelector:
+    matchLabels: {app: kaveon-api}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {app: kaveon-portal}}
+        - podSelector: {matchLabels: {app: kaveon-portal-init}}
+      ports:
+        - {protocol: TCP, port: 8080}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kaveon-portal-postgres-ingress
+  namespace: kaveon
+spec:
+  podSelector:
+    matchLabels: {app: kaveon-postgres}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {app: kaveon-api}}
+        - podSelector: {matchLabels: {app: kaveon-portal-init}}
+      ports:
+        - {protocol: TCP, port: 5432}

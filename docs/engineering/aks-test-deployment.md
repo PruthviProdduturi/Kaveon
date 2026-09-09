@@ -7,7 +7,7 @@ The user authorized provisioning in Microsoft tenant `72f988bf-86f1-41af-91ab-2d
 East US hosts `kaveon-test-aks`, a Kubernetes 1.35.7 test cluster with one system node and three worker nodes. Every node uses Standard_D4s_v3 (4 vCPU, 16 GiB). AKS rejected D4s_v5 for this subscription; the deployment uses an allowed SKU without changing policy. The Free control-plane tier and fixed node counts avoid automatic growth. Four running VMs, disks, registry and network/storage usage remain billable; this is not a spending cap.
 
 - ACR: `kvtestegmf6oweugsno.azurecr.io`, Basic, admin credentials disabled.
-- ADLS Gen2: `kvtestegmf6oweugsno`, Standard LRS, containers `bronze`, `silver`, `gold`; HTTPS only, shared keys and anonymous blob access disabled, firewall default deny with AKS subnet access.
+- ADLS Gen2: `kvtestegmf6oweugsno`, Standard LRS, including the `kavedb` test catalog container; HTTPS only, shared keys and anonymous blob access disabled, firewall default deny with AKS subnet access.
 - Network: `kaveon-test-vnet`, dedicated AKS subnet, Azure CNI overlay.
 - Identity: Entra/Azure RBAC cluster access, local cluster accounts disabled, OIDC and workload identity enabled. `kaveon-test-reader` has read-only blob access to this test account. Caller upload permission is scoped to the test account; image pull and cluster administration roles are scoped to their new resources.
 - AKS-managed resources are in `MC_test-prproddu-test_kaveon-test-aks_eastus`.
@@ -18,17 +18,20 @@ East US hosts `kaveon-test-aks`, a Kubernetes 1.35.7 test cluster with one syste
 
 `infra/helm/kaveon-test` renders a single coordinator and three workers in namespace `kaveon`. Each worker is required to occupy a different worker node. The coordinator uses a 32 GiB Azure Disk PVC for SQLite/WAL and exchange state; workers use bounded ephemeral scratch. This is a single-coordinator test system, not high availability.
 
-The image was rebuilt from engine source at `d567232` and pushed as:
+The final Engine image is pinned as:
 
 ```text
-kvtestegmf6oweugsno.azurecr.io/kaveon-engine@sha256:b0fbcc0ba878ea956152b0985f39c1996fc1f9c29b42200b70d6c3852dfc4ea8
+kvtestegmf6oweugsno.azurecr.io/kaveon-engine@sha256:c50c400207244c9a5af0553420e9f6ecbfe52df3cf4276f4b958d55fabf539fd
 ```
 
 Pods run as UID/GID 10001 with a read-only root filesystem, dropped capabilities, TLS and distinct principal/catalog/exchange credentials. Services are ClusterIP only; network policy restricts engine ingress to the namespace. Worker readiness checks process health because workers execute shipped fragments without loading the coordinator catalog; separate live queries must prove worker registration and execution.
 
 `scripts/aks-test-secrets.py` generates test PKI and secrets in a private ignored directory. Server certificates expire after 30 days; replace the TLS Secret and roll pods before expiry. This initial test uses Kubernetes Secrets, not a completed Key Vault rotation integration. Never commit the generated bundle or print credential files. Apply Secret JSON with `kubectl apply --server-side` to avoid copying the CA bundle into a size-limited last-applied annotation.
 
-Render the Helm chart with the immutable image and workload identity client ID, then apply it in `kaveon`. No public Studio/API endpoint or managed PostgreSQL was deployed by this engine test rollout. Existing application environments were not migrated.
+Render the Helm chart with the immutable image, then apply it in `kaveon`. The
+test portal uses ClusterIP services and is reached through a local `3000` port
+forward; it is not a public endpoint. Existing application environments were
+not migrated.
 
 ## Data and validation
 
@@ -65,13 +68,25 @@ restore or recovery of interrupted queries.
 
 ## Stop and resume
 
-The September 8 CLI/UI follow-up deployed coordinator image
-`kvtestegmf6oweugsno.azurecr.io/kaveon-engine@sha256:909cf21c79cc87d5bf4085f7f155aa23e90a9ed00f1ea968c0fea10327e2883a`
-from `ad3d9c8`. Workers retained their qualified image. Live query history and a
-real Edge browser check show **Kaveon CLI** and the signed Entra username; an
-explicit spoofed request username is ignored. Three workers are active. The
-coordinator restart preserves catalog data but in-memory query history starts
-afresh, so attribution checks use newly submitted queries.
+The final rollout has all four Engine pods Ready on
+`kvtestegmf6oweugsno.azurecr.io/kaveon-engine@sha256:c50c400207244c9a5af0553420e9f6ecbfe52df3cf4276f4b958d55fabf539fd`.
+Studio is Ready on
+`kvtestegmf6oweugsno.azurecr.io/kaveon-studio@sha256:bb797095971d731b89f999388bfc9e9145c77392991138014588801c57c90f7f`;
+the API is Ready on
+`kvtestegmf6oweugsno.azurecr.io/kaveon-api@sha256:e413c4da91e666d220132721bc72ef6793de6c7399209cf5ad005d3e540b42a0`.
+The portal is authenticated with a public Entra client and server-verified
+session; no subscription policy changed for this rollout. The coordinator
+restart preserves catalog data but in-memory query history starts afresh, so
+attribution checks use newly submitted queries.
+
+The `kavedb` catalog contains `bronze.orders`, `bronze.customers`,
+`silver.orders`, `silver.customers`, and `gold.daily_sales` in ADLS Parquet.
+A live CLI query returned COUNT 10000 and SUM(amount_cents) 486727696,
+with 10000 scanned rows and 59186 selected compressed bytes. A real Microsoft
+token established an Admin portal session; an Edge browser then selected
+`kavedb` / `silver` and ran the same exact aggregate through deployed SQL Lab.
+The browser test used real API, Engine, and storage responses. Interactive
+Microsoft popup/MFA completion remains a manual check.
 
 To stop compute between sessions (after queries finish):
 

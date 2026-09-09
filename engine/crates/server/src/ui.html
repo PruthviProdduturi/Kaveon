@@ -113,7 +113,7 @@ body{font-family:var(--sans);background:radial-gradient(circle at 50% -20%,rgba(
 .query-sql{display:block;font:13px/1.65 var(--mono);color:var(--text);padding:16px 18px;white-space:pre-wrap;overflow-wrap:anywhere}
 .query-stat{display:flex;flex-direction:column;gap:2px;min-width:74px}.query-stat-label{font-size:9px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted)}.query-stat-value{font:600 12px var(--mono);color:var(--text-secondary)}
 table{width:100%;border-collapse:collapse;font-size:13px}
-thead{position:sticky;top:64px;z-index:10}
+thead{position:static}
 th{text-align:left;padding:10px 16px;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);background:var(--bg-elevated);border-bottom:1px solid var(--border);white-space:nowrap}
 td{padding:9px 16px;border-bottom:1px solid var(--border);font-size:13px}
 tr:last-child td{border-bottom:none}
@@ -130,7 +130,7 @@ tr:last-child td{border-bottom:none}
   display:inline-flex;align-items:center;gap:6px;
   font-size:12px;color:var(--text-muted);cursor:pointer;
   margin-bottom:20px;padding:5px 10px;border-radius:6px;
-  transition:all .15s;border:1px solid transparent;
+  transition:all .15s;border:1px solid transparent;background:transparent;font-family:inherit;
 }
 .qd-back:hover{color:var(--text-secondary);background:var(--bg-hover);border-color:var(--border)}
 .qd-back svg{width:14px;height:14px}
@@ -139,6 +139,7 @@ tr:last-child td{border-bottom:none}
 .qd-title{font-size:16px;font-weight:600}
 .qd-id{font-size:16px;font-family:var(--mono);color:var(--text);overflow-wrap:anywhere}
 .qd-state{display:flex;align-items:center;gap:10px;flex-shrink:0}.qd-state-time{font:12px var(--mono);color:var(--text-muted)}
+.qd-actions{display:flex;align-items:center;flex-wrap:wrap;justify-content:flex-end;gap:8px}.copy-button{border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--text-secondary);padding:7px 10px;font:600 11px var(--sans);cursor:pointer}.copy-button:hover{border-color:var(--border-active);color:var(--text);background:var(--bg-hover)}.copy-status{width:100%;min-height:16px;text-align:right;color:var(--text-muted);font:10px var(--mono)}
 
 .qd-sections{display:flex;flex-direction:column;gap:24px}
 .qd-section{min-width:0}
@@ -170,7 +171,7 @@ tr:last-child td{border-bottom:none}
 
 .qd-data{border:1px solid var(--border);border-radius:var(--radius-sm);overflow:auto;max-height:340px}
 .qd-data table{font-size:12px}
-.qd-data th{font-size:10px;padding:8px 14px;background:var(--bg);position:sticky;top:0}
+.qd-data thead{position:sticky;top:0;z-index:1}.qd-data th{font-size:10px;padding:8px 14px;background:var(--bg)}
 .qd-data td{padding:7px 14px;font-family:var(--mono);font-size:12px}
 td.nl{color:var(--text-muted);font-style:italic}
 
@@ -206,6 +207,12 @@ td.nl{color:var(--text-muted);font-style:italic}
 .empty svg{width:36px;height:36px;opacity:.25;margin-bottom:12px}
 .empty-t{font-size:14px}
 .empty-s{font-size:12px;margin-top:4px;color:var(--text-muted)}
+.state-panel{border:1px dashed var(--border);border-radius:var(--radius);background:var(--bg-surface)}
+.state-panel.error{border-color:rgba(var(--error-rgb),.38);background:rgba(var(--error-rgb),.05)}
+.state-panel.loading .empty-t:before{content:"";display:inline-block;width:8px;height:8px;margin:0 8px 1px 0;border:2px solid var(--brand);border-right-color:transparent;border-radius:50%;vertical-align:middle;animation:spin .7s linear infinite}
+.history-status{min-height:18px;color:var(--text-muted);font:11px var(--mono);text-align:right}
+.auth-identity{color:var(--text-secondary);font-size:12px}.auth-identity strong{font-family:var(--mono);font-weight:600;color:var(--text)}
+@keyframes spin{to{transform:rotate(360deg)}}
 
 /* ===== TIMELINE BAR ===== */
 .timeline{display:flex;flex-direction:column;gap:6px}
@@ -222,7 +229,7 @@ td.nl{color:var(--text-muted);font-style:italic}
 :focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 @media(max-width:900px){.telemetry,.qd-columns{grid-template-columns:1fr}}
-@media(max-width:700px){.mast,.qd-header{align-items:flex-start;flex-direction:column}.section-row{align-items:flex-start;flex-direction:column}.query-tools{width:100%}.query-tools input{width:100%}.query-body{grid-template-columns:1fr}.query-meta{border-right:0;border-bottom:1px solid var(--border)}.main{padding:20px}.header{padding:0 18px}.gauges{padding:12px 18px}.qd-inner{padding:16px}.qd-tabs{overflow-x:auto}.qd-tab{white-space:nowrap}.qd-definition{grid-template-columns:1fr}.qd-definition dt{border-bottom:0;padding-bottom:2px}.qd-definition dd{padding-top:0}.plan-shell{padding:14px}.plan-node{min-width:210px}}
+@media(max-width:700px){.mast,.qd-header{align-items:flex-start;flex-direction:column}.section-row{align-items:flex-start;flex-direction:column}.query-tools{width:100%}.query-tools input{width:100%}.query-body{grid-template-columns:1fr}.query-meta{border-right:0;border-bottom:1px solid var(--border)}.main{padding:20px}.header{position:static;height:auto;min-height:64px;padding:12px 18px;align-items:flex-start;flex-wrap:wrap;gap:8px}.header-r{width:100%;justify-content:space-between;gap:8px}.gauges{padding:12px 18px}.qd-inner{padding:16px}.qd-tabs{overflow-x:auto}.qd-tab{white-space:nowrap}.qd-definition{grid-template-columns:1fr}.qd-definition dt{border-bottom:0;padding-bottom:2px}.qd-definition dd{padding-top:0}.plan-shell{padding:14px}.plan-node{min-width:210px}.qd-actions{width:100%;justify-content:flex-start}.copy-status{text-align:left}}
 .auth{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:14px 24px;border-bottom:1px solid var(--border)}
 .auth input{padding:8px;background:var(--bg-surface);color:var(--text);border:1px solid var(--border);border-radius:6px}
 .auth small{color:var(--text-muted)}
@@ -246,6 +253,7 @@ td.nl{color:var(--text-muted);font-style:italic}
   <button class="refresh" type="button" id="microsoft-sign-in" hidden>Sign in with Microsoft</button>
   <button class="refresh" type="button" id="disconnect">Disconnect</button>
   <span id="auth-status" role="status" aria-live="polite">Loading sign-in options…</span>
+  <span id="auth-identity" class="auth-identity" aria-live="polite"></span>
   <details id="advanced-auth">
   <summary>Advanced: engine access token</summary>
 <form id="auth-form">
@@ -285,7 +293,7 @@ td.nl{color:var(--text-muted);font-style:italic}
       <div class="chart"><div class="chart-top"><span class="chart-label">Observed queries</span><span class="chart-value" id="cv-queries">0</span></div><svg class="spark" id="chart-queries" viewBox="0 0 320 72" preserveAspectRatio="none"></svg><div class="chart-note">Coordinator process history</div></div>
       <div class="chart"><div class="chart-top"><span class="chart-label">Engine memory</span><span class="chart-value" id="cv-memory">0 B</span></div><svg class="spark" id="chart-memory" viewBox="0 0 320 72" preserveAspectRatio="none"></svg><div class="chart-note">Resident memory across Engine processes</div></div>
     </div>
-    <div class="section-row"><div class="section-hdr">Query history <span class="ct" id="qc">0</span></div><div class="query-tools"><input id="qsearch" type="search" placeholder="Search SQL or query ID" aria-label="Search query history"><select id="qstate" aria-label="Filter query state"><option value="ALL">All states</option><option value="RUNNING">Running</option><option value="FINISHED">Finished</option><option value="FAILED">Failed</option></select></div></div>
+    <div class="section-row"><div><div class="section-hdr">Query history <span class="ct" id="qc">0</span></div><div class="history-status" id="history-status" role="status" aria-live="polite"></div></div><div class="query-tools"><input id="qsearch" type="search" placeholder="Search SQL or query ID" aria-label="Search query history"><select id="qstate" aria-label="Filter query state"><option value="ALL">All states</option><option value="RUNNING">Running</option><option value="FINISHED">Finished</option><option value="FAILED">Failed</option></select></div></div>
     <div id="qarea">
       <div class="empty">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
@@ -320,6 +328,7 @@ function disconnect(message='Disconnected'){
   document.getElementById('cd').className='conn-dot err';
   document.getElementById('ct').textContent='Disconnected';
   document.getElementById('auth-status').textContent=message;
+  document.getElementById('auth-identity').textContent='';
   renderHistory();
 }
 async function apiJson(path){
@@ -349,7 +358,7 @@ async function apiJson(path){
 }
 function refresh(){if(connected){fetchCluster();fetchHistory();}}
 
-let queries={},qorder=[];
+let queries={},qorder=[],lastQueryTrigger=null;
 const MAX_SAMPLES=60,samples={queries:[],memory:[]};
 
 function fmt(s){
@@ -446,12 +455,17 @@ function queryClient(q){
   return c.client||'HTTP API';
 }
 function queryUser(q){const c=q.context||{};return c.user||c.principal||'Unavailable';}
+function queryPrincipal(q){const c=q.context||{};return c.principal||'Unavailable';}
+function historyState(kind,title,message){
+  document.getElementById('qarea').innerHTML=`<div class="empty state-panel ${kind}"><div class="empty-t">${esc(title)}</div><div class="empty-s">${esc(message)}</div></div>`;
+}
 
 function showDetail(id){
   const q=queries[id];if(!q)return;
   document.getElementById('view-list').style.display='none';
   const el=document.getElementById('view-detail');
   el.style.display='block';
+  el.tabIndex=-1;
 
   const badge=q.state==='FINISHED'?'<span class="badge badge-finished">Finished</span>':q.state==='RUNNING'?'<span class="badge badge-running">Running</span>':'<span class="badge badge-failed">Failed</span>';
   const elapsed=q.elapsed_ms||0;
@@ -465,7 +479,7 @@ function showDetail(id){
     </button>
     <div class="qd-header">
       <div class="qd-heading"><div class="qd-kicker">Query details</div><div class="qd-id">${esc(q.id)}</div></div>
-      <div class="qd-state">${badge}<span class="qd-state-time">${elapsed} ms</span></div>
+      <div class="qd-actions"><div class="qd-state">${badge}<span class="qd-state-time">${elapsed} ms</span></div><button class="copy-button" id="copy-query-id" type="button">Copy query ID</button><button class="copy-button" id="copy-query-sql" type="button">Copy SQL</button><div class="copy-status" id="copy-status" role="status" aria-live="polite"></div></div>
     </div>
     <div class="qd-tabs" id="qd-tabs" role="tablist" aria-label="Query details">
       <button class="qd-tab active" type="button" role="tab" aria-selected="true" data-t="overview">Overview</button>
@@ -479,14 +493,14 @@ function showDetail(id){
     <div class="qd-section"><div class="qd-label">Query</div><div class="qd-sql">${esc(q.sql)}</div></div>
     <div class="qd-columns">
       <section class="qd-panel"><div class="qd-label">Session</div>${definition([
-        ['User',esc(queryUser(q))],['Principal',present(context.principal)],['Source',present(context.source)],['Client',esc(queryClient(q))],
+        ['Verified user',esc(queryUser(q))],['Verified principal',esc(queryPrincipal(q))],['Source',present(context.source)],['Client',esc(queryClient(q))],
         ['Catalog',present(context.catalog)],['Schema',present(context.schema)],['Time zone',present(context.time_zone)],
         ['Client address',present(context.client_address)],['Client tags',present(tags)],['Result delivery',present(context.result_delivery)]
       ])}</section>
       <div class="qd-stack"><section class="qd-panel"><div class="qd-label">Execution</div>${definition([
         ['State',present(q.state)],['Submitted',present(q.submitted_at_ms?submitted(q.submitted_at_ms):null)],
         ['Completed',q.completed_at_ms?esc(submitted(q.completed_at_ms)):'<span class="qd-unavailable">In progress</span>'],
-        ['Elapsed',esc(elapsed+' ms')],['Rows returned',esc(String(q.rows?q.rows.length:0))],['Columns',esc(String(q.columns?q.columns.length:0))]
+        ['Elapsed',esc(elapsed+' ms')],['Rows in response',esc(String(q.rows?q.rows.length:0))],['Columns',esc(String(q.columns?q.columns.length:0))]
       ])}</section>
       <section class="qd-panel"><div class="qd-label">Engine context</div>${definition([
         ['Version',present(context.engine_version)],['Environment',present(context.environment)]
@@ -516,11 +530,13 @@ function showDetail(id){
     ${q.plan&&q.plan.logical?renderPlan(q.plan.logical):'<div class="qd-plan-note"><strong>Not available.</strong> The planner did not attach a logical plan.</div>'}
     <div class="qd-label" style="margin-top:20px">Storage scans</div>`;
   if(q.scans&&q.scans.length){
+    if(!q.scan_metrics_complete)h+=`<div class="qd-plan-note"><strong>Partial scan metrics.</strong> One or more workers did not return reader counters, so no cluster-wide scan total is shown.</div>`;
     q.scans.forEach((s,index)=>{h+=`<div class="qd-section"><div class="qd-label">Scan ${index+1}</div><div class="qd-grid">
       <div class="qd-metric"><div class="qd-metric-label">Files opened</div><div class="qd-metric-value">${s.files_opened} / ${s.files_considered}</div></div>
       <div class="qd-metric"><div class="qd-metric-label">Row groups read</div><div class="qd-metric-value">${s.row_groups_read} / ${s.row_groups_considered}</div></div>
       <div class="qd-metric"><div class="qd-metric-label">Row groups pruned</div><div class="qd-metric-value">${s.row_groups_pruned}</div></div>
-      <div class="qd-metric"><div class="qd-metric-label">Rows emitted</div><div class="qd-metric-value">${s.rows_emitted.toLocaleString()}</div></div>
+      <div class="qd-metric"><div class="qd-metric-label">Reader output rows</div><div class="qd-metric-value">${s.rows_emitted.toLocaleString()}</div></div>
+      <div class="qd-metric"><div class="qd-metric-label">Selected row-group rows</div><div class="qd-metric-value">${s.rows_selected.toLocaleString()}</div></div>
       <div class="qd-metric"><div class="qd-metric-label">Selected compressed data</div><div class="qd-metric-value">${bytes(s.compressed_bytes_selected)}</div></div>
       <div class="qd-metric"><div class="qd-metric-label">Read throughput</div><div class="qd-metric-value">${rate(s.compressed_bytes_per_second,'B/s')}</div></div>
       <div class="qd-metric"><div class="qd-metric-label">Row throughput</div><div class="qd-metric-value">${rate(s.rows_per_second,'rows/s')}</div></div>
@@ -530,7 +546,7 @@ function showDetail(id){
     </div></div>`});
   }else{
     h+=q.stages&&q.stages.length
-      ?`<div class="qd-plan-note"><strong>Worker-level metric pending.</strong> This distributed stage reports task output; worker storage-scan metrics are not yet aggregated into the coordinator record.</div>`
+      ?`<div class="qd-plan-note"><strong>Reader counters unavailable.</strong> This distributed query did not receive complete storage-scan metrics from every worker.</div>`
       :`<div class="qd-plan-note"><strong>Not measured.</strong> No storage scan was attached to this query.</div>`;
   }
   h+=`<div class="qd-label" style="margin-top:20px">Distributed stages</div>`;
@@ -565,7 +581,8 @@ function showDetail(id){
     });
     h+=`</tbody></table></div>`;
   }else{
-    h+=`<div class="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 3v18"/></svg><div class="empty-t">No result data</div></div>`;
+    const resultMessage=q.state==='RUNNING'?'Results will appear when execution completes.':q.state==='FAILED'?'No results are available because this query failed.':'This query returned no rows.';
+    h+=`<div class="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 3v18"/></svg><div class="empty-t">No result data</div><div class="empty-s">${resultMessage}</div></div>`;
   }
   h+=`</div>`;
 
@@ -582,14 +599,40 @@ function showDetail(id){
       el.querySelectorAll('.qd-pane').forEach(p=>p.classList.remove('active'));
       tab.classList.add('active');
       tab.setAttribute('aria-selected','true');
+      tab.tabIndex=0;
       document.getElementById('qdt-'+tab.dataset.t).classList.add('active');
+      el.querySelectorAll('.qd-tab').forEach(t=>{if(t!==tab)t.tabIndex=-1;});
+    });
+    tab.addEventListener('keydown',event=>{
+      if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+      event.preventDefault();
+      const tabs=[...el.querySelectorAll('.qd-tab')];
+      const index=tabs.indexOf(tab);
+      const target=event.key==='Home'?tabs[0]:event.key==='End'?tabs[tabs.length-1]:tabs[(index+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length];
+      target.focus();target.click();
     });
   });
+  el.querySelector('#copy-query-id').addEventListener('click',()=>copyText(q.id,'Query ID'));
+  el.querySelector('#copy-query-sql').addEventListener('click',()=>copyText(q.sql,'SQL'));
+  el.focus();
+}
+
+async function copyText(value,label){
+  const status=document.getElementById('copy-status');
+  try{
+    if(navigator.clipboard&&navigator.clipboard.writeText)await navigator.clipboard.writeText(value);
+    else{
+      const input=document.createElement('textarea');input.value=value;input.setAttribute('readonly','');input.style.position='fixed';input.style.opacity='0';document.body.append(input);input.select();
+      const copied=document.execCommand('copy');input.remove();if(!copied)throw new Error('copy unavailable');
+    }
+    status.textContent=label+' copied.';
+  }catch{status.textContent='Copy is unavailable in this browser.';}
 }
 
 function hideDetail(){
   document.getElementById('view-detail').style.display='none';
   document.getElementById('view-list').style.display='block';
+  if(lastQueryTrigger)lastQueryTrigger.focus();
 }
 
 function renderHistory(){
@@ -597,7 +640,10 @@ function renderHistory(){
   const state=document.getElementById('qstate').value;
   const visible=qorder.filter(id=>{const q=queries[id];return q&&(state==='ALL'||q.state===state)&&(!term||q.sql.toLowerCase().includes(term)||id.toLowerCase().includes(term));});
   document.getElementById('qc').textContent=visible.length===qorder.length?qorder.length:visible.length+' / '+qorder.length;
-  if(!visible.length){document.getElementById('qarea').innerHTML='<div class="empty"><div class="empty-t">No matching queries</div><div class="empty-s">Adjust the search or state filter</div></div>';return;}
+  if(!visible.length){
+    historyState('',qorder.length?'No matching queries':'No queries yet',qorder.length?'Adjust the search or state filter.':'Queries submitted through the Engine appear here.');
+    return;
+  }
   let h='<div class="query-list">';
   visible.forEach(id=>{
     const q=queries[id];if(!q)return;
@@ -607,7 +653,7 @@ function renderHistory(){
       <span class="query-card-top"><span class="query-identity"><span class="query-id">${esc(id)}</span></span><span class="query-time">${submitted(q.submitted_at_ms)}</span></span>
       <span class="query-body"><span class="query-meta">
         <span class="query-stat"><span class="query-stat-label">Elapsed</span><span class="query-stat-value">${q.elapsed_ms||0} ms</span></span>
-        <span class="query-stat"><span class="query-stat-label">Returned</span><span class="query-stat-value">${q.rows?q.rows.length:0} rows</span></span>
+        <span class="query-stat"><span class="query-stat-label">In response</span><span class="query-stat-value">${q.rows?q.rows.length:0} rows</span></span>
         <span class="query-stat"><span class="query-stat-label">Columns</span><span class="query-stat-value">${q.columns?q.columns.length:0}</span></span>
         <span class="query-stat"><span class="query-stat-label">Entry point</span><span class="query-stat-value">${esc(queryClient(q))}</span></span>
         <span class="query-stat"><span class="query-stat-label">User</span><span class="query-stat-value" style="overflow-wrap:anywhere">${esc(queryUser(q))}</span></span>
@@ -618,14 +664,17 @@ function renderHistory(){
   const area=document.getElementById('qarea');
   area.innerHTML=h;
   area.querySelectorAll('[data-query-id]').forEach(row=>{
-    const open=()=>showDetail(row.dataset.queryId);
+    const open=()=>{lastQueryTrigger=row;showDetail(row.dataset.queryId);};
     row.addEventListener('click',open);
   });
 }
 
 async function fetchHistory(){
+  const status=document.getElementById('history-status');
+  const current=session;
+  if(!qorder.length)historyState('loading','Loading query history…','Fetching the current Engine record.');
+  status.textContent=qorder.length?'Refreshing query history…':'';
   try{
-    const current=session;
     const records=await apiJson('/v1/query');
     if(current!==session)return;
     queries={};qorder=[];
@@ -634,12 +683,18 @@ async function fetchHistory(){
       qorder.push(record.id);
     });
     renderHistory();
-  }catch{}
+    status.textContent=`Updated ${new Date().toLocaleTimeString([], {hour:'numeric',minute:'2-digit',second:'2-digit'})}`;
+  }catch(error){
+    if(current!==session)return;
+    if(!qorder.length)historyState('error','Query history is unavailable','Check your connection and refresh the page.');
+    status.textContent='Last refresh failed';
+  }
 }
 
 function connect(token,account=null){
   disconnect();accessToken=token;identityAccount=account;connected=true;
   document.getElementById('auth-status').textContent='Connecting…';
+  document.getElementById('auth-identity').innerHTML=account?`Signed in as <strong>${esc(account.name||account.username||'Microsoft user')}</strong>`:'Connected with an engine access token';
   refresh();pollTimer=setInterval(refresh,5000);
 }
 async function initializeSignIn(){

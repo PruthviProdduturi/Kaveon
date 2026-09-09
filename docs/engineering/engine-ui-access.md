@@ -75,15 +75,21 @@ A real headless Edge browser test verified wrong-token rejection, three workers
 visible after authentication, empty browser storage, cleared data on Disconnect,
 and no JavaScript errors. The live viewer reads the deployed AKS cluster.
 
-The coordinator UI/auth image digest is
+The earlier coordinator-only UI/auth image digest was
 `sha256:909cf21c79cc87d5bf4085f7f155aa23e90a9ed00f1ea968c0fea10327e2883a`.
 The chart supports `coordinator.imageDigest` for this compatible coordinator-only
-update; workers retain the previously qualified engine image. Future full engine
+update; workers retained the previously qualified engine image. Future full engine
 upgrades should update both roles as required by their protocol compatibility.
 
 The coordinator-only AKS rollout completed successfully. A verified HTTPS GET
 of its native `/ui` returned the new sign-in form; coordinator and all three
 worker pods were Ready. Raw rollout evidence is `tmp/aks-ui-rollout.json`.
+
+The subsequent CLI 0.2.0 rollout updated both coordinator and all three workers
+to `sha256:c50c400207244c9a5af0553420e9f6ecbfe52df3cf4276f4b958d55fabf539fd`.
+All four are Ready. The portal is also deployed as `service/kaveon-portal` on
+port 3000; see [deployment evidence](aks-test-deployment.md) for image pins and
+the live `kavedb` SQL Lab check.
 
 Always check `kubectl config current-context` before operating on a cluster.
 The repository's dedicated `--kubeconfig tmp/aks-kubeconfig` selects `kaveon-test-aks`;

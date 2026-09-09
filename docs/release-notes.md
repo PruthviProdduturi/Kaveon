@@ -5,6 +5,23 @@ The repository does not yet maintain a canonical historical changelog. Git histo
 release notes: status is current capability state, while the handshake is an
 engineering coordination log.
 
+## September 8, 2026 — CLI 0.2.0 and dashboard refinement
+
+CLI 0.2.0 adds editable history, history suggestions, keyword completion, EMACS/VI
+bindings, and a gray/white active-schema prompt that respects `NO_COLOR`. Remote
+scripts support files, redirected input, and multiple statements with explicit
+stop/continue error handling. Connection defaults, positional URLs, and additional
+output formats are documented in the [CLI guide](guides/engine-cli.md).
+
+The Engine UI now has loading/error/empty history states, clearer verified identity,
+keyboard detail tabs, copy SQL/query-ID actions, and corrected desktop/mobile
+result-table layout. Browser checks cover authentication, identity escaping,
+keyboard tabs, copy actions, and responsive views.
+
+The [compatibility checkpoint](engineering/cli-compatibility.md) records supported
+workflows and remaining Trino differences. The Engine performance comparison stays
+paused; this release does not establish performance or SQL-engine parity.
+
 ## September 8, 2026 â€” CLI and Engine UI preview
 
 The Engine coordinator UI update is deployed from `ad3d9c8`; the CLI is distributed

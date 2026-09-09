@@ -30,7 +30,15 @@ Remote mode submits SQL to the coordinator and is the default:
 
 ```bash
 kaveon --server https://engine.example.com --catalog medallion --schema test
+# The URL may be positional; its /catalog/schema path selects session context.
+kaveon https://engine.example.com/medallion/test
 ```
+
+Options accept either `--option value` or `--option=value`. Use
+`--client-request-timeout 30s` or `--client-request-timeout 2m` to set a request
+timeout. `--access-token` supplies an explicit bearer token; prefer the
+`KAVEON_ACCESS_TOKEN` environment variable for unattended use so the token does
+not enter shell history.
 
 When the coordinator enables Microsoft sign-in, `--auth auto` (the default)
 first reuses the current Azure CLI login and renews through it when necessary;
@@ -64,17 +72,54 @@ APIs. They are client metadata commands, not SQL support provided by
 SHOW CATALOGS;
 SHOW SCHEMAS IN medallion;
 SHOW TABLES FROM medallion.test;
+SHOW TABLES FROM medallion.test LIKE 'orders_%';
+DESCRIBE medallion.test.orders;
+SHOW COLUMNS FROM medallion.test.orders;
 USE medallion.test;
 ```
 
 `SHOW SCHEMAS` and `SHOW TABLES` accept `IN` or `FROM`; unqualified commands use
 the validated session catalog and schema. Dot aliases are `.catalogs`,
-`.schemas [catalog]`, `.tables [[catalog.]schema]`, and `.use <catalog.schema>`.
+`.schemas [catalog]`, `.tables [[catalog.]schema]`, `.describe <table>`, and `.use <catalog.schema>`.
+`LIKE` filters returned names with SQL `%` and `_` wildcards. `DESCRIBE` and
+`SHOW COLUMNS` read catalog-definition metadata for recorded name, type, and
+nullability.
 `USE` validates its target before changing the prompt context.
 
+Connection defaults can be stored in `KAVEON_CONFIG`, or in
+`~/.kaveon_config` when that variable is unset. It is a `key=value` file whose
+allowlist is limited to connection, output, history, and pager defaults; it
+cannot contain SQL or access tokens. Explicit CLI flags override these defaults.
+
 After a completed remote query, the CLI can show the returned row count and JSON
-result bytes with rates, plus reported node/task counts. Scan metrics are shown
-only when the coordinator reports them.
+result bytes with rates, plus reported node/task counts. Complete Parquet worker
+coverage reports measured reader-output rows, selected row-group rows, and
+selected compressed bytes; incomplete coverage is unavailable rather than zero.
+
+## Scripts, history, and output
+
+Use `-e` for a statement or `-f`/`--file` for a UTF-8 script. Statements in a
+script run in order; `--ignore-errors` continues after failures while preserving
+a nonzero exit status. Interactive history is persistent by default at
+`%APPDATA%\kaveon\history` on Windows (or `~/.kaveon_history` elsewhere); set a
+different location with `--history-file` or disable it with `--no-history`. `--editing-mode`
+accepts `EMACS` (default) or `VI`; SQL keyword completion is available in the
+interactive terminal, and `--disable-auto-suggestion` turns off history
+suggestions. `--pager` selects an optional pager and an empty value disables it.
+
+Lowercase `table`, `csv`, `tsv`, and `json` preserve the existing Kaveon output
+formats. The CLI also accepts exact uppercase Trino-style names:
+
+```text
+ALIGNED  VERTICAL  AUTO  MARKDOWN
+CSV  CSV_HEADER  CSV_UNQUOTED  CSV_HEADER_UNQUOTED
+TSV  TSV_HEADER  JSON  NULL
+```
+
+`JSON` emits one JSON object per result row; `NULL` discards result rows. `AUTO`
+uses `COLUMNS` when set and chooses vertical output when the aligned table does
+not fit. The formats cover common presentation and machine-output workflows;
+they are not a claim of full byte-for-byte Trino formatter parity.
 
 ## Embedded local mode
 
@@ -297,5 +342,6 @@ error in the terminal.
 - SQL support is intentionally narrower than Trino. See
   [Engine SQL compatibility](../reference/engine-sql-compatibility.md) before
   relying on joins, sorting, DDL, or DML.
-- The client does not provide query-history editing, completion, `LIKE` metadata
-  filtering, batch execution, or full Trino command parity.
+- The client does not provide query-history editing. `SHOW TABLES ... LIKE` is
+  supported for remote catalog metadata. It does not claim full Trino command,
+  session-property, wire-protocol, or SQL parity.

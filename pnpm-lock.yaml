@@ -40,6 +40,9 @@ importers:
       html-to-image:
         specifier: ^1.11.13
         version: 1.11.13
+      jose:
+        specifier: ^6.2.4
+        version: 6.2.4
       monaco-editor:
         specifier: ^0.52.0
         version: 0.52.2

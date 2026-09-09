@@ -36,6 +36,9 @@ jobs:
       - name: Type check (tsc)
         run: pnpm --filter kaveon-studio type-check
 
+      - name: Verify public Microsoft sign-in tokens
+        run: node --no-warnings --experimental-strip-types --test studio/qualification/entra_auth.mjs
+
       - name: Validate documentation integrity
         run: node scripts/validate-docs.mjs
 

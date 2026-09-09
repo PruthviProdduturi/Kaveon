@@ -1,0 +1,74 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kaveon-postgres
+  namespace: kaveon
+spec:
+  selector:
+    app: kaveon-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kaveon-postgres
+  namespace: kaveon
+spec:
+  serviceName: kaveon-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kaveon-postgres
+  template:
+    metadata:
+      labels:
+        app: kaveon-postgres
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: postgres
+          image: {{ include "portal.image" (list .Values.images.postgres "postgres") }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - {name: POSTGRES_DB, value: kaveonmeta}
+            - {name: POSTGRES_USER, value: kaveon}
+            - {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: {{ required "secrets.portalAuth is required" .Values.secrets.portalAuth }}, key: POSTGRES_PASSWORD}}}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          readinessProbe:
+            exec: {command: [sh, -ec, "pg_isready -U kaveon -d kaveonmeta"]}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 12
+          livenessProbe:
+            exec: {command: [sh, -ec, "pg_isready -U kaveon -d kaveonmeta"]}
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+{{ toYaml .Values.postgres.resources | indent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: {{ required "postgres.storageClass is required" .Values.postgres.storageClass }}
+        resources:
+          requests: {storage: {{ required "postgres.storageSize is required" .Values.postgres.storageSize }}}

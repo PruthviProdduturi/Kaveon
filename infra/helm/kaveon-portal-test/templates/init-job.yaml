@@ -1,0 +1,93 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kaveon-portal-init
+  namespace: kaveon
+  labels:
+    app: kaveon-portal-init
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: kaveon-portal-init
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: schema-and-catalog-source
+          image: {{ include "portal.image" (list .Values.images.api "api") }}
+          command: [python, -c]
+          args:
+            - |
+              import json, os, time
+              import psycopg2
+              options = dict(host=os.environ["PGHOST"], port=os.environ["PGPORT"],
+                             dbname=os.environ["PGDATABASE"], user=os.environ["PGUSER"],
+                             password=os.environ["PGPASSWORD"])
+              for attempt in range(60):
+                  try:
+                      connection = psycopg2.connect(**options)
+                      break
+                  except psycopg2.OperationalError:
+                      if attempt == 59:
+                          raise
+                      time.sleep(2)
+              with connection:
+                  with connection.cursor() as cursor:
+                      with open("/app/schema_postgresql.sql", encoding="utf-8") as schema:
+                          cursor.execute(schema.read())
+                      storage = json.dumps({"account": os.environ["SEED_ADLS_ACCOUNT"], "container": os.environ["SEED_ADLS_CONTAINER"], "root_path": os.environ["SEED_ADLS_ROOT_PATH"]})
+                      cursor.execute("""
+                          INSERT INTO catalog_sources
+                            (name, engine_catalog, storage_type, storage_config, data_format,
+                             credential_kind, credential_ref, adapter_type, adapter_config,
+                             lifecycle, description, created_by, modified_by)
+                          VALUES (%s, %s, 'adls_gen2', %s, 'parquet',
+                                  'workload_identity', %s, 'native', '{}',
+                                  'active', 'KaveDB ADLS catalog', 'system', 'system')
+                          ON CONFLICT (engine_catalog) DO UPDATE SET
+                            name = EXCLUDED.name, storage_type = EXCLUDED.storage_type,
+                            storage_config = EXCLUDED.storage_config,
+                            data_format = EXCLUDED.data_format,
+                            credential_kind = EXCLUDED.credential_kind,
+                            credential_ref = EXCLUDED.credential_ref,
+                            adapter_type = EXCLUDED.adapter_type,
+                            adapter_config = EXCLUDED.adapter_config,
+                            lifecycle = EXCLUDED.lifecycle,
+                            description = EXCLUDED.description,
+                            modified_by = EXCLUDED.modified_by,
+                            modified_at = NOW()
+                      """, (os.environ["SEED_NAME"], os.environ["SEED_CATALOG"], storage,
+                            os.environ["SEED_CREDENTIAL_REF"]))
+              connection.close()
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          env:
+            - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+            - {name: PGHOST, value: kaveon-postgres}
+            - {name: PGPORT, value: "5432"}
+            - {name: PGDATABASE, value: kaveonmeta}
+            - {name: PGUSER, value: kaveon}
+            - {name: PGPASSWORD, valueFrom: {secretKeyRef: {name: {{ required "secrets.portalAuth is required" .Values.secrets.portalAuth }}, key: POSTGRES_PASSWORD}}}
+            - {name: SEED_CATALOG, value: {{ required "seed.catalog is required" .Values.seed.catalog | quote }}}
+            - {name: SEED_NAME, value: {{ required "seed.name is required" .Values.seed.name | quote }}}
+            - {name: SEED_ADLS_ACCOUNT, value: {{ required "seed.adls.account is required" .Values.seed.adls.account | quote }}}
+            - {name: SEED_ADLS_CONTAINER, value: {{ required "seed.adls.container is required" .Values.seed.adls.container | quote }}}
+            - {name: SEED_ADLS_ROOT_PATH, value: {{ .Values.seed.adls.rootPath | quote }}}
+            - {name: SEED_CREDENTIAL_REF, value: {{ required "seed.credentialRef is required" .Values.seed.credentialRef | quote }}}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+      volumes:
+        - {name: tmp, emptyDir: {}}

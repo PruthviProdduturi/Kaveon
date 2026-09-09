@@ -1,6 +1,7 @@
 """Opt-in Engine control/data plane client. No secrets enter catalog definitions."""
 import json
 import os
+import ssl
 from urllib.parse import urlsplit, quote
 
 import httpx
@@ -24,6 +25,17 @@ def _endpoint():
     return value
 
 
+def _verify_context():
+    """Use system trust by default, or a configured private CA. Never disable TLS verification."""
+    ca_path = os.getenv("KAVEON_ENGINE_CA_CERT")
+    if not ca_path:
+        return True
+    try:
+        return ssl.create_default_context(cafile=ca_path)
+    except (OSError, ssl.SSLError):
+        raise HTTPException(503, "Engine CA certificate is unavailable or invalid") from None
+
+
 def _request(method, path, token_name, actor, *, payload=None, revision=None, role=None):
     token = os.getenv(token_name)
     if not token:
@@ -35,7 +47,7 @@ def _request(method, path, token_name, actor, *, payload=None, revision=None, ro
         headers["If-Match"] = str(revision)
     try:
         response = httpx.request(method, _endpoint() + path, headers=headers, json=payload,
-                                 timeout=60, follow_redirects=False)
+                                 timeout=60, follow_redirects=False, verify=_verify_context())
     except httpx.HTTPError:
         raise HTTPException(502, "Engine is unavailable") from None
     if response.status_code == 404:
@@ -107,3 +119,29 @@ def execute(sql, catalog, actor, role, schema=None):
     if result is None or result.get("error"):
         raise HTTPException(422, "Engine query failed")
     return result
+
+
+def _read_role(role):
+    roles = {"Viewer": "reader", "Analyst": "analyst", "Editor": "analyst", "Admin": "admin"}
+    try:
+        return roles[role]
+    except KeyError:
+        raise HTTPException(403, "A recognized Kaveon role is required for Engine catalog access") from None
+
+
+def catalogs(actor, role):
+    return _request("GET", "/v1/catalog", "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role))
+
+
+def schemas(catalog, actor, role):
+    return _request(
+        "GET", "/v1/catalog/" + quote(catalog, safe="") + "/schema",
+        "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role),
+    )
+
+
+def tables(catalog, schema, actor, role):
+    return _request(
+        "GET", "/v1/catalog/" + quote(catalog, safe="") + "/schema/" + quote(schema, safe="") + "/table",
+        "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role),
+    )

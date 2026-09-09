@@ -18,6 +18,8 @@ import NextAuth from "next-auth";
 import GitHub from "next-auth/providers/github";
 import Google from "next-auth/providers/google";
 import MicrosoftEntraID from "next-auth/providers/microsoft-entra-id";
+import Credentials from "next-auth/providers/credentials";
+import { isEntraObjectId, verifyEntraAccessToken } from "./auth/verifyEntra";
 
 const adminEmails = (process.env.AUTH_ADMIN_EMAILS ?? "")
   .split(",")
@@ -25,6 +27,9 @@ const adminEmails = (process.env.AUTH_ADMIN_EMAILS ?? "")
   .filter(Boolean);
 
 const adminUsernames = ["pruthviprodduturi"];
+const publicClientEnabled = process.env.KAVEON_ENTRA_PUBLIC_CLIENT === "true";
+const entraAdmins = new Set((process.env.AUTH_ENTRA_ADMIN_OBJECT_IDS ?? "")
+  .split(",").map((value) => value.trim().toLowerCase()).filter(isEntraObjectId));
 
 function roleFor(email?: string | null, username?: string | null): "Admin" | "Viewer" {
   if (email && adminEmails.includes(email.toLowerCase())) return "Admin";
@@ -34,13 +39,30 @@ function roleFor(email?: string | null, username?: string | null): "Admin" | "Vi
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   providers: [
+    ...(publicClientEnabled ? [Credentials({
+      id: "entra-public",
+      name: "Microsoft Entra ID",
+      credentials: { token: { label: "token", type: "password" } },
+      async authorize(credentials) {
+        const token = typeof credentials?.token === "string" ? credentials.token : "";
+        const identity = await verifyEntraAccessToken(token);
+        if (!identity) return null;
+        return {
+          id: identity.id,
+          email: identity.email,
+          name: identity.name,
+          role: entraAdmins.has(identity.objectId) ? "Admin" : "Viewer",
+          upstreamExpiresAt: identity.expiresAt,
+        };
+      },
+    })] : []),
     ...(process.env.GITHUB_ID
       ? [GitHub({ clientId: process.env.GITHUB_ID, clientSecret: process.env.GITHUB_SECRET })]
       : []),
     ...(process.env.GOOGLE_ID
       ? [Google({ clientId: process.env.GOOGLE_ID, clientSecret: process.env.GOOGLE_SECRET })]
       : []),
-    ...(process.env.AUTH_MICROSOFT_ENTRA_ID_ID
+    ...(!publicClientEnabled && process.env.AUTH_MICROSOFT_ENTRA_ID_ID
       ? [
           MicrosoftEntraID({
             clientId: process.env.AUTH_MICROSOFT_ENTRA_ID_ID,
@@ -54,11 +76,20 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   pages: {
     signIn: "/login",
   },
+  session: {
+    strategy: "jwt",
+    // A public-client session cannot outlive the verified Entra access token.
+    maxAge: publicClientEnabled ? 60 * 60 : undefined,
+  },
   callbacks: {
     // Attach a Kaveon role to the session token so the app can gate on it.
-    jwt({ token, profile }) {
+    jwt({ token, profile, user }) {
+      const upstreamExpiresAt = user && "upstreamExpiresAt" in user ? user.upstreamExpiresAt : undefined;
+      if (typeof upstreamExpiresAt === "number") token.upstreamExpiresAt = upstreamExpiresAt;
+      if (typeof token.upstreamExpiresAt === "number" && token.upstreamExpiresAt <= Date.now()) return null;
       const username = (profile as { login?: string })?.login ?? (token.name as string | undefined);
-      token.role = roleFor(token.email as string | undefined, username);
+      if (profile) token.role = roleFor(token.email as string | undefined, username);
+      else if (user && "role" in user) token.role = user.role as string;
       return token;
     },
     session({ session, token }) {

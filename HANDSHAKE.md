@@ -145,6 +145,43 @@ release-step failure. Preview image/Helm/bundle workflow is added; first publica
 and public GHCR access remain to be verified. No source clone is needed by clients;
 the deployment guide uses a downloadable infrastructure/setup bundle.
 
+### Test portal and Engine SQL Lab — September 8
+
+`infra/helm/kaveon-portal-test` is a test-only, digest-pinned add-on in the
+fixed `kaveon` namespace. It creates ClusterIP Studio/API/PostgreSQL services,
+a one-PVC PostgreSQL instance, and an idempotent API-image initialization Job
+which applies `schema_postgresql.sql` and upserts the active `kavedb` ADLS
+catalog source. Secret keys are projected per workload, not through `envFrom`;
+the API verifies the Engine private CA at
+`https://kaveon-coordinator.kaveon.svc.cluster.local:8080`. Ingress policy
+permits API traffic from Studio/init and PostgreSQL traffic from API/init.
+
+Studio uses the approved Entra public-client PKCE flow. The server verifies the
+session; `AUTH_ENTRA_ADMIN_OBJECT_IDS` is the explicit Administrator allowlist
+and every other signed-in user is Viewer. No Graph token, Entra client secret,
+or federated workload identity is used by this portal path.
+
+The Engine Lab API resolves the browser-selected source ID server-side to one
+active native catalog. Viewer may discover sources, schemas, and tables; only
+Analyst or Admin may execute one read-only `SELECT` or `WITH` query. Engine URLs
+and catalog names are never accepted from the browser. Results are normalized to
+the existing `columns: string[]` / row-array result contract. The KaveDB fixture
+contains bronze `orders`/`customers`, silver `orders`/`customers`, and gold
+`daily_sales` synthetic Parquet tables. `api/services/test_engine_bridge.py` and
+`api/routers/test_lab_engine.py` cover bridge, source, role, result, lexical
+scope, quoted identifier, and literal handling; Helm lint/template cover chart
+rendering.
+
+Final Engine image: `sha256:c50c400207244c9a5af0553420e9f6ecbfe52df3cf4276f4b958d55fabf539fd`,
+with all four Engine pods Ready. Studio is Ready on:
+`sha256:bb797095971d731b89f999388bfc9e9145c77392991138014588801c57c90f7f`.
+The API digest and complete live validation are recorded in
+`docs/engineering/aks-test-deployment.md`. A real Microsoft Admin session and
+deployed SQL Lab returned the exact silver aggregate (10000 / 486727696).
+CLI 0.2.0 Windows release SHA256:
+`779dc2ba094eb32806f07a851b544ee56502f34556dc6bf5312bcbf76ffcd68b`.
+No subscription policy changed. Performance comparison remains paused.
+
 ### Local port allocation — September 8
 
 User requested Engine UI on localhost:8080 and Studio on localhost:3000.

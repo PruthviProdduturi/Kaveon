@@ -1,0 +1,77 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kaveon-portal
+  namespace: kaveon
+spec:
+  selector:
+    app: kaveon-portal
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kaveon-portal
+  namespace: kaveon
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kaveon-portal
+  template:
+    metadata:
+      labels:
+        app: kaveon-portal
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: studio
+          image: {{ include "portal.image" (list .Values.images.studio "studio") }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - {name: NODE_ENV, value: production}
+            - {name: HOSTNAME, value: "0.0.0.0"}
+            - {name: API_URL, value: http://kaveon-api:8080}
+            - {name: AUTH_URL, value: http://localhost:3000}
+            - {name: AUTH_TRUST_HOST, value: "true"}
+            - {name: KAVEON_ENTRA_PUBLIC_CLIENT, value: "true"}
+            - {name: AUTH_SECRET, valueFrom: {secretKeyRef: {name: {{ required "secrets.portalAuth is required" .Values.secrets.portalAuth }}, key: AUTH_SECRET}}}
+            - {name: KAVEON_PROXY_SECRET, valueFrom: {secretKeyRef: {name: {{ .Values.secrets.portalAuth }}, key: KAVEON_PROXY_SECRET}}}
+            - {name: AUTH_MICROSOFT_ENTRA_ID_ID, valueFrom: {secretKeyRef: {name: {{ .Values.secrets.portalAuth }}, key: AUTH_MICROSOFT_ENTRA_ID_ID}}}
+            - {name: AUTH_MICROSOFT_ENTRA_ID_ISSUER, valueFrom: {secretKeyRef: {name: {{ .Values.secrets.portalAuth }}, key: AUTH_MICROSOFT_ENTRA_ID_ISSUER}}}
+            - {name: AUTH_ENTRA_ADMIN_OBJECT_IDS, valueFrom: {secretKeyRef: {name: {{ .Values.secrets.portalAuth }}, key: AUTH_ENTRA_ADMIN_OBJECT_IDS}}}
+          readinessProbe:
+            httpGet: {path: /login, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 12
+          livenessProbe:
+            httpGet: {path: /login, port: http}
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: next-cache, mountPath: /app/studio/.next/cache}
+          resources:
+{{ toYaml .Values.studio.resources | indent 12 }}
+      volumes:
+        - {name: tmp, emptyDir: {}}
+        - {name: next-cache, emptyDir: {}}

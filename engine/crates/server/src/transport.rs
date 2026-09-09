@@ -15,16 +15,25 @@ static CACHED_BYTES: AtomicU64 = AtomicU64::new(0);
 pub struct CachedTaskResult {
     pub bytes: Vec<u8>,
     pub elapsed_us: u64,
+    pub scan_metrics_header: Option<String>,
 }
 impl CachedTaskResult {
-    pub fn new(bytes: Vec<u8>, elapsed_us: u64) -> Result<Self, String> {
+    pub fn new(
+        bytes: Vec<u8>,
+        elapsed_us: u64,
+        scan_metrics_header: Option<String>,
+    ) -> Result<Self, String> {
         CACHED_BYTES
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                 used.checked_add(bytes.capacity() as u64)
                     .filter(|total| *total <= 512 * 1024 * 1024)
             })
             .map_err(|_| "worker task result cache quota exceeded")?;
-        Ok(Self { bytes, elapsed_us })
+        Ok(Self {
+            bytes,
+            elapsed_us,
+            scan_metrics_header,
+        })
     }
 }
 impl Drop for CachedTaskResult {

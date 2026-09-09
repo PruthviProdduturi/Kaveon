@@ -15,7 +15,9 @@ use parquet::arrow::{
 
 use crate::{
     ScanMetrics, ScanPartition,
-    parquet_reader::{matching_row_groups, projection_indices, validate_predicate},
+    parquet_reader::{
+        matching_row_groups, projection_indices, record_selection_metrics, validate_predicate,
+    },
 };
 
 const DEFAULT_BATCH_SIZE: usize = 8_192;
@@ -202,9 +204,13 @@ impl AdlsParquetReader {
         metrics.file_opened();
 
         let schema = Arc::clone(builder.schema());
-        if let Some(columns) = &self.columns {
-            let projection = projection_indices(&schema, columns)?;
-            let mask = ProjectionMask::roots(builder.parquet_schema(), projection);
+        let projection = self
+            .columns
+            .as_ref()
+            .map(|columns| projection_indices(&schema, columns))
+            .transpose()?;
+        if let Some(projection) = &projection {
+            let mask = ProjectionMask::roots(builder.parquet_schema(), projection.clone());
             builder = builder.with_projection(mask);
         }
 
@@ -214,15 +220,14 @@ impl AdlsParquetReader {
         } else {
             (0..builder.metadata().num_row_groups()).collect()
         };
-        let considered = builder.metadata().num_row_groups();
         if let Some(partition) = self.partition {
             row_groups.retain(|ordinal| partition.contains(*ordinal));
         }
-        metrics.row_groups(
-            u64::try_from(considered)
-                .map_err(|_| storage_error("Parquet row-group count exceeds u64"))?,
-            u64::try_from(row_groups.len())
-                .map_err(|_| storage_error("selected row-group count exceeds u64"))?,
+        record_selection_metrics(
+            builder.metadata().as_ref(),
+            &row_groups,
+            projection.as_deref(),
+            &metrics,
         );
         builder = builder.with_row_groups(row_groups);
         let stream: ParquetRecordBatchStream<ParquetObjectReader> =

@@ -94,6 +94,143 @@ def _hide_platform_tables(tables: list, resolved_db: str) -> list:
     ]
 
 
+def _engine_source(source_id: str) -> dict:
+    """Resolve a browser-selected ID to one active native catalog only."""
+    source = meta_db.query_one(
+        "SELECT id, name, engine_catalog FROM catalog_sources "
+        "WHERE id = @param0 AND lifecycle = 'active' AND adapter_type = 'native'",
+        [source_id],
+    )
+    if not source or not source.get("engine_catalog"):
+        raise HTTPException(404, "Active Engine catalog source not found")
+    return source
+
+
+def _engine_tokens(sql: str) -> list[str]:
+    """Small SQL lexer for statement count and three-part catalog references.
+
+    It intentionally does not interpret SQL. It skips strings/comments so a
+    catalog-looking value or semicolon in a literal cannot affect the scope gate.
+    """
+    tokens, index, size = [], 0, len(sql)
+    while index < size:
+        char = sql[index]
+        if char.isspace():
+            index += 1
+        elif sql.startswith("--", index):
+            newline = sql.find("\n", index + 2)
+            index = size if newline < 0 else newline + 1
+        elif sql.startswith("/*", index):
+            end = sql.find("*/", index + 2)
+            if end < 0:
+                raise HTTPException(400, "Engine SQL contains an unterminated comment")
+            index = end + 2
+        elif char == "'":
+            index += 1
+            closed = False
+            while index < size:
+                if sql[index] == "'":
+                    if index + 1 < size and sql[index + 1] == "'":
+                        index += 2
+                    else:
+                        index += 1
+                        closed = True
+                        break
+                else:
+                    index += 1
+            if not closed:
+                raise HTTPException(400, "Engine SQL contains an unterminated string")
+        elif char == "$":
+            # PostgreSQL/Trino-style dollar strings may contain semicolons,
+            # comments, and identifier-looking text. Treat the whole body as a
+            # literal so it cannot change the one-statement or catalog scope.
+            marker_end = sql.find("$", index + 1)
+            marker = sql[index:marker_end + 1] if marker_end >= 0 else ""
+            tag = marker[1:-1]
+            if marker and (not tag or (tag[0].isalpha() or tag[0] == "_") and all(c.isalnum() or c == "_" for c in tag)):
+                end = sql.find(marker, marker_end + 1)
+                if end < 0:
+                    raise HTTPException(400, "Engine SQL contains an unterminated dollar string")
+                index = end + len(marker)
+            else:
+                index += 1
+        elif char in ('"', '`'):
+            quote, value = char, []
+            index += 1
+            while index < size:
+                if sql[index] == quote:
+                    if index + 1 < size and sql[index + 1] == quote:
+                        value.append(quote)
+                        index += 2
+                    else:
+                        index += 1
+                        break
+                else:
+                    value.append(sql[index])
+                    index += 1
+            else:
+                raise HTTPException(400, "Engine SQL contains an unterminated identifier")
+            tokens.append("".join(value))
+        elif char.isalnum() or char == '_':
+            start = index
+            index += 1
+            while index < size and (sql[index].isalnum() or sql[index] in "_$"):
+                index += 1
+            tokens.append(sql[start:index])
+        elif char in '.;':
+            tokens.append(char)
+            index += 1
+        else:
+            index += 1
+    return tokens
+
+
+def _engine_query(sql: str, catalog: str) -> str:
+    """Keep Lab Engine execution read-only and scoped to the selected catalog."""
+    tokens = _engine_tokens(sql)
+    semicolons = [index for index, token in enumerate(tokens) if token == ';']
+    if len(semicolons) > 1 or (semicolons and semicolons[0] != len(tokens) - 1):
+        raise HTTPException(400, "Engine SQL Lab accepts one statement")
+    if semicolons:
+        tokens.pop()
+    if not tokens or tokens[0].lower() not in {"select", "with"}:
+        raise HTTPException(400, "Engine SQL Lab accepts one SELECT or WITH statement")
+    for index in range(len(tokens) - 4):
+        if tokens[index + 1] == '.' and tokens[index + 3] == '.' and tokens[index].casefold() != catalog.casefold():
+            raise HTTPException(403, "Engine query references a catalog outside the selected source")
+    return sql.strip().rstrip(';').rstrip()
+
+
+@router.get("/lab/engine/sources")
+def list_engine_sources(response: Response, ctx=Depends(require_min_role("Viewer"))):
+    response.headers.update(NO_CACHE)
+    rows = meta_db.query(
+        "SELECT id, name, engine_catalog FROM catalog_sources "
+        "WHERE lifecycle = 'active' AND adapter_type = 'native' ORDER BY name"
+    ).get("rows") or []
+    return {"success": True, "sources": [
+        {"id": row["id"], "name": row["name"], "catalog": row["engine_catalog"]} for row in rows
+    ]}
+
+
+@router.get("/lab/engine/{source_id}/schemas")
+def list_engine_schemas(source_id: str, response: Response, ctx=Depends(require_min_role("Viewer"))):
+    from services import engine_bridge
+    response.headers.update(NO_CACHE)
+    source = _engine_source(source_id)
+    result = engine_bridge.schemas(source["engine_catalog"], ctx.email, ctx.role) or {}
+    return {"success": True, "schemas": result.get("schemas") or []}
+
+
+@router.get("/lab/engine/{source_id}/schemas/{schema}/tables")
+def list_engine_tables(source_id: str, schema: str, response: Response, ctx=Depends(require_min_role("Viewer"))):
+    from services import engine_bridge
+    response.headers.update(NO_CACHE)
+    source = _engine_source(source_id)
+    result = engine_bridge.tables(source["engine_catalog"], schema, ctx.email, ctx.role) or {}
+    return {"success": True, "tables": result.get("tables") or []}
+
+
 @router.get("/lab/tables")
 def list_tables(response: Response, database: str = Query(default=None), user: str = Depends(require_auth)):
     response.headers.update(NO_CACHE)
@@ -133,6 +270,41 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
     user_id = user
     sql = data.query
     database = _resolve_db(data.database)
+    engine_source_id = data.engineSourceId
+    engine_schema = data.engineSchema
+    if engine_source_id:
+        from services import engine_bridge
+        source = _engine_source(engine_source_id)
+        scoped_sql = _engine_query(sql, source["engine_catalog"])
+        start_time = int(time.time() * 1000)
+        result = await asyncio.to_thread(
+            engine_bridge.execute,
+            scoped_sql, source["engine_catalog"], user, ctx.role, engine_schema,
+        )
+        duration_ms = int(time.time() * 1000) - start_time
+        rows = result.get("data", [])
+        columns = [
+            column.get("name", "") if isinstance(column, dict) else str(column)
+            for column in result.get("columns", [])
+        ]
+        try:
+            history_svc.create_history({
+                "sql_text": scoped_sql, "duration_ms": duration_ms,
+                "database_name": "engine:" + source["engine_catalog"],
+                "row_count": len(rows), "status": "success",
+                "dataset_id": int(data.datasetId) if data.datasetId else None,
+                "trigger_source": "lab", "run_context": None, "tables_used": None,
+                "started_at": start_time,
+            }, user)
+        except Exception as error:
+            print(f"[History] Failed to record Engine lab query: {error}")
+        return {
+            "success": True,
+            "columns": columns,
+            "rows": rows,
+            "rowCount": len(rows),
+            "executionTime": duration_ms / 1000,
+        }
     assert_no_platform_tables(sql, database)
     dataset_id = data.datasetId
     run_context = data.runContext

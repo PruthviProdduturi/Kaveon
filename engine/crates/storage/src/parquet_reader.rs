@@ -116,7 +116,7 @@ impl ParquetReader {
         self
     }
 
-    pub(crate) fn with_metrics(mut self, metrics: ScanMetrics) -> Self {
+    pub fn with_metrics(mut self, metrics: ScanMetrics) -> Self {
         self.metrics = Some(metrics);
         self
     }
@@ -204,7 +204,7 @@ impl ParquetReader {
     }
 }
 
-fn record_selection_metrics(
+pub(crate) fn record_selection_metrics(
     metadata: &ParquetMetaData,
     groups: &[usize],
     projection: Option<&[usize]>,

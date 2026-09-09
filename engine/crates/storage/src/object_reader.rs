@@ -1,7 +1,9 @@
 //! Shared object-store range reader. Credentials come from provider chains, never URIs.
 use crate::{
     ScanMetrics, ScanPartition,
-    parquet_reader::{matching_row_groups, projection_indices, validate_predicate},
+    parquet_reader::{
+        matching_row_groups, projection_indices, record_selection_metrics, validate_predicate,
+    },
 };
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use futures::StreamExt;
@@ -221,9 +223,14 @@ impl ObjectParquetReader {
                         self.metrics.footer_time(started.elapsed());
                         self.metrics.file_opened();
                         let schema = builder.schema().clone();
-                        if let Some(columns) = &self.columns {
-                            let indices = projection_indices(&schema, columns)?;
-                            let mask = ProjectionMask::roots(builder.parquet_schema(), indices);
+                        let projection = self
+                            .columns
+                            .as_ref()
+                            .map(|columns| projection_indices(&schema, columns))
+                            .transpose()?;
+                        if let Some(indices) = &projection {
+                            let mask =
+                                ProjectionMask::roots(builder.parquet_schema(), indices.clone());
                             builder = builder.with_projection(mask);
                         }
                         let considered = builder.metadata().num_row_groups();
@@ -236,8 +243,12 @@ impl ObjectParquetReader {
                         if let Some(partition) = self.partition {
                             groups.retain(|&ordinal| partition.contains(ordinal));
                         }
-                        self.metrics
-                            .row_groups(considered as u64, groups.len() as u64);
+                        record_selection_metrics(
+                            builder.metadata().as_ref(),
+                            &groups,
+                            projection.as_deref(),
+                            &self.metrics,
+                        );
                         builder
                             .with_row_groups(groups)
                             .build()
@@ -360,15 +371,22 @@ mod tests {
             .unwrap();
         let mut rows = 0;
         for i in 0..2 {
+            let metrics = ScanMetrics::default();
             let mut source = ObjectParquetReader::new(store.clone(), path.clone())
                 .with_columns(vec!["x".into()])
                 .with_partition(ScanPartition::new(i, 2).unwrap())
+                .with_metrics(metrics.clone())
                 .read_blocking()
                 .unwrap();
             while let Some(batch) = source.next_batch().unwrap() {
                 rows += batch.num_rows();
             }
             assert!(source.next_batch().unwrap().is_none());
+            let snapshot = metrics.snapshot();
+            assert_eq!(snapshot.row_groups_considered, 2);
+            assert_eq!(snapshot.row_groups_selected, 1);
+            assert_eq!(snapshot.rows_selected, 2);
+            assert!(snapshot.compressed_bytes_selected > 0);
         }
         assert_eq!(rows, 4);
         assert!(

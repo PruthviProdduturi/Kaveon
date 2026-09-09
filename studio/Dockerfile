@@ -5,8 +5,7 @@ RUN npm install --global pnpm@10.34.5 --registry=$NPM_REGISTRY
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY studio/package.json studio/package.json
 COPY packages/types/package.json packages/types/package.json
-RUN --mount=type=cache,id=kaveon-pnpm-store,target=/pnpm/store \
-    pnpm config set registry $NPM_REGISTRY \
+RUN pnpm config set registry $NPM_REGISTRY \
     && pnpm config set store-dir /pnpm/store \
     && pnpm install --frozen-lockfile
 
