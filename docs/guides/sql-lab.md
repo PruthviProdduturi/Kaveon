@@ -55,8 +55,11 @@ Engine SQL execution requires **Analyst** or **Admin**. Grant Administrator only
 by explicitly listing the Entra object ID in `AUTH_ENTRA_ADMIN_OBJECT_IDS`; a
 display name or email does not grant that role.
 
-Choose **KaveDB ADLS** from the source selector, then choose `bronze`, `silver`,
-or `gold`. The test catalog contains five deterministic synthetic Parquet tables:
+Choose `kavedb` under **Kaveon DB**. With no relational sources configured, the
+first available Kaveon database is selected automatically. The explorer shows
+`bronze`, `silver`, and `gold` together; the schema selector sets the default
+for unqualified SQL names without hiding other schemas. Expand a table to see
+its actual Engine columns and types. The test catalog contains five deterministic synthetic Parquet tables:
 
 | Schema | Tables | Contents |
 | --- | --- | --- |
@@ -74,7 +77,7 @@ ORDER BY order_date;
 ```
 
 The Engine Lab path accepts one read-only `SELECT` or `WITH` query. Its browser
-uses authenticated schema and table discovery; it does not expose relational
+uses authenticated schema, table, and column discovery; it does not expose relational
 metadata, editing, history completion, multi-statement execution, or full Trino
 SQL for KaveDB.
 

@@ -145,3 +145,31 @@ def tables(catalog, schema, actor, role):
         "GET", "/v1/catalog/" + quote(catalog, safe="") + "/schema/" + quote(schema, safe="") + "/table",
         "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role),
     )
+
+
+def table_columns(catalog, schema, table, actor, role):
+    """Read one table definition through catalog metadata, never through SQL."""
+    scoped_role = _read_role(role)
+    catalogs = _request("GET", "/v1/catalog/definitions", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+                        role=scoped_role) or []
+    catalog_definition = next((item for item in catalogs if item.get("name") == catalog), None)
+    if not catalog_definition or not catalog_definition.get("id"):
+        raise HTTPException(404, "Engine catalog definition not found")
+    schemas = _request(
+        "GET", "/v1/catalog/definitions/" + quote(str(catalog_definition["id"]), safe="") + "/schemas",
+        "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=scoped_role,
+    ) or []
+    schema_definition = next((item for item in schemas if item.get("name") == schema), None)
+    if not schema_definition or not schema_definition.get("id"):
+        raise HTTPException(404, "Engine schema definition not found")
+    definitions = _request(
+        "GET", "/v1/catalog/schemas/" + quote(str(schema_definition["id"]), safe="") + "/tables",
+        "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=scoped_role,
+    ) or []
+    definition = next((item for item in definitions if item.get("name") == table), None)
+    if not definition:
+        raise HTTPException(404, "Engine table definition not found")
+    columns = definition.get("columns")
+    if not isinstance(columns, list):
+        raise HTTPException(502, "Engine table definition is invalid")
+    return columns

@@ -231,6 +231,25 @@ def list_engine_tables(source_id: str, schema: str, response: Response, ctx=Depe
     return {"success": True, "tables": result.get("tables") or []}
 
 
+@router.get("/lab/engine/{source_id}/schemas/{schema}/tables/{table}/columns")
+def get_engine_table_columns(source_id: str, schema: str, table: str, response: Response,
+                             ctx=Depends(require_min_role("Viewer"))):
+    from services import engine_bridge
+    response.headers.update(NO_CACHE)
+    source = _engine_source(source_id)
+    raw_columns = engine_bridge.table_columns(source["engine_catalog"], schema, table, ctx.email, ctx.role)
+    columns = []
+    for column in raw_columns:
+        if not isinstance(column, dict) or not isinstance(column.get("name"), str) or "data_type" not in column:
+            raise HTTPException(502, "Engine table definition contains an invalid column")
+        columns.append({
+            "name": column["name"],
+            "dataType": str(column["data_type"]),
+            "isNullable": bool(column.get("nullable", True)),
+        })
+    return {"success": True, "schema": {"columns": columns}}
+
+
 @router.get("/lab/tables")
 def list_tables(response: Response, database: str = Query(default=None), user: str = Depends(require_auth)):
     response.headers.update(NO_CACHE)

@@ -47,6 +47,18 @@ class EngineLabTests(unittest.TestCase):
         self.assertEqual(response, {"success": True, "schemas": ["bronze", "silver"]})
         schemas.assert_called_once_with("kavedb", "viewer@example.com", "Viewer")
 
+    def test_column_discovery_uses_definition_metadata_and_studio_shape(self):
+        ctx = UserContext("viewer@example.com", "Viewer")
+        with patch.object(lab, "_engine_source", return_value={"engine_catalog": "kavedb"}), patch(
+            "services.engine_bridge.table_columns",
+            return_value=[{"name": "order_id", "data_type": "Int64", "nullable": False}],
+        ) as table_columns:
+            response = lab.get_engine_table_columns("source-1", "silver", "orders", Response(), ctx)
+        self.assertEqual(response, {"success": True, "schema": {"columns": [
+            {"name": "order_id", "dataType": "Int64", "isNullable": False}
+        ]}})
+        table_columns.assert_called_once_with("kavedb", "silver", "orders", "viewer@example.com", "Viewer")
+
     def test_query_body_keeps_engine_source_context(self):
         body = LabQueryBody(query="SELECT 1", engineSourceId="source-1", engineSchema="silver")
         self.assertEqual((body.engineSourceId, body.engineSchema), ("source-1", "silver"))
