@@ -1839,9 +1839,13 @@ version = "0.1.0"
 dependencies = [
  "arrow-schema",
  "kaveon-core",
+ "kaveon-storage",
+ "object_store",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
+ "tokio",
  "uuid",
 ]
 

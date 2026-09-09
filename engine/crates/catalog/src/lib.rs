@@ -1,5 +1,9 @@
 #![deny(clippy::all)]
 
+pub mod product_commit;
+pub mod product_manifest;
+pub mod product_metrics;
+
 use kaveon_core::{
     CatalogDefinition, CatalogId, CatalogRevision, KaveonError, Result, SchemaDefinition, SchemaId,
     TableDefinition, TableId,

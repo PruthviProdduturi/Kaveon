@@ -26,6 +26,17 @@ changed unless the application actually changes it; the user controls that picke
 
 ## Ownership map
 
+### ADLS transaction foundation validated - September 8
+
+Internal conditional storage writes/reads, versioned snapshot preparation,
+atomic head publication, bounded idempotency recovery and process telemetry
+are implemented. Storage tests: 39; catalog tests: 16; strict Clippy passes.
+Live Azure REST probe verified create-only/current ETag/stale ETag behavior and
+removed its qualification object. No live write endpoint or product cutover
+was deployed. PostgreSQL and SQLite definition state remain transitional.
+The protocol document lists explicit limits and the remaining full migration
+gates; do not describe this foundation as a completed transactional database.
+
 ### Storage direction superseded - September 8
 
 User requires all durable analytics and transactional state in ADLS, rejecting
