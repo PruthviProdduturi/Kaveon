@@ -26,6 +26,16 @@ changed unless the application actually changes it; the user controls that picke
 
 ## Ownership map
 
+### Storage direction superseded - September 8
+
+User requires all durable analytics and transactional state in ADLS, rejecting
+the suggested SQLite/PVC product-catalog design. The verified local snapshot
+copy (26 files, 251,844,196 bytes) was removed after that instruction. ADLS still
+holds the public snapshot. PostgreSQL remains the temporary authoritative
+product store until ADLS transaction, migration, recovery, and rollback gates
+pass; neither the current SQLite Engine definition catalog nor PostgreSQL has
+yet been migrated. ADLS conditional commit/protocol work is now in progress.
+
 ### OpenSource extras and Settings - September 8 (UTC September 9)
 
 OWID energy (23,377 rows), energy codebook (130), NASA monthly GISTEMP

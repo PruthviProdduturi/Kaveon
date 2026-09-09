@@ -167,6 +167,8 @@
     "files": 26,
     "bytes": 251844196,
     "sha256_verified": true,
-    "transfer": "AKS relay; no storage network changes"
+    "transfer": "AKS relay; no storage network changes",
+    "retained": false,
+    "removal_reason": "User superseded local-copy request with ADLS-only durable storage"
   }
 }

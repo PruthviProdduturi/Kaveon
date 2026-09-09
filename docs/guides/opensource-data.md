@@ -112,32 +112,13 @@ The [product catalog assessment](../engineering/product-catalog-migration.md)
 documents the separate transactional migration required before PostgreSQL can
 be replaced.
 
-## Local snapshot cache
+## ADLS is authoritative
 
-Retain the registered public snapshot locally for repeatable tests without
-copying credentials into the repository. Sign in with the Azure CLI, then run:
+The current deployment requirement is ADLS-only durable data storage. The
+previous local test copy was checksum-verified and then removed at the user's
+request. Source files, curated Parquet, and provenance manifests remain in the
+private ADLS snapshot. Do not routinely mirror the snapshot to workstation disks.
 
-```powershell
-python scripts/download-demo-snapshot.py
-```
-
-The downloader obtains a short-lived Storage token from the current Azure CLI
-session without printing or saving it. It mirrors
-`opensource/snapshots/2026-09-09-v1` to `data/opensource/2026-09-09-v1`,
-preserves paths, verifies every `x-ms-meta-sha256`, skips matching files, and
-refuses to overwrite a different local file. Its credential-free
-`inventory.json` records local paths, byte counts, and checksums. Run it again
-after a completed extras import to cache newly registered blobs.
-
-If the workstation is outside the storage account's permitted network paths,
-use the existing API pod as the authorized relay without changing storage
-network rules:
-
-```powershell
-python scripts/download-demo-snapshot.py --via-aks --kubeconfig tmp/aks-kubeconfig
-```
-
-The caller's short-lived Azure Storage token is passed only over kubectl stdin.
-The pod streams a verified tar archive to a local temporary file; the downloader
-then checks every archive path, byte count, and checksum before placing files in
-the cache. Neither the token nor the temporary archive is retained.
+`scripts/download-demo-snapshot.py` is an optional diagnostic utility for an
+explicitly requested temporary export; it is not part of deployment or required
+for queries. AKS curators use temporary staging, which is removed with the Job.

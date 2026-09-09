@@ -1,0 +1,15 @@
+{
+  "scope": "Azure storage primitives only; no SQL transaction or metadata migration claim",
+  "account": "kvtestegmf6oweugsno",
+  "container": "opensource",
+  "network_path": "existing AKS API pod",
+  "checks": {
+    "create_only": true,
+    "duplicate_rejected": true,
+    "etag_cas": true,
+    "stale_writer_rejected": true,
+    "read_matches_committed_version": true
+  },
+  "qualification_object_removed": true,
+  "subscription_policy_changes": false
+}

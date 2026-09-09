@@ -1,121 +1,116 @@
-# Product catalog migration assessment
+# Product catalog migration to ADLS
 
-This is a source assessment for moving mutable Kaveon product metadata from the
-current PostgreSQL metadata database to an internal catalog. It is not a
-completed migration or implementation. No production data was copied in this assessment. In
-particular, a readable Delta snapshot is not a mutable metadata database.
+Kaveon will move durable product and Engine-definition state to an ADLS-backed
+catalog. PostgreSQL remains the production authority until the protocol,
+backfill, reconciliation, fencing, and rollback gates in this document have
+passed. This is a design, not an implemented migration and not evidence that a
+read-only Delta snapshot can accept product CRUD.
 
-## Verified current state
+The durable state model is defined in
+[ADLS transaction protocol](adls-transaction-protocol.md). It uses immutable
+Parquet/data and manifest objects with one conditional catalog head update as
+the commit point. It does not use SQLite, a PVC, local files, blob listings, or
+an uncoordinated Delta log as durable transaction authority. Process memory and
+short-lived upload staging are permitted only before the commit point; a restart
+may discard them without changing committed state.
 
-The Engine can read local and object-store Delta tables. `DeltaTableReader` and
-`ObjectDeltaReader` replay a Delta v1 snapshot to select active Parquet files;
-the server uses `ObjectDeltaReader` for remote Delta scan sources. See
-[`delta_reader.rs`](../../engine/crates/storage/src/delta_reader.rs),
-[`object_delta.rs`](../../engine/crates/storage/src/object_delta.rs), and
-[`delta_snapshot.rs`](../../engine/crates/storage/src/delta_snapshot.rs).
+## Inventory and boundaries
 
-That reader deliberately rejects unsupported Delta features: reader protocol
-other than v1, column mapping, deletion vectors, partition reconstruction, Delta
-v2 checkpoint sidecars, incomplete JSON history, and oversized metadata. The
-Engine has no Delta writer, transaction-log commit coordinator, optimistic
-concurrency protocol, table-level authorization, or multi-table transaction.
-The only `_delta_log` writes in the repository are test fixtures. An ADLS Delta
-snapshot therefore supports analytical reads; it cannot presently replace
-PostgreSQL CRUD.
+The checked-in PostgreSQL schema is
+[`api/schema_postgresql.sql`](../../api/schema_postgresql.sql). The migration
+inventory is:
 
-The Engine's own durable catalog is SQLite/WAL with immediate transactions,
-optimistic revisions, lifecycle validation, and audit events in
-[`engine/crates/catalog/src/lib.rs`](../../engine/crates/catalog/src/lib.rs).
-It stores Engine catalog/schema/table definitions, not dashboards, user state,
-or the application relational model.
-
-The API talks directly to its metadata database through
-[`api/database/metadata.py`](../../api/database/metadata.py) and
-[`api/database/pool.py`](../../api/database/pool.py). The pool uses normal SQL
-reads and writes and presently enables PostgreSQL autocommit. Product services
-depend on SQL filtering, joins, unique constraints, foreign keys, ordered reads,
-and in some cases several writes for one user action.
-
-## Source inventory
-
-The additive PostgreSQL schema is
-[`api/schema_postgresql.sql`](../../api/schema_postgresql.sql). Its product data
-falls into these groups:
-
-| Group | Current tables | Primary API code |
+| Family | Tables | Important behavior |
 | --- | --- | --- |
-| Semantic objects | `datasets`, `dataset_dimensions`, `dataset_columns`, `dataset_metrics`, `charts`, `dashboards`, `favorites` | `api/services/datasets.py`, `charts.py`, `dashboards.py`, `favorites.py` |
-| User state and audit | `saved_queries`, `query_history`, `activity`, `user_themes`, `user_recents` | `saved_queries.py`, `query_history.py`, `theme.py`, `user_recents.py` |
-| Engine integration | `catalog_sources` | `api/routers/catalog_sources.py`, `api/services/engine_bridge.py` |
-| Adaptive/DLM state | `context_snapshots`, `context_answer_cache`, `dlm_artifact`, `dlm_value_index`, `dlm_router` | `api/routers/context.py`, `api/routers/dlm.py` |
-| Legacy or separately provisioned chat state | `chat_sessions`, `chat_messages` are used by `api/routers/chat_history.py` but are not created by the checked-in additive PostgreSQL schema | `api/routers/chat_history.py` |
+| Semantic objects | `datasets`, `dataset_dimensions`, `dataset_columns`, `dataset_metrics`, `charts`, `dashboards`, `favorites` | Cascading dataset children, chart/dataset links, JSON payloads, visibility and ownership |
+| User state and audit | `saved_queries`, `query_history`, `activity`, `user_themes`, `user_recents` | Per-user access, ordered/paginated reads, unique recent items and audit ordering |
+| Engine control plane | `catalog_sources` and Engine catalog/schema/table definitions | Lifecycle validation, unique names, revisions, audit, source-to-definition mapping |
+| Adaptive/DLM state | `context_snapshots`, `context_answer_cache`, `dlm_artifact`, `dlm_value_index`, `dlm_router` | Unique keys, bounded cache semantics, generated artifacts and value indexes |
+| Legacy chat | `chat_sessions`, `chat_messages` | Owner checks, ordered messages, potentially sensitive payloads; separately provisioned today |
 
-There is no canonical application `users` table in the checked-in schema.
-Identity and roles come from verified Entra claims in
-[`api/services/users.py`](../../api/services/users.py); user email appears in
-ownership and preference rows. A migration must preserve immutable subject/tenant
-identity rather than treating a display name or email as the identity key.
+There is no canonical product users table. API authorization derives a verified
+Entra principal and role; email is presently used in many ownership rows. The
+target object model must retain immutable tenant and provider-subject identity
+when available, with email only as a mutable display/lookup attribute.
 
-Do not copy credentials or configuration into a catalog export. In particular,
-exclude `data_sources.connection_string` even when it is an encrypted envelope,
-all metadata/Engine/auth environment secrets, credential keyrings, and Auth.js
-session secrets. `api/services/credentials.py` shows that connection credentials
-have a distinct key-managed lifecycle. Query text, chat messages, cached answers,
-and DLM values can contain customer data; inventory and classify them separately
-before any export rather than assuming they are harmless metadata.
+`data_sources.connection_string`, AI/API/Engine credentials, keyrings, Auth.js
+session material, and environment configuration are not product catalog
+objects. They remain in their key-managed secret boundary. Query text, chat
+messages, cached answers, and DLM values are customer data; retention,
+encryption scope, deletion, and access policy must be decided before copying
+them.
 
-## Concrete blockers
+## Why the current implementation cannot cut over
 
-1. **No write authority.** The Engine exposes no API or storage implementation
-   that creates Parquet data files and safely commits Delta log versions on ADLS.
-2. **No concurrent commit semantics.** Delta migration would need conditional
-   object creation, conflict retry, idempotency keys, commit ownership, orphan
-   cleanup, and recovery. The reader's snapshot replay does not supply any of
-   these writer guarantees.
-3. **No relational integrity or cross-object atomicity.** Dataset children,
-   dashboard/chart references, favorites, ownership changes, and chat/session
-   updates need foreign-key-like checks and atomic multi-row transitions. One
-   Delta table commit cannot atomically update several tables.
-4. **API is SQL-shaped.** Existing services embed SQL predicates, ordering,
-   joins, generated IDs, and dialect adaptation. A Delta-backed repository layer
-   must replace these calls and preserve authorization, pagination, visibility,
-   and compare-and-swap behavior.
-5. **Identity, privacy, and secrets need a boundary.** Entra subjects, user-owned
-   data, query/chat contents, and encrypted connection references require data
-   classification, retention, deletion, and key-management decisions before a
-   bulk copy.
-6. **No migration safety mechanism exists.** There is no backfill tool,
-   change-capture/dual-write protocol, reconciliation suite, read cutover, or
-   rollback path for this schema.
+The Engine catalog currently persists catalog/schema/table definitions in local
+SQLite/WAL and exposes revisions for each definition. It has neither an ADLS
+writer nor a generic product-object API, and its transaction scope is one
+definition operation. The API metadata adapter exposes independent
+`query`/`execute` calls; its PostgreSQL connections use autocommit. Existing
+multi-write operations consequently cannot be reproduced by replacing one SQL
+query with a Parquet write.
 
-## Feasible milestones
+The target must preserve primary/unique/foreign-key-like rules, ownership and
+role checks, pagination and ordering, and atomic cross-table changes. SQL
+dialect translation (`TOP`, `MERGE`, `OUTPUT`, JSON expressions and PostgreSQL
+upserts) is a source-adapter detail, not a target contract.
 
-The requested target is the `Kaveon` internal product catalog, with all current
-PostgreSQL system-table behavior preserved. The migration must not be declared
-complete on the basis of an export, a read-only snapshot, or a subset of CRUD.
-Required acceptance includes commit/rollback across related records, concurrent
-update conflict tests, primary/unique/referential constraints, durable recovery
-after interrupted writes and coordinator restart, existing role/ownership checks,
-and a validated backfill/cutover/rollback for every system-table family. PostgreSQL
-stays authoritative until those gates pass. This is the next engineering task;
-the OpenSource analytics import does not implement it.
+## Required target contract
 
-1. Define the supported scope and a versioned product-object model. Keep
-   credentials/auth configuration outside it; decide whether history, chat, and
-   DLM caches are migrated, archived, or retained in PostgreSQL.
-2. Build a dedicated mutable catalog service before changing API storage. For a
-   Delta design, implement an ADLS writer and commit coordinator with conditional
-   commits, revisions/idempotency, recovery, audit, and per-object authorization.
-   Alternatively retain a transactional control-plane database and use Delta for
-   append-only analytical projections.
-3. Add an API repository interface and migrate one bounded object family first
-   (for example dashboards plus charts and favorites). Preserve ownership,
-   visibility, ordering, and referential checks; add concurrent update and
-   restart/recovery tests.
-4. Create a read-only, redacted inventory exporter and a deterministic backfill
-   validator. Reconcile row counts, IDs, revisions, references, ownership, and
-   visibility before enabling dual reads.
-5. Introduce dual writes with an outbox or equivalent durable change stream,
-   then compare reads continuously. Cut over one family only after reconciliation
-   and rollback are demonstrated. Do not present a Delta snapshot as evidence of
-   a completed mutable-metadata migration.
+Each product mutation is a typed transaction request with authenticated tenant,
+immutable actor subject, effective role, request/trace IDs, a client idempotency
+key plus canonical request digest, optional expected catalog revision, and a
+bounded mutation set over declared table schemas.
+
+The coordinator validates authorization, schema versions, primary/unique keys,
+foreign references, lifecycle rules, and mutation bounds against one pinned
+catalog head. It writes immutable replacement data/index objects and a complete
+candidate manifest, then conditionally updates the one catalog head. A failed
+head compare-and-swap changes no visible state. The successful head is the only
+transaction authority; readers pin it before resolving any table.
+
+The first deliverable is the ADLS catalog writer, reader, head CAS path,
+manifest validator, and a bounded dashboard/chart/favorite repository family.
+That family proves cross-object validation, visibility, owner-scoped favorite
+changes, idempotency, rollback, and read parity before dataset/DLM/history/chat
+families move.
+
+## Backfill, dual write, and cutover
+
+1. **Prepare.** Version every target table schema and make all PostgreSQL writes
+   for the selected family pass through a transaction wrapper. Add a source
+   outbox row in that same PostgreSQL transaction.
+2. **Snapshot.** Take a repeatable PostgreSQL snapshot with a recorded source
+   watermark. Export typed, redacted records in dependency order to immutable
+   ADLS objects; import through the normal validator, never a bypass.
+3. **Catch up.** Apply outbox events in source sequence order through the ADLS
+   transaction API using durable idempotency keys. Reconcile counts, IDs,
+   revisions, ownership, references, and canonical payload hashes.
+4. **Shadow read.** Compare authorization-filtered PostgreSQL and ADLS reads.
+   Do not expose a target result if comparison fails.
+5. **Fence and cut over.** Reject new source writes for that family, drain the
+   outbox, reconcile the final watermark, then publish the read switch. Retain
+   PostgreSQL and its outbox for the rollback window.
+6. **Rollback.** Fence target writes, return reads to PostgreSQL, and preserve
+   the failed ADLS head and telemetry. PostgreSQL is retired only after a later,
+   separately approved retirement gate.
+
+During transition PostgreSQL is source-authoritative with a durable outbox;
+there is no claim of cross-system atomic commit. After cutover the ADLS service
+is the family’s sole writer. A reverse mirror needs its own protocol and proof.
+
+## Acceptance and telemetry gates
+
+Before any family cutover, prove rejected mutations leave every table at the
+previous pinned head; concurrent writers produce one winner and one retryable
+revision conflict; ambiguous responses resolve through the idempotency key;
+restart cannot expose a partial transaction; constraints do not require an
+unbounded scan; authorization matches today’s API; and final fenced backfill
+reconciles IDs, revisions, ownership, references, visibility-filtered reads and
+payload hashes.
+
+Emit structured metrics and immutable audit records for commit latency, head
+revision, CAS conflicts/retries, validation failures, idempotency replays,
+orphan bytes/age, garbage collection, source/target watermark lag, mismatches,
+fencing duration, and rollback state. Use IDs and classified error codes rather
+than query text, chat content, credentials, or cached result payloads.
