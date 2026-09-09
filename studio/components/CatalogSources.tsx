@@ -97,6 +97,8 @@ export function CatalogSources() {
   const [editing, setEditing] = useState<CatalogSource | null>(null);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [engineRevisions, setEngineRevisions] = useState<Record<string, number>>({});
   const PAGE_SIZE = 20;
 
   const load = useCallback(async () => {
@@ -147,6 +149,30 @@ export function CatalogSources() {
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Delete failed");
+    }
+  };
+
+  const syncWithEngine = async (cs: CatalogSource) => {
+    try {
+      setSyncingId(cs.id);
+      setError(null);
+      const revision = engineRevisions[cs.id];
+      const res = await msalFetch(`${API_BASE}/api/v1/catalog-sources/${cs.id}/engine-sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(revision === undefined ? {} : { expected_revision: revision }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload.detail || "Engine synchronization failed");
+      const nextRevision = payload.catalog?.revision;
+      if (typeof nextRevision === "number") {
+        setEngineRevisions(current => ({ ...current, [cs.id]: nextRevision }));
+      }
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Engine synchronization failed");
+    } finally {
+      setSyncingId(null);
     }
   };
 
@@ -287,6 +313,17 @@ export function CatalogSources() {
                               <i className={`fas ${a.icon}`} />
                             </button>
                           ))}
+                          {cs.adapter_type === "native" && cs.lifecycle !== "deleted" && (
+                            <button
+                              type="button"
+                              className="action-icon-btn"
+                              title="Sync this catalog definition with Kaveon Engine"
+                              onClick={() => syncWithEngine(cs)}
+                              disabled={syncingId === cs.id}
+                            >
+                              <i className={syncingId === cs.id ? "fas fa-spinner fa-spin" : "fas fa-arrows-rotate"} />
+                            </button>
+                          )}
                           <button type="button" className="action-icon-btn" title="Edit" onClick={() => { setEditing(cs); setShowModal(true); }}>
                             <i className="fas fa-edit" />
                           </button>
