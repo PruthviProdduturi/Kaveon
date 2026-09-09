@@ -7,6 +7,7 @@ import { msalFetch } from "../../../utils/msalFetch";
 import { useRole } from "../../../hooks/useRole";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { Button } from "../../../components/Button";
+import { CatalogSources } from "../../../components/CatalogSources";
 import { ListPageShell } from "../../../components/ListPageShell";
 import { SETUP_DB_ICONS } from "../../../components/DataSourceIcons";
 
@@ -24,6 +25,12 @@ interface MetadataConfig {
   ui_configured: boolean;
 }
 
+interface EngineStatus {
+  configured: boolean;
+  connected: boolean;
+  catalog_count: number | null;
+}
+
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function SystemSettingsPage() {
@@ -34,6 +41,8 @@ export default function SystemSettingsPage() {
   const [metaConfig, setMetaConfig] = useState<MetadataConfig | null>(null);
   const [metaLoading, setMetaLoading] = useState(true);
   const [pingMs, setPingMs] = useState<number | null>(null);
+  const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
+  const [engineLoading, setEngineLoading] = useState(true);
 
   const [thumbStatus, setThumbStatus] = useState<
     { running: boolean; done: number; total: number; label: string } | null
@@ -121,6 +130,24 @@ export default function SystemSettingsPage() {
         .then((d: MetadataConfig) => { setMetaConfig(d); setMetaLoading(false); })
         .catch(() => { setMetaConfig(null); setMetaLoading(false); });
     }
+  }, [roleLoading, isAdmin]);
+
+  useEffect(() => {
+    if (roleLoading || !isAdmin) return;
+    let cancelled = false;
+    setEngineLoading(true);
+    msalFetch(`${API_BASE}/api/v1/catalog-sources/engine-status`)
+      .then((response) => (response.ok ? response.json() : Promise.reject(response.status)))
+      .then((status: EngineStatus) => {
+        if (!cancelled) setEngineStatus(status);
+      })
+      .catch(() => {
+        if (!cancelled) setEngineStatus(null);
+      })
+      .finally(() => {
+        if (!cancelled) setEngineLoading(false);
+      });
+    return () => { cancelled = true; };
   }, [roleLoading, isAdmin]);
 
   if (!isAdmin && !roleLoading) return null;
@@ -275,6 +302,50 @@ export default function SystemSettingsPage() {
               </>
             )}
           </div>
+        </div>
+
+        {/* ── Kaveon Engine ──────────────────────────────────────────────── */}
+        <div className="card" style={{ overflow: "hidden", border: "1px solid var(--border)" }}>
+          <div style={{ height: 3, background: engineStatus?.connected ? `linear-gradient(90deg, ${green}, ${primaryColor})` : "var(--border)" }} />
+          <div style={{ padding: "1.5rem" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                <div style={{
+                  width: 44, height: 44, borderRadius: 12, flexShrink: 0,
+                  background: engineStatus?.connected ? greenBg : "var(--bg-primary)",
+                  border: `1px solid ${engineStatus?.connected ? greenBorder : "var(--border)"}`,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>
+                  <i className="fas fa-bolt" style={{ fontSize: 18, color: engineStatus?.connected ? green : "var(--text-muted)" }} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>Kaveon Engine</div>
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
+                    Server-managed execution and catalog control plane
+                  </div>
+                </div>
+              </div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: engineStatus?.connected ? green : "var(--text-muted)" }}>
+                {engineLoading ? <><i className="fas fa-spinner fa-spin" /> Checking</> : engineStatus?.connected ? <><i className="fas fa-circle-check" /> Connected</> : <><i className="fas fa-circle-xmark" /> Unavailable</>}
+              </div>
+            </div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: "1rem", lineHeight: 1.5 }}>
+              {engineStatus?.connected
+                ? `${engineStatus.catalog_count ?? 0} Engine catalog${engineStatus.catalog_count === 1 ? "" : "s"} visible to this server. Add a catalog source below, then explicitly synchronize it with the Engine.`
+                : "The server could not verify its Engine connection. Catalog sources remain available for configuration."}
+            </div>
+          </div>
+        </div>
+
+        {/* ── Engine Catalog Sources ─────────────────────────────────────── */}
+        <div className="card" style={{ padding: "1.5rem", overflow: "hidden" }}>
+          <div style={{ marginBottom: "1rem" }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>Engine catalog sources</div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 3 }}>
+              Register storage metadata here. Synchronization creates or updates the Engine catalog definition; it does not discover tables.
+            </div>
+          </div>
+          <CatalogSources />
         </div>
 
         {/* ── Dashboard Thumbnails ─────────────────────────────────────────── */}

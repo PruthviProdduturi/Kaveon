@@ -53,11 +53,19 @@ synchronization. Subsequent changes require the current Engine
 `expected_revision` in the request body. The returned catalog includes its stable
 Engine ID and revision. A conflict means reload and review before retrying.
 
-The portal form currently handles source settings/lifecycle; synchronization
-requires this API. Merely seeing an active source does not prove it is queryable.
+System Settings shows a server-verified Engine connection and embeds catalog
+source registration. The native-source Sync action calls this API explicitly;
+it does not automatically activate the source or register tables. Merely seeing
+an active source does not prove it is queryable.
 The Engine catalog and the PostgreSQL platform source registry are separate
 stores. Do not create a second same-named Engine catalog through a different
 registration path.
+
+Existing bootstrap-managed catalogs such as `kavedb` and `OpenSource` have
+`aks-*` Engine IDs, while new platform-managed sources use `platform-*` IDs.
+They are already queryable and should not be recreated through Sync. A conflict
+requires reviewing the source-to-Engine mapping; do not delete/recreate a live
+catalog to suppress it.
 
 ## Register schemas and tables
 

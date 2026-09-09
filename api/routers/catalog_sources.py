@@ -75,6 +75,28 @@ def list_catalog_sources(ctx: UserContext = Depends(require_min_role("Viewer")))
     return {"success": True, "catalogSources": result["rows"]}
 
 
+@router.get("/catalog-sources/engine-status")
+def engine_status(ctx: UserContext = Depends(require_min_role("Admin"))):
+    """Report whether the server can reach its configured Engine.
+
+    This deliberately returns no endpoint, credentials, or catalog definition
+    data.  The catalog listing is both a connectivity check and an
+    authorization check performed with the server-side bridge credential.
+    """
+    from services.engine_bridge import catalogs
+
+    result = catalogs(ctx.email, ctx.role)
+    names = result.get("catalogs") if isinstance(result, dict) else None
+    if not isinstance(names, list):
+        raise HTTPException(502, "Engine returned an invalid catalog listing")
+    return {
+        "success": True,
+        "configured": True,
+        "connected": True,
+        "catalog_count": len(names),
+    }
+
+
 @router.get("/catalog-sources/{cs_id}")
 def get_catalog_source(cs_id: str, ctx: UserContext = Depends(require_min_role("Viewer"))):
     row = db.query_one(f"SELECT {_FIELDS} FROM catalog_sources WHERE id = @param0", [cs_id])

@@ -1,0 +1,56 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kaveon-opensource-curate-v1
+  namespace: kaveon
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: {app: kaveon-opensource-curate}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      nodeSelector: {workload: kaveon-worker}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: curate
+          image: kvtestegmf6oweugsno.azurecr.io/kaveon-curate@sha256:7f78a0b30d509278e22a1ee05a95a19e1db9622b148d1e7ad3ba8786d41d1447
+          command: [sh, -c]
+          args:
+            - >-
+              set -eu;
+              python /scripts/curate-nyc-taxi.py;
+              python /scripts/curate-who-covid.py;
+              python /scripts/upload-curated-adls.py;
+              python -c 'from pathlib import Path; print("NYC_MANIFEST=" + Path("/work/manifest.json").read_text().replace("\n", "")); print("COVID_MANIFEST=" + Path("/work/covid-manifest.json").read_text().replace("\n", ""))'
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+            - {name: ADLS_ACCOUNT, value: kvtestegmf6oweugsno}
+            - {name: ADLS_CONTAINER, value: opensource}
+            - name: ADLS_UPLOAD_TOKEN
+              valueFrom:
+                secretKeyRef: {name: kaveon-opensource-upload, key: token}
+          resources:
+            requests: {cpu: "1", memory: 1Gi, ephemeral-storage: 2Gi}
+            limits: {cpu: "2", memory: 4Gi, ephemeral-storage: 12Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: work, mountPath: /work}
+            - {name: scripts, mountPath: /scripts, readOnly: true}
+      volumes:
+        - name: work
+          emptyDir: {sizeLimit: 10Gi}
+        - name: scripts
+          configMap: {name: kaveon-opensource-scripts}

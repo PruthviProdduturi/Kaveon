@@ -1,0 +1,172 @@
+{
+  "catalog": "OpenSource",
+  "account": "kvtestegmf6oweugsno",
+  "container": "opensource",
+  "prefix": "snapshots/2026-09-09-v1",
+  "job": "kaveon-opensource-curate-v1",
+  "job_duration_seconds": 310,
+  "sources": {
+    "green": {
+      "accepted": 48131,
+      "bytes": 1178451,
+      "raw_sha256": "84f3a121667157efcbf012c3566a6065df6f8e0312c678cb2f29cd72cc9c0f10",
+      "rejected": 195,
+      "source_count": 48326,
+      "url": "https://d37ci6vzurychx.cloudfront.net/trip-data/green_tripdata_2025-01.parquet"
+    },
+    "yellow": {
+      "accepted": 3412043,
+      "bytes": 59158238,
+      "raw_sha256": "9af277e4c0d3f9deb30644da822981e1e7df6af58313170fd3aa8a474485488a",
+      "rejected": 63183,
+      "source_count": 3475226,
+      "url": "https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2025-01.parquet"
+    },
+    "zones": {
+      "bytes": 12331,
+      "raw_sha256": "1a99e105092230f8620f301edcca7f80d3080642ff404d28ed957d3fa222c8ed",
+      "url": "https://d37ci6vzurychx.cloudfront.net/misc/taxi_zone_lookup.csv"
+    },
+    "who_covid": {
+      "bytes": 26097232,
+      "sha256": "6063fda90dba3439f551c0bfadce53bb437d9982056cd1a92aeee64963bf2038",
+      "url": "https://srhdpeuwpubsa.blob.core.windows.net/whdh/COVID/WHO-COVID-19-global-daily-data.csv"
+    }
+  },
+  "covid_date_coverage": {
+    "maximum": "2026-07-19",
+    "minimum": "2020-01-04"
+  },
+  "engine_row_checks": [
+    {
+      "table": "bronze.yellow_trips",
+      "rows": 3475226,
+      "query_id": "f086017c-c0ca-48ba-bc5e-504741358f0a"
+    },
+    {
+      "table": "silver.yellow_trips",
+      "rows": 3412043,
+      "query_id": "44d4beec-ebb3-46cc-8e06-2cb1cca47bd8"
+    },
+    {
+      "table": "silver.yellow_rejected",
+      "rows": 63183,
+      "query_id": "d6f8c112-3007-4ef9-bdf7-3f79241e84a3"
+    },
+    {
+      "table": "bronze.green_trips",
+      "rows": 48326,
+      "query_id": "3d88d6c9-5289-4de1-9d1d-ea92e57ace36"
+    },
+    {
+      "table": "silver.green_trips",
+      "rows": 48131,
+      "query_id": "8768d002-c91a-4e18-aea5-c28898fbed1c"
+    },
+    {
+      "table": "silver.green_rejected",
+      "rows": 195,
+      "query_id": "5a8390f4-0a78-4ce3-badc-0af7c304a80f"
+    },
+    {
+      "table": "reference.taxi_zones",
+      "rows": 265,
+      "query_id": "a0124ea9-9b94-43e1-bece-b46a005772e2"
+    },
+    {
+      "table": "gold.daily_trips",
+      "rows": 62,
+      "query_id": "c68b9a65-70fb-46f0-a7c1-d4165db78464"
+    },
+    {
+      "table": "covid.reported_cases",
+      "rows": 573360,
+      "query_id": "c5b9276f-874e-45f5-97a1-c34315c1045c"
+    },
+    {
+      "table": "covid.country_latest",
+      "rows": 240,
+      "query_id": "ec5991c0-b765-4201-b876-7764695d3b7e"
+    },
+    {
+      "table": "gold.covid_reported_by_date",
+      "rows": 2389,
+      "query_id": "01e9740d-fcc8-4c17-ba35-9f6f3c6d45b1"
+    }
+  ],
+  "nyc_gold": {
+    "gold_total_amount_cents": 9175357418,
+    "gold_total_trip_distance": 21075905.59000011,
+    "gold_trip_count": 3460174
+  },
+  "covid_new_counts_sum": [
+    779268246,
+    7116051
+  ],
+  "covid_gold_matches": true,
+  "upload_secret_removed": true,
+  "format": "Parquet",
+  "postgres_metadata_migrated": false,
+  "uploaded_files": 17,
+  "uploaded_bytes": 236008953,
+  "live_portal_green_count": 48131,
+  "extras": {
+    "job": "kaveon-opensource-extras-v1",
+    "sources": {
+      "nasa_gistemp": {
+        "bytes": 12884,
+        "provenance": "NASA GISTEMP v4 global monthly anomaly; 1951-1980 baseline",
+        "sha256": "6cfa44e7bbacd9b12cb10bdd64b3182c2735fa3f3a95688e1f7bc8e5dfcece93",
+        "url": "https://data.giss.nasa.gov/gistemp/tabledata_v4/GLB.Ts+dSST.csv"
+      },
+      "open_llm_leaderboard": {
+        "bytes": 1109997,
+        "provenance": "Hugging Face archived Open LLM Leaderboard contents commit 9c09a7cae43334062a82cb164f2ef255013dafa2",
+        "sha256": "f13a7061e63133bc8745d89f8c7a56148584940ede22d3b27e21cad1e078dca5",
+        "url": "https://huggingface.co/datasets/open-llm-leaderboard/contents/resolve/9c09a7cae43334062a82cb164f2ef255013dafa2/data/train-00000-of-00001.parquet"
+      },
+      "owid_codebook": {
+        "bytes": 45793,
+        "provenance": "OWID energy-data commit 7e387a16f70a510e433f8aac7efeac6faa1e5059",
+        "sha256": "3cc9b7db0d921496e2988568ce3aee5ed41f50431dd234a0663b5f0a4b2e32bb",
+        "url": "https://raw.githubusercontent.com/owid/energy-data/7e387a16f70a510e433f8aac7efeac6faa1e5059/owid-energy-codebook.csv"
+      },
+      "owid_energy": {
+        "bytes": 9229369,
+        "provenance": "OWID energy-data commit 7e387a16f70a510e433f8aac7efeac6faa1e5059",
+        "sha256": "266f2e2baad7975351bc9bb4aa061d22b1da9fe4c47d51d2ac6071e01e171f76",
+        "url": "https://raw.githubusercontent.com/owid/energy-data/7e387a16f70a510e433f8aac7efeac6faa1e5059/owid-energy-data.csv"
+      }
+    },
+    "checks": [
+      {
+        "table": "climate_energy.energy",
+        "rows": 23377,
+        "query_id": "907be3e4-c77e-4061-b713-a965dad6f0dc"
+      },
+      {
+        "table": "reference.energy_indicators",
+        "rows": 130,
+        "query_id": "07b84d93-f920-4f7b-be2b-6dd858eff112"
+      },
+      {
+        "table": "climate_energy.global_temperature_monthly",
+        "rows": 1764,
+        "query_id": "0dd72561-087d-457c-b874-734d2c7d708b"
+      },
+      {
+        "table": "ai_benchmarks.open_llm_results",
+        "rows": 4576,
+        "query_id": "e86f78fa-0c77-42e5-9c58-7c4d0f22f782"
+      }
+    ],
+    "ai_dataset_status": "Archived leaderboard snapshot, not current model rankings"
+  },
+  "local_cache": {
+    "path": "data/opensource/2026-09-09-v1",
+    "files": 26,
+    "bytes": 251844196,
+    "sha256_verified": true,
+    "transfer": "AKS relay; no storage network changes"
+  }
+}

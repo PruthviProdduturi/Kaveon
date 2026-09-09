@@ -26,6 +26,41 @@ changed unless the application actually changes it; the user controls that picke
 
 ## Ownership map
 
+### OpenSource extras and Settings - September 8 (UTC September 9)
+
+OWID energy (23,377 rows), energy codebook (130), NASA monthly GISTEMP
+(1,764), and archived Hugging Face Open LLM results (4,576) are loaded in
+OpenSource: now 15 tables in seven schemas. All four distributed COUNT
+results match manifests; authenticated live SQL Lab returned 4,576 AI rows.
+Extras used the existing worker pool; the upload Secret was deleted afterward.
+File hashes and pinned revisions are in the validation report. AI results
+are an archived snapshot, not current model rankings.
+
+System Settings Engine connectivity and native catalog Sync are deployed on
+AKS; authenticated status and live Settings page checks passed. Build records:
+tmp/aks-engine-settings-api.json and tmp/aks-engine-settings-studio.json.
+Bootstrap IDs require care with generic Sync; see the registration guide.
+Quoted table identifiers can fail distributed fallback; bootstrap checks use
+validated unquoted names. PostgreSQL remains the transactional metadata store;
+Kaveon product catalog migration is documented as unfinished.
+
+### OpenSource live import — September 8 (UTC September 9)
+
+Direct-source AKS curation completed using existing workers: full NYC TLC
+January 2025 yellow/green files plus taxi zones, and the full retrieved WHO
+COVID reported-count CSV. Private ADLS container `opensource`, snapshot
+`snapshots/2026-09-09-v1`, Engine catalog `OpenSource` / ID `aks-opensource`.
+All 11 table counts passed Engine checks, taxi daily sums reconcile, WHO daily
+sums match reported totals, and real SQL Lab returned 48,131 green trips.
+The short-lived upload Secret was removed. Source hashes, coverage and query
+IDs are in `docs/engineering/opensource-validation-2026-09-09.json`.
+
+User's next task is a transactional Engine and migration of all product system
+tables into a separate `Kaveon` catalog. This is NOT implemented: PostgreSQL
+remains authoritative. `product-catalog-migration.md` inventories requirements.
+The latest source has object-store Delta snapshot readers, but no transactional
+Delta writer. This public import uses the deployed Parquet path.
+
 ### OpenSource import planning — September 8
 
 User requested an OpenSource catalog with NYC Taxi and other PostgreSQL
