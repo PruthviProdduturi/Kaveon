@@ -172,7 +172,7 @@ endpoint or a product storage cutover:
   bounded multi-table preparation. It does not validate row-level constraints.
 - `catalog::product_commit::ProductCatalogCommit`: immutable snapshot JSON,
   a digest-verified head, conditional publication, and bounded history lookup.
-  Catalog tests: 16 passed, including transaction metrics. Both crates pass
+  Catalog tests: 18 passed, including transaction metrics. Both crates pass
   strict Clippy. The live ADLS REST primitive probe also passed; see
   [its evidence](adls-commit-validation-2026-09-09.json).
 - `catalog::product_metrics`: attempts, in-flight operations, commit/replay/
@@ -183,13 +183,14 @@ endpoint or a product storage cutover:
 The publication prototype assumes trusted callers validate referenced objects,
 row/schema/foreign-key constraints, authorization, and a canonical request
 fingerprint before calling it. It does not write table data. Head reads are
-limited to 64 KiB and snapshot reads/writes to 8 MiB. Idempotency traversal has a
-64-hop budget; exhausted or missing history refuses further writes rather than
-risk duplicate application. A durable operation index is required to remove
-that prototype limit. No automatic history deletion is implemented.
+limited to 64 KiB and snapshot reads/writes to 8 MiB. New heads reference immutable, digest-verified operation-index shards, so
+idempotency checks no longer depend on a 64-hop history walk. Each shard is
+bounded to 1,024 entries in this prototype; capacity exhaustion refuses writes
+until shard splitting is implemented. Legacy heads without an index require
+explicit migration and fail closed. No automatic history deletion is implemented.
 
 Still required: the Delta/Parquet mutation writer and constraint indexes,
-authenticated transactional API, durable idempotency index, independently
+authenticated transactional API, scalable index splitting, independently
 verified head recovery, failure-injection coverage for lost write responses,
 telemetry exposure/audit/alerts, every application repository adapter, and the
 backfill/reconciliation/fencing/cutover/rollback suite. Existing PostgreSQL and
