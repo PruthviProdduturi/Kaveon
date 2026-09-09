@@ -45,9 +45,14 @@ export async function msalFetchRetry(
 	for (let attempt = 0; attempt <= retries; attempt++) {
 		try {
 			const res = await msalFetch(input, init);
-			// Retry only on transient server errors; 4xx are the caller's problem.
-			if (res.status >= 500 && res.status <= 504 && attempt < retries) {
-				await new Promise((r) => setTimeout(r, backoffMs * (attempt + 1)));
+			// Admission/rate limits are retryable for these idempotent reads.
+			// Authentication and other client errors still return immediately.
+			if ((res.status === 429 || (res.status >= 500 && res.status <= 504)) && attempt < retries) {
+				const retryAfter = Number(res.headers.get("Retry-After"));
+				const delay = res.status === 429
+					? Math.min(20_000, Math.max(backoffMs * 2 ** attempt, Number.isFinite(retryAfter) ? retryAfter * 1000 : 0))
+					: backoffMs * (attempt + 1);
+				await new Promise((r) => setTimeout(r, delay));
 				continue;
 			}
 			return res;

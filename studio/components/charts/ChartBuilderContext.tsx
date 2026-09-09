@@ -6,7 +6,7 @@ import { msalFetch, msalFetchRetry } from "../../utils/msalFetch";
 import { useAuth } from "../../auth/useAuth";
 import { useRouter } from "next/navigation";
 import { getRegisteredPlugins, getPlugin } from "./chartPluginRegistry";
-import { acquireQuerySlot } from "../../utils/querySemaphore";
+import { acquireQuerySlot, acquireEngineQuerySlot } from "../../utils/querySemaphore";
 
 // ── Client-side query result cache ──────────────────────────────────────────
 // Module-level so it survives component unmounts (navigation).
@@ -3128,6 +3128,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
 
     // Acquire a slot from the global semaphore — limits concurrent dashboard queries
     const releaseSlot = await acquireQuerySlot();
+    let releaseEngineSlot: (() => void) | undefined;
     const start = performance.now();
 
     try {
@@ -3139,6 +3140,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         datasetDetail?.database_name,
         account?.email || account?.username || null,
       );
+      if (engineCatalog) releaseEngineSlot = await acquireEngineQuerySlot();
 
       // ── Context-first path for dashboard charts ────────────────────────
       // When running inside a dashboard, try to serve the chart from the
@@ -3306,7 +3308,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(executeBody),
-        });
+        }, engineCatalog ? { retries: 4, backoffMs: 1000 } : {});
         if (!executeRes.ok) {
           const text = await executeRes.text();
           throw new Error(`Query execution failed: ${executeRes.status} ${text}`);
@@ -3742,6 +3744,8 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
       isQueryRunningRef.current = false;
       releaseSlot();
       setSqlPreview((prev) => ({ ...prev, isRunning: false, error: message }));
+    } finally {
+      releaseEngineSlot?.();
     }
   };
 

@@ -141,6 +141,7 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
         f.enabled &&
         f.filterType !== 'date_range' &&
         String(f.value ?? '').trim() !== '' &&
+        f.value !== 'AllUp' &&
         getDatasetId(f) === tds
       )
       .map((f) => ({
@@ -161,8 +162,10 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
    *  narrowing context, unless the right (context-matched) options are loaded. */
   const loadOptions = async (filter: DashboardFilter) => {
     const col = filter.column;
+    const datasetId = getDatasetId(filter);
+    if (!datasetId) return;
     const narrow = getNarrowFilters(filter);
-    const sig = narrowSig(narrow);
+    const sig = `${datasetId}|${narrowSig(narrow)}`;
     if (colOptions[col] !== undefined && colNarrowSigRef.current[col] === sig) return;
     if (loadingCol === col) return;
 
@@ -175,9 +178,6 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
       return;
     }
 
-    const datasetId = getDatasetId(filter);
-    if (!datasetId) return;
-
     setLoadingCol(col);
     try {
       const dlmParams = new URLSearchParams({
@@ -185,9 +185,11 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
         column: col,
         limit: '200',
       });
-      const dlmRes = await msalFetch(`${API_BASE}/api/v1/dlm/filter-values?${dlmParams}`);
-      const dlmData = await dlmRes.json();
-      if (dlmRes.ok && dlmData.ok && Array.isArray(dlmData.values) && dlmData.values.length > 0) {
+      // DLM's cached list has no sibling-filter predicates. Use the query path
+      // when a selection narrows the options, so cascading controls stay valid.
+      const dlmRes = narrow.length ? null : await msalFetch(`${API_BASE}/api/v1/dlm/filter-values?${dlmParams}`);
+      const dlmData = dlmRes ? await dlmRes.json() : null;
+      if (dlmRes?.ok && dlmData?.ok && Array.isArray(dlmData.values) && dlmData.values.length > 0) {
         const values: FilterOption[] = dlmData.values
           .map((v: any) => ({ key: String(v.key ?? ''), value: String(v.value ?? '') }))
           .filter((x: FilterOption) => x.value !== '');

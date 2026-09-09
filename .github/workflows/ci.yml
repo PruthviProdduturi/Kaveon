@@ -39,6 +39,9 @@ jobs:
       - name: Verify public Microsoft sign-in tokens
         run: node --no-warnings --experimental-strip-types --test studio/qualification/entra_auth.mjs
 
+      - name: Verify Engine dashboard query admission
+        run: node --no-warnings --experimental-strip-types --test studio/qualification/query_semaphore.mjs
+
       - name: Validate documentation integrity
         run: node scripts/validate-docs.mjs
 

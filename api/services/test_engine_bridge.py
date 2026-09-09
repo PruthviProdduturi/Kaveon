@@ -1,5 +1,6 @@
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 from fastapi import HTTPException
 from services import engine_bridge as bridge
 
@@ -99,6 +100,16 @@ class EngineBridgeTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as error:
                 bridge._verify_context()
             self.assertEqual(error.exception.status_code, 503)
+
+    def test_engine_admission_rejection_is_retryable(self):
+        response = SimpleNamespace(status_code=429, is_success=False)
+        with patch.dict("os.environ", {"KAVEON_ENGINE_URL": "https://engine.example", "KAVEON_ENGINE_BRIDGE_TOKEN": "test"}), \
+             patch.object(bridge, "_verify_context", return_value=True), \
+             patch.object(bridge.httpx, "request", return_value=response):
+            with self.assertRaises(HTTPException) as error:
+                bridge._request("POST", "/v1/statement", "KAVEON_ENGINE_BRIDGE_TOKEN", "alice", payload={})
+        self.assertEqual(error.exception.status_code, 429)
+        self.assertEqual(error.exception.headers, {"Retry-After": "1"})
 
 
 if __name__ == "__main__":

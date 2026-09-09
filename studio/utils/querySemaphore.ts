@@ -47,3 +47,26 @@ export function resetQuerySemaphore(): void {
 export function isQueryIdle(): boolean {
   return running === 0 && queue.length === 0;
 }
+
+// The test Engine admits four 512 MiB query budgets. Keep one slot available
+// for filter options or SQL Lab while a rich dashboard loads. This limiter is
+// independent of the relational backend's existing six-query limit.
+let engineRunning = 0;
+const engineQueue: Array<() => void> = [];
+
+export function acquireEngineQuerySlot(): Promise<() => void> {
+  return new Promise((resolve) => {
+    const start = () => {
+      engineRunning++;
+      let released = false;
+      resolve(() => {
+        if (released) return;
+        released = true;
+        engineRunning--;
+        engineQueue.shift()?.();
+      });
+    };
+    if (engineRunning < 3) start();
+    else engineQueue.push(start);
+  });
+}

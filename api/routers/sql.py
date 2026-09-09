@@ -196,8 +196,8 @@ def generate_sql(data: SqlGenerateBody, ctx=Depends(require_min_role("Analyst"))
     # Engine accepts PostgreSQL-style quoting and LIMIT.  This also prevents
     # generated showcase SQL from using T-SQL TOP/bracket syntax.
     engine_catalog = _is_engine_catalog(dataset.get("database_name") or "")
-    if engine_catalog and not dataset.get("table_name") and dataset.get("dimensions"):
-        raise HTTPException(422, detail="Engine virtual datasets do not support dimension joins")
+    if engine_catalog and dataset.get("dimensions"):
+        raise HTTPException(422, detail="Engine datasets do not support dimension joins")
     db_type = "postgresql" if engine_catalog else "fabric_sql"
     if db_type != "postgresql":
         try:
@@ -215,6 +215,7 @@ def generate_sql(data: SqlGenerateBody, ctx=Depends(require_min_role("Analyst"))
         "columns": dataset.get("columns") or [],
         "database_name": dataset.get("database_name"),
         "engine_virtual_source": engine_catalog,
+        "engine_source": engine_catalog,
         "db_type": db_type,
     }
 
@@ -293,6 +294,7 @@ def distinct_filter_values(
         "limit": row_limit,
         "filters": narrow_filters,
         "db_type": db_type,
+        "engine_source": bool(engine_source),
     })
     if not query_result:
         raise HTTPException(status_code=400, detail="Failed to generate distinct values query")
@@ -323,6 +325,10 @@ def distinct_filter_values(
             result = {"columns": columns, "rows": engine_rows, "row_count": len(engine_rows)}
         else:
             result = pool.execute_query(sql_text, dataset["database_name"])
+    except HTTPException:
+        # Engine admission 429 carries Retry-After and is safe for the client
+        # to retry; do not hide it behind this legacy generic execution error.
+        raise
     except Exception as e:
         duration_ms = int(time.time() * 1000) - start_time
         try:
