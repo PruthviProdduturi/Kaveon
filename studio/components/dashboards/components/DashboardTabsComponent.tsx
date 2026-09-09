@@ -26,7 +26,7 @@ const DashboardHeaderComponent = dynamic(() => import('./DashboardHeaderComponen
 const DashboardDividerComponent = dynamic(() => import('./DashboardDividerComponent'), { ssr: false });
 
 interface Chart {
-  id: number;
+  id: string | number;
   name: string;
   chart_type?: string;
 }

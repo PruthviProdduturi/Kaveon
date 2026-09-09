@@ -377,9 +377,9 @@ const DashboardViewPage: React.FC = () => {
         // Auto-discover filters from dataset dimensions when none are saved
         if (!filters.length && layout.length) {
           try {
-            const chartIds = layout.filter((it: any) => it.type === "chart" && it.chartId).map((it: any) => it.chartId);
+            const chartIds = layout.filter((it: any) => it.type === "chart" && it.chartId && !it.exemptFromFilters).map((it: any) => it.chartId);
             if (chartIds.length) {
-              const chartResps = await Promise.all(chartIds.map((cid: number) => msalFetch(`${API_BASE}/api/v1/charts/${cid}`)));
+              const chartResps = await Promise.all(chartIds.map((cid: string | number) => msalFetch(`${API_BASE}/api/v1/charts/${cid}`)));
               const charts: { id: number; dataset_id: number }[] = await Promise.all(chartResps.map((r: Response) => r.json()));
               const dsIds = Array.from(new Set(charts.map((c) => c.dataset_id)));
               const colResps = await Promise.all(dsIds.map((dsId) => msalFetch(`${API_BASE}/api/v1/datasets/${dsId}/columns`)));

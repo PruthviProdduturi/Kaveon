@@ -342,7 +342,13 @@ def _resolve_column_expression(
         coalesce_parts = [f"{s['alias']}.{quote_identifier(s['columnName'])}" for s in sources]
         return f"COALESCE({', '.join(coalesce_parts)})"
 
-    return f"{alias}.{quote_identifier(col_name)}"
+    return _qualified_column(alias, col_name)
+
+
+def _qualified_column(alias: str, column: str) -> str:
+    """Quote a column with an optional relation alias."""
+    quoted = quote_identifier(column)
+    return f"{alias}.{quoted}" if alias else quoted
 
 
 # ─── Filter clause ────────────────────────────────────────────────────────────
@@ -372,7 +378,7 @@ def _build_optimized_filter_clause(
     if key_column and value_key not in (None, ""):
         key_parts = [p for p in normalize_column_name(key_column).split(".") if p]
         key_col_name = key_parts[-1]
-        quoted_key_col = f"{fact_alias}.{quote_identifier(key_col_name)}"
+        quoted_key_col = _qualified_column(fact_alias, key_col_name)
 
         if isinstance(value_key, list):
             values = ", ".join(f"'{str(v).replace(chr(39), chr(39)*2)}'" for v in value_key)
@@ -392,7 +398,7 @@ def _build_optimized_filter_clause(
 
     # Tier 3: dimension display column
     alias, col_name = _resolve_column_alias(col, fact_alias, alias_map, column_table_map)
-    quoted_col = f"{alias}.{quote_identifier(col_name)}"
+    quoted_col = _qualified_column(alias, col_name)
 
     def _is_num(v):
         try:
@@ -502,15 +508,20 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
             if len(_parts) == 3:
                 datasource = ".".join(_parts[1:])
 
-        # Virtual SQL dataset — use the saved SQL as a subquery source
+        # Virtual SQL dataset — use the saved SQL as a subquery source. The
+        # Engine flag is set only by server-side catalog resolution: its
+        # distributed planner exposes derived fields unqualified, unlike a
+        # general PostgreSQL source where relation aliases remain valid.
+        engine_virtual = bool(sql_text and not datasource and params.get("engine_virtual_source"))
         if sql_text and not datasource:
-            fact_alias = "fact"
+            fact_alias = "" if engine_virtual else "fact"
             fact_table = f"(\n{sql_text}\n)"
         elif not datasource:
             return None
         else:
             fact_alias = "fact"
             fact_table = quote_identifier(datasource)
+        fact_source = f"{fact_table} AS {fact_alias}" if fact_alias else fact_table
 
         column_table_map = _build_column_table_map(columns)
         required_dims = _get_required_dimensions(dimensions, groupby, filters, column_table_map, datasource)
@@ -534,15 +545,16 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
                 col = m.get("column") or m.get("field")
                 if col:
                     alias, col_name = _resolve_column_alias(col, fact_alias, alias_map, column_table_map)
-                    raw_expr = f"{alias}.{quote_identifier(col_name)}"
+                    raw_expr = _qualified_column(alias, col_name)
                     if raw_expr not in select_parts:
                         select_parts.append(raw_expr)
             if not select_parts:
-                select_parts.append(f"{fact_alias}.*")
+                select_parts.append(f"{fact_alias}.*" if fact_alias else "*")
 
-            top_clause = f"TOP {int(row_limit)} " if row_limit and int(row_limit) > 0 else "TOP 1000 "
-            select_clause = f"SELECT {top_clause}{', '.join(select_parts)}"
-            from_clause = f"FROM {fact_table} AS {fact_alias}"
+            portable_limit = db_type in ("postgresql", "mysql")
+            row_cap = int(row_limit) if row_limit and int(row_limit) > 0 else 1000
+            select_clause = f"SELECT {'' if portable_limit else f'TOP {row_cap} '}{', '.join(select_parts)}"
+            from_clause = f"FROM {fact_source}"
             join_clause = " ".join(join_clauses)
 
             where_parts: List[str] = []
@@ -552,7 +564,8 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
                     where_parts.append(fc)
             where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
-            parts = [p for p in [select_clause, from_clause, join_clause, where_clause] if p]
+            limit_clause = f"LIMIT {row_cap}" if portable_limit else ""
+            parts = [p for p in [select_clause, from_clause, join_clause, where_clause, limit_clause] if p]
             return " ".join(parts)
 
         # ── AGGREGATE mode (default) ───────────────────────────────────────────
@@ -585,18 +598,19 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
             if col:
                 alias, col_name = _resolve_column_alias(col, fact_alias, alias_map, column_table_map)
                 if agg_func == "COUNT_DISTINCT":
-                    metric_expr = f"COUNT(DISTINCT {alias}.{quote_identifier(col_name)})"
+                    metric_expr = f"COUNT(DISTINCT {_qualified_column(alias, col_name)})"
                 else:
-                    metric_expr = f"{agg_func}({alias}.{quote_identifier(col_name)})"
+                    metric_expr = f"{agg_func}({_qualified_column(alias, col_name)})"
                 metric_alias = m.get("label") or m.get("name") or col_name or "value"
                 select_parts.append(f"{metric_expr} AS {quote_identifier(metric_alias)}")
 
         if not select_parts:
             select_parts.append("*")
 
-        top_clause = f"TOP {int(row_limit)} " if row_limit and int(row_limit) > 0 else ""
-        select_clause = f"SELECT {top_clause}{', '.join(select_parts)}"
-        from_clause = f"FROM {fact_table} AS {fact_alias}"
+        portable_limit = db_type in ("postgresql", "mysql")
+        row_cap = int(row_limit) if row_limit and int(row_limit) > 0 else None
+        select_clause = f"SELECT {'' if portable_limit or not row_cap else f'TOP {row_cap} '}{', '.join(select_parts)}"
+        from_clause = f"FROM {fact_source}"
         join_clause = " ".join(join_clauses)
 
         where_parts = []
@@ -738,17 +752,22 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
             ) or (time_column and normalize_column_name(time_column).split(".")[-1].lower() == _sb_norm)
 
             if sb_metric and query_mode != "raw":
-                agg_func = (sb_metric.get("aggregate") or sb_metric.get("agg") or "SUM").upper()
-                m_alias, m_col = _resolve_column_alias(
-                    sb_metric.get("column") or sb_metric.get("field"), fact_alias, alias_map, column_table_map)
-                if agg_func == "COUNT_DISTINCT":
-                    sb_expr = f"COUNT(DISTINCT {m_alias}.{quote_identifier(m_col)})"
+                if engine_virtual:
+                    # The Engine planner evaluates an aggregate repeated in an
+                    # ORDER BY as a scalar. Order by the projected metric alias.
+                    sb_expr = quote_identifier(sb_metric.get("label") or sb_metric.get("name") or sb_metric.get("column") or "value")
                 else:
-                    sb_expr = f"{agg_func}({m_alias}.{quote_identifier(m_col)})"
+                    agg_func = (sb_metric.get("aggregate") or sb_metric.get("agg") or "SUM").upper()
+                    m_alias, m_col = _resolve_column_alias(
+                        sb_metric.get("column") or sb_metric.get("field"), fact_alias, alias_map, column_table_map)
+                    if agg_func == "COUNT_DISTINCT":
+                        sb_expr = f"COUNT(DISTINCT {_qualified_column(m_alias, m_col)})"
+                    else:
+                        sb_expr = f"{agg_func}({_qualified_column(m_alias, m_col)})"
             elif query_mode != "raw" and not _sb_in_groupby:
                 # Sort by a non-grouped measure → aggregate it so it's valid under GROUP BY.
                 s_alias, s_col = _resolve_column_alias(sb_col, fact_alias, alias_map, column_table_map)
-                sb_expr = f"SUM({s_alias}.{quote_identifier(s_col)})"
+                sb_expr = f"SUM({_qualified_column(s_alias, s_col)})"
             else:
                 sb_expr = _resolve_column_expression(sb_col, fact_alias, alias_map, column_table_map, coalesce_map)
             # NULLS LAST so a sorted+limited ranking (e.g. top-20 by Arena ELO)
@@ -796,12 +815,12 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
             cte_parts.append(f"{time_grain_expr} AS [__time__]")
             cte_parts.extend(metric_agg_parts)
 
-            # Row cap belongs on the OUTER query, not the CTE — otherwise the
-            # single-TOP→LIMIT adapter relocates the cap to the outer result set
-            # anyway and changes semantics. Keep the CTE uncapped.
+            # Row cap belongs on the OUTER query, not the CTE, to preserve the
+            # window calculation over the full ordered input.
             cte_select_clause = f"SELECT {', '.join(cte_parts)}"
             cte_body = " ".join([p for p in [cte_select_clause, from_clause, join_clause, where_clause, group_by_clause] if p])
-            outer_top = f"TOP {int(row_limit)} " if row_limit and int(row_limit) > 0 else ""
+            outer_top = f"TOP {row_cap} " if row_cap and not portable_limit else ""
+            outer_limit = f" LIMIT {row_cap}" if row_cap and portable_limit else ""
 
             # PARTITION BY per dimension so window runs per series, not across all data
             partition_by = f"PARTITION BY {', '.join(dim_aliases)} " if dim_aliases else ""
@@ -824,11 +843,12 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
                     f"WITH base AS ({cte_body}) "
                     f"SELECT {outer_top}{outer_dims}, {', '.join(window_selects)} "
                     f"FROM base "
-                    f"ORDER BY {', '.join(dim_aliases + [qt])} ASC"
+                    f"ORDER BY {', '.join(dim_aliases + [qt])} ASC{outer_limit}"
                 )
                 return window_query
 
-        parts = [p for p in [select_clause, from_clause, join_clause, where_clause, group_by_clause, order_by_clause] if p]
+        limit_clause = f"LIMIT {row_cap}" if row_cap and portable_limit else ""
+        parts = [p for p in [select_clause, from_clause, join_clause, where_clause, group_by_clause, order_by_clause, limit_clause] if p]
         return " ".join(parts)
 
     except Exception:

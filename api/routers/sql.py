@@ -16,6 +16,7 @@ from services.query_generator import build_chart_preview_query, build_distinct_f
 from services.sql_table_extractor import extract_tables_from_sql
 from services.sql_guard import assert_no_platform_tables, assert_read_only
 import database.pool as pool
+import database.metadata as meta_db
 
 router = APIRouter()
 NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
@@ -106,6 +107,63 @@ def canonical_source(raw: str) -> str:
     return _CANONICAL_SOURCE.get((raw or "").lower(), raw or "chart-builder")
 
 
+def _engine_source_for_catalog(catalog: str) -> dict | None:
+    """Resolve a catalog name through the active server-side source registry.
+
+    Browser requests name a logical catalog only.  They never supply an Engine
+    URL, credential, or source definition, and inactive/deleted sources cannot
+    be used for chart execution.
+    """
+    if not catalog:
+        return None
+    return meta_db.query_one(
+        "SELECT id, engine_catalog FROM catalog_sources "
+        "WHERE engine_catalog = @param0 AND lifecycle = 'active' AND adapter_type = 'native'",
+        [catalog],
+    )
+
+
+def _is_engine_catalog(catalog: str) -> bool:
+    return _engine_source_for_catalog(catalog) is not None
+
+
+def _engine_result_rows(result: dict) -> tuple[list[str], list[list]]:
+    """Normalize the Engine statement response to the chart renderer contract."""
+    raw_columns = result.get("columns") or []
+    columns = [
+        column.get("name", "") if isinstance(column, dict) else str(column)
+        for column in raw_columns
+    ]
+    rows: list[list] = []
+    for row in result.get("data") or result.get("rows") or []:
+        if isinstance(row, dict):
+            rows.append([row.get(column) for column in columns])
+        elif isinstance(row, (list, tuple)):
+            rows.append(list(row))
+        else:
+            rows.append([row])
+    return columns, rows
+
+
+def _execute_engine_read_only(sql_text: str, catalog: str, ctx: UserContext, schema: str | None = None) -> dict:
+    """Run a read-only statement within one catalog selected by the server."""
+    from routers.lab import _engine_query
+    from services.engine_bridge import execute
+
+    scoped_sql = _engine_query(sql_text, catalog)
+    return execute(scoped_sql, catalog, ctx.email, ctx.role, schema)
+
+
+def _assert_engine_execute_permission(data: SqlExecuteBody, ctx: UserContext) -> None:
+    """Engine chart SQL requires a verified Analyst-level principal."""
+    from middleware.permissions import ROLE_LEVELS
+    if ROLE_LEVELS.get(ctx.role, 0) < ROLE_LEVELS["Analyst"]:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "forbidden", "message": "Analyst role required to execute queries."},
+        )
+
+
 @router.post("/sql/generate")
 def generate_sql(data: SqlGenerateBody, ctx=Depends(require_min_role("Analyst"))):
     user = ctx.email
@@ -113,7 +171,7 @@ def generate_sql(data: SqlGenerateBody, ctx=Depends(require_min_role("Analyst"))
     chart_type = data.chart_type
     config = data.config
 
-    dataset = datasets_svc.get_dataset_by_id(str(dataset_id))
+    dataset = datasets_svc.get_dataset_by_id(str(dataset_id), ctx.email, ctx.role)
     if not dataset:
         raise HTTPException(status_code=400, detail="Dataset not found")
 
@@ -135,18 +193,28 @@ def generate_sql(data: SqlGenerateBody, ctx=Depends(require_min_role("Analyst"))
     )
 
     # Resolve the target dialect so date grain/format SQL is generated correctly.
-    try:
-        db_type = pool.get_connection_pool(dataset.get("database_name")).db_type
-    except Exception:
-        db_type = "fabric_sql"
+    # Engine accepts PostgreSQL-style quoting and LIMIT.  This also prevents
+    # generated showcase SQL from using T-SQL TOP/bracket syntax.
+    engine_catalog = _is_engine_catalog(dataset.get("database_name") or "")
+    if engine_catalog and not dataset.get("table_name") and dataset.get("dimensions"):
+        raise HTTPException(422, detail="Engine virtual datasets do not support dimension joins")
+    db_type = "postgresql" if engine_catalog else "fabric_sql"
+    if db_type != "postgresql":
+        try:
+            db_type = pool.get_connection_pool(dataset.get("database_name")).db_type
+        except Exception:
+            pass
 
+    # Configuration controls visualization operations only.  The data source
+    # and any virtual SQL are durable dataset metadata, never browser input.
     params = {
+        **config,
         "datasource": datasource,
         "sql_text": dataset.get("sql_text") or "",
-        **config,
         "dimensions": dimensions,
         "columns": dataset.get("columns") or [],
         "database_name": dataset.get("database_name"),
+        "engine_virtual_source": engine_catalog,
         "db_type": db_type,
     }
 
@@ -172,10 +240,10 @@ def distinct_filter_values(
     chart_id: str = Query(default=None),
     dashboard_id: str = Query(default=None),
     filters: str = Query(default=None),   # JSON list of sibling filters that narrow this column
-    user: str = Depends(require_auth),
+    ctx: UserContext = Depends(require_user_context),
 ):
     response.headers.update(NO_CACHE)
-    user_id = user
+    user_id = ctx.email
     row_limit = min(limit, 500)
 
     # Cascading filters — other active filters on the same dataset that narrow the
@@ -189,7 +257,7 @@ def distinct_filter_values(
         except Exception:
             narrow_filters = []
 
-    dataset = datasets_svc.get_dataset_by_id(dataset_id)
+    dataset = datasets_svc.get_dataset_by_id(dataset_id, ctx.email, ctx.role)
     if not dataset:
         raise HTTPException(status_code=400, detail="Dataset not found")
     if not dataset.get("table_name"):
@@ -212,10 +280,13 @@ def distinct_filter_values(
     if hint_fk:
         raw_dims.sort(key=lambda d: 0 if (d.get("factKey") or "").lower() == hint_fk else 1)
 
-    try:
-        db_type = pool.get_connection_pool(dataset.get("database_name")).db_type
-    except Exception:
-        db_type = "fabric_sql"
+    engine_source = _engine_source_for_catalog(dataset.get("database_name") or "")
+    db_type = "postgresql" if engine_source else "fabric_sql"
+    if db_type != "postgresql":
+        try:
+            db_type = pool.get_connection_pool(dataset.get("database_name")).db_type
+        except Exception:
+            pass
     query_result = build_distinct_filter_values_query({
         "datasource": datasource, "column": column,
         "dimensions": raw_dims, "columns": dataset.get("columns") or [],
@@ -240,13 +311,18 @@ def distinct_filter_values(
     run_context = json.dumps({
         "source": filter_trigger, "datasetId": int(dataset_id), "column": column,
         "filteringTier": filtering_tier, "database": dataset["database_name"],
-        **({} if not chart_id else {"chartId": int(chart_id)}),
+        **({} if not chart_id else {"chartId": chart_id}),
         **({} if not dashboard_id else {"dashboardId": dashboard_id}),
     })
 
     start_time = int(time.time() * 1000)
     try:
-        result = pool.execute_query(sql_text, dataset["database_name"])
+        if engine_source:
+            result = _execute_engine_read_only(sql_text, engine_source["engine_catalog"], ctx, dataset.get("schema_name"))
+            columns, engine_rows = _engine_result_rows(result)
+            result = {"columns": columns, "rows": engine_rows, "row_count": len(engine_rows)}
+        else:
+            result = pool.execute_query(sql_text, dataset["database_name"])
     except Exception as e:
         duration_ms = int(time.time() * 1000) - start_time
         try:
@@ -327,7 +403,7 @@ def execute_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Dep
     resolved_tables = tables_used or json.dumps(extract_tables_from_sql(sql_text))
     run_context = json.dumps({
         "source": trigger_source, "database": database,
-        **({} if chart_id is None else {"chartId": int(chart_id)}),
+        **({} if chart_id is None else {"chartId": chart_id}),
         **({} if dashboard_id is None else {"dashboardId": dashboard_id}),
         **({} if chart_type is None else {"chartType": chart_type}),
         **({} if dataset_id is None else {"datasetId": int(dataset_id)}),
@@ -454,15 +530,30 @@ def invalidate_cache(ctx=Depends(require_min_role("Admin"))):
 
 @router.post("/sql/engine")
 def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Depends(require_user_context)):
-    """Explicit Engine execution; existing database execution remains unchanged."""
-    from services.engine_bridge import execute
+    """Execute against an active, server-resolved Engine catalog."""
+    _assert_engine_execute_permission(data, ctx)
     assert_read_only(data.sql_text)
     assert_no_platform_tables(data.sql_text, data.database)
     sql_execute_limiter.check(ctx.email)
     response.headers.update(NO_CACHE)
-    result = execute(data.sql_text, data.database, ctx.email, ctx.role)
-    rows = result.get("data") or []
+    source = _engine_source_for_catalog(data.database)
+    if not source:
+        raise HTTPException(status_code=404, detail="Active Engine catalog source not found")
+    # Engine requires a selected schema.  Resolve it from the authorized saved
+    # dataset instead of accepting a browser-supplied schema name.
+    if data.dataset_id is None:
+        raise HTTPException(status_code=400, detail="An Engine chart query requires a dataset")
+    dataset = datasets_svc.get_dataset_by_id(str(data.dataset_id), ctx.email, ctx.role)
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    if (dataset.get("database_name") or "").casefold() != source["engine_catalog"].casefold():
+        raise HTTPException(status_code=400, detail="Dataset is not bound to the selected Engine catalog")
+    schema = dataset.get("schema_name") or None
+    if not schema:
+        raise HTTPException(status_code=400, detail="Engine dataset is missing schema_name")
+    result = _execute_engine_read_only(data.sql_text, source["engine_catalog"], ctx, schema)
+    columns, rows = _engine_result_rows(result)
     if data.row_limit:
         rows = rows[:data.row_limit]
-    return {"columns": result.get("columns") or [], "rows": rows,
-            "query_id": result["id"], "duration_ms": result.get("elapsed_ms", 0)}
+    return {"columns": columns, "rows": rows,
+            "query_id": result.get("id"), "duration_ms": result.get("elapsed_ms", 0)}

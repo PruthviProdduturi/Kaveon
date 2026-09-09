@@ -20,7 +20,7 @@ import { useAuth } from "../../auth/useAuth";
 import type { ComponentType } from "../../types/dashboard";
 
 interface Chart {
-  id: number;
+  id: string | number;
   name: string;
   chart_type?: string;
   dataset_name?: string | null;

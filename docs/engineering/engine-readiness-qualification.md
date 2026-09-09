@@ -124,6 +124,16 @@ release evidence after combined validation.
 - Compact grouped-state transport and opt-in local parallel aggregation.
 - Sustained mixed-workload soak and complete local Compose integration.
 
+### Engine-backed virtual chart datasets
+
+The Studio chart generator uses a server-resolved Engine flag only for virtual
+datasets. Engine's distributed planner currently exposes derived-table output
+columns without the derived-table relation alias, so generated outer projections
+and groupings are unqualified for that path. Physical and general PostgreSQL
+datasets retain normal relation aliases. This is a scoped compatibility path,
+not a claim of general PostgreSQL or Trino derived-table alias parity; the
+showcase wrappers require live Engine validation.
+
 ## External and performance gates
 
 The current Azure CLI identity cannot access the recorded Kaveon subscription.
