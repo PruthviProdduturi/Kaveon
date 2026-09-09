@@ -4156,12 +4156,13 @@ main.main-wide {
 
 .schema-name {
   font-weight: 700;
-  color: var(--lens-dark, #1f3b7a);
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
 }
 
 .schema-icon {
   margin-right: 0.4rem;
-  color: var(--lens-dark, #1f3b7a);
+  color: var(--text-muted);
   font-size: 0.85rem;
 }
 
@@ -4196,12 +4197,17 @@ main.main-wide {
 }
 
 .table-item.selected {
-  background: color-mix(in srgb, var(--lens-primary) 12%, white);
-  border-left: 3px solid var(--lens-primary);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-left: 3px solid var(--accent);
+}
+
+.table-item.selected .table-name {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .table-icon {
-  color: var(--lens-primary, #3b82f6);
+  color: var(--accent);
   font-size: 0.8rem;
   width: 14px;
   text-align: center;
@@ -4225,7 +4231,7 @@ main.main-wide {
 
 .table-name {
   font-weight: 500;
-  color: var(--lens-primary, #0078D4);
+  color: var(--text-secondary);
   font-size: 0.85rem;
   flex: 1;
   min-width: 0;
@@ -4237,8 +4243,8 @@ main.main-wide {
 .table-schema-pill {
   padding: 2px 8px;
   border-radius: 999px;
-  background: var(--lens-accent, #eef3fb);
-  color: var(--lens-dark, #2b4c8f);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
   font-size: 11px;
   font-weight: 600;
   border: 1px solid color-mix(in srgb, var(--lens-primary, #0078D4) 30%, transparent);
