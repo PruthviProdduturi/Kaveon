@@ -122,6 +122,19 @@ def execute(sql, catalog, actor, role, schema=None):
                                "source": "studio", "client": "kaveon-api"}, role=roles[role])
     if result is None or result.get("error"):
         raise HTTPException(422, "Engine query failed")
+    query_id = result.get("id")
+    if query_id:
+        try:
+            details = _request(
+                "GET", "/v1/query/" + quote(str(query_id), safe=""),
+                "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=roles[role],
+            )
+        except HTTPException:
+            # Telemetry enrichment is best effort after a successful statement;
+            # never turn a completed query into an execution failure.
+            details = None
+        if isinstance(details, dict):
+            result["query_details"] = details
     return result
 
 

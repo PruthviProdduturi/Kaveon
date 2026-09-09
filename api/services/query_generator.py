@@ -65,6 +65,12 @@ def _apply_date_format(col_expr: str, date_format: Optional[str], db_type: str =
     fmt = date_format.lower()
     if fmt in ("day", "auto"):
         return col_expr
+    if db_type == "kaveon":
+        if fmt in ("month", "quarter", "year", "week"):
+            return col_expr
+        if fmt in ("month-year", "quarter-year"):
+            return col_expr
+        return col_expr
     pg = db_type in ("postgresql", "mysql")
     if pg:
         # Postgres / MySQL: truncate via date_trunc; label formats via to_char.
@@ -100,6 +106,10 @@ def _apply_date_format(col_expr: str, date_format: Optional[str], db_type: str =
 def _apply_time_grain(col_expr: str, grain: str, db_type: str = "fabric_sql") -> str:
     """Truncate a datetime expression to the given time grain (dialect-aware)."""
     g = (grain or "").lower()
+    if db_type == "kaveon":
+        if g in ("", "none", "day", "week", "month", "quarter", "year"):
+            return col_expr
+        return col_expr
     if db_type == "postgresql":
         if g in ("", "none", "day"): return f"CAST({col_expr} AS DATE)"
         if g in ("week", "month", "quarter", "year"):
@@ -522,7 +532,7 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
         # are not implemented"). The client qualifies the source as
         # database_name.schema.table, so for these dialects drop the leading
         # database part, leaving a valid `schema.table`.
-        if db_type in ("postgresql", "mysql") and datasource:
+        if db_type in ("postgresql", "mysql", "kaveon") and datasource:
             _parts = datasource.split(".")
             if len(_parts) == 3:
                 datasource = ".".join(_parts[1:])
@@ -571,7 +581,7 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
             if not select_parts:
                 select_parts.append(f"{fact_alias}.*" if fact_alias else "*")
 
-            portable_limit = db_type in ("postgresql", "mysql")
+            portable_limit = db_type in ("postgresql", "mysql", "kaveon")
             row_cap = int(row_limit) if row_limit and int(row_limit) > 0 else 1000
             select_clause = f"SELECT {'' if portable_limit else f'TOP {row_cap} '}{', '.join(select_parts)}"
             from_clause = f"FROM {fact_source}"
@@ -627,7 +637,7 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
         if not select_parts:
             select_parts.append("*")
 
-        portable_limit = db_type in ("postgresql", "mysql")
+        portable_limit = db_type in ("postgresql", "mysql", "kaveon")
         row_cap = int(row_limit) if row_limit and int(row_limit) > 0 else None
         select_clause = f"SELECT {'' if portable_limit or not row_cap else f'TOP {row_cap} '}{', '.join(select_parts)}"
         from_clause = f"FROM {fact_source}"
@@ -638,7 +648,7 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
         # ── Time range filter ─────────────────────────────────────────────────
         if time_column and time_range and time_range != "all_time":
             raw_time_expr = _resolve_column_expression(time_column, fact_alias, alias_map, column_table_map, coalesce_map)
-            is_pg = db_type in ("postgresql", "mysql")
+            is_pg = db_type in ("postgresql", "mysql", "kaveon")
             today = "CURRENT_DATE" if is_pg else "CAST(GETUTCDATE() AS DATE)"
             tr = time_range.lower()
 
@@ -800,15 +810,26 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
             elif query_mode != "raw" and not _sb_in_groupby:
                 # Sort by a non-grouped measure → aggregate it so it's valid under GROUP BY.
                 s_alias, s_col = _resolve_column_alias(sb_col, fact_alias, alias_map, column_table_map)
-                sb_expr = f"SUM({_qualified_column(s_alias, s_col)})"
+                aggregate_sort = f"SUM({_qualified_column(s_alias, s_col)})"
+                if db_type == "kaveon":
+                    # Kaveon's distributed final projection can sort only a
+                    # retained output. Keep the ranking measure under a private
+                    # alias; chart renderers select their configured series.
+                    sb_expr = quote_alias("__sort")
+                    select_parts.append(f"{aggregate_sort} AS {sb_expr}")
+                    select_clause = f"SELECT {', '.join(select_parts)}"
+                else:
+                    sb_expr = aggregate_sort
             else:
                 sb_expr = _resolve_column_expression(sb_col, fact_alias, alias_map, column_table_map, coalesce_map)
             # NULLS LAST so a sorted+limited ranking (e.g. top-20 by Arena ELO)
             # isn't dominated by rows whose sort metric is NULL.
-            _nulls = " NULLS LAST" if db_type == "postgresql" else ""
+            _nulls = " NULLS LAST" if db_type in ("postgresql", "kaveon") else ""
             order_by_clause = f"ORDER BY {sb_expr} {sb_dir}{_nulls}"
         elif time_grain_expr:
-            order_by_clause = f"ORDER BY {time_grain_expr} ASC"
+            # Sort by the projected alias. Distributed Engine stages no longer
+            # retain the pre-projection source name after `expr AS date`.
+            order_by_clause = f"ORDER BY {quote_alias('date')} ASC"
         elif group_by_parts:
             order_by_clause = f"ORDER BY {group_by_parts[0]}"
         else:
@@ -892,7 +913,7 @@ def _distinct_kv_sql(limit: int, cols: str, from_clause: str, where_clause: str)
     """Build a SELECT DISTINCT with TOP (SQL Server) or LIMIT (PostgreSQL)."""
     db_type = getattr(_dialect, "db_type", "fabric_sql")
     qv = quote_identifier("value")
-    if db_type in ("postgresql", "mysql"):
+    if db_type in ("postgresql", "mysql", "kaveon"):
         return f"SELECT DISTINCT {cols} {from_clause} {where_clause} ORDER BY {qv} LIMIT {int(limit)}"
     return f"SELECT DISTINCT TOP {int(limit)} {cols} {from_clause} {where_clause} ORDER BY {qv}"
 
@@ -911,7 +932,7 @@ def _dim_direct_subquery(dim_entry: dict, col_name: str, limit: int) -> Optional
     qv = quote_identifier("value")
 
     db_type = getattr(_dialect, "db_type", "fabric_sql")
-    cast_type = "TEXT" if db_type in ("postgresql", "mysql") else "NVARCHAR(MAX)"
+    cast_type = "TEXT" if db_type in ("postgresql", "mysql", "kaveon") else "NVARCHAR(MAX)"
 
     if dk and (dk.endswith("ID") or dk.endswith("Id")):
         key_select = f"CAST({quote_identifier(dk)} AS {cast_type})"

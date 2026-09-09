@@ -146,7 +146,7 @@ data/**/*.json
 data/**/*.parquet
 # Curated, source-controlled dashboard template provenance (not extracted data).
 !data/dashboard-templates/
-!data/dashboard-templates/original-dashboard-templates.json
+!data/dashboard-templates/vercel-live-dashboard-contract.json
 
 # Local visual-regression renders and disposable browser profiles
 .tmp-*.png

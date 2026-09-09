@@ -4,10 +4,10 @@
  * saturating the backend connection pool and causing timeouts.
  */
 
-// Concurrent dashboard chart queries. Azure Postgres allows ~50 connections and
-// the API data-warehouse pool is 10, so 6 loads dashboards ~2x faster than the
-// old Fabric/Neon-era limit of 3 while staying well within the pool.
-const MAX_CONCURRENT = 6;
+// Concurrent dashboard chart queries against the selected source.
+// The default AKS resource group admits one dashboard statement at a time;
+// each statement already fans out across all three workers.
+const MAX_CONCURRENT = 1;
 let running = 0;
 const queue: Array<() => void> = [];
 

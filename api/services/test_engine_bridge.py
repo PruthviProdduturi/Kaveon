@@ -66,6 +66,13 @@ class EngineBridgeTests(unittest.TestCase):
             self.assertEqual(request.call_args.args[3], "alice")
             self.assertEqual(request.call_args.kwargs["role"], "analyst")
 
+    def test_successful_statement_is_enriched_with_its_query_record(self):
+        details = {"id": "query-1", "timings": {"planning_us": 12}, "stages": []}
+        with patch.object(bridge, "_request", side_effect=[{"id": "query-1", "data": []}, details]) as request:
+            result = bridge.execute("SELECT 1", "warehouse", "alice", "Analyst")
+        self.assertEqual(result["query_details"], details)
+        self.assertEqual(request.call_args_list[1].args[1], "/v1/query/query-1")
+
     def test_external_plaintext_transport_fails_closed(self):
         with patch.dict("os.environ", {"KAVEON_ENGINE_URL": "http://engine.example", "KAVEON_ENGINE_PRIVATE_HTTP": "false"}):
             with self.assertRaises(HTTPException):

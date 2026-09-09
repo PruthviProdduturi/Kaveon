@@ -145,6 +145,15 @@ def _engine_result_rows(result: dict) -> tuple[list[str], list[list]]:
     return columns, rows
 
 
+def _engine_history_fields(result: dict) -> dict:
+    """Extract only the Engine's authoritative identifier and query record."""
+    details = result.get("query_details")
+    return {
+        "engine_query_id": result.get("id"),
+        **({"engine_details": details} if isinstance(details, dict) else {}),
+    }
+
+
 def _execute_engine_read_only(sql_text: str, catalog: str, ctx: UserContext, schema: str | None = None) -> dict:
     """Run a read-only statement within one catalog selected by the server."""
     from routers.lab import _engine_query
@@ -193,13 +202,13 @@ def generate_sql(data: SqlGenerateBody, ctx=Depends(require_min_role("Analyst"))
     )
 
     # Resolve the target dialect so date grain/format SQL is generated correctly.
-    # Engine accepts PostgreSQL-style quoting and LIMIT.  This also prevents
-    # generated showcase SQL from using T-SQL TOP/bracket syntax.
+    # Engine has its own portable DataFusion dialect. It shares LIMIT/INTERVAL
+    # with PostgreSQL but does not accept PostgreSQL's ``expression::type`` cast.
     engine_catalog = _is_engine_catalog(dataset.get("database_name") or "")
     if engine_catalog and dataset.get("dimensions"):
         raise HTTPException(422, detail="Engine datasets do not support dimension joins")
-    db_type = "postgresql" if engine_catalog else "fabric_sql"
-    if db_type != "postgresql":
+    db_type = "kaveon" if engine_catalog else "fabric_sql"
+    if db_type != "kaveon":
         try:
             db_type = pool.get_connection_pool(dataset.get("database_name")).db_type
         except Exception:
@@ -282,8 +291,8 @@ def distinct_filter_values(
         raw_dims.sort(key=lambda d: 0 if (d.get("factKey") or "").lower() == hint_fk else 1)
 
     engine_source = _engine_source_for_catalog(dataset.get("database_name") or "")
-    db_type = "postgresql" if engine_source else "fabric_sql"
-    if db_type != "postgresql":
+    db_type = "kaveon" if engine_source else "fabric_sql"
+    if db_type != "kaveon":
         try:
             db_type = pool.get_connection_pool(dataset.get("database_name")).db_type
         except Exception:
@@ -321,6 +330,7 @@ def distinct_filter_values(
     try:
         if engine_source:
             result = _execute_engine_read_only(sql_text, engine_source["engine_catalog"], ctx, dataset.get("schema_name"))
+            engine_history = _engine_history_fields(result)
             columns, engine_rows = _engine_result_rows(result)
             result = {"columns": columns, "rows": engine_rows, "row_count": len(engine_rows)}
         else:
@@ -350,9 +360,11 @@ def distinct_filter_values(
             "sql_text": sql_text, "duration_ms": duration_ms,
             "row_count": len(result.get("rows") or []), "status": "success",
             "trigger_source": filter_trigger,
+            "database_name": dataset["database_name"],
             "tables_used": json.dumps(tables_used_list),
             "run_context": run_context, "dataset_id": int(dataset_id),
             "started_at": start_time,
+            **(engine_history if engine_source else {}),
         }, user_id)
     except Exception:
         pass
@@ -557,9 +569,41 @@ def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContex
     schema = dataset.get("schema_name") or None
     if not schema:
         raise HTTPException(status_code=400, detail="Engine dataset is missing schema_name")
-    result = _execute_engine_read_only(data.sql_text, source["engine_catalog"], ctx, schema)
+    started_at = int(time.time() * 1000)
+    try:
+        result = _execute_engine_read_only(data.sql_text, source["engine_catalog"], ctx, schema)
+    except HTTPException as error:
+        try:
+            history_svc.create_history({
+                "sql_text": data.sql_text,
+                "database_name": source["engine_catalog"],
+                "duration_ms": int(time.time() * 1000) - started_at,
+                "row_count": 0,
+                "status": "error",
+                "error_message": str(error.detail),
+                "trigger_source": canonical_source(data.source or "studio"),
+                "dataset_id": str(data.dataset_id),
+                "tables_used": data.tables_used or json.dumps(extract_tables_from_sql(data.sql_text)),
+            }, ctx.email)
+        except Exception:
+            pass
+        raise
     columns, rows = _engine_result_rows(result)
     if data.row_limit:
         rows = rows[:data.row_limit]
+    try:
+        history_svc.create_history({
+            "sql_text": data.sql_text,
+            "database_name": source["engine_catalog"],
+            "duration_ms": result.get("elapsed_ms", 0),
+            "row_count": len(rows),
+            "status": "success",
+            "trigger_source": canonical_source(data.source or "studio"),
+            "dataset_id": str(data.dataset_id),
+            "tables_used": data.tables_used or json.dumps(extract_tables_from_sql(data.sql_text)),
+            **_engine_history_fields(result),
+        }, ctx.email)
+    except Exception:
+        pass
     return {"columns": columns, "rows": rows,
             "query_id": result.get("id"), "duration_ms": result.get("elapsed_ms", 0)}

@@ -1,250 +1,86 @@
 {
-  "verified_at": "2026-09-09T04:41:33.179145+00:00",
+  "verified_at": "2026-09-09T22:37:52.1824198Z",
   "environment": "kaveon-test-aks / kaveon",
   "catalog": "OpenSource",
-  "dashboard_count": 4,
-  "chart_count": 12,
-  "source_queries": [
-    {
-      "key": "daily_trips",
-      "rows": 31,
-      "columns": [
-        "pickup_date",
-        "trips"
-      ]
-    },
-    {
-      "key": "daily_gross_amount",
-      "rows": 31,
-      "columns": [
-        "pickup_date",
-        "gross_amount_cents"
-      ]
-    },
-    {
-      "key": "service_mix",
-      "rows": 2,
-      "columns": [
-        "service_type",
-        "trips"
-      ]
-    },
-    {
-      "key": "reported_cases_2020",
-      "rows": 363,
-      "columns": [
-        "report_date",
-        "reported_cases"
-      ]
-    },
-    {
-      "key": "cases_by_region",
-      "rows": 7,
-      "columns": [
-        "who_region",
-        "reported_cases"
-      ]
-    },
-    {
-      "key": "highest_cumulative_cases",
-      "rows": 15,
-      "columns": [
-        "country",
-        "reported_cumulative_cases"
-      ]
-    },
-    {
-      "key": "annual_gistemp_anomaly",
-      "rows": 147,
-      "columns": [
-        "year",
-        "annual_anomaly_deg_c"
-      ]
-    },
-    {
-      "key": "global_low_carbon_share",
-      "rows": 41,
-      "columns": [
-        "year",
-        "low_carbon_share_elec"
-      ]
-    },
-    {
-      "key": "low_carbon_share_2023",
-      "rows": 15,
-      "columns": [
-        "country",
-        "low_carbon_share_elec"
-      ]
-    },
-    {
-      "key": "average_by_architecture",
-      "rows": 15,
-      "columns": [
-        "architecture",
-        "average_score"
-      ]
-    },
-    {
-      "key": "average_by_precision",
-      "rows": 3,
-      "columns": [
-        "precision",
-        "average_score"
-      ]
-    },
-    {
-      "key": "top_archived_entries",
-      "rows": 20,
-      "columns": [
-        "fullname",
-        "average_score"
-      ]
-    }
-  ],
-  "browser_checks": [
-    {
-      "dashboard": "NYC taxi \u2014 January 2025",
-      "id": "d39fb6d4-7261-49c8-a86d-f9d7649d4881",
-      "queries": [
-        {
-          "columns": [
-            "pickup_date",
-            "trips"
-          ],
-          "rows": 31,
-          "query_id": "0a7c5d1f-16f4-4e8f-85d9-d038abed3b93"
-        },
-        {
-          "columns": [
-            "pickup_date",
-            "gross_amount_cents"
-          ],
-          "rows": 31,
-          "query_id": "01909da6-2191-4458-9c8f-7a8b86be6384"
-        },
-        {
-          "columns": [
-            "service_type",
-            "trips"
-          ],
-          "rows": 2,
-          "query_id": "699e4224-ceaa-4e2e-a014-4db79c197419"
-        }
-      ]
-    },
-    {
-      "dashboard": "COVID-19 \u2014 reported values",
-      "id": "c4359743-d960-4f02-aa71-b00723eea63a",
-      "queries": [
-        {
-          "columns": [
-            "report_date",
-            "reported_cases"
-          ],
-          "rows": 363,
-          "query_id": "282749b8-edb9-4611-a361-29fcf6f75b25"
-        },
-        {
-          "columns": [
-            "who_region",
-            "reported_cases"
-          ],
-          "rows": 7,
-          "query_id": "6a9d85da-7651-4ad3-876d-7fd3269d494d"
-        },
-        {
-          "columns": [
-            "country",
-            "reported_cumulative_cases"
-          ],
-          "rows": 15,
-          "query_id": "d9b8459a-5db6-427a-b7c3-ee31cd7ca062"
-        }
-      ]
-    },
-    {
-      "dashboard": "Climate and energy",
-      "id": "c8104bf2-60dd-4eab-87b3-cdc44e7a85ea",
-      "queries": [
-        {
-          "columns": [
-            "year",
-            "annual_anomaly_deg_c"
-          ],
-          "rows": 147,
-          "query_id": "6319c01f-a91d-4213-beed-d4952034e729"
-        },
-        {
-          "columns": [
-            "year",
-            "low_carbon_share_elec"
-          ],
-          "rows": 41,
-          "query_id": "82d34f4e-0ecb-4ac4-9b82-a45fd1a3975f"
-        },
-        {
-          "columns": [
-            "country",
-            "low_carbon_share_elec"
-          ],
-          "rows": 15,
-          "query_id": "6e56dba1-7423-4437-a954-78b70e245869"
-        }
-      ]
-    },
-    {
-      "dashboard": "Archived Open LLM leaderboard",
-      "id": "2be5683f-0e11-4664-9625-24993fb75bee",
-      "queries": [
-        {
-          "columns": [
-            "fullname",
-            "average_score"
-          ],
-          "rows": 20,
-          "query_id": "b843d39a-8a55-4808-932c-7b1f857b23f1"
-        },
-        {
-          "columns": [
-            "precision",
-            "average_score"
-          ],
-          "rows": 3,
-          "query_id": "1dd164c9-b668-480b-a072-7b507fbe3550"
-        },
-        {
-          "columns": [
-            "architecture",
-            "average_score"
-          ],
-          "rows": 15,
-          "query_id": "c1e06c6f-7999-4b6e-b8f0-fd4ce49163e5"
-        }
-      ]
-    }
-  ],
+  "inventory": {
+    "dashboards": 8,
+    "charts": 70,
+    "datasets": 9
+  },
   "checks": {
-    "source_and_generated_values_match": true,
-    "idempotent_seed_preserves_ids": true,
-    "render_and_refresh_all_dashboards": true,
-    "no_ineffective_auto_filters": true,
-    "focused_api_tests": 25,
+    "exact_contract": true,
+    "all_chart_queries_executed": true,
+    "all_dashboards_rendered": true,
+    "all_engine_tables_available": true,
+    "published": true,
+    "orphan_cleanup_complete": true,
+    "api_tests": 68,
+    "engine_tests": 99,
+    "importer_and_data_tests": 13,
     "studio_typecheck": true,
-    "all_dashboard_previews_present": true
+    "docs_validation": true
+  },
+  "dashboards": [
+    {
+      "name": "COVID-19 Global Overview",
+      "id": "9afe5cb7-b044-486c-8c15-284fc631bf1b",
+      "charts": 6,
+      "rendered": 6
+    },
+    {
+      "name": "Kaveon Platform & Growth",
+      "id": "6044ad74-63db-4149-a8f6-0f35c9903975",
+      "charts": 10,
+      "rendered": 10
+    },
+    {
+      "name": "Kaveon Events",
+      "id": "e45d337a-df7b-410d-9bfd-6d49229e97b6",
+      "charts": 12,
+      "rendered": 12
+    },
+    {
+      "name": "Kaveon Worldwide Usage",
+      "id": "91e8ab26-8cf5-49bc-a4f8-3f9193c9b885",
+      "charts": 11,
+      "rendered": 11
+    },
+    {
+      "name": "AI Model Arena",
+      "id": "f1a595c3-35d1-46a4-ac07-ccbc4a412aa1",
+      "charts": 10,
+      "rendered": 10
+    },
+    {
+      "name": "NYC Yellow Taxi",
+      "id": "4b204bf5-e4b7-4880-8f8b-ada773bfd9f3",
+      "charts": 6,
+      "rendered": 6
+    },
+    {
+      "name": "Global Energy",
+      "id": "8aaebc2b-9a5a-481d-868b-60743c09b916",
+      "charts": 8,
+      "rendered": 8
+    },
+    {
+      "name": "Global Climate",
+      "id": "c1639d80-91ec-4775-8eb5-96427c8e0ca5",
+      "charts": 7,
+      "rendered": 7
+    }
+  ],
+  "query_evidence": {
+    "count": 70,
+    "first_query_id": "7b61a748-44ec-4097-b8c5-b5733e7d92f0",
+    "last_query_id": "948ef76c-cc25-42fd-9ed5-3f50c5ab6d90"
   },
   "images": {
-    "api": "kvtestegmf6oweugsno.azurecr.io/kaveon-api@sha256:ada78ed20559bf6a4ad733b7c50e1876df29d6787801c3028a453f6d8eaae2b4",
-    "studio": "kvtestegmf6oweugsno.azurecr.io/kaveon-studio@sha256:68b9b73ec86d0d87ff027146dc0ae2bc7987a3a6978bc78eb3ec8de0573a4285",
-    "postgres": {
-      "repository": "kvtestegmf6oweugsno.azurecr.io/postgres",
-      "digest": "sha256:d13db94ae661d517c5ed57c509a578d5ea64aae639871ba25294f4f42d83de28"
-    }
+    "kaveon-portal": "kvtestegmf6oweugsno.azurecr.io/kaveon-studio@sha256:eaa3bbaedba285ac6bece340407c0813f331d5914304ce3894dfe085d640408e",
+    "kaveon-api": "kvtestegmf6oweugsno.azurecr.io/kaveon-api@sha256:16f27b70251393c48150daaaa6d22384933528df61763240e2d4d599d334388e",
+    "kaveon-postgres": "kvtestegmf6oweugsno.azurecr.io/postgres@sha256:d13db94ae661d517c5ed57c509a578d5ea64aae639871ba25294f4f42d83de28",
+    "kaveon-worker": "kvtestegmf6oweugsno.azurecr.io/kaveon-engine@sha256:7a43b70fb8dba65d34b74e36f5793ef53e4a134d0a8068342dca011975da5668",
+    "kaveon-coordinator": "kvtestegmf6oweugsno.azurecr.io/kaveon-engine@sha256:7a43b70fb8dba65d34b74e36f5793ef53e4a134d0a8068342dca011975da5668"
   },
-  "boundaries": [
-    "Product metadata remains PostgreSQL; ADLS native transactional migration is pending.",
-    "Engine chart execution requires Analyst, Editor, or Admin.",
-    "Snapshot showcase charts have independent scopes and no dashboard cross-filters.",
-    "General Engine derived-table alias and aggregate ORDER BY compatibility remain pending."
-  ]
+  "data_boundary": "Eight relations are exact exports or deterministic rebuilds. public.kaveon_events_dashboard is a deterministic synthetic showcase projection and is not legacy event-row parity."
 }

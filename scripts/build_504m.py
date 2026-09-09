@@ -6,14 +6,15 @@ Expected: ~78 min on a fast machine, UNLOGGED table on B1ms.
 import psycopg2
 import numpy as np
 import io
+import os
 import time
 import sys
 
 DSN = dict(
-    host="kaveon-db.postgres.database.azure.com",
-    dbname="kaveon",
-    user="kaveon_admin",
-    password="Kv#bv1r0v_TB=i9NV1YJvMHf7qVW1=nm",
+    host=os.environ.get("KAVEON_POSTGRES_HOST", "kaveon-db.postgres.database.azure.com"),
+    dbname=os.environ.get("KAVEON_POSTGRES_DATABASE", "kaveon"),
+    user=os.environ.get("KAVEON_POSTGRES_USER", "kaveon_admin"),
+    password=os.environ.get("KAVEON_POSTGRES_PASSWORD"),
     sslmode="require",
     options="-c statement_timeout=0",
 )
@@ -60,6 +61,8 @@ def gen_batch(day_off, sc, ranges):
     return buf
 
 def main():
+    if not DSN["password"]:
+        raise SystemExit("KAVEON_POSTGRES_PASSWORD is required")
     conn = psycopg2.connect(**DSN)
     conn.autocommit = True
     cur = conn.cursor()

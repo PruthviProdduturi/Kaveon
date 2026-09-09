@@ -106,7 +106,42 @@ class EngineChartSqlTests(unittest.TestCase):
         self.assertEqual(params["datasource"], "")
         self.assertEqual(params["sql_text"], dataset["sql_text"])
         self.assertEqual(params["database_name"], "OpenSource")
-        self.assertEqual(params["db_type"], "postgresql")
+        self.assertEqual(params["db_type"], "kaveon")
+
+    def test_kaveon_time_grains_use_prebucketed_engine_column(self):
+        for grain in ("week", "month", "quarter", "year"):
+            generated = build_chart_preview_query({
+                "datasource": "climate.temperature", "db_type": "kaveon", "engine_source": True,
+                "time_column": "observed_at", "time_grain": grain,
+                "metrics": [{"column": "value", "aggregate": "AVG", "label": "Average"}],
+            })
+            self.assertIn("observed_at AS date", generated)
+            self.assertNotIn("::date", generated)
+
+    def test_kaveon_date_display_formats_have_no_postgres_cast_operator(self):
+        month = build_chart_preview_query({
+            "datasource": "climate.temperature", "db_type": "kaveon", "engine_source": True,
+            "time_column": "observed_at", "date_display_format": "month",
+            "metrics": [{"column": "value", "aggregate": "SUM"}],
+        })
+        quarter_year = build_chart_preview_query({
+            "datasource": "climate.temperature", "db_type": "kaveon", "engine_source": True,
+            "time_column": "observed_at", "date_display_format": "quarter-year",
+            "metrics": [{"column": "value", "aggregate": "SUM"}],
+        })
+        self.assertIn("observed_at AS date", month)
+        self.assertIn("observed_at AS date", quarter_year)
+        self.assertNotIn("::", quarter_year)
+
+    def test_kaveon_relative_date_ranges_remain_datafusion_compatible(self):
+        generated = build_chart_preview_query({
+            "datasource": "climate.temperature", "db_type": "kaveon", "engine_source": True,
+            "time_column": "observed_at", "time_grain": "month", "time_range": "previous_month",
+            "metrics": [{"column": "value", "aggregate": "SUM"}],
+        })
+        self.assertIn("DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'", generated)
+        self.assertNotIn("GETUTCDATE", generated)
+        self.assertNotIn("::", generated)
 
     def test_virtual_engine_dataset_uses_portable_quotes_not_tsql_top(self):
         generated = build_chart_preview_query({

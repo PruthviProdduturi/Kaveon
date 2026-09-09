@@ -45,6 +45,7 @@ with sync_playwright() as p:
     page.route('https://engine.test/**', route)
     page.goto('https://engine.test/ui')
     page.locator('#microsoft-sign-in').wait_for(state='visible')
+    assert page.locator('#advanced-auth').is_hidden()
     assert not page.locator('#advanced-auth').evaluate('(e)=>e.open')
     page.locator('#microsoft-sign-in').click()
     page.wait_for_function("document.getElementById('g-workers').textContent==='3'")
@@ -108,7 +109,7 @@ with sync_playwright() as p:
     page.evaluate('testAuth.expired=true;refresh()')
     page.wait_for_function("document.getElementById('auth-status').textContent.includes('needs sign-in')")
     assert page.locator('#g-workers').inner_text() == '0'
-    page.locator('#advanced-auth').evaluate('(e)=>e.open=true')
+    page.locator('#advanced-auth').evaluate('(e)=>{e.hidden=false;e.open=true}')
     page.locator('#auth-token').fill('wrong-token')
     page.locator('#auth-form button[type=submit]').click()
     page.wait_for_function("document.getElementById('auth-status').textContent.includes('Access denied')")

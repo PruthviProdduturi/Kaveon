@@ -24,8 +24,8 @@ interface SavedQueryRow {
 }
 
 interface QueryHistoryRow {
-  id: number;
-  query_id?: number | null;
+  id: string | number;
+  query_id?: string | number | null;
   dataset_id?: number | null;
   tables_used?: string | null;
   status: string;
@@ -34,9 +34,36 @@ interface QueryHistoryRow {
   started_at: string;
   finished_at?: string | null;
   sql_text: string;
-  executed_by: string;
+  executed_by?: string;
+  user_email?: string | null;
   run_context?: string | null;
   trigger_source?: string | null;
+  database_name?: string | null;
+  executed_at?: string | null;
+  execution_time?: number | null;
+  error_message?: string | null;
+  engine_query_id?: string | null;
+  trace_id?: string | null;
+  worker_count?: number | null;
+  split_count?: number | null;
+  completed_splits?: number | null;
+  stage_count?: number | null;
+  processed_bytes?: number | null;
+  engine_details?: {
+    rows_are_preview?: boolean;
+    scan_metrics_complete?: boolean;
+    timings?: Record<string, number | null>;
+    scans?: Array<Record<string, number>>;
+    stages?: Array<{
+      stage_id?: number;
+      state?: string;
+      task_count?: number;
+      completed_tasks?: number;
+      elapsed_us?: number;
+      tasks?: Array<{ node_id?: string }>;
+    }>;
+    context?: Record<string, unknown>;
+  } | null;
 }
 
 interface QueryPreviewState {
@@ -61,6 +88,20 @@ type HistorySortKey =
   | "sql_text"
   | "executed_by";
 
+type HistoryStatusFilter = "all" | "success" | "error" | "running";
+
+function historyStartedAt(row: QueryHistoryRow): string {
+  return row.started_at || row.executed_at || "";
+}
+
+function historyDuration(row: QueryHistoryRow): number | null {
+  return row.duration_ms ?? row.execution_time ?? null;
+}
+
+function historyUser(row: QueryHistoryRow): string {
+  return row.executed_by || row.user_email || "Unknown user";
+}
+
 function formatDate(value?: string | null): string {
   if (!value) return "";
   // Return raw SQL date without formatting
@@ -68,10 +109,47 @@ function formatDate(value?: string | null): string {
 }
 
 function formatDurationMs(ms?: number | null): string {
-  if (ms == null) return "";
+  if (ms == null) return "Unavailable";
   if (ms < 1000) return `${ms} ms`;
   const seconds = ms / 1000;
   return `${seconds.toFixed(2)} s`;
+}
+
+function formatCount(value?: number | null): string {
+  return value == null ? "Unavailable" : new Intl.NumberFormat().format(value);
+}
+
+function formatBytes(value?: number | null): string {
+  if (value == null) return "Unavailable";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let amount = value;
+  let index = 0;
+  while (amount >= 1024 && index < units.length - 1) {
+    amount /= 1024;
+    index += 1;
+  }
+  return `${amount.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+function engineSummary(row: QueryHistoryRow) {
+  const details = row.engine_details;
+  const stages = details?.stages || [];
+  const scans = details?.scans || [];
+  const workers = new Set(
+    stages.flatMap((stage) => stage.tasks || []).map((task) => task.node_id).filter(Boolean),
+  );
+  const taskCount = stages.reduce((total, stage) => total + (stage.task_count || 0), 0);
+  const completedTasks = stages.reduce((total, stage) => total + (stage.completed_tasks || 0), 0);
+  const processedBytes = scans.length
+    ? scans.reduce((total, scan) => total + (scan.compressed_bytes_selected || 0), 0)
+    : row.processed_bytes ?? null;
+  return {
+    workers: workers.size || row.worker_count || null,
+    stages: stages.length || row.stage_count || null,
+    taskCount: stages.length ? taskCount : null,
+    completedTasks: stages.length ? completedTasks : null,
+    processedBytes,
+  };
 }
 
 function formatTablesUsed(raw?: string | null): string {
@@ -205,6 +283,17 @@ const LabQueriesPage: React.FC = () => {
   const [historySortDirection, setHistorySortDirection] = useState<SortDirection>("desc");
   const [historyPageSize, setHistoryPageSize] = useState<number>(50);
   const [historyPage, setHistoryPage] = useState<number>(1);
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyStatus, setHistoryStatus] = useState<HistoryStatusFilter>("all");
+
+  useEffect(() => {
+    if (!preview) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPreview(null);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [preview]);
 
   // Respect an optional `view` query parameter so links like
   // /lab/queries?view=history can open directly to the history tab.
@@ -497,15 +586,31 @@ const LabQueriesPage: React.FC = () => {
   };
 
   const getSortedHistory = () => {
-    const items = [...history];
+    const needle = historySearch.trim().toLowerCase();
+    const items = history.filter((row) => {
+      const normalizedStatus = (row.status || "").toLowerCase();
+      if (historyStatus !== "all" && normalizedStatus !== historyStatus) return false;
+      if (!needle) return true;
+      return [
+        row.id,
+        row.engine_query_id,
+        row.trace_id,
+        row.sql_text,
+        historyUser(row),
+        getHistorySourceLabel(row),
+        row.database_name,
+        formatTablesUsed(row.tables_used),
+        row.error_message,
+      ].some((value) => String(value || "").toLowerCase().includes(needle));
+    });
     if (!historySortBy) return items;
 
     items.sort((a, b) => {
       switch (historySortBy) {
         case "started_at":
-          return compareDates(a.started_at, b.started_at, historySortDirection);
+          return compareDates(historyStartedAt(a), historyStartedAt(b), historySortDirection);
         case "duration_ms":
-          return compareNumbers(a.duration_ms, b.duration_ms, historySortDirection);
+          return compareNumbers(historyDuration(a), historyDuration(b), historySortDirection);
         case "row_count":
           return compareNumbers(a.row_count, b.row_count, historySortDirection);
         case "tables_used":
@@ -523,7 +628,7 @@ const LabQueriesPage: React.FC = () => {
         case "sql_text":
           return compareStrings(a.sql_text, b.sql_text, historySortDirection);
         case "executed_by":
-          return compareStrings(a.executed_by, b.executed_by, historySortDirection);
+          return compareStrings(historyUser(a), historyUser(b), historySortDirection);
         case "status":
         default:
           return compareStrings(a.status, b.status, historySortDirection);
@@ -790,6 +895,40 @@ const LabQueriesPage: React.FC = () => {
 
           {activeTab === "history" && (
             <div className="results-table-container">
+              <div className="query-history-toolbar" aria-label="Query history filters">
+                <label className="query-history-search">
+                  <i className="fas fa-search" aria-hidden="true" />
+                  <span className="sr-only">Search query history</span>
+                  <input
+                    type="search"
+                    value={historySearch}
+                    placeholder="Search SQL, user, source, table, activity ID, or error"
+                    onChange={(event) => {
+                      setHistorySearch(event.target.value);
+                      setHistoryPage(1);
+                    }}
+                  />
+                </label>
+                <div className="query-status-filters" role="group" aria-label="Filter by query status">
+                  {(["all", "success", "error", "running"] as HistoryStatusFilter[]).map((status) => (
+                    <button
+                      type="button"
+                      key={status}
+                      className={historyStatus === status ? "active" : ""}
+                      aria-pressed={historyStatus === status}
+                      onClick={() => {
+                        setHistoryStatus(status);
+                        setHistoryPage(1);
+                      }}
+                    >
+                      {status === "all" ? "All states" : status}
+                    </button>
+                  ))}
+                </div>
+                <button type="button" className="query-refresh-btn" onClick={loadQueryHistory} disabled={isLoadingHistory}>
+                  <i className="fas fa-rotate" aria-hidden="true" /> Refresh
+                </button>
+              </div>
               {isLoadingHistory && <LoadingOverlay />}
               {!isLoadingHistory && errorHistory && (
                 typeof sessionStorage !== "undefined" && sessionStorage.getItem("lens_setup_ok") !== "1"
@@ -799,7 +938,10 @@ const LabQueriesPage: React.FC = () => {
               {!isLoadingHistory && !errorHistory && history.length === 0 && (
                 <p className="muted">No query history available yet.</p>
               )}
-              {!isLoadingHistory && !errorHistory && history.length > 0 && (
+              {!isLoadingHistory && !errorHistory && history.length > 0 && sortedHistory.length === 0 && (
+                <div className="query-history-empty">No queries match these filters.</div>
+              )}
+              {!isLoadingHistory && !errorHistory && sortedHistory.length > 0 && (
                 <>
                   <table className="results-table">
                     <thead>
@@ -867,11 +1009,22 @@ const LabQueriesPage: React.FC = () => {
                     </thead>
                     <tbody>
                       {pagedHistory.map((h) => (
-                        <tr key={h.id}>
+                        <tr
+                          key={h.id}
+                          className="query-history-row"
+                          tabIndex={0}
+                          onClick={() => handleOpenHistoryPreview(h)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              handleOpenHistoryPreview(h);
+                            }
+                          }}
+                        >
                           <td>{renderStatus(h.status)}</td>
-                          <td>{formatDate(h.started_at)}</td>
-                          <td>{formatDurationMs(h.duration_ms)}</td>
-                          <td className="numeric-cell">{h.row_count ?? ""}</td>
+                          <td>{formatDate(historyStartedAt(h))}</td>
+                          <td>{formatDurationMs(historyDuration(h))}</td>
+                          <td className="numeric-cell">{formatCount(h.row_count)}</td>
                           <td
                             title={formatTablesUsed(h.tables_used)}
                             style={{
@@ -893,12 +1046,12 @@ const LabQueriesPage: React.FC = () => {
                                 overflow: "hidden",
                                 textOverflow: "ellipsis",
                               }}
-                              onClick={() => handleOpenHistoryPreview(h)}
+                              onClick={(event) => { event.stopPropagation(); handleOpenHistoryPreview(h); }}
                             >
                               {getSqlSnippet(h.sql_text)}
                             </pre>
                           </td>
-                          <td>{h.executed_by}</td>
+                          <td>{historyUser(h)}</td>
                           <td className="actions-cell">
                             <div className="row-actions">
                               <button
@@ -906,7 +1059,7 @@ const LabQueriesPage: React.FC = () => {
                                 className="action-icon-btn"
                                 title="Open in SQL Lab"
                                 aria-label="Open query in SQL Lab"
-                                onClick={() => handleOpenHistoryInEditor(h)}
+                                onClick={(event) => { event.stopPropagation(); handleOpenHistoryInEditor(h); }}
                               >
                                 <i className="fas fa-external-link-alt" aria-hidden="true" />
                               </button>
@@ -976,10 +1129,24 @@ const LabQueriesPage: React.FC = () => {
             </div>
           )}
           {preview && (
-            <div className="query-preview-overlay" role="dialog" aria-modal="true">
-              <div className="query-preview-modal">
+            <div className="query-preview-overlay" onMouseDown={(event) => {
+              if (event.target === event.currentTarget) handleClosePreview();
+            }}>
+              <div
+                className={`query-preview-modal ${preview.kind === "history" ? "query-details-modal" : ""}`}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="query-preview-title"
+              >
                 <div className="query-preview-header">
-                  <h2 className="query-preview-title">{preview.title || "Query preview"}</h2>
+                  <div>
+                    <div className="query-preview-eyebrow">{preview.kind === "history" ? "Query details" : "Saved query"}</div>
+                    <h2 className="query-preview-title" id="query-preview-title">
+                      {preview.kind === "history" && preview.historyRow
+                        ? preview.historyRow.engine_query_id || `Activity ${preview.historyRow.id}`
+                        : preview.title || "Query preview"}
+                    </h2>
+                  </div>
                   <button
                     type="button"
                     className="query-preview-close"
@@ -990,6 +1157,86 @@ const LabQueriesPage: React.FC = () => {
                   </button>
                 </div>
                 <div className="query-preview-body">
+                  {preview.kind === "history" && preview.historyRow && (() => {
+                    const row = preview.historyRow;
+                    const tables = formatTablesUsed(row.tables_used);
+                    const engine = engineSummary(row);
+                    const splitProgress = row.split_count == null
+                      ? "Unavailable"
+                      : `${formatCount(row.completed_splits ?? 0)} / ${formatCount(row.split_count)}`;
+                    return (
+                      <div className="query-details-content">
+                        <div className="query-details-hero">
+                          <div>
+                            {renderStatus(row.status)}
+                            <div className="query-details-time">Started {formatDate(historyStartedAt(row)) || "Unavailable"}</div>
+                          </div>
+                          <div className="query-detail-identity">
+                            <span>Executed by</span>
+                            <strong>{historyUser(row)}</strong>
+                          </div>
+                          <div className="query-detail-identity">
+                            <span>Entry point</span>
+                            <strong>{getHistorySourceLabel(row)}</strong>
+                          </div>
+                        </div>
+
+                        <section className="query-metric-grid" aria-label="Query metrics">
+                          <div><span>Elapsed</span><strong>{formatDurationMs(historyDuration(row))}</strong></div>
+                          <div><span>Returned rows</span><strong>{formatCount(row.row_count)}</strong></div>
+                          <div><span>Compressed read</span><strong>{formatBytes(engine.processedBytes)}</strong></div>
+                          <div><span>Workers</span><strong>{formatCount(engine.workers)}</strong></div>
+                          <div><span>Splits complete</span><strong>{splitProgress}</strong></div>
+                          <div><span>Stages</span><strong>{formatCount(engine.stages)}</strong></div>
+                        </section>
+
+                        {row.engine_details && (
+                          <section className="query-details-section">
+                            <h3>Engine execution</h3>
+                            <dl className="query-details-list">
+                              <div><dt>Tasks complete</dt><dd>{engine.taskCount == null ? "Unavailable" : `${formatCount(engine.completedTasks)} / ${formatCount(engine.taskCount)}`}</dd></div>
+                              {Object.entries(row.engine_details.timings || {}).map(([name, microseconds]) => (
+                                <div key={name}><dt>{name.replace(/_us$/, "").replaceAll("_", " ")}</dt><dd>{microseconds == null ? "Unavailable" : formatDurationMs(microseconds / 1000)}</dd></div>
+                              ))}
+                              <div><dt>Scan telemetry</dt><dd>{row.engine_details.scan_metrics_complete === true ? "Complete" : row.engine_details.scan_metrics_complete === false ? "Partial" : "Unavailable"}</dd></div>
+                              <div><dt>Result rows</dt><dd>{row.engine_details.rows_are_preview === true ? "Preview retained" : row.engine_details.rows_are_preview === false ? "Complete" : "Unavailable"}</dd></div>
+                            </dl>
+                          </section>
+                        )}
+
+                        <section className="query-details-section">
+                          <h3>Execution context</h3>
+                          <dl className="query-details-list">
+                            <div><dt>Activity ID</dt><dd className="query-mono">{String(row.id)}</dd></div>
+                            <div><dt>Engine query ID</dt><dd className="query-mono">{row.engine_query_id || "Unavailable"}</dd></div>
+                            <div><dt>Trace ID</dt><dd className="query-mono">{row.trace_id || "Unavailable"}</dd></div>
+                            <div><dt>Database / catalog</dt><dd>{row.database_name || "Unavailable"}</dd></div>
+                            <div><dt>Tables</dt><dd>{tables || "Unavailable"}</dd></div>
+                            <div><dt>Saved query</dt><dd>{row.query_id == null ? "Not linked" : String(row.query_id)}</dd></div>
+                            {row.engine_details?.context && Object.entries(row.engine_details.context)
+                              .filter(([name, value]) => ["engine_version", "environment", "client", "catalog", "schema", "time_zone", "client_tags"].includes(name) && value != null)
+                              .map(([name, value]) => (
+                                <div key={name}>
+                                  <dt>{name.replaceAll("_", " ")}</dt>
+                                  <dd>{Array.isArray(value) ? value.join(", ") || "None" : String(value)}</dd>
+                                </div>
+                              ))}
+                          </dl>
+                        </section>
+
+                        {row.error_message && (
+                          <section className="query-error-panel" role="alert">
+                            <h3><i className="fas fa-circle-exclamation" aria-hidden="true" /> Error</h3>
+                            <pre>{row.error_message}</pre>
+                          </section>
+                        )}
+                      </div>
+                    );
+                  })()}
+                  <div className="query-sql-heading">
+                    <h3>SQL</h3>
+                    <span>Exact submitted statement</span>
+                  </div>
                   <pre className="query-preview-sql">{formatSqlSafe(preview.sql)}</pre>
                 </div>
                 <div className="query-preview-footer">

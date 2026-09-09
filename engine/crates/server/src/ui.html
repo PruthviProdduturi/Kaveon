@@ -254,7 +254,7 @@ td.nl{color:var(--text-muted);font-style:italic}
   <button class="refresh" type="button" id="disconnect">Disconnect</button>
   <span id="auth-status" role="status" aria-live="polite">Loading sign-in options…</span>
   <span id="auth-identity" class="auth-identity" aria-live="polite"></span>
-  <details id="advanced-auth">
+  <details id="advanced-auth" hidden>
   <summary>Advanced: engine access token</summary>
 <form id="auth-form">
   <label for="auth-token">Engine access token</label>
@@ -704,6 +704,7 @@ async function initializeSignIn(){
     if(!response.ok)throw new Error('Sign-in configuration unavailable');
     const config=await response.json();
     if(!config.entra){
+      document.getElementById('advanced-auth').hidden=false;
       document.getElementById('advanced-auth').open=true;
       document.getElementById('auth-status').textContent='Enter your engine token to connect.';
       return;

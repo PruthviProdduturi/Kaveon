@@ -1,0 +1,4337 @@
+{
+  "chart_count": 70,
+  "charts": [
+    {
+      "chart_type": "big_number",
+      "config": {
+        "chartTypeOptions": {
+          "numberFormat": "bn",
+          "subtitle": "PEOPLE"
+        },
+        "dataset_id": 139,
+        "datasource": "kaveon.public.covid_global",
+        "metrics": [
+          {
+            "aggregate": "MAX",
+            "column": "population",
+            "label": "People"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-14T21:53:36.789121",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "139",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "529",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Total Population",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 139,
+        "datasource": "kaveon.public.covid_global",
+        "metrics": [
+          {
+            "aggregate": "MAX",
+            "column": "population",
+            "label": "People"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-14T21:53:36.789121",
+      "visibility": "internal",
+      "viz_config": {
+        "chartTypeOptions": {
+          "numberFormat": "bn",
+          "subtitle": "PEOPLE"
+        }
+      }
+    },
+    {
+      "chart_type": "big_number_trend",
+      "config": {
+        "chartTypeOptions": {
+          "numberFormat": "m",
+          "subtitle": "▲ 0.2% vs prior period"
+        },
+        "dataset_id": 139,
+        "datasource": "kaveon.public.covid_global",
+        "metrics": [
+          {
+            "aggregate": "MAX",
+            "column": "total_cases",
+            "label": "Cases"
+          }
+        ],
+        "query_mode": "aggregate",
+        "time_column": "dt",
+        "time_grain": "month",
+        "time_range": "all"
+      },
+      "created_at": "2026-08-14T21:53:36.829359",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "139",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "530",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Total Confirmed Cases",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 139,
+        "datasource": "kaveon.public.covid_global",
+        "metrics": [
+          {
+            "aggregate": "MAX",
+            "column": "total_cases",
+            "label": "Cases"
+          }
+        ],
+        "query_mode": "aggregate",
+        "time_column": "dt",
+        "time_grain": "month",
+        "time_range": "all"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-14T21:53:36.829359",
+      "visibility": "internal",
+      "viz_config": {
+        "chartTypeOptions": {
+          "numberFormat": "m",
+          "subtitle": "▲ 0.2% vs prior period"
+        }
+      }
+    },
+    {
+      "chart_type": "big_number_trend",
+      "config": {
+        "chartTypeOptions": {
+          "numberFormat": "m",
+          "subtitle": "▲ 0.1% vs prior period"
+        },
+        "dataset_id": 139,
+        "datasource": "kaveon.public.covid_global",
+        "metrics": [
+          {
+            "aggregate": "MAX",
+            "column": "total_deaths",
+            "label": "Deaths"
+          }
+        ],
+        "query_mode": "aggregate",
+        "time_column": "dt",
+        "time_grain": "month",
+        "time_range": "all"
+      },
+      "created_at": "2026-08-14T21:53:36.8672",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "139",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "531",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Total Deaths",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 139,
+        "datasource": "kaveon.public.covid_global",
+        "metrics": [
+          {
+            "aggregate": "MAX",
+            "column": "total_deaths",
+            "label": "Deaths"
+          }
+        ],
+        "query_mode": "aggregate",
+        "time_column": "dt",
+        "time_grain": "month",
+        "time_range": "all"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-14T21:53:36.8672",
+      "visibility": "internal",
+      "viz_config": {
+        "chartTypeOptions": {
+          "numberFormat": "m",
+          "subtitle": "▲ 0.1% vs prior period"
+        }
+      }
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "chartTypeOptions": {
+          "customExpression": "ROUND(MAX(total_deaths)::numeric * 100.0 / NULLIF(MAX(total_cases), 0), 2)",
+          "numberFormat": "pct",
+          "subtitle": "CFR"
+        },
+        "dataset_id": 139,
+        "datasource": "kaveon.public.covid_global",
+        "metrics": [
+          {
+            "aggregate": "MAX",
+            "column": "total_deaths",
+            "label": "CFR"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-14T21:53:36.905673",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "139",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "532",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Case Fatality Rate",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 139,
+        "datasource": "kaveon.public.covid_global",
+        "metrics": [
+          {
+            "aggregate": "MAX",
+            "column": "total_deaths",
+            "label": "CFR"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-14T21:53:36.905673",
+      "visibility": "internal",
+      "viz_config": {
+        "chartTypeOptions": {
+          "customExpression": "ROUND(MAX(total_deaths)::numeric * 100.0 / NULLIF(MAX(total_cases), 0), 2)",
+          "numberFormat": "pct",
+          "subtitle": "CFR"
+        }
+      }
+    },
+    {
+      "chart_type": "world_map",
+      "config": {
+        "chartTypeOptions": {
+          "mapRegion": "world"
+        },
+        "color": [
+          "#fef3c7",
+          "#fbbf24",
+          "#f59e0b",
+          "#ef4444",
+          "#991b1b"
+        ],
+        "dataset_id": 139,
+        "datasource": "kaveon.public.covid_global",
+        "groupby": [
+          "country"
+        ],
+        "map_code_column": "iso_code",
+        "metrics": [
+          {
+            "aggregate": "MAX",
+            "column": "total_cases",
+            "label": "Cases"
+          }
+        ],
+        "query_mode": "aggregate",
+        "template": "world_map"
+      },
+      "created_at": "2026-08-14T21:53:36.946875",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "139",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "533",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Confirmed Cases by Country",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 139,
+        "datasource": "kaveon.public.covid_global",
+        "groupby": [
+          "country"
+        ],
+        "map_code_column": "iso_code",
+        "metrics": [
+          {
+            "aggregate": "MAX",
+            "column": "total_cases",
+            "label": "Cases"
+          }
+        ],
+        "query_mode": "aggregate",
+        "template": "world_map"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-14T21:53:36.946875",
+      "visibility": "internal",
+      "viz_config": {
+        "chartTypeOptions": {
+          "mapRegion": "world"
+        },
+        "color": [
+          "#fef3c7",
+          "#fbbf24",
+          "#f59e0b",
+          "#ef4444",
+          "#991b1b"
+        ]
+      }
+    },
+    {
+      "chart_type": "pie",
+      "config": {
+        "dataset_id": 139,
+        "datasource": "kaveon.public.covid_global",
+        "echarts_option": {
+          "color": [
+            "#10b981",
+            "#ef4444",
+            "#f59e0b",
+            "#3b82f6",
+            "#8b5cf6",
+            "#ec4899"
+          ]
+        },
+        "groupby": [
+          "continent"
+        ],
+        "metrics": [
+          {
+            "aggregate": "MAX",
+            "column": "total_cases",
+            "label": "Total"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "column": "total_cases",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-14T21:53:36.987764",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "139",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "534",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Case Outcomes",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 139,
+        "datasource": "kaveon.public.covid_global",
+        "groupby": [
+          "continent"
+        ],
+        "metrics": [
+          {
+            "aggregate": "MAX",
+            "column": "total_cases",
+            "label": "Total"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "column": "total_cases",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-14T21:53:36.987764",
+      "visibility": "internal",
+      "viz_config": {
+        "echarts_option": {
+          "color": [
+            "#10b981",
+            "#ef4444",
+            "#f59e0b",
+            "#3b82f6",
+            "#8b5cf6",
+            "#ec4899"
+          ]
+        }
+      }
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "charts_created",
+            "label": "Charts"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-25T21:08:43.641125",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "590",
+      "modified_by": "system",
+      "name": "Charts Created",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "charts_created",
+            "label": "Charts"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:08:43.641125",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "queries_run",
+            "label": "Queries"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-25T21:08:43.641125",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "591",
+      "modified_by": "system",
+      "name": "Queries Run",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "queries_run",
+            "label": "Queries"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:08:43.641125",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "rows_scanned",
+            "label": "Rows"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-25T21:08:43.641125",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "592",
+      "modified_by": "system",
+      "name": "Rows Scanned",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "rows_scanned",
+            "label": "Rows"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:08:43.641125",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "cache_hits",
+            "label": "Hits"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-25T21:08:43.641125",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "593",
+      "modified_by": "system",
+      "name": "Cache Hits",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "cache_hits",
+            "label": "Hits"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:08:43.641125",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "region"
+        ],
+        "metrics": [
+          {
+            "aggregate": "COUNT_DISTINCT",
+            "column": "user_id",
+            "label": "Users"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "COUNT_DISTINCT",
+          "column": "user_id",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-25T21:08:43.641125",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "594",
+      "modified_by": "system",
+      "name": "Users by Region",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "region"
+        ],
+        "metrics": [
+          {
+            "aggregate": "COUNT_DISTINCT",
+            "column": "user_id",
+            "label": "Users"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "COUNT_DISTINCT",
+          "column": "user_id",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:08:43.641125",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "deployment"
+        ],
+        "metrics": [
+          {
+            "aggregate": "COUNT_DISTINCT",
+            "column": "user_id",
+            "label": "Users"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "COUNT_DISTINCT",
+          "column": "user_id",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-25T21:08:43.641125",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "595",
+      "modified_by": "system",
+      "name": "Users by Deployment",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "deployment"
+        ],
+        "metrics": [
+          {
+            "aggregate": "COUNT_DISTINCT",
+            "column": "user_id",
+            "label": "Users"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "COUNT_DISTINCT",
+          "column": "user_id",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:08:43.641125",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "team_size"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "queries_run",
+            "label": "Queries"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "SUM",
+          "column": "queries_run",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-25T21:08:43.641125",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "596",
+      "modified_by": "system",
+      "name": "Queries by Team Size",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "team_size"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "queries_run",
+            "label": "Queries"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "SUM",
+          "column": "queries_run",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:08:43.641125",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "chartTypeOptions": {
+          "orientation": "horizontal"
+        },
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "platform"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "queries_run",
+            "label": "Queries"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "SUM",
+          "column": "queries_run",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-25T21:08:43.641125",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "597",
+      "modified_by": "system",
+      "name": "Queries by Platform",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "platform"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "queries_run",
+            "label": "Queries"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "SUM",
+          "column": "queries_run",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:08:43.641125",
+      "visibility": "published",
+      "viz_config": {
+        "chartTypeOptions": {
+          "orientation": "horizontal"
+        }
+      }
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "acquisition_channel"
+        ],
+        "metrics": [
+          {
+            "aggregate": "COUNT_DISTINCT",
+            "column": "user_id",
+            "label": "Users"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "COUNT_DISTINCT",
+          "column": "user_id",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-25T21:08:43.641125",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "598",
+      "modified_by": "system",
+      "name": "Users by Channel",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "acquisition_channel"
+        ],
+        "metrics": [
+          {
+            "aggregate": "COUNT_DISTINCT",
+            "column": "user_id",
+            "label": "Users"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "COUNT_DISTINCT",
+          "column": "user_id",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:08:43.641125",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "license"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "actions",
+            "label": "Actions"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "SUM",
+          "column": "actions",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-25T21:08:43.641125",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "599",
+      "modified_by": "system",
+      "name": "Actions by License",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "license"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "actions",
+            "label": "Actions"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "SUM",
+          "column": "actions",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:08:43.641125",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "actions",
+            "label": "Actions"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-25T21:01:38.317793",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "578",
+      "modified_by": "system",
+      "name": "Total Actions",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "actions",
+            "label": "Actions"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:01:38.317793",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "metrics": [
+          {
+            "aggregate": "COUNT_DISTINCT",
+            "column": "user_id",
+            "label": "Users"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-25T21:01:38.317793",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "579",
+      "modified_by": "system",
+      "name": "Active Users",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "metrics": [
+          {
+            "aggregate": "COUNT_DISTINCT",
+            "column": "user_id",
+            "label": "Users"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:01:38.317793",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "sessions",
+            "label": "Sessions"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-25T21:01:38.317793",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "580",
+      "modified_by": "system",
+      "name": "Total Sessions",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "sessions",
+            "label": "Sessions"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:01:38.317793",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "metrics": [
+          {
+            "aggregate": "AVG",
+            "column": "latency_p75_ms",
+            "label": "ms"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-25T21:01:38.317793",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "581",
+      "modified_by": "system",
+      "name": "Avg Latency",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "metrics": [
+          {
+            "aggregate": "AVG",
+            "column": "latency_p75_ms",
+            "label": "ms"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:01:38.317793",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "surface"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "actions",
+            "label": "Actions"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "SUM",
+          "column": "actions",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-25T21:01:38.317793",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "582",
+      "modified_by": "system",
+      "name": "Actions by Surface",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "surface"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "actions",
+            "label": "Actions"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "SUM",
+          "column": "actions",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:01:38.317793",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "world_map",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "country"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "actions",
+            "label": "Total Actions"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-25T21:01:38.317793",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "583",
+      "modified_by": "system",
+      "name": "Global Usage by Country",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "country"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "actions",
+            "label": "Total Actions"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:01:38.317793",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "chartTypeOptions": {
+          "orientation": "horizontal"
+        },
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "industry"
+        ],
+        "metrics": [
+          {
+            "aggregate": "COUNT_DISTINCT",
+            "column": "user_id",
+            "label": "Users"
+          }
+        ],
+        "query_mode": "aggregate",
+        "row_limit": 12,
+        "sort_by": {
+          "aggregate": "COUNT_DISTINCT",
+          "column": "user_id",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-25T21:01:38.317793",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "584",
+      "modified_by": "system",
+      "name": "Users by Industry",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "industry"
+        ],
+        "metrics": [
+          {
+            "aggregate": "COUNT_DISTINCT",
+            "column": "user_id",
+            "label": "Users"
+          }
+        ],
+        "query_mode": "aggregate",
+        "row_limit": 12,
+        "sort_by": {
+          "aggregate": "COUNT_DISTINCT",
+          "column": "user_id",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:01:38.317793",
+      "visibility": "published",
+      "viz_config": {
+        "chartTypeOptions": {
+          "orientation": "horizontal"
+        }
+      }
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "chartTypeOptions": {
+          "orientation": "horizontal"
+        },
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "platform"
+        ],
+        "metrics": [
+          {
+            "aggregate": "COUNT_DISTINCT",
+            "column": "user_id",
+            "label": "Users"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "COUNT_DISTINCT",
+          "column": "user_id",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-25T21:01:38.317793",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "585",
+      "modified_by": "system",
+      "name": "Users by Platform",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "platform"
+        ],
+        "metrics": [
+          {
+            "aggregate": "COUNT_DISTINCT",
+            "column": "user_id",
+            "label": "Users"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "COUNT_DISTINCT",
+          "column": "user_id",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:01:38.317793",
+      "visibility": "published",
+      "viz_config": {
+        "chartTypeOptions": {
+          "orientation": "horizontal"
+        }
+      }
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "license"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "queries_run",
+            "label": "Queries"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "SUM",
+          "column": "queries_run",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-25T21:01:38.317793",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "586",
+      "modified_by": "system",
+      "name": "Queries by License",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "license"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "queries_run",
+            "label": "Queries"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "SUM",
+          "column": "queries_run",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:01:38.317793",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "segment"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "sessions",
+            "label": "Sessions"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "SUM",
+          "column": "sessions",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-25T21:01:38.317793",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "587",
+      "modified_by": "system",
+      "name": "Sessions by Segment",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "segment"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "sessions",
+            "label": "Sessions"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "SUM",
+          "column": "sessions",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:01:38.317793",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "region"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "actions",
+            "label": "Actions"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "SUM",
+          "column": "actions",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-25T21:01:38.317793",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "588",
+      "modified_by": "system",
+      "name": "Actions by Region",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "region"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "actions",
+            "label": "Actions"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "SUM",
+          "column": "actions",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:01:38.317793",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "surface"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "errors",
+            "label": "Errors"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "SUM",
+          "column": "errors",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-25T21:01:38.317793",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "589",
+      "modified_by": "system",
+      "name": "Errors by Surface",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "surface"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "errors",
+            "label": "Errors"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "SUM",
+          "column": "errors",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:01:38.317793",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "actions",
+            "label": "Actions"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-25T21:08:43.641125",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "600",
+      "modified_by": "system",
+      "name": "Total Actions",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "actions",
+            "label": "Actions"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:08:43.641125",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "metrics": [
+          {
+            "aggregate": "COUNT_DISTINCT",
+            "column": "user_id",
+            "label": "Users"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-25T21:08:43.641125",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "601",
+      "modified_by": "system",
+      "name": "Active Users",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "metrics": [
+          {
+            "aggregate": "COUNT_DISTINCT",
+            "column": "user_id",
+            "label": "Users"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:08:43.641125",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "errors",
+            "label": "Errors"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-25T21:08:43.641125",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "602",
+      "modified_by": "system",
+      "name": "Total Errors",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "errors",
+            "label": "Errors"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:08:43.641125",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "metrics": [
+          {
+            "aggregate": "AVG",
+            "column": "latency_p75_ms",
+            "label": "ms"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-25T21:08:43.641125",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "603",
+      "modified_by": "system",
+      "name": "Avg Latency",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "metrics": [
+          {
+            "aggregate": "AVG",
+            "column": "latency_p75_ms",
+            "label": "ms"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:08:43.641125",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "world_map",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "country"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "actions",
+            "label": "Total Actions"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-25T21:08:43.641125",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "604",
+      "modified_by": "system",
+      "name": "Global Actions by Country",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "country"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "actions",
+            "label": "Total Actions"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:08:43.641125",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "chartTypeOptions": {
+          "orientation": "horizontal"
+        },
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "country"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "actions",
+            "label": "Actions"
+          }
+        ],
+        "query_mode": "aggregate",
+        "row_limit": 15,
+        "sort_by": {
+          "aggregate": "SUM",
+          "column": "actions",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-25T21:08:43.641125",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "605",
+      "modified_by": "system",
+      "name": "Top Countries by Actions",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "country"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "actions",
+            "label": "Actions"
+          }
+        ],
+        "query_mode": "aggregate",
+        "row_limit": 15,
+        "sort_by": {
+          "aggregate": "SUM",
+          "column": "actions",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:08:43.641125",
+      "visibility": "published",
+      "viz_config": {
+        "chartTypeOptions": {
+          "orientation": "horizontal"
+        }
+      }
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "chartTypeOptions": {
+          "orientation": "horizontal"
+        },
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "country"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "sessions",
+            "label": "Sessions"
+          }
+        ],
+        "query_mode": "aggregate",
+        "row_limit": 15,
+        "sort_by": {
+          "aggregate": "SUM",
+          "column": "sessions",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-25T21:08:43.641125",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "606",
+      "modified_by": "system",
+      "name": "Sessions by Country",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "country"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "sessions",
+            "label": "Sessions"
+          }
+        ],
+        "query_mode": "aggregate",
+        "row_limit": 15,
+        "sort_by": {
+          "aggregate": "SUM",
+          "column": "sessions",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:08:43.641125",
+      "visibility": "published",
+      "viz_config": {
+        "chartTypeOptions": {
+          "orientation": "horizontal"
+        }
+      }
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "chartTypeOptions": {
+          "orientation": "horizontal"
+        },
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "industry"
+        ],
+        "metrics": [
+          {
+            "aggregate": "COUNT_DISTINCT",
+            "column": "user_id",
+            "label": "Users"
+          }
+        ],
+        "query_mode": "aggregate",
+        "row_limit": 12,
+        "sort_by": {
+          "aggregate": "COUNT_DISTINCT",
+          "column": "user_id",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-25T21:08:43.641125",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "607",
+      "modified_by": "system",
+      "name": "Users by Industry",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "industry"
+        ],
+        "metrics": [
+          {
+            "aggregate": "COUNT_DISTINCT",
+            "column": "user_id",
+            "label": "Users"
+          }
+        ],
+        "query_mode": "aggregate",
+        "row_limit": 12,
+        "sort_by": {
+          "aggregate": "COUNT_DISTINCT",
+          "column": "user_id",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:08:43.641125",
+      "visibility": "published",
+      "viz_config": {
+        "chartTypeOptions": {
+          "orientation": "horizontal"
+        }
+      }
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "segment"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "sessions",
+            "label": "Sessions"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "SUM",
+          "column": "sessions",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-25T21:08:43.641125",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "608",
+      "modified_by": "system",
+      "name": "Sessions by Segment",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "segment"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "sessions",
+            "label": "Sessions"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "SUM",
+          "column": "sessions",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:08:43.641125",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "region"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "errors",
+            "label": "Errors"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "SUM",
+          "column": "errors",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-25T21:08:43.641125",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "609",
+      "modified_by": "system",
+      "name": "Errors by Region",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "region"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "errors",
+            "label": "Errors"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "SUM",
+          "column": "errors",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:08:43.641125",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "surface"
+        ],
+        "metrics": [
+          {
+            "aggregate": "AVG",
+            "column": "latency_p75_ms",
+            "label": "Avg Latency (ms)"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "AVG",
+          "column": "latency_p75_ms",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-25T21:08:43.641125",
+      "created_by": "system",
+      "dataset_id": "144",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "610",
+      "modified_by": "system",
+      "name": "Latency by Surface",
+      "owner": "system",
+      "query_config": {
+        "dataset_id": 144,
+        "datasource": "kaveon.public.kaveon_events_enriched",
+        "groupby": [
+          "surface"
+        ],
+        "metrics": [
+          {
+            "aggregate": "AVG",
+            "column": "latency_p75_ms",
+            "label": "Avg Latency (ms)"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "aggregate": "AVG",
+          "column": "latency_p75_ms",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-25T21:08:43.641125",
+      "visibility": "published",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "dataset_id": 135,
+        "datasource": "kaveon.ai_benchmarks.leaderboard",
+        "metrics": [
+          {
+            "aggregate": "COUNT",
+            "column": "model_name",
+            "label": "Models"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-11T22:32:21.380798",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "135",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "482",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Models Tracked",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 135,
+        "datasource": "kaveon.ai_benchmarks.leaderboard",
+        "metrics": [
+          {
+            "aggregate": "COUNT",
+            "column": "model_name",
+            "label": "Models"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T22:32:21.380798",
+      "visibility": "internal",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "dataset_id": 135,
+        "datasource": "kaveon.ai_benchmarks.leaderboard",
+        "metrics": [
+          {
+            "aggregate": "MAX",
+            "column": "arena_elo",
+            "label": "ELO"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-11T22:32:21.421301",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "135",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "483",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Highest ELO",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 135,
+        "datasource": "kaveon.ai_benchmarks.leaderboard",
+        "metrics": [
+          {
+            "aggregate": "MAX",
+            "column": "arena_elo",
+            "label": "ELO"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T22:32:21.421301",
+      "visibility": "internal",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "dataset_id": 135,
+        "datasource": "kaveon.ai_benchmarks.leaderboard",
+        "metrics": [
+          {
+            "aggregate": "MAX",
+            "column": "mmlu",
+            "label": "%"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-11T22:32:21.458871",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "135",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "484",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Best MMLU",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 135,
+        "datasource": "kaveon.ai_benchmarks.leaderboard",
+        "metrics": [
+          {
+            "aggregate": "MAX",
+            "column": "mmlu",
+            "label": "%"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T22:32:21.458871",
+      "visibility": "internal",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "dataset_id": 138,
+        "datasource": "kaveon.ai_benchmarks.pricing",
+        "metrics": [
+          {
+            "aggregate": "MIN",
+            "column": "input_cost",
+            "label": "$/1M tokens"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-11T22:32:21.499152",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "138",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "485",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Cheapest Input",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 138,
+        "datasource": "kaveon.ai_benchmarks.pricing",
+        "metrics": [
+          {
+            "aggregate": "MIN",
+            "column": "input_cost",
+            "label": "$/1M tokens"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T22:32:21.499152",
+      "visibility": "internal",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "chartTypeOptions": {
+          "horizontal": true
+        },
+        "dataset_id": 135,
+        "datasource": "kaveon.ai_benchmarks.leaderboard",
+        "echarts_option": {
+          "color": [
+            "#4A9EE8"
+          ]
+        },
+        "groupby": [
+          "model_name"
+        ],
+        "metrics": [
+          {
+            "aggregate": "MAX",
+            "column": "arena_elo",
+            "label": "ELO"
+          }
+        ],
+        "query_mode": "aggregate",
+        "row_limit": 20,
+        "sort_by": {
+          "column": "arena_elo",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-11T22:32:21.536773",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "135",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "486",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Arena ELO Ranking",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 135,
+        "datasource": "kaveon.ai_benchmarks.leaderboard",
+        "groupby": [
+          "model_name"
+        ],
+        "metrics": [
+          {
+            "aggregate": "MAX",
+            "column": "arena_elo",
+            "label": "ELO"
+          }
+        ],
+        "query_mode": "aggregate",
+        "row_limit": 20,
+        "sort_by": {
+          "column": "arena_elo",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T22:32:21.536773",
+      "visibility": "internal",
+      "viz_config": {
+        "chartTypeOptions": {
+          "horizontal": true
+        },
+        "echarts_option": {
+          "color": [
+            "#4A9EE8"
+          ]
+        }
+      }
+    },
+    {
+      "chart_type": "scatter",
+      "config": {
+        "columns": [
+          "model_name",
+          "mmlu",
+          "humaneval",
+          "provider"
+        ],
+        "dataset_id": 135,
+        "datasource": "kaveon.ai_benchmarks.leaderboard",
+        "label_column": "model_name",
+        "query_mode": "raw",
+        "x_axis": "mmlu",
+        "y_axis": "humaneval"
+      },
+      "created_at": "2026-08-11T22:32:21.574934",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "135",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "487",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "MMLU vs HumanEval",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "columns": [
+          "model_name",
+          "mmlu",
+          "humaneval",
+          "provider"
+        ],
+        "dataset_id": 135,
+        "datasource": "kaveon.ai_benchmarks.leaderboard",
+        "label_column": "model_name",
+        "query_mode": "raw",
+        "x_axis": "mmlu",
+        "y_axis": "humaneval"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T22:32:21.574934",
+      "visibility": "internal",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "scatter",
+      "config": {
+        "columns": [
+          "model_name",
+          "input_cost",
+          "arena_elo",
+          "provider"
+        ],
+        "dataset_id": 135,
+        "datasource": "kaveon.ai_benchmarks.leaderboard",
+        "label_column": "model_name",
+        "query_mode": "raw",
+        "x_axis": "input_cost",
+        "y_axis": "arena_elo"
+      },
+      "created_at": "2026-08-11T22:32:21.614332",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "135",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "488",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Cost vs Arena ELO",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "columns": [
+          "model_name",
+          "input_cost",
+          "arena_elo",
+          "provider"
+        ],
+        "dataset_id": 135,
+        "datasource": "kaveon.ai_benchmarks.leaderboard",
+        "label_column": "model_name",
+        "query_mode": "raw",
+        "x_axis": "input_cost",
+        "y_axis": "arena_elo"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T22:32:21.614332",
+      "visibility": "internal",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "pie",
+      "config": {
+        "dataset_id": 135,
+        "datasource": "kaveon.ai_benchmarks.leaderboard",
+        "groupby": [
+          "provider"
+        ],
+        "metrics": [
+          {
+            "aggregate": "COUNT",
+            "column": "model_name",
+            "label": "Count"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-11T22:32:21.651746",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "135",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "489",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Models by Provider",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 135,
+        "datasource": "kaveon.ai_benchmarks.leaderboard",
+        "groupby": [
+          "provider"
+        ],
+        "metrics": [
+          {
+            "aggregate": "COUNT",
+            "column": "model_name",
+            "label": "Count"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T22:32:21.651746",
+      "visibility": "internal",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "category_labels": {
+          "False": "Proprietary",
+          "True": "Open Source",
+          "f": "Proprietary",
+          "false": "Proprietary",
+          "t": "Open Source",
+          "true": "Open Source"
+        },
+        "dataset_id": 135,
+        "datasource": "kaveon.ai_benchmarks.leaderboard",
+        "groupby": [
+          "is_open_source"
+        ],
+        "metrics": [
+          {
+            "aggregate": "COUNT",
+            "column": "model_name",
+            "label": "Models"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-11T22:32:21.689225",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "135",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "490",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Open Source vs Proprietary",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "category_labels": {
+          "False": "Proprietary",
+          "True": "Open Source",
+          "f": "Proprietary",
+          "false": "Proprietary",
+          "t": "Open Source",
+          "true": "Open Source"
+        },
+        "dataset_id": 135,
+        "datasource": "kaveon.ai_benchmarks.leaderboard",
+        "groupby": [
+          "is_open_source"
+        ],
+        "metrics": [
+          {
+            "aggregate": "COUNT",
+            "column": "model_name",
+            "label": "Models"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T22:32:21.689225",
+      "visibility": "internal",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "chartTypeOptions": {
+          "horizontal": true
+        },
+        "dataset_id": 137,
+        "datasource": "kaveon.ai_benchmarks.arena_battles",
+        "echarts_option": {
+          "color": [
+            "#10b981"
+          ]
+        },
+        "groupby": [
+          "model_a"
+        ],
+        "metrics": [
+          {
+            "aggregate": "AVG",
+            "column": "win_rate_a",
+            "label": "Win Rate %"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "column": "win_rate_a",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-11T22:32:21.726837",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "137",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "491",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Arena Head-to-Head",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 137,
+        "datasource": "kaveon.ai_benchmarks.arena_battles",
+        "groupby": [
+          "model_a"
+        ],
+        "metrics": [
+          {
+            "aggregate": "AVG",
+            "column": "win_rate_a",
+            "label": "Win Rate %"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "column": "win_rate_a",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T22:32:21.726837",
+      "visibility": "internal",
+      "viz_config": {
+        "chartTypeOptions": {
+          "horizontal": true
+        },
+        "echarts_option": {
+          "color": [
+            "#10b981"
+          ]
+        }
+      }
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "dataset_id": 140,
+        "datasource": "kaveon.public.nyc_taxi_borough",
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "trips",
+            "label": "Trips"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-14T21:08:32.688277",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "140",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "521",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Total Trips",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 140,
+        "datasource": "kaveon.public.nyc_taxi_borough",
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "trips",
+            "label": "Trips"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-14T21:08:32.688277",
+      "visibility": "internal",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "dataset_id": 140,
+        "datasource": "kaveon.public.nyc_taxi_borough",
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "revenue",
+            "label": "$"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-14T21:08:32.724702",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "140",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "522",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Total Revenue",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 140,
+        "datasource": "kaveon.public.nyc_taxi_borough",
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "revenue",
+            "label": "$"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-14T21:08:32.724702",
+      "visibility": "internal",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "dataset_id": 140,
+        "datasource": "kaveon.public.nyc_taxi_borough",
+        "metrics": [
+          {
+            "aggregate": "AVG",
+            "column": "avg_fare",
+            "label": "$"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-14T21:08:32.763626",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "140",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "523",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Avg Fare",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 140,
+        "datasource": "kaveon.public.nyc_taxi_borough",
+        "metrics": [
+          {
+            "aggregate": "AVG",
+            "column": "avg_fare",
+            "label": "$"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-14T21:08:32.763626",
+      "visibility": "internal",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "world_map",
+      "config": {
+        "chartTypeOptions": {
+          "mapNumberFormat": "m",
+          "mapRegion": "nyc"
+        },
+        "color": [
+          "#eff6ff",
+          "#bfdbfe",
+          "#7dd3fc",
+          "#38bdf8",
+          "#0ea5e9",
+          "#0369a1"
+        ],
+        "dataset_id": 140,
+        "datasource": "kaveon.public.nyc_taxi_borough",
+        "groupby": [
+          "borough"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "trips",
+            "label": "Trips"
+          }
+        ],
+        "query_mode": "aggregate",
+        "row_limit": 10,
+        "sort_by": {
+          "column": "trips",
+          "direction": "desc"
+        },
+        "template": "world_map"
+      },
+      "created_at": "2026-08-14T21:16:19.126678",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "140",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "526",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Taxi Trips by Borough",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 140,
+        "datasource": "kaveon.public.nyc_taxi_borough",
+        "groupby": [
+          "borough"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "trips",
+            "label": "Trips"
+          }
+        ],
+        "query_mode": "aggregate",
+        "row_limit": 10,
+        "sort_by": {
+          "column": "trips",
+          "direction": "desc"
+        },
+        "template": "world_map"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-14T21:16:19.126678",
+      "visibility": "internal",
+      "viz_config": {
+        "chartTypeOptions": {
+          "mapNumberFormat": "m",
+          "mapRegion": "nyc"
+        },
+        "color": [
+          "#eff6ff",
+          "#bfdbfe",
+          "#7dd3fc",
+          "#38bdf8",
+          "#0ea5e9",
+          "#0369a1"
+        ]
+      }
+    },
+    {
+      "chart_type": "pie",
+      "config": {
+        "dataset_id": 140,
+        "datasource": "kaveon.public.nyc_taxi_borough",
+        "groupby": [
+          "borough"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "revenue",
+            "label": "Revenue"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-14T21:08:32.836003",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "140",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "525",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Revenue by Borough",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 140,
+        "datasource": "kaveon.public.nyc_taxi_borough",
+        "groupby": [
+          "borough"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "revenue",
+            "label": "Revenue"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-14T21:08:32.836003",
+      "visibility": "internal",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "chartTypeOptions": {
+          "horizontal": true
+        },
+        "dataset_id": 140,
+        "datasource": "kaveon.public.nyc_taxi_borough",
+        "echarts_option": {
+          "color": [
+            "#4A9EE8"
+          ]
+        },
+        "groupby": [
+          "borough"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "trips",
+            "label": "Trips"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "column": "trips",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-14T21:08:32.800021",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "140",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "524",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Trips by Borough",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 140,
+        "datasource": "kaveon.public.nyc_taxi_borough",
+        "groupby": [
+          "borough"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "trips",
+            "label": "Trips"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "column": "trips",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-14T21:08:32.800021",
+      "visibility": "internal",
+      "viz_config": {
+        "chartTypeOptions": {
+          "horizontal": true
+        },
+        "echarts_option": {
+          "color": [
+            "#4A9EE8"
+          ]
+        }
+      }
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "chartTypeOptions": {
+          "numberFormat": "k",
+          "subtitle": "Terawatt-hours"
+        },
+        "dataset_id": 132,
+        "datasource": "kaveon.climate_energy.energy_annual",
+        "filters": [
+          {
+            "column": "year",
+            "op": "=",
+            "value": "2023"
+          }
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "primary_energy_consumption",
+            "label": "TWh"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-11T23:26:17.506932",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "132",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "499",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Total Energy 2023",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 132,
+        "datasource": "kaveon.climate_energy.energy_annual",
+        "filters": [
+          {
+            "column": "year",
+            "op": "=",
+            "value": "2023"
+          }
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "primary_energy_consumption",
+            "label": "TWh"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T23:26:17.506932",
+      "visibility": "internal",
+      "viz_config": {
+        "chartTypeOptions": {
+          "numberFormat": "k",
+          "subtitle": "Terawatt-hours"
+        }
+      }
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "chartTypeOptions": {
+          "subtitle": "of total energy mix"
+        },
+        "dataset_id": 132,
+        "datasource": "kaveon.climate_energy.energy_annual",
+        "filters": [
+          {
+            "column": "year",
+            "op": "=",
+            "value": "2023"
+          }
+        ],
+        "metrics": [
+          {
+            "aggregate": "AVG",
+            "column": "renewables_share_energy",
+            "label": "%"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-11T23:26:17.543718",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "132",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "500",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Avg Renewables %",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 132,
+        "datasource": "kaveon.climate_energy.energy_annual",
+        "filters": [
+          {
+            "column": "year",
+            "op": "=",
+            "value": "2023"
+          }
+        ],
+        "metrics": [
+          {
+            "aggregate": "AVG",
+            "column": "renewables_share_energy",
+            "label": "%"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T23:26:17.543718",
+      "visibility": "internal",
+      "viz_config": {
+        "chartTypeOptions": {
+          "subtitle": "of total energy mix"
+        }
+      }
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "chartTypeOptions": {
+          "subtitle": "grams CO2 per kWh"
+        },
+        "dataset_id": 132,
+        "datasource": "kaveon.climate_energy.energy_annual",
+        "filters": [
+          {
+            "column": "year",
+            "op": "=",
+            "value": "2023"
+          }
+        ],
+        "metrics": [
+          {
+            "aggregate": "AVG",
+            "column": "carbon_intensity_elec",
+            "label": "gCO2/kWh"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-11T23:26:17.579557",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "132",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "501",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Avg Carbon Intensity",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 132,
+        "datasource": "kaveon.climate_energy.energy_annual",
+        "filters": [
+          {
+            "column": "year",
+            "op": "=",
+            "value": "2023"
+          }
+        ],
+        "metrics": [
+          {
+            "aggregate": "AVG",
+            "column": "carbon_intensity_elec",
+            "label": "gCO2/kWh"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T23:26:17.579557",
+      "visibility": "internal",
+      "viz_config": {
+        "chartTypeOptions": {
+          "subtitle": "grams CO2 per kWh"
+        }
+      }
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "chartTypeOptions": {
+          "numberFormat": "k",
+          "subtitle": "Million tonnes CO2e"
+        },
+        "dataset_id": 132,
+        "datasource": "kaveon.climate_energy.energy_annual",
+        "filters": [
+          {
+            "column": "year",
+            "op": "=",
+            "value": "2023"
+          }
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "greenhouse_gas_emissions",
+            "label": "Mt CO2e"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-11T23:26:17.615603",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "132",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "502",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Total GHG 2023",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 132,
+        "datasource": "kaveon.climate_energy.energy_annual",
+        "filters": [
+          {
+            "column": "year",
+            "op": "=",
+            "value": "2023"
+          }
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "greenhouse_gas_emissions",
+            "label": "Mt CO2e"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T23:26:17.615603",
+      "visibility": "internal",
+      "viz_config": {
+        "chartTypeOptions": {
+          "numberFormat": "k",
+          "subtitle": "Million tonnes CO2e"
+        }
+      }
+    },
+    {
+      "chart_type": "world_map",
+      "config": {
+        "chartTypeOptions": {
+          "mapRegion": "world"
+        },
+        "color": [
+          "#eff6ff",
+          "#93c5fd",
+          "#3b82f6",
+          "#1d4ed8",
+          "#1e3a8a"
+        ],
+        "dataset_id": 132,
+        "datasource": "kaveon.climate_energy.energy_annual",
+        "filters": [
+          {
+            "column": "year",
+            "op": "=",
+            "value": "2023"
+          }
+        ],
+        "groupby": [
+          "country"
+        ],
+        "map_code_column": "iso_code",
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "primary_energy_consumption",
+            "label": "TWh"
+          }
+        ],
+        "query_mode": "aggregate",
+        "template": "world_map"
+      },
+      "created_at": "2026-08-11T23:26:17.651744",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "132",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "503",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Energy Consumption Map",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 132,
+        "datasource": "kaveon.climate_energy.energy_annual",
+        "filters": [
+          {
+            "column": "year",
+            "op": "=",
+            "value": "2023"
+          }
+        ],
+        "groupby": [
+          "country"
+        ],
+        "map_code_column": "iso_code",
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "primary_energy_consumption",
+            "label": "TWh"
+          }
+        ],
+        "query_mode": "aggregate",
+        "template": "world_map"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T23:26:17.651744",
+      "visibility": "internal",
+      "viz_config": {
+        "chartTypeOptions": {
+          "mapRegion": "world"
+        },
+        "color": [
+          "#eff6ff",
+          "#93c5fd",
+          "#3b82f6",
+          "#1d4ed8",
+          "#1e3a8a"
+        ]
+      }
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "chartTypeOptions": {
+          "horizontal": true
+        },
+        "dataset_id": 132,
+        "datasource": "kaveon.climate_energy.energy_annual",
+        "echarts_option": {
+          "color": [
+            "#ef4444"
+          ],
+          "yAxis": {
+            "min": 0
+          }
+        },
+        "filters": [
+          {
+            "column": "year",
+            "op": "=",
+            "value": "2023"
+          }
+        ],
+        "groupby": [
+          "country"
+        ],
+        "metrics": [
+          {
+            "aggregate": "AVG",
+            "column": "carbon_intensity_elec",
+            "label": "gCO2/kWh"
+          }
+        ],
+        "query_mode": "aggregate",
+        "row_limit": 15,
+        "sort_by": {
+          "column": "carbon_intensity_elec",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-11T23:26:17.688174",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "132",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "504",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Top 15 Carbon Intensity",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 132,
+        "datasource": "kaveon.climate_energy.energy_annual",
+        "filters": [
+          {
+            "column": "year",
+            "op": "=",
+            "value": "2023"
+          }
+        ],
+        "groupby": [
+          "country"
+        ],
+        "metrics": [
+          {
+            "aggregate": "AVG",
+            "column": "carbon_intensity_elec",
+            "label": "gCO2/kWh"
+          }
+        ],
+        "query_mode": "aggregate",
+        "row_limit": 15,
+        "sort_by": {
+          "column": "carbon_intensity_elec",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T23:26:17.688174",
+      "visibility": "internal",
+      "viz_config": {
+        "chartTypeOptions": {
+          "horizontal": true
+        },
+        "echarts_option": {
+          "color": [
+            "#ef4444"
+          ],
+          "yAxis": {
+            "min": 0
+          }
+        }
+      }
+    },
+    {
+      "chart_type": "stacked_bar",
+      "config": {
+        "dataset_id": 132,
+        "datasource": "kaveon.climate_energy.energy_annual",
+        "echarts_option": {
+          "color": [
+            "#facc15",
+            "#22d3ee",
+            "#3b82f6",
+            "#a855f7",
+            "#6b7280",
+            "#f97316"
+          ],
+          "showAsPercentage": true
+        },
+        "filters": [
+          {
+            "column": "year",
+            "op": "=",
+            "value": "2023"
+          }
+        ],
+        "groupby": [
+          "country"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "solar_electricity",
+            "label": "Solar"
+          },
+          {
+            "aggregate": "SUM",
+            "column": "wind_electricity",
+            "label": "Wind"
+          },
+          {
+            "aggregate": "SUM",
+            "column": "hydro_electricity",
+            "label": "Hydro"
+          },
+          {
+            "aggregate": "SUM",
+            "column": "nuclear_electricity",
+            "label": "Nuclear"
+          },
+          {
+            "aggregate": "SUM",
+            "column": "coal_electricity",
+            "label": "Coal"
+          },
+          {
+            "aggregate": "SUM",
+            "column": "gas_electricity",
+            "label": "Gas"
+          }
+        ],
+        "query_mode": "aggregate",
+        "row_limit": 10,
+        "sort_by": {
+          "column": "primary_energy_consumption",
+          "direction": "desc"
+        }
+      },
+      "created_at": "2026-08-11T23:26:17.724229",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "132",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "505",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Energy Mix - Top 10",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 132,
+        "datasource": "kaveon.climate_energy.energy_annual",
+        "filters": [
+          {
+            "column": "year",
+            "op": "=",
+            "value": "2023"
+          }
+        ],
+        "groupby": [
+          "country"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "solar_electricity",
+            "label": "Solar"
+          },
+          {
+            "aggregate": "SUM",
+            "column": "wind_electricity",
+            "label": "Wind"
+          },
+          {
+            "aggregate": "SUM",
+            "column": "hydro_electricity",
+            "label": "Hydro"
+          },
+          {
+            "aggregate": "SUM",
+            "column": "nuclear_electricity",
+            "label": "Nuclear"
+          },
+          {
+            "aggregate": "SUM",
+            "column": "coal_electricity",
+            "label": "Coal"
+          },
+          {
+            "aggregate": "SUM",
+            "column": "gas_electricity",
+            "label": "Gas"
+          }
+        ],
+        "query_mode": "aggregate",
+        "row_limit": 10,
+        "sort_by": {
+          "column": "primary_energy_consumption",
+          "direction": "desc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T23:26:17.724229",
+      "visibility": "internal",
+      "viz_config": {
+        "echarts_option": {
+          "color": [
+            "#facc15",
+            "#22d3ee",
+            "#3b82f6",
+            "#a855f7",
+            "#6b7280",
+            "#f97316"
+          ],
+          "showAsPercentage": true
+        }
+      }
+    },
+    {
+      "chart_type": "line",
+      "config": {
+        "dataset_id": 132,
+        "datasource": "kaveon.climate_energy.energy_annual",
+        "filters": [
+          {
+            "column": "country",
+            "op": "IN",
+            "value": [
+              "China",
+              "United States",
+              "India",
+              "Russia",
+              "Japan"
+            ]
+          }
+        ],
+        "groupby": [
+          "year"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "greenhouse_gas_emissions",
+            "label": "Mt CO2e"
+          }
+        ],
+        "query_mode": "aggregate",
+        "series_groupby": [
+          "country"
+        ],
+        "sort_by": {
+          "column": "year",
+          "direction": "asc"
+        }
+      },
+      "created_at": "2026-08-11T23:26:17.760566",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "132",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "506",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "GHG Trend - Top 5",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 132,
+        "datasource": "kaveon.climate_energy.energy_annual",
+        "filters": [
+          {
+            "column": "country",
+            "op": "IN",
+            "value": [
+              "China",
+              "United States",
+              "India",
+              "Russia",
+              "Japan"
+            ]
+          }
+        ],
+        "groupby": [
+          "year"
+        ],
+        "metrics": [
+          {
+            "aggregate": "SUM",
+            "column": "greenhouse_gas_emissions",
+            "label": "Mt CO2e"
+          }
+        ],
+        "query_mode": "aggregate",
+        "series_groupby": [
+          "country"
+        ],
+        "sort_by": {
+          "column": "year",
+          "direction": "asc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T23:26:17.760566",
+      "visibility": "internal",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "dataset_id": 133,
+        "datasource": "kaveon.climate_energy.temperature_monthly",
+        "metrics": [
+          {
+            "aggregate": "COUNT_DISTINCT",
+            "column": "country",
+            "label": "Countries"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-11T23:26:17.202624",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "133",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "492",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Countries Tracked",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 133,
+        "datasource": "kaveon.climate_energy.temperature_monthly",
+        "metrics": [
+          {
+            "aggregate": "COUNT_DISTINCT",
+            "column": "country",
+            "label": "Countries"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T23:26:17.202624",
+      "visibility": "internal",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "dataset_id": 133,
+        "datasource": "kaveon.climate_energy.temperature_monthly",
+        "filters": [
+          {
+            "column": "year",
+            "op": "=",
+            "value": "2023"
+          }
+        ],
+        "metrics": [
+          {
+            "aggregate": "AVG",
+            "column": "temp_change_c",
+            "label": "C"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-11T23:26:17.242125",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "133",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "493",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Avg Temp Anomaly 2023",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 133,
+        "datasource": "kaveon.climate_energy.temperature_monthly",
+        "filters": [
+          {
+            "column": "year",
+            "op": "=",
+            "value": "2023"
+          }
+        ],
+        "metrics": [
+          {
+            "aggregate": "AVG",
+            "column": "temp_change_c",
+            "label": "C"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T23:26:17.242125",
+      "visibility": "internal",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "dataset_id": 133,
+        "datasource": "kaveon.climate_energy.temperature_monthly",
+        "filters": [
+          {
+            "column": "year",
+            "op": "=",
+            "value": "2023"
+          }
+        ],
+        "metrics": [
+          {
+            "aggregate": "MAX",
+            "column": "temp_change_c",
+            "label": "C"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-11T23:26:17.283636",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "133",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "494",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Max Temp Anomaly 2023",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 133,
+        "datasource": "kaveon.climate_energy.temperature_monthly",
+        "filters": [
+          {
+            "column": "year",
+            "op": "=",
+            "value": "2023"
+          }
+        ],
+        "metrics": [
+          {
+            "aggregate": "MAX",
+            "column": "temp_change_c",
+            "label": "C"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T23:26:17.283636",
+      "visibility": "internal",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "big_number",
+      "config": {
+        "dataset_id": 133,
+        "datasource": "kaveon.climate_energy.temperature_monthly",
+        "metrics": [
+          {
+            "aggregate": "COUNT_DISTINCT",
+            "column": "year",
+            "label": "Years"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "created_at": "2026-08-11T23:26:17.324683",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "133",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "495",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Data Coverage",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 133,
+        "datasource": "kaveon.climate_energy.temperature_monthly",
+        "metrics": [
+          {
+            "aggregate": "COUNT_DISTINCT",
+            "column": "year",
+            "label": "Years"
+          }
+        ],
+        "query_mode": "aggregate"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T23:26:17.324683",
+      "visibility": "internal",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "world_map",
+      "config": {
+        "chartTypeOptions": {
+          "mapRegion": "world"
+        },
+        "color": [
+          "#fef3c7",
+          "#fbbf24",
+          "#f59e0b",
+          "#ef4444",
+          "#991b1b"
+        ],
+        "dataset_id": 134,
+        "datasource": "kaveon.climate_energy.climate_x_energy",
+        "filters": [
+          {
+            "column": "year",
+            "op": "=",
+            "value": "2023"
+          }
+        ],
+        "groupby": [
+          "country"
+        ],
+        "map_code_column": "iso_code",
+        "metrics": [
+          {
+            "aggregate": "AVG",
+            "column": "avg_tc",
+            "label": "Temp C"
+          }
+        ],
+        "query_mode": "aggregate",
+        "template": "world_map"
+      },
+      "created_at": "2026-08-11T23:26:17.361088",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "134",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "496",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Temperature Anomaly Map",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 134,
+        "datasource": "kaveon.climate_energy.climate_x_energy",
+        "filters": [
+          {
+            "column": "year",
+            "op": "=",
+            "value": "2023"
+          }
+        ],
+        "groupby": [
+          "country"
+        ],
+        "map_code_column": "iso_code",
+        "metrics": [
+          {
+            "aggregate": "AVG",
+            "column": "avg_tc",
+            "label": "Temp C"
+          }
+        ],
+        "query_mode": "aggregate",
+        "template": "world_map"
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T23:26:17.361088",
+      "visibility": "internal",
+      "viz_config": {
+        "chartTypeOptions": {
+          "mapRegion": "world"
+        },
+        "color": [
+          "#fef3c7",
+          "#fbbf24",
+          "#f59e0b",
+          "#ef4444",
+          "#991b1b"
+        ]
+      }
+    },
+    {
+      "chart_type": "line",
+      "config": {
+        "dataset_id": 133,
+        "datasource": "kaveon.climate_energy.temperature_monthly",
+        "filters": [
+          {
+            "column": "country",
+            "op": "IN",
+            "value": [
+              "Russia",
+              "Canada",
+              "Finland",
+              "Norway",
+              "Sweden"
+            ]
+          }
+        ],
+        "groupby": [
+          "year"
+        ],
+        "metrics": [
+          {
+            "aggregate": "AVG",
+            "column": "temp_change_c",
+            "label": "C"
+          }
+        ],
+        "query_mode": "aggregate",
+        "series_groupby": [
+          "country"
+        ],
+        "sort_by": {
+          "column": "year",
+          "direction": "asc"
+        }
+      },
+      "created_at": "2026-08-11T23:26:17.397204",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "133",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "497",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Warming Trend - Arctic Nations",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 133,
+        "datasource": "kaveon.climate_energy.temperature_monthly",
+        "filters": [
+          {
+            "column": "country",
+            "op": "IN",
+            "value": [
+              "Russia",
+              "Canada",
+              "Finland",
+              "Norway",
+              "Sweden"
+            ]
+          }
+        ],
+        "groupby": [
+          "year"
+        ],
+        "metrics": [
+          {
+            "aggregate": "AVG",
+            "column": "temp_change_c",
+            "label": "C"
+          }
+        ],
+        "query_mode": "aggregate",
+        "series_groupby": [
+          "country"
+        ],
+        "sort_by": {
+          "column": "year",
+          "direction": "asc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T23:26:17.397204",
+      "visibility": "internal",
+      "viz_config": {}
+    },
+    {
+      "chart_type": "bar",
+      "config": {
+        "dataset_id": 133,
+        "datasource": "kaveon.climate_energy.temperature_monthly",
+        "echarts_option": {
+          "color": [
+            "#ef4444"
+          ]
+        },
+        "filters": [
+          {
+            "column": "year",
+            "op": "=",
+            "value": "2023"
+          }
+        ],
+        "groupby": [
+          "month"
+        ],
+        "metrics": [
+          {
+            "aggregate": "AVG",
+            "column": "temp_change_c",
+            "label": "C"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "column": "month",
+          "direction": "asc"
+        }
+      },
+      "created_at": "2026-08-11T23:26:17.433449",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "dataset_id": "133",
+      "dataset_name": null,
+      "description": null,
+      "favorite": false,
+      "id": "498",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Monthly Pattern 2023",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "query_config": {
+        "dataset_id": 133,
+        "datasource": "kaveon.climate_energy.temperature_monthly",
+        "filters": [
+          {
+            "column": "year",
+            "op": "=",
+            "value": "2023"
+          }
+        ],
+        "groupby": [
+          "month"
+        ],
+        "metrics": [
+          {
+            "aggregate": "AVG",
+            "column": "temp_change_c",
+            "label": "C"
+          }
+        ],
+        "query_mode": "aggregate",
+        "sort_by": {
+          "column": "month",
+          "direction": "asc"
+        }
+      },
+      "sql_text": null,
+      "thumbnail": null,
+      "updated_at": "2026-08-11T23:26:17.433449",
+      "visibility": "internal",
+      "viz_config": {
+        "echarts_option": {
+          "color": [
+            "#ef4444"
+          ]
+        }
+      }
+    }
+  ],
+  "complete": false,
+  "dashboard_count": 8,
+  "dashboards": [
+    {
+      "charts": "[529, 530, 531, 532, 533, 534]",
+      "created_at": "2026-08-14T21:53:37.330808",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "description": "Global KPIs, world map and links to the trend, ranking and impact deep-dives.",
+      "favorite": false,
+      "filters": "[]",
+      "id": "c67537076eb5172793402e42da4787c9",
+      "is_archived": false,
+      "is_favorite": false,
+      "is_published": true,
+      "layout": "[{\"i\": \"c849f7b57\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"w\": 12, \"h\": 2, \"minW\": 2, \"minH\": 1, \"maxW\": 12, \"maxH\": 40, \"textConfig\": {\"content\": \"A live command-centre view of the pandemic, queried in real time from **Azure Postgres**. Click a country on the map **to cross-filter or jump into a deep-dive below.**\", \"alignment\": \"center\", \"fontSize\": 16, \"color\": \"#eeeeee\"}}, {\"i\": \"c70485ee6\", \"type\": \"chart\", \"chartId\": 529, \"x\": 0, \"y\": 2, \"w\": 3, \"h\": 5, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"cebaceee1\", \"type\": \"chart\", \"chartId\": 530, \"x\": 3, \"y\": 2, \"w\": 3, \"h\": 5, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"c51abe89e\", \"type\": \"chart\", \"chartId\": 531, \"x\": 6, \"y\": 2, \"w\": 3, \"h\": 5, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"cfc848367\", \"type\": \"chart\", \"chartId\": 532, \"x\": 9, \"y\": 2, \"w\": 3, \"h\": 5, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"cdd584bb2\", \"type\": \"chart\", \"chartId\": 533, \"x\": 0, \"y\": 7, \"w\": 8, \"h\": 13, \"minW\": 4, \"minH\": 4, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"cb8bfb361\", \"type\": \"chart\", \"chartId\": 534, \"x\": 8, \"y\": 7, \"w\": 4, \"h\": 13, \"minW\": 3, \"minH\": 4, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"cd06351a7\", \"type\": \"text\", \"x\": 0, \"y\": 20, \"w\": 12, \"h\": 1, \"minW\": 2, \"minH\": 1, \"maxW\": 12, \"maxH\": 40, \"textConfig\": {\"content\": \"*Data: Our World in Data (OWID) COVID-19 dataset. CFR = deaths \\u00f7 confirmed and is sensitive to testing coverage. Demo snapshot.*\", \"alignment\": \"left\", \"fontSize\": 12, \"color\": \"#f59e0b\"}}]",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "COVID-19 Global Overview",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "theme": "dark",
+      "thumbnail": null,
+      "thumbnail_dark": null,
+      "updated_at": "2026-09-05T00:55:31.449817",
+      "visibility": "internal"
+    },
+    {
+      "charts": "[590, 591, 592, 593, 594, 595, 596, 597, 598, 599]",
+      "created_at": "2026-08-25T21:08:43.641125",
+      "created_by": "system",
+      "description": "Platform distribution, regional growth, team sizes, deployment models, and acquisition channels — 504M events, 3M users.",
+      "favorite": false,
+      "filters": "[{\"id\": \"f-surface\", \"column\": \"surface\", \"label\": \"Surface\", \"operator\": \"=\", \"value\": \"AllUp\", \"enabled\": true, \"appliesTo\": \"all\", \"datasetId\": 144}, {\"id\": \"f-platform\", \"column\": \"platform\", \"label\": \"Platform\", \"operator\": \"=\", \"value\": \"AllUp\", \"enabled\": true, \"appliesTo\": \"all\", \"datasetId\": 144}, {\"id\": \"f-license\", \"column\": \"license\", \"label\": \"License\", \"operator\": \"=\", \"value\": \"AllUp\", \"enabled\": true, \"appliesTo\": \"all\", \"datasetId\": 144}, {\"id\": \"f-region\", \"column\": \"region\", \"label\": \"Region\", \"operator\": \"=\", \"value\": \"AllUp\", \"enabled\": true, \"appliesTo\": \"all\", \"datasetId\": 144}, {\"id\": \"f-deployment\", \"column\": \"deployment\", \"label\": \"Deployment\", \"operator\": \"=\", \"value\": \"AllUp\", \"enabled\": true, \"appliesTo\": \"all\", \"datasetId\": 144}, {\"id\": \"f-team_size\", \"column\": \"team_size\", \"label\": \"Team Size\", \"operator\": \"=\", \"value\": \"AllUp\", \"enabled\": true, \"appliesTo\": \"all\", \"datasetId\": 144}, {\"id\": \"f-acquisition_channel\", \"column\": \"acquisition_channel\", \"label\": \"Channel\", \"operator\": \"=\", \"value\": \"AllUp\", \"enabled\": true, \"appliesTo\": \"all\", \"datasetId\": 144}]",
+      "id": "b7e20cb0a8db400abec1fbcbfe11eacc",
+      "is_archived": false,
+      "is_favorite": false,
+      "is_published": true,
+      "layout": "[{\"i\": \"u1cc9d356\", \"type\": \"chart\", \"chartId\": 590, \"x\": 0, \"y\": 0, \"w\": 3, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"ue96dae44\", \"type\": \"chart\", \"chartId\": 591, \"x\": 3, \"y\": 0, \"w\": 3, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"ubd12bb8b\", \"type\": \"chart\", \"chartId\": 592, \"x\": 6, \"y\": 0, \"w\": 3, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"ubb993c69\", \"type\": \"chart\", \"chartId\": 593, \"x\": 9, \"y\": 0, \"w\": 3, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"u82e64940\", \"type\": \"chart\", \"chartId\": 594, \"x\": 0, \"y\": 4, \"w\": 12, \"h\": 7, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"u583bd5d5\", \"type\": \"chart\", \"chartId\": 595, \"x\": 0, \"y\": 11, \"w\": 6, \"h\": 7, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"u1e76f78c\", \"type\": \"chart\", \"chartId\": 596, \"x\": 6, \"y\": 11, \"w\": 6, \"h\": 7, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"u3860b109\", \"type\": \"chart\", \"chartId\": 597, \"x\": 0, \"y\": 18, \"w\": 6, \"h\": 7, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"u441f4311\", \"type\": \"chart\", \"chartId\": 598, \"x\": 6, \"y\": 18, \"w\": 6, \"h\": 7, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"u6398ee5d\", \"type\": \"chart\", \"chartId\": 599, \"x\": 0, \"y\": 25, \"w\": 12, \"h\": 7, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}]",
+      "modified_by": "system",
+      "name": "Kaveon Platform & Growth",
+      "owner": "system",
+      "theme": "dark",
+      "thumbnail": null,
+      "thumbnail_dark": null,
+      "updated_at": "2026-09-02T20:00:34.775341",
+      "visibility": "published"
+    },
+    {
+      "charts": "[578, 579, 580, 581, 582, 583, 584, 585, 586, 587, 588, 589]",
+      "created_at": "2026-08-25T21:01:38.317793",
+      "created_by": "system",
+      "description": "504M events across 6 surfaces, 3M users, 28 days — actions, sessions, queries, errors, latency by platform, license, segment, industry, region, and country.",
+      "favorite": false,
+      "filters": "[{\"id\": \"f-surface\", \"column\": \"surface\", \"label\": \"Surface\", \"operator\": \"=\", \"value\": \"AllUp\", \"enabled\": true, \"appliesTo\": \"all\", \"datasetId\": 144}, {\"id\": \"f-platform\", \"column\": \"platform\", \"label\": \"Platform\", \"operator\": \"=\", \"value\": \"AllUp\", \"enabled\": true, \"appliesTo\": \"all\", \"datasetId\": 144}, {\"id\": \"f-license\", \"column\": \"license\", \"label\": \"License\", \"operator\": \"=\", \"value\": \"AllUp\", \"enabled\": true, \"appliesTo\": \"all\", \"datasetId\": 144}, {\"id\": \"f-segment\", \"column\": \"segment\", \"label\": \"Segment\", \"operator\": \"=\", \"value\": \"AllUp\", \"enabled\": true, \"appliesTo\": \"all\", \"datasetId\": 144}, {\"id\": \"f-industry\", \"column\": \"industry\", \"label\": \"Industry\", \"operator\": \"=\", \"value\": \"AllUp\", \"enabled\": true, \"appliesTo\": \"all\", \"datasetId\": 144}, {\"id\": \"f-region\", \"column\": \"region\", \"label\": \"Region\", \"operator\": \"=\", \"value\": \"AllUp\", \"enabled\": true, \"appliesTo\": \"all\", \"datasetId\": 144}, {\"id\": \"f-country\", \"column\": \"country\", \"label\": \"Country\", \"operator\": \"=\", \"value\": \"AllUp\", \"enabled\": true, \"appliesTo\": \"all\", \"datasetId\": 144}, {\"id\": \"f-deployment\", \"column\": \"deployment\", \"label\": \"Deployment\", \"operator\": \"=\", \"value\": \"AllUp\", \"enabled\": true, \"appliesTo\": \"all\", \"datasetId\": 144}, {\"id\": \"f-acquisition_channel\", \"column\": \"acquisition_channel\", \"label\": \"Channel\", \"operator\": \"=\", \"value\": \"AllUp\", \"enabled\": true, \"appliesTo\": \"all\", \"datasetId\": 144}, {\"id\": \"f-team_size\", \"column\": \"team_size\", \"label\": \"Team Size\", \"operator\": \"=\", \"value\": \"AllUp\", \"enabled\": true, \"appliesTo\": \"all\", \"datasetId\": 144}]",
+      "id": "9782aba572c14851a6091253a76d7b03",
+      "is_archived": false,
+      "is_favorite": false,
+      "is_published": true,
+      "layout": "[{\"i\": \"uc450df28\", \"type\": \"chart\", \"chartId\": 578, \"x\": 0, \"y\": 0, \"w\": 3, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"u580ff95d\", \"type\": \"chart\", \"chartId\": 579, \"x\": 3, \"y\": 0, \"w\": 3, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"u64ccf07c\", \"type\": \"chart\", \"chartId\": 580, \"x\": 6, \"y\": 0, \"w\": 3, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"u1b87574b\", \"type\": \"chart\", \"chartId\": 581, \"x\": 9, \"y\": 0, \"w\": 3, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"u1f68d4d2\", \"type\": \"chart\", \"chartId\": 582, \"x\": 6, \"y\": 4, \"w\": 6, \"h\": 11, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"u6f385fa1\", \"type\": \"chart\", \"chartId\": 583, \"x\": 0, \"y\": 4, \"w\": 6, \"h\": 11, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"u4009bc6c\", \"type\": \"chart\", \"chartId\": 584, \"x\": 0, \"y\": 15, \"w\": 6, \"h\": 7, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"ueba9baa4\", \"type\": \"chart\", \"chartId\": 585, \"x\": 6, \"y\": 15, \"w\": 6, \"h\": 7, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"uf963eed0\", \"type\": \"chart\", \"chartId\": 586, \"x\": 0, \"y\": 22, \"w\": 6, \"h\": 7, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"uad4de497\", \"type\": \"chart\", \"chartId\": 587, \"x\": 6, \"y\": 22, \"w\": 6, \"h\": 7, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"u9c508e2a\", \"type\": \"chart\", \"chartId\": 588, \"x\": 0, \"y\": 29, \"w\": 6, \"h\": 7, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"u074288e6\", \"type\": \"chart\", \"chartId\": 589, \"x\": 6, \"y\": 29, \"w\": 6, \"h\": 7, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}]",
+      "modified_by": "system",
+      "name": "Kaveon Events",
+      "owner": "system",
+      "theme": "dark",
+      "thumbnail": null,
+      "thumbnail_dark": null,
+      "updated_at": "2026-08-26T16:30:08.505795",
+      "visibility": "published"
+    },
+    {
+      "charts": "[600, 601, 602, 603, 604, 605, 606, 607, 608, 609, 610]",
+      "created_at": "2026-08-25T21:08:43.641125",
+      "created_by": "system",
+      "description": "Global distribution of 504M events across 27 countries, 4 regions, 12 industries — actions, sessions, errors, and latency.",
+      "favorite": false,
+      "filters": "[{\"id\": \"f-surface\", \"column\": \"surface\", \"label\": \"Surface\", \"operator\": \"=\", \"value\": \"AllUp\", \"enabled\": true, \"appliesTo\": \"all\", \"datasetId\": 144}, {\"id\": \"f-region\", \"column\": \"region\", \"label\": \"Region\", \"operator\": \"=\", \"value\": \"AllUp\", \"enabled\": true, \"appliesTo\": \"all\", \"datasetId\": 144}, {\"id\": \"f-country\", \"column\": \"country\", \"label\": \"Country\", \"operator\": \"=\", \"value\": \"AllUp\", \"enabled\": true, \"appliesTo\": \"all\", \"datasetId\": 144}, {\"id\": \"f-industry\", \"column\": \"industry\", \"label\": \"Industry\", \"operator\": \"=\", \"value\": \"AllUp\", \"enabled\": true, \"appliesTo\": \"all\", \"datasetId\": 144}, {\"id\": \"f-segment\", \"column\": \"segment\", \"label\": \"Segment\", \"operator\": \"=\", \"value\": \"AllUp\", \"enabled\": true, \"appliesTo\": \"all\", \"datasetId\": 144}, {\"id\": \"f-platform\", \"column\": \"platform\", \"label\": \"Platform\", \"operator\": \"=\", \"value\": \"AllUp\", \"enabled\": true, \"appliesTo\": \"all\", \"datasetId\": 144}, {\"id\": \"f-license\", \"column\": \"license\", \"label\": \"License\", \"operator\": \"=\", \"value\": \"AllUp\", \"enabled\": true, \"appliesTo\": \"all\", \"datasetId\": 144}]",
+      "id": "a44e0ad2a51048b6bd2a578533ae5333",
+      "is_archived": false,
+      "is_favorite": false,
+      "is_published": true,
+      "layout": "[{\"i\": \"ue5e8d0e2\", \"type\": \"chart\", \"chartId\": 600, \"x\": 0, \"y\": 0, \"w\": 3, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"ubc2d41c0\", \"type\": \"chart\", \"chartId\": 601, \"x\": 3, \"y\": 0, \"w\": 3, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"u0e406d1f\", \"type\": \"chart\", \"chartId\": 602, \"x\": 6, \"y\": 0, \"w\": 3, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"u2dda7a5f\", \"type\": \"chart\", \"chartId\": 603, \"x\": 9, \"y\": 0, \"w\": 3, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"u191c2c6f\", \"type\": \"chart\", \"chartId\": 604, \"x\": 0, \"y\": 4, \"w\": 12, \"h\": 10, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"u0fac927d\", \"type\": \"chart\", \"chartId\": 605, \"x\": 0, \"y\": 14, \"w\": 6, \"h\": 8, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"u5de00c3c\", \"type\": \"chart\", \"chartId\": 606, \"x\": 6, \"y\": 14, \"w\": 6, \"h\": 8, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"ub41c1467\", \"type\": \"chart\", \"chartId\": 607, \"x\": 0, \"y\": 22, \"w\": 6, \"h\": 7, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"u251dc5b0\", \"type\": \"chart\", \"chartId\": 608, \"x\": 6, \"y\": 22, \"w\": 6, \"h\": 7, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"u04713b53\", \"type\": \"chart\", \"chartId\": 609, \"x\": 0, \"y\": 29, \"w\": 6, \"h\": 7, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"ufef3a574\", \"type\": \"chart\", \"chartId\": 610, \"x\": 6, \"y\": 29, \"w\": 6, \"h\": 7, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}]",
+      "modified_by": "system",
+      "name": "Kaveon Worldwide Usage",
+      "owner": "system",
+      "theme": "dark",
+      "thumbnail": null,
+      "thumbnail_dark": null,
+      "updated_at": "2026-08-26T06:31:22.232717",
+      "visibility": "published"
+    },
+    {
+      "charts": "[482, 483, 484, 485, 486, 487, 488, 489, 490, 491]",
+      "created_at": "2026-08-11T22:32:21.764646",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "description": "LLM leaderboard: Arena ELO rankings, benchmark scores (MMLU, HumanEval, GSM8K), pricing, head-to-head battles. 34 models from OpenAI, Anthropic, Google, Meta, DeepSeek, xAI.",
+      "favorite": false,
+      "filters": "[{\"id\": \"flt-ai-provider\", \"column\": \"provider\", \"label\": \"Provider\", \"operator\": \"IN\", \"value\": \"\", \"appliesTo\": \"all\", \"enabled\": true, \"datasetId\": 135, \"filterType\": \"value\"}, {\"id\": \"flt-ai-family\", \"column\": \"family\", \"label\": \"Model Family\", \"operator\": \"IN\", \"value\": \"\", \"appliesTo\": \"all\", \"enabled\": true, \"datasetId\": 135, \"filterType\": \"value\"}, {\"id\": \"flt-ai-open\", \"column\": \"is_open_source\", \"label\": \"Open Source\", \"operator\": \"=\", \"value\": \"\", \"appliesTo\": \"all\", \"enabled\": true, \"datasetId\": 135, \"filterType\": \"value\"}, {\"id\": \"flt-ai-cat\", \"column\": \"category\", \"label\": \"Battle Category\", \"operator\": \"=\", \"value\": \"\", \"appliesTo\": \"all\", \"enabled\": true, \"datasetId\": 137, \"filterType\": \"value\"}]",
+      "id": "2dea3fcf1d9a47948dcab4d413e6171b",
+      "is_archived": false,
+      "is_favorite": false,
+      "is_published": true,
+      "layout": "[{\"i\": \"cea8e97b8\", \"type\": \"chart\", \"chartId\": 482, \"x\": 0, \"y\": 0, \"w\": 3, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"c184020b6\", \"type\": \"chart\", \"chartId\": 483, \"x\": 3, \"y\": 0, \"w\": 3, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"c0723dd9b\", \"type\": \"chart\", \"chartId\": 484, \"x\": 6, \"y\": 0, \"w\": 3, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"c5a56aa41\", \"type\": \"chart\", \"chartId\": 485, \"x\": 9, \"y\": 0, \"w\": 3, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"c1a0fdc51\", \"type\": \"chart\", \"chartId\": 486, \"x\": 0, \"y\": 4, \"w\": 6, \"h\": 8, \"minW\": 3, \"minH\": 4, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"cb9b91b06\", \"type\": \"chart\", \"chartId\": 487, \"x\": 6, \"y\": 4, \"w\": 6, \"h\": 8, \"minW\": 3, \"minH\": 4, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"c6c9ce846\", \"type\": \"chart\", \"chartId\": 488, \"x\": 0, \"y\": 12, \"w\": 6, \"h\": 7, \"minW\": 3, \"minH\": 4, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"cd5f580ec\", \"type\": \"chart\", \"chartId\": 489, \"x\": 6, \"y\": 12, \"w\": 3, \"h\": 7, \"minW\": 2, \"minH\": 4, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"c52f5f8af\", \"type\": \"chart\", \"chartId\": 490, \"x\": 9, \"y\": 12, \"w\": 3, \"h\": 7, \"minW\": 2, \"minH\": 4, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"ca7be23c3\", \"type\": \"chart\", \"chartId\": 491, \"x\": 0, \"y\": 19, \"w\": 12, \"h\": 7, \"minW\": 3, \"minH\": 4, \"maxW\": 12, \"maxH\": 40}]",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "AI Model Arena",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "theme": "dark",
+      "thumbnail": null,
+      "thumbnail_dark": null,
+      "updated_at": "2026-08-24T20:07:07.114949",
+      "visibility": "internal"
+    },
+    {
+      "charts": "[521, 522, 523, 526, 525, 524]",
+      "created_at": "2026-08-14T21:08:32.87301",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "description": "3M taxi trips, Jan 2023. Borough breakdown, revenue, fares. Source: NYC TLC.",
+      "favorite": false,
+      "filters": "[]",
+      "id": "7f1936888df648e3b921547d34d200bd",
+      "is_archived": false,
+      "is_favorite": false,
+      "is_published": true,
+      "layout": "[{\"i\": \"c1a490982\", \"type\": \"chart\", \"chartId\": 521, \"x\": 0, \"y\": 0, \"w\": 4, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"c89601325\", \"type\": \"chart\", \"chartId\": 522, \"x\": 4, \"y\": 0, \"w\": 4, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"c72a480dc\", \"type\": \"chart\", \"chartId\": 523, \"x\": 8, \"y\": 0, \"w\": 4, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"cb5bb02a5\", \"type\": \"chart\", \"chartId\": 526, \"x\": 0, \"y\": 4, \"w\": 7, \"h\": 10, \"minW\": 4, \"minH\": 4, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"cdbf0906a\", \"type\": \"chart\", \"chartId\": 525, \"x\": 7, \"y\": 4, \"w\": 5, \"h\": 10, \"minW\": 3, \"minH\": 4, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"c30106c30\", \"type\": \"chart\", \"chartId\": 524, \"x\": 0, \"y\": 14, \"w\": 12, \"h\": 8, \"minW\": 4, \"minH\": 4, \"maxW\": 12, \"maxH\": 40}]",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "NYC Yellow Taxi",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "theme": "dark",
+      "thumbnail": null,
+      "thumbnail_dark": null,
+      "updated_at": "2026-08-24T06:27:57.974168",
+      "visibility": "internal"
+    },
+    {
+      "charts": "[499, 500, 501, 502, 503, 504, 505, 506]",
+      "created_at": "2026-08-11T23:26:17.798874",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "description": "220 countries - consumption, generation, fossil vs renewable mix, carbon intensity, GHG emissions. Source: Our World in Data.",
+      "favorite": false,
+      "filters": "[{\"id\": \"flt-eng-year\", \"column\": \"year\", \"label\": \"Year\", \"operator\": \"=\", \"value\": \"\", \"appliesTo\": \"all\", \"enabled\": true, \"datasetId\": 132, \"filterType\": \"value\"}, {\"id\": \"flt-eng-country\", \"column\": \"country\", \"label\": \"Country\", \"operator\": \"IN\", \"value\": \"\", \"appliesTo\": \"all\", \"enabled\": true, \"datasetId\": 132, \"filterType\": \"value\"}, {\"id\": \"flt-eng-iso\", \"column\": \"iso_code\", \"label\": \"Region (ISO)\", \"operator\": \"IN\", \"value\": \"\", \"appliesTo\": \"all\", \"enabled\": true, \"datasetId\": 132, \"filterType\": \"value\"}]",
+      "id": "e668aa15d99147abbc4d5135c2a31b82",
+      "is_archived": false,
+      "is_favorite": false,
+      "is_published": true,
+      "layout": "[{\"i\": \"cc487f761\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"w\": 12, \"h\": 2, \"minW\": 2, \"minH\": 1, \"maxW\": 12, \"maxH\": 40, \"textConfig\": {\"content\": \"Global energy landscape across **220 countries**. How much energy does the world consume, what is the fossil vs renewable mix, and which countries have the highest carbon intensity? Filter by year, country, or region.\", \"alignment\": \"center\", \"fontSize\": 15, \"color\": \"#94a3b8\"}}, {\"i\": \"c7a9a953f\", \"type\": \"chart\", \"chartId\": 499, \"x\": 0, \"y\": 2, \"w\": 3, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"ca9cc49f9\", \"type\": \"chart\", \"chartId\": 500, \"x\": 3, \"y\": 2, \"w\": 3, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"c124a6503\", \"type\": \"chart\", \"chartId\": 501, \"x\": 6, \"y\": 2, \"w\": 3, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"cc4c7f9b4\", \"type\": \"chart\", \"chartId\": 502, \"x\": 9, \"y\": 2, \"w\": 3, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"c17a95507\", \"type\": \"chart\", \"chartId\": 503, \"x\": 0, \"y\": 6, \"w\": 7, \"h\": 8, \"minW\": 4, \"minH\": 4, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"c6027d7d2\", \"type\": \"chart\", \"chartId\": 504, \"x\": 7, \"y\": 6, \"w\": 5, \"h\": 8, \"minW\": 3, \"minH\": 4, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"c5c5c2cd4\", \"type\": \"chart\", \"chartId\": 505, \"x\": 0, \"y\": 14, \"w\": 6, \"h\": 7, \"minW\": 3, \"minH\": 4, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"ce6eb99fe\", \"type\": \"chart\", \"chartId\": 506, \"x\": 6, \"y\": 14, \"w\": 6, \"h\": 7, \"minW\": 3, \"minH\": 4, \"maxW\": 12, \"maxH\": 40}]",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Global Energy",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "theme": "dark",
+      "thumbnail": null,
+      "thumbnail_dark": null,
+      "updated_at": "2026-08-21T21:17:32.921842",
+      "visibility": "internal"
+    },
+    {
+      "charts": "[492, 493, 494, 495, 496, 497, 498]",
+      "created_at": "2026-08-11T23:26:17.469787",
+      "created_by": "pruthvi.prodduturi@gmail.com",
+      "description": "Temperature anomaly by country. 288 countries, monthly 2020-2025 vs 1951-1980 baseline. Source: FAO.",
+      "favorite": false,
+      "filters": "[{\"id\": \"flt-clim-year\", \"column\": \"year\", \"label\": \"Year\", \"operator\": \"=\", \"value\": \"\", \"appliesTo\": \"all\", \"enabled\": true, \"datasetId\": 133, \"filterType\": \"value\"}, {\"id\": \"flt-clim-country\", \"column\": \"country\", \"label\": \"Country\", \"operator\": \"IN\", \"value\": \"\", \"appliesTo\": \"all\", \"enabled\": true, \"datasetId\": 133, \"filterType\": \"value\"}, {\"id\": \"flt-clim-month\", \"column\": \"month\", \"label\": \"Month\", \"operator\": \"=\", \"value\": \"\", \"appliesTo\": \"all\", \"enabled\": true, \"datasetId\": 133, \"filterType\": \"value\"}]",
+      "id": "fdcc4e3a9f1347c8adcba981c02acfef",
+      "is_archived": false,
+      "is_favorite": false,
+      "is_published": true,
+      "layout": "[{\"i\": \"c98e96cd8\", \"type\": \"chart\", \"chartId\": 492, \"x\": 0, \"y\": 0, \"w\": 3, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"c25e776ea\", \"type\": \"chart\", \"chartId\": 493, \"x\": 3, \"y\": 0, \"w\": 3, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"c08a9f5b6\", \"type\": \"chart\", \"chartId\": 494, \"x\": 6, \"y\": 0, \"w\": 3, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"c5fde885b\", \"type\": \"chart\", \"chartId\": 495, \"x\": 9, \"y\": 0, \"w\": 3, \"h\": 4, \"minW\": 2, \"minH\": 2, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"c927f9c30\", \"type\": \"chart\", \"chartId\": 496, \"x\": 0, \"y\": 4, \"w\": 7, \"h\": 9, \"minW\": 4, \"minH\": 4, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"c8f60c332\", \"type\": \"chart\", \"chartId\": 497, \"x\": 7, \"y\": 4, \"w\": 5, \"h\": 9, \"minW\": 3, \"minH\": 4, \"maxW\": 12, \"maxH\": 40}, {\"i\": \"c550a622b\", \"type\": \"chart\", \"chartId\": 498, \"x\": 0, \"y\": 13, \"w\": 12, \"h\": 8, \"minW\": 4, \"minH\": 4, \"maxW\": 12, \"maxH\": 40}]",
+      "modified_by": "pruthvi.prodduturi@gmail.com",
+      "name": "Global Climate",
+      "owner": "pruthvi.prodduturi@gmail.com",
+      "theme": "dark",
+      "thumbnail": null,
+      "thumbnail_dark": null,
+      "updated_at": "2026-08-14T23:23:44.117178",
+      "visibility": "internal"
+    }
+  ],
+  "source": "https://kaveon.vercel.app",
+  "dataset_references": [
+    {
+      "dataset_id": 132,
+      "chart_count": 8,
+      "datasource": "kaveon.climate_energy.energy_annual",
+      "metadata_status": "referenced"
+    },
+    {
+      "dataset_id": 133,
+      "chart_count": 6,
+      "datasource": "kaveon.climate_energy.temperature_monthly",
+      "metadata_status": "referenced"
+    },
+    {
+      "dataset_id": 134,
+      "chart_count": 1,
+      "datasource": "kaveon.climate_energy.climate_x_energy",
+      "metadata_status": "dangling_reference_dataset_endpoint_404"
+    },
+    {
+      "dataset_id": 135,
+      "chart_count": 8,
+      "datasource": "kaveon.ai_benchmarks.leaderboard",
+      "metadata_status": "referenced"
+    },
+    {
+      "dataset_id": 137,
+      "chart_count": 1,
+      "datasource": "kaveon.ai_benchmarks.arena_battles",
+      "metadata_status": "referenced"
+    },
+    {
+      "dataset_id": 138,
+      "chart_count": 1,
+      "datasource": "kaveon.ai_benchmarks.pricing",
+      "metadata_status": "referenced"
+    },
+    {
+      "dataset_id": 139,
+      "chart_count": 6,
+      "datasource": "kaveon.public.covid_global",
+      "metadata_status": "referenced"
+    },
+    {
+      "dataset_id": 140,
+      "chart_count": 6,
+      "datasource": "kaveon.public.nyc_taxi_borough",
+      "metadata_status": "referenced"
+    },
+    {
+      "dataset_id": 144,
+      "chart_count": 33,
+      "datasource": "kaveon.public.kaveon_events_enriched",
+      "metadata_status": "referenced"
+    }
+  ],
+  "missing_dataset_ids": [
+    134
+  ],
+  "audit_notes": [
+    "Dashboard details, layouts, filters, and all referenced chart configurations were exported from live.",
+    "Dataset 134 is referenced by the Global Climate world-map chart but GET /datasets/134 returns 404.",
+    "The browser was closed during the optional data-sources request; source registration objects and dataset row counts are not present."
+  ]
+}

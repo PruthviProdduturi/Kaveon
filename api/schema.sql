@@ -179,13 +179,18 @@ BEGIN
         user_email     NVARCHAR(255) NOT NULL DEFAULT 'system',
         trigger_source NVARCHAR(50)  NULL,
         dataset_id     NVARCHAR(36)  NULL,
-        tables_used    NVARCHAR(MAX) NULL
+        tables_used    NVARCHAR(MAX) NULL,
+        engine_query_id NVARCHAR(36) NULL,
+        engine_details NVARCHAR(MAX) NULL
     );
     CREATE INDEX idx_query_history_executed_at ON query_history(executed_at);
     CREATE INDEX idx_query_history_user_email  ON query_history(user_email);
     CREATE INDEX idx_query_history_status      ON query_history(status);
     PRINT 'Table query_history created';
 END
+GO
+IF COL_LENGTH('query_history', 'engine_query_id') IS NULL ALTER TABLE query_history ADD engine_query_id NVARCHAR(36) NULL;
+IF COL_LENGTH('query_history', 'engine_details') IS NULL ALTER TABLE query_history ADD engine_details NVARCHAR(MAX) NULL;
 GO
 
 -- ── Favorites ─────────────────────────────────────────────────────────────────
