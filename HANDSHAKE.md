@@ -26,6 +26,14 @@ changed unless the application actually changes it; the user controls that picke
 
 ## Ownership map
 
+### Fresh AKS dashboard metadata repair — September 8
+
+The dashboard list returned HTTP 500 because the PostgreSQL bootstrap omitted
+`dashboards.thumbnail`. Added idempotent thumbnail and thumbnail_dark columns
+to `api/schema_postgresql.sql` and applied those additive statements to the
+test AKS metadata database. The deployed dashboard service now returns an empty
+list successfully. No existing dashboards were removed or fabricated.
+
 ### AKS Microsoft popup correction — September 8
 
 The public-client callback was missing MSAL v5's redirect bridge, and ClientLayout

@@ -141,6 +141,9 @@ CREATE TABLE IF NOT EXISTS dashboards (
     created_by   VARCHAR(255) NOT NULL DEFAULT 'system',
     modified_by  VARCHAR(255) NULL
 );
+-- Reconcile existing installations as well as fresh metadata databases.
+ALTER TABLE dashboards ADD COLUMN IF NOT EXISTS thumbnail TEXT;
+ALTER TABLE dashboards ADD COLUMN IF NOT EXISTS thumbnail_dark TEXT;
 CREATE INDEX IF NOT EXISTS idx_dashboards_name        ON dashboards(name);
 CREATE INDEX IF NOT EXISTS idx_dashboards_slug        ON dashboards(slug);
 CREATE INDEX IF NOT EXISTS idx_dashboards_visibility  ON dashboards(visibility);
