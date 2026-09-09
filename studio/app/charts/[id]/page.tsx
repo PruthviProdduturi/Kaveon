@@ -23,7 +23,7 @@ export const dynamicParams = true;
 // using same-origin relative API calls
 
 interface ChartDetail {
-  id: number;
+  id: string | number;
   name: string;
   description?: string | null;
   chart_type: string;

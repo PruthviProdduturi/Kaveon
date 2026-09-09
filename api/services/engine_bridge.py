@@ -110,9 +110,9 @@ def sync_catalog(source, actor, expected_revision=None):
 
 
 def execute(sql, catalog, actor, role, schema=None):
-    roles = {"Analyst": "analyst", "Admin": "admin"}
+    roles = {"Analyst": "analyst", "Editor": "analyst", "Admin": "admin"}
     if role not in roles:
-        raise HTTPException(403, "Analyst role required for Engine SQL")
+        raise HTTPException(403, "A recognized Kaveon role is required for Engine SQL")
     result = _request("POST", "/v1/statement", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
                       payload={"query": sql, "catalog": catalog, "schema": schema,
                                "source": "studio", "client": "kaveon-api"}, role=roles[role])

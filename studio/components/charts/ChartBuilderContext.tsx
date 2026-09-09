@@ -14,6 +14,38 @@ import { acquireQuerySlot } from "../../utils/querySemaphore";
 const _CLIENT_CACHE = new Map<string, { result: any; ts: number }>();
 const CLIENT_CACHE_TTL = 300_000; // 5 min, matches server TTL
 
+interface EngineCatalogSource {
+  id: string;
+  catalog: string;
+}
+
+let engineCatalogsPromise: Promise<EngineCatalogSource[]> | null = null;
+
+/** Resolve a dataset's catalog through the server-owned Engine source list.
+ * The browser never supplies a storage URL or Engine credential. */
+async function resolveEngineCatalog(databaseName: string | null | undefined, userEmail: string | null): Promise<string | null> {
+  if (!databaseName) return null;
+  if (!engineCatalogsPromise) {
+    engineCatalogsPromise = msalFetch(`${API_BASE}/api/v1/lab/engine/sources`, {
+      headers: userEmail ? { "x-user-email": userEmail } : undefined,
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok || !data.success || !Array.isArray(data.sources)) return [];
+        return data.sources.filter((source: unknown): source is EngineCatalogSource =>
+          Boolean(source && typeof source === "object"
+            && typeof (source as EngineCatalogSource).id === "string"
+            && typeof (source as EngineCatalogSource).catalog === "string"));
+      })
+      .catch(() => {
+        engineCatalogsPromise = null;
+        return [];
+      });
+  }
+  const sources = await engineCatalogsPromise;
+  return sources.find((source) => source.catalog.toLowerCase() === databaseName.toLowerCase())?.catalog ?? null;
+}
+
 function clientCacheKey(database: string, sql: string): string {
   let h = 0;
   const s = `${database}\0${sql}`;
@@ -917,6 +949,8 @@ export interface DatasetDetailForChart {
   schema_name?: string | null;
   database_name?: string | null;
   date_column?: string | null;
+  /** Server-stored definition for a virtual dataset. It is never client-generated. */
+  sql_text?: string | null;
 }
 
 export interface ChartFilterOption {
@@ -1240,8 +1274,8 @@ export const TEMPLATES: ChartTemplate[] = [
 ];
 
 export interface ChartBuilderContextValue {
-  chartId: number | null;
-  setChartId: (id: number | null) => void;
+  chartId: string | number | null;
+  setChartId: (id: string | number | null) => void;
   datasets: DatasetSummary[];
   datasetsError: string | null;
   selectedDatasetId: number | null;
@@ -1327,7 +1361,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
 }) => {
   const { isAuthenticated, account } = useAuth();
 
-  const [chartId, setChartId] = useState<number | null>(null);
+  const [chartId, setChartId] = useState<string | number | null>(null);
   const [datasets, setDatasets] = useState<DatasetSummary[]>([]);
   const [datasetsError, setDatasetsError] = useState<string | null>(null);
   const [selectedDatasetId, setSelectedDatasetId] = useState<number | null>(null);
@@ -1447,6 +1481,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
           schema_name: detail.schema_name ?? null,
           database_name: detail.database_name ?? null,
           date_column: detail.date_column ?? null,
+          sql_text: detail.sql_text ?? null,
         });
         setDatasetDetailError(null);
       } catch (e: unknown) {
@@ -1583,12 +1618,14 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
       return null;
     }
 
-    const datasourceParts = [
-      datasetDetail?.database_name,
-      datasetDetail?.schema_name,
-      datasetDetail?.table_name,
-    ].filter(Boolean) as string[];
-    const datasource = datasourceParts.join(".") || datasetDetail?.table_name || null;
+    // Virtual datasets deliberately have no physical table. Sending a partial
+    // `database.schema` datasource would override the server's stored sql_text
+    // and prevent the query generator from using its subquery source.
+    const datasource = datasetDetail?.table_name
+      ? [datasetDetail.database_name, datasetDetail.schema_name, datasetDetail.table_name]
+        .filter(Boolean)
+        .join(".")
+      : null;
 
     const primaryFilters = filters.filter((f) => !f.groupKey || f.groupKey === "primary");
     const secondaryFilters = filters.filter((f) => f.groupKey === "secondary");
@@ -3094,6 +3131,15 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     const start = performance.now();
 
     try {
+      // A dataset whose database name is an active Engine catalog is executed
+      // through the Engine route. Catalog resolution is server-owned and only
+      // matches an advertised catalog name, so relational datasets keep their
+      // existing pool-backed execution path.
+      const engineCatalog = await resolveEngineCatalog(
+        datasetDetail?.database_name,
+        account?.email || account?.username || null,
+      );
+
       // ── Context-first path for dashboard charts ────────────────────────
       // When running inside a dashboard, try to serve the chart from the
       // DLM's precomputed context before generating SQL. Single-metric
@@ -3101,7 +3147,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
       // instantly from dlm_answers with zero database trip.
       const isDashboardCtx = (runContext || "").startsWith("dashboard");
       const validMetrics = (config.metrics || []).filter((m: any) => m.column && m.aggregate);
-      if (isDashboardCtx && validMetrics.length > 0) {
+      if (!engineCatalog && isDashboardCtx && validMetrics.length > 0) {
         const groupBy = config.groupby?.[0] || null;
         const serveFilters = (extraFilters || [])
           .filter((f: any) => f.column && f.value && f.value !== "AllUp"
@@ -3230,7 +3276,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
 
       const executeBody = {
         sql_text: sqlText,
-        database: datasetDetail?.database_name,
+        database: engineCatalog || datasetDetail?.database_name,
         source: executeSource,
         tables_used: tablesUsed.length > 0 ? JSON.stringify(tablesUsed) : null,
         chart_id:     chartId              ?? undefined,
@@ -3246,15 +3292,17 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
       let executeJson: any;
 
       // Client-side cache: skip the HTTP round-trip entirely on repeat views.
-      const cck = isDashboard && datasetDetail?.database_name
-        ? clientCacheKey(datasetDetail.database_name, sqlText)
+      const cacheDatabase = engineCatalog || datasetDetail?.database_name;
+      const cck = isDashboard && cacheDatabase
+        ? clientCacheKey(cacheDatabase, sqlText)
         : null;
       const clientCached = cck ? clientCacheGet(cck) : null;
 
       if (clientCached) {
         executeJson = clientCached;
       } else {
-        const executeRes = await msalFetchRetry(`${API_BASE}/api/v1/sql/execute`, {
+        const executeEndpoint = engineCatalog ? "/api/v1/sql/engine" : "/api/v1/sql/execute";
+        const executeRes = await msalFetchRetry(`${API_BASE}${executeEndpoint}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(executeBody),

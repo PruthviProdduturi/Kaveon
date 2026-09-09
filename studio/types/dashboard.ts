@@ -10,6 +10,9 @@
  */
 export type ComponentType = 'chart' | 'text' | 'header' | 'tabs' | 'divider' | 'row' | 'column';
 
+/** Chart identifiers are opaque: new catalog records use UUIDs; legacy records may be numeric. */
+export type ChartId = string | number;
+
 /**
  * Filter operators supported by the filter system
  */
@@ -59,7 +62,7 @@ export interface FilterConfig {
  */
 export interface DashboardFilter extends FilterConfig {
   /** Which charts this filter applies to */
-  appliesTo: 'all' | number[];
+  appliesTo: 'all' | ChartId[];
   /** Whether this filter is currently enabled */
   enabled: boolean;
 }
@@ -191,7 +194,7 @@ export interface DashboardLayoutItem {
   type: ComponentType;
 
   /** Chart ID (required for chart components) */
-  chartId?: number;
+  chartId?: ChartId;
 
   /** Configuration for text components */
   textConfig?: TextComponentConfig;
@@ -276,7 +279,7 @@ export interface DashboardConfig {
   filterLogic: FilterLogic;
 
   /** Chart IDs used in this dashboard (for quick reference) */
-  chartIds: number[];
+  chartIds: ChartId[];
 
   /** Dashboard metadata */
   metadata?: {

@@ -7,7 +7,7 @@ import { useRouter } from 'next/navigation';
 import { useChartBuilder, ChartBuilderProvider } from '../../charts/ChartBuilderContext';
 import { useDashboard, resolveEffectiveFilters } from '../DashboardContext';
 import DashboardFilterBarReadOnly from '../DashboardFilterBarReadOnly';
-import type { DashboardFilter, DashboardLayoutItem, FilterConfig, FilterOperator } from '../../../types/dashboard';
+import type { ChartId, DashboardFilter, DashboardLayoutItem, FilterConfig, FilterOperator } from '../../../types/dashboard';
 import { msalFetch } from '../../../utils/msalFetch';
 import { API_BASE } from '../../../config';
 
@@ -18,7 +18,7 @@ const ChartPreview = dynamic(() => import('../../charts/ChartPreview'), { ssr: f
 const ChartHydrator = dynamic(() => import('../../charts/ChartHydrator'), { ssr: false });
 
 interface ChartActionsOverlayProps {
-  chartId: number;
+  chartId: ChartId;
   dashboardId?: string | null;
   isEditMode: boolean;
   onRefresh: () => void;

@@ -291,7 +291,8 @@ def create_dataset(data: dict, user_id: str) -> dict:
 
 
 def update_dataset(dataset_id: str, data: dict, user_id: str) -> Optional[dict]:
-    if not get_dataset_by_id(dataset_id):
+    existing = get_dataset_by_id(dataset_id)
+    if not existing:
         return None
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -308,9 +309,25 @@ def update_dataset(dataset_id: str, data: dict, user_id: str) -> Optional[dict]:
         vis = data["visibility"] if data["visibility"] in VALID_VISIBILITY else "internal"
         updates.append(f"visibility = @param{i}"); params.append(vis); i += 1
 
-    if "filters" in data:
+    # `tables_used` also carries the server-owned virtual dataset SQL.  Merge
+    # an update into its JSON envelope so a filter-only seed refresh cannot
+    # silently turn a virtual Engine dataset into an empty physical source.
+    if "filters" in data or "sql_text" in data:
+        try:
+            table_metadata = json.loads(existing.get("tables_used") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            table_metadata = {}
+        if not isinstance(table_metadata, dict):
+            table_metadata = {}
+        if "filters" in data:
+            table_metadata["filters"] = data["filters"] or []
+        if "sql_text" in data:
+            if data["sql_text"]:
+                table_metadata["sql_text"] = data["sql_text"]
+            else:
+                table_metadata.pop("sql_text", None)
         updates.append(f"tables_used = @param{i}")
-        params.append(json.dumps({"filters": data["filters"]})); i += 1
+        params.append(json.dumps(table_metadata)); i += 1
 
     updates.append(f"modified_at = @param{i}"); params.append(now); i += 1
     updates.append(f"modified_by = @param{i}"); params.append(user_id); i += 1

@@ -16,6 +16,7 @@ import type {
   FilterConfig,
   FilterLogic,
   DashboardConfig,
+  ChartId,
   ComponentType,
   FilterResolutionResult,
   DEFAULT_COMPONENT_DIMENSIONS,
@@ -39,8 +40,8 @@ function distributeGridCols(n: number): number[] {
 /**
  * Recursively collect all chart IDs from a layout tree (including nested children).
  */
-function collectChartIds(items: DashboardLayoutItem[]): number[] {
-  const ids: number[] = [];
+function collectChartIds(items: DashboardLayoutItem[]): ChartId[] {
+  const ids: ChartId[] = [];
   for (const item of items) {
     if (item.type === 'chart' && item.chartId) ids.push(item.chartId);
     if (item.children) ids.push(...collectChartIds(item.children));
@@ -66,7 +67,7 @@ interface DashboardContextState {
   filterLogic: FilterLogic;
 
   // Chart config cache for parallel loading
-  chartConfigCache: Map<number, any>;
+  chartConfigCache: Map<ChartId, any>;
   isPreloading: boolean;
 
   // UI state
@@ -127,7 +128,7 @@ interface DashboardContextState {
 
   // Chart preloading
   preloadAllCharts: (apiBase: string, msalFetch: any) => Promise<void>;
-  getChartConfig: (chartId: number) => any | null;
+  getChartConfig: (chartId: ChartId) => any | null;
 
   // Global refresh (auto-refresh / manual refresh all charts)
   globalRefreshTick: number;
@@ -211,7 +212,7 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
   }, []);
 
   // Chart config cache for parallel loading
-  const [chartConfigCache, setChartConfigCache] = useState<Map<number, any>>(new Map());
+  const [chartConfigCache, setChartConfigCache] = useState<Map<ChartId, any>>(new Map());
   const [isPreloading, setIsPreloading] = useState<boolean>(false);
   const [globalRefreshTick, setGlobalRefreshTick] = useState<number>(0);
   const triggerGlobalRefresh = useCallback(() => setGlobalRefreshTick((t) => t + 1), []);
@@ -1040,7 +1041,7 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
       const results = await Promise.all(fetchPromises);
 
       // Build the cache map
-      const newCache = new Map<number, any>();
+      const newCache = new Map<ChartId, any>();
       results.forEach(({ chartId, data }) => {
         if (data) {
           newCache.set(chartId, data);
@@ -1060,7 +1061,7 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
    * @param chartId The chart ID to retrieve
    * @returns The chart config if cached, null otherwise
    */
-  const getChartConfig = useCallback((chartId: number): any | null => {
+  const getChartConfig = useCallback((chartId: ChartId): any | null => {
     return chartConfigCache.get(chartId) || null;
   }, [chartConfigCache]);
 
@@ -1195,7 +1196,7 @@ export type { DashboardConfig };
  * mutating global dashboard state. Keep in sync with getEffectiveFilters above.
  */
 export function resolveEffectiveFilters(
-  item: { chartId?: number | null; ignoreFilters?: string[]; filters?: FilterConfig[] } | null | undefined,
+  item: { chartId?: ChartId | null; ignoreFilters?: string[]; filters?: FilterConfig[] } | null | undefined,
   dashboardFilters: DashboardFilter[],
 ): FilterResolutionResult {
   if (!item) {

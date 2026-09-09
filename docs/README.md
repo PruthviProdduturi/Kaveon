@@ -26,6 +26,7 @@ are planned rather than executable.
 - [Use SQL Lab](guides/sql-lab.md)
 - [Build charts](guides/charts.md)
 - [Build dashboards](guides/dashboards.md)
+- [Run the OpenSource product showcase](guides/product-showcase.md)
 - [Natural-language query flow](guides/nl-to-sql.md)
 - [Deploy Studio to Vercel](guides/vercel-deployment.md)
 - [Deploy Vercel, Container Apps, and PostgreSQL](guides/deploy-vercel-azure-postgres.md)

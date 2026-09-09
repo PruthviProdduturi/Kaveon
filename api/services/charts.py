@@ -1,6 +1,7 @@
 """Charts service — port of charts.service.ts."""
 
 import json
+import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 import database.metadata as db
@@ -8,16 +9,30 @@ import database.metadata as db
 VALID_VISIBILITY = {"private", "internal", "published"}
 
 
-def _adapt(row: dict) -> dict:
-    query_config, viz_config, config = {}, {}, {}
+def _configs(row: dict) -> tuple[dict, dict]:
+    """Read the PostgreSQL `config` envelope and tolerate legacy flat config."""
+    stored = {}
     try:
-        query_config = json.loads(row.get("query_config") or "{}")
-        viz_config = json.loads(row.get("viz_config") or "{}")
-        config = {**query_config, **viz_config}
+        stored = json.loads(row.get("config") or "{}")
     except Exception:
         pass
+    if not isinstance(stored, dict):
+        stored = {}
+    query_config = stored.get("query_config")
+    viz_config = stored.get("viz_config")
+    # Earlier installations stored the query config directly in `config`.
+    if not isinstance(query_config, dict):
+        query_config = stored
+    if not isinstance(viz_config, dict):
+        viz_config = {}
+    return query_config, viz_config
 
-    dataset_id = str(config.get("dataset_id") or query_config.get("dataset_id") or "")
+
+def _adapt(row: dict) -> dict:
+    query_config, viz_config = _configs(row)
+    config = {**query_config, **viz_config}
+
+    dataset_id = str(row.get("dataset_id") or query_config.get("dataset_id") or "")
 
     return {
         "id": str(row["id"]),
@@ -36,7 +51,7 @@ def _adapt(row: dict) -> dict:
         "updated_at": row.get("updated_at"),
         "created_by": row.get("created_by"),
         "owner": row.get("created_by"),
-        "modified_by": row.get("updated_by") or row.get("created_by"),
+        "modified_by": row.get("modified_by") or row.get("created_by"),
         "favorite": row.get("favorite") == 1,
     }
 
@@ -53,16 +68,16 @@ def _vis_clause(role_idx: int, email_idx: int, alias: str = "c") -> str:
 def list_charts(user_email: str, role: str = "Viewer") -> List[dict]:
     vis = _vis_clause(1, 0)
     result = db.query(f"""
-        SELECT c.id, c.name, c.description, c.chart_type, c.query_config, c.viz_config,
-               c.created_on, c.created_by, c.changed_on, c.updated_by, c.created_at, c.updated_at,
+        SELECT c.id, c.name, c.description, c.dataset_id, c.chart_type, c.config,
+               c.created_by, c.modified_by, c.created_at, c.modified_at,
                c.visibility, c.thumbnail, ds.dataset_name,
                CASE WHEN f.id IS NOT NULL THEN 1 ELSE 0 END as favorite
         FROM dbo.charts c
         LEFT JOIN dbo.favorites f ON f.object_id = CAST(c.id AS NVARCHAR(255))
             AND f.object_type = 'chart' AND f.user_email = @param0
-        LEFT JOIN dbo.datasets ds ON ds.id = TRY_CAST(JSON_VALUE(c.query_config, '$.dataset_id') AS INT)
+        LEFT JOIN dbo.datasets ds ON ds.id = c.dataset_id
         WHERE c.id IS NOT NULL AND {vis}
-        ORDER BY c.updated_at DESC
+        ORDER BY c.modified_at DESC
     """, [user_email, role])
     return [_adapt(r) for r in result["rows"]]
 
@@ -75,24 +90,24 @@ def get_chart_by_id(chart_id: str, user_email: Optional[str] = None, role: str =
     if user_email:
         vis = _vis_clause(2, 1)
         row = db.query_one(f"""
-            SELECT c.id, c.name, c.description, c.chart_type, c.query_config, c.viz_config,
-                   c.created_on, c.created_by, c.changed_on, c.updated_by, c.created_at, c.updated_at,
+            SELECT c.id, c.name, c.description, c.dataset_id, c.chart_type, c.config,
+                   c.created_by, c.modified_by, c.created_at, c.modified_at,
                    c.visibility
             FROM dbo.charts c
             WHERE c.id = @param0 AND c.id IS NOT NULL AND {vis}
-        """, [int(chart_id), user_email, role])
+        """, [chart_id, user_email, role])
     else:
         row = db.query_one("""
-            SELECT id, name, description, chart_type, query_config, viz_config,
-                   created_on, created_by, changed_on, updated_by, created_at, updated_at, visibility
+            SELECT id, name, description, dataset_id, chart_type, config,
+                   created_by, modified_by, created_at, modified_at, visibility
             FROM dbo.charts WHERE id = @param0 AND id IS NOT NULL
-        """, [int(chart_id)])
+        """, [chart_id])
     return _adapt(row) if row else None
 
 
 def create_chart(data: dict, user_id: str) -> dict:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    query_config = data.get("query_config") or {}
+    query_config = data.get("query_config") or data.get("config") or {}
     if "dataset_id" in data and data["dataset_id"] is not None:
         query_config = {**query_config, "dataset_id": data["dataset_id"]}
 
@@ -100,24 +115,20 @@ def create_chart(data: dict, user_id: str) -> dict:
     if visibility not in VALID_VISIBILITY:
         visibility = "internal"
 
+    chart_id = str(uuid.uuid4())
+    envelope = {"query_config": query_config, "viz_config": data.get("viz_config") or {}}
     db.execute("""
-        INSERT INTO charts (name, description, chart_type, query_config, viz_config,
-                           visibility, created_on, created_by, changed_on, updated_by, created_at, updated_at)
-        VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6, @param7, @param8, @param9, @param10, @param11)
+        INSERT INTO charts (id, name, description, dataset_id, chart_type, config,
+                           visibility, created_by, modified_by, created_at, modified_at)
+        VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6, @param7, @param8, @param9, @param10)
     """, [
-        data["name"], data.get("description"), data["chart_type"],
-        json.dumps(query_config),
-        json.dumps(data.get("viz_config") or {}),
-        visibility,
-        now, user_id, now, user_id, now, now,
+        chart_id, data["name"], data.get("description"), data["dataset_id"], data["chart_type"],
+        json.dumps(envelope), visibility, user_id, user_id, now, now,
     ])
-    inserted = db.query_one(
-        "SELECT TOP 1 id FROM charts WHERE name = @param0 AND created_by = @param1 ORDER BY id DESC",
-        [data["name"], user_id],
-    )
-    if not inserted:
+    created = get_chart_by_id(chart_id)
+    if not created:
         raise RuntimeError("Failed to retrieve created chart")
-    return get_chart_by_id(str(inserted["id"]))
+    return created
 
 
 def update_chart(chart_id: str, data: dict) -> Optional[dict]:
@@ -129,26 +140,29 @@ def update_chart(chart_id: str, data: dict) -> Optional[dict]:
     for field_name, col in [("name", "name"), ("description", "description"), ("chart_type", "chart_type")]:
         if field_name in data:
             updates.append(f"{col} = @param{i}"); params.append(data[field_name]); i += 1
-    if "query_config" in data:
-        updates.append(f"query_config = @param{i}"); params.append(json.dumps(data["query_config"])); i += 1
-    if "viz_config" in data:
-        updates.append(f"viz_config = @param{i}"); params.append(json.dumps(data["viz_config"])); i += 1
+    if "dataset_id" in data:
+        updates.append(f"dataset_id = @param{i}"); params.append(data["dataset_id"]); i += 1
+    if "query_config" in data or "viz_config" in data or "config" in data:
+        existing = get_chart_by_id(chart_id) or {}
+        query_config = data.get("query_config", data.get("config", existing.get("query_config") or {}))
+        viz_config = data.get("viz_config", existing.get("viz_config") or {})
+        updates.append(f"config = @param{i}")
+        params.append(json.dumps({"query_config": query_config or {}, "viz_config": viz_config or {}})); i += 1
     if "visibility" in data:
         vis = data["visibility"] if data["visibility"] in VALID_VISIBILITY else "internal"
         updates.append(f"visibility = @param{i}"); params.append(vis); i += 1
     if "thumbnail" in data:
         updates.append(f"thumbnail = @param{i}"); params.append(data["thumbnail"]); i += 1
 
-    updates.append(f"changed_on = @param{i}"); params.append(now); i += 1
-    updates.append(f"updated_at = @param{i}"); params.append(now); i += 1
-    params.append(int(chart_id))
+    updates.append(f"modified_at = @param{i}"); params.append(now); i += 1
+    params.append(chart_id)
 
     db.execute(f"UPDATE charts SET {', '.join(updates)} WHERE id = @param{i}", params)
     return get_chart_by_id(chart_id)
 
 
 def delete_chart(chart_id: str) -> bool:
-    return db.execute("DELETE FROM charts WHERE id = @param0", [int(chart_id)]) > 0
+    return db.execute("DELETE FROM charts WHERE id = @param0", [chart_id]) > 0
 
 
 def count_charts() -> int:

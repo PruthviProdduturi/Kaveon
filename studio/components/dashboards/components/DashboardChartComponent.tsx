@@ -15,7 +15,7 @@
  */
 
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import type { DashboardComponentProps, DashboardLayoutItem } from '../../../types/dashboard';
+import type { ChartId, DashboardComponentProps, DashboardLayoutItem } from '../../../types/dashboard';
 import { msalFetch } from '../../../utils/msalFetch';
 import { API_BASE } from '../../../config';
 import { useDashboard } from '../DashboardContext';
@@ -29,7 +29,7 @@ import ChartActionsOverlay from './ChartActionsOverlay';
 interface DashboardChartLoaderProps {
   itemId: string;
   item?: DashboardLayoutItem;
-  chartId: number;
+  chartId: ChartId;
   filters: any[];
   crossFilterFilters: Array<{ column: string | null; operator: string; value: string }>;
   onCrossFilter: (column: string | null, value: string) => void;
