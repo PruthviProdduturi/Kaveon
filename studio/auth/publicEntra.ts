@@ -2,7 +2,7 @@
 
 import { PublicClientApplication } from "@azure/msal-browser";
 
-export async function publicEntraToken(config: { clientId: string; tenantId: string; scope: string }) {
+export async function preparePublicEntra(config: { clientId: string; tenantId: string; scope: string }) {
   const client = new PublicClientApplication({
     auth: {
       clientId: config.clientId,
@@ -12,6 +12,8 @@ export async function publicEntraToken(config: { clientId: string; tenantId: str
     cache: { cacheLocation: "memoryStorage" },
   });
   await client.initialize();
-  const result = await client.loginPopup({ scopes: [config.scope], prompt: "select_account" });
-  return result.accessToken;
+  return async () => {
+    const result = await client.loginPopup({ scopes: [config.scope], prompt: "select_account" });
+    return result.accessToken;
+  };
 }
