@@ -7,6 +7,8 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 html = (Path(__file__).resolve().parents[1] / 'crates/server/src/ui.html').read_text(encoding='utf-8')
+screenshots = Path(__file__).resolve().parents[2] / 'tmp' / 'ui-browser'
+screenshots.mkdir(parents=True, exist_ok=True)
 mock = '''window.testAuth={};window.msal={PublicClientApplication:class{
  constructor(config){window.testAuth.config=config;}
  async initialize(){}
@@ -24,6 +26,7 @@ cluster = {'environment': 'browser-test', 'coordinator': dict(node, role='coordi
 with sync_playwright() as p:
     browser = p.chromium.launch(channel='msedge', headless=True)
     page = browser.new_page()
+    page.context.grant_permissions(['clipboard-read', 'clipboard-write'], origin='https://engine.test')
     errors, headers = [], []
     page.on('pageerror', lambda error: errors.append(str(error)))
     def route(request):
@@ -62,10 +65,38 @@ with sync_playwright() as p:
     page.locator('[data-query-id="attribution-test"]').click()
     assert 'alice@example.test' in page.locator('#view-detail').inner_text()
     assert 'entra:tenant:object' in page.locator('#view-detail').inner_text()
+    page.locator('.qd-back').click()
+    page.evaluate('''() => {
+      const context={client:'kaveon-cli',source:'interactive',user:'alice@example.test',principal:'entra:tenant:object',catalog:'medallion',schema:'test',engine_version:'0.1.0',environment:'browser-test',client_tags:['review']};
+      queries={
+        'finished-query':{id:'finished-query',sql:'SELECT customer_id, SUM(amount_cents) AS total\\nFROM medallion.test.orders\\nGROUP BY customer_id\\nORDER BY total DESC\\nLIMIT 5',state:'FINISHED',elapsed_ms:128,submitted_at_ms:1735689600000,completed_at_ms:1735689600128,columns:[{name:'customer_id',type:'Int64'},{name:'total',type:'Int64'}],rows:[[42,8412],[7,5160]],context,timings:{analysis_us:120,planning_us:84,execution_us:127000,result_serialization_us:630}},
+        'running-query':{id:'running-query',sql:'SELECT COUNT(*) FROM medallion.test.orders',state:'RUNNING',elapsed_ms:862,submitted_at_ms:1735689600000,columns:[],rows:[],context},
+        'failed-query':{id:'failed-query',sql:'SELECT missing_column FROM medallion.test.orders',state:'FAILED',elapsed_ms:4,submitted_at_ms:1735689600000,columns:[],rows:[],error:'column missing_column was not found',context}
+      };qorder=['running-query','finished-query','failed-query'];renderHistory();
+    }''')
+    page.evaluate('window.scrollTo(0,0)')
+    page.screenshot(path=str(screenshots / 'query-history-desktop.png'), full_page=True)
+    page.locator('[data-query-id="finished-query"]').click()
+    page.locator('[data-t="results"]').click()
+    assert page.locator('#qdt-results').is_visible()
+    assert page.locator('#copy-query-id').is_visible()
+    assert page.locator('#copy-query-sql').is_visible()
+    page.locator('#copy-query-id').click()
+    page.wait_for_function("document.getElementById('copy-status').textContent==='Query ID copied.'")
+    page.evaluate('window.scrollTo(0,0)')
+    page.screenshot(path=str(screenshots / 'query-detail-desktop.png'), full_page=True)
+    page.set_viewport_size({'width': 390, 'height': 844})
+    page.locator('.qd-back').click()
+    page.evaluate('window.scrollTo(0,0)')
+    page.screenshot(path=str(screenshots / 'query-history-mobile.png'), full_page=True)
+    page.locator('[data-query-id="finished-query"]').click()
+    page.evaluate('window.scrollTo(0,0)')
+    page.screenshot(path=str(screenshots / 'query-detail-mobile.png'), full_page=True)
+    page.set_viewport_size({'width': 1280, 'height': 720})
     assert page.evaluate("queryClient({context:{}})") == 'HTTP API'
     assert page.evaluate("queryUser({context:{principal:'legacy'}})") == 'legacy'
     page.evaluate('''() => {
-      queries['attribution-test'].context.user='<img src=x onerror=alert(1)>';
+      queries['finished-query'].context.user='<img src=x onerror=alert(1)>';
       renderHistory();
     }''')
     assert page.locator('#qarea img').count() == 0

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { signIn } from "next-auth/react";
 import { KaveonMark } from "./KaveonMark";
+import { publicEntraToken } from "../auth/publicEntra";
 
 const PROMPTS = [
 	"What happened to revenue last quarter?",
@@ -15,6 +16,8 @@ const PROMPTS = [
 
 export function AuthScreen() {
 	const [toast, setToast] = useState<string | null>(null);
+	const [signInError, setSignInError] = useState<string | null>(null);
+	const [microsoftPending, setMicrosoftPending] = useState(false);
 	const [promptIdx, setPromptIdx] = useState(0);
 
 	useEffect(() => {
@@ -41,6 +44,22 @@ export function AuthScreen() {
 
 	const start = (provider: string) => {
 		signIn(provider, { callbackUrl: "/" });
+	};
+	const startMicrosoft = async () => {
+		setSignInError(null);
+		setMicrosoftPending(true);
+		try {
+			const response = await fetch("/api/auth/entra-config", { cache: "no-store" });
+			if (!response.ok) throw new Error("Entra configuration unavailable");
+			const config = await response.json() as { enabled?: boolean; clientId?: string; tenantId?: string; scope?: string };
+			if (!config.enabled || !config.clientId || !config.tenantId || !config.scope) return start("microsoft-entra-id");
+			const token = await publicEntraToken({ clientId: config.clientId, tenantId: config.tenantId, scope: config.scope });
+			await signIn("entra-public", { token, callbackUrl: "/" });
+		} catch {
+			setSignInError("Microsoft sign-in could not be started. Please try again.");
+		} finally {
+			setMicrosoftPending(false);
+		}
 	};
 
 	const showComingSoon = (provider: string) => {
@@ -224,8 +243,10 @@ export function AuthScreen() {
 
 						<button
 							type="button"
-							onClick={() => start("microsoft-entra-id")}
-							style={btnBase}
+							onClick={startMicrosoft}
+							disabled={microsoftPending}
+							aria-busy={microsoftPending}
+							style={{ ...btnBase, cursor: microsoftPending ? "wait" : "pointer", opacity: microsoftPending ? 0.7 : 1 }}
 							onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)"; }}
 							onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; }}
 						>
@@ -235,8 +256,9 @@ export function AuthScreen() {
 								<rect x="1" y="11" width="9" height="9" fill="#00a4ef" />
 								<rect x="11" y="11" width="9" height="9" fill="#ffb900" />
 							</svg>
-							Continue with Microsoft
+							{microsoftPending ? "Connecting to Microsoft…" : "Continue with Microsoft"}
 						</button>
+						{signInError && <p role="alert" style={{ margin: "2px 0 0", fontSize: 13, color: "#fca5a5", lineHeight: 1.4 }}>{signInError}</p>}
 
 						<button
 							type="button"

@@ -374,3 +374,22 @@ Windows curl may report unknown revocation status for the test CA. The diagnosti
 uses best-effort revocation checks while retaining CA and hostname verification.
 It does not disable TLS verification. The CLI uses a separate TLS library and
 automatically bypasses proxies for loopback Engine connections.
+
+## CLI 0.2.0 workflows
+
+Re-run the installer and confirm `kaveon --version` reports `0.2.0`. Keep the
+port-forward terminal open, then use a second terminal:
+
+```powershell
+kaveon https://localhost:18443/medallion/test --ca-cert "$HOME\kaveon-ca.crt"
+```
+
+The interactive prompt has a gray prefix and white active schema; `NO_COLOR`
+disables colors. Up/down recall history, Ctrl+R searches it, Tab completes shell
+and SQL keywords, and `exit` leaves the session. `--editing-mode VI` selects VI
+bindings. Use `--no-history` to avoid saving SQL to the history file.
+
+Run multiple statements from a UTF-8 file with `--file queries.sql`, or pass them
+together with `--execute`. Batch errors stop execution; `--ignore-errors` continues
+and still exits unsuccessfully if any statement failed. See the
+[CLI guide](../guides/engine-cli.md) for connection defaults and output formats.

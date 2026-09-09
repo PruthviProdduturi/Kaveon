@@ -1,0 +1,38 @@
+# Test AKS only. Every image must be pinned by immutable digest at install time.
+namespace: kaveon
+images:
+  api: {repository: "", digest: ""}
+  studio: {repository: "", digest: ""}
+  postgres: {repository: "", digest: ""}
+secrets:
+  # Existing secret; this chart never creates or populates it.
+  portalAuth: kaveon-portal-auth
+engine:
+  service: kaveon-coordinator.kaveon.svc.cluster.local
+  port: 8080
+  caConfigMap: kaveon-engine-ca
+  caKey: ca.crt
+  # Set this instead of caConfigMap when the private CA is stored as a Secret.
+  caSecret: ""
+seed:
+  catalog: kavedb
+  name: KaveDB ADLS
+  adls:
+    account: ""
+    container: kavedb
+    rootPath: ""
+  credentialRef: aks-workload-identity
+postgres:
+  storageClass: managed-csi
+  storageSize: 20Gi
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "1", memory: 1Gi}
+api:
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "1", memory: 1Gi}
+studio:
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: 500m, memory: 512Mi}

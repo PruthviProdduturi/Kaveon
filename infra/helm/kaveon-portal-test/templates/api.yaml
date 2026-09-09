@@ -1,0 +1,87 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kaveon-api
+  namespace: kaveon
+spec:
+  selector:
+    app: kaveon-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kaveon-api
+  namespace: kaveon
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kaveon-api
+  template:
+    metadata:
+      labels:
+        app: kaveon-api
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: api
+          image: {{ include "portal.image" (list .Values.images.api "api") }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - {name: NODE_ENV, value: production}
+            - {name: METADATA_DB_TYPE, value: postgresql}
+            - {name: METADATA_HOST, value: kaveon-postgres}
+            - {name: METADATA_PORT, value: "5432"}
+            - {name: METADATA_DATABASE, value: kaveonmeta}
+            - {name: METADATA_USER, value: kaveon}
+            - {name: METADATA_SSLMODE, value: disable}
+            - {name: KAVEON_ENGINE_URL, value: "https://{{ .Values.engine.service }}:{{ .Values.engine.port }}"}
+            - {name: KAVEON_ENGINE_CA_CERT, value: /var/run/kaveon/engine-ca/{{ .Values.engine.caKey }}}
+            - {name: METADATA_PASSWORD, valueFrom: {secretKeyRef: {name: {{ required "secrets.portalAuth is required" .Values.secrets.portalAuth }}, key: METADATA_PASSWORD}}}
+            - {name: KAVEON_PROXY_SECRET, valueFrom: {secretKeyRef: {name: {{ .Values.secrets.portalAuth }}, key: KAVEON_PROXY_SECRET}}}
+            - {name: KAVEON_ENGINE_BRIDGE_TOKEN, valueFrom: {secretKeyRef: {name: {{ .Values.secrets.portalAuth }}, key: KAVEON_ENGINE_BRIDGE_TOKEN}}}
+            - {name: KAVEON_ENGINE_CATALOG_TOKEN, valueFrom: {secretKeyRef: {name: {{ .Values.secrets.portalAuth }}, key: KAVEON_ENGINE_CATALOG_TOKEN}}}
+            - {name: KAVEON_CREDENTIAL_ACTIVE_KEY, valueFrom: {secretKeyRef: {name: {{ .Values.secrets.portalAuth }}, key: KAVEON_CREDENTIAL_ACTIVE_KEY}}}
+            - {name: KAVEON_CREDENTIAL_KEYS, valueFrom: {secretKeyRef: {name: {{ .Values.secrets.portalAuth }}, key: KAVEON_CREDENTIAL_KEYS}}}
+          readinessProbe:
+            httpGet: {path: /api/health, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 12
+          livenessProbe:
+            httpGet: {path: /api/health, port: http}
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: engine-ca, mountPath: /var/run/kaveon/engine-ca, readOnly: true}
+          resources:
+{{ toYaml .Values.api.resources | indent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: engine-ca
+{{- if .Values.engine.caSecret }}
+          secret: {secretName: {{ .Values.engine.caSecret }}}
+{{- else }}
+          configMap: {name: {{ required "engine.caConfigMap is required when engine.caSecret is empty" .Values.engine.caConfigMap }}}
+{{- end }}

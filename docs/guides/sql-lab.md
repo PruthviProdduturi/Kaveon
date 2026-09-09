@@ -34,9 +34,49 @@ Double-click a tab title to rename it.
 
 ## Selecting a Database
 
-The database selector in the toolbar shows all active data sources. Select a database before running a query. The schema browser updates to show tables from that database.
+In the test portal, select the active Engine catalog source before running a
+query. The platform metadata database is not exposed through SQL Lab, so it
+cannot be browsed or queried from this path.
 
-If no database is selected, the editor defaults to the metadata database (where demo datasets live). This is intentional — you can always run a query to explore the platform's own metadata.
+---
+
+## KaveDB in the test portal
+
+With the test add-on running, forward the Studio service and open the portal at
+`http://localhost:3000`:
+
+```powershell
+kubectl -n kaveon port-forward service/kaveon-portal 3000:3000
+```
+
+Sign in with the approved Entra public-client flow. New signed-in users receive
+the **Viewer** role. Viewer can browse the KaveDB source, schemas, and tables;
+Engine SQL execution requires **Analyst** or **Admin**. Grant Administrator only
+by explicitly listing the Entra object ID in `AUTH_ENTRA_ADMIN_OBJECT_IDS`; a
+display name or email does not grant that role.
+
+Choose **KaveDB ADLS** from the source selector, then choose `bronze`, `silver`,
+or `gold`. The test catalog contains five deterministic synthetic Parquet tables:
+
+| Schema | Tables | Contents |
+| --- | --- | --- |
+| `bronze` | `orders`, `customers` | Raw-source fields materialized as Parquet strings |
+| `silver` | `orders`, `customers` | Typed synthetic facts and dimensions |
+| `gold` | `daily_sales` | Daily aggregates for completed orders |
+
+Run one statement at a time through the Engine source, for example:
+
+```sql
+SELECT COUNT(*) FROM kavedb.bronze.orders;
+SELECT order_date, total_amount
+FROM kavedb.gold.daily_sales
+ORDER BY order_date;
+```
+
+The Engine Lab path accepts one read-only `SELECT` or `WITH` query. Its browser
+uses authenticated schema and table discovery; it does not expose relational
+metadata, editing, history completion, multi-statement execution, or full Trino
+SQL for KaveDB.
 
 ---
 

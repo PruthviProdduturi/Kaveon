@@ -40,6 +40,7 @@ struct QueryStore {
 #[derive(Clone, Serialize)]
 struct QueryRecord {
     rows_are_preview: bool,
+    scan_metrics_complete: bool,
     id: String,
     sql: String,
     state: QueryState,
@@ -75,6 +76,24 @@ struct TaskTelemetry {
     output_rows: usize,
     output_batches: usize,
     output_bytes: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scan: Option<TaskScanMetrics>,
+}
+
+/// Counters emitted by a worker's storage readers, never derived from query output.
+#[derive(Clone, Default, Serialize, Deserialize)]
+struct TaskScanMetrics {
+    files_considered: u64,
+    files_opened: u64,
+    row_groups_considered: u64,
+    row_groups_selected: u64,
+    rows_selected: u64,
+    rows_emitted: u64,
+    compressed_bytes_selected: u64,
+    batches_emitted: u64,
+    snapshot_ns: u64,
+    footer_ns: u64,
+    read_ns: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -460,7 +479,13 @@ async fn execute_owned_task(
         )
         .and_then(|mut planned| {
             let schema = planned.operator.schema().clone();
-            collect_batches(&mut *planned.operator).map(|batches| (schema, batches))
+            collect_batches(&mut *planned.operator).map(|batches| {
+                (
+                    schema,
+                    batches,
+                    merge_task_scan_metrics(planned.scan_metrics.iter()),
+                )
+            })
         });
         (result, admitted)
     })
@@ -478,10 +503,15 @@ async fn execute_owned_task(
         return canceled_task_response();
     }
     match result {
-        Ok((schema, batches)) => match encode_arrow_stream(&schema, &batches) {
+        Ok((schema, batches, scan)) => match encode_arrow_stream(&schema, &batches) {
             Ok(bytes) => {
                 let elapsed = elapsed_us(started);
-                let cached = match crate::transport::CachedTaskResult::new(bytes, elapsed) {
+                let scan_metrics_header = serde_json::to_string(&scan).ok();
+                let cached = match crate::transport::CachedTaskResult::new(
+                    bytes,
+                    elapsed,
+                    scan_metrics_header,
+                ) {
                     Ok(cached) => cached,
                     Err(error) => {
                         let _ = owner.complete(TaskOutcome::Failed(Arc::from(error.clone())));
@@ -592,6 +622,7 @@ async fn execute_fragment_task(
     (
         arrow::datatypes::SchemaRef,
         Vec<arrow::record_batch::RecordBatch>,
+        Option<TaskScanMetrics>,
     ),
     String,
 > {
@@ -703,7 +734,10 @@ async fn execute_fragment_task(
             }
         }
     }
-    Ok((execution.result_schema, execution.result_batches))
+    let scan = execution
+        .scan_metrics_complete
+        .then(|| merge_task_scan_metrics(execution.scan_metrics.iter()));
+    Ok((execution.result_schema, execution.result_batches, scan))
 }
 
 fn requested_partition_index(req: &TaskRequest) -> usize {
@@ -719,15 +753,20 @@ fn complete_owned_task(
         (
             arrow::datatypes::SchemaRef,
             Vec<arrow::record_batch::RecordBatch>,
+            Option<TaskScanMetrics>,
         ),
         String,
     >,
 ) -> Response {
     match result {
-        Ok((schema, batches)) => match encode_arrow_stream(&schema, &batches) {
+        Ok((schema, batches, scan)) => match encode_arrow_stream(&schema, &batches) {
             Ok(bytes) => {
                 let elapsed = elapsed_us(started);
-                let cached = match crate::transport::CachedTaskResult::new(bytes, elapsed) {
+                let cached = match crate::transport::CachedTaskResult::new(
+                    bytes,
+                    elapsed,
+                    scan.and_then(|scan| serde_json::to_string(&scan).ok()),
+                ) {
                     Ok(cached) => cached,
                     Err(error) => {
                         let _ = owner.complete(TaskOutcome::Failed(Arc::from(error.clone())));
@@ -757,6 +796,10 @@ fn task_outcome_response(outcome: TaskOutcome<crate::transport::CachedTaskResult
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "application/vnd.apache.arrow.stream")
             .header("x-kaveon-task-elapsed-us", result.elapsed_us)
+            .header(
+                "x-kaveon-task-scan-metrics",
+                result.scan_metrics_header.as_deref().unwrap_or(""),
+            )
             .body(Body::from_stream(futures::stream::unfold(
                 (result, 0usize),
                 |(result, offset)| async move {
@@ -943,6 +986,7 @@ async fn submit_statement(
         query_id.clone(),
         QueryRecord {
             rows_are_preview: true,
+            scan_metrics_complete: false,
             id: query_id.clone(),
             sql: sql.clone(),
             state: QueryState::Running,
@@ -1034,8 +1078,10 @@ async fn submit_statement(
                 };
 
                 let elapsed = start.elapsed().as_millis() as u64;
+                let (scans, scan_metrics_complete) = distributed_scan_telemetry(&stages);
                 let record = QueryRecord {
                     rows_are_preview: true,
+                    scan_metrics_complete,
                     id: query_id.clone(),
                     sql,
                     state: QueryState::Finished,
@@ -1056,7 +1102,7 @@ async fn submit_statement(
                         optimized: Some(optimized_plan),
                         physical: Some(physical_plan),
                     },
-                    scans: vec![],
+                    scans,
                     stages,
                     context,
                 };
@@ -1131,8 +1177,11 @@ async fn submit_statement(
                 };
 
                 let elapsed = start.elapsed().as_millis() as u64;
+                let stages = vec![stage];
+                let (scans, scan_metrics_complete) = distributed_scan_telemetry(&stages);
                 let record = QueryRecord {
                     rows_are_preview: true,
+                    scan_metrics_complete,
                     id: query_id.clone(),
                     sql,
                     state: QueryState::Finished,
@@ -1153,8 +1202,8 @@ async fn submit_statement(
                         optimized: Some(optimized_plan),
                         physical: Some(physical_plan),
                     },
-                    scans: vec![],
-                    stages: vec![stage],
+                    scans,
+                    stages,
                     context,
                 };
                 if !commit_query_record(record).await {
@@ -1228,8 +1277,11 @@ async fn submit_statement(
                 };
 
                 let elapsed = start.elapsed().as_millis() as u64;
+                let stages = vec![stage];
+                let (scans, scan_metrics_complete) = distributed_scan_telemetry(&stages);
                 let record = QueryRecord {
                     rows_are_preview: true,
+                    scan_metrics_complete,
                     id: query_id.clone(),
                     sql,
                     state: QueryState::Finished,
@@ -1250,8 +1302,8 @@ async fn submit_statement(
                         optimized: Some(optimized_plan),
                         physical: Some(physical_plan),
                     },
-                    scans: vec![],
-                    stages: vec![stage],
+                    scans,
+                    stages,
                     context,
                 };
                 if !commit_query_record(record).await {
@@ -1401,6 +1453,7 @@ async fn submit_statement(
             let elapsed = start.elapsed().as_millis() as u64;
             let record = QueryRecord {
                 rows_are_preview: true,
+                scan_metrics_complete: true,
                 id: query_id.clone(),
                 sql: sql.clone(),
                 state: QueryState::Failed,
@@ -1485,6 +1538,7 @@ async fn submit_statement(
 
     let record = QueryRecord {
         rows_are_preview: true,
+        scan_metrics_complete: true,
         id: query_id.clone(),
         sql,
         state: QueryState::Finished,
@@ -2584,17 +2638,18 @@ async fn execute_remote_task(
         Vec<arrow::record_batch::RecordBatch>,
         u64,
         usize,
+        Option<TaskScanMetrics>,
     ),
     RemoteTaskFailure,
 > {
-    let (payload, elapsed_us) =
+    let (payload, elapsed_us, scan) =
         execute_remote_task_payload(client, worker, request, exchange_token).await?;
     let output_bytes = payload.bytes();
     let (schema, batches) = payload.collect().map_err(|message| RemoteTaskFailure {
         message,
         retryable: false,
     })?;
-    Ok((schema, batches, elapsed_us, output_bytes))
+    Ok((schema, batches, elapsed_us, output_bytes, scan))
 }
 
 async fn execute_remote_task_payload(
@@ -2602,7 +2657,7 @@ async fn execute_remote_task_payload(
     worker: &NodeInfo,
     request: &TaskRequest,
     exchange_token: Option<&str>,
-) -> Result<(crate::transport::ArrowPayload, u64), RemoteTaskFailure> {
+) -> Result<(crate::transport::ArrowPayload, u64, Option<TaskScanMetrics>), RemoteTaskFailure> {
     let url = format!("{}/v1/task", worker.address.trim_end_matches('/'));
     let mut submission = client.post(url).json(request);
     if let Some(token) = exchange_token {
@@ -2643,13 +2698,20 @@ async fn execute_remote_task_payload(
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse().ok())
         .unwrap_or_default();
+    // Absence is valid for an older worker or a fragment that has no reader telemetry.
+    let scan = response
+        .headers()
+        .get("x-kaveon-task-scan-metrics")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+        .and_then(|value| serde_json::from_str(value).ok());
     let payload = crate::transport::receive(response)
         .await
         .map_err(|message| RemoteTaskFailure {
             retryable: message.starts_with("network receive:"),
             message,
         })?;
-    Ok((payload, elapsed_us))
+    Ok((payload, elapsed_us, scan))
 }
 
 async fn cleanup_distributed_query(state: &Arc<AppState>, query_id: &str) {
@@ -2783,7 +2845,7 @@ async fn execute_distributed_fragments(
             };
             let task_id = &dispatch.assignment.task_id;
             match result {
-                Ok((mut payload, elapsed_us)) => {
+                Ok((mut payload, elapsed_us, scan)) => {
                     let schema = payload.schema();
                     let output_bytes = payload.bytes();
                     let mut output_rows = 0;
@@ -2835,6 +2897,7 @@ async fn execute_distributed_fragments(
                             output_rows,
                             output_batches,
                             output_bytes,
+                            scan,
                         });
                     if let Err(error) = orchestrator.finish_task(task_id) {
                         return Some(Err(format!("cannot finish distributed task: {error}")));
@@ -3078,7 +3141,7 @@ async fn execute_distributed_top_n(
                 match execute_remote_task(&client, &worker, &request, exchange_token.as_deref())
                     .await
                 {
-                    Ok((schema, batches, elapsed_us, output_bytes)) => {
+                    Ok((schema, batches, elapsed_us, output_bytes, scan)) => {
                         let output_rows = batches.iter().map(|batch| batch.num_rows()).sum();
                         let telemetry = TaskTelemetry {
                             task_id,
@@ -3088,6 +3151,7 @@ async fn execute_distributed_top_n(
                             output_rows,
                             output_batches: batches.len(),
                             output_bytes,
+                            scan,
                         };
                         return Ok((schema, batches, telemetry));
                     }
@@ -3241,7 +3305,7 @@ async fn execute_distributed_aggregate(
                 match execute_remote_task(&client, &worker, &request, exchange_token.as_deref())
                     .await
                 {
-                    Ok((schema, batches, elapsed_us, output_bytes)) => {
+                    Ok((schema, batches, elapsed_us, output_bytes, scan)) => {
                         let data = batches_to_json(&batches);
                         let telemetry = TaskTelemetry {
                             task_id,
@@ -3251,6 +3315,7 @@ async fn execute_distributed_aggregate(
                             output_rows: data.len(),
                             output_batches: batches.len(),
                             output_bytes,
+                            scan,
                         };
                         return Ok((
                             TaskResponse {
@@ -3634,6 +3699,85 @@ fn scan_telemetry(metrics: &kaveon_storage::ScanMetrics) -> ScanTelemetry {
     }
 }
 
+fn merge_task_scan_metrics<'a>(
+    metrics: impl Iterator<Item = &'a kaveon_storage::ScanMetrics>,
+) -> TaskScanMetrics {
+    metrics.fold(TaskScanMetrics::default(), |mut total, metrics| {
+        let snapshot = metrics.snapshot();
+        total.files_considered += snapshot.files_considered;
+        total.files_opened += snapshot.files_opened;
+        total.row_groups_considered += snapshot.row_groups_considered;
+        total.row_groups_selected += snapshot.row_groups_selected;
+        total.rows_selected += snapshot.rows_selected;
+        total.rows_emitted += snapshot.rows_emitted;
+        total.compressed_bytes_selected += snapshot.compressed_bytes_selected;
+        total.batches_emitted += snapshot.batches_emitted;
+        total.snapshot_ns += duration_ns(snapshot.snapshot_elapsed);
+        total.footer_ns += duration_ns(snapshot.footer_elapsed);
+        total.read_ns += duration_ns(snapshot.read_elapsed);
+        total
+    })
+}
+
+fn distributed_scan_telemetry(stages: &[StageTelemetry]) -> (Vec<ScanTelemetry>, bool) {
+    let tasks = stages
+        .iter()
+        .flat_map(|stage| stage.tasks.iter())
+        .collect::<Vec<_>>();
+    if tasks.is_empty() || tasks.iter().any(|task| task.scan.is_none()) {
+        return (Vec::new(), false);
+    }
+    let total = tasks
+        .into_iter()
+        .filter_map(|task| task.scan.as_ref())
+        .fold(TaskScanMetrics::default(), |mut total, scan| {
+            total.files_considered += scan.files_considered;
+            total.files_opened += scan.files_opened;
+            total.row_groups_considered += scan.row_groups_considered;
+            total.row_groups_selected += scan.row_groups_selected;
+            total.rows_selected += scan.rows_selected;
+            total.rows_emitted += scan.rows_emitted;
+            total.compressed_bytes_selected += scan.compressed_bytes_selected;
+            total.batches_emitted += scan.batches_emitted;
+            total.snapshot_ns += scan.snapshot_ns;
+            total.footer_ns += scan.footer_ns;
+            total.read_ns += scan.read_ns;
+            total
+        });
+    let read_elapsed = std::time::Duration::from_nanos(total.read_ns);
+    let rows_per_second = if read_elapsed.is_zero() {
+        0.0
+    } else {
+        total.rows_emitted as f64 / read_elapsed.as_secs_f64()
+    };
+    let compressed_bytes_per_second = if read_elapsed.is_zero() {
+        0.0
+    } else {
+        total.compressed_bytes_selected as f64 / read_elapsed.as_secs_f64()
+    };
+    (
+        vec![ScanTelemetry {
+            files_considered: total.files_considered,
+            files_opened: total.files_opened,
+            row_groups_considered: total.row_groups_considered,
+            row_groups_read: total.row_groups_selected,
+            row_groups_pruned: total
+                .row_groups_considered
+                .saturating_sub(total.row_groups_selected),
+            rows_selected: total.rows_selected,
+            rows_emitted: total.rows_emitted,
+            batches_emitted: total.batches_emitted,
+            compressed_bytes_selected: total.compressed_bytes_selected,
+            snapshot_ns: total.snapshot_ns,
+            footer_ns: total.footer_ns,
+            read_ns: total.read_ns,
+            rows_per_second,
+            compressed_bytes_per_second,
+        }],
+        true,
+    )
+}
+
 fn duration_ns(duration: std::time::Duration) -> u64 {
     duration.as_nanos().try_into().unwrap_or(u64::MAX)
 }
@@ -3667,7 +3811,7 @@ mod tests {
     async fn task_response_stream_retains_cache_until_slow_consumer_drops() {
         use futures::StreamExt;
         let cached = std::sync::Arc::new(
-            crate::transport::CachedTaskResult::new(vec![1; 200_000], 10).unwrap(),
+            crate::transport::CachedTaskResult::new(vec![1; 200_000], 10, None).unwrap(),
         );
         let response =
             super::task_outcome_response(crate::lifecycle::TaskOutcome::Success(cached.clone()));
@@ -3927,6 +4071,44 @@ mod tests {
                 vec![serde_json::json!("west"), serde_json::json!(4)],
             ]
         );
+    }
+
+    #[test]
+    fn aggregates_only_complete_worker_reader_counters() {
+        let task = |scan| super::TaskTelemetry {
+            task_id: "task".into(),
+            node_id: "worker".into(),
+            partition_index: 0,
+            elapsed_us: 1,
+            output_rows: 999,
+            output_batches: 1,
+            output_bytes: 1,
+            scan,
+        };
+        let scan = |rows_emitted, rows_selected| super::TaskScanMetrics {
+            rows_emitted,
+            rows_selected,
+            compressed_bytes_selected: 12,
+            ..Default::default()
+        };
+        let stages = vec![super::StageTelemetry {
+            stage_id: 0,
+            state: "FINISHED",
+            task_count: 2,
+            completed_tasks: 2,
+            elapsed_us: 1,
+            tasks: vec![task(Some(scan(40, 60))), task(Some(scan(30, 50)))],
+        }];
+        let (scans, complete) = super::distributed_scan_telemetry(&stages);
+        assert!(complete);
+        assert_eq!(scans[0].rows_emitted, 70);
+        assert_eq!(scans[0].rows_selected, 110);
+        assert_ne!(scans[0].rows_emitted, stages[0].tasks[0].output_rows as u64);
+        let incomplete = vec![super::StageTelemetry {
+            tasks: vec![task(None)],
+            ..stages[0].clone()
+        }];
+        assert!(!super::distributed_scan_telemetry(&incomplete).1);
     }
 
     #[test]

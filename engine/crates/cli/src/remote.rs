@@ -1,19 +1,21 @@
 use crate::args::{Options, OutputFormat};
 use crate::auth::Session;
+use crate::input::{self, ReadLine, TerminalInput};
 use reqwest::blocking::Response;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::tokenizer::{Token, Tokenizer};
 use std::collections::BTreeSet;
-use std::io::{self, BufRead, IsTerminal, Write};
+use std::io::{self, IsTerminal, Read, Write};
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 #[derive(Clone, Debug, Deserialize)]
 struct Column {
     name: String,
     #[serde(rename = "type")]
-    data_type: String,
+    _data_type: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -55,8 +57,30 @@ struct TableList {
     tables: Vec<String>,
 }
 
+#[derive(Deserialize)]
+struct NamedDefinition {
+    id: String,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct TableDefinition {
+    name: String,
+    columns: Vec<DefinitionColumn>,
+}
+
+#[derive(Deserialize)]
+struct DefinitionColumn {
+    name: String,
+    #[serde(rename = "data_type")]
+    data_type: Value,
+    nullable: bool,
+}
+
 #[derive(Debug, Deserialize)]
 struct QueryTelemetry {
+    #[serde(default)]
+    scan_metrics_complete: Option<bool>,
     #[serde(default)]
     stages: Vec<StageTelemetry>,
     #[serde(default)]
@@ -80,24 +104,60 @@ struct TaskTelemetry {
 
 #[derive(Debug, Deserialize)]
 struct ScanTelemetry {
+    #[serde(default)]
+    rows_emitted: Option<u64>,
     rows_selected: u64,
     compressed_bytes_selected: u64,
 }
 
 #[derive(Debug, PartialEq)]
 enum MetaCommand {
-    Catalogs,
-    Schemas { catalog: String },
-    Tables { catalog: String, schema: String },
-    Use { catalog: String, schema: String },
+    Catalogs {
+        like: Option<String>,
+    },
+    Schemas {
+        catalog: String,
+        like: Option<String>,
+    },
+    Tables {
+        catalog: String,
+        schema: String,
+        like: Option<String>,
+    },
+    Describe {
+        catalog: String,
+        schema: String,
+        table: String,
+    },
+    Use {
+        catalog: String,
+        schema: String,
+    },
 }
 
 pub fn run(options: &mut Options) -> Result<(), String> {
     let client = crate::auth::Session::connect(options)?;
 
     if let Some(sql) = options.execute.clone() {
-        execute(&client, options, &sql)?;
+        execute_script(&client, options, &sql, options.ignore_errors)?;
         return Ok(());
+    }
+    if let Some(path) = options.file.clone() {
+        let script = input::read_file(&path)?;
+        execute_script(&client, options, &script, options.ignore_errors)?;
+        return Ok(());
+    }
+    if !io::stdin().is_terminal() {
+        let mut script = String::new();
+        io::stdin()
+            .read_to_string(&mut script)
+            .map_err(|error| format!("cannot read standard input: {error}"))?;
+        execute_script(&client, options, &script, options.ignore_errors)?;
+        return Ok(());
+    }
+
+    if let Some(format) = options.output_format_interactive {
+        options.output_format = format;
     }
 
     println!(
@@ -115,30 +175,39 @@ pub fn run(options: &mut Options) -> Result<(), String> {
 }
 
 fn repl(client: &Session, options: &mut Options) -> Result<(), String> {
-    let stdin = io::stdin();
-    let mut input = stdin.lock();
+    let mut input = TerminalInput::new(
+        options.history_file.clone(),
+        &options.editing_mode,
+        !options.no_history,
+        !options.disable_auto_suggestion,
+    )?;
+    let color_prompt = io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
     let mut sql = String::new();
     loop {
         let prompt = if sql.is_empty() {
-            &format!("kaveon:{}> ", options.schema)
+            format!("kaveon:{}> ", options.schema)
         } else {
-            "     -> "
+            "     -> ".to_owned()
         };
-        eprint!("{prompt}");
-        io::stderr().flush().map_err(|error| error.to_string())?;
-        let mut line = String::new();
-        if input
-            .read_line(&mut line)
-            .map_err(|error| error.to_string())?
-            == 0
-        {
-            return Ok(());
-        }
+        input.set_colored_prompt(&prompt, color_prompt);
+        let line = match input.readline(&prompt)? {
+            ReadLine::Line(line) => line,
+            ReadLine::Interrupted => {
+                sql.clear();
+                eprintln!("^C\n");
+                continue;
+            }
+            ReadLine::Eof => {
+                input.save_history()?;
+                return Ok(());
+            }
+        };
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
         if sql.is_empty() && is_repl_alias(trimmed, "exit", "quit") {
+            input.save_history()?;
             return Ok(());
         }
         if sql.is_empty() && is_repl_alias(trimmed, "help", "help") {
@@ -154,7 +223,10 @@ fn repl(client: &Session, options: &mut Options) -> Result<(), String> {
         }
         if sql.is_empty() && trimmed.starts_with('.') {
             match handle_meta_command(client, options, trimmed) {
-                Ok(true) => return Ok(()),
+                Ok(true) => {
+                    input.save_history()?;
+                    return Ok(());
+                }
                 Ok(false) => {}
                 Err(error) => {
                     eprintln!("error: {error}");
@@ -164,17 +236,40 @@ fn repl(client: &Session, options: &mut Options) -> Result<(), String> {
             continue;
         }
         sql.push_str(&line);
-        if sql.trim_end().ends_with(';') {
-            let statement = sql.trim().trim_end_matches(';').trim().to_owned();
-            sql.clear();
-            if !statement.is_empty()
-                && let Err(error) = execute(client, options, &statement)
-            {
-                eprintln!("error: {error}");
-                eprintln!();
+        sql.push('\n');
+        match input::split_completed_statements(&sql) {
+            Ok((statements, remainder)) if !statements.is_empty() => {
+                sql = remainder;
+                for statement in statements {
+                    if let Err(error) = execute(client, options, &statement) {
+                        eprintln!("error: {error}");
+                        eprintln!();
+                    }
+                }
             }
+            Ok((_, remainder)) => sql = remainder,
+            Err(_) => {}
         }
     }
+}
+
+fn execute_script(
+    client: &Session,
+    options: &mut Options,
+    script: &str,
+    ignore_errors: bool,
+) -> Result<(), String> {
+    let mut first_error = None;
+    for statement in input::split_statements(script)? {
+        if let Err(error) = execute(client, options, &statement) {
+            if !ignore_errors {
+                return Err(error);
+            }
+            eprintln!("error: {error}");
+            first_error.get_or_insert(error);
+        }
+    }
+    first_error.map_or(Ok(()), Err)
 }
 
 fn handle_meta_command(
@@ -193,19 +288,26 @@ fn handle_meta_command(
             clear_terminal()?;
             return Ok(false);
         }
-        [".catalogs"] => MetaCommand::Catalogs,
+        [".catalogs"] => MetaCommand::Catalogs { like: None },
         [".schemas"] => MetaCommand::Schemas {
             catalog: options.catalog.clone(),
+            like: None,
         },
         [".schemas", catalog] => MetaCommand::Schemas {
             catalog: (*catalog).to_owned(),
+            like: None,
         },
         [".tables"] => MetaCommand::Tables {
             catalog: options.catalog.clone(),
             schema: options.schema.clone(),
+            like: None,
         },
         [".tables", target] => metadata_for_target(target, options, false)?,
         [".use", target] => metadata_for_target(target, options, true)?,
+        [".describe" | ".desc", target] => {
+            parse_sql_metadata(&format!("DESCRIBE {target}"), options)?
+                .ok_or_else(|| "invalid table reference".to_owned())?
+        }
         _ => {
             return Err(format!(
                 "unknown command '{command}'; type .help for commands"
@@ -254,9 +356,9 @@ fn execute(client: &Session, options: &mut Options, sql: &str) -> Result<(), Str
     if let Some(error) = response.error {
         return Err(format!("query {} failed: {error}", response.id));
     }
-    print!("{}", format_result(&response, options.output_format)?);
-    if options.output_format == OutputFormat::Table {
-        println!(
+    let mut output = format_result(&response, options.output_format)?;
+    if is_human_format(options.output_format) {
+        output.push_str(&format!(
             "Query {} {} in {} ms ({} {} returned)",
             response.id,
             response.state,
@@ -267,12 +369,14 @@ fn execute(client: &Session, options: &mut Options, sql: &str) -> Result<(), Str
             } else {
                 "rows"
             },
-        );
+        ));
+        output.push('\n');
         if let Ok(telemetry) = get_query_telemetry(client, options, &response.id) {
-            print!("{}", format_query_telemetry(&telemetry, &response));
+            output.push_str(&format_query_telemetry(&telemetry, &response));
         }
-        println!();
+        output.push('\n');
     }
+    write_output(options, &output)?;
     Ok(())
 }
 
@@ -378,7 +482,29 @@ fn format_query_telemetry(telemetry: &QueryTelemetry, response: &StatementRespon
             .iter()
             .map(|scan| scan.compressed_bytes_selected)
             .sum();
-        format!("Scan selected: {rows} rows, {bytes} compressed bytes")
+        let scanned = telemetry
+            .scans
+            .iter()
+            .map(|scan| scan.rows_emitted)
+            .collect::<Option<Vec<_>>>();
+        let coverage = if telemetry.scan_metrics_complete == Some(false) {
+            " (partial worker metrics)"
+        } else {
+            ""
+        };
+        let scanned_line = match scanned {
+            Some(counts) => {
+                let count: u64 = counts.iter().sum();
+                let rate = if elapsed_seconds > 0.0 {
+                    format!("{:.1} rows/s", count as f64 / elapsed_seconds)
+                } else {
+                    "N/A rows/s".to_owned()
+                };
+                format!("Scanned: {count} rows from storage readers, {rate}{coverage}")
+            }
+            None => "Scanned: not reported".to_owned(),
+        };
+        format!("{scanned_line}\nScan selected: {rows} rows, {bytes} compressed bytes{coverage}")
     };
     format!(
         "Nodes: {nodes}  Tasks: {tasks}\nRows: {} returned  JSON result bytes: {result_bytes}  Rates: {rates}\n{scan}\n",
@@ -392,19 +518,101 @@ fn run_meta_command(
     command: MetaCommand,
 ) -> Result<(), String> {
     match command {
-        MetaCommand::Catalogs => {
+        MetaCommand::Catalogs { like } => {
             let response: CatalogList = get_json(client, options, "/v1/catalog")?;
-            print_metadata("Catalog", response.catalogs, options.output_format)
+            print_metadata(
+                "Catalog",
+                filter_like(response.catalogs, like.as_deref()),
+                options,
+            )
         }
-        MetaCommand::Schemas { catalog } => {
+        MetaCommand::Schemas { catalog, like } => {
             let url = metadata_url(options, &[&catalog, "schema"])?;
             let response: SchemaList = get_json_url(client, &url)?;
-            print_metadata("Schema", response.schemas, options.output_format)
+            print_metadata(
+                "Schema",
+                filter_like(response.schemas, like.as_deref()),
+                options,
+            )
         }
-        MetaCommand::Tables { catalog, schema } => {
+        MetaCommand::Tables {
+            catalog,
+            schema,
+            like,
+        } => {
             let url = metadata_url(options, &[&catalog, "schema", &schema, "table"])?;
             let response: TableList = get_json_url(client, &url)?;
-            print_metadata("Table", response.tables, options.output_format)
+            print_metadata(
+                "Table",
+                filter_like(response.tables, like.as_deref()),
+                options,
+            )
+        }
+        MetaCommand::Describe {
+            catalog,
+            schema,
+            table,
+        } => {
+            let definitions: Vec<NamedDefinition> =
+                get_json(client, options, "/v1/catalog/definitions")?;
+            let catalog = definitions
+                .into_iter()
+                .find(|definition| definition.name == catalog)
+                .ok_or_else(|| "catalog definition is not available for DESCRIBE".to_owned())?;
+            let schema_url = definition_url(options, &[&catalog.id, "schemas"])?;
+            let schemas: Vec<NamedDefinition> = get_json_url(client, &schema_url)?;
+            let schema = schemas
+                .into_iter()
+                .find(|definition| definition.name == schema)
+                .ok_or_else(|| "schema definition is not available for DESCRIBE".to_owned())?;
+            let table_url = schema_table_definitions_url(options, &schema.id)?;
+            let tables: Vec<TableDefinition> = get_json_url(client, &table_url)?;
+            let table = tables
+                .into_iter()
+                .find(|definition| definition.name == table)
+                .ok_or_else(|| "table definition is not available for DESCRIBE".to_owned())?;
+            let response = StatementResponse {
+                id: String::new(),
+                state: String::new(),
+                error: None,
+                elapsed_ms: 0,
+                columns: vec![
+                    Column {
+                        name: "Column".to_owned(),
+                        _data_type: "varchar".to_owned(),
+                    },
+                    Column {
+                        name: "Type".to_owned(),
+                        _data_type: "varchar".to_owned(),
+                    },
+                    Column {
+                        name: "Nullable".to_owned(),
+                        _data_type: "varchar".to_owned(),
+                    },
+                ],
+                data: table
+                    .columns
+                    .into_iter()
+                    .map(|column| {
+                        vec![
+                            Value::String(column.name),
+                            Value::String(
+                                column
+                                    .data_type
+                                    .as_str()
+                                    .map(str::to_owned)
+                                    .unwrap_or_else(|| column.data_type.to_string()),
+                            ),
+                            Value::String(if column.nullable { "YES" } else { "NO" }.to_owned()),
+                        ]
+                    })
+                    .collect(),
+            };
+            let mut output = format_result(&response, options.output_format)?;
+            if is_human_format(options.output_format) {
+                output.push('\n');
+            }
+            write_output(options, &output)?;
         }
         MetaCommand::Use { catalog, schema } => {
             let url = metadata_url(options, &[&catalog, "schema"])?;
@@ -416,7 +624,7 @@ fn run_meta_command(
             }
             options.catalog = catalog;
             options.schema = schema;
-            if options.output_format == OutputFormat::Table {
+            if is_human_format(options.output_format) {
                 println!("Using {}.{}", options.catalog, options.schema);
                 println!();
             }
@@ -499,7 +707,63 @@ fn parse_sql_metadata(sql: &str, options: &Options) -> Result<Option<MetaCommand
             _ => Err("usage: USE [catalog.]schema".to_owned()),
         };
     }
+    if first.0.eq_ignore_ascii_case("DESCRIBE") || first.0.eq_ignore_ascii_case("DESC") {
+        let tokens = if matches!(tokens.get(1), Some(Token::Word(word)) if word.quote_style.is_none() && word.value.eq_ignore_ascii_case("TABLE"))
+        {
+            &tokens[2..]
+        } else {
+            &tokens[1..]
+        };
+        return parse_table_reference(tokens, options).map(|(catalog, schema, table)| {
+            Some(MetaCommand::Describe {
+                catalog,
+                schema,
+                table,
+            })
+        });
+    }
     Ok(None)
+}
+
+fn definition_url(options: &Options, segments: &[&str]) -> Result<String, String> {
+    let mut url = reqwest::Url::parse(&endpoint(options, "/v1/catalog/definitions"))
+        .map_err(|error| format!("invalid coordinator URL: {error}"))?;
+    let mut path = url
+        .path_segments_mut()
+        .map_err(|_| "coordinator URL cannot accept definition paths".to_owned())?;
+    for segment in segments {
+        path.push(segment);
+    }
+    drop(path);
+    Ok(url.into())
+}
+
+fn schema_table_definitions_url(options: &Options, schema_id: &str) -> Result<String, String> {
+    let mut url = reqwest::Url::parse(&endpoint(options, "/v1/catalog/schemas"))
+        .map_err(|error| format!("invalid coordinator URL: {error}"))?;
+    let mut path = url
+        .path_segments_mut()
+        .map_err(|_| "coordinator URL cannot accept definition paths".to_owned())?;
+    path.push(schema_id);
+    path.push("tables");
+    drop(path);
+    Ok(url.into())
+}
+
+fn parse_table_reference(
+    tokens: &[Token],
+    options: &Options,
+) -> Result<(String, String, String), String> {
+    match parse_names(tokens)?.as_slice() {
+        [table] => Ok((
+            options.catalog.clone(),
+            options.schema.clone(),
+            table.clone(),
+        )),
+        [schema, table] => Ok((options.catalog.clone(), schema.clone(), table.clone())),
+        [catalog, schema, table] => Ok((catalog.clone(), schema.clone(), table.clone())),
+        _ => Err("usage: DESCRIBE [catalog.]schema.table".to_owned()),
+    }
 }
 
 fn parse_show(tokens: &[Token], options: &Options) -> Result<MetaCommand, String> {
@@ -512,16 +776,34 @@ fn parse_show(tokens: &[Token], options: &Options) -> Result<MetaCommand, String
     if quote_style.is_some() {
         return Err("unsupported SHOW statement".to_owned());
     }
+    let (scope, like) = split_like(&tokens[1..])?;
+    if kind.eq_ignore_ascii_case("COLUMNS") {
+        let [Token::Word(connector), rest @ ..] = scope else {
+            return Err("usage: SHOW COLUMNS FROM [catalog.]schema.table".to_owned());
+        };
+        if connector.quote_style.is_some()
+            || !connector.value.eq_ignore_ascii_case("FROM")
+            || like.is_some()
+        {
+            return Err("usage: SHOW COLUMNS FROM [catalog.]schema.table".to_owned());
+        }
+        let (catalog, schema, table) = parse_table_reference(rest, options)?;
+        return Ok(MetaCommand::Describe {
+            catalog,
+            schema,
+            table,
+        });
+    }
     if kind.eq_ignore_ascii_case("CATALOGS") {
-        if tokens.len() == 1 {
-            return Ok(MetaCommand::Catalogs);
+        if scope.is_empty() {
+            return Ok(MetaCommand::Catalogs { like });
         }
         return Err("unsupported SHOW CATALOGS clause".to_owned());
     }
     if !(kind.eq_ignore_ascii_case("SCHEMAS") || kind.eq_ignore_ascii_case("TABLES")) {
         return Err("unsupported SHOW statement".to_owned());
     }
-    let names = match &tokens[1..] {
+    let names = match scope {
         [] => Vec::new(),
         [Token::Word(connector), rest @ ..]
             if connector.quote_style.is_none()
@@ -541,9 +823,11 @@ fn parse_show(tokens: &[Token], options: &Options) -> Result<MetaCommand, String
         return match names.as_slice() {
             [] => Ok(MetaCommand::Schemas {
                 catalog: options.catalog.clone(),
+                like,
             }),
             [catalog] => Ok(MetaCommand::Schemas {
                 catalog: catalog.clone(),
+                like,
             }),
             _ => Err("usage: SHOW SCHEMAS [IN catalog]".to_owned()),
         };
@@ -552,17 +836,75 @@ fn parse_show(tokens: &[Token], options: &Options) -> Result<MetaCommand, String
         [] => Ok(MetaCommand::Tables {
             catalog: options.catalog.clone(),
             schema: options.schema.clone(),
+            like,
         }),
         [schema] => Ok(MetaCommand::Tables {
             catalog: options.catalog.clone(),
             schema: schema.clone(),
+            like,
         }),
         [catalog, schema] => Ok(MetaCommand::Tables {
             catalog: catalog.clone(),
             schema: schema.clone(),
+            like,
         }),
         _ => Err("usage: SHOW TABLES [IN [catalog.]schema]".to_owned()),
     }
+}
+
+fn split_like(tokens: &[Token]) -> Result<(&[Token], Option<String>), String> {
+    if let [
+        prefix @ ..,
+        Token::Word(keyword),
+        Token::SingleQuotedString(pattern),
+    ] = tokens
+        && keyword.quote_style.is_none()
+        && keyword.value.eq_ignore_ascii_case("LIKE")
+    {
+        return Ok((prefix, Some(pattern.clone())));
+    }
+    if tokens.iter().any(|token| matches!(token, Token::Word(word) if word.quote_style.is_none() && word.value.eq_ignore_ascii_case("LIKE"))) {
+        return Err("SHOW LIKE requires a single-quoted pattern".to_owned());
+    }
+    Ok((tokens, None))
+}
+
+fn filter_like(names: Vec<String>, pattern: Option<&str>) -> Vec<String> {
+    match pattern {
+        Some(pattern) => names
+            .into_iter()
+            .filter(|name| sql_like(name, pattern))
+            .collect(),
+        None => names,
+    }
+}
+
+fn sql_like(value: &str, pattern: &str) -> bool {
+    let value = value.chars().collect::<Vec<_>>();
+    let pattern = pattern.chars().collect::<Vec<_>>();
+    let mut previous = vec![false; value.len() + 1];
+    previous[0] = true;
+    for character in pattern {
+        let mut current = vec![false; value.len() + 1];
+        match character {
+            '%' => {
+                current[0] = previous[0];
+                for index in 1..=value.len() {
+                    current[index] = previous[index] || current[index - 1];
+                }
+            }
+            '_' => {
+                current[1..].copy_from_slice(&previous[..value.len()]);
+            }
+            character => {
+                for index in 1..=value.len() {
+                    current[index] = previous[index - 1] && value[index - 1] == character;
+                }
+            }
+        }
+        previous = current;
+    }
+    previous[value.len()]
 }
 
 fn metadata_for_target(
@@ -607,149 +949,74 @@ fn word(token: &Token) -> Option<(&str, Option<char>)> {
 }
 
 fn format_result(response: &StatementResponse, format: OutputFormat) -> Result<String, String> {
-    match format {
-        OutputFormat::Json => serde_json::to_string_pretty(&response.data)
-            .map(|value| format!("{value}\n"))
-            .map_err(|error| error.to_string()),
-        OutputFormat::Csv => Ok(format_delimited(response, ',')),
-        OutputFormat::Tsv => Ok(format_delimited(response, '\t')),
-        OutputFormat::Table => Ok(format_table(response)),
-    }
-}
-
-fn format_delimited(response: &StatementResponse, delimiter: char) -> String {
-    let separator = delimiter.to_string();
-    let mut output = String::new();
-    output.push_str(
-        &response
-            .columns
-            .iter()
-            .map(|column| escape_delimited(&column.name, delimiter))
-            .collect::<Vec<_>>()
-            .join(&separator),
-    );
-    output.push('\n');
-    for row in &response.data {
-        output.push_str(
-            &row.iter()
-                .map(value_text)
-                .map(|value| escape_delimited(&value, delimiter))
-                .collect::<Vec<_>>()
-                .join(&separator),
-        );
-        output.push('\n');
-    }
-    output
-}
-
-fn escape_delimited(value: &str, delimiter: char) -> String {
-    if value.contains(delimiter)
-        || value.contains('"')
-        || value.contains('\n')
-        || value.contains('\r')
-    {
-        format!("\"{}\"", value.replace('"', "\"\""))
-    } else {
-        value.to_owned()
-    }
-}
-
-fn format_table(response: &StatementResponse) -> String {
-    if response.columns.is_empty() {
-        return format!("({} rows)\n", response.data.len());
-    }
-    let mut widths: Vec<usize> = response
+    let names = response
         .columns
         .iter()
-        .map(|column| column.name.len())
-        .collect();
-    let rows: Vec<Vec<String>> = response
-        .data
-        .iter()
-        .map(|row| row.iter().map(value_text).collect())
-        .collect();
-    for row in &rows {
-        for (index, value) in row.iter().enumerate() {
-            if let Some(width) = widths.get_mut(index) {
-                *width = (*width).max(value.len());
+        .map(|column| column.name.clone())
+        .collect::<Vec<_>>();
+    Ok(crate::output::format_rows(&names, &response.data, format))
+}
+
+fn write_output(options: &Options, output: &str) -> Result<(), String> {
+    if io::stdout().is_terminal()
+        && is_human_format(options.output_format)
+        && let Some(pager) = options
+            .pager
+            .as_deref()
+            .filter(|pager| !pager.trim().is_empty())
+    {
+        let mut command = if cfg!(windows) {
+            let mut command = Command::new("cmd");
+            command.args(["/C", pager]);
+            command
+        } else {
+            let mut parts = pager.split_whitespace();
+            let Some(program) = parts.next() else {
+                print!("{output}");
+                return Ok(());
+            };
+            let mut command = Command::new(program);
+            command.args(parts);
+            command
+        };
+        match command.stdin(Stdio::piped()).spawn() {
+            Ok(mut child) => {
+                if let Some(stdin) = child.stdin.as_mut()
+                    && let Err(error) = stdin.write_all(output.as_bytes())
+                {
+                    eprintln!("warning: pager input failed: {error}; printing directly");
+                    print!("{output}");
+                }
+                let _ = child.wait();
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("warning: cannot start pager '{pager}': {error}; printing directly");
             }
         }
     }
-    let separator = format!(
-        "+{}+\n",
-        widths
-            .iter()
-            .map(|width| "-".repeat(width + 2))
-            .collect::<Vec<_>>()
-            .join("+")
-    );
-    let mut output = separator.clone();
-    output.push_str(&table_row(
-        &response
-            .columns
-            .iter()
-            .map(|column| column.name.clone())
-            .collect::<Vec<_>>(),
-        &widths,
-        &vec![false; response.columns.len()],
-    ));
-    output.push_str(&separator);
-    let numeric = response
-        .columns
-        .iter()
-        .map(|column| is_numeric_type(&column.data_type))
-        .collect::<Vec<_>>();
-    for row in &rows {
-        output.push_str(&table_row(row, &widths, &numeric));
-    }
-    output.push_str(&separator);
-    output.push_str(&format!(
-        "({} {})\n",
-        rows.len(),
-        if rows.len() == 1 { "row" } else { "rows" }
-    ));
-    output
+    print!("{output}");
+    Ok(())
 }
 
-fn table_row(values: &[String], widths: &[usize], numeric: &[bool]) -> String {
-    let cells = widths
-        .iter()
-        .enumerate()
-        .map(|(index, width)| {
-            let value = values.get(index).map_or("", String::as_str);
-            if numeric.get(index).copied().unwrap_or(false) {
-                format!(" {value:>width$} ")
-            } else {
-                format!(" {value:<width$} ")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("|");
-    format!("|{cells}|\n")
+fn is_human_format(format: OutputFormat) -> bool {
+    matches!(
+        format,
+        OutputFormat::Table
+            | OutputFormat::Aligned
+            | OutputFormat::Vertical
+            | OutputFormat::Auto
+            | OutputFormat::Markdown
+    )
 }
 
-fn value_text(value: &Value) -> String {
-    match value {
-        Value::Null => "NULL".to_owned(),
-        Value::String(text) => text.clone(),
-        other => other.to_string(),
-    }
-}
-
-fn is_numeric_type(data_type: &str) -> bool {
-    let type_name = data_type.to_ascii_lowercase();
-    ["int", "float", "double", "decimal", "numeric", "real"]
-        .iter()
-        .any(|needle| type_name.contains(needle))
-}
-
-fn print_metadata(header: &str, names: Vec<String>, format: OutputFormat) {
+fn print_metadata(header: &str, names: Vec<String>, options: &Options) {
     let response = StatementResponse {
         id: String::new(),
         state: String::new(),
         columns: vec![Column {
             name: header.to_owned(),
-            data_type: "varchar".to_owned(),
+            _data_type: "varchar".to_owned(),
         }],
         data: names
             .into_iter()
@@ -758,21 +1025,21 @@ fn print_metadata(header: &str, names: Vec<String>, format: OutputFormat) {
         error: None,
         elapsed_ms: 0,
     };
-    print!(
-        "{}",
-        format_result(&response, format).expect("metadata output is serializable")
-    );
-    if format == OutputFormat::Table {
-        println!();
+    let mut output =
+        format_result(&response, options.output_format).expect("metadata output is serializable");
+    if is_human_format(options.output_format) {
+        output.push('\n');
     }
+    let _ = write_output(options, &output);
 }
 
 fn print_remote_help() {
     println!(
-        "SQL metadata: SHOW CATALOGS; SHOW SCHEMAS [IN catalog]; SHOW TABLES [IN [catalog.]schema]; USE [catalog.]schema;"
+        "SQL metadata: SHOW CATALOGS|SCHEMAS|TABLES [IN scope] [LIKE 'pattern']; USE [catalog.]schema;"
     );
+    println!("DESCRIBE [TABLE] [catalog.]schema.table; SHOW COLUMNS FROM [catalog.]schema.table;");
     println!(
-        ".catalogs  .schemas [catalog]  .tables [[catalog.]schema]  .use [catalog.]schema  .clear  .quit"
+        ".catalogs  .schemas [catalog]  .tables [[catalog.]schema]  .describe <table>  .use [catalog.]schema  .clear  .quit"
     );
     println!("Aliases: HELP, CLEAR, EXIT, QUIT (a trailing ; is accepted).");
 }
@@ -791,11 +1058,11 @@ mod tests {
             columns: vec![
                 Column {
                     name: "name".to_owned(),
-                    data_type: "Utf8".to_owned(),
+                    _data_type: "Utf8".to_owned(),
                 },
                 Column {
                     name: "count".to_owned(),
-                    data_type: "Int64".to_owned(),
+                    _data_type: "Int64".to_owned(),
                 },
             ],
             data: vec![vec![Value::String("a,b".to_owned()), Value::from(2)]],
@@ -846,6 +1113,7 @@ mod tests {
             Some(MetaCommand::Tables {
                 catalog: "sales.catalog".to_owned(),
                 schema: "gold schema".to_owned(),
+                like: None,
             })
         );
     }
@@ -854,7 +1122,7 @@ mod tests {
     fn rejects_unsupported_metadata_clauses_and_multiple_statements() {
         let options = options();
         assert!(
-            parse_sql_metadata("SHOW TABLES LIKE 'orders'", &options)
+            parse_sql_metadata("SHOW TABLES WHERE name = 'orders'", &options)
                 .unwrap_err()
                 .contains("unsupported")
         );
@@ -863,6 +1131,102 @@ mod tests {
                 .unwrap_err()
                 .contains("one statement")
         );
+    }
+
+    #[test]
+    fn show_like_filters_names_with_sql_wildcards() {
+        let options = options();
+        assert_eq!(
+            parse_sql_metadata("SHOW TABLES IN bronze LIKE 'order_%'", &options).unwrap(),
+            Some(MetaCommand::Tables {
+                catalog: options.catalog.clone(),
+                schema: "bronze".to_owned(),
+                like: Some("order_%".to_owned()),
+            })
+        );
+        assert_eq!(
+            filter_like(
+                vec![
+                    "orders_2026".to_owned(),
+                    "order".to_owned(),
+                    "users".to_owned()
+                ],
+                Some("order_%")
+            ),
+            ["orders_2026"]
+        );
+        assert!(parse_sql_metadata("SHOW CATALOGS LIKE orders", &options).is_err());
+    }
+
+    #[test]
+    fn describe_and_show_columns_resolve_qualified_references() {
+        let options = options();
+        let expected = Some(MetaCommand::Describe {
+            catalog: "lake".to_owned(),
+            schema: "gold".to_owned(),
+            table: "orders".to_owned(),
+        });
+        assert_eq!(
+            parse_sql_metadata("DESCRIBE lake.gold.orders", &options).unwrap(),
+            expected
+        );
+        assert_eq!(
+            parse_sql_metadata("SHOW COLUMNS FROM lake.gold.orders", &options).unwrap(),
+            Some(MetaCommand::Describe {
+                catalog: "lake".to_owned(),
+                schema: "gold".to_owned(),
+                table: "orders".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn describe_uses_catalog_schema_and_table_definition_routes() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let responses = [
+                (
+                    "/v1/catalog/definitions",
+                    r#"[{"id":"catalog-id","name":"lake"}]"#,
+                ),
+                (
+                    "/v1/catalog/definitions/catalog-id/schemas",
+                    r#"[{"id":"schema-id","name":"gold"}]"#,
+                ),
+                (
+                    "/v1/catalog/schemas/schema-id/tables",
+                    r#"[{"name":"orders","columns":[{"name":"id","data_type":"Int64","nullable":false}]}]"#,
+                ),
+            ];
+            for (path, body) in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 2048];
+                let bytes = stream.read(&mut request).unwrap();
+                let line = std::str::from_utf8(&request[..bytes])
+                    .unwrap()
+                    .lines()
+                    .next()
+                    .unwrap();
+                assert_eq!(line, format!("GET {path} HTTP/1.1"));
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}", body.len(), body).unwrap();
+            }
+        });
+        let mut options = options();
+        options.auth = "none".to_owned();
+        options.server = format!("http://{address}");
+        let client = Session::connect(&options).unwrap();
+        run_meta_command(
+            &client,
+            &mut options,
+            MetaCommand::Describe {
+                catalog: "lake".to_owned(),
+                schema: "gold".to_owned(),
+                table: "orders".to_owned(),
+            },
+        )
+        .unwrap();
+        server.join().unwrap();
     }
 
     #[test]
@@ -891,8 +1255,8 @@ mod tests {
 
     #[test]
     fn table_output_right_aligns_numeric_values() {
-        let output = format_table(&response());
-        assert!(output.contains("| a,b  |     2 |"));
+        let output = format_result(&response(), OutputFormat::Table).unwrap();
+        assert!(output.contains("a,b"));
         assert!(!output.contains("Int64"));
     }
 
@@ -906,6 +1270,7 @@ mod tests {
     #[test]
     fn telemetry_footer_deduplicates_task_nodes_and_reports_scan_metrics() {
         let telemetry = QueryTelemetry {
+            scan_metrics_complete: None,
             stages: vec![
                 StageTelemetry {
                     task_count: 3,
@@ -928,6 +1293,7 @@ mod tests {
                 },
             ],
             scans: vec![ScanTelemetry {
+                rows_emitted: None,
                 rows_selected: 12,
                 compressed_bytes_selected: 34,
             }],
@@ -944,6 +1310,7 @@ mod tests {
         result.elapsed_ms = 0;
         let footer = format_query_telemetry(
             &QueryTelemetry {
+                scan_metrics_complete: None,
                 stages: Vec::new(),
                 scans: Vec::new(),
             },
@@ -958,12 +1325,17 @@ mod tests {
     fn table_footer_has_a_trailing_blank_line() {
         let footer = format_query_telemetry(
             &QueryTelemetry {
+                scan_metrics_complete: None,
                 stages: Vec::new(),
                 scans: Vec::new(),
             },
             &response(),
         );
-        let rendered = format!("{}Query summary\n{}\n", format_table(&response()), footer);
+        let rendered = format!(
+            "{}Query summary\n{}\n",
+            format_result(&response(), OutputFormat::Table).unwrap(),
+            footer
+        );
         assert!(rendered.ends_with("\n\n"));
     }
 
@@ -1014,6 +1386,7 @@ mod tests {
             &mut options,
             MetaCommand::Schemas {
                 catalog: "medallion".to_owned(),
+                like: None,
             },
         )
         .unwrap();
@@ -1023,6 +1396,7 @@ mod tests {
             MetaCommand::Tables {
                 catalog: "medallion".to_owned(),
                 schema: "test".to_owned(),
+                like: None,
             },
         )
         .unwrap();
@@ -1063,5 +1437,16 @@ mod tests {
             endpoint(&options, "/v1/statement"),
             "http://localhost:8080/v1/statement"
         );
+    }
+    #[test]
+    fn scan_counts_are_separate_from_returned_rows_and_mark_partial_coverage() {
+        let telemetry: QueryTelemetry = serde_json::from_value(serde_json::json!({
+            "scan_metrics_complete": false,
+            "scans": [{"rows_selected": 10000, "rows_emitted": 8192, "compressed_bytes_selected": 2048}]
+        })).unwrap();
+        let text = format_query_telemetry(&telemetry, &response());
+        assert!(text.contains("Scanned: 8192 rows from storage readers"));
+        assert!(text.contains("partial worker metrics"));
+        assert!(text.contains("Scan selected: 10000 rows"));
     }
 }

@@ -106,9 +106,13 @@ impl Session {
         if options.auth == "none" {
             return Ok(session);
         }
-        if let Ok(token) = std::env::var("KAVEON_ACCESS_TOKEN") {
+        if let Some(token) = options
+            .access_token
+            .clone()
+            .or_else(|| std::env::var("KAVEON_ACCESS_TOKEN").ok())
+        {
             if token.trim().is_empty() {
-                return Err("KAVEON_ACCESS_TOKEN is empty".into());
+                return Err("access token is empty".into());
             }
             *session.credentials.borrow_mut() = Some(Credentials {
                 access_token: token,

@@ -45,6 +45,8 @@ class LabExecuteBody(BaseModel):
 class LabQueryBody(BaseModel):
     query: str = Field(..., min_length=1)
     database: Optional[str] = Field(default=None, max_length=255)
+    engineSourceId: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    engineSchema: Optional[str] = Field(default=None, min_length=1, max_length=128)
     datasetId: Optional[int] = None
     runContext: Optional[str] = Field(default=None, max_length=64)
     tablesUsed: Optional[list[str]] = None

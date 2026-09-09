@@ -32,7 +32,7 @@ use kaveon_exec::union::UnionOperator;
 use kaveon_exec::window::WindowOperator;
 use kaveon_storage::{
     AdlsParquetReader, DeltaTableReader, ObjectDeltaReader, ObjectParquetReader, ParquetReader,
-    ScanPartition,
+    ScanMetrics, ScanPartition,
 };
 
 pub struct ExchangeBatches {
@@ -56,6 +56,8 @@ pub struct FragmentExecution {
     pub result_schema: SchemaRef,
     pub result_batches: Vec<RecordBatch>,
     pub exchange_outputs: BTreeMap<ExchangeId, ExchangeOutputBatches>,
+    pub scan_metrics: Vec<kaveon_storage::ScanMetrics>,
+    pub scan_metrics_complete: bool,
 }
 
 pub struct ExchangeOutputBatches {
@@ -86,6 +88,12 @@ pub fn execute_fragment_with_memory(
         .map(|node| (node.id, node))
         .collect::<HashMap<_, _>>();
     let root = nodes[&fragment.root];
+    let scan_count = fragment
+        .nodes
+        .iter()
+        .filter(|node| matches!(node.operator, FragmentOperator::Scan(_)))
+        .count();
+    let mut scan_metrics = Vec::new();
     if let FragmentOperator::ExchangeOutput(output) = &root.operator {
         let mut operator = compile_node(
             root.inputs[0],
@@ -94,10 +102,12 @@ pub fn execute_fragment_with_memory(
             exchanges,
             scan_partition,
             memory,
+            &mut scan_metrics,
         )?;
         let schema = Arc::clone(operator.schema());
         let batches = collect(&mut *operator)?;
         let partitions = partition_batches(&batches, &schema, &output.partitioning)?;
+        let scan_metrics_complete = has_complete_scan_metrics(scan_count, scan_metrics.len());
         return Ok(FragmentExecution {
             result_schema: Arc::clone(&schema),
             result_batches: Vec::new(),
@@ -105,6 +115,8 @@ pub fn execute_fragment_with_memory(
                 output.exchange_id.clone(),
                 ExchangeOutputBatches { schema, partitions },
             )]),
+            scan_metrics,
+            scan_metrics_complete,
         });
     }
     let mut operator = compile_node(
@@ -114,12 +126,16 @@ pub fn execute_fragment_with_memory(
         exchanges,
         scan_partition,
         memory,
+        &mut scan_metrics,
     )?;
     let result_schema = Arc::clone(operator.schema());
+    let scan_metrics_complete = has_complete_scan_metrics(scan_count, scan_metrics.len());
     Ok(FragmentExecution {
         result_schema,
         result_batches: collect(&mut *operator)?,
         exchange_outputs: BTreeMap::new(),
+        scan_metrics,
+        scan_metrics_complete,
     })
 }
 
@@ -130,6 +146,7 @@ fn compile_node(
     exchanges: &dyn ExchangeInputProvider,
     scan_partition: ScanPartition,
     memory: Option<&QueryMemoryPool>,
+    scan_metrics: &mut Vec<kaveon_storage::ScanMetrics>,
 ) -> Result<Box<dyn BatchOperator>> {
     let node = nodes[&id];
     match &node.operator {
@@ -145,6 +162,9 @@ fn compile_node(
                         if let Some(predicate) = &scan.predicate {
                             reader = reader.with_predicate(predicate.clone());
                         }
+                        let metrics = ScanMetrics::default();
+                        reader = reader.with_metrics(metrics.clone());
+                        scan_metrics.push(metrics);
                         return Ok(Box::new(ScanOperator::new(
                             Box::new(reader.read_blocking()?),
                             None,
@@ -159,6 +179,9 @@ fn compile_node(
                         if let Some(predicate) = &scan.predicate {
                             reader = reader.with_predicate(predicate.clone());
                         }
+                        let metrics = ScanMetrics::default();
+                        reader = reader.with_metrics(metrics.clone());
+                        scan_metrics.push(metrics);
                         return Ok(Box::new(ScanOperator::new(
                             Box::new(reader.read_blocking()?),
                             None,
@@ -172,6 +195,9 @@ fn compile_node(
                     if let Some(predicate) = &scan.predicate {
                         reader = reader.with_predicate(predicate.clone());
                     }
+                    let metrics = ScanMetrics::default();
+                    reader = reader.with_metrics(metrics.clone());
+                    scan_metrics.push(metrics);
                     Box::new(reader.read()?)
                 }
                 DataFormat::Delta => {
@@ -224,7 +250,16 @@ fn compile_node(
         FragmentOperator::ExchangeInput(input) => exchanges.open(&input.exchange_id),
         FragmentOperator::Filter { predicate } => {
             let mut operator = FilterOperator::new(
-                compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?,
+                compile_input(
+                    node,
+                    0,
+                    nodes,
+                    catalog,
+                    exchanges,
+                    scan_partition,
+                    memory,
+                    scan_metrics,
+                )?,
                 predicate.clone(),
             );
             if let Some(memory) = memory {
@@ -234,7 +269,16 @@ fn compile_node(
         }
         FragmentOperator::Project { expressions } => {
             let mut operator = ProjectOperator::new(
-                compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?,
+                compile_input(
+                    node,
+                    0,
+                    nodes,
+                    catalog,
+                    exchanges,
+                    scan_partition,
+                    memory,
+                    scan_metrics,
+                )?,
                 expressions
                     .iter()
                     .map(|named| Expr::Alias {
@@ -282,7 +326,16 @@ fn compile_node(
                     })
                 })
                 .collect::<Result<_>>()?;
-            let input = compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?;
+            let input = compile_input(
+                node,
+                0,
+                nodes,
+                catalog,
+                exchanges,
+                scan_partition,
+                memory,
+                scan_metrics,
+            )?;
             match mode {
                 AggregateMode::Single => kaveon_exec::partitioned::hash_aggregate(
                     input,
@@ -367,14 +420,32 @@ fn compile_node(
             }
         }
         FragmentOperator::Sort { keys } => kaveon_exec::partitioned::sort_operator(
-            compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?,
+            compile_input(
+                node,
+                0,
+                nodes,
+                catalog,
+                exchanges,
+                scan_partition,
+                memory,
+                scan_metrics,
+            )?,
             sort_expressions(keys),
             memory
                 .map(|memory| memory.operator("fragment-sort"))
                 .transpose()?,
         ),
         FragmentOperator::TopN { keys, limit } => kaveon_exec::partitioned::top_n_operator(
-            compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?,
+            compile_input(
+                node,
+                0,
+                nodes,
+                catalog,
+                exchanges,
+                scan_partition,
+                memory,
+                scan_metrics,
+            )?,
             sort_expressions(keys),
             *limit,
             memory
@@ -382,15 +453,42 @@ fn compile_node(
                 .transpose()?,
         ),
         FragmentOperator::Limit { limit } => Ok(Box::new(LimitOperator::new(
-            compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?,
+            compile_input(
+                node,
+                0,
+                nodes,
+                catalog,
+                exchanges,
+                scan_partition,
+                memory,
+                scan_metrics,
+            )?,
             *limit,
         ))),
         FragmentOperator::Offset { offset } => Ok(Box::new(OffsetOperator::new(
-            compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?,
+            compile_input(
+                node,
+                0,
+                nodes,
+                catalog,
+                exchanges,
+                scan_partition,
+                memory,
+                scan_metrics,
+            )?,
             *offset,
         ))),
         FragmentOperator::Distinct => {
-            let input = compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?;
+            let input = compile_input(
+                node,
+                0,
+                nodes,
+                catalog,
+                exchanges,
+                scan_partition,
+                memory,
+                scan_metrics,
+            )?;
             let mut operator = DistinctOperator::new(input);
             if let Some(memory) = memory {
                 operator = operator.with_memory(memory.operator("fragment-distinct")?);
@@ -407,6 +505,7 @@ fn compile_node(
                     exchanges,
                     scan_partition,
                     memory,
+                    scan_metrics,
                 )?);
             }
             if operators.is_empty() {
@@ -430,8 +529,26 @@ fn compile_node(
                 .iter()
                 .map(expression_column)
                 .collect::<Result<Vec<_>>>()?;
-            let left = compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?;
-            let right = compile_input(node, 1, nodes, catalog, exchanges, scan_partition, memory)?;
+            let left = compile_input(
+                node,
+                0,
+                nodes,
+                catalog,
+                exchanges,
+                scan_partition,
+                memory,
+                scan_metrics,
+            )?;
+            let right = compile_input(
+                node,
+                1,
+                nodes,
+                catalog,
+                exchanges,
+                scan_partition,
+                memory,
+                scan_metrics,
+            )?;
             let keys = left_keys.into_iter().zip(right_keys).collect();
             kaveon_exec::partitioned::hash_join(
                 left,
@@ -446,7 +563,16 @@ fn compile_node(
             )
         }
         FragmentOperator::Window { window_exprs } => {
-            let input = compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?;
+            let input = compile_input(
+                node,
+                0,
+                nodes,
+                catalog,
+                exchanges,
+                scan_partition,
+                memory,
+                scan_metrics,
+            )?;
             let mut operator = WindowOperator::new(input, window_exprs.clone())?;
             if let Some(memory) = memory {
                 operator = operator.with_memory(memory.operator("fragment-window")?);
@@ -454,8 +580,26 @@ fn compile_node(
             Ok(Box::new(operator))
         }
         FragmentOperator::Intersect => {
-            let left = compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?;
-            let right = compile_input(node, 1, nodes, catalog, exchanges, scan_partition, memory)?;
+            let left = compile_input(
+                node,
+                0,
+                nodes,
+                catalog,
+                exchanges,
+                scan_partition,
+                memory,
+                scan_metrics,
+            )?;
+            let right = compile_input(
+                node,
+                1,
+                nodes,
+                catalog,
+                exchanges,
+                scan_partition,
+                memory,
+                scan_metrics,
+            )?;
             let mut operator = SetOpOperator::new(left, right, SetOpMode::Intersect);
             if let Some(memory) = memory {
                 operator = operator.with_memory(memory.operator("fragment-set-operation")?);
@@ -463,8 +607,26 @@ fn compile_node(
             Ok(Box::new(operator))
         }
         FragmentOperator::Except => {
-            let left = compile_input(node, 0, nodes, catalog, exchanges, scan_partition, memory)?;
-            let right = compile_input(node, 1, nodes, catalog, exchanges, scan_partition, memory)?;
+            let left = compile_input(
+                node,
+                0,
+                nodes,
+                catalog,
+                exchanges,
+                scan_partition,
+                memory,
+                scan_metrics,
+            )?;
+            let right = compile_input(
+                node,
+                1,
+                nodes,
+                catalog,
+                exchanges,
+                scan_partition,
+                memory,
+                scan_metrics,
+            )?;
             let mut operator = SetOpOperator::new(left, right, SetOpMode::Except);
             if let Some(memory) = memory {
                 operator = operator.with_memory(memory.operator("fragment-set-operation")?);
@@ -475,6 +637,10 @@ fn compile_node(
             "ExchangeOutput is supported only as the fragment root",
         )),
     }
+}
+
+fn has_complete_scan_metrics(scan_count: usize, metric_handle_count: usize) -> bool {
+    scan_count == metric_handle_count
 }
 
 pub(crate) fn compile_final_aggregate(
@@ -801,6 +967,7 @@ fn group_column(
     kaveon_exec::aggregate::aggregate_key_column(&keys, data_type)
 }
 
+#[allow(clippy::too_many_arguments)] // Shared fragment compilation context includes measured scan handles.
 fn compile_input(
     node: &FragmentNode,
     index: usize,
@@ -809,6 +976,7 @@ fn compile_input(
     exchanges: &dyn ExchangeInputProvider,
     scan_partition: ScanPartition,
     memory: Option<&QueryMemoryPool>,
+    scan_metrics: &mut Vec<kaveon_storage::ScanMetrics>,
 ) -> Result<Box<dyn BatchOperator>> {
     compile_node(
         node.inputs[index],
@@ -817,6 +985,7 @@ fn compile_input(
         exchanges,
         scan_partition,
         memory,
+        scan_metrics,
     )
 }
 
@@ -1968,7 +2137,20 @@ mod tests {
             .map(RecordBatch::num_rows)
             .sum::<usize>();
         assert_eq!((first_rows, second_rows), (2, 2));
+        assert_eq!(first.scan_metrics.len(), 1);
+        assert_eq!(first.scan_metrics[0].snapshot().rows_emitted, 2);
+        assert_eq!(second.scan_metrics[0].snapshot().rows_emitted, 2);
 
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn scan_metric_coverage_rejects_unsupported_readers_but_accepts_exchange_only_fragments() {
+        // Delta and Iceberg fragments currently have scan operators without injectable handles.
+        assert!(!has_complete_scan_metrics(1, 0));
+        // An exchange-only stage has no storage reader and is complete at zero counters.
+        assert!(has_complete_scan_metrics(0, 0));
+        // Local Parquet retains one reader handle for each scan operator.
+        assert!(has_complete_scan_metrics(1, 1));
     }
 }

@@ -70,6 +70,22 @@ class EngineBridgeTests(unittest.TestCase):
             with self.assertRaises(HTTPException):
                 bridge._endpoint()
 
+    def test_catalog_reads_forward_only_a_valid_scoped_role(self):
+        with patch.object(bridge, "_request", return_value={"schemas": ["test"]}) as request:
+            self.assertEqual(bridge.schemas("warehouse", "viewer@example.com", "Viewer"), {"schemas": ["test"]})
+            self.assertEqual(request.call_args.args[:4], ("GET", "/v1/catalog/warehouse/schema", "KAVEON_ENGINE_BRIDGE_TOKEN", "viewer@example.com"))
+            self.assertEqual(request.call_args.kwargs["role"], "reader")
+        with patch.object(bridge, "_request") as request:
+            with self.assertRaises(HTTPException):
+                bridge.schemas("warehouse", "unknown@example.com", "NoAccess")
+            request.assert_not_called()
+
+    def test_private_ca_uses_a_verifying_context(self):
+        with patch.dict("os.environ", {"KAVEON_ENGINE_CA_CERT": "C:/missing-ca.pem"}):
+            with self.assertRaises(HTTPException) as error:
+                bridge._verify_context()
+            self.assertEqual(error.exception.status_code, 503)
+
 
 if __name__ == "__main__":
     unittest.main()

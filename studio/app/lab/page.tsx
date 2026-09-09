@@ -33,6 +33,12 @@ interface DataSource {
   table_count?: number;
 }
 
+interface EngineSource {
+  id: string;
+  name: string;
+  catalog: string;
+}
+
 interface TableInfo {
   id: string;
   schema: string;
@@ -179,6 +185,9 @@ export default function LabPage() {
   const datasetId = searchParams.get('datasetId');
 
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
+  const [engineSources, setEngineSources] = useState<EngineSource[]>([]);
+  const [currentEngineSourceId, setCurrentEngineSourceId] = useState<string | null>(null);
+  const [engineSchemas, setEngineSchemas] = useState<string[]>([]);
   const [currentDataSourceId, setCurrentDataSourceId] = useState<number | null>(null);
   const [databases, setDatabases] = useState<DatabaseConfig[]>([]);
   const [currentDatabase, setCurrentDatabase] = useState<string | null>(null);
@@ -275,6 +284,11 @@ export default function LabPage() {
     () => dataSources.find((ds) => ds.id === currentDataSourceId) || null,
     [dataSources, currentDataSourceId],
   );
+  const currentEngineSource = useMemo(
+    () => engineSources.find((source) => source.id === currentEngineSourceId) || null,
+    [engineSources, currentEngineSourceId],
+  );
+  const usingEngine = currentEngineSourceId !== null;
 
   const [expandedSchemas, setExpandedSchemas] = useState<Record<string, boolean>>({});
 
@@ -616,6 +630,56 @@ export default function LabPage() {
     loadInitial();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const loadEngineSources = async () => {
+      try {
+        const userEmail = account?.email || account?.username || null;
+        const res = await msalFetch(`${API_BASE}/api/v1/lab/engine/sources`, {
+          headers: userEmail ? { "x-user-email": userEmail } : undefined,
+        });
+        const data = await res.json();
+        if (res.ok && data.success) setEngineSources(data.sources || []);
+      } catch (error) {
+        setLoadError(error instanceof Error ? error.message : "Failed to load Engine sources");
+      }
+    };
+    void loadEngineSources();
+  }, [isAuthenticated, account?.email, account?.username]);
+
+  const loadEngineSchemas = async (sourceId: string) => {
+    const userEmail = account?.email || account?.username || null;
+    const res = await msalFetch(`${API_BASE}/api/v1/lab/engine/${encodeURIComponent(sourceId)}/schemas`, {
+      headers: userEmail ? { "x-user-email": userEmail } : undefined,
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) throw new Error(data.error || "Failed to load Engine schemas");
+    const schemas: string[] = data.schemas || [];
+    setEngineSchemas(schemas);
+    const schema = schemas[0] || null;
+    setCurrentDatabase(schema);
+    setTables([]);
+    setFilteredTables([]);
+    if (schema) await loadEngineTables(sourceId, schema);
+  };
+
+  const loadEngineTables = async (sourceId: string, schema: string) => {
+    setIsLoadingTables(true);
+    try {
+      const userEmail = account?.email || account?.username || null;
+      const res = await msalFetch(`${API_BASE}/api/v1/lab/engine/${encodeURIComponent(sourceId)}/schemas/${encodeURIComponent(schema)}/tables`, {
+        headers: userEmail ? { "x-user-email": userEmail } : undefined,
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || "Failed to load Engine tables");
+      const discovered = (data.tables || []).map((name: string) => ({ id: `engine:${schema}.${name}`, schema, name, fullName: `${schema}.${name}` }));
+      setTables(discovered);
+      setFilteredTables(discovered);
+    } finally {
+      setIsLoadingTables(false);
+    }
+  };
   const switchDatabase = async (databaseName: string) => {
     try {
       setIsLoadingTables(true);
@@ -771,6 +835,7 @@ export default function LabPage() {
 
   const buildQualifiedName = (table: TableInfo | null) => {
     if (!table) return "";
+    if (usingEngine) return `${table.schema}.${table.name}`;
     return `[${table.schema}].[${table.name}]`;
   };
 
@@ -788,7 +853,9 @@ export default function LabPage() {
     setSelectedTableId(table.id);
     setResultError(null);
     const qualified = buildQualifiedName(table);
-    const sql = `SELECT TOP 100 * FROM ${qualified};`;
+    const sql = usingEngine
+      ? `SELECT * FROM ${qualified} LIMIT 100;`
+      : `SELECT TOP 100 * FROM ${qualified};`;
 
     // Append to the active tab rather than overwriting it.
     const editor = editorRef.current;
@@ -814,6 +881,8 @@ export default function LabPage() {
       ...prev,
       [tableId]: !prev[tableId],
     }));
+
+    if (usingEngine) return;
 
     // If we're collapsing, clear its search term and bail
     if (expandedTables[tableId]) {
@@ -902,7 +971,9 @@ return;
         signal: abortControllerRef.current.signal,
         body: JSON.stringify({
           query: text,
-          database: currentDatabase,
+          ...(usingEngine
+            ? { engineSourceId: currentEngineSourceId, engineSchema: currentDatabase }
+            : { database: currentDatabase }),
           savedQueryId: active?.savedQueryId ?? null,
           executedBy: userEmail,
           ...(rowLimit > 0 ? { row_limit: rowLimit } : {}),
@@ -982,7 +1053,9 @@ return;
             },
             body: JSON.stringify({
               query: stmt,
-              database: currentDatabase,
+              ...(usingEngine
+                ? { engineSourceId: currentEngineSourceId, engineSchema: currentDatabase }
+                : { database: currentDatabase }),
               executedBy: userEmail,
               ...(rowLimit > 0 ? { row_limit: rowLimit } : {}),
             }),
@@ -1676,11 +1749,13 @@ return;
                 <i
                   className={
                     "fas fa-circle " +
-                    (currentDataSource ? "status-connected" : "status-disconnected")
+                    (currentDataSource || currentEngineSource ? "status-connected" : "status-disconnected")
                   }
                 />
                 <span className="connection-text">
-                  {currentDataSource
+                  {currentEngineSource
+                    ? `Engine: ${currentEngineSource.name}`
+                    : currentDataSource
                     ? `Connected to ${currentDataSource.name}`
                     : "Select Data Source"}
                 </span>
@@ -1727,11 +1802,23 @@ return;
                 <i className="fas fa-database sidebar-db-icon" />
                 <select
                   className="sidebar-db-select"
-                  value={currentDataSourceId ?? ""}
-                  disabled={isLoadingDatabases || dataSources.length === 0}
+                  value={usingEngine ? `engine:${currentEngineSourceId}` : currentDataSourceId ?? ""}
+                  disabled={isLoadingDatabases || (dataSources.length === 0 && engineSources.length === 0)}
                   onChange={async (e) => {
-                    const id = e.target.value ? parseInt(e.target.value) : null;
+                    const value = e.target.value;
+                    if (value.startsWith("engine:")) {
+                      const id = value.slice("engine:".length);
+                      setCurrentEngineSourceId(id);
+                      setCurrentDataSourceId(null);
+                      setTableColumns({});
+                      setExpandedSchemas({});
+                      try { await loadEngineSchemas(id); } catch (error) { setLoadError(error instanceof Error ? error.message : "Failed to load Engine source"); }
+                      return;
+                    }
+                    const id = value ? parseInt(value) : null;
                     if (!id) return;
+                    setCurrentEngineSourceId(null);
+                    setEngineSchemas([]);
                     setCurrentDataSourceId(id);
                     const ds = dataSources.find((d) => d.id === id);
                     if (ds?.database_name) await switchDatabase(ds.database_name);
@@ -1744,8 +1831,36 @@ return;
                   {dataSources.map((ds) => (
                     <option key={ds.id} value={ds.id}>{ds.name}</option>
                   ))}
+                  {engineSources.length > 0 && (
+                    <optgroup label="Kaveon Engine catalogs">
+                      {engineSources.map((source) => (
+                        <option key={source.id} value={`engine:${source.id}`}>{source.name} · {source.catalog}</option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
               </div>
+
+              {usingEngine && (
+                <div className="sidebar-db-wrap">
+                  <i className="fas fa-layer-group sidebar-db-icon" />
+                  <select
+                    className="sidebar-db-select"
+                    value={currentDatabase ?? ""}
+                    disabled={!currentEngineSourceId || engineSchemas.length === 0}
+                    onChange={async (e) => {
+                      const schema = e.target.value;
+                      if (!schema || !currentEngineSourceId) return;
+                      setCurrentDatabase(schema);
+                      setTableColumns({});
+                      setExpandedSchemas({});
+                      try { await loadEngineTables(currentEngineSourceId, schema); } catch (error) { setLoadError(error instanceof Error ? error.message : "Failed to load Engine tables"); }
+                    }}
+                  >
+                    {engineSchemas.map((schema) => <option key={schema} value={schema}>{schema}</option>)}
+                  </select>
+                </div>
+              )}
 
               <div className="sidebar-search-wrap">
                 <i className="fas fa-search sidebar-search-icon" />

@@ -100,6 +100,33 @@ LIMIT  5;`}</Code>
     <p>Or execute one statement and exit — useful in scripts:</p>
     <Code lang="bash">{`kaveon --local --data-dir /data/warehouse -e "SELECT count(*) FROM orders"`}</Code>
 
+    <h2>Interactive shell and scripts</h2>
+    <p>
+      CLI 0.2.0 adds persistent history, reverse history search, tab completion, and EMACS or VI editing.
+      The prompt shows your active schema in white with a muted gray prefix; <code>NO_COLOR</code> disables
+      terminal colors. Use <code>exit</code> or <code>quit</code> to leave the shell.
+    </p>
+    <Code lang="bash">{`# Execute a script against the connected Engine
+kaveon https://localhost:18443/medallion/test --ca-cert ./kaveon-ca.crt --file queries.sql
+
+# Export one JSON object per row
+kaveon https://localhost:18443/medallion/test --ca-cert ./kaveon-ca.crt --execute "SELECT * FROM orders LIMIT 10" --output-format JSON`}</Code>
+    <p>
+      Remote scripts and redirected standard input support multiple statements. A failed statement stops
+      the batch; <code>--ignore-errors</code> continues while retaining a nonzero exit status. Uppercase
+      output formats include <code>ALIGNED</code>, <code>AUTO</code>, <code>VERTICAL</code>,{" "}
+      <code>MARKDOWN</code>, <code>CSV_HEADER</code>, <code>TSV_HEADER</code>, and <code>JSON</code>.
+      Existing lowercase <code>json</code> retains its array-of-rows format.
+    </p>
+    <p>
+      Save connection defaults as <code>key=value</code> lines in <code>~/.kaveon_config</code>, or select a
+      file with <code>KAVEON_CONFIG</code>. See the{" "}
+      <a href="https://github.com/PruthviProdduturi/Kaveon/blob/dev/docs/guides/engine-cli.md">CLI guide</a>{" "}
+      for all formats and examples, and the{" "}
+      <a href="https://github.com/PruthviProdduturi/Kaveon/blob/dev/docs/engineering/cli-compatibility.md">compatibility checkpoint</a>{" "}
+      for the remaining differences from Trino.
+    </p>
+
     <h2>Run the cluster</h2>
     <p>
       For distributed execution, start a coordinator and one or more workers, then point the CLI at the
