@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { signIn } from "next-auth/react";
 import { KaveonMark } from "./KaveonMark";
-import { publicEntraToken } from "../auth/publicEntra";
+import { preparePublicEntra } from "../auth/publicEntra";
 
 const PROMPTS = [
 	"What happened to revenue last quarter?",
@@ -18,6 +18,22 @@ export function AuthScreen() {
 	const [toast, setToast] = useState<string | null>(null);
 	const [signInError, setSignInError] = useState<string | null>(null);
 	const [microsoftPending, setMicrosoftPending] = useState(false);
+	const [microsoftAction, setMicrosoftAction] = useState<{ token: (() => Promise<string>) | null } | null>(null);
+	useEffect(() => {
+		let active = true;
+		void (async () => {
+			try {
+				const response = await fetch("/api/auth/entra-config", { cache: "no-store" });
+				if (!response.ok) throw new Error("configuration_unavailable");
+				const config = await response.json();
+				const token = config.enabled ? await preparePublicEntra(config) : null;
+				if (active) setMicrosoftAction({ token });
+			} catch {
+				if (active) setSignInError("Microsoft sign-in could not be prepared. Refresh this page to retry.");
+			}
+		})();
+		return () => { active = false; };
+	}, []);
 	const [promptIdx, setPromptIdx] = useState(0);
 
 	useEffect(() => {
@@ -46,17 +62,18 @@ export function AuthScreen() {
 		signIn(provider, { callbackUrl: "/" });
 	};
 	const startMicrosoft = async () => {
+		if (!microsoftAction) return;
 		setSignInError(null);
 		setMicrosoftPending(true);
 		try {
-			const response = await fetch("/api/auth/entra-config", { cache: "no-store" });
-			if (!response.ok) throw new Error("Entra configuration unavailable");
-			const config = await response.json() as { enabled?: boolean; clientId?: string; tenantId?: string; scope?: string };
-			if (!config.enabled || !config.clientId || !config.tenantId || !config.scope) return start("microsoft-entra-id");
-			const token = await publicEntraToken({ clientId: config.clientId, tenantId: config.tenantId, scope: config.scope });
+			if (!microsoftAction.token) return start("microsoft-entra-id");
+			const token = await microsoftAction.token();
 			await signIn("entra-public", { token, callbackUrl: "/" });
-		} catch {
-			setSignInError("Microsoft sign-in could not be started. Please try again.");
+		} catch (error) {
+			const code = error && typeof error === "object" && "errorCode" in error && typeof error.errorCode === "string" && /^[a-z_]{1,80}$/.test(error.errorCode) ? error.errorCode : "sign_in_failed";
+			setSignInError(code === "popup_window_error" || code === "empty_window_error"
+				? "Allow pop-ups for this site, then select Microsoft again."
+				: `Microsoft sign-in failed (${code}). Please try again.`);
 		} finally {
 			setMicrosoftPending(false);
 		}
@@ -244,7 +261,7 @@ export function AuthScreen() {
 						<button
 							type="button"
 							onClick={startMicrosoft}
-							disabled={microsoftPending}
+							disabled={microsoftPending || !microsoftAction}
 							aria-busy={microsoftPending}
 							style={{ ...btnBase, cursor: microsoftPending ? "wait" : "pointer", opacity: microsoftPending ? 0.7 : 1 }}
 							onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)"; }}

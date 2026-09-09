@@ -26,6 +26,19 @@ changed unless the application actually changes it; the user controls that picke
 
 ## Ownership map
 
+### AKS Microsoft popup correction — September 8
+
+The public-client callback was missing MSAL v5's redirect bridge, and ClientLayout
+rendered AuthScreen instead of that callback for signed-out users. The callback
+now broadcasts through `@azure/msal-browser/redirect-bridge` and is public in
+both middleware and the client layout. Public-client initialization/config fetch
+run before the button is enabled, preserving the click's popup activation.
+Only sanitized MSAL error codes are shown on failure. The browser qualification
+`studio/qualification/microsoft_popup_browser.py` opens the real popup and verifies
+the actual callback broadcasts a synthetic error and clears the URL, without
+tokens or bypassing sign-in. Type checking and lint pass (existing lint warnings).
+Ordinary Vercel OAuth remains the fallback when public-client mode is disabled.
+
 ### OAuth session regression — September 8
 
 The CLI/AKS portal change accidentally passed `session.maxAge: undefined` when
