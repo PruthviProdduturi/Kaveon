@@ -1,8 +1,8 @@
 # OpenSource sample data
 
-`OpenSource` is the public analytical data catalog. It is separate from the
-planned internal `Kaveon` product catalog and the existing `kavedb` synthetic
-fixtures. PostgreSQL still owns the portal's mutable metadata.
+`OpenSource` is the retained public analytical catalog. It is separate from the
+planned internal `Kaveon` product catalog, which is not available yet.
+PostgreSQL still owns the portal's mutable metadata.
 
 The first AKS run completed in 5 minutes 10 seconds. All 11 tables passed exact
 Engine row-count checks. It loaded 3,523,552 original taxi rows, retained
@@ -14,8 +14,8 @@ An authenticated live SQL Lab query returned 48,131 cleaned green taxi trips.
 
 The extras import adds four verified tables: complete OWID energy data (23,377
 rows), its 130-indicator codebook, 1,764 NASA GISTEMP global monthly anomalies,
-and 4,576 Open LLM leaderboard results. The catalog now has 15 tables across
-seven schemas. Its source URLs, pinned archive revisions, and checksums are in
+and 4,576 Open LLM leaderboard results. The published catalog now has 11 tables across four subject schemas.
+Processing-layer files remain in ADLS, outside the product explorer. Its source URLs, pinned archive revisions, and checksums are in
 `tmp/extras-manifest.json`; counts are recorded in
 `tmp/extras-registration.log`. These are source snapshots for demonstrations,
 not a claim of continuously refreshed energy, climate, or benchmark reporting.
@@ -33,7 +33,7 @@ not a claim of continuously refreshed energy, climate, or benchmark reporting.
   codebook at the commit pinned in the extras manifest.
 - [NASA GISTEMP v4](https://data.giss.nasa.gov/gistemp/): global monthly
   land-ocean anomalies relative to the 1951-1980 baseline; `***` is null.
-- [Open LLM Leaderboard](https://huggingface.co/datasets/open-llm-leaderboard):
+- [Open LLM Leaderboard](https://huggingface.co/datasets/open-llm-leaderboard/contents):
   the pinned Parquet archive recorded in the extras manifest.
 
 The sources are public datasets; no PostgreSQL production records are included.
@@ -43,15 +43,15 @@ Additional previously loaded datasets require their names/source inventory.
 
 | Schema | Tables | Meaning |
 | --- | --- | --- |
-| `bronze` | `yellow_trips`, `green_trips` | All source trip rows, with normalized Engine-compatible types |
-| `silver` | `yellow_trips`, `green_trips` | Trips passing the documented checks |
-| `silver` | `yellow_rejected`, `green_rejected` | Excluded trips with the first rejection reason |
-| `reference` | `taxi_zones` | TLC location IDs and names |
-| `covid` | `reported_cases`, `country_latest` | WHO time series and latest dated row per country |
-| `gold` | `daily_trips`, `covid_reported_by_date` | Daily trip totals and sums of newly reported COVID counts |
-| `climate_energy` | `energy`, `global_temperature_monthly` | OWID country/year indicators and GISTEMP monthly anomalies |
-| `reference` | `energy_indicators` | OWID indicator codebook |
-| `ai_benchmarks` | `open_llm_results` | Pinned Open LLM leaderboard archive |
+| `nyc_taxi` | `yellow_trips`, `green_trips`, `taxi_zones`, `daily_trips` | Cleaned trips, location lookup, and daily summaries |
+| `covid` | `reported_cases`, `country_latest`, `reported_by_date` | WHO records, latest country reports, and date summaries |
+| `climate_energy` | `energy`, `energy_indicators`, `global_temperature_monthly` | Energy indicators, their codebook, and temperature anomalies |
+| `ai_benchmarks` | `open_llm_results` | Archived model benchmark results |
+
+The catalog is **not raw-only**. Original downloads remain unchanged under
+`raw/` in ADLS. Cleaned, rejected, and summarized Parquet outputs are separate
+files. Only the subject-oriented tables above are published; bronze/silver/gold
+processing paths and rejected rows are not additional user-facing schemas.
 
 Trip cleaning requires pickup during January 2025, drop-off at or after pickup,
 and finite, nonnegative distance and total amount. These are explicit sample-data
@@ -97,13 +97,14 @@ filesystem discovery.
 ## Query
 
 Choose `OpenSource` in SQL Lab. Or start CLI 0.2.0 with
-`--catalog OpenSource --schema silver`, then run:
+`--catalog OpenSource --schema nyc_taxi`, then run:
 
 ```sql
 SHOW SCHEMAS;
 SHOW TABLES;
 SELECT COUNT(*) FROM yellow_trips;
-SELECT * FROM gold.daily_trips LIMIT 10;
+SELECT pickup_date, service_type, trip_count, total_amount_cents, total_trip_distance
+FROM nyc_taxi.daily_trips ORDER BY pickup_date;
 SELECT country, cumulative_cases, cumulative_deaths
 FROM covid.country_latest LIMIT 10;
 ```

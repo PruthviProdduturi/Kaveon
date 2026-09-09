@@ -26,6 +26,25 @@ changed unless the application actually changes it; the user controls that picke
 
 ## Ownership map
 
+### Catalog cleanup and SQL Lab navigation - September 8 (UTC September 9)
+
+Retired synthetic kavedb, medallion and medallion_gold catalogs after a zero-
+dependency audit. Published OpenSource under four subject schemas: nyc_taxi,
+covid, climate_energy, ai_benchmarks (11 tables). Removed bronze/silver/gold/
+reference registrations after new subject aliases passed all 11 row-count
+checks. Original and intermediate ADLS files were not changed or deleted.
+Definition backups are under maintenance/catalog-cleanup and
+maintenance/schema-cleanup in the opensource container; exact paths/evidence
+are in docs/engineering/catalog-cleanup-2026-09-09.json.
+
+SQL Lab now shows Source=Kaveon DB, Catalog=OpenSource, Query schema=nyc_taxi;
+all subject schemas remain visible. Typecheck, browser regression, Helm render,
+and docs validation passed. AKS Studio build cab deployed digest
+sha256:a807564a86b7a2adefb9d26acf24ba96a4bda650534a934b5f3c00fad5c7efe2.
+Authenticated live browser verified selectors/four schemas and query count
+48,131 from nyc_taxi.green_trips. Users may need to restart their portal port-
+forward after this rollout. Native transactional migration is still unfinished.
+
 ### Native engine target - superseding the metadata bridge
 
 User confirmed BOTH general-purpose OLTP and distributed analytics. The durable

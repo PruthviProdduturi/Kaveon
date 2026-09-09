@@ -40,7 +40,7 @@ cannot be browsed or queried from this path.
 
 ---
 
-## KaveDB in the test portal
+## OpenSource in the test portal
 
 With the test add-on running, forward the Studio service and open the portal at
 `http://localhost:3000`:
@@ -50,36 +50,37 @@ kubectl -n kaveon port-forward service/kaveon-portal 3000:3000
 ```
 
 Sign in with the approved Entra public-client flow. New signed-in users receive
-the **Viewer** role. Viewer can browse the KaveDB source, schemas, and tables;
+the **Viewer** role. Viewer can browse the OpenSource source, schemas, and tables;
 Engine SQL execution requires **Analyst** or **Admin**. Grant Administrator only
 by explicitly listing the Entra object ID in `AUTH_ENTRA_ADMIN_OBJECT_IDS`; a
 display name or email does not grant that role.
 
-Choose `kavedb` under **Kaveon DB**. With no relational sources configured, the
-first available Kaveon database is selected automatically. The explorer shows
-`bronze`, `silver`, and `gold` together; the schema selector sets the default
-for unqualified SQL names without hiding other schemas. Expand a table to see
-its actual Engine columns and types. The test catalog contains five deterministic synthetic Parquet tables:
+Choose **Kaveon DB** in **Source**, then **OpenSource** in **Catalog**. The explorer
+groups its four subject schemas; **Query schema** sets the default for unqualified SQL
+names without hiding other schemas. Expand a table to see actual Engine columns
+and types. The curated catalog contains January 2025 NYC TLC trips, WHO reported
+COVID counts, energy/climate snapshots, and an archived Open LLM leaderboard
+snapshot. Source coverage and checks are in the [OpenSource validation report](../engineering/opensource-validation-2026-09-09.json).
 
 | Schema | Tables | Contents |
 | --- | --- | --- |
-| `bronze` | `orders`, `customers` | Raw-source fields materialized as Parquet strings |
-| `silver` | `orders`, `customers` | Typed synthetic facts and dimensions |
-| `gold` | `daily_sales` | Daily aggregates for completed orders |
+| `nyc_taxi` | `yellow_trips`, `green_trips` | Cleaned NYC taxi trips |
+| `nyc_taxi` | `daily_trips` | Daily taxi counts, cents, and distance by service |
+| `covid` | `reported_cases`, `country_latest` | WHO reported-count time series and latest country rows |
 
 Run one statement at a time through the Engine source, for example:
 
 ```sql
-SELECT COUNT(*) FROM kavedb.bronze.orders;
-SELECT order_date, total_amount
-FROM kavedb.gold.daily_sales
-ORDER BY order_date;
+SELECT COUNT(*) FROM OpenSource.nyc_taxi.green_trips;
+SELECT pickup_date, service_type, trip_count, total_amount_cents, total_trip_distance
+FROM OpenSource.nyc_taxi.daily_trips
+ORDER BY pickup_date;
 ```
 
 The Engine Lab path accepts one read-only `SELECT` or `WITH` query. Its browser
 uses authenticated schema, table, and column discovery; it does not expose relational
 metadata, editing, history completion, multi-statement execution, or full Trino
-SQL for KaveDB.
+SQL for Engine catalog sources.
 
 ---
 
