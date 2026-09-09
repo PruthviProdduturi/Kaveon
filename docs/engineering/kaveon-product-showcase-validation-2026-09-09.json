@@ -1,0 +1,65 @@
+{
+  "environment": {
+    "cluster": "kaveon-test-aks",
+    "namespace": "kaveon",
+    "catalog": "OpenSource",
+    "schema": "kaveon_product",
+    "api_image": "sha256:8c0eb845998f20d2dba6fb7fbfc978261f21d43b4dd75c0a22c3b1c16e4ca5af",
+    "studio_image": "sha256:4a681bac99851d093c1fb710c46926ecb3df35ee5f64d7877b70cae0dd9e5b0d"
+  },
+  "data": [
+    {"table": "dim_geography", "rows": 26, "query_id": "c13cc5cb-bf6c-49bc-963d-5b8172646eed"},
+    {"table": "dim_platform", "rows": 9, "query_id": "be2cbc47-fd0f-4e2b-8fc9-ef3389a098be"},
+    {"table": "kaveon_users", "rows": 44000, "query_id": "718a4663-360b-43f6-b2e6-fcab2fa6cd9d"},
+    {"table": "kaveon_usage_daily", "rows": 10120000, "query_id": "e05b66d4-c377-4977-adcf-ccc4a5eb1764"},
+    {"table": "kaveon_product_analytics", "rows": 10120000, "query_id": "302697aa-3eed-4f7d-9b35-529cf0a58252"}
+  ],
+  "dashboards": [
+    {
+      "id": "0114aa3a-ad91-4dec-a748-fab7e1c3a78d",
+      "name": "Kaveon Product Usage",
+      "charts": 10,
+      "filters": 12,
+      "template_configuration_match": true,
+      "license_filter_changed_results": true,
+      "date_filter_changed_results": true,
+      "clear_restored_results": true,
+      "browser_query_executions": 30
+    },
+    {
+      "id": "4114b3d2-11ae-46c7-951d-a08a725ea67d",
+      "name": "Kaveon Adoption & Engagement",
+      "charts": 10,
+      "filters": 12,
+      "template_configuration_match": true,
+      "license_filter_changed_results": true,
+      "date_filter_changed_results": true,
+      "clear_restored_results": true,
+      "browser_query_executions": 30
+    },
+    {
+      "id": "42f04554-147d-4cd5-abb7-fa5060a049af",
+      "name": "Kaveon Platform & Growth",
+      "charts": 10,
+      "filters": 12,
+      "template_configuration_match": true,
+      "license_filter_changed_results": true,
+      "date_filter_changed_results": true,
+      "clear_restored_results": true,
+      "browser_query_executions": 30
+    }
+  ],
+  "qualification": {
+    "api_tests": 60,
+    "api_subtests": 2,
+    "auth_and_query_admission_tests": 5,
+    "typescript_typecheck": "passed",
+    "documentation_validation": "passed",
+    "aks_browser_validation": "passed"
+  },
+  "scope": {
+    "data_authority": "ADLS Gen2",
+    "product_metadata_authority": "PostgreSQL",
+    "live_vercel_export_compared": false
+  }
+}

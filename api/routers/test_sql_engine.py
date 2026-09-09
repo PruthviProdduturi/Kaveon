@@ -13,7 +13,7 @@ from fastapi import HTTPException, Response
 from middleware.auth import UserContext
 from models.sql import SqlExecuteBody
 from routers import sql
-from services.query_generator import build_chart_preview_query
+from services.query_generator import build_chart_preview_query, build_distinct_filter_values_query
 
 
 class EngineChartSqlTests(unittest.TestCase):
@@ -71,6 +71,21 @@ class EngineChartSqlTests(unittest.TestCase):
         self.assertEqual(error.exception.status_code, 403)
         lookup.assert_not_called()
 
+    def test_engine_admission_retry_is_not_rewritten_as_a_server_error(self):
+        dataset = {"id": "7", "database_name": "OpenSource", "schema_name": "nyc_taxi",
+                   "table_name": "daily_trips", "dimensions": [], "columns": []}
+        retryable = HTTPException(429, "Engine query capacity is temporarily exhausted", headers={"Retry-After": "1"})
+        with patch.object(sql.datasets_svc, "get_dataset_by_id", return_value=dataset), \
+             patch.object(sql, "_engine_source_for_catalog", return_value={"engine_catalog": "OpenSource"}), \
+             patch.object(sql, "build_distinct_filter_values_query", return_value={"sql": "SELECT 1", "keyColumn": "country", "filteringTier": "fact"}), \
+             patch.object(sql, "_execute_engine_read_only", side_effect=retryable):
+            with self.assertRaises(HTTPException) as error:
+                sql.distinct_filter_values(Response(), "7", "country", fact_key=None, limit=100,
+                                            source=None, chart_id=None, dashboard_id=None, filters=None,
+                                            ctx=UserContext("analyst@example.com", "Analyst"))
+        self.assertEqual(error.exception.status_code, 429)
+        self.assertEqual(error.exception.headers, {"Retry-After": "1"})
+
     def test_virtual_dataset_sql_is_generated_without_client_sql(self):
         dataset = {
             "id": "7", "schema_name": None, "table_name": None,
@@ -99,12 +114,13 @@ class EngineChartSqlTests(unittest.TestCase):
             "sql_text": "SELECT model, score FROM ai_benchmarks.leaderboard",
             "db_type": "postgresql",
             "engine_virtual_source": True,
+            "engine_source": True,
             "groupby": ["model"],
             "metrics": [{"column": "score", "aggregate": "AVG", "label": "average_score"}],
         })
         self.assertIsNotNone(generated)
         self.assertIn('FROM (\nSELECT model, score FROM ai_benchmarks.leaderboard\n)', generated)
-        self.assertIn('"model"', generated)
+        self.assertIn("SELECT model", generated)
         self.assertNotIn("TOP ", generated)
         self.assertNotIn("[model]", generated)
 
@@ -117,6 +133,7 @@ class EngineChartSqlTests(unittest.TestCase):
             ),
             "db_type": "postgresql",
             "engine_virtual_source": True,
+            "engine_source": True,
             "groupby": ["pickup_date"],
             "metrics": [{"column": "trips", "aggregate": "MAX", "label": "trips"}],
             "row_limit": 500,
@@ -126,12 +143,12 @@ class EngineChartSqlTests(unittest.TestCase):
         self.assertNotIn("TOP ", generated)
         self.assertTrue(generated.endswith("LIMIT 500"), generated)
         self.assertNotIn("fact.", generated)
-        self.assertIn('ORDER BY "pickup_date" ASC', generated)
+        self.assertIn("ORDER BY pickup_date ASC", generated)
 
     def test_engine_virtual_metric_sort_uses_projected_alias(self):
         generated = build_chart_preview_query({
             "datasource": "", "sql_text": "SELECT service_type, 5 AS trips FROM services",
-            "db_type": "postgresql", "engine_virtual_source": True,
+            "db_type": "postgresql", "engine_virtual_source": True, "engine_source": True,
             "groupby": ["service_type"],
             "metrics": [{"column": "trips", "aggregate": "MAX", "label": "trips"}],
             "sort_by": {"column": "trips", "direction": "desc"},
@@ -151,11 +168,76 @@ class EngineChartSqlTests(unittest.TestCase):
         source_sql = "SELECT 'fact.score' AS note, score FROM leaderboard"
         generated = build_chart_preview_query({
             "datasource": "", "sql_text": source_sql, "db_type": "postgresql",
-            "engine_virtual_source": True, "groupby": ["note"],
+            "engine_virtual_source": True, "engine_source": True, "groupby": ["note"],
             "metrics": [{"column": "score", "aggregate": "MAX"}],
         })
         self.assertIn("'fact.score'", generated)
         self.assertNotIn('fact."note"', generated)
+
+    def test_physical_engine_metric_sort_uses_projected_alias(self):
+        generated = build_chart_preview_query({
+            "datasource": "nyc_taxi.daily_trips", "db_type": "postgresql", "engine_source": True,
+            "groupby": ["service_type"],
+            "metrics": [{"column": "trip_count", "aggregate": "SUM", "label": "trips"}],
+            "sort_by": {"column": "trips", "direction": "desc"}, "row_limit": 20,
+        })
+        self.assertIn('ORDER BY "trips" DESC', generated)
+        self.assertNotIn('ORDER BY SUM(', generated)
+        self.assertTrue(generated.endswith("LIMIT 20"), generated)
+
+    def test_engine_metric_sort_matches_hydrated_qualified_column(self):
+        generated = build_chart_preview_query({
+            "datasource": "kaveon_product.kaveon_product_analytics",
+            "db_type": "postgresql", "engine_source": True,
+            "groupby": ["platform"],
+            "metrics": [{"column": "kaveon_product_analytics.queries_run", "aggregate": "SUM", "label": "Queries"}],
+            "sort_by": {"column": "queries_run", "direction": "desc"}, "row_limit": 500,
+        })
+        self.assertIn('ORDER BY "Queries" DESC', generated)
+        self.assertNotIn('ORDER BY SUM(queries_run)', generated)
+
+    def test_physical_engine_presentation_metric_aliases_are_quoted(self):
+        generated = build_chart_preview_query({
+            "datasource": "kaveon_product.kaveon_product_analytics",
+            "db_type": "postgresql", "engine_source": True,
+            "groupby": ["segment"],
+            "metrics": [
+                {"column": "user_id", "aggregate": "COUNT_DISTINCT", "label": "Active Users"},
+                {"column": "active_minutes", "aggregate": "AVG", "label": "Avg Min"},
+                {"column": "nl_queries", "aggregate": "SUM", "label": "NL Queries"},
+                {"column": "data_processed_mb", "aggregate": "SUM", "label": "MB Processed"},
+            ],
+            "sort_by": {"column": "user_id", "direction": "desc"},
+        })
+        self.assertIn('COUNT(DISTINCT user_id) AS "Active Users"', generated)
+        self.assertIn('AVG(active_minutes) AS "Avg Min"', generated)
+        self.assertIn('SUM(nl_queries) AS "NL Queries"', generated)
+        self.assertIn('SUM(data_processed_mb) AS "MB Processed"', generated)
+        self.assertIn('ORDER BY "Active Users" DESC', generated)
+
+    def test_physical_engine_count_distinct_and_date_filters_are_sql_literals(self):
+        generated = build_chart_preview_query({
+            "datasource": "nyc_taxi.daily_trips", "db_type": "postgresql", "engine_source": True,
+            "groupby": ["pickup_date"],
+            "metrics": [{"column": "service_type", "aggregate": "COUNT_DISTINCT", "label": "services"}],
+            "filters": [
+                {"column": "pickup_date", "operator": ">=", "value": "2025-01-01"},
+                {"column": "pickup_date", "operator": "<=", "value": "2025-01-31"},
+            ],
+        })
+        self.assertIn("COUNT(DISTINCT service_type)", generated)
+        self.assertIn("pickup_date >= '2025-01-01'", generated)
+        self.assertIn("pickup_date <= '2025-01-31'", generated)
+        self.assertNotIn("fact.", generated)
+
+    def test_physical_engine_distinct_filter_query_uses_limit_and_quotes(self):
+        generated = build_distinct_filter_values_query({
+            "datasource": "nyc_taxi.daily_trips", "column": "service_type",
+            "db_type": "postgresql", "engine_source": True, "limit": 50, "dimensions": [], "columns": [],
+        })
+        self.assertIsNotNone(generated)
+        self.assertIn("service_type", generated["sql"])
+        self.assertTrue(generated["sql"].endswith("LIMIT 50"), generated["sql"])
 
 
 if __name__ == "__main__":

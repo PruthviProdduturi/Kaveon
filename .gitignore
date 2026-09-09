@@ -144,6 +144,9 @@ data/**/*.txt
 data/**/*.zip
 data/**/*.json
 data/**/*.parquet
+# Curated, source-controlled dashboard template provenance (not extracted data).
+!data/dashboard-templates/
+!data/dashboard-templates/original-dashboard-templates.json
 
 # Local visual-regression renders and disposable browser profiles
 .tmp-*.png

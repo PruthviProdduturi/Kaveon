@@ -23,9 +23,27 @@ def quote_identifier(identifier: str) -> str:
     db_type = getattr(_dialect, "db_type", "fabric_sql")
     clean = identifier.replace("[", "").replace("]", "").replace('"', "")
     parts = clean.split(".")
+    if getattr(_dialect, "engine_source", False):
+        if not all(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", part or "") for part in parts):
+            raise ValueError("Engine identifiers must be simple catalog metadata names")
+        return ".".join(parts)
     if db_type in ("postgresql", "mysql"):
         return ".".join(f'"{p}"' for p in parts)
     return ".".join(f"[{p.replace(']', ']]')}]" for p in parts)
+
+
+def quote_alias(alias: str) -> str:
+    """Quote one output alias without applying physical-name validation.
+
+    Engine catalog identifiers are limited to simple metadata names. Chart
+    labels are presentation text, though, and may contain spaces. They are
+    emitted only as escaped SELECT/ORDER BY aliases.
+    """
+    value = str(alias or "value")
+    db_type = getattr(_dialect, "db_type", "fabric_sql")
+    if db_type in ("postgresql", "mysql") or getattr(_dialect, "engine_source", False):
+        return '"' + value.replace('"', '""') + '"'
+    return "[" + value.replace("]", "]]") + "]"
 
 
 def _parse_join_condition(join_condition: str) -> Tuple[Optional[str], Optional[str]]:
@@ -495,6 +513,7 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
         rolling_window = max(2, int(params.get("rolling_window") or 3))
         db_type = (params.get("db_type") or "fabric_sql").lower()
         _dialect.db_type = db_type
+        _dialect.engine_source = bool(params.get("engine_source"))
 
         datasource = normalize_column_name(raw_datasource)
 
@@ -513,13 +532,14 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
         # distributed planner exposes derived fields unqualified, unlike a
         # general PostgreSQL source where relation aliases remain valid.
         engine_virtual = bool(sql_text and not datasource and params.get("engine_virtual_source"))
+        engine_unqualified_source = bool(params.get("engine_source") and not dimensions)
         if sql_text and not datasource:
-            fact_alias = "" if engine_virtual else "fact"
+            fact_alias = "" if engine_unqualified_source else "fact"
             fact_table = f"(\n{sql_text}\n)"
         elif not datasource:
             return None
         else:
-            fact_alias = "fact"
+            fact_alias = "" if engine_unqualified_source else "fact"
             fact_table = quote_identifier(datasource)
         fact_source = f"{fact_table} AS {fact_alias}" if fact_alias else fact_table
 
@@ -602,7 +622,7 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
                 else:
                     metric_expr = f"{agg_func}({_qualified_column(alias, col_name)})"
                 metric_alias = m.get("label") or m.get("name") or col_name or "value"
-                select_parts.append(f"{metric_expr} AS {quote_identifier(metric_alias)}")
+                select_parts.append(f"{metric_expr} AS {quote_alias(metric_alias)}")
 
         if not select_parts:
             select_parts.append("*")
@@ -739,12 +759,25 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
             sb_dir = "DESC" if str(sort_by.get("direction", "asc")).upper() == "DESC" else "ASC"
             # Sorting by a metric under GROUP BY must use the aggregate, not the
             # raw column (which is invalid SQL in both T-SQL and Postgres).
-            sb_metric = next(
-                (m for m in metric_list
-                 if (m.get("column") or m.get("field")) == sb_col
-                 or (m.get("label") or m.get("name")) == sb_col),
-                None,
-            )
+            if params.get("engine_source"):
+                # Hydration may canonicalize a saved metric to
+                # ``table.column`` while historical sort configs retain the
+                # short column name. Engine single-source datasets have no
+                # joins, so matching their terminal metadata name is safe.
+                sb_terminal = normalize_column_name(sb_col).split(".")[-1].casefold()
+                sb_metric = next(
+                    (m for m in metric_list
+                     if normalize_column_name(str(m.get("column") or m.get("field") or "")).split(".")[-1].casefold() == sb_terminal
+                     or (m.get("label") or m.get("name")) == sb_col),
+                    None,
+                )
+            else:
+                sb_metric = next(
+                    (m for m in metric_list
+                     if (m.get("column") or m.get("field")) == sb_col
+                     or (m.get("label") or m.get("name")) == sb_col),
+                    None,
+                )
             # Is the sort column one of the GROUP BY dimensions? (then sort by it directly)
             _sb_norm = normalize_column_name(sb_col).split(".")[-1].lower()
             _sb_in_groupby = any(
@@ -752,10 +785,10 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
             ) or (time_column and normalize_column_name(time_column).split(".")[-1].lower() == _sb_norm)
 
             if sb_metric and query_mode != "raw":
-                if engine_virtual:
+                if params.get("engine_source"):
                     # The Engine planner evaluates an aggregate repeated in an
                     # ORDER BY as a scalar. Order by the projected metric alias.
-                    sb_expr = quote_identifier(sb_metric.get("label") or sb_metric.get("name") or sb_metric.get("column") or "value")
+                    sb_expr = quote_alias(sb_metric.get("label") or sb_metric.get("name") or sb_metric.get("column") or "value")
                 else:
                     agg_func = (sb_metric.get("aggregate") or sb_metric.get("agg") or "SUM").upper()
                     m_alias, m_col = _resolve_column_alias(
@@ -902,6 +935,7 @@ def build_distinct_filter_values_query(params: dict) -> Optional[dict]:
         columns = params.get("columns") or []
         limit = params.get("limit") or 100
         _dialect.db_type = (params.get("db_type") or "fabric_sql").lower()
+        _dialect.engine_source = bool(params.get("engine_source"))
 
         datasource = normalize_column_name(raw_datasource)
         column = normalize_column_name(raw_column)
@@ -909,7 +943,7 @@ def build_distinct_filter_values_query(params: dict) -> Optional[dict]:
         if not datasource or not column:
             return None
 
-        fact_alias = "fact"
+        fact_alias = "" if bool(params.get("engine_source")) and not dimensions else "fact"
         fact_table = quote_identifier(datasource)
 
         column_table_map = _build_column_table_map(columns)
@@ -946,14 +980,14 @@ def build_distinct_filter_values_query(params: dict) -> Optional[dict]:
         qv = quote_identifier("value")
 
         if narrow_filters:
-            target_quoted = f"{alias}.{quote_identifier(col_name)}"
+            target_quoted = _qualified_column(alias, col_name)
             where_parts = [f"{target_quoted} IS NOT NULL"]
             for nf in narrow_filters:
                 clause = _build_optimized_filter_clause(nf, fact_alias, alias_map, column_table_map)
                 if clause:
                     where_parts.append(clause)
             join_clause = " ".join(join_clauses)
-            from_parts = f"FROM {fact_table} AS {fact_alias}" + (f" {join_clause}" if join_clause else "")
+            from_parts = (f"FROM {fact_table} AS {fact_alias}" if fact_alias else f"FROM {fact_table}") + (f" {join_clause}" if join_clause else "")
             sql = _distinct_kv_sql(
                 limit,
                 f"{target_quoted} AS {qk}, {target_quoted} AS {qv}",
@@ -1002,9 +1036,9 @@ def build_distinct_filter_values_query(params: dict) -> Optional[dict]:
                     return {"sql": sql, "keyColumn": key_column, "filteringTier": tier}
 
             # Fallback: dim entry missing metadata — use fact+join query
-            quoted_col = f"{alias}.{quote_identifier(col_name)}"
+            quoted_col = _qualified_column(alias, col_name)
             join_clause = " ".join(join_clauses)
-            from_parts = f"FROM {fact_table} AS {fact_alias}" + (f" {join_clause}" if join_clause else "")
+            from_parts = (f"FROM {fact_table} AS {fact_alias}" if fact_alias else f"FROM {fact_table}") + (f" {join_clause}" if join_clause else "")
             sql = _distinct_kv_sql(
                 limit,
                 f"{quoted_col} AS {qk}, {quoted_col} AS {qv}",
@@ -1014,11 +1048,11 @@ def build_distinct_filter_values_query(params: dict) -> Optional[dict]:
             return {"sql": sql, "keyColumn": key_column, "filteringTier": tier}
 
         # ── Column is on the fact table itself — query it directly ────────────
-        quoted_col = f"{fact_alias}.{quote_identifier(col_name)}"
+        quoted_col = _qualified_column(fact_alias, col_name)
         sql = _distinct_kv_sql(
             limit,
             f"{quoted_col} AS {qk}, {quoted_col} AS {qv}",
-            f"FROM {fact_table} AS {fact_alias}",
+            f"FROM {fact_table} AS {fact_alias}" if fact_alias else f"FROM {fact_table}",
             f"WHERE {quoted_col} IS NOT NULL",
         )
         return {"sql": sql, "keyColumn": key_column, "filteringTier": tier}

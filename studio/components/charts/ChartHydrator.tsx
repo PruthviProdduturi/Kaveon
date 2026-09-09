@@ -97,13 +97,24 @@ const ChartHydrator: React.FC<ChartHydratorProps> = ({ chart, externalFilters = 
   // Both dashboard (external) filters AND cross-filters are applied as run-time
   // extras — so both are reactive (changing either re-runs the query).
   const buildExtras = (): any[] => [
-    ...(externalFiltersRef.current || []).map((f: any) => ({
-      column: f.column,
-      operator: f.operator || "=",
-      value: Array.isArray(f.value) ? f.value.join(", ") : String(f.value ?? ""),
-      valueKey: f.valueKey ?? "",
-      keyColumn: f.keyColumn ?? null,
-    })),
+    ...(externalFiltersRef.current || []).flatMap((f: any) => {
+      // Dashboard controls keep ranges as two ISO dates. Expand them into
+      // ordinary predicates before query generation so every backend, including
+      // Engine, receives an unambiguous inclusive range.
+      if (f.filterType === "date_range") {
+        return [
+          f.dateFrom ? { column: f.column, operator: ">=", value: String(f.dateFrom) } : null,
+          f.dateTo ? { column: f.column, operator: "<=", value: String(f.dateTo) } : null,
+        ].filter(Boolean);
+      }
+      return [{
+        column: f.column,
+        operator: f.operator || "=",
+        value: Array.isArray(f.value) ? f.value.join(", ") : String(f.value ?? ""),
+        valueKey: f.valueKey ?? "",
+        keyColumn: f.keyColumn ?? null,
+      }];
+    }),
     ...(crossFilterExtraRef.current || []),
   ];
 

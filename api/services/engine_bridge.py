@@ -52,6 +52,10 @@ def _request(method, path, token_name, actor, *, payload=None, revision=None, ro
         raise HTTPException(502, "Engine is unavailable") from None
     if response.status_code == 404:
         return None
+    # Admission exhaustion is temporary. Preserve it for the Studio's bounded
+    # retry path instead of turning a healthy Engine into an opaque 502.
+    if response.status_code == 429:
+        raise HTTPException(429, "Engine query capacity is temporarily exhausted", headers={"Retry-After": "1"})
     if response.status_code in {409, 412, 428}:
         raise HTTPException(409, "Engine revision conflict; reload before retrying")
     if not response.is_success:
