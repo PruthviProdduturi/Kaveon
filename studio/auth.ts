@@ -20,6 +20,7 @@ import Google from "next-auth/providers/google";
 import MicrosoftEntraID from "next-auth/providers/microsoft-entra-id";
 import Credentials from "next-auth/providers/credentials";
 import { isEntraObjectId, verifyEntraAccessToken } from "./auth/verifyEntra";
+import { sessionConfig } from "./auth/sessionConfig";
 
 const adminEmails = (process.env.AUTH_ADMIN_EMAILS ?? "")
   .split(",")
@@ -76,11 +77,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   pages: {
     signIn: "/login",
   },
-  session: {
-    strategy: "jwt",
-    // A public-client session cannot outlive the verified Entra access token.
-    maxAge: publicClientEnabled ? 60 * 60 : undefined,
-  },
+  session: sessionConfig(publicClientEnabled),
   callbacks: {
     // Attach a Kaveon role to the session token so the app can gate on it.
     jwt({ token, profile, user }) {
