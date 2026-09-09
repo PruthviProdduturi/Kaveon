@@ -839,39 +839,33 @@ export default function LabPage() {
     return `[${table.schema}].[${table.name}]`;
   };
 
-  // Selecting a table is an exploration action: it highlights the table and shows
-  // its columns. It deliberately does not touch the editor or execute anything --
-  // clicking to look at a schema should never rewrite the query you are editing.
+  // Clicking a table previews it: highlight, show columns, and run a top-100 read
+  // whose rows land in the results pane. It deliberately does not write into the
+  // editor -- browsing a schema must not rewrite the query someone is editing.
   const selectTable = async (table: TableInfo) => {
     setSelectedTableId(table.id);
     setResultError(null);
     await toggleTableColumns(table);
+    setResults(null);
+    await executeQuery(`SELECT TOP 100 * FROM ${buildQualifiedName(table)};`);
   };
 
-  // The explicit action, from the row's preview button or a drag into the editor.
-  const previewTable = async (table: TableInfo) => {
-    setSelectedTableId(table.id);
-    setResultError(null);
+  // Putting the statement in the editor is the explicit action, for when someone
+  // wants to edit it rather than just look at the rows. It does not re-run: the
+  // preview above already fetched them.
+  const insertTableQuery = (table: TableInfo) => {
     const qualified = buildQualifiedName(table);
-    const sql = usingEngine
-      ? `SELECT * FROM ${qualified} LIMIT 100;`
-      : `SELECT TOP 100 * FROM ${qualified};`;
-
-    // Append to the active tab rather than overwriting it.
+    const snippet = `-- Preview: ${qualified}
+SELECT TOP 100 * FROM ${qualified};`;
     const editor = editorRef.current;
     const existing = editor?.getValue() ?? "";
-    const snippet = `-- Preview: ${qualified}\n${sql}`;
-    const appended = existing.trimEnd()
-      ? `${existing.trimEnd()}\n\n${snippet}`
-      : snippet;
+    const appended = existing.trimEnd() ? `${existing.trimEnd()}
 
+${snippet}` : snippet;
     setQueries((prev) =>
       prev.map((q) => (q.id === activeQueryId ? { ...q, text: appended } : q)),
     );
     editor?.setValue(appended);
-
-    setResults(null);
-    await executeQuery(sql);
   };
 
   const toggleTableColumns = async (table: TableInfo) => {
@@ -1950,14 +1944,14 @@ return;
                             <button
                               type="button"
                               className="table-preview-btn"
-                              title={`Preview 100 rows from ${t.schema}.${t.name}`}
-                              aria-label={`Preview ${t.name}`}
-                              onClick={async (e) => {
+                              title={`Add a query for ${t.schema}.${t.name} to the editor`}
+                              aria-label={`Add query for ${t.name} to the editor`}
+                              onClick={(e) => {
                                 e.stopPropagation();
-                                await previewTable(t);
+                                insertTableQuery(t);
                               }}
                             >
-                              <i className="fas fa-play" />
+                              <i className="fas fa-plus" />
                             </button>
                             <div
                               className="column-toggle-icon"

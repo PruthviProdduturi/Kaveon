@@ -5065,9 +5065,9 @@ main.main-wide {
   }
 }
 
-/* Explicit preview action on a schema-browser table row. Selecting a table only
-   explores it; writing a query into the editor is deliberate, so the control is
-   visible on hover or keyboard focus rather than firing on the row click. */
+/* Add-to-editor action on a schema-browser table row. Clicking the row previews
+   the table into the results pane; putting the statement into the editor is a
+   separate deliberate act, so the control appears on hover or keyboard focus. */
 .table-preview-btn {
   flex-shrink: 0;
   width: 22px;
