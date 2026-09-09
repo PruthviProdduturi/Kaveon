@@ -1,5 +1,6 @@
 #![deny(clippy::all)]
 
+pub mod adls_commit;
 pub mod adls_reader;
 pub mod delta_reader;
 pub mod delta_snapshot;
@@ -9,6 +10,10 @@ pub mod object_delta;
 pub mod object_reader;
 pub mod parquet_reader;
 
+pub use adls_commit::{
+    AdlsConditionalCommit, CommitError, CommitErrorKind, CommitResult, ObjectVersion,
+    VersionedObject,
+};
 pub use adls_reader::{AdlsAuthMode, AdlsBatchSource, AdlsBatchStream, AdlsParquetReader};
 pub use delta_reader::{DeltaBatchIterator, DeltaTableReader};
 pub use iceberg_reader::{IcebergReader, IcebergSnapshot, IcebergSource};

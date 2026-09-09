@@ -6,6 +6,11 @@ backfill, reconciliation, fencing, and rollback gates in this document have
 passed. This is a design, not an implemented migration and not evidence that a
 read-only Delta snapshot can accept product CRUD.
 
+The documented ADLS primitives are target requirements, not current Kaveon
+guarantees. Current Engine code has read paths and a local definition store; it
+does not yet provide the ADLS transaction writer, app-level head history, or
+verified head recovery required below.
+
 The durable state model is defined in
 [ADLS transaction protocol](adls-transaction-protocol.md). It uses immutable
 Parquet/data and manifest objects with one conditional catalog head update as
@@ -105,9 +110,10 @@ Before any family cutover, prove rejected mutations leave every table at the
 previous pinned head; concurrent writers produce one winner and one retryable
 revision conflict; ambiguous responses resolve through the idempotency key;
 restart cannot expose a partial transaction; constraints do not require an
-unbounded scan; authorization matches today’s API; and final fenced backfill
-reconciles IDs, revisions, ownership, references, visibility-filtered reads and
-payload hashes.
+unbounded scan; an unavailable/corrupt head is restored only from verified
+application-level backup evidence rather than a blob listing; authorization
+matches today’s API; and final fenced backfill reconciles IDs, revisions,
+ownership, references, visibility-filtered reads and payload hashes.
 
 Emit structured metrics and immutable audit records for commit latency, head
 revision, CAS conflicts/retries, validation failures, idempotency replays,

@@ -7,10 +7,14 @@ license.workspace = true
 
 [dependencies]
 kaveon-core = { path = "../core" }
+kaveon-storage = { path = "../storage" }
 rusqlite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "0.10"
 
 [dev-dependencies]
 arrow-schema = { workspace = true }
 uuid = { workspace = true }
+tokio = { workspace = true }
+object_store = { workspace = true }

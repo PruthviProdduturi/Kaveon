@@ -4,6 +4,8 @@ This is the durable state path for Kaveon product metadata and, eventually,
 Engine catalog/schema/table definitions. It uses ADLS Gen2 objects only.
 SQLite, PVCs, and coordinator-local files are not durable state. Temporary
 memory or upload buffers may be lost before a successful head compare-and-swap.
+It is a **target protocol**: Kaveon does not yet implement or qualify this
+writer, reader, recovery path, or transaction guarantee against an ADLS account.
 
 The protocol relies on Azure Blob ETags: a write with `If-Match` succeeds only
 when the supplied ETag is current; a mismatch returns HTTP 412. Microsoft
@@ -12,11 +14,11 @@ That documentation also specifies strong consistency for subsequent reads and
 lists after an insert or update. The protocol nevertheless treats listings as
 non-authoritative: only a directly read head and its digest-verified manifest
 establish committed state.
-Blob versioning should be enabled for head recovery; Azure documents that each
-write produces a blob version and versions are immutable in its [versioning
-overview](https://learn.microsoft.com/azure/storage/blobs/versioning-overview).
-Those features do not create a multi-blob transaction. One conditional head
-write is the only visible commit point.
+Blob versioning is not available for hierarchical-namespace ADLS Gen2 accounts,
+as documented in [Blob versioning overview](https://learn.microsoft.com/azure/storage/blobs/versioning-overview),
+so this protocol does not depend on it for head recovery. One conditional head
+write is the only visible commit point. Azure's documented storage primitives
+are not, by themselves, evidence of a Kaveon transaction implementation.
 
 ## Object layout
 
@@ -28,6 +30,8 @@ product-catalog/
   objects/<sha256>/data.parquet                 immutable table/index data
   manifests/<commit-id>.json                    immutable complete snapshot
   intents/<tenant>/<idempotency-key-hash>.json  immutable request digest/commit id
+  head-history/<commit-id>.json                 immutable read-back head record
+  head-backups/<commit-id>.json                 immutable recovery evidence
   heads/catalog-head.json                       sole mutable commit pointer
   gc/marks/<run-id>.json                        immutable GC evidence
 ```
@@ -60,7 +64,11 @@ manifest for the whole request. It never rereads current head mid-request.
    authority.
 6. Replace `heads/catalog-head.json` with the new pointer using `If-Match` and
    the ETag from step 2. Success is the commit.
-7. On HTTP 412, candidate objects remain unreachable. Read current head and
+7. Read back the exact head and verify its commit ID, manifest digest and
+   revision. Write immutable `head-history` and `head-backups` records containing
+   those exact bytes, ETag, digest and parent commit. They are recovery evidence,
+   not a second commit authority.
+8. On HTTP 412, candidate objects remain unreachable. Read current head and
    revalidate from that snapshot; never reuse earlier constraint decisions.
 
 The head serializes commits for a tenant/catalog. Independent heads/shards are a
@@ -100,25 +108,35 @@ dataset children, chart/dataset references, visibility values, lifecycle states
 and owner/tenant scope. Product code uses repository operations; arbitrary SQL
 is not part of this protocol.
 
-## Recovery and garbage collection
+## Head recovery and garbage collection
 
 Objects uploaded before failed CAS are harmless orphans. Blob listings are
 advisory only for GC and never choose a committed snapshot, recover idempotency,
 or establish transaction order.
 
-GC roots are current head, retained prior head versions, rollback pins, active
-migration/checkpoint roots and minimum idempotency/read windows. GC traverses
-manifest references, writes immutable mark evidence, waits longer than maximum
-reader/retry duration, rechecks roots, then deletes only aged unmarked objects.
-Soft delete/version retention are recovery guards, not transaction authority.
+After every successful read-back, the service writes an immutable app-level
+history/backup record. It retains a checkpointed parent chain and exact head
+payload, ETag, manifest digest and verification time. These records make a
+recovery candidate auditable but do not make a pre-CAS candidate committed.
 
-For retained data, use Azure WORM only on immutable paths. Microsoft documents
-that WORM retention prevents overwrites/deletes in [Immutable Storage for Blob
-Data](https://learn.microsoft.com/azure/storage/blobs/immutable-storage-overview).
-Do not apply a policy that blocks the mutable head’s next CAS; separate it from
-WORM-protected objects or use a compatible version-level policy. Lifecycle
-deletion must include version handling as documented in [lifecycle management
-policy structure](https://learn.microsoft.com/azure/storage/blobs/lifecycle-management-policy-structure).
+If the mutable head is unavailable or corrupt, the service fails closed: it
+fences reads and writes. Recovery restores only an operator-selected, exact
+head payload from a verified app-level backup after checking its manifest digest,
+parent chain and referenced immutable objects. The restored head is written with
+an empty-head precondition when it is absent, or the observed corrupt ETag when
+it remains present, and is followed by a new recovery audit record. The procedure
+must produce evidence of the selected backup, digest checks, restore result and
+any declared recovery-point loss. It must never select the highest revision or
+newest manifest from a blob listing; those files can be failed-CAS orphans. ADLS
+backup/restore and this procedure require real-account failure qualification
+before the catalog is authoritative.
+
+GC roots are the directly read head, retained app-level head-history/checkpoint
+records, rollback pins, active migration roots and minimum idempotency/read
+windows. GC traverses manifest references, writes immutable mark evidence, waits
+longer than maximum reader/retry duration, rechecks roots, then deletes only aged
+unmarked objects. Storage retention and soft delete can be defense in depth but
+are neither transaction authority nor a replacement for application history.
 
 ## Migration, cutover, telemetry and qualification
 
@@ -139,5 +157,41 @@ chat, cache payloads or customer values.
 
 Qualify against the real ADLS account and workload identity: cross-table success
 and rollback, CAS races, every retry failure point, lost-response idempotency,
-coordinator restart, checksum failure, GC versus pinned reader, bounds/schema/
-authorization, source backfill/outbox replay, final fencing and cutover rollback.
+coordinator restart, checksum failure, explicit head corruption/deletion and
+verified backup restore, GC versus pinned reader, bounds/schema/authorization,
+source backfill/outbox replay, final fencing and cutover rollback.
+
+## Implemented foundation and remaining gates
+
+The repository now contains these internal components, without a public write
+endpoint or a product storage cutover:
+
+- `storage::AdlsConditionalCommit`: create-only writes, matching-body/ETag reads,
+  bounded streaming reads, and conditional replacement. Storage tests: 39 passed.
+- `catalog::product_manifest`: versioned complete table-reference snapshots and
+  bounded multi-table preparation. It does not validate row-level constraints.
+- `catalog::product_commit::ProductCatalogCommit`: immutable snapshot JSON,
+  a digest-verified head, conditional publication, and bounded history lookup.
+  Catalog tests: 16 passed, including transaction metrics. Both crates pass
+  strict Clippy. The live ADLS REST primitive probe also passed; see
+  [its evidence](adls-commit-validation-2026-09-09.json).
+- `catalog::product_metrics`: attempts, in-flight operations, commit/replay/
+  conflict/rejection/indeterminate/abandonment outcomes and bounded latency
+  buckets. These are internal process counters, not yet an exposed monitoring
+  endpoint or durable audit stream.
+
+The publication prototype assumes trusted callers validate referenced objects,
+row/schema/foreign-key constraints, authorization, and a canonical request
+fingerprint before calling it. It does not write table data. Head reads are
+limited to 64 KiB and snapshot reads/writes to 8 MiB. Idempotency traversal has a
+64-hop budget; exhausted or missing history refuses further writes rather than
+risk duplicate application. A durable operation index is required to remove
+that prototype limit. No automatic history deletion is implemented.
+
+Still required: the Delta/Parquet mutation writer and constraint indexes,
+authenticated transactional API, durable idempotency index, independently
+verified head recovery, failure-injection coverage for lost write responses,
+telemetry exposure/audit/alerts, every application repository adapter, and the
+backfill/reconciliation/fencing/cutover/rollback suite. Existing PostgreSQL and
+SQLite Engine definition storage remain live. No full transaction, HA, or
+migration readiness claim follows from these foundation tests.
