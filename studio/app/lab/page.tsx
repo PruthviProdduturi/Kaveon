@@ -1921,24 +1921,6 @@ return;
                       {engineSources.map((source) => <option key={source.id} value={source.id}>{source.catalog}</option>)}
                     </select>
                   </div>
-                  <div className="sidebar-db-wrap" style={{ marginTop: "0.75rem" }}>
-                    <i className="fas fa-layer-group sidebar-db-icon" />
-                    <label htmlFor="lab-query-schema-select" style={{ position: "absolute", top: "-0.85rem", left: 0, fontSize: "0.7rem", color: "var(--text-muted)" }}>Query schema</label>
-                    <select
-                      id="lab-query-schema-select"
-                      className="sidebar-db-select"
-                      aria-label="Query schema"
-                      title="Default schema for queries; all schemas remain visible below"
-                      value={currentDatabase ?? ""}
-                      disabled={!currentEngineSourceId || engineSchemas.length === 0 || isLoadingTables}
-                      onChange={(e) => {
-                        const schema = e.target.value;
-                        if (schema) setCurrentDatabase(schema);
-                      }}
-                    >
-                      {engineSchemas.map((schema) => <option key={schema} value={schema}>{schema}</option>)}
-                    </select>
-                  </div>
                 </>
               )}
 
