@@ -176,8 +176,12 @@ CREATE TABLE IF NOT EXISTS query_history (
     user_email     VARCHAR(255) NOT NULL DEFAULT 'system',
     trigger_source VARCHAR(50)  NULL,
     dataset_id     VARCHAR(36)  NULL,
-    tables_used    TEXT         NULL
+    tables_used    TEXT         NULL,
+    engine_query_id VARCHAR(36) NULL,
+    engine_details TEXT         NULL
 );
+ALTER TABLE query_history ADD COLUMN IF NOT EXISTS engine_query_id VARCHAR(36) NULL;
+ALTER TABLE query_history ADD COLUMN IF NOT EXISTS engine_details TEXT NULL;
 CREATE INDEX IF NOT EXISTS idx_query_history_executed_at ON query_history(executed_at);
 CREATE INDEX IF NOT EXISTS idx_query_history_user_email  ON query_history(user_email);
 CREATE INDEX IF NOT EXISTS idx_query_history_status      ON query_history(status);

@@ -3,7 +3,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
-const ignoredDirectories = new Set([".git", ".next", "node_modules", "target"]);
+const ignoredDirectories = new Set([".git", ".next", "node_modules", "target", "tmp"]);
 const markdownLinkPattern = /\[[^\]]+\]\(([^)\s]+)\)/g;
 const docsRoutePattern = /href:\s*"(\/docs[^"]*)"/g;
 const failures = [];

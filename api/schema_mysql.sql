@@ -142,6 +142,8 @@ CREATE TABLE IF NOT EXISTS query_history (
     trigger_source VARCHAR(50)  NULL,
     dataset_id     VARCHAR(36)  NULL,
     tables_used    LONGTEXT     NULL,
+    engine_query_id VARCHAR(36) NULL,
+    engine_details LONGTEXT     NULL,
     INDEX idx_query_history_executed_at (executed_at),
     INDEX idx_query_history_user_email  (user_email),
     INDEX idx_query_history_status      (status)
