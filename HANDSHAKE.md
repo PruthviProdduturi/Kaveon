@@ -26,6 +26,15 @@ changed unless the application actually changes it; the user controls that picke
 
 ## Ownership map
 
+### OpenSource import planning — September 8
+
+User requested an OpenSource catalog with NYC Taxi and other PostgreSQL
+datasets copied to ADLS Gen2, retaining source schemas. NYC Taxi name confirmed;
+PostgreSQL source server/database remains unidentified (local Docker `kaveon`
+has no user tables). No import or catalog rename has been performed. Added
+`docs/guides/register-engine-catalog.md` with the actual source-registration,
+Engine-sync, and separate schema/table steps and explicit test coverage limits.
+
 ### Kaveon DB explorer — September 8
 
 SQL Lab selects the first available Engine source when no relational source
