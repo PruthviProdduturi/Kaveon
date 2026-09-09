@@ -56,8 +56,9 @@ by explicitly listing the Entra object ID in `AUTH_ENTRA_ADMIN_OBJECT_IDS`; a
 display name or email does not grant that role.
 
 Choose **Kaveon DB** in **Source**, then **OpenSource** in **Catalog**. The explorer
-groups its four subject schemas; **Query schema** sets the default for unqualified SQL
-names without hiding other schemas. Expand a table to see actual Engine columns
+groups its four subject schemas without a separate schema dropdown. Use schema-qualified
+names such as `nyc_taxi.yellow_trips` in SQL; table insertion includes the schema
+automatically. Expand a table to see actual Engine columns
 and types. The curated catalog contains January 2025 NYC TLC trips, WHO reported
 COVID counts, energy/climate snapshots, and an archived Open LLM leaderboard
 snapshot. Source coverage and checks are in the [OpenSource validation report](../engineering/opensource-validation-2026-09-09.json).

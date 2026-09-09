@@ -58,9 +58,7 @@ with sync_playwright() as p:
     nyc_schema.get_by_text("1 tables", exact=True).wait_for()
     nyc_schema.click()
     page.get_by_text("green_trips", exact=True).wait_for(state="visible", timeout=5_000)
-    query_schema = page.get_by_label("Query schema")
-    assert query_schema.is_enabled()
-    query_schema.select_option("nyc_taxi")
+    assert page.get_by_label("Query schema").count() == 0
     page.get_by_text("green_trips", exact=True).click()
     page.locator(".column-item").get_by_text("trip_distance", exact=True).wait_for()
     assert page.locator(".column-item").get_by_text("Float64", exact=True).is_visible()
