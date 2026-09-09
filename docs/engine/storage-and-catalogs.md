@@ -6,4 +6,11 @@ Local Delta replays contiguous JSON logs from version zero and reads active Parq
 
 The native SQLite/WAL catalog provides transactions, migrations, stable IDs, optimistic revisions, lifecycle validation, structured Arrow schemas, credential references, and audit history. Secrets are forbidden. Workers execute coordinator-resolved fragment sources rather than consulting mutable local catalogs.
 
-The platform PostgreSQL source registry and Engine catalog remain separate until the catalog bridge ships. Canonical `abfss://` Parquet locations execute through Azure object-store range reads with environment/workload identity or Azure CLI authentication. Cloud Delta-log replay, S3, richer Delta, Iceberg, and external catalog adapters remain pending execution paths.
+The platform PostgreSQL source registry and Engine catalog are separate stores,
+connected by the native catalog synchronization API. Saving a platform source
+does not import data or register its tables. See the
+[registration guide](../guides/register-engine-catalog.md) for the current
+workflow and validation limits. Canonical `abfss://` Parquet locations execute
+through Azure object-store range reads with environment/workload identity or
+Azure CLI authentication. See the Engine qualification documentation for the
+supported readers and remaining format/adapter limitations.
