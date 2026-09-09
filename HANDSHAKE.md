@@ -26,6 +26,18 @@ changed unless the application actually changes it; the user controls that picke
 
 ## Ownership map
 
+### Kaveon DB explorer — September 8
+
+SQL Lab selects the first available Engine source when no relational source
+exists, labels it Kaveon DB, and loads all schema groups together. The schema
+selector controls unqualified SQL context only. Engine table previews use LIMIT,
+refresh stays on the Engine path, and table expansion calls the new Viewer-gated
+`/lab/engine/{source_id}/schemas/{schema}/tables/{table}/columns` endpoint.
+The API resolves active native sources server-side and reads Engine definitions,
+returning `{success, schema: {columns: [{name, dataType, isNullable}]}}` without
+running SQL. Seventeen API tests and the browser auto-selection/schema/column/
+query regression pass. Empty discovery and failed requests are distinguished.
+
 ### Fresh AKS dashboard metadata repair — September 8
 
 The dashboard list returned HTTP 500 because the PostgreSQL bootstrap omitted

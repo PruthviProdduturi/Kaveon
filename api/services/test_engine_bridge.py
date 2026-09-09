@@ -80,6 +80,20 @@ class EngineBridgeTests(unittest.TestCase):
                 bridge.schemas("warehouse", "unknown@example.com", "NoAccess")
             request.assert_not_called()
 
+    def test_table_columns_follow_catalog_definition_metadata(self):
+        responses = [
+            [{"id": "catalog-id", "name": "kavedb"}],
+            [{"id": "schema-id", "name": "silver"}],
+            [{"name": "orders", "columns": [{"name": "order_id", "data_type": "Int64", "nullable": False}]}],
+        ]
+        with patch.object(bridge, "_request", side_effect=responses) as request:
+            columns = bridge.table_columns("kavedb", "silver", "orders", "viewer@example.com", "Viewer")
+        self.assertEqual(columns, [{"name": "order_id", "data_type": "Int64", "nullable": False}])
+        self.assertEqual([call.args[1] for call in request.call_args_list], [
+            "/v1/catalog/definitions", "/v1/catalog/definitions/catalog-id/schemas", "/v1/catalog/schemas/schema-id/tables",
+        ])
+        self.assertTrue(all(call.kwargs["role"] == "reader" for call in request.call_args_list))
+
     def test_private_ca_uses_a_verifying_context(self):
         with patch.dict("os.environ", {"KAVEON_ENGINE_CA_CERT": "C:/missing-ca.pem"}):
             with self.assertRaises(HTTPException) as error:

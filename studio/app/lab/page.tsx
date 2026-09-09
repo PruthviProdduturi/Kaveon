@@ -198,6 +198,8 @@ export default function LabPage() {
   const [tableColumns, setTableColumns] = useState<Record<string, ColumnInfo[]>>({});
   const [expandedTables, setExpandedTables] = useState<Record<string, boolean>>({});
   const [loadingColumnsFor, setLoadingColumnsFor] = useState<string | null>(null);
+  const [isLoadingEngineSources, setIsLoadingEngineSources] = useState(true);
+  const [columnErrors, setColumnErrors] = useState<Record<string, string>>({});
 
   // Query history panel
   const [isHistoryPanelOpen, setIsHistoryPanelOpen] = useState(false);
@@ -640,13 +642,25 @@ export default function LabPage() {
           headers: userEmail ? { "x-user-email": userEmail } : undefined,
         });
         const data = await res.json();
-        if (res.ok && data.success) setEngineSources(data.sources || []);
+        if (!res.ok || !data.success) throw new Error(data.detail || "Failed to load Engine sources");
+        setEngineSources(data.sources || []);
       } catch (error) {
         setLoadError(error instanceof Error ? error.message : "Failed to load Engine sources");
+      } finally {
+        setIsLoadingEngineSources(false);
       }
     };
     void loadEngineSources();
   }, [isAuthenticated, account?.email, account?.username]);
+
+  useEffect(() => {
+    if (isLoadingDatabases || isLoadingEngineSources || currentDataSourceId !== null || currentEngineSourceId !== null || !engineSources.length || dataSources.length) return;
+    const source = engineSources[0];
+    setCurrentEngineSourceId(source.id);
+    void loadEngineSchemas(source.id).catch((error) => setLoadError(error instanceof Error ? error.message : "Failed to load Engine schemas"));
+    // Source selection runs once after both discovery requests settle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoadingDatabases, isLoadingEngineSources, currentDataSourceId, currentEngineSourceId, engineSources, dataSources]);
 
   const loadEngineSchemas = async (sourceId: string) => {
     const userEmail = account?.email || account?.username || null;
@@ -661,19 +675,22 @@ export default function LabPage() {
     setCurrentDatabase(schema);
     setTables([]);
     setFilteredTables([]);
-    if (schema) await loadEngineTables(sourceId, schema);
+    if (schema) await loadEngineTables(sourceId, schemas);
   };
 
-  const loadEngineTables = async (sourceId: string, schema: string) => {
+  const loadEngineTables = async (sourceId: string, schemas: string[]) => {
     setIsLoadingTables(true);
     try {
       const userEmail = account?.email || account?.username || null;
+      const groups = await Promise.all(schemas.map(async (schema) => {
       const res = await msalFetch(`${API_BASE}/api/v1/lab/engine/${encodeURIComponent(sourceId)}/schemas/${encodeURIComponent(schema)}/tables`, {
         headers: userEmail ? { "x-user-email": userEmail } : undefined,
       });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || "Failed to load Engine tables");
-      const discovered = (data.tables || []).map((name: string) => ({ id: `engine:${schema}.${name}`, schema, name, fullName: `${schema}.${name}` }));
+      return (data.tables || []).map((name: string) => ({ id: `engine:${sourceId}:${schema}.${name}`, schema, name, fullName: `${schema}.${name}` }));
+      }));
+      const discovered = groups.flat();
       setTables(discovered);
       setFilteredTables(discovered);
     } finally {
@@ -726,6 +743,10 @@ export default function LabPage() {
       const run = async () => {
         try {
           setIsLoadingTables(true);
+          if (currentEngineSourceId) {
+            await loadEngineSchemas(currentEngineSourceId);
+            return;
+          }
           if (currentDatabase) {
             await switchDatabase(currentDatabase);
           } else if (currentDataSource) {
@@ -786,13 +807,14 @@ export default function LabPage() {
 
   const schemaGroups = useMemo(() => {
     const groups: Record<string, TableInfo[]> = {};
+    if (usingEngine && !tableSearch.trim()) for (const schema of engineSchemas) groups[schema] = [];
     for (const t of filteredTables) {
       const key = t.schema || "default";
       if (!groups[key]) groups[key] = [];
       groups[key].push(t);
     }
     return Object.entries(groups).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [filteredTables]);
+  }, [filteredTables, usingEngine, engineSchemas, tableSearch]);
 
   const handleSearchChange = (value: string) => {
     setTableSearch(value);
@@ -847,7 +869,7 @@ export default function LabPage() {
     setResultError(null);
     await toggleTableColumns(table);
     setResults(null);
-    await executeQuery(`SELECT TOP 100 * FROM ${buildQualifiedName(table)};`);
+    await executeQuery(usingEngine ? `SELECT * FROM ${buildQualifiedName(table)} LIMIT 100;` : `SELECT TOP 100 * FROM ${buildQualifiedName(table)};`);
   };
 
   // Putting the statement in the editor is the explicit action, for when someone
@@ -855,8 +877,7 @@ export default function LabPage() {
   // preview above already fetched them.
   const insertTableQuery = (table: TableInfo) => {
     const qualified = buildQualifiedName(table);
-    const snippet = `-- Preview: ${qualified}
-SELECT TOP 100 * FROM ${qualified};`;
+    const snippet = `-- Preview: ${qualified}\n${usingEngine ? `SELECT * FROM ${qualified} LIMIT 100;` : `SELECT TOP 100 * FROM ${qualified};`}`;
     const editor = editorRef.current;
     const existing = editor?.getValue() ?? "";
     const appended = existing.trimEnd() ? `${existing.trimEnd()}
@@ -876,8 +897,6 @@ ${snippet}` : snippet;
       [tableId]: !prev[tableId],
     }));
 
-    if (usingEngine) return;
-
     // If we're collapsing, clear its search term and bail
     if (expandedTables[tableId]) {
 return;
@@ -890,6 +909,7 @@ return;
 
     try {
       setLoadingColumnsFor(tableId);
+      setColumnErrors((prev) => ({ ...prev, [tableId]: "" }));
       const schemaEncoded = encodeURIComponent(table.schema);
       const nameEncoded = encodeURIComponent(table.name);
       const userEmail = account?.email || account?.username || null;
@@ -900,17 +920,20 @@ return;
       }
       const queryString = params.toString() ? `?${params.toString()}` : '';
 
-      const res = await msalFetch(`${API_BASE}/api/v1/lab/schema/${schemaEncoded}/${nameEncoded}${queryString}`, {
+      const endpoint = usingEngine
+        ? `${API_BASE}/api/v1/lab/engine/${encodeURIComponent(currentEngineSourceId!)}/schemas/${schemaEncoded}/tables/${nameEncoded}/columns`
+        : `${API_BASE}/api/v1/lab/schema/${schemaEncoded}/${nameEncoded}${queryString}`;
+      const res = await msalFetch(endpoint, {
         headers: userEmail ? { 'x-user-email': userEmail } : undefined,
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        throw new Error(data.error || "Failed to load column schema");
+        throw new Error(data.detail || data.error || "Failed to load column schema");
       }
 
       const cols: ColumnInfo[] = (data.schema?.columns || []).map((c: any) => ({
         name: c.name,
-        dataType: c.dataType,
+        dataType: c.dataType || c.data_type || "unknown",
       }));
 
       setTableColumns((prev) => ({
@@ -921,6 +944,7 @@ return;
       // Surface schema errors in the main error area
       const message = e instanceof Error ? e.message : "Failed to load column schema";
       setResultError(message);
+      setColumnErrors((prev) => ({ ...prev, [tableId]: message }));
     } finally {
       setLoadingColumnsFor(null);
     }
@@ -1748,7 +1772,7 @@ return;
                 />
                 <span className="connection-text">
                   {currentEngineSource
-                    ? `Engine: ${currentEngineSource.name}`
+                    ? currentEngineSource.catalog
                     : currentDataSource
                     ? `Connected to ${currentDataSource.name}`
                     : "Select Data Source"}
@@ -1756,7 +1780,7 @@ return;
               </div>
               <div className="sidebar-header-main-row">
                 <h3>
-                  <i className="fas fa-table" /> Database Tables
+                  <i className="fas fa-table" /> {usingEngine ? "Kaveon DB" : "Database Tables"}
                   <span className="table-stats" style={{ marginLeft: '0.75rem' }}>
                     {isLoadingTables ? "Loading tables..." : `${filteredTables.length} tables`}
                   </span>
@@ -1776,7 +1800,8 @@ return;
                     const run = async () => {
                       try {
                         setIsLoadingTables(true);
-                        await loadTables(true);
+                        if (currentEngineSourceId) await loadEngineSchemas(currentEngineSourceId);
+                        else await loadTables(true);
                       } finally {
                         setIsLoadingTables(false);
                       }
@@ -1797,7 +1822,7 @@ return;
                 <select
                   className="sidebar-db-select"
                   value={usingEngine ? `engine:${currentEngineSourceId}` : currentDataSourceId ?? ""}
-                  disabled={isLoadingDatabases || (dataSources.length === 0 && engineSources.length === 0)}
+                  disabled={isLoadingDatabases || isLoadingEngineSources || (dataSources.length === 0 && engineSources.length === 0)}
                   onChange={async (e) => {
                     const value = e.target.value;
                     if (value.startsWith("engine:")) {
@@ -1818,17 +1843,17 @@ return;
                     if (ds?.database_name) await switchDatabase(ds.database_name);
                   }}
                 >
-                  {isLoadingDatabases && <option value="">Loading…</option>}
-                  {!isLoadingDatabases && dataSources.length === 0 && (
+                  {(isLoadingDatabases || isLoadingEngineSources) && <option value="">Loading…</option>}
+                  {!isLoadingDatabases && !isLoadingEngineSources && dataSources.length === 0 && engineSources.length === 0 && (
                     <option value="">No data sources</option>
                   )}
                   {dataSources.map((ds) => (
                     <option key={ds.id} value={ds.id}>{ds.name}</option>
                   ))}
                   {engineSources.length > 0 && (
-                    <optgroup label="Kaveon Engine catalogs">
+                    <optgroup label="Kaveon DB">
                       {engineSources.map((source) => (
-                        <option key={source.id} value={`engine:${source.id}`}>{source.name} · {source.catalog}</option>
+                        <option key={source.id} value={`engine:${source.id}`}>{source.catalog}</option>
                       ))}
                     </optgroup>
                   )}
@@ -1840,15 +1865,14 @@ return;
                   <i className="fas fa-layer-group sidebar-db-icon" />
                   <select
                     className="sidebar-db-select"
+                    aria-label="Default query schema"
+                    title="Default schema for queries; all schemas remain visible below"
                     value={currentDatabase ?? ""}
                     disabled={!currentEngineSourceId || engineSchemas.length === 0}
                     onChange={async (e) => {
                       const schema = e.target.value;
                       if (!schema || !currentEngineSourceId) return;
                       setCurrentDatabase(schema);
-                      setTableColumns({});
-                      setExpandedSchemas({});
-                      try { await loadEngineTables(currentEngineSourceId, schema); } catch (error) { setLoadError(error instanceof Error ? error.message : "Failed to load Engine tables"); }
                     }}
                   >
                     {engineSchemas.map((schema) => <option key={schema} value={schema}>{schema}</option>)}
@@ -1977,7 +2001,8 @@ return;
                                   <span>Loading columns...</span>
                                 </div>
                               )}
-                              {loadingColumnsFor !== t.id && (tableColumns[t.id] || []).length === 0 && (
+                              {loadingColumnsFor !== t.id && columnErrors[t.id] && <div className="column-empty" role="alert">{columnErrors[t.id]} Close and reopen this table to retry.</div>}
+                              {loadingColumnsFor !== t.id && !columnErrors[t.id] && tableColumns[t.id]?.length === 0 && (
                                 <div className="column-empty">No columns found.</div>
                               )}
                               {loadingColumnsFor !== t.id && (tableColumns[t.id] || []).length > 0 && (
