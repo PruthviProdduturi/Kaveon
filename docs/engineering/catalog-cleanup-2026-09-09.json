@@ -1,0 +1,58 @@
+{
+  "removed_catalogs": [
+    "kavedb",
+    "medallion",
+    "medallion_gold"
+  ],
+  "retired_platform_sources": 1,
+  "archive": "maintenance/catalog-cleanup/f19d598a-09e9-43a4-9764-885dd233969d.json",
+  "source_files_deleted": false,
+  "remaining_catalog": "OpenSource",
+  "schemas": 4,
+  "tables": 11,
+  "dependency_counts": {
+    "dashboards": 0,
+    "charts": 0,
+    "datasets": 0,
+    "saved_queries": 0,
+    "data_sources": 0
+  },
+  "verified_query": {
+    "table": "OpenSource.ai_benchmarks.open_llm_results",
+    "rows": 4576
+  },
+  "scope": "test-prproddu-test AKS only; no subscription policy changes",
+  "subject_schema_cleanup": {
+    "removed_schemas": [
+      "bronze",
+      "gold",
+      "reference",
+      "silver"
+    ],
+    "archive": "maintenance/schema-cleanup/4ce583e9-7d11-4e73-9109-35d86bbe3a89.json",
+    "remaining_schemas": [
+      "nyc_taxi",
+      "covid",
+      "climate_energy",
+      "ai_benchmarks"
+    ],
+    "table_count": 11,
+    "source_files_modified": false
+  },
+  "portal_verification": {
+    "source": "Kaveon DB",
+    "catalog": "OpenSource",
+    "default_query_schema": "nyc_taxi",
+    "subject_schemas": [
+      "nyc_taxi",
+      "covid",
+      "climate_energy",
+      "ai_benchmarks"
+    ],
+    "live_query": "SELECT COUNT(*) AS row_count FROM green_trips",
+    "result": 48131,
+    "browser_verified": true,
+    "image_digest": "sha256:a807564a86b7a2adefb9d26acf24ba96a4bda650534a934b5f3c00fad5c7efe2",
+    "acr_run": "cab"
+  }
+}

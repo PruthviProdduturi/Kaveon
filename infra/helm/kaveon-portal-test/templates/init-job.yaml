@@ -51,7 +51,7 @@ spec:
                              lifecycle, description, created_by, modified_by)
                           VALUES (%s, %s, 'adls_gen2', %s, 'parquet',
                                   'workload_identity', %s, 'native', '{}',
-                                  'active', 'KaveDB ADLS catalog', 'system', 'system')
+                                  'active', 'Public datasets in ADLS', 'system', 'system')
                           ON CONFLICT (engine_catalog) DO UPDATE SET
                             name = EXCLUDED.name, storage_type = EXCLUDED.storage_type,
                             storage_config = EXCLUDED.storage_config,

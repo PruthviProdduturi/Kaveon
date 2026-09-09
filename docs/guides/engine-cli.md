@@ -29,9 +29,9 @@ see [Kaveon on Azure: deploy, connect and test](../engineering/azure-deployment-
 Remote mode submits SQL to the coordinator and is the default:
 
 ```bash
-kaveon --server https://engine.example.com --catalog medallion --schema test
+kaveon --server https://engine.example.com --catalog OpenSource --schema nyc_taxi
 # The URL may be positional; its /catalog/schema path selects session context.
-kaveon https://engine.example.com/medallion/test
+kaveon https://engine.example.com/OpenSource/nyc_taxi
 ```
 
 Options accept either `--option value` or `--option=value`. Use
@@ -51,7 +51,7 @@ For an AKS port-forward that uses the test private CA:
 
 ```powershell
 kubectl -n kaveon port-forward service/kaveon 18443:8080 --address 127.0.0.1
-kaveon --server https://localhost:18443 --ca-cert ./kaveon-ca.crt --catalog medallion --schema test
+kaveon --server https://localhost:18443 --ca-cert ./kaveon-ca.crt --catalog OpenSource --schema nyc_taxi
 ```
 
 Use the [Azure deployment guide](../engineering/azure-deployment-guide.md) for
@@ -70,12 +70,12 @@ APIs. They are client metadata commands, not SQL support provided by
 
 ```sql
 SHOW CATALOGS;
-SHOW SCHEMAS IN medallion;
-SHOW TABLES FROM medallion.test;
-SHOW TABLES FROM medallion.test LIKE 'orders_%';
-DESCRIBE medallion.test.orders;
-SHOW COLUMNS FROM medallion.test.orders;
-USE medallion.test;
+SHOW SCHEMAS IN OpenSource;
+SHOW TABLES FROM OpenSource.nyc_taxi;
+SHOW TABLES FROM OpenSource.nyc_taxi LIKE '%_trips';
+DESCRIBE OpenSource.nyc_taxi.yellow_trips;
+SHOW COLUMNS FROM OpenSource.nyc_taxi.daily_trips;
+USE OpenSource.nyc_taxi;
 ```
 
 `SHOW SCHEMAS` and `SHOW TABLES` accept `IN` or `FROM`; unqualified commands use

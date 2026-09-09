@@ -15,13 +15,13 @@ engine:
   # Set this instead of caConfigMap when the private CA is stored as a Secret.
   caSecret: ""
 seed:
-  catalog: kavedb
-  name: KaveDB ADLS
+  catalog: OpenSource
+  name: OpenSource
   adls:
     account: ""
-    container: kavedb
-    rootPath: ""
-  credentialRef: aks-workload-identity
+    container: opensource
+    rootPath: snapshots/2026-09-09-v1
+  credentialRef: kaveon-test-reader
 postgres:
   storageClass: managed-csi
   storageSize: 20Gi

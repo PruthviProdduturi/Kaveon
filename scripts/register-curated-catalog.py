@@ -44,6 +44,26 @@ register('/v1/catalog/definitions', '/v1/catalog/definitions/'+CATALOG_ID,
           'storage': {'AdlsGen2': {'account': 'kvtestegmf6oweugsno', 'container': 'opensource', 'root_path': ROOT}},
           'credential': {'kind': 'WorkloadIdentity', 'reference': 'kaveon-test-reader'}})
 tables = [table for filename in sys.argv[1:] for table in json.loads(Path(filename).read_text())['tables']]
+# Publish subject schemas; physical medallion paths remain unchanged in ADLS.
+publication = {
+    ('silver', 'yellow_trips'): ('nyc_taxi', 'yellow_trips'),
+    ('silver', 'green_trips'): ('nyc_taxi', 'green_trips'),
+    ('gold', 'daily_trips'): ('nyc_taxi', 'daily_trips'),
+    ('reference', 'taxi_zones'): ('nyc_taxi', 'taxi_zones'),
+    ('reference', 'energy_indicators'): ('climate_energy', 'energy_indicators'),
+    ('gold', 'covid_reported_by_date'): ('covid', 'reported_by_date'),
+}
+excluded = {('bronze', 'yellow_trips'), ('bronze', 'green_trips'),
+            ('silver', 'yellow_rejected'), ('silver', 'green_rejected')}
+curated = []
+for table in tables:
+    key = (table['schema'], table['name'])
+    if key in excluded:
+        continue
+    schema, name = publication.get(key, key)
+    curated.append({**table, 'schema': schema, 'name': name})
+tables = curated
+
 for schema in sorted({t['schema'] for t in tables}):
     schema_id = CATALOG_ID+'-'+schema
     register(f'/v1/catalog/definitions/{CATALOG_ID}/schemas', '/v1/catalog/schemas/'+schema_id,

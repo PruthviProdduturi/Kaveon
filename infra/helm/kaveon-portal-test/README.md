@@ -8,8 +8,8 @@ Ingress, or Engine resources.
 
 Every image is required as an immutable `sha256` digest. Supply a values file
 with the three image repositories and digests and the ADLS location for the
-already registered `kavedb` catalog. The init Job applies `/app/schema_postgresql.sql`, then upserts the
-active native ADLS catalog-source record using `engine_catalog = kavedb`.
+already registered `OpenSource` catalog. The init Job applies `/app/schema_postgresql.sql`, then upserts the
+active native ADLS catalog-source record using `engine_catalog = OpenSource`.
 
 The deployment assumes these existing same-namespace resources:
 

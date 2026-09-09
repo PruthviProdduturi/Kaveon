@@ -21,12 +21,12 @@ Parquet, a catalog name, account/container/root path, and workload identity
 credential reference. Saving creates a platform source record in draft state.
 
 The corresponding authenticated API is `POST /api/v1/catalog-sources`. For
-example, a proposed OpenSource catalog would use:
+example, a new catalog source would use its own name and storage location:
 
 ```json
 {
-  "name": "OpenSource",
-  "engine_catalog": "OpenSource",
+  "name": "ExampleLake",
+  "engine_catalog": "ExampleLake",
   "storage_type": "adls_gen2",
   "storage_config": {
     "account": "kvtestegmf6oweugsno",
@@ -41,7 +41,8 @@ example, a proposed OpenSource catalog would use:
 }
 ```
 
-This is an example, not evidence that OpenSource data has been imported.
+This is a registration shape, not a substitute for table registration or a
+claim that a storage location is queryable.
 
 ## Synchronize with the Engine
 
@@ -61,11 +62,10 @@ The Engine catalog and the PostgreSQL platform source registry are separate
 stores. Do not create a second same-named Engine catalog through a different
 registration path.
 
-Existing bootstrap-managed catalogs such as `kavedb` and `OpenSource` have
-`aks-*` Engine IDs, while new platform-managed sources use `platform-*` IDs.
-They are already queryable and should not be recreated through Sync. A conflict
-requires reviewing the source-to-Engine mapping; do not delete/recreate a live
-catalog to suppress it.
+`OpenSource` is a bootstrap-managed, queryable catalog with Engine ID
+`aks-opensource`. It should not be recreated through the generic Sync flow. A
+conflict requires reviewing the source-to-Engine mapping; do not delete and
+recreate a live catalog to suppress it.
 
 ## Register schemas and tables
 
@@ -79,10 +79,12 @@ Use the authenticated Engine catalog API:
 
 Schema object updates use `/v1/catalog/schemas/{schema_id}`; table updates use
 `/v1/catalog/tables/{table_id}`. Table locations are relative to the catalog's
-container/root path. The working native ADLS example is
-[`aks-kavedb-bundle.py`](../../scripts/aks-kavedb-bundle.py); it registers the
-Engine objects directly, with its platform source seeded separately by the test
-deployment. Its private credential bundle must not be committed or printed.
+container/root path. The current OpenSource bootstrap is registered by
+[`register-curated-catalog.py`](../../scripts/register-curated-catalog.py) from
+curation manifests. It contains `silver.yellow_trips`, `silver.green_trips`,
+and `nyc_taxi.daily_trips`; the last has `pickup_date`, `service_type`,
+`trip_count`, `total_amount_cents`, and `total_trip_distance`. Private
+credential material must not be committed or printed.
 
 ## Verify
 
@@ -91,8 +93,10 @@ and `DESCRIBE`. Run row counts and selected aggregates against source-system
 expectations. In SQL Lab, select the catalog and verify all schema groups,
 column types, and a real query.
 
-Live AKS evidence currently covers the native `kavedb` ADLS registration,
-schema/table/column discovery, workload-identity reads, and exact SQL results.
-The platform synchronization bridge has automated tests. A complete generic
-portal-only registration flow and the proposed PostgreSQL-to-OpenSource import
-have not yet been validated end to end.
+Live AKS evidence covers OpenSource schema/table/column discovery,
+workload-identity reads, exact row-count checks, and SQL Lab retrieval of
+48,131 cleaned green trips. See the
+[validation report](../engineering/opensource-validation-2026-09-09.json).
+
+`aks-kavedb-bundle.py` is retained only as a legacy synthetic qualification
+script. It is not the default catalog or a guide for a new registration.

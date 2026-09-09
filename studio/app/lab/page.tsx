@@ -281,16 +281,19 @@ export default function LabPage() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const applySqlFormattingRef = useRef<() => void>(() => {});
   const contentAreaRef = useRef<HTMLElement | null>(null);
+  const engineLoadRef = useRef(0);
+  const lastEngineSourceIdRef = useRef<string | null>(null);
 
   const currentDataSource = useMemo(
     () => dataSources.find((ds) => ds.id === currentDataSourceId) || null,
     [dataSources, currentDataSourceId],
   );
-  const currentEngineSource = useMemo(
+  const selectedEngineSource = useMemo(
     () => engineSources.find((source) => source.id === currentEngineSourceId) || null,
     [engineSources, currentEngineSourceId],
   );
   const usingEngine = currentEngineSourceId !== null;
+  const currentEngineSource = usingEngine ? selectedEngineSource : null;
 
   const [expandedSchemas, setExpandedSchemas] = useState<Record<string, boolean>>({});
 
@@ -657,28 +660,54 @@ export default function LabPage() {
     if (isLoadingDatabases || isLoadingEngineSources || currentDataSourceId !== null || currentEngineSourceId !== null || !engineSources.length || dataSources.length) return;
     const source = engineSources[0];
     setCurrentEngineSourceId(source.id);
+    lastEngineSourceIdRef.current = source.id;
     void loadEngineSchemas(source.id).catch((error) => setLoadError(error instanceof Error ? error.message : "Failed to load Engine schemas"));
     // Source selection runs once after both discovery requests settle.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoadingDatabases, isLoadingEngineSources, currentDataSourceId, currentEngineSourceId, engineSources, dataSources]);
 
   const loadEngineSchemas = async (sourceId: string) => {
-    const userEmail = account?.email || account?.username || null;
-    const res = await msalFetch(`${API_BASE}/api/v1/lab/engine/${encodeURIComponent(sourceId)}/schemas`, {
-      headers: userEmail ? { "x-user-email": userEmail } : undefined,
-    });
-    const data = await res.json();
-    if (!res.ok || !data.success) throw new Error(data.error || "Failed to load Engine schemas");
-    const schemas: string[] = data.schemas || [];
-    setEngineSchemas(schemas);
-    const schema = schemas[0] || null;
-    setCurrentDatabase(schema);
+    const loadId = ++engineLoadRef.current;
+    setLoadError(null);
+    setIsLoadingTables(true);
+    setEngineSchemas([]);
+    setCurrentDatabase(null);
     setTables([]);
     setFilteredTables([]);
-    if (schema) await loadEngineTables(sourceId, schemas);
+    setTableColumns({});
+    setExpandedTables({});
+    setExpandedSchemas({});
+    setSelectedTableId(null);
+    try {
+      const userEmail = account?.email || account?.username || null;
+      const res = await msalFetch(`${API_BASE}/api/v1/lab/engine/${encodeURIComponent(sourceId)}/schemas`, {
+        headers: userEmail ? { "x-user-email": userEmail } : undefined,
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || "Failed to load Engine schemas");
+      const schemas: string[] = data.schemas || [];
+      if (loadId !== engineLoadRef.current) return;
+      setEngineSchemas(schemas);
+      const schema = schemas.find((name) => name.toLowerCase() === "nyc_taxi")
+        || schemas.find((name) => name.toLowerCase() === "public")
+        || schemas.find((name) => name.toLowerCase() === "default")
+        || schemas[0]
+        || null;
+      setCurrentDatabase(schema);
+      if (schema) await loadEngineTables(sourceId, schemas, loadId);
+      else if (loadId === engineLoadRef.current) setIsLoadingTables(false);
+    } catch (error) {
+      if (loadId !== engineLoadRef.current) return;
+      setEngineSchemas([]);
+      setCurrentDatabase(null);
+      setTables([]);
+      setFilteredTables([]);
+      setIsLoadingTables(false);
+      throw error;
+    }
   };
 
-  const loadEngineTables = async (sourceId: string, schemas: string[]) => {
+  const loadEngineTables = async (sourceId: string, schemas: string[], loadId = engineLoadRef.current) => {
     setIsLoadingTables(true);
     try {
       const userEmail = account?.email || account?.username || null;
@@ -691,10 +720,16 @@ export default function LabPage() {
       return (data.tables || []).map((name: string) => ({ id: `engine:${sourceId}:${schema}.${name}`, schema, name, fullName: `${schema}.${name}` }));
       }));
       const discovered = groups.flat();
+      if (loadId !== engineLoadRef.current) return;
       setTables(discovered);
       setFilteredTables(discovered);
+    } catch (error) {
+      if (loadId !== engineLoadRef.current) return;
+      setTables([]);
+      setFilteredTables([]);
+      throw error;
     } finally {
-      setIsLoadingTables(false);
+      if (loadId === engineLoadRef.current) setIsLoadingTables(false);
     }
   };
   const switchDatabase = async (databaseName: string) => {
@@ -743,7 +778,7 @@ export default function LabPage() {
       const run = async () => {
         try {
           setIsLoadingTables(true);
-          if (currentEngineSourceId) {
+          if (usingEngine && currentEngineSourceId) {
             await loadEngineSchemas(currentEngineSourceId);
             return;
           }
@@ -1800,7 +1835,7 @@ return;
                     const run = async () => {
                       try {
                         setIsLoadingTables(true);
-                        if (currentEngineSourceId) await loadEngineSchemas(currentEngineSourceId);
+                        if (usingEngine && currentEngineSourceId) await loadEngineSchemas(currentEngineSourceId);
                         else await loadTables(true);
                       } finally {
                         setIsLoadingTables(false);
@@ -1817,20 +1852,26 @@ return;
             </div>
 
             <div className="sidebar-controls">
-              <div className="sidebar-db-wrap">
+              <div className="sidebar-db-wrap" style={{ marginTop: "0.75rem" }}>
                 <i className="fas fa-database sidebar-db-icon" />
+                <label htmlFor="lab-source-select" style={{ position: "absolute", top: "-0.85rem", left: 0, fontSize: "0.7rem", color: "var(--text-muted)" }}>Source</label>
                 <select
+                  id="lab-source-select"
                   className="sidebar-db-select"
-                  value={usingEngine ? `engine:${currentEngineSourceId}` : currentDataSourceId ?? ""}
+                  aria-label="Source"
+                  value={usingEngine ? "kaveon" : currentDataSourceId ?? ""}
                   disabled={isLoadingDatabases || isLoadingEngineSources || (dataSources.length === 0 && engineSources.length === 0)}
                   onChange={async (e) => {
                     const value = e.target.value;
-                    if (value.startsWith("engine:")) {
-                      const id = value.slice("engine:".length);
+                    if (value === "kaveon") {
+                      const id = currentEngineSourceId || lastEngineSourceIdRef.current || engineSources[0]?.id;
+                      if (!id) {
+                        setLoadError("No Kaveon DB catalogs are available");
+                        return;
+                      }
                       setCurrentEngineSourceId(id);
+                      lastEngineSourceIdRef.current = id;
                       setCurrentDataSourceId(null);
-                      setTableColumns({});
-                      setExpandedSchemas({});
                       try { await loadEngineSchemas(id); } catch (error) { setLoadError(error instanceof Error ? error.message : "Failed to load Engine source"); }
                       return;
                     }
@@ -1838,6 +1879,10 @@ return;
                     if (!id) return;
                     setCurrentEngineSourceId(null);
                     setEngineSchemas([]);
+                    setTables([]);
+                    setFilteredTables([]);
+                    setTableColumns({});
+                    setExpandedSchemas({});
                     setCurrentDataSourceId(id);
                     const ds = dataSources.find((d) => d.id === id);
                     if (ds?.database_name) await switchDatabase(ds.database_name);
@@ -1850,34 +1895,51 @@ return;
                   {dataSources.map((ds) => (
                     <option key={ds.id} value={ds.id}>{ds.name}</option>
                   ))}
-                  {engineSources.length > 0 && (
-                    <optgroup label="Kaveon DB">
-                      {engineSources.map((source) => (
-                        <option key={source.id} value={`engine:${source.id}`}>{source.catalog}</option>
-                      ))}
-                    </optgroup>
-                  )}
+                  {engineSources.length > 0 && <option value="kaveon">Kaveon DB</option>}
                 </select>
               </div>
 
               {usingEngine && (
-                <div className="sidebar-db-wrap">
-                  <i className="fas fa-layer-group sidebar-db-icon" />
-                  <select
-                    className="sidebar-db-select"
-                    aria-label="Default query schema"
-                    title="Default schema for queries; all schemas remain visible below"
-                    value={currentDatabase ?? ""}
-                    disabled={!currentEngineSourceId || engineSchemas.length === 0}
-                    onChange={async (e) => {
-                      const schema = e.target.value;
-                      if (!schema || !currentEngineSourceId) return;
-                      setCurrentDatabase(schema);
-                    }}
-                  >
-                    {engineSchemas.map((schema) => <option key={schema} value={schema}>{schema}</option>)}
-                  </select>
-                </div>
+                <>
+                  <div className="sidebar-db-wrap" style={{ marginTop: "0.75rem" }}>
+                    <i className="fas fa-layer-group sidebar-db-icon" />
+                    <label htmlFor="lab-catalog-select" style={{ position: "absolute", top: "-0.85rem", left: 0, fontSize: "0.7rem", color: "var(--text-muted)" }}>Catalog</label>
+                    <select
+                      id="lab-catalog-select"
+                      className="sidebar-db-select"
+                      aria-label="Catalog"
+                      value={currentEngineSourceId ?? ""}
+                      disabled={isLoadingEngineSources || isLoadingTables || engineSources.length === 0}
+                      onChange={async (e) => {
+                        const id = e.target.value;
+                        if (!id) return;
+                        setCurrentEngineSourceId(id);
+                        lastEngineSourceIdRef.current = id;
+                        try { await loadEngineSchemas(id); } catch (error) { setLoadError(error instanceof Error ? error.message : "Failed to load Engine catalog"); }
+                      }}
+                    >
+                      {engineSources.map((source) => <option key={source.id} value={source.id}>{source.catalog}</option>)}
+                    </select>
+                  </div>
+                  <div className="sidebar-db-wrap" style={{ marginTop: "0.75rem" }}>
+                    <i className="fas fa-layer-group sidebar-db-icon" />
+                    <label htmlFor="lab-query-schema-select" style={{ position: "absolute", top: "-0.85rem", left: 0, fontSize: "0.7rem", color: "var(--text-muted)" }}>Query schema</label>
+                    <select
+                      id="lab-query-schema-select"
+                      className="sidebar-db-select"
+                      aria-label="Query schema"
+                      title="Default schema for queries; all schemas remain visible below"
+                      value={currentDatabase ?? ""}
+                      disabled={!currentEngineSourceId || engineSchemas.length === 0 || isLoadingTables}
+                      onChange={(e) => {
+                        const schema = e.target.value;
+                        if (schema) setCurrentDatabase(schema);
+                      }}
+                    >
+                      {engineSchemas.map((schema) => <option key={schema} value={schema}>{schema}</option>)}
+                    </select>
+                  </div>
+                </>
               )}
 
               <div className="sidebar-search-wrap">
