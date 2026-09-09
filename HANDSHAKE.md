@@ -26,6 +26,17 @@ changed unless the application actually changes it; the user controls that picke
 
 ## Ownership map
 
+### OAuth session regression — September 8
+
+The CLI/AKS portal change accidentally passed `session.maxAge: undefined` when
+`KAVEON_ENTRA_PUBLIC_CLIENT` was disabled. Auth.js spreads this over its default,
+causing `JWTSessionError: Invalid time value` on existing OAuth sessions. The
+shared session config now explicitly preserves OAuth's 30-day lifetime and
+AKS's one-hour lifetime. Regression tests exercise real Auth.js session refresh
+for both modes; the OAuth test fails against the old value and both pass with
+the correction. This confirms a code regression, not live Vercel recovery:
+Vercel URL/runtime access is still needed to verify the user's reported page.
+
 ### Engine (`engine/`)
 
 | Crate | Owner | Status |
