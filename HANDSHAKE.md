@@ -47,11 +47,26 @@ regression publishes a v2 table location after pinning v1 and proves distributed
 fragments still contain only the v1 source. All 102 server tests pass.
 
 This covers coordinator planning and the executable-fragment path, whose scan
-source and Delta/Iceberg versions are serialized to workers. Legacy raw-SQL
-aggregate/TopN task requests still resolve catalog names on each worker and do
-not carry a catalog-head identity. They remain a boundary until those fallbacks
-use executable fragments or enforce a shared revision; do not claim full
-cross-worker catalog-head pinning for them.
+source and Delta/Iceberg versions are serialized to workers. At that checkpoint,
+legacy raw-SQL aggregate/TopN tasks still resolved current worker catalogs; the
+next round adds their fail-closed identity contract.
+
+Round 3 closes that legacy silent-read gap with a backwards-compatible
+`catalog_snapshot_id` field on task requests. Coordinators hash the selected
+catalog's storage definition, sorted schemas/tables, table locations, access
+mode, format and Arrow schema from the pinned manager, then attach the identity
+to raw-SQL aggregate/TopN tasks. Workers compare it with their local catalog
+before parsing or planning and return `409 CATALOG_SNAPSHOT_MISMATCH` rather
+than reading a newer or divergent definition. Missing identity remains accepted
+only for rolling compatibility with older task senders. Executable fragments
+omit it because they already serialize resolved sources and data snapshot IDs.
+Wire compatibility, matching identity and fail-closed mismatch tests pass; all
+103 server tests pass.
+
+The identity is a deterministic in-memory definition digest, not yet the
+durable ADLS catalog-head generation. It prevents silent mixed catalog reads but
+cannot make an older worker materialize a missing head. Durable head propagation
+and worker catch-up/retry remain the deployment-level prerequisite.
 
 ## Current integration ledger — September 10, 2026
 
@@ -105,6 +120,7 @@ AKS separately. Never promote a local result to a deployed claim.
 | 2026-09-10 | Integrated typed-product/resource-group working tree | Local Windows | `cargo fmt --all -- --check`; catalog and security tests; strict catalog/server Clippy | **Passed:** 25 catalog tests, 8 focused server security tests, formatting, and `-D warnings` | Repeatable local commands from the integration session |
 | 2026-09-10 | `755d9a7` plus in-flight typed-reference/runtime integration | Local Windows | `cargo test --workspace --all-targets`; `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets -- -D warnings` | **Passed:** 409 tests, one intentional ignored CLI fixture, aggregate/storage benchmark harnesses, workspace formatting and strict Clippy | Repeatable local commands from the round-two integration session; this validates the shared working tree, not an AKS image |
 | 2026-09-10 | `755d9a7` | GitHub Actions | CI `34523052121`; Engine `34523052001`; Deploy `34523052036` | **Passed:** Web lint/type/build, API tests, secret scan, Vercel deploy, Rust format/Clippy/tests, three-platform release builds, dev release and deploy | Linked workflow runs; Containers `34523051977` remained in progress when recorded |
+| 2026-09-10 | `fd1f879` | Local Windows | `cargo test --workspace --all-targets`; `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets -- -D warnings` | **Passed:** 412 tests, one intentional ignored CLI fixture, aggregate/storage benchmark harnesses, workspace formatting and strict Clippy | Exact clean commit; local evidence covers typed references and coordinator query catalog pinning, not deployment or legacy worker raw-SQL catalog consistency |
 
 The two failed rows above record the intentionally caught intermediate state,
 before the owning agent completed its edit. The integrated passing row supersedes
@@ -121,8 +137,11 @@ Named equality indexes are validated for uniqueness within each record kind over
 the final all-or-nothing snapshot and are bounded to 32 entries per record.
 Index names and values currently use exact byte-sensitive equality; a typed
 per-index normalization and collation policy is required before product cutover.
-Immutable document paths and digests remain
-the durable payload boundary. Typed references enforce chart-to-dataset and
+Immutable product documents are now published create-only before the head CAS,
+bounded to 8 MiB each, and verified against their declared SHA-256. Missing,
+extra, oversized, or mismatched candidate payloads fail closed; an existing
+object is accepted only when its bytes and digest are identical. Reopening a
+snapshot revalidates every referenced product document. Typed references enforce chart-to-dataset and
 dashboard-to-chart/dataset relationships against the final snapshot. Deletes
 use explicit restrict semantics; cascade is not implicit. This permits atomic
 parent-and-child creation while rejecting dangling references and referenced
@@ -132,7 +151,7 @@ same-transaction relationships, concurrent same-base updates with one durable
 CAS winner, and reopen recovery. This is a transactional metadata foundation;
 PostgreSQL remains authoritative until the repository adapter, migration,
 dual-read validation, rollback, and live qualification gates are complete.
-Catalog validation is 31/31 tests with strict Clippy clean.
+Catalog validation is 33/33 tests with strict Clippy clean.
 
 ### Catalog cleanup and SQL Lab navigation - September 8 (UTC September 9)
 
