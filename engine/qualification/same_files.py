@@ -17,8 +17,6 @@ import subprocess
 import tempfile
 import time
 
-from smoke import free_port, wait_for
-
 QUERIES = {
     "filtered_sum": "SELECT COUNT(*), SUM(amount) FROM events WHERE amount > 500",
     "grouped_sum": "SELECT category, COUNT(*), SUM(amount) FROM events GROUP BY category ORDER BY category",
@@ -79,13 +77,14 @@ def redact_config(text):
 def main():
     # Keep the workload contract importable by the fail-closed claim evaluator
     # without requiring benchmark-only native dependencies during collection.
-    global duckdb, pa, pq, requests, psutil, trino
+    global duckdb, pa, pq, requests, psutil, trino, free_port, wait_for
     import duckdb
     import pyarrow as pa
     import pyarrow.parquet as pq
     import requests
     import psutil
     import trino
+    from smoke import free_port, wait_for
 
     parser = argparse.ArgumentParser(description=__doc__)
     runner = parser.add_mutually_exclusive_group(required=True)
