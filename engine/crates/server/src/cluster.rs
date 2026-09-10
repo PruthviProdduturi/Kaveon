@@ -21,6 +21,8 @@ pub struct NodeInfo {
     pub last_heartbeat: u64,
     #[serde(default)]
     pub memory_rss_bytes: u64,
+    #[serde(default)]
+    pub catalog_snapshot_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,6 +65,7 @@ impl ClusterState {
                 uptime_secs: 0,
                 last_heartbeat: now,
                 memory_rss_bytes: process_memory_rss_bytes(),
+                catalog_snapshot_id: None,
             },
             workers: HashMap::new(),
             started_at: now,
@@ -78,6 +81,14 @@ impl ClusterState {
 
     pub fn register_worker(&mut self, info: NodeInfo) {
         self.workers.insert(info.node_id.clone(), info);
+    }
+
+    pub fn compatible_workers(&self, required_snapshot_id: &str) -> Vec<NodeInfo> {
+        self.workers
+            .values()
+            .filter(|worker| worker.catalog_snapshot_id.as_deref() == Some(required_snapshot_id))
+            .cloned()
+            .collect()
     }
 
     pub fn remove_stale_workers(&mut self) {
@@ -118,8 +129,10 @@ pub async fn worker_heartbeat_loop(state: Arc<AppState>) {
     let client = reqwest::Client::new();
     loop {
         let info = {
+            let snapshot_id = state.catalog.read().await.snapshot_id.clone();
             let mut cluster = state.cluster.write().await;
             cluster.update_uptime();
+            cluster.this_node.catalog_snapshot_id = Some(snapshot_id);
             cluster.this_node.clone()
         };
 

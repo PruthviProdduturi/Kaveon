@@ -88,6 +88,35 @@ async fn main() {
     let catalog_snapshot_id = catalog_store
         .snapshot_identity()
         .expect("opened catalog has a durable snapshot identity");
+    let product_catalog = match config::product_catalog_commit(&config) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("failed to configure product transaction store: {error}");
+            std::process::exit(1);
+        }
+    };
+    if let Some(product_catalog) = &product_catalog {
+        match product_catalog.read_current().await {
+            Ok(_) => {}
+            Err(kaveon_storage::CommitErrorKind::Missing) => {
+                let genesis =
+                    kaveon_catalog::product_manifest::CatalogSnapshot::empty("snapshot-genesis")
+                        .expect("static genesis snapshot is valid");
+                if !matches!(
+                    product_catalog.initialize(genesis).await,
+                    kaveon_catalog::product_commit::CommitOutcome::Committed(_)
+                        | kaveon_catalog::product_commit::CommitOutcome::Replayed(_)
+                ) {
+                    eprintln!("failed to initialize product transaction store");
+                    std::process::exit(1);
+                }
+            }
+            Err(error) => {
+                eprintln!("failed to open product transaction store: {error:?}");
+                std::process::exit(1);
+            }
+        }
+    }
 
     println!("Kaveon Engine v{}", env!("CARGO_PKG_VERSION"));
     println!("Node:        {}", config.node_id);
@@ -142,7 +171,9 @@ async fn main() {
         memory_admission,
         // Product transactions fail closed until an ADLS-backed product store
         // is supplied by deployment configuration.
-        product_transactions: transaction_api::TransactionRegistry::disabled(),
+        product_transactions: product_catalog
+            .map(transaction_api::TransactionRegistry::enabled)
+            .unwrap_or_else(transaction_api::TransactionRegistry::disabled),
     });
 
     if !state.config.coordinator {

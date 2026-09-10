@@ -1,6 +1,8 @@
 use kaveon_core::{KaveonError, Result};
 use sqlparser::ast::Statement;
-use sqlparser::ast::{AssignmentTarget, FromTable, SetExpr, TableFactor, TableWithJoins};
+use sqlparser::ast::{
+    AssignmentTarget, BinaryOperator, Expr, FromTable, SetExpr, TableFactor, TableWithJoins, Value,
+};
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 
@@ -29,6 +31,176 @@ pub enum NativeTransactionalStatement {
     Commit,
     Rollback,
     Dml(Box<NativeDmlStatement>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProductDmlCommand {
+    Create {
+        kind: String,
+        id: String,
+        document_json: String,
+    },
+    Update {
+        kind: String,
+        id: String,
+        expected_revision: u64,
+        document_json: String,
+    },
+    Delete {
+        kind: String,
+        id: String,
+        expected_revision: u64,
+    },
+}
+
+/// Adapt only Kaveon's typed product-record SQL facade. Arbitrary row DML has
+/// no storage contract and is rejected instead of being silently emulated.
+pub fn adapt_product_dml(dml: &NativeDmlStatement) -> Result<ProductDmlCommand> {
+    let kind = product_kind(&dml.table)?;
+    match &dml.ast {
+        Statement::Insert(insert) => {
+            let columns: Vec<_> = insert
+                .columns
+                .iter()
+                .map(|column| column.value.as_str())
+                .collect();
+            if columns.len() != 2
+                || !columns[0].eq_ignore_ascii_case("id")
+                || !columns[1].eq_ignore_ascii_case("document_json")
+            {
+                return Err(sql_error(
+                    "product INSERT columns must be (id, document_json)",
+                ));
+            }
+            let Some(SetExpr::Values(values)) =
+                insert.source.as_deref().map(|query| query.body.as_ref())
+            else {
+                return Err(sql_error("product INSERT requires VALUES"));
+            };
+            if values.rows.len() != 1 || values.rows[0].len() != 2 {
+                return Err(sql_error("product INSERT accepts exactly one record"));
+            }
+            Ok(ProductDmlCommand::Create {
+                kind,
+                id: string_literal(&values.rows[0][0], "product ID")?,
+                document_json: string_literal(&values.rows[0][1], "product document_json")?,
+            })
+        }
+        Statement::Update {
+            assignments,
+            selection,
+            ..
+        } => {
+            if assignments.len() != 1 {
+                return Err(sql_error("product UPDATE may set document_json only"));
+            }
+            let AssignmentTarget::ColumnName(column) = &assignments[0].target else {
+                return Err(sql_error("product UPDATE may set document_json only"));
+            };
+            if column.0.len() != 1 || !column.0[0].value.eq_ignore_ascii_case("document_json") {
+                return Err(sql_error("product UPDATE may set document_json only"));
+            }
+            let document_json = string_literal(&assignments[0].value, "product document_json")?;
+            let (id, expected_revision) = product_key_predicate(selection.as_ref())?;
+            Ok(ProductDmlCommand::Update {
+                kind,
+                id,
+                expected_revision,
+                document_json,
+            })
+        }
+        Statement::Delete(delete) => {
+            let (id, expected_revision) = product_key_predicate(delete.selection.as_ref())?;
+            Ok(ProductDmlCommand::Delete {
+                kind,
+                id,
+                expected_revision,
+            })
+        }
+        _ => Err(sql_error("statement is not product DML")),
+    }
+}
+
+fn product_kind(table: &str) -> Result<String> {
+    let normalized = table.to_ascii_lowercase();
+    let leaf = normalized
+        .strip_prefix("kaveon.product.")
+        .or_else(|| normalized.strip_prefix("product."));
+    match leaf {
+        Some("datasets") => Ok("dataset".into()),
+        Some("charts") => Ok("chart".into()),
+        Some("dashboards") => Ok("dashboard".into()),
+        Some("saved_queries") => Ok("saved_query".into()),
+        Some("user_themes") => Ok("user_theme".into()),
+        _ => Err(sql_error(
+            "row DML is unsupported; target kaveon.product.datasets, charts, dashboards, saved_queries, or user_themes",
+        )),
+    }
+}
+
+fn product_key_predicate(selection: Option<&Expr>) -> Result<(String, u64)> {
+    let Some(Expr::BinaryOp {
+        left,
+        op: BinaryOperator::And,
+        right,
+    }) = selection
+    else {
+        return Err(sql_error(
+            "product UPDATE/DELETE requires WHERE id = <string> AND revision = <integer>",
+        ));
+    };
+    let mut id = None;
+    let mut revision = None;
+    for expression in [left.as_ref(), right.as_ref()] {
+        let Expr::BinaryOp {
+            left,
+            op: BinaryOperator::Eq,
+            right,
+        } = expression
+        else {
+            return Err(sql_error(
+                "product UPDATE/DELETE requires equality predicates",
+            ));
+        };
+        let Expr::Identifier(column) = left.as_ref() else {
+            return Err(sql_error(
+                "product key predicates require unqualified columns",
+            ));
+        };
+        if column.value.eq_ignore_ascii_case("id") {
+            id = Some(string_literal(right, "product ID")?);
+        } else if column.value.eq_ignore_ascii_case("revision") {
+            revision = Some(integer_literal(right, "expected revision")?);
+        } else {
+            return Err(sql_error(
+                "product key predicates support id and revision only",
+            ));
+        }
+    }
+    match (id, revision) {
+        (Some(id), Some(revision)) if revision > 0 => Ok((id, revision)),
+        _ => Err(sql_error(
+            "product UPDATE/DELETE requires one id and one positive revision",
+        )),
+    }
+}
+
+fn string_literal(expression: &Expr, label: &str) -> Result<String> {
+    match expression {
+        Expr::Value(Value::SingleQuotedString(value)) => Ok(value.clone()),
+        _ => Err(sql_error(&format!("{label} must be a string literal"))),
+    }
+}
+
+fn integer_literal(expression: &Expr, label: &str) -> Result<u64> {
+    match expression {
+        Expr::Value(Value::Number(value, false)) => value
+            .parse()
+            .map_err(|_| sql_error(&format!("{label} must be an unsigned integer literal"))),
+        _ => Err(sql_error(&format!(
+            "{label} must be an unsigned integer literal"
+        ))),
+    }
 }
 
 /// Parse the deliberately small native write contract.
@@ -261,6 +433,54 @@ mod tests {
             assert!(
                 parse_native_transactional(sql).is_err(),
                 "unexpectedly accepted {sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn adapts_only_exact_product_record_dml() {
+        let parsed = parse_native_transactional(
+            "INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('ds-1', '{\"name\":\"Orders\"}')",
+        ).unwrap();
+        let NativeTransactionalStatement::Dml(dml) = parsed else {
+            panic!("expected DML")
+        };
+        assert_eq!(
+            adapt_product_dml(&dml).unwrap(),
+            ProductDmlCommand::Create {
+                kind: "dataset".into(),
+                id: "ds-1".into(),
+                document_json: "{\"name\":\"Orders\"}".into(),
+            }
+        );
+        for sql in [
+            "UPDATE product.charts SET document_json = '{}' WHERE id = 'c-1' AND revision = 2",
+            "DELETE FROM product.dashboards WHERE id = 'd-1' AND revision = 3",
+        ] {
+            let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(sql).unwrap()
+            else {
+                panic!("expected DML")
+            };
+            assert!(adapt_product_dml(&dml).is_ok());
+        }
+    }
+
+    #[test]
+    fn product_adapter_rejects_generic_rows_and_unsafe_shapes() {
+        for sql in [
+            "INSERT INTO app.users (id, document_json) VALUES ('u-1', '{}')",
+            "INSERT INTO product.datasets (document_json, id) VALUES ('{}', 'd-1')",
+            "INSERT INTO product.datasets (id, document_json) VALUES ('d-1', '{}'), ('d-2', '{}')",
+            "UPDATE product.datasets SET document_json = '{}' WHERE id = 'd-1' AND owner = 'alice'",
+            "DELETE FROM product.datasets WHERE revision = 1 AND revision = 2",
+        ] {
+            let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(sql).unwrap()
+            else {
+                panic!("expected DML")
+            };
+            assert!(
+                adapt_product_dml(&dml).is_err(),
+                "unexpectedly adapted {sql}"
             );
         }
     }

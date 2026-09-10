@@ -1964,14 +1964,18 @@ async fn cancel_query(
 #[derive(Serialize)]
 struct ClusterResponse {
     environment: String,
+    required_catalog_snapshot_id: String,
     coordinator: NodeInfo,
     workers: Vec<NodeInfo>,
     active_workers: usize,
+    compatible_workers: usize,
     total_nodes: usize,
 }
 
 async fn get_cluster(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let required_catalog_snapshot_id = state.catalog.read().await.snapshot_id.clone();
     let mut cluster = state.cluster.write().await;
+    cluster.this_node.catalog_snapshot_id = Some(required_catalog_snapshot_id.clone());
     let nodes = cluster.all_nodes();
 
     let coordinator = nodes
@@ -1988,16 +1992,25 @@ async fn get_cluster(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
     Json(ClusterResponse {
         environment: state.config.environment.clone(),
+        required_catalog_snapshot_id: required_catalog_snapshot_id.clone(),
         coordinator,
         workers: workers.clone(),
         active_workers: workers.len(),
+        compatible_workers: workers
+            .iter()
+            .filter(|worker| {
+                worker.catalog_snapshot_id.as_deref() == Some(required_catalog_snapshot_id.as_str())
+            })
+            .count(),
         total_nodes: nodes.len(),
     })
 }
 
 async fn get_node(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let snapshot_id = state.catalog.read().await.snapshot_id.clone();
     let mut cluster = state.cluster.write().await;
     cluster.update_uptime();
+    cluster.this_node.catalog_snapshot_id = Some(snapshot_id);
     Json(cluster.this_node.clone())
 }
 
@@ -2746,7 +2759,14 @@ async fn ready(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let catalog = state.catalog.read().await;
     let has_catalogs = !catalog.catalog_names().is_empty();
     if has_catalogs {
-        (StatusCode::OK, Json(serde_json::json!({ "ready": true }))).into_response()
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ready": true,
+                "catalog_snapshot_id": catalog.snapshot_id
+            })),
+        )
+            .into_response()
     } else {
         (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -2939,6 +2959,27 @@ async fn cleanup_distributed_query(state: &Arc<AppState>, query_id: &str) {
     let _ = state.lifecycle.finish_query(query_id);
 }
 
+fn workers_for_catalog_snapshot(
+    cluster: &mut crate::cluster::ClusterState,
+    required_snapshot_id: &str,
+) -> Result<Vec<NodeInfo>, String> {
+    cluster.remove_stale_workers();
+    let active = cluster.workers.len();
+    let compatible = cluster.compatible_workers(required_snapshot_id);
+    if active > 0 && compatible.is_empty() {
+        return Err(format!(
+            "NO_COMPATIBLE_WORKER: no active worker has catalog snapshot {required_snapshot_id}"
+        ));
+    }
+    if active >= 2 && compatible.len() < 2 {
+        return Err(format!(
+            "INSUFFICIENT_COMPATIBLE_WORKERS: catalog snapshot {required_snapshot_id} is present on {} of {active} active workers",
+            compatible.len()
+        ));
+    }
+    Ok(compatible)
+}
+
 async fn execute_distributed_fragments(
     state: &Arc<AppState>,
     query_id: &str,
@@ -2949,10 +2990,13 @@ async fn execute_distributed_fragments(
     if !general_distributed_eligible(plan) {
         return None;
     }
-    let mut workers = {
+    let worker_selection = {
         let mut cluster = state.cluster.write().await;
-        cluster.remove_stale_workers();
-        cluster.workers.values().cloned().collect::<Vec<_>>()
+        workers_for_catalog_snapshot(&mut cluster, &context.catalog_snapshot_id)
+    };
+    let mut workers = match worker_selection {
+        Ok(workers) => workers,
+        Err(error) => return Some(Err(error)),
     };
     workers.sort_unstable_by(|left, right| left.node_id.cmp(&right.node_id));
     let token = state.config.exchange_token.clone()?;
@@ -3283,10 +3327,13 @@ async fn execute_distributed_top_n(
     plan: &LogicalPlan,
 ) -> Option<Result<(TaskResponse, StageTelemetry), String>> {
     let (sort_exprs, limit) = top_n_merge_contract(plan)?;
-    let mut workers = {
+    let worker_selection = {
         let mut cluster = state.cluster.write().await;
-        cluster.remove_stale_workers();
-        cluster.workers.values().cloned().collect::<Vec<_>>()
+        workers_for_catalog_snapshot(&mut cluster, &context.catalog_snapshot_id)
+    };
+    let mut workers = match worker_selection {
+        Ok(workers) => workers,
+        Err(error) => return Some(Err(error)),
     };
     workers.sort_unstable_by(|left, right| left.node_id.cmp(&right.node_id));
     if workers.len() < 2 {
@@ -3450,10 +3497,13 @@ async fn execute_distributed_aggregate(
     memory: &kaveon_core::QueryMemoryPool,
 ) -> Option<Result<(TaskResponse, StageTelemetry), String>> {
     let (group_count, operations) = aggregate_merge_contract(plan)?;
-    let mut workers = {
+    let worker_selection = {
         let mut cluster = state.cluster.write().await;
-        cluster.remove_stale_workers();
-        cluster.workers.values().cloned().collect::<Vec<_>>()
+        workers_for_catalog_snapshot(&mut cluster, &context.catalog_snapshot_id)
+    };
+    let mut workers = match worker_selection {
+        Ok(workers) => workers,
+        Err(error) => return Some(Err(error)),
     };
     workers.sort_unstable_by(|left, right| left.node_id.cmp(&right.node_id));
     if workers.len() < 2 {
@@ -4541,6 +4591,45 @@ mod tests {
             };
         assert!(error.contains("cannot reserve"), "{error}");
         assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn scheduler_filters_workers_by_published_catalog_identity() {
+        let config = crate::config::ServerConfig::default();
+        let mut cluster = crate::cluster::ClusterState::new(&config);
+        let mut worker = cluster.this_node.clone();
+        worker.role = crate::cluster::NodeRole::Worker;
+        worker.node_id = "matching".into();
+        worker.catalog_snapshot_id = Some("snapshot-required".into());
+        cluster.register_worker(worker.clone());
+        worker.node_id = "stale".into();
+        worker.catalog_snapshot_id = Some("snapshot-old".into());
+        cluster.register_worker(worker);
+
+        let error =
+            super::workers_for_catalog_snapshot(&mut cluster, "snapshot-required").unwrap_err();
+        assert!(error.starts_with("INSUFFICIENT_COMPATIBLE_WORKERS:"));
+
+        cluster.workers.remove("stale");
+        let compatible =
+            super::workers_for_catalog_snapshot(&mut cluster, "snapshot-required").unwrap();
+        assert_eq!(compatible.len(), 1);
+        assert_eq!(compatible[0].node_id, "matching");
+    }
+
+    #[test]
+    fn scheduler_reports_when_no_worker_has_required_catalog() {
+        let config = crate::config::ServerConfig::default();
+        let mut cluster = crate::cluster::ClusterState::new(&config);
+        let mut worker = cluster.this_node.clone();
+        worker.role = crate::cluster::NodeRole::Worker;
+        worker.node_id = "legacy".into();
+        worker.catalog_snapshot_id = None;
+        cluster.register_worker(worker);
+
+        let error =
+            super::workers_for_catalog_snapshot(&mut cluster, "snapshot-required").unwrap_err();
+        assert!(error.starts_with("NO_COMPATIBLE_WORKER:"));
     }
 
     #[test]

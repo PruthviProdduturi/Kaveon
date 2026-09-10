@@ -35,6 +35,35 @@ pub struct ServerConfig {
     pub exchange_token: Option<String>,
     pub query_memory_limit_bytes: u64,
     pub memory_admission_limit_bytes: u64,
+    pub product_transactions: ProductTransactionsConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProductTransactionsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub account: String,
+    #[serde(default)]
+    pub container: String,
+    #[serde(default = "default_product_prefix")]
+    pub prefix: String,
+}
+
+fn default_product_prefix() -> String {
+    "kaveon/product-catalog".to_owned()
+}
+
+impl Default for ProductTransactionsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            account: String::new(),
+            container: String::new(),
+            prefix: default_product_prefix(),
+        }
+    }
 }
 
 impl Default for ServerConfig {
@@ -61,6 +90,7 @@ impl Default for ServerConfig {
             exchange_token: None,
             query_memory_limit_bytes: DEFAULT_QUERY_MEMORY_LIMIT_BYTES,
             memory_admission_limit_bytes: DEFAULT_MEMORY_ADMISSION_LIMIT_BYTES,
+            product_transactions: ProductTransactionsConfig::default(),
         }
     }
 }
@@ -74,6 +104,7 @@ struct RawConfig {
     exchange: Option<ExchangeConfig>,
     memory: Option<MemoryConfig>,
     catalog: Option<NativeCatalogConfig>,
+    product_transactions: Option<ProductTransactionsConfig>,
 }
 
 #[derive(Deserialize)]
@@ -179,6 +210,9 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
             }
             config.catalog_admin_token = catalog.admin_token;
         }
+        if let Some(product_transactions) = raw.product_transactions {
+            config.product_transactions = product_transactions;
+        }
     }
 
     if let Ok(v) = std::env::var("KAVEON_NODE_ID") {
@@ -215,6 +249,22 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     }
     if let Ok(v) = std::env::var("KAVEON_EXCHANGE_TOKEN") {
         config.exchange_token = Some(v);
+    }
+    if let Ok(value) = std::env::var("KAVEON_PRODUCT_TRANSACTIONS_ENABLED") {
+        anyhow::ensure!(
+            matches!(value.as_str(), "true" | "false"),
+            "KAVEON_PRODUCT_TRANSACTIONS_ENABLED must be true or false"
+        );
+        config.product_transactions.enabled = value == "true";
+    }
+    if let Ok(value) = std::env::var("KAVEON_PRODUCT_ADLS_ACCOUNT") {
+        config.product_transactions.account = value;
+    }
+    if let Ok(value) = std::env::var("KAVEON_PRODUCT_ADLS_CONTAINER") {
+        config.product_transactions.container = value;
+    }
+    if let Ok(value) = std::env::var("KAVEON_PRODUCT_ADLS_PREFIX") {
+        config.product_transactions.prefix = value;
     }
     if let Ok(v) = std::env::var("KAVEON_QUERY_MEMORY_LIMIT_BYTES") {
         config.query_memory_limit_bytes = v.parse().map_err(|_| {
@@ -302,7 +352,50 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
         "exchange disk limit must be positive"
     );
     config.security.validate()?;
+    validate_product_transactions(&config)?;
     Ok(config)
+}
+
+fn validate_product_transactions(config: &ServerConfig) -> anyhow::Result<()> {
+    if config.product_transactions.enabled {
+        anyhow::ensure!(
+            config.coordinator,
+            "product transactions may be enabled only on a coordinator"
+        );
+        anyhow::ensure!(
+            !config.product_transactions.account.is_empty(),
+            "enabled product transactions require an ADLS account"
+        );
+        anyhow::ensure!(
+            !config.product_transactions.container.is_empty(),
+            "enabled product transactions require an ADLS container"
+        );
+        anyhow::ensure!(
+            !config.product_transactions.prefix.is_empty(),
+            "enabled product transactions require an ADLS prefix"
+        );
+    }
+    Ok(())
+}
+
+pub fn product_catalog_commit(
+    config: &ServerConfig,
+) -> anyhow::Result<Option<kaveon_catalog::product_commit::ProductCatalogCommit>> {
+    if !config.product_transactions.enabled {
+        return Ok(None);
+    }
+    let storage = kaveon_storage::workload_identity_adls_commit(
+        &config.product_transactions.account,
+        &config.product_transactions.container,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let commit = kaveon_catalog::product_commit::ProductCatalogCommit::new(
+        storage,
+        &config.product_transactions.prefix,
+        Arc::new(kaveon_catalog::product_metrics::TransactionMetrics::default()),
+    )
+    .map_err(anyhow::Error::msg)?;
+    Ok(Some(commit))
 }
 
 const BOOTSTRAP_ACTOR: &str = "engine-bootstrap";
@@ -680,7 +773,10 @@ fn parse_kv(line: &str) -> Option<(&str, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ServerConfig, load_server_config, open_catalog};
+    use super::{
+        ProductTransactionsConfig, ServerConfig, load_server_config, open_catalog,
+        product_catalog_commit, validate_product_transactions,
+    };
     use arrow::datatypes::{DataType, Field};
     use kaveon_core::{
         AccessPattern, CatalogAdapter, CatalogDefinition, CatalogId, CatalogLifecycle,
@@ -712,6 +808,41 @@ mod tests {
         );
         assert_eq!(config.catalog_admin_token.as_deref(), Some("test-token"));
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn product_transaction_configuration_is_coordinator_only_and_secret_free() {
+        let mut config = ServerConfig {
+            product_transactions: ProductTransactionsConfig {
+                enabled: true,
+                account: "kaveontest".into(),
+                container: "product".into(),
+                prefix: "kaveon/product-catalog".into(),
+            },
+            ..ServerConfig::default()
+        };
+        validate_product_transactions(&config).unwrap();
+        assert!(product_catalog_commit(&config).unwrap().is_some());
+        config.coordinator = false;
+        assert!(validate_product_transactions(&config).is_err());
+    }
+
+    #[test]
+    fn enabled_product_transactions_reject_missing_or_unsafe_storage_coordinates() {
+        let mut config = ServerConfig {
+            product_transactions: ProductTransactionsConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            ..ServerConfig::default()
+        };
+        assert!(validate_product_transactions(&config).is_err());
+        config.product_transactions.account = "Unsafe Account".into();
+        config.product_transactions.container = "product".into();
+        assert!(product_catalog_commit(&config).is_err());
+        config.product_transactions.account = "kaveontest".into();
+        config.product_transactions.prefix = "../escape".into();
+        assert!(product_catalog_commit(&config).is_err());
     }
 
     #[test]

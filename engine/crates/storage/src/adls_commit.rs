@@ -8,7 +8,10 @@
 use std::sync::Arc;
 
 use futures::StreamExt;
-use object_store::{Error as ObjectStoreError, ObjectStore, PutMode, UpdateVersion, path::Path};
+use object_store::{
+    Error as ObjectStoreError, ObjectStore, PutMode, UpdateVersion, azure::MicrosoftAzureBuilder,
+    path::Path,
+};
 
 use crate::object_reader::relative_path;
 
@@ -204,6 +207,58 @@ fn classify_error(error: ObjectStoreError) -> CommitError {
     CommitError { kind }
 }
 
+/// Builds an ADLS conditional store from AKS workload identity, falling back to
+/// Azure managed identity when no workload variables are present. This API does
+/// not read account keys, SAS tokens, bearer tokens, or client secrets.
+pub fn workload_identity_adls_commit(
+    account: &str,
+    container: &str,
+) -> Result<AdlsConditionalCommit, String> {
+    if account.trim() != account
+        || !(3..=24).contains(&account.len())
+        || !account
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+    {
+        return Err("ADLS account must contain only lowercase ASCII letters and digits".to_owned());
+    }
+    if container.trim() != container
+        || container.len() < 3
+        || container.len() > 63
+        || !container
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        || container.starts_with('-')
+        || container.ends_with('-')
+        || container.contains("--")
+    {
+        return Err("ADLS container must be a normalized Azure container name".to_owned());
+    }
+    let mut builder = MicrosoftAzureBuilder::new()
+        .with_account(account)
+        .with_container_name(container);
+    let workload = (
+        std::env::var("AZURE_CLIENT_ID").ok(),
+        std::env::var("AZURE_TENANT_ID").ok(),
+        std::env::var("AZURE_FEDERATED_TOKEN_FILE").ok(),
+    );
+    builder = match workload {
+        (Some(client), Some(tenant), Some(token_file)) => builder
+            .with_client_id(client)
+            .with_tenant_id(tenant)
+            .with_federated_token_file(token_file),
+        (None, None, None) => builder,
+        _ => return Err("Azure workload identity environment is incomplete".to_owned()),
+    };
+    if let Ok(authority) = std::env::var("AZURE_AUTHORITY_HOST") {
+        builder = builder.with_authority_host(authority);
+    }
+    let store = builder
+        .build()
+        .map_err(|error| format!("cannot configure ADLS object store: {error}"))?;
+    Ok(AdlsConditionalCommit::new(Arc::new(store)))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -349,5 +404,12 @@ mod tests {
             .kind,
             CommitErrorKind::Retryable
         );
+    }
+
+    #[test]
+    fn workload_identity_store_rejects_unsafe_coordinates() {
+        assert!(workload_identity_adls_commit("Unsafe Account", "product").is_err());
+        assert!(workload_identity_adls_commit("kaveon", "../product").is_err());
+        assert!(workload_identity_adls_commit("ka", "product").is_err());
     }
 }

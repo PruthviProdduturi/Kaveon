@@ -12,7 +12,7 @@ pub mod parquet_reader;
 
 pub use adls_commit::{
     AdlsConditionalCommit, CommitError, CommitErrorKind, CommitResult, ObjectVersion,
-    VersionedObject,
+    VersionedObject, workload_identity_adls_commit,
 };
 pub use adls_reader::{AdlsAuthMode, AdlsBatchSource, AdlsBatchStream, AdlsParquetReader};
 pub use delta_reader::{DeltaBatchIterator, DeltaTableReader};

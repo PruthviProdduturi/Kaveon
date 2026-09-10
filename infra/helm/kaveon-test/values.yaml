@@ -3,6 +3,11 @@ image:
   digest: ""
 workloadIdentity:
   clientId: ""
+productTransactions:
+  enabled: false
+  account: ""
+  container: ""
+  prefix: kaveon/product-catalog
 serviceAccountName: kaveon-engine
 credentialsSecret: kaveon-engine-auth
 tlsSecret: kaveon-engine-tls
