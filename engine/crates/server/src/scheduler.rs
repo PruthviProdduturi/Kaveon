@@ -333,6 +333,7 @@ mod tests {
             uptime_secs: 0,
             last_heartbeat: 0,
             memory_rss_bytes: 0,
+            catalog_snapshot_id: None,
         }
     }
 

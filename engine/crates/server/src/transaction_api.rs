@@ -15,10 +15,14 @@ use axum::{
 };
 use kaveon_catalog::{
     product_commit::{CommitOutcome, ProductCatalogCommit},
-    product_manifest::{CatalogChange, CatalogSnapshot},
+    product_manifest::{
+        CatalogChange, CatalogSnapshot, ImmutableFileRef, ProductRecordKind, ProductRecordRef,
+    },
     product_transaction::ProductTransaction,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -28,6 +32,8 @@ const MAX_SESSIONS: usize = 64;
 const MAX_SESSIONS_PER_PRINCIPAL: usize = 8;
 const MAX_SESSION_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
 const SESSION_TTL: Duration = Duration::from_secs(5 * 60);
+type StagedDocument = (String, Vec<u8>);
+type ProductStage = (CatalogChange, Option<StagedDocument>);
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -35,6 +41,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/v1/transaction/{transaction_id}/stage", post(stage))
         .route("/v1/transaction/{transaction_id}/commit", post(commit))
         .route("/v1/transaction/{transaction_id}/rollback", post(rollback))
+        .route("/v1/transaction/sql", post(execute_sql))
 }
 
 #[derive(Clone)]
@@ -70,8 +77,7 @@ impl TransactionRegistry {
         }
     }
 
-    #[cfg(test)]
-    fn enabled(catalog: ProductCatalogCommit) -> Self {
+    pub(crate) fn enabled(catalog: ProductCatalogCommit) -> Self {
         Self {
             catalog: Some(catalog),
             sessions: Arc::new(Mutex::new(HashMap::new())),
@@ -178,6 +184,155 @@ impl TransactionRegistry {
             .expect("session was checked")
             .transaction)
     }
+
+    async fn stage_product_command(
+        &self,
+        owner: &str,
+        id: &str,
+        command: kaveon_sql::parser::ProductDmlCommand,
+    ) -> Result<CatalogSnapshot, RegistryError> {
+        let mut sessions = self.sessions.lock().await;
+        expire(&mut sessions);
+        let session = owned_session(&mut sessions, owner, id)?;
+        let (change, document) = product_change(session.transaction.snapshot(), command)?;
+        let document_total =
+            document
+                .as_ref()
+                .map_or(Ok(session.document_bytes), |(_, bytes)| {
+                    session
+                        .document_bytes
+                        .checked_add(bytes.len())
+                        .ok_or(RegistryError::Capacity)
+                })?;
+        if document_total > MAX_SESSION_DOCUMENT_BYTES {
+            return Err(RegistryError::Capacity);
+        }
+        session
+            .transaction
+            .stage(change)
+            .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+        if let Some((path, bytes)) = document {
+            session.transaction.stage_document(path, bytes);
+            session.document_bytes = document_total;
+        }
+        session.expires_at = Instant::now() + self.ttl;
+        Ok(session.transaction.snapshot().clone())
+    }
+}
+
+fn product_change(
+    snapshot: &CatalogSnapshot,
+    command: kaveon_sql::parser::ProductDmlCommand,
+) -> Result<ProductStage, RegistryError> {
+    use kaveon_sql::parser::ProductDmlCommand;
+    match command {
+        ProductDmlCommand::Create {
+            kind,
+            id,
+            document_json,
+        } => {
+            let kind = record_kind(&kind)?;
+            let (document, bytes) = product_document(kind, &id, 1, &document_json)?;
+            Ok((
+                CatalogChange::CreateProduct {
+                    record: ProductRecordRef {
+                        kind,
+                        id,
+                        revision: 1,
+                        document,
+                        unique_values: BTreeMap::new(),
+                        references: BTreeSet::new(),
+                    },
+                },
+                Some(bytes),
+            ))
+        }
+        ProductDmlCommand::Update {
+            kind,
+            id,
+            expected_revision,
+            document_json,
+        } => {
+            let kind = record_kind(&kind)?;
+            let current = snapshot
+                .product_record(kind, &id)
+                .map_err(|error| RegistryError::Invalid(error.to_string()))?
+                .ok_or_else(|| RegistryError::Invalid("product record does not exist".into()))?;
+            let revision = expected_revision
+                .checked_add(1)
+                .ok_or_else(|| RegistryError::Invalid("product revision overflow".into()))?;
+            let (document, bytes) = product_document(kind, &id, revision, &document_json)?;
+            Ok((
+                CatalogChange::UpdateProduct {
+                    expected_revision,
+                    record: ProductRecordRef {
+                        document,
+                        revision,
+                        ..current.clone()
+                    },
+                },
+                Some(bytes),
+            ))
+        }
+        ProductDmlCommand::Delete {
+            kind,
+            id,
+            expected_revision,
+        } => Ok((
+            CatalogChange::DeleteProduct {
+                kind: record_kind(&kind)?,
+                id,
+                expected_revision,
+            },
+            None,
+        )),
+    }
+}
+
+fn record_kind(kind: &str) -> Result<ProductRecordKind, RegistryError> {
+    match kind {
+        "dataset" => Ok(ProductRecordKind::Dataset),
+        "chart" => Ok(ProductRecordKind::Chart),
+        "dashboard" => Ok(ProductRecordKind::Dashboard),
+        "saved_query" => Ok(ProductRecordKind::SavedQuery),
+        "user_theme" => Ok(ProductRecordKind::UserTheme),
+        _ => Err(RegistryError::Invalid(
+            "unsupported product record kind".into(),
+        )),
+    }
+}
+
+fn product_document(
+    kind: ProductRecordKind,
+    id: &str,
+    revision: u64,
+    document_json: &str,
+) -> Result<(ImmutableFileRef, (String, Vec<u8>)), RegistryError> {
+    let value: serde_json::Value = serde_json::from_str(document_json)
+        .map_err(|_| RegistryError::Invalid("document_json must be valid JSON".into()))?;
+    if !value.is_object() {
+        return Err(RegistryError::Invalid(
+            "document_json must be a JSON object".into(),
+        ));
+    }
+    let bytes = serde_json::to_vec(&value)
+        .map_err(|_| RegistryError::Invalid("document_json cannot be encoded".into()))?;
+    let sha256 = format!("{:x}", Sha256::digest(&bytes));
+    let kind_name = match kind {
+        ProductRecordKind::Dataset => "dataset",
+        ProductRecordKind::Chart => "chart",
+        ProductRecordKind::Dashboard => "dashboard",
+        ProductRecordKind::SavedQuery => "saved_query",
+        ProductRecordKind::UserTheme => "user_theme",
+    };
+    let path = format!("products/{kind_name}/{id}/{revision}-{sha256}.json");
+    Ok((
+        ImmutableFileRef {
+            path: path.clone(),
+            sha256,
+        },
+        (path, bytes),
+    ))
 }
 
 fn expire(sessions: &mut HashMap<String, Session>) {
@@ -214,6 +369,101 @@ struct StageRequest {
 struct DocumentInput {
     path: String,
     bytes: Vec<u8>,
+}
+
+#[derive(Deserialize)]
+struct SqlTransactionRequest {
+    sql: String,
+    #[serde(default)]
+    transaction_id: Option<String>,
+}
+
+async fn execute_sql(
+    State(state): State<Arc<AppState>>,
+    Extension(identity): Extension<Identity>,
+    Json(request): Json<SqlTransactionRequest>,
+) -> Response {
+    execute_sql_request(&state.product_transactions, &identity.principal, request).await
+}
+
+async fn execute_sql_request(
+    registry: &TransactionRegistry,
+    owner: &str,
+    request: SqlTransactionRequest,
+) -> Response {
+    use kaveon_sql::parser::{
+        NativeTransactionalStatement, adapt_product_dml, parse_native_transactional,
+    };
+    let parsed = match parse_native_transactional(&request.sql) {
+        Ok(parsed) => parsed,
+        Err(error) => return error_response(RegistryError::Invalid(error.to_string())),
+    };
+    match parsed {
+        NativeTransactionalStatement::Begin => {
+            if request.transaction_id.is_some() {
+                return error_response(RegistryError::Invalid(
+                    "BEGIN cannot include transaction_id".into(),
+                ));
+            }
+            match registry.begin(owner).await {
+                Ok(response) => (StatusCode::CREATED, Json(response)).into_response(),
+                Err(error) => error_response(error),
+            }
+        }
+        NativeTransactionalStatement::Commit | NativeTransactionalStatement::Rollback
+            if request.transaction_id.is_none() =>
+        {
+            error_response(RegistryError::Invalid("transaction_id is required".into()))
+        }
+        NativeTransactionalStatement::Commit => {
+            let id = request.transaction_id.expect("checked");
+            commit_transaction(registry, owner, &id).await
+        }
+        NativeTransactionalStatement::Rollback => {
+            let id = request.transaction_id.expect("checked");
+            rollback_transaction(registry, owner, &id).await
+        }
+        NativeTransactionalStatement::Dml(dml) => {
+            let Some(id) = request.transaction_id else {
+                return error_response(RegistryError::Invalid("transaction_id is required".into()));
+            };
+            let command = match adapt_product_dml(&dml) {
+                Ok(command) => command,
+                Err(error) => return error_response(RegistryError::Invalid(error.to_string())),
+            };
+            match registry.stage_product_command(owner, &id, command).await {
+                Ok(snapshot) => Json(snapshot).into_response(),
+                Err(error) => error_response(error),
+            }
+        }
+    }
+}
+
+async fn commit_transaction(registry: &TransactionRegistry, owner: &str, id: &str) -> Response {
+    let mut transaction = match registry.take(owner, id).await {
+        Ok(transaction) => transaction,
+        Err(error) => return error_response(error),
+    };
+    if let Err(error) = transaction.bind_request_digest(owner.as_bytes()) {
+        return error_response(RegistryError::Invalid(error.to_string()));
+    }
+    match transaction.commit().await {
+        Ok(CommitOutcome::Committed(snapshot) | CommitOutcome::Replayed(snapshot)) => Json(snapshot).into_response(),
+        Ok(CommitOutcome::Conflict) => error_response(RegistryError::Conflict),
+        Ok(CommitOutcome::Rejected) => error_response(RegistryError::Invalid("transaction rejected".into())),
+        Ok(CommitOutcome::Indeterminate) => (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error":"transaction outcome is indeterminate; resolve the operation before retrying"}))).into_response(),
+        Err(error) => error_response(RegistryError::Invalid(error.to_string())),
+    }
+}
+
+async fn rollback_transaction(registry: &TransactionRegistry, owner: &str, id: &str) -> Response {
+    match registry.take(owner, id).await {
+        Ok(transaction) => {
+            let _ = transaction.rollback();
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(error) => error_response(error),
+    }
 }
 
 async fn begin(
@@ -320,6 +570,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use kaveon_sql::parser::ProductDmlCommand;
     const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     async fn registry() -> (TransactionRegistry, ProductCatalogCommit) {
@@ -462,5 +713,170 @@ mod tests {
             Err(RegistryError::Missing)
         ));
         assert!(catalog.read_current().await.unwrap().tables.is_empty());
+    }
+
+    #[tokio::test]
+    async fn product_sql_commands_stage_revisioned_documents_and_delete() {
+        let (registry, catalog) = registry().await;
+        let begun = registry.begin("alice").await.unwrap();
+        let preview = registry
+            .stage_product_command(
+                "alice",
+                &begun.transaction_id,
+                ProductDmlCommand::Create {
+                    kind: "dataset".into(),
+                    id: "orders".into(),
+                    document_json: r#"{"name":"Orders"}"#.into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            preview
+                .product_record(ProductRecordKind::Dataset, "orders")
+                .unwrap()
+                .unwrap()
+                .revision,
+            1
+        );
+        let mut transaction = registry.take("alice", &begun.transaction_id).await.unwrap();
+        transaction.bind_request_digest(b"alice").unwrap();
+        assert!(matches!(
+            transaction.commit().await.unwrap(),
+            CommitOutcome::Committed(_)
+        ));
+
+        let begun = registry.begin("alice").await.unwrap();
+        let preview = registry
+            .stage_product_command(
+                "alice",
+                &begun.transaction_id,
+                ProductDmlCommand::Update {
+                    kind: "dataset".into(),
+                    id: "orders".into(),
+                    expected_revision: 1,
+                    document_json: r#"{"name":"Orders v2"}"#.into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            preview
+                .product_record(ProductRecordKind::Dataset, "orders")
+                .unwrap()
+                .unwrap()
+                .revision,
+            2
+        );
+        let mut transaction = registry.take("alice", &begun.transaction_id).await.unwrap();
+        transaction.bind_request_digest(b"alice").unwrap();
+        assert!(matches!(
+            transaction.commit().await.unwrap(),
+            CommitOutcome::Committed(_)
+        ));
+
+        let begun = registry.begin("alice").await.unwrap();
+        let preview = registry
+            .stage_product_command(
+                "alice",
+                &begun.transaction_id,
+                ProductDmlCommand::Delete {
+                    kind: "dataset".into(),
+                    id: "orders".into(),
+                    expected_revision: 2,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            preview
+                .product_record(ProductRecordKind::Dataset, "orders")
+                .unwrap()
+                .is_none()
+        );
+        let mut transaction = registry.take("alice", &begun.transaction_id).await.unwrap();
+        transaction.bind_request_digest(b"alice").unwrap();
+        assert!(matches!(
+            transaction.commit().await.unwrap(),
+            CommitOutcome::Committed(_)
+        ));
+        assert!(
+            catalog
+                .read_current()
+                .await
+                .unwrap()
+                .product_record(ProductRecordKind::Dataset, "orders")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_product_json_does_not_change_the_transaction_preview() {
+        let (registry, _) = registry().await;
+        let begun = registry.begin("alice").await.unwrap();
+        let error = registry
+            .stage_product_command(
+                "alice",
+                &begun.transaction_id,
+                ProductDmlCommand::Create {
+                    kind: "dataset".into(),
+                    id: "orders".into(),
+                    document_json: "[]".into(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, RegistryError::Invalid(_)));
+        let transaction = registry.take("alice", &begun.transaction_id).await.unwrap();
+        assert_eq!(transaction.staged_change_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn sql_endpoint_dispatches_product_dml_and_commit_to_owner_session() {
+        let (registry, catalog) = registry().await;
+        let begun = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(&registry, "alice", SqlTransactionRequest {
+            sql: r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('orders', '{"name":"Orders"}')"#.into(),
+            transaction_id: Some(begun.transaction_id.clone()),
+        }).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "COMMIT".into(),
+                transaction_id: Some(begun.transaction_id),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            catalog
+                .read_current()
+                .await
+                .unwrap()
+                .product_record(ProductRecordKind::Dataset, "orders")
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn sql_endpoint_rejects_generic_row_dml_without_staging() {
+        let (registry, _) = registry().await;
+        let begun = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "DELETE FROM app.users WHERE id = 'alice'".into(),
+                transaction_id: Some(begun.transaction_id.clone()),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let transaction = registry.take("alice", &begun.transaction_id).await.unwrap();
+        assert_eq!(transaction.staged_change_count(), 0);
     }
 }

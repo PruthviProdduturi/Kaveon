@@ -2,6 +2,11 @@
 {{- $digest := required "image.digest must be a sha256 digest" .Values.image.digest -}}
 {{- if not (regexMatch "^sha256:[a-f0-9]{64}$" $digest) }}{{ fail "image.digest must be sha256 plus 64 lowercase hex digits" }}{{ end -}}
 {{- $client := required "workloadIdentity.clientId is required" .Values.workloadIdentity.clientId -}}
+{{- if .Values.productTransactions.enabled -}}
+{{- required "productTransactions.account is required when enabled" .Values.productTransactions.account -}}
+{{- required "productTransactions.container is required when enabled" .Values.productTransactions.container -}}
+{{- required "productTransactions.prefix is required when enabled" .Values.productTransactions.prefix -}}
+{{- end -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -156,6 +161,18 @@ spec:
               value: /etc/kaveon/tls/ca.crt
             - name: KAVEON_CATALOG_DATABASE_PATH
               value: /state/catalog/kaveon-catalog.db
+            {{- if $isCoordinator }}
+            - name: KAVEON_PRODUCT_TRANSACTIONS_ENABLED
+              value: {{ $.Values.productTransactions.enabled | quote }}
+            {{- if $.Values.productTransactions.enabled }}
+            - name: KAVEON_PRODUCT_ADLS_ACCOUNT
+              value: {{ $.Values.productTransactions.account | quote }}
+            - name: KAVEON_PRODUCT_ADLS_CONTAINER
+              value: {{ $.Values.productTransactions.container | quote }}
+            - name: KAVEON_PRODUCT_ADLS_PREFIX
+              value: {{ $.Values.productTransactions.prefix | quote }}
+            {{- end }}
+            {{- end }}
             - name: KAVEON_COORDINATOR_EXCHANGE_SPOOL
               value: "true"
             - name: KAVEON_EXCHANGE_SPOOL_ROOT

@@ -102,6 +102,18 @@ This completes the single-process publication and transport cutover. It does
 not replicate catalog metadata or make a lagging worker materialize the required
 head; cluster rollout must distribute the same durable catalog database (or a
 future catalog-head service) before tasks can succeed after catalog changes.
+
+Worker heartbeats and `/ready` now advertise the worker's published durable
+catalog identity; the coordinator's cluster response exposes its required
+identity plus active and compatible worker counts. Distributed fragment,
+aggregate and TopN scheduling filters workers by the query's pinned identity.
+If active workers exist but none match, scheduling fails explicitly with
+`NO_COMPATIBLE_WORKER`; a partly upgraded pool that previously had distributed
+capacity fails with `INSUFFICIENT_COMPATIBLE_WORKERS` instead of silently using
+stale metadata or changing execution mode. Two focused scheduler tests cover
+legacy/mismatched exclusion, partial compatibility, and the fully incompatible
+case. This is safe readiness behavior, not synchronization: operators must still
+roll out identical catalog state, and automatic worker catch-up remains pending.
 The identity currently covers the complete catalog store, so an unrelated
 catalog mutation can conservatively reject a task until every worker catches up.
 
@@ -115,10 +127,10 @@ session, preventing accidental reuse. A rejected staged change leaves the prior
 transaction view unchanged; rollback performs no storage publication; and two
 sessions begun from the same head produce exactly one commit and one conflict.
 
-This is a typed repository transaction session, not a SQL transaction claim.
-There is no INSERT/UPDATE/DELETE parser or HTTP session binding, row storage,
+This is a typed repository transaction session. The constrained product SQL
+facade described below now binds to it, but there is no generic row storage,
 predicate locking, write-skew protection, crash-resumable client session, or
-automatic conflict retry. Five focused tests and strict catalog Clippy pass.
+automatic conflict retry. Five foundational tests and strict catalog Clippy pass.
 
 The Engine now exposes authenticated coordinator routes to begin, stage, commit,
 and roll back those typed sessions. Sessions are opaque UUIDs, isolated to the
@@ -131,9 +143,15 @@ The server generates snapshot/operation IDs and binds the final idempotency
 digest to the ordered write set plus authenticated principal; clients cannot
 supply those trust fields.
 Five focused server tests cover owner commit, cross-principal denial, rollback,
-capacity and expiration. Production startup deliberately returns 503 because no
-ADLS product-store configuration is wired yet; the API cannot silently fall back
-to memory or SQLite.
+capacity and expiration. Production coordinators can now enable the store with
+an ADLS account, container and normalized prefix. The object store accepts AKS
+workload identity or managed identity and does not read account keys, SAS tokens,
+bearer tokens or client secrets; Helm contains no storage secret. Startup reads
+or creates the durable head before listening and
+exits on invalid configuration, authentication, authorization, corrupt state or
+an indeterminate initialization. Workers receive no transaction configuration.
+Disabled coordinators keep returning 503 and cannot silently fall back to memory
+or SQLite.
 
 ## Current integration ledger — September 10, 2026
 
@@ -147,7 +165,7 @@ Historical detail belongs in the log or the linked engineering document.
 | Repository | `dev` at `796ed11` | Full Rust workspace tests, strict workspace Clippy and formatting, 77 API tests plus four subtests, semaphore tests, local TypeScript compilation, and docs validation pass | This evidence is not deployed AKS evidence and does not include external PostgreSQL/Trino measurements | Require CI/Engine/Containers, configure the ADLS transaction store, then run deployment qualification |
 | AKS runtime | API `dd48b8b7`, Studio `eaa3bbae`, Engine `c8b227a0`; 1 coordinator and 3 workers Ready | Read-only pod/deployment inventory on September 10 | Three Ready workers do not prove failure recovery, pressure behavior, or multi-coordinator consistency | Run bounded AKS correctness, fault, concurrency, and restart gates |
 | DLM showcase | Evidence commit `db54b33` | 9/9 artifacts ready; 716 answers; 45/45 conservative chart shapes served; 7/7 representative SQL comparisons exact; no orphan artifacts/answers | PostgreSQL statistics/value index are unavailable for the Engine catalog; 25 complex or shape-sensitive charts remain on SQL | Qualify freshness for immutable Engine snapshots and every remaining chart shape before removing the Studio Engine-source gate |
-| Transaction publication | Typed records, repository sessions, and authenticated API binding through `796ed11` | Atomic revisions, uniqueness, references, immutable documents, snapshot reads, owner-isolated typed API sessions, read-your-writes, rollback, bounds, expiry, and same-head CAS conflict pass locally | Production ADLS store configuration, native row-DML execution, API cutover, and multi-coordinator session service are not implemented | Configure the ADLS product store, then bind parsed DML to the transaction executor |
+| Transaction publication | Typed records, repository sessions, and authenticated API binding through `796ed11`; in-flight ADLS configuration | Atomic revisions, uniqueness, references, immutable documents, snapshot reads, owner-isolated typed API sessions, read-your-writes, rollback, bounds, expiry, same-head CAS conflict, and fail-closed workload-identity configuration pass locally | Live ADLS startup/commit, native row-DML execution, API cutover, and multi-coordinator session service are not qualified | Run live ADLS restart/commit evidence, then bind parsed DML to the transaction executor |
 | Distributed analytics | Engine digest `c8b227a0` | Existing three-worker AKS dashboard queries and the documented distributed operator suite pass | Current evidence does not establish transactional/analytical snapshot interaction, scheduler fault tolerance under the new changes, or Trino parity | Re-run distributed equivalence and fault gates against committed snapshots |
 | Product migration | PostgreSQL remains authoritative | Canonical dashboards and DLM metadata are healthy before cutover | Product system tables have not moved to ADLS and rollback/fencing are unproved | Inventory, reconcile, fence writes, cut over, restart, and demonstrate rollback |
 
@@ -184,8 +202,8 @@ matched resources, the complete declared operation corpus, a 1.9x Kaveon/Trino
 throughput result, and both PostgreSQL throughput and p95 wins. Missing inputs are
 `pending`; failed gates are `not_qualified`; neither state can publish a win.
 The evaluator is locally covered by three fail-closed tests. A Kaveon transaction
-runner remains blocked on the unimplemented transactional HTTP/SQL surface, so no
-PostgreSQL result or combined superiority claim exists yet.
+runner remains blocked on a generic transactional row workload, so no PostgreSQL
+result or combined superiority claim exists yet.
 
 The SQL crate now contains a syntax-only native transactional contract. It
 accepts one statement per request: explicit-column `INSERT ... VALUES`,
@@ -194,10 +212,29 @@ predicate-bounded single-base-table `UPDATE` and `DELETE`, or unmodified
 kind and one- to three-part target name for a later executor. Insert-select,
 unbounded mutations, target joins/aliases, conflict and returning clauses,
 savepoints, chained completion, transaction modes, DDL, queries, and batches fail
-with explicit SQL errors. Three focused SQL-crate tests cover the accepted and
-rejected surfaces. This is not execution: session state, parameters, type and
-constraint checks, isolation, durable commit, recovery, and API wiring remain
-unimplemented.
+with explicit SQL errors. Five focused SQL-crate tests cover parsing plus the
+product adapter. The general parser still does not provide row execution,
+parameters, arbitrary type/constraint checks, or isolation semantics.
+
+The authenticated `/v1/transaction/sql` facade now maps that syntax to the same
+owner-isolated session registry. `BEGIN` creates a session; subsequent DML,
+`COMMIT`, and `ROLLBACK` require its opaque transaction ID. Only
+`kaveon.product.datasets`, `charts`, `dashboards`, `saved_queries`, and
+`user_themes` are executable. Creates require `(id, document_json)` and one row;
+updates may replace `document_json` only; update/delete predicates must provide
+exact `id` and positive `revision`. The server validates an object-valued JSON
+document, canonicalizes its bytes, derives its SHA-256 and immutable revisioned
+path, then stages the typed create/update/delete. Updates preserve the current
+typed uniqueness and reference metadata. Generic application-table DML fails
+before the session changes. Five SQL adapter tests and nine transaction API tests
+cover accepted syntax, unsafe rejection, revisioned create/update/delete, invalid
+JSON atomicity, endpoint commit, and generic-DML rejection.
+
+This is product-record DML, not PostgreSQL-compatible mutable row storage. It has
+no arbitrary schemas/columns, predicates beyond an exact product key, parameter
+binding, result rows, or SQL client session affinity. Production remains disabled
+until an ADLS-backed product store is configured, and PostgreSQL remains metadata
+authority until migration, shadow-read, fencing, rollback, and restart gates pass.
 
 Dashboard chart hydration mounts tiles concurrently, but the shared Studio
 query semaphore was configured to one slot, making every SQL/DLM fallback
