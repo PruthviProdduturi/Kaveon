@@ -61,6 +61,19 @@ class LiveDashboardImportTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "exceeds compact projection"):
             module.validate_event_projection_contract(broken)
 
+    def test_dataset_semantics_cover_exact_chart_and_filter_contract(self):
+        event = module.dataset_semantics(self.contract, "144")
+        self.assertEqual(event["dimensions"], module.EVENT_DIMENSIONS)
+        self.assertIn("user_id", event["metric_columns"])
+        expressions = {metric["expression"] for metric in event["metrics"]}
+        self.assertIn("COUNT(DISTINCT user_id)", expressions)
+        self.assertIn("AVG(latency_p75_ms)", expressions)
+        self.assertEqual(len(expressions), len(event["metrics"]))
+
+        energy = module.dataset_semantics(self.contract, "132")
+        self.assertTrue({"country", "iso_code", "year"}.issubset(energy["dimensions"]))
+        self.assertIn("SUM(primary_energy_consumption)", {m["expression"] for m in energy["metrics"]})
+
     def test_cleanup_only_selects_stale_namespaced_marker(self):
         wanted = {"layout": [{module.MARKER: "vercel-dashboard:wanted"}]}
         stale = {"layout": [{module.MARKER: "vercel-dashboard:stale"}]}

@@ -13,6 +13,8 @@ class DatasetCreate(BaseModel):
     description: Optional[str] = Field(default=None, max_length=1000)
     dimensions: Optional[list[dict[str, Any]]] = None
     columns: Optional[list[dict[str, Any]]] = None
+    metrics: Optional[list[dict[str, Any]]] = None
+    date_column: Optional[str] = Field(default=None, max_length=128)
     visibility: Optional[Literal["private", "internal", "published"]] = None
 
 
@@ -25,4 +27,6 @@ class DatasetUpdate(BaseModel):
     description: Optional[str] = Field(default=None, max_length=1000)
     dimensions: Optional[list[dict[str, Any]]] = None
     columns: Optional[list[dict[str, Any]]] = None
+    metrics: Optional[list[dict[str, Any]]] = None
+    date_column: Optional[str] = Field(default=None, max_length=128)
     visibility: Optional[Literal["private", "internal", "published"]] = None

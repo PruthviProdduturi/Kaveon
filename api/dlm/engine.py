@@ -322,6 +322,12 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
     _ANSWER_CACHE.pop(str(dataset_id), None)  # invalidate in-memory caches after regen
     _SKETCH_CACHE.pop(str(dataset_id), None)
     _RANGE_CACHE.pop(str(dataset_id), None)
+    artifact_status = "ready" if stats_supported or answers > 0 else "unsupported"
+    if artifact_status == "ready" and not stats_supported:
+        meta.execute(
+            "UPDATE dlm_artifact SET status = 'ready' WHERE dataset_id = @param0",
+            [str(dataset_id)],
+        )
 
     # record generation timing (+ what drove it) into the stored stats rollup so
     # the dataset page can be transparent about how long it took and why.
@@ -353,7 +359,7 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
     if date_col and database and fact_tbl:
         try:
             tbl = f"{_qid(schema)}.{_qid(fact_tbl)}" if schema else _qid(fact_tbl)
-            dr = pool.execute_query(
+            dr = _execute_dataset_query(
                 f"SELECT MAX({_qid(date_col)}) AS mx FROM {tbl}", database)
             drow = (dr.get("rows") or dr.get("rows_objects") or [{}])[0]
             max_date = str(drow.get("mx") if isinstance(drow, dict) else drow[0])
@@ -375,7 +381,7 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
     return {
         "ok": True,
         "dataset_id": dataset_id,
-        "status": "ready" if stats_supported else "unsupported",
+        "status": artifact_status,
         "rebuilt": True,
         "stats_supported": stats_supported,
         "columns": len(columns),
@@ -415,7 +421,7 @@ def _precompute_answers(dataset_id: str, database: str, schema: str, fact: Optio
     # 1) grand totals — one scan computes all metrics at once
     sel = ", ".join(f"{expr} AS {alias}" for alias, _n, expr in mdefs)
     try:
-        res = pool.execute_query(f"SELECT {sel} FROM {tbl}", database)
+        res = _execute_dataset_query(f"SELECT {sel} FROM {tbl}", database)
         row = (res.get("rows") or res.get("rows_objects") or [None])[0]
         vals = list(row.values()) if isinstance(row, dict) else (list(row) if row else [])
         for j, (_a, name, _e) in enumerate(mdefs):
@@ -442,7 +448,7 @@ def _precompute_answers(dataset_id: str, database: str, schema: str, fact: Optio
         # order by the first metric desc so top-N questions can slice the head
         order = mdefs[0][0]
         try:
-            res = pool.execute_query(
+            res = _execute_dataset_query(
                 f"SELECT {_qid(dim)} AS grp, {gsel} FROM {tbl} "
                 f"WHERE {_qid(dim)} IS NOT NULL GROUP BY {_qid(dim)} "
                 f"ORDER BY {order} DESC LIMIT {int(depth)}", database)
@@ -477,7 +483,7 @@ def _precompute_answers(dataset_id: str, database: str, schema: str, fact: Optio
         gsel = ", ".join(f"{expr} AS {alias}" for alias, _n, expr in mdefs)
         order = mdefs[0][0]
         try:
-            res = pool.execute_query(
+            res = _execute_dataset_query(
                 f"SELECT {_qid(d1)} AS g1, {_qid(d2)} AS g2, {gsel} FROM {tbl} "
                 f"WHERE {_qid(d1)} IS NOT NULL AND {_qid(d2)} IS NOT NULL "
                 f"GROUP BY {_qid(d1)}, {_qid(d2)} ORDER BY {order} DESC LIMIT {int(CELL_CAP)}", database)
@@ -632,7 +638,7 @@ def _build_sketch_cuboids(dataset_id: str, database: str, schema: str, fact: Opt
     ndim = len(dims)
     for name, dcol in dmetrics:
         try:
-            res = pool.execute_query(_pg_register_sql(tbl, dims, dcol), database)
+            res = _execute_dataset_query(_pg_register_sql(tbl, dims, dcol), database)
         except Exception:
             continue
         rows = res.get("rows") or res.get("rows_objects") or []
@@ -940,7 +946,7 @@ def _scan_distinct(database: str, schema: str, table: str, column: str,
     sql = (f"SELECT {qcol} AS v, COUNT(*) AS c FROM {tbl} "
            f"WHERE {qcol} IS NOT NULL GROUP BY {qcol} ORDER BY c DESC LIMIT {int(cap) + 1}")
     try:
-        res = pool.execute_query(sql, database)
+        res = _execute_dataset_query(sql, database)
     except Exception:
         return None
     rows = res.get("rows_objects", res.get("rows", []))
@@ -966,7 +972,7 @@ def _scan_min_max(database: str, schema: str, table: str, column: str,
     if require_nonnull:
         where = " WHERE " + " AND ".join(f"{_qid(c)} IS NOT NULL" for c in require_nonnull)
     try:
-        res = pool.execute_query(f"SELECT MIN({qcol}) AS mn, MAX({qcol}) AS mx FROM {tbl}{where}", database)
+        res = _execute_dataset_query(f"SELECT MIN({qcol}) AS mn, MAX({qcol}) AS mx FROM {tbl}{where}", database)
     except Exception:
         return None
     rows = res.get("rows_objects", res.get("rows", []))
@@ -1987,6 +1993,10 @@ def serve_chart(dataset_id: str, metric_column: str, aggregation: str,
     if not ds:
         return {"served": False, "reason": "dataset_not_found"}
 
+    freshness_fallback = _stale_context_fallback(dataset_id)
+    if freshness_fallback is not None:
+        return freshness_fallback
+
     metrics = ds.get("metrics") or []
     filters = filters or []
 
@@ -2046,6 +2056,12 @@ def serve_chart(dataset_id: str, metric_column: str, aggregation: str,
 
     if served is None:
         return {"served": False}
+    if served.get("approx"):
+        # Dashboard chart results must preserve the exact SQL semantics.  The
+        # generalized proportional estimate assumes independent filters and the
+        # chart client does not present an approximation warning, so use the
+        # live-query fallback instead of silently rendering an estimate.
+        return {"served": False, "reason": "approximate_context"}
 
     # ── freshness score ───────────────────────────────────────────────────
     fresh = check_freshness(dataset_id)
@@ -2092,6 +2108,28 @@ def _resolve_metric(metric_column: str, aggregation: str,
     return (None, None)
 
 
+def _stale_context_fallback(dataset_id: str) -> Optional[Dict[str, Any]]:
+    """Decline a stale precomputed answer so the caller executes live SQL.
+
+    The rebuild runs in the background and is protected by the existing
+    in-flight/cooldown guard.  ``no_context`` is left to the normal lookup path,
+    which provides the more useful metric/dimension/no-answer reason.
+    """
+    freshness = check_freshness(dataset_id)
+    if freshness.get("recommendation") != "rebuild":
+        return None
+    triggered = _trigger_background_rebuild(dataset_id)
+    return {
+        "served": False,
+        "reason": "stale_context",
+        "freshness": {
+            "score": freshness.get("score", 0.0),
+            "recommendation": "rebuild",
+        },
+        "rebuild_triggered": triggered,
+    }
+
+
 def serve_chart_multi(dataset_id: str,
                       metric_specs: List[Dict[str, str]],
                       group_by: Optional[str] = None,
@@ -2109,6 +2147,10 @@ def serve_chart_multi(dataset_id: str,
     ds = datasets_svc.get_dataset_by_id(dataset_id)
     if not ds:
         return {"served": False, "reason": "dataset_not_found"}
+
+    freshness_fallback = _stale_context_fallback(dataset_id)
+    if freshness_fallback is not None:
+        return freshness_fallback
 
     ds_metrics = ds.get("metrics") or []
     filters = filters or []
@@ -2154,6 +2196,9 @@ def serve_chart_multi(dataset_id: str,
                                         clean_filters, dummy_routed)
         if served is None:
             return {"served": False, "reason": "no_precomputed_answer",
+                    "detail": mname}
+        if served.get("approx"):
+            return {"served": False, "reason": "approximate_context",
                     "detail": mname}
         per_metric.append((mname, served))
 
@@ -2250,7 +2295,7 @@ def _precompute_n_dim(dataset_id: str, database: str, schema: str, fact: str,
     tbl = f"{_qid(schema)}.{_qid(fact)}" if schema else _qid(fact)
     order = mdefs[0][0]
     try:
-        res = pool.execute_query(
+        res = _execute_dataset_query(
             f"SELECT {dim_sel}, {met_sel} FROM {tbl} "
             f"WHERE {where} GROUP BY {', '.join(_qid(d) for d in combo)} "
             f"ORDER BY {order} DESC LIMIT {CURATION_CELL_CAP}", database)
@@ -2464,7 +2509,7 @@ def incremental_refresh(dataset_id: str) -> Dict[str, Any]:
 
     tbl = f"{_qid(schema_name)}.{_qid(fact)}" if schema_name else _qid(fact)
     try:
-        cr = pool.execute_query(f"SELECT COUNT(*) AS cnt FROM {tbl}", database)
+        cr = _execute_dataset_query(f"SELECT COUNT(*) AS cnt FROM {tbl}", database)
         row = (cr.get("rows") or cr.get("rows_objects") or [{}])[0]
         cur_count = int(row.get("cnt") if isinstance(row, dict) else row[0])
     except Exception:
@@ -2490,7 +2535,7 @@ def incremental_refresh(dataset_id: str) -> Dict[str, Any]:
     max_date = None
     if date_col:
         try:
-            dr = pool.execute_query(
+            dr = _execute_dataset_query(
                 f"SELECT MAX({_qid(date_col)}) AS mx FROM {tbl}", database)
             drow = (dr.get("rows") or dr.get("rows_objects") or [{}])[0]
             max_date = str(drow.get("mx") if isinstance(drow, dict) else drow[0])
@@ -2543,7 +2588,7 @@ def _delta_merge(dataset_id: str, database: str, schema: str, fact: str,
             if agg != "additive":
                 continue
             try:
-                dr = pool.execute_query(
+                dr = _execute_dataset_query(
                     f"SELECT {expr} AS v FROM {tbl} WHERE {where_new}", database)
                 drow = (dr.get("rows") or dr.get("rows_objects") or [{}])[0]
                 delta = float(drow.get("v") if isinstance(drow, dict) else drow[0] or 0)
@@ -2561,7 +2606,7 @@ def _delta_merge(dataset_id: str, database: str, schema: str, fact: str,
 
         dim_sel = ", ".join(_qid(d) for d in dims)
         try:
-            dr = pool.execute_query(
+            dr = _execute_dataset_query(
                 f"SELECT {dim_sel}, {expr} AS v FROM {tbl} "
                 f"WHERE {where_new} AND {' AND '.join(_qid(d) + ' IS NOT NULL' for d in dims)} "
                 f"GROUP BY {dim_sel}", database)
@@ -2611,7 +2656,7 @@ def _metric_year_bounds(database: str, schema: str, table: str, date_column: Opt
     tbl = f"{_qid(schema)}.{_qid(table)}" if schema else _qid(table)
     dc = _qid(date_column)
     try:
-        res = pool.execute_query(
+        res = _execute_dataset_query(
             f"SELECT MIN({dc}) AS mn, MAX({dc}) AS mx FROM {tbl} WHERE {' AND '.join(conds)}", database)
     except Exception:
         return (None, None)
@@ -2957,6 +3002,39 @@ def _metadata_database() -> str:
         return os.environ.get("METADATA_DATABASE", "")
 
 
+def _execute_dataset_query(sql: str, database: str) -> Dict[str, Any]:
+    """Execute DLM build SQL through the dataset's registered query plane.
+
+    Native Kaveon catalogs are served by the Engine HTTP bridge and do not have
+    a database.pool connection string. External SQL sources continue through
+    the existing connection pool.
+    """
+    source = meta.query_one(
+        "SELECT engine_catalog FROM catalog_sources "
+        "WHERE engine_catalog = @param0 AND lifecycle = 'active' AND adapter_type = 'native'",
+        [database],
+    )
+    if not source:
+        return pool.execute_query(sql, database)
+
+    from services.engine_bridge import execute
+    result = execute(
+        sql, source["engine_catalog"], "dlm-curation@kaveon.internal", "Admin"
+    )
+    raw_columns = result.get("columns") or []
+    columns = [
+        column.get("name", "") if isinstance(column, dict) else str(column)
+        for column in raw_columns
+    ]
+    rows = result.get("data") or result.get("rows") or []
+    return {
+        "columns": columns,
+        "rows": rows,
+        "rows_objects": [dict(zip(columns, row)) for row in rows],
+        "row_count": len(rows),
+    }
+
+
 def _estimate_distinct(n_distinct: Any, row_count: Any) -> Optional[float]:
     """Convert a pg_stats n_distinct into an absolute distinct-count estimate.
     Postgres encodes it two ways: a positive value is the estimated count; a
@@ -2985,7 +3063,7 @@ def _analyze_tables(database: str, schema: str, tables: List[str]) -> None:
             continue
         sfx = f'"{schema}"."{t}"' if schema else f'"{t}"'
         try:
-            pool.execute_query(f"ANALYZE {sfx}", database)
+            _execute_dataset_query(f"ANALYZE {sfx}", database)
         except Exception:
             continue
 

@@ -118,6 +118,55 @@ def validate_contract(contract: dict[str, Any]) -> None:
     validate_event_projection_contract(contract)
 
 
+def dataset_semantics(contract: dict[str, Any], legacy_id: str) -> dict[str, Any]:
+    """Compile the exact dashboard contract into dataset dimensions and metrics.
+
+    DLM serving resolves the same aggregate/column pairs that charts execute, so
+    this semantic layer is derived from the contract instead of a second manual
+    definition that can drift from it.
+    """
+    dimension_names: set[str] = set()
+    metric_defs: dict[tuple[str, str], dict[str, Any]] = {}
+    used_names: set[str] = set()
+
+    for chart in contract.get("charts", []):
+        if str(chart.get("dataset_id")) != str(legacy_id):
+            continue
+        query = decoded(chart.get("query_config") or chart.get("config") or {}, "chart query")
+        dimension_names.update(str(value) for value in query.get("groupby") or [] if value)
+        for metric in query.get("metrics") or []:
+            aggregate = str(metric.get("aggregate") or "").upper()
+            column = str(metric.get("column") or "")
+            if not aggregate or not column:
+                continue
+            key = (aggregate, column)
+            if key in metric_defs:
+                continue
+            base_name = str(metric.get("label") or f"{aggregate} {column}").strip()
+            name = base_name
+            if name.casefold() in used_names:
+                name = f"{base_name} ({column} {aggregate.lower()})"
+            used_names.add(name.casefold())
+            expression = f"COUNT(DISTINCT {column})" if aggregate == "COUNT_DISTINCT" else f"{aggregate}({column})"
+            metric_defs[key] = {
+                "name": name,
+                "expression": expression,
+                "metric_type": "distinct_count" if aggregate == "COUNT_DISTINCT" else aggregate.lower(),
+            }
+
+    for dashboard in contract.get("dashboards", []):
+        for item in decoded(dashboard.get("filters"), f"filters for {dashboard.get('name')}"):
+            if str(item.get("datasetId")) == str(legacy_id) and item.get("column"):
+                dimension_names.add(str(item["column"]))
+
+    metric_columns = {column for _, column in metric_defs}
+    return {
+        "dimensions": dimension_names,
+        "metric_columns": metric_columns,
+        "metrics": list(metric_defs.values()),
+    }
+
+
 def chart_body(chart: dict[str, Any], dataset_ids: dict[str, int]) -> dict[str, Any]:
     legacy_id = str(chart["dataset_id"])
     query = decoded(chart.get("query_config") or chart.get("config") or {}, "chart query_config")
@@ -260,10 +309,20 @@ def import_contract(contract: dict[str, Any], api: Callable[..., Any], apply: bo
         columns = columns_response.get("schema", {}).get("columns", [])
         if not columns:
             raise RuntimeError(f"Engine returned no columns for {physical['schema_name']}.{physical['table_name']}")
+        semantics = dataset_semantics(contract, legacy_id)
+        physical_columns = {str(col["name"]) for col in columns}
+        required_columns = semantics["dimensions"] | semantics["metric_columns"]
+        missing_columns = sorted(required_columns - physical_columns)
+        if missing_columns:
+            raise RuntimeError(
+                f"Semantic columns missing from {physical['schema_name']}.{physical['table_name']}: {missing_columns}"
+            )
         body = {**target, "name": physical["name"], "description": "Managed exact Vercel dashboard source.", "columns": [
-            {"table_name": physical["table_name"], "column_name": col["name"], "data_type": col["dataType"]}
+            {"table_name": physical["table_name"], "column_name": col["name"], "data_type": col["dataType"],
+             "is_dimension": col["name"] in semantics["dimensions"],
+             "is_metric": col["name"] in semantics["metric_columns"]}
             for col in columns
-        ], "visibility": "published"}
+        ], "metrics": semantics["metrics"], "visibility": "published"}
         if matches:
             saved = api("PUT", f"datasets/{matches[0]['id']}", body) if apply else matches[0]
         elif apply:

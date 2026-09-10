@@ -1,6 +1,7 @@
 use std::{
+    collections::HashMap,
     pin::Pin,
-    sync::{Arc, mpsc},
+    sync::{Arc, Mutex, OnceLock, mpsc},
     time::Instant,
 };
 
@@ -10,6 +11,7 @@ use kaveon_core::{BatchSource, KaveonError, Result, StoragePredicate};
 use object_store::{ObjectStore, azure::MicrosoftAzureBuilder, path::Path};
 use parquet::arrow::{
     ParquetRecordBatchStreamBuilder, ProjectionMask,
+    arrow_reader::ArrowReaderMetadata,
     async_reader::{ParquetObjectReader, ParquetRecordBatchStream},
 };
 
@@ -21,6 +23,54 @@ use crate::{
 };
 
 const DEFAULT_BATCH_SIZE: usize = 8_192;
+const MAX_METADATA_CACHE_ENTRIES: usize = 256;
+
+#[derive(Clone)]
+struct CachedMetadata {
+    object_identity: String,
+    metadata: ArrowReaderMetadata,
+}
+
+static METADATA_CACHE: OnceLock<Mutex<HashMap<String, CachedMetadata>>> = OnceLock::new();
+
+fn object_identity(metadata: &object_store::ObjectMeta) -> String {
+    format!(
+        "{}:{}:{}:{}",
+        metadata.size,
+        metadata
+            .last_modified
+            .timestamp_nanos_opt()
+            .unwrap_or_default(),
+        metadata.e_tag.as_deref().unwrap_or_default(),
+        metadata.version.as_deref().unwrap_or_default()
+    )
+}
+
+fn cached_metadata(key: &str, identity: &str) -> Option<ArrowReaderMetadata> {
+    METADATA_CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .ok()?
+        .get(key)
+        .filter(|entry| entry.object_identity == identity)
+        .map(|entry| entry.metadata.clone())
+}
+
+fn cache_metadata(key: String, identity: String, metadata: ArrowReaderMetadata) {
+    let Ok(mut cache) = METADATA_CACHE.get_or_init(Default::default).lock() else {
+        return;
+    };
+    if cache.len() >= MAX_METADATA_CACHE_ENTRIES && !cache.contains_key(&key) {
+        cache.clear();
+    }
+    cache.insert(
+        key,
+        CachedMetadata {
+            object_identity: identity,
+            metadata,
+        },
+    );
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AdlsAuthMode {
@@ -195,11 +245,23 @@ impl AdlsParquetReader {
             Path::parse(&self.object_path).map_err(|error| storage_error(error.to_string()))?;
         let footer_started = Instant::now();
         let metadata = store.head(&path).await.map_err(object_store_error)?;
-        let object_reader = ParquetObjectReader::new(store, metadata);
-        let mut builder = ParquetRecordBatchStreamBuilder::new(object_reader)
-            .await
-            .map_err(parquet_error)?
-            .with_batch_size(self.batch_size);
+        let cache_key = format!("{}/{}/{}", self.account, self.container, self.object_path);
+        let identity = object_identity(&metadata);
+        let mut object_reader = ParquetObjectReader::new(store, metadata);
+        let mut builder = match cached_metadata(&cache_key, &identity) {
+            Some(metadata) => {
+                ParquetRecordBatchStreamBuilder::new_with_metadata(object_reader, metadata)
+            }
+            None => {
+                let metadata =
+                    ArrowReaderMetadata::load_async(&mut object_reader, Default::default())
+                        .await
+                        .map_err(parquet_error)?;
+                cache_metadata(cache_key, identity, metadata.clone());
+                ParquetRecordBatchStreamBuilder::new_with_metadata(object_reader, metadata)
+            }
+        }
+        .with_batch_size(self.batch_size);
         metrics.footer_time(footer_started.elapsed());
         metrics.file_opened();
 
