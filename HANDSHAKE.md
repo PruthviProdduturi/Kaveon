@@ -191,13 +191,31 @@ the AKS deployment guide includes the port-forward, token and report commands.
 
 Failed query `3d60efaa-f5f2-4ae8-ba4e-1ca5bb8b5579` was traced to DLM
 generation issuing PostgreSQL `ANALYZE ai_benchmarks.leaderboard` before its
-profiler detected that `ai_benchmarks` is an Engine-native catalog. DLM table
-analysis now first requires `profiler.supports_database(database)`, which is
-true only for a supported PostgreSQL connection. Native catalogs skip ANALYZE
-entirely and use the exact Engine aggregate statistics path, including the new
-row-count population. The Engine SQL normalizer no longer treats ANALYZE as a
-valid schema-discovery statement. Focused tests prove native catalogs issue no
-maintenance query while PostgreSQL retains best-effort ANALYZE behavior.
+profiler detected that `ai_benchmarks` is an Engine-native catalog. The API now
+routes analysis according to the registered source: active native catalogs send
+`ANALYZE schema.table` to Kaveon Engine, PostgreSQL connections retain their
+own best-effort ANALYZE, and other external engines receive neither. Native DLM
+row counts remain exact Engine aggregates. Focused API tests prove native and
+PostgreSQL routing stay isolated. The matching Engine slice is implemented
+locally: authenticated admins can submit bounded one-, two-, or three-part
+`ANALYZE` names through `/v1/statement`. Storage derives exact metadata row
+counts and identities from Delta version/active files, Iceberg metadata
+pointer/snapshot/files, or Parquet ETag/version. The Engine resolves identity
+twice, then atomically publishes the runtime source binding, immutable
+statistics document, and statistics reference through the conditional ADLS
+product-catalog head. Statistics without a registered exact source binding are
+rejected. Concurrent head changes conflict and interrupted publication leaves
+only non-authoritative orphan objects. The planner re-resolves both the catalog
+definition snapshot and live source identity and ignores stale statistics.
+Local files use size and high-resolution modification time for development;
+AKS uses object versions. Live ADLS execution and measured optimizer benefit
+remain deployment qualification steps.
+Mixed-version rollout is fail-closed: before submitting native ANALYZE, the API
+queries the authenticated Engine `/v1/capabilities` endpoint and requires the
+literal capability `native_analyze: true`. A missing endpoint, failed request,
+or false/malformed value suppresses the maintenance statement while exact
+Engine row-count generation continues. This prevents old Engine pods from
+accumulating known-failed ANALYZE query-history records during rollout.
 The identity currently covers the complete catalog store, so an unrelated
 catalog mutation can conservatively reject a task until every worker catches up.
 
@@ -300,6 +318,26 @@ AKS separately. Never promote a local result to a deployed claim.
 | Cancellation/restart | Cancel during scan/exchange/final stage; restart coordinator and one worker | Terminal state is stable, exchanges/tasks clean up, committed catalog reopens, and unknown writes stay indeterminate | Pending combined runtime test |
 | Product cutover | Migrate datasets, charts, dashboards, filters, favorites, roles, ownership, history and DLM metadata | Reconciled counts/hashes; create-save-reopen works; restart preserves edits; write fence prevents PostgreSQL drift; rollback is demonstrated | Not started; PostgreSQL remains authoritative |
 | Comparative performance | Repeat equivalent analytics against Trino and transactions against PostgreSQL with matched resources/cache state | Result hashes plus throughput, p50/p95/p99, conflicts/errors, scan/memory/network/storage and cost | Pending; no 90% superiority claim is supported |
+
+The proposed primary Trino metric is successful exact-result queries per second
+on the equal-weight extended twelve-query corpus at concurrency four. This is a
+proposal pending explicit user acceptance; it is not a claim that throughput is
+the user's chosen meaning of “90% better.” `same_files.py` now records the exact
+corpus hash and a warm-cache primary policy with cold-cache runs explicitly
+separate. `trino_claim_gate.py` requires identical file hashes, DuckDB-checked
+results, the exact SQL corpus, equal Docker CPU/memory/swap/affinity/quota,
+single-node topology, five warmups, thirty latency samples per query, p50/p95
+diagnostics, six alternating throughput rounds at concurrency four, provenance,
+zero workload errors, and a ratio of at least 1.90. It fails closed on every
+missing field and never emits a broad superiority claim. Three evaluator tests
+pass locally.
+
+The checked-in AKS shape is one 2 CPU/4 GiB coordinator plus three 3 CPU/6 GiB
+workers (limits; requests are lower). No resource-matched Trino cluster exists
+there, so current AKS evidence cannot support a comparative performance result.
+The full proposal and executable commands are in
+`docs/engineering/trino-90-percent-benchmark.md`. No cloud resources or
+subscription policies were changed for this work.
 
 The combined comparison evaluator at
 `engine/qualification/comparison_gate.py` now makes that last row executable and
@@ -605,6 +643,7 @@ Vercel URL/runtime access is still needed to verify the user's reported page.
 | `python` — PyO3 bindings | **Claude** | Scaffold |
 | `cli` — `kaveon` interactive SQL shell | **Codex** | Remote-first client done; embedded mode requires `--local` |
 | `benches` — Criterion benchmarks | **Codex** | Reproducible storage and execution Criterion suites done; external PostgreSQL/Trino harness pending |
+| `server/src/ui.html` + `ui.rs` — Engine operations console (HTML/CSS/JS only) | **Claude** | Claimed 2026-09-10 with architect approval for a redesign: single grid, KPI-with-trend tiles, actionable failure filtering, per-query telemetry from existing `engine_details`, Inter for prose. Reads existing `/v1` endpoints only; no new Engine telemetry or API contract. Rust handlers, `/v1` API and all other `server` code remain **Codex** |
 
 ### API (`api/`)
 
@@ -1245,3 +1284,5 @@ let source = DeltaTableReader::new(table_directory)
 | 2026-09-10 | Claude | Grounded the ADLS head-recovery rationale in first-party Microsoft documentation: blob versioning is unsupported on hierarchical-namespace accounts and the HNS blob-snapshots preview is closed to new customers, so the immutable `head-history` / `head-backups` records are the only available recovery evidence rather than a chosen one. `docs/engineering/adls-transaction-protocol.md` now cites both Learn pages. No protocol behavior, contract, or Engine code changed. |
 | 2026-09-10 | Claude | Added `docs/research/kaveon-vs-htap-platforms.md` and its Studio route after verifying competitor claims against vendor primary sources. Snowflake Unistore Hybrid Tables reached GA in November 2024, TiDB X moved persistence to object storage in October 2025 under Apache 2.0, and Databricks announced LTAP in June 2026 as two engines with availability still "coming soon". The doc retires two unsupportable positioning claims, records that Fabric mirrors SQL data to a read-only Delta copy rather than sharing one writable representation, and states Kaveon transactional maturity honestly against each. Docs validation passes at 80 Markdown files, 31 routes, 8 SVGs; Studio TypeScript compiles. No runtime contract or Engine code changed. |
 | 2026-09-10 | Claude | REQUEST @Codex: opened an information-sync section near the top of this file. Nine items covering the missing 2026-09-10 Log rows, current AKS digests, whether the ADLS product transaction store is enabled anywhere, ownership and scope of the degraded public Vercel demo (seven of nine tables return HTTP 500), orphaned dataset 134, the next three gates, whether the 1.9x and November 26 targets survive the transactional pivot, whether the 2026-09-04 catalog_sources bridge request is still wanted, and a proposed rule that neither agent commits the other unstaged files. |
+| 2026-09-10 | Claude | CLAIMED with architect approval: `engine/crates/server/src/ui.html` (and the static `ui.rs` embed) for a console redesign. Scope is presentation only against existing `/v1` endpoints. Findings driving it: `Failed` KPI has no path to action; queries and memory are rendered twice; two content widths on one page; auth state stated four times; per-query cards omit stages/scans/timings that `engine_details` already carries; `--sans` stack puts Segoe UI ahead of Inter. Rust handlers and the API contract stay with Codex. REQUEST @Codex: confirm whether failed query records carry an error category today, or name the field to add. |
+| 2026-09-10 | Claude | REQUEST @Codex: add an optional `studio_url` string to the `/v1/auth/config` response (`entra::public_config`), sourced from security config or `KAVEON_STUDIO_URL`, validated as an absolute `https://` origin with no path, query, or credentials, omitted when unset. The console at `/ui` already reads it: when present and the visit is unauthenticated, it redirects to `{studio_url}/engine` (bypass with `?direct=1`). No other contract changes. Also still open: an error category on failed `QueryRecord`s so the console can classify failures rather than only excerpt the string. |
