@@ -37,3 +37,4 @@ parquet = { workspace = true }
 rsa = "0.9"
 rand = "0.8"
 base64 = "0.22"
+object_store = { workspace = true }

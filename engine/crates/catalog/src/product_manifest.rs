@@ -61,7 +61,8 @@ pub struct CatalogSnapshot {
     pub product_records: BTreeMap<String, ProductRecordRef>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum CatalogChange {
     Put {
         table: String,

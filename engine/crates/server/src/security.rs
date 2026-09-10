@@ -237,7 +237,9 @@ pub async fn authorize(
             }
         }
     };
-    if path == "/v1/statement" && identity.role == Role::Reader {
+    if (path == "/v1/statement" || path.starts_with("/v1/transaction"))
+        && identity.role == Role::Reader
+    {
         return StatusCode::FORBIDDEN.into_response();
     }
     request.extensions_mut().insert(identity);
@@ -364,30 +366,41 @@ mod tests {
                     }))
                     .unwrap(),
                 ),
-                principals: vec![PrincipalCredential {
-                    token: "a".repeat(32),
-                    principal: "alice".into(),
-                    role: Role::Analyst,
-                }],
+                principals: vec![
+                    PrincipalCredential {
+                        token: "a".repeat(32),
+                        principal: "alice".into(),
+                        role: Role::Analyst,
+                    },
+                    PrincipalCredential {
+                        token: "r".repeat(32),
+                        principal: "reader".into(),
+                        role: Role::Reader,
+                    },
+                ],
                 ..Default::default()
             },
             ..Default::default()
         };
+        let catalog_store = kaveon_catalog::CatalogStore::open_in_memory().unwrap();
+        let snapshot_id = catalog_store.snapshot_identity().unwrap();
         let state = Arc::new(crate::AppState {
             disk_exchange_store: None,
             results: crate::results::ResultStore::default(),
             principal_admission: PrincipalAdmission::default(),
             cluster: tokio::sync::RwLock::new(crate::cluster::ClusterState::new(&config)),
-            catalog: tokio::sync::RwLock::new(Arc::new(kaveon_core::CatalogManager::new(
-                "kaveon", "default",
-            ))),
-            catalog_store: kaveon_catalog::CatalogStore::open_in_memory().unwrap(),
+            catalog: tokio::sync::RwLock::new(Arc::new(crate::PublishedCatalog {
+                manager: kaveon_core::CatalogManager::new("kaveon", "default"),
+                snapshot_id,
+            })),
+            catalog_store,
             exchange_store: crate::exchange::ExchangeStore::default(),
             lifecycle: crate::lifecycle::WorkerLifecycle::default(),
             memory_admission: kaveon_core::MemoryAdmissionController::new(
                 config.memory_admission_limit_bytes,
             )
             .unwrap(),
+            product_transactions: crate::transaction_api::TransactionRegistry::disabled(),
             config,
         });
         let app = axum::Router::new()
@@ -402,6 +415,7 @@ mod tests {
             )
             .route("/v1/cluster", axum::routing::get(|| async { "protected" }))
             .route("/v1/query", axum::routing::get(|| async { "protected" }))
+            .route("/v1/transaction", axum::routing::post(|| async { "write" }))
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 authorize,
@@ -474,6 +488,16 @@ mod tests {
                 .unwrap()
                 .status(),
             StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            client
+                .post(format!("http://{address}/v1/transaction"))
+                .bearer_auth("r".repeat(32))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
         );
         server.abort();
     }

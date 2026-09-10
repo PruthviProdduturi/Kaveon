@@ -120,9 +120,10 @@ def execute(sql, catalog, actor, role, schema=None):
     result = _request("POST", "/v1/statement", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
                       payload={"query": sql, "catalog": catalog, "schema": schema,
                                "source": "studio", "client": "kaveon-api"}, role=roles[role])
-    if result is None or result.get("error"):
+    if result is None:
         raise HTTPException(422, "Engine query failed")
     query_id = result.get("id")
+    details = None
     if query_id:
         try:
             details = _request(
@@ -135,6 +136,15 @@ def execute(sql, catalog, actor, role, schema=None):
             details = None
         if isinstance(details, dict):
             result["query_details"] = details
+    if result.get("error"):
+        # Preserve the opaque Engine UUID and bounded query details for the
+        # server-side history record. Never return statement diagnostics or
+        # credentials directly to the browser.
+        raise HTTPException(422, {
+            "message": "Engine query failed",
+            "query_id": query_id,
+            **({"engine_details": details} if isinstance(details, dict) else {}),
+        })
     return result
 
 

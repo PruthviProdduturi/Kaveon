@@ -573,6 +573,7 @@ def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContex
     try:
         result = _execute_engine_read_only(data.sql_text, source["engine_catalog"], ctx, schema)
     except HTTPException as error:
+        failure = error.detail if isinstance(error.detail, dict) else {}
         try:
             history_svc.create_history({
                 "sql_text": data.sql_text,
@@ -584,9 +585,18 @@ def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContex
                 "trigger_source": canonical_source(data.source or "studio"),
                 "dataset_id": str(data.dataset_id),
                 "tables_used": data.tables_used or json.dumps(extract_tables_from_sql(data.sql_text)),
+                "engine_query_id": failure.get("query_id"),
+                **({"engine_details": failure["engine_details"]}
+                   if isinstance(failure.get("engine_details"), dict) else {}),
             }, ctx.email)
         except Exception:
             pass
+        if failure:
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=failure.get("message", "Engine query failed"),
+                headers=error.headers,
+            ) from None
         raise
     columns, rows = _engine_result_rows(result)
     if data.row_limit:

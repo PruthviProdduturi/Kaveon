@@ -118,6 +118,17 @@ class EngineBridgeTests(unittest.TestCase):
         self.assertEqual(error.exception.status_code, 429)
         self.assertEqual(error.exception.headers, {"Retry-After": "1"})
 
+    def test_failed_statement_retains_engine_identity_for_server_history(self):
+        failed = {"id": "query-failed-1", "error": {"code": "BAD_QUERY"}}
+        details = {"id": "query-failed-1", "state": "FAILED",
+                   "context": {"principal": "user@example.com"}}
+        with patch.object(bridge, "_request", side_effect=[failed, details]):
+            with self.assertRaises(HTTPException) as raised:
+                bridge.execute("SELECT broken", "OpenSource", "user@example.com", "Analyst", "app")
+        self.assertEqual(raised.exception.status_code, 422)
+        self.assertEqual(raised.exception.detail["query_id"], "query-failed-1")
+        self.assertEqual(raised.exception.detail["engine_details"]["state"], "FAILED")
+
 
 if __name__ == "__main__":
     unittest.main()

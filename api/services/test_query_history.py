@@ -18,6 +18,8 @@ class QueryHistoryTests(unittest.TestCase):
         columns = [{"column_name": name} for name in ("engine_query_id", "engine_details")]
         details = {
             "id": "engine-1",
+            "state": "FAILED",
+            "error": "bounded failure",
             "timings": {"planning_us": 120},
             "stages": [{"stage_id": 1, "task_count": 2}],
             "context": {"source": "studio"},
@@ -33,6 +35,8 @@ class QueryHistoryTests(unittest.TestCase):
         self.assertIn("engine_query_id, engine_details", insert_sql)
         stored = json.loads(params[-1])
         self.assertEqual(stored["timings"], details["timings"])
+        self.assertEqual(stored["state"], "FAILED")
+        self.assertEqual(stored["error"], "bounded failure")
         self.assertNotIn("rows", stored)
         self.assertNotIn("plan", stored)
         self.assertEqual(created["engine_query_id"], "engine-1")

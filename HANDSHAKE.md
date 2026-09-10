@@ -65,14 +65,10 @@ fields, sorted schema/table names and recursively key-sorted schema JSON; it
 does not depend on Rust `Debug` output. Registration-order determinism, wire
 compatibility, matching identity and fail-closed mismatch tests pass.
 
-The optional field is a rolling-upgrade bridge only: a missing identity is
-accepted for an older sender and therefore provides no pinning guarantee. The
-identity is a deterministic in-memory definition digest, not yet the
-durable ADLS catalog-head generation. It prevents silent mixed catalog reads but
-cannot make an older worker materialize a missing head. Durable head propagation
-and worker catch-up/retry remain the deployment-level prerequisite. Computing
-the bridge digest still walks the selected catalog once at coordinator admission
-and once at worker validation; a durable O(1) head ID should replace it.
+That v2 digest was the rolling-upgrade bridge. The durable publication slice
+below replaces it on production raw-SQL task paths and rejects missing
+identities. It still cannot make a lagging worker materialize a missing head;
+worker catalog distribution and catch-up remain deployment prerequisites.
 
 Round 4 puts the coordinator's legacy distributed grouped-aggregate merge under
 the admitted query memory pool. Each newly retained group reserves its encoded
@@ -92,11 +88,22 @@ indexed singleton read instead of walking every selected table. Focused tests
 cover restart durability, equal identity for equivalent stores, identity change
 after a committed mutation, and no advancement after a failed mutation.
 
-This is the storage foundation for O(1) propagation, not the completed wire
-cutover: `AppState` and raw-SQL task construction still use the in-memory v2
-definition digest. A follow-up must publish the durable identity alongside the
-immutable manager snapshot and require it on all upgraded worker requests;
-rolling compatibility still allows an absent identity.
+The durable identity and immutable `CatalogManager` are now published together
+in one `Arc<PublishedCatalog>`, so an admitted query cannot combine definitions
+from one generation with the identity of another. Query context and raw-SQL
+task dispatch use the pinned durable identity, and workers compare it with their
+published durable identity in constant time. Raw-SQL tasks without an identity
+now fail closed; executable fragments remain exempt because they carry resolved
+sources and data snapshot IDs rather than resolving worker catalog metadata.
+Focused integration tests cover atomic manager/identity pinning, matching and
+mismatched worker identities, and rejection of an unversioned raw-SQL task.
+
+This completes the single-process publication and transport cutover. It does
+not replicate catalog metadata or make a lagging worker materialize the required
+head; cluster rollout must distribute the same durable catalog database (or a
+future catalog-head service) before tasks can succeed after catalog changes.
+The identity currently covers the complete catalog store, so an unrelated
+catalog mutation can conservatively reject a task until every worker catches up.
 
 ### Native transaction session workstream — September 10, 2026
 
@@ -113,6 +120,21 @@ There is no INSERT/UPDATE/DELETE parser or HTTP session binding, row storage,
 predicate locking, write-skew protection, crash-resumable client session, or
 automatic conflict retry. Five focused tests and strict catalog Clippy pass.
 
+The Engine now exposes authenticated coordinator routes to begin, stage, commit,
+and roll back those typed sessions. Sessions are opaque UUIDs, isolated to the
+authenticated principal, capped at 64 per coordinator and eight per principal,
+expire after five idle minutes, and retain at most 16 MiB of document payload.
+Readers are forbidden by the authentication middleware. Commit removes the
+session before storage I/O so it cannot be submitted twice; CAS conflicts return
+409 and indeterminate outcomes return 503 with an operation-resolution warning.
+The server generates snapshot/operation IDs and binds the final idempotency
+digest to the ordered write set plus authenticated principal; clients cannot
+supply those trust fields.
+Five focused server tests cover owner commit, cross-principal denial, rollback,
+capacity and expiration. Production startup deliberately returns 503 because no
+ADLS product-store configuration is wired yet; the API cannot silently fall back
+to memory or SQLite.
+
 ## Current integration ledger — September 10, 2026
 
 Use one row per independently reviewable workstream. Keep entries short and use
@@ -125,7 +147,7 @@ Historical detail belongs in the log or the linked engineering document.
 | Repository | `dev` at `65af483` | Full Rust workspace tests, strict workspace Clippy, formatting, three comparison-gate tests, Python compilation, and docs validation pass locally | This evidence is not deployed AKS evidence and does not include external PostgreSQL/Trino measurements | Require CI/Engine/Containers, then expose and qualify the transaction API |
 | AKS runtime | API `dd48b8b7`, Studio `eaa3bbae`, Engine `c8b227a0`; 1 coordinator and 3 workers Ready | Read-only pod/deployment inventory on September 10 | Three Ready workers do not prove failure recovery, pressure behavior, or multi-coordinator consistency | Run bounded AKS correctness, fault, concurrency, and restart gates |
 | DLM showcase | Evidence commit `db54b33` | 9/9 artifacts ready; 716 answers; 45/45 conservative chart shapes served; 7/7 representative SQL comparisons exact; no orphan artifacts/answers | PostgreSQL statistics/value index are unavailable for the Engine catalog; 25 complex or shape-sensitive charts remain on SQL | Qualify freshness for immutable Engine snapshots and every remaining chart shape before removing the Studio Engine-source gate |
-| Transaction publication | Typed records, immutable reads, and transaction sessions through `65af483` | Atomic revisions, uniqueness, references, immutable documents, snapshot reads, typed read-your-writes, rollback, and same-head CAS conflict pass locally | No native row DML, SQL/HTTP session binding, API cutover, or multi-coordinator service is implemented | Bind typed sessions to an authenticated API, then add constrained native DML |
+| Transaction publication | Typed records and repository sessions through `65af483`; in-flight authenticated API binding | Atomic revisions, uniqueness, references, immutable documents, snapshot reads, owner-isolated typed API sessions, read-your-writes, rollback, bounds, expiry, and same-head CAS conflict pass locally | Production ADLS store configuration, native row DML, API cutover, and multi-coordinator session service are not implemented | Configure the ADLS product store, then add constrained native DML |
 | Distributed analytics | Engine digest `c8b227a0` | Existing three-worker AKS dashboard queries and the documented distributed operator suite pass | Current evidence does not establish transactional/analytical snapshot interaction, scheduler fault tolerance under the new changes, or Trino parity | Re-run distributed equivalence and fault gates against committed snapshots |
 | Product migration | PostgreSQL remains authoritative | Canonical dashboards and DLM metadata are healthy before cutover | Product system tables have not moved to ADLS and rollback/fencing are unproved | Inventory, reconcile, fence writes, cut over, restart, and demonstrate rollback |
 
@@ -164,6 +186,41 @@ throughput result, and both PostgreSQL throughput and p95 wins. Missing inputs a
 The evaluator is locally covered by three fail-closed tests. A Kaveon transaction
 runner remains blocked on the unimplemented transactional HTTP/SQL surface, so no
 PostgreSQL result or combined superiority claim exists yet.
+
+The SQL crate now contains a syntax-only native transactional contract. It
+accepts one statement per request: explicit-column `INSERT ... VALUES`,
+predicate-bounded single-base-table `UPDATE` and `DELETE`, or unmodified
+`BEGIN`/`COMMIT`/`ROLLBACK`. It returns the validated sqlparser AST plus mutation
+kind and one- to three-part target name for a later executor. Insert-select,
+unbounded mutations, target joins/aliases, conflict and returning clauses,
+savepoints, chained completion, transaction modes, DDL, queries, and batches fail
+with explicit SQL errors. Three focused SQL-crate tests cover the accepted and
+rejected surfaces. This is not execution: session state, parameters, type and
+constraint checks, isolation, durable commit, recovery, and API wiring remain
+unimplemented.
+
+Dashboard chart hydration mounts tiles concurrently, but the shared Studio
+query semaphore was configured to one slot, making every SQL/DLM fallback
+request sequential and preventing the existing three-slot Engine limiter from
+ever admitting parallel work. The general dashboard bound is now four, leaving
+one connection free in the five-connection data-warehouse pool; Engine requests
+additionally retain the three-slot cap so one slot remains available from the
+four-query test admission budget.
+Semaphore reset now replaces a generation: releases from an abandoned page
+cannot decrement or over-admit the next page. Focused tests prove a four-query
+peak, three-query Engine peak, failure release, idempotent release, and reset
+isolation. The API remains synchronous per request, while FastAPI may serve the
+bounded independent requests concurrently.
+
+Failed Engine statement responses previously lost their Engine query UUID when
+the bridge raised an HTTP error. The bridge now enriches that failure with the
+opaque UUID and best-effort query details, and `/sql/engine` writes them with the
+error history row. `query_history.engine_query_id`, `engine_details`, `status`,
+`error_message`, dashboard/chart source context, dataset, SQL, and duration are
+the persistence path. Browser responses still receive the generic Engine failure
+message rather than internal diagnostics. Successes already used the same UUID
+and details columns. Focused bridge, router, and history tests cover this path;
+metadata persistence remains on PostgreSQL until product cutover.
 
 ### Latest baseline executions
 

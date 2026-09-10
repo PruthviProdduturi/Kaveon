@@ -19,6 +19,7 @@ use kaveon_exec::topn::merge_top_n;
 use kaveon_sql::logical_plan::sql_to_logical_plan;
 use kaveon_sql::logical_plan::{AggregateExpr, LogicalPlan};
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap};
@@ -175,6 +176,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .merge(crate::exchange::routes())
         .route("/v1/statement", post(submit_statement))
+        .merge(crate::transaction_api::routes())
         .route("/v1/task", post(execute_task))
         .route(
             "/v1/internal/query/{query_id}/finish",
@@ -553,15 +555,16 @@ async fn validate_task_catalog_snapshot(
     request: &TaskRequest,
 ) -> Result<(), Box<Response>> {
     let Some(expected) = request.catalog_snapshot_id.as_deref() else {
-        return Ok(());
+        if request.fragment.is_some() {
+            return Ok(());
+        }
+        return Err(Box::new(task_failure_response(
+            StatusCode::BAD_REQUEST,
+            "raw SQL task requires catalog_snapshot_id",
+        )));
     };
     let catalog = state.catalog.read().await;
-    let actual = catalog_snapshot_identity(&catalog, &request.catalog).map_err(|error| {
-        Box::new(task_failure_response(
-            StatusCode::BAD_REQUEST,
-            &error.to_string(),
-        ))
-    })?;
+    let actual = &catalog.snapshot_id;
     if actual != expected {
         return Err(Box::new(
             (
@@ -577,6 +580,7 @@ async fn validate_task_catalog_snapshot(
     Ok(())
 }
 
+#[cfg(test)]
 fn catalog_snapshot_identity(
     manager: &kaveon_core::CatalogManager,
     catalog_name: &str,
@@ -653,11 +657,13 @@ fn catalog_snapshot_identity(
     Ok(format!("sha256:{:x}", digest.finalize()))
 }
 
+#[cfg(test)]
 fn digest_field(digest: &mut Sha256, bytes: &[u8]) {
     digest.update((bytes.len() as u64).to_be_bytes());
     digest.update(bytes);
 }
 
+#[cfg(test)]
 fn digest_canonical_json(digest: &mut Sha256, value: &serde_json::Value) {
     match value {
         serde_json::Value::Null => digest_field(digest, b"null"),
@@ -1073,20 +1079,17 @@ async fn submit_statement(
         .catalog
         .as_deref()
         .unwrap_or_else(|| catalog_snapshot.default_catalog());
-    let catalog_snapshot_id = match catalog_snapshot_identity(&catalog_snapshot, requested_catalog)
-    {
-        Ok(identity) => identity,
-        Err(error) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": error.to_string(),
-                    "code": "CATALOG_NOT_FOUND"
-                })),
-            )
-                .into_response();
-        }
-    };
+    if catalog_snapshot.catalog(requested_catalog).is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!("catalog '{requested_catalog}' not found"),
+                "code": "CATALOG_NOT_FOUND"
+            })),
+        )
+            .into_response();
+    }
+    let catalog_snapshot_id = catalog_snapshot.snapshot_id.clone();
     let context = {
         let catalog = &catalog_snapshot;
         let catalog_name = req
@@ -2264,7 +2267,21 @@ async fn refresh_catalog_snapshot(state: &AppState) -> Result<(), Box<Response>>
                     .into_response(),
             )
         })?;
-    *state.catalog.write().await = Arc::new(snapshot);
+    let snapshot_id = state.catalog_store.snapshot_identity().map_err(|error| {
+        Box::new(
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("catalog identity failed: {error}")
+                })),
+            )
+                .into_response(),
+        )
+    })?;
+    *state.catalog.write().await = Arc::new(crate::PublishedCatalog {
+        manager: snapshot,
+        snapshot_id,
+    });
     Ok(())
 }
 
@@ -4063,21 +4080,25 @@ mod tests {
             catalog_admin_token: Some("admin-token".into()),
             ..crate::config::ServerConfig::default()
         };
+        let catalog_store = kaveon_catalog::CatalogStore::open_in_memory().unwrap();
+        let snapshot_id = catalog_store.snapshot_identity().unwrap();
         crate::AppState {
             disk_exchange_store: None,
             results: crate::results::ResultStore::default(),
             principal_admission: crate::security::PrincipalAdmission::default(),
             cluster: tokio::sync::RwLock::new(crate::cluster::ClusterState::new(&config)),
-            catalog: tokio::sync::RwLock::new(Arc::new(kaveon_core::CatalogManager::new(
-                "kaveon", "default",
-            ))),
-            catalog_store: kaveon_catalog::CatalogStore::open_in_memory().unwrap(),
+            catalog: tokio::sync::RwLock::new(Arc::new(crate::PublishedCatalog {
+                manager: kaveon_core::CatalogManager::new("kaveon", "default"),
+                snapshot_id,
+            })),
+            catalog_store,
             exchange_store: crate::exchange::ExchangeStore::default(),
             lifecycle: crate::lifecycle::WorkerLifecycle::default(),
             memory_admission: kaveon_core::MemoryAdmissionController::new(
                 config.memory_admission_limit_bytes,
             )
             .unwrap(),
+            product_transactions: crate::transaction_api::TransactionRegistry::disabled(),
             config,
         }
     }
@@ -4163,11 +4184,18 @@ mod tests {
         }
 
         let state = catalog_test_state();
-        *state.catalog.write().await = Arc::new(manager("snapshot-v1/events.parquet"));
+        *state.catalog.write().await = Arc::new(crate::PublishedCatalog {
+            manager: manager("snapshot-v1/events.parquet"),
+            snapshot_id: "snapshot-v1".into(),
+        });
         let pinned = state.catalog.read().await.clone();
+        assert_eq!(pinned.snapshot_id, "snapshot-v1");
 
         // Publish a new catalog head while the query retains its original Arc.
-        *state.catalog.write().await = Arc::new(manager("snapshot-v2/events.parquet"));
+        *state.catalog.write().await = Arc::new(crate::PublishedCatalog {
+            manager: manager("snapshot-v2/events.parquet"),
+            snapshot_id: "snapshot-v2".into(),
+        });
 
         let mut plan =
             kaveon_sql::logical_plan::sql_to_logical_plan("SELECT id FROM lake.analytics.events")
@@ -4236,11 +4264,11 @@ mod tests {
         let mut manager = CatalogManager::new("lake", "analytics");
         manager.register_catalog(Box::new(catalog));
         let state = catalog_test_state();
-        *state.catalog.write().await = Arc::new(manager);
-        let matching = {
-            let published = state.catalog.read().await;
-            super::catalog_snapshot_identity(published.as_ref(), "lake").unwrap()
-        };
+        let matching = "sha256:durable-catalog-test".to_owned();
+        *state.catalog.write().await = Arc::new(crate::PublishedCatalog {
+            manager,
+            snapshot_id: matching.clone(),
+        });
 
         let request = |identity: &str| TaskRequest {
             query_id: "query-raw".into(),
@@ -4270,6 +4298,13 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(mismatch.status(), axum::http::StatusCode::CONFLICT);
+
+        let mut missing = request(&matching);
+        missing.catalog_snapshot_id = None;
+        let missing = super::validate_task_catalog_snapshot(&state, &missing)
+            .await
+            .unwrap_err();
+        assert_eq!(missing.status(), axum::http::StatusCode::BAD_REQUEST);
     }
 
     #[test]

@@ -12,6 +12,7 @@ pub mod results;
 pub mod runtime;
 pub mod scheduler;
 pub mod security;
+mod transaction_api;
 pub mod transport;
 mod ui;
 
@@ -23,6 +24,19 @@ use tokio::sync::RwLock;
 use cluster::ClusterState;
 use config::ServerConfig;
 
+pub struct PublishedCatalog {
+    pub manager: kaveon_core::CatalogManager,
+    pub snapshot_id: String,
+}
+
+impl std::ops::Deref for PublishedCatalog {
+    type Target = kaveon_core::CatalogManager;
+
+    fn deref(&self) -> &Self::Target {
+        &self.manager
+    }
+}
+
 pub struct AppState {
     pub disk_exchange_store: Option<disk_exchange::DiskExchangeStore>,
     pub results: results::ResultStore,
@@ -31,11 +45,12 @@ pub struct AppState {
     pub cluster: RwLock<ClusterState>,
     /// Published catalog view. Queries clone the `Arc` once and retain that
     /// immutable manager while a newer view may be published here.
-    pub catalog: RwLock<Arc<kaveon_core::CatalogManager>>,
+    pub catalog: RwLock<Arc<PublishedCatalog>>,
     pub catalog_store: kaveon_catalog::CatalogStore,
     pub exchange_store: exchange::ExchangeStore,
     pub lifecycle: lifecycle::WorkerLifecycle<transport::CachedTaskResult>,
     pub memory_admission: kaveon_core::MemoryAdmissionController,
+    pub product_transactions: transaction_api::TransactionRegistry,
 }
 
 #[tokio::main]
@@ -70,6 +85,9 @@ async fn main() {
             std::process::exit(1);
         }
     };
+    let catalog_snapshot_id = catalog_store
+        .snapshot_identity()
+        .expect("opened catalog has a durable snapshot identity");
 
     println!("Kaveon Engine v{}", env!("CARGO_PKG_VERSION"));
     println!("Node:        {}", config.node_id);
@@ -114,11 +132,17 @@ async fn main() {
         principal_admission: security::PrincipalAdmission::default(),
         config,
         cluster: RwLock::new(cluster),
-        catalog: RwLock::new(Arc::new(catalog)),
+        catalog: RwLock::new(Arc::new(PublishedCatalog {
+            manager: catalog,
+            snapshot_id: catalog_snapshot_id,
+        })),
         catalog_store,
         exchange_store: exchange::ExchangeStore::default(),
         lifecycle: lifecycle::WorkerLifecycle::default(),
         memory_admission,
+        // Product transactions fail closed until an ADLS-backed product store
+        // is supplied by deployment configuration.
+        product_transactions: transaction_api::TransactionRegistry::disabled(),
     });
 
     if !state.config.coordinator {

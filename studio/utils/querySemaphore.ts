@@ -4,30 +4,35 @@
  * saturating the backend connection pool and causing timeouts.
  */
 
-// Concurrent dashboard chart queries against the selected source.
-// The default AKS resource group admits one dashboard statement at a time;
-// each statement already fans out across all three workers.
-const MAX_CONCURRENT = 1;
-let running = 0;
-const queue: Array<() => void> = [];
-
-function release() {
-  running = Math.max(0, running - 1);
-  if (queue.length > 0) {
-    const next = queue.shift()!;
-    running++;
-    next();
-  }
-}
+// The data-warehouse pool has five connections. Keep one available for filter
+// options or SQL Lab. Engine requests also pass through the three-slot cap below.
+const MAX_CONCURRENT = 4;
+type SemaphoreState = { running: number; queue: Array<() => void> };
+let state: SemaphoreState = { running: 0, queue: [] };
 
 export function acquireQuerySlot(): Promise<() => void> {
   return new Promise((resolve) => {
-    const start = () => resolve(release);
-    if (running < MAX_CONCURRENT) {
-      running++;
+    // Capture this generation so releases from a page that was reset cannot
+    // decrement or over-admit work on the next page.
+    const acquiredState = state;
+    const start = () => {
+      let released = false;
+      resolve(() => {
+        if (released) return;
+        released = true;
+        acquiredState.running = Math.max(0, acquiredState.running - 1);
+        const next = acquiredState.queue.shift();
+        if (next) {
+          acquiredState.running++;
+          next();
+        }
+      });
+    };
+    if (acquiredState.running < MAX_CONCURRENT) {
+      acquiredState.running++;
       start();
     } else {
-      queue.push(start);
+      acquiredState.queue.push(start);
     }
   });
 }
@@ -39,13 +44,13 @@ export function acquireQuerySlot(): Promise<() => void> {
  * (guarded release), but the next page gets fresh slots immediately.
  */
 export function resetQuerySemaphore(): void {
-  queue.length = 0;
-  running = 0;
+  state.queue.length = 0;
+  state = { running: 0, queue: [] };
 }
 
 /** True when no chart queries are running or queued (dashboard finished loading). */
 export function isQueryIdle(): boolean {
-  return running === 0 && queue.length === 0;
+  return state.running === 0 && state.queue.length === 0;
 }
 
 // The test Engine admits four 512 MiB query budgets. Keep one slot available
