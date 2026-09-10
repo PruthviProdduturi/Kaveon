@@ -323,6 +323,20 @@ LIMIT 10;
 The CLI prints query results, elapsed time, and any parsing, planning, or execution
 error in the terminal.
 
+On a remote coordinator with durable product-catalog storage enabled, an Engine
+administrator can refresh snapshot-bound optimizer statistics:
+
+```sql
+ANALYZE OpenSource.ai_benchmarks.leaderboard;
+```
+
+The command returns the qualified table and exact metadata row count. Kaveon
+records the resolved catalog identity and the Delta version, Iceberg snapshot,
+or Parquet object identity in the same conditional ADLS catalog publication.
+The planner ignores the result whenever either identity no longer matches.
+`ANALYZE` is unavailable in embedded `--local` mode and to reader or analyst
+roles.
+
 ## Current boundaries
 
 - `--local` embeds and executes the Engine in its own process. It does not submit
