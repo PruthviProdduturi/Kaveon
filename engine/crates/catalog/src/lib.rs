@@ -40,6 +40,18 @@ pub struct AuditEvent {
     pub details: BTreeMap<String, String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CatalogReplicaSnapshot {
+    pub identity: String,
+    pub catalogs: Vec<CatalogDefinition>,
+    pub schemas: Vec<SchemaDefinition>,
+    pub tables: Vec<TableDefinition>,
+}
+
+const MAX_REPLICA_CATALOGS: usize = 100;
+const MAX_REPLICA_SCHEMAS: usize = 10_000;
+const MAX_REPLICA_TABLES: usize = 100_000;
+
 pub struct CatalogStore {
     connection: Mutex<Connection>,
 }
@@ -260,6 +272,88 @@ impl CatalogStore {
                 |row| row.get(0),
             )
             .map_err(db_error)
+    }
+
+    pub fn export_replica_snapshot(&self) -> Result<CatalogReplicaSnapshot> {
+        let connection = self.connection()?;
+        let catalogs = list_on_connection(
+            &connection,
+            "SELECT definition_json FROM catalogs ORDER BY id",
+        )?;
+        let schemas = list_on_connection(
+            &connection,
+            "SELECT definition_json FROM schemas ORDER BY id",
+        )?;
+        let tables = list_on_connection(
+            &connection,
+            "SELECT definition_json FROM tables ORDER BY id",
+        )?;
+        let identity = connection
+            .query_row(
+                "SELECT identity FROM catalog_snapshot WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(db_error)?;
+        Ok(CatalogReplicaSnapshot {
+            identity,
+            catalogs,
+            schemas,
+            tables,
+        })
+    }
+
+    pub fn install_replica_snapshot(&self, snapshot: &CatalogReplicaSnapshot) -> Result<()> {
+        if snapshot.catalogs.len() > MAX_REPLICA_CATALOGS
+            || snapshot.schemas.len() > MAX_REPLICA_SCHEMAS
+            || snapshot.tables.len() > MAX_REPLICA_TABLES
+        {
+            return Err(catalog_error("replica snapshot exceeds object bounds"));
+        }
+        let mut connection = self.connection()?;
+        let transaction = immediate(&mut connection)?;
+        transaction
+            .execute("DELETE FROM tables", [])
+            .map_err(db_error)?;
+        transaction
+            .execute("DELETE FROM schemas", [])
+            .map_err(db_error)?;
+        transaction
+            .execute("DELETE FROM catalogs", [])
+            .map_err(db_error)?;
+        for value in &snapshot.catalogs {
+            transaction
+                .execute(
+                    "INSERT INTO catalogs(id,name,revision,definition_json) VALUES (?1,?2,?3,?4)",
+                    params![
+                        value.id().as_str(),
+                        value.name(),
+                        value.revision().value(),
+                        encode(value)?
+                    ],
+                )
+                .map_err(db_error)?;
+        }
+        for value in &snapshot.schemas {
+            transaction.execute(
+                "INSERT INTO schemas(id,catalog_id,name,revision,definition_json) VALUES (?1,?2,?3,?4,?5)",
+                params![value.id().as_str(), value.catalog_id().as_str(), value.name(), value.revision().value(), encode(value)?],
+            ).map_err(db_error)?;
+        }
+        for value in &snapshot.tables {
+            transaction.execute(
+                "INSERT INTO tables(id,schema_id,name,revision,definition_json) VALUES (?1,?2,?3,?4,?5)",
+                params![value.id().as_str(), value.schema_id().as_str(), value.name(), value.revision().value(), encode(value)?],
+            ).map_err(db_error)?;
+        }
+        let actual = refresh_snapshot_identity(&transaction)?;
+        if actual != snapshot.identity {
+            return Err(catalog_error(format!(
+                "replica snapshot digest mismatch: expected {}, computed {actual}",
+                snapshot.identity
+            )));
+        }
+        transaction.commit().map_err(db_error)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -568,6 +662,17 @@ fn collect<T>(
 ) -> Result<Vec<T>> {
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(db_error)
 }
+fn list_on_connection<T: DeserializeOwned>(connection: &Connection, sql: &str) -> Result<Vec<T>> {
+    let mut statement = connection.prepare(sql).map_err(db_error)?;
+    collect(
+        statement
+            .query_map([], |row| {
+                let json: String = row.get(0)?;
+                decode_sql(&json)
+            })
+            .map_err(db_error)?,
+    )
+}
 fn encode<T: Serialize>(value: &T) -> Result<String> {
     serde_json::to_string(value).map_err(json_error)
 }
@@ -772,5 +877,23 @@ mod tests {
                 .is_err()
         );
         assert_eq!(store.snapshot_identity().unwrap(), committed);
+    }
+
+    #[test]
+    fn replica_snapshot_installs_atomically_and_rejects_digest_tampering() {
+        let coordinator = CatalogStore::open_in_memory().unwrap();
+        let (_, _, table) = seed(&coordinator);
+        let snapshot = coordinator.export_replica_snapshot().unwrap();
+        let worker = CatalogStore::open_in_memory().unwrap();
+        worker.install_replica_snapshot(&snapshot).unwrap();
+        assert_eq!(worker.snapshot_identity().unwrap(), snapshot.identity);
+        assert_eq!(worker.table(table.id()).unwrap().unwrap().name(), "orders");
+
+        let before = worker.snapshot_identity().unwrap();
+        let mut tampered = snapshot;
+        tampered.identity = "sha256:tampered".into();
+        assert!(worker.install_replica_snapshot(&tampered).is_err());
+        assert_eq!(worker.snapshot_identity().unwrap(), before);
+        assert!(worker.table(table.id()).unwrap().is_some());
     }
 }

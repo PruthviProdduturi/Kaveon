@@ -194,6 +194,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/v1/cluster", get(get_cluster))
         .route("/v1/node", get(get_node))
         .route("/v1/node/heartbeat", post(receive_heartbeat))
+        .route(
+            "/v1/internal/catalog/snapshot",
+            get(catalog_replica_snapshot),
+        )
         .route("/v1/catalog", get(list_catalogs))
         .route(
             "/v1/catalog/definitions",
@@ -234,6 +238,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/ui/msal-browser.min.js", get(crate::ui::msal_script))
         .route("/v1/auth/config", get(crate::entra::public_config))
         .route("/v1/capabilities", get(capabilities))
+        .route("/v1/statistics", get(statistics_diagnostics))
         .route("/health", get(health))
         .route("/ready", get(ready))
         .layer(axum::middleware::from_fn_with_state(
@@ -2037,6 +2042,48 @@ async fn capabilities(State(state): State<Arc<AppState>>) -> Json<serde_json::Va
     )
 }
 
+const MAX_DIAGNOSTIC_STATISTICS: usize = 100;
+
+#[derive(Debug, Serialize)]
+struct StatisticsDiagnostic {
+    table: String,
+    row_count: u64,
+    catalog_digest_prefix: String,
+    source_digest_prefix: String,
+    current: bool,
+}
+
+async fn statistics_diagnostics(
+    State(state): State<Arc<AppState>>,
+    Extension(identity): Extension<Identity>,
+) -> Response {
+    if identity.role != crate::security::Role::Admin {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(commit) = state.product_transactions.catalog() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error":"durable statistics are disabled","code":"STATISTICS_DISABLED"}))).into_response();
+    };
+    let snapshot = match commit.read_current().await {
+        Ok(value) => value,
+        Err(_) => return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error":"cannot read durable statistics","code":"STATISTICS_UNAVAILABLE"}))).into_response(),
+    };
+    let catalog = state.catalog.read().await.clone();
+    let total = snapshot.table_statistics.len();
+    let statistics = snapshot
+        .table_statistics
+        .iter()
+        .take(MAX_DIAGNOSTIC_STATISTICS)
+        .map(|(table, stored)| StatisticsDiagnostic {
+            table: table.clone(),
+            row_count: stored.row_count,
+            catalog_digest_prefix: stored.catalog_snapshot_sha256.chars().take(12).collect(),
+            source_digest_prefix: stored.source_identity_sha256.chars().take(12).collect(),
+            current: durable_relation_statistics(&catalog, &snapshot, table).is_some(),
+        })
+        .collect::<Vec<_>>();
+    Json(serde_json::json!({"statistics":statistics,"total":total,"truncated":total > MAX_DIAGNOSTIC_STATISTICS})).into_response()
+}
+
 async fn optimize_with_durable_statistics(
     state: &AppState,
     plan: LogicalPlan,
@@ -2339,14 +2386,66 @@ async fn get_node(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
 async fn receive_heartbeat(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(info): Json<NodeInfo>,
-) -> impl IntoResponse {
+) -> Response {
     if !state.config.coordinator {
-        return StatusCode::BAD_REQUEST;
+        return StatusCode::BAD_REQUEST.into_response();
     }
+    if crate::exchange::validate_bearer_header(
+        headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok()),
+        state.config.exchange_token.as_deref().unwrap_or_default(),
+    )
+    .is_err()
+    {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let required = state.catalog.read().await.snapshot_id.clone();
     let mut cluster = state.cluster.write().await;
     cluster.register_worker(info);
-    StatusCode::OK
+    Json(serde_json::json!({"required_catalog_snapshot_id": required})).into_response()
+}
+
+const MAX_CATALOG_REPLICA_BYTES: usize = 16 * 1024 * 1024;
+
+async fn catalog_replica_snapshot(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.coordinator {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    if crate::exchange::validate_bearer_header(
+        headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok()),
+        state.config.exchange_token.as_deref().unwrap_or_default(),
+    )
+    .is_err()
+    {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let snapshot = match state.catalog_store.export_replica_snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return task_failure_response(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string());
+        }
+    };
+    let bytes = match serde_json::to_vec(&snapshot) {
+        Ok(bytes) if bytes.len() <= MAX_CATALOG_REPLICA_BYTES => bytes,
+        Ok(_) => {
+            return task_failure_response(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "catalog replica snapshot exceeds 16 MiB",
+            );
+        }
+        Err(error) => {
+            return task_failure_response(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string());
+        }
+    };
+    ([(header::CONTENT_TYPE, "application/json")], bytes).into_response()
 }
 
 // --- Catalog ---
@@ -2590,7 +2689,7 @@ fn validate_replacement(
     }
 }
 
-async fn refresh_catalog_snapshot(state: &AppState) -> Result<(), Box<Response>> {
+pub(crate) async fn refresh_catalog_snapshot(state: &AppState) -> Result<(), Box<Response>> {
     let snapshot =
         crate::config::catalog_manager_snapshot(&state.catalog_store).map_err(|error| {
             Box::new(
@@ -3081,19 +3180,36 @@ async fn health() -> impl IntoResponse {
 async fn ready(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let catalog = state.catalog.read().await;
     let has_catalogs = !catalog.catalog_names().is_empty();
-    if has_catalogs {
+    let snapshot_id = catalog.snapshot_id.clone();
+    drop(catalog);
+    let worker_synced = if state.config.coordinator {
+        true
+    } else {
+        state
+            .cluster
+            .read()
+            .await
+            .required_catalog_snapshot_id
+            .as_deref()
+            == Some(snapshot_id.as_str())
+    };
+    if has_catalogs && worker_synced {
         (
             StatusCode::OK,
             Json(serde_json::json!({
                 "ready": true,
-                "catalog_snapshot_id": catalog.snapshot_id
+                "catalog_snapshot_id": snapshot_id
             })),
         )
             .into_response()
     } else {
         (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "ready": false, "reason": "no catalogs loaded" })),
+            Json(serde_json::json!({
+                "ready": false,
+                "reason": if has_catalogs { "catalog synchronization pending" } else { "no catalogs loaded" },
+                "catalog_snapshot_id": snapshot_id
+            })),
         )
             .into_response()
     }
@@ -4423,8 +4539,8 @@ mod tests {
         ColumnInfo, MergeOperation, TaskRequest, TaskResponse, aggregate_merge_contract,
         capabilities, decode_arrow_stream, durable_relation_statistics, encode_arrow_stream,
         execute_analyze, general_distributed_eligible, merge_partial_aggregates, mutation_actor,
-        parse_analyze_table, task_request_from_dispatch, top_n_merge_contract,
-        validate_replacement,
+        parse_analyze_table, statistics_diagnostics, task_request_from_dispatch,
+        top_n_merge_contract, validate_replacement,
     };
     use crate::security::Role;
     use arrow::array::{Int64Array, StringArray};
@@ -4589,6 +4705,32 @@ mod tests {
                 .rows,
             3
         );
+        let diagnostic = statistics_diagnostics(
+            axum::extract::State(state.clone()),
+            axum::Extension(admin.clone()),
+        )
+        .await;
+        let body = axum::body::to_bytes(diagnostic.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["statistics"][0]["table"], "lake.sales.orders");
+        assert_eq!(json["statistics"][0]["row_count"], 3);
+        assert_eq!(json["statistics"][0]["current"], true);
+        assert_eq!(
+            json["statistics"][0]["catalog_digest_prefix"]
+                .as_str()
+                .unwrap()
+                .len(),
+            12
+        );
+        assert_eq!(
+            json["statistics"][0]["source_digest_prefix"]
+                .as_str()
+                .unwrap()
+                .len(),
+            12
+        );
         let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
         let batch = RecordBatch::try_new(
             schema.clone(),
@@ -4604,6 +4746,14 @@ mod tests {
         writer.write(&batch).unwrap();
         writer.close().unwrap();
         assert!(durable_relation_statistics(&catalog, &snapshot, "lake.sales.orders").is_none());
+        let stale =
+            statistics_diagnostics(axum::extract::State(state.clone()), axum::Extension(admin))
+                .await;
+        let body = axum::body::to_bytes(stale.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["statistics"][0]["current"], false);
         let enabled = capabilities(axum::extract::State(state)).await.0;
         assert_eq!(enabled["native_analyze"], true);
         std::fs::remove_dir_all(directory).unwrap();
@@ -4616,6 +4766,20 @@ mod tests {
             capabilities(axum::extract::State(state)).await.0["native_analyze"],
             false
         );
+    }
+
+    #[tokio::test]
+    async fn statistics_diagnostics_require_admin() {
+        let (state, _, directory) = analyze_test_state().await;
+        let reader = crate::security::Identity {
+            principal: "reader".into(),
+            display_identity: None,
+            role: Role::Reader,
+        };
+        let response =
+            statistics_diagnostics(axum::extract::State(state), axum::Extension(reader)).await;
+        assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -4638,6 +4802,7 @@ mod tests {
     fn catalog_test_state() -> crate::AppState {
         let config = crate::config::ServerConfig {
             catalog_admin_token: Some("admin-token".into()),
+            exchange_token: Some("exchange-token-at-least-32-bytes-long".into()),
             ..crate::config::ServerConfig::default()
         };
         let catalog_store = kaveon_catalog::CatalogStore::open_in_memory().unwrap();
@@ -4661,6 +4826,45 @@ mod tests {
             product_transactions: crate::transaction_api::TransactionRegistry::disabled(),
             config,
         }
+    }
+
+    #[tokio::test]
+    async fn heartbeat_requires_exchange_auth_and_returns_required_catalog_identity() {
+        let state = Arc::new(catalog_test_state());
+        let mut worker = state.cluster.read().await.this_node.clone();
+        worker.role = crate::cluster::NodeRole::Worker;
+        worker.node_id = "worker-sync-test".into();
+
+        let unauthorized = super::receive_heartbeat(
+            axum::extract::State(state.clone()),
+            axum::http::HeaderMap::new(),
+            axum::Json(worker.clone()),
+        )
+        .await;
+        assert_eq!(unauthorized.status(), axum::http::StatusCode::UNAUTHORIZED);
+
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer exchange-token-at-least-32-bytes-long"
+                .parse()
+                .unwrap(),
+        );
+        let accepted = super::receive_heartbeat(
+            axum::extract::State(state.clone()),
+            headers,
+            axum::Json(worker),
+        )
+        .await;
+        assert_eq!(accepted.status(), axum::http::StatusCode::OK);
+        assert!(
+            state
+                .cluster
+                .read()
+                .await
+                .workers
+                .contains_key("worker-sync-test")
+        );
     }
 
     #[test]
