@@ -19,6 +19,7 @@ use kaveon_exec::topn::merge_top_n;
 use kaveon_sql::logical_plan::sql_to_logical_plan;
 use kaveon_sql::logical_plan::{AggregateExpr, LogicalPlan};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap};
 #[cfg(test)]
@@ -110,6 +111,7 @@ struct QueryContext {
     client_address: Option<String>,
     client_tags: Vec<String>,
     result_delivery: Option<String>,
+    catalog_snapshot_id: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -268,6 +270,10 @@ struct TaskRequest {
     catalog: String,
     #[serde(default)]
     schema: String,
+    /// Deterministic identity of the coordinator's selected catalog view.
+    /// Optional only for rolling compatibility with older task senders.
+    #[serde(default)]
+    catalog_snapshot_id: Option<String>,
     #[serde(default)]
     partition_index: usize,
     #[serde(default)]
@@ -404,6 +410,12 @@ async fn execute_owned_task(
     owner: TaskOwner<crate::transport::CachedTaskResult>,
     cancellation: CancellationToken,
 ) -> Response {
+    if let Err(response) = validate_task_catalog_snapshot(state, &req).await {
+        let _ = owner.complete(TaskOutcome::Failed(Arc::from(
+            "worker catalog snapshot does not match coordinator",
+        )));
+        return *response;
+    }
     let requested_partition = req
         .execution_partition
         .unwrap_or(ExecutionPartitionRequest {
@@ -534,6 +546,76 @@ async fn execute_owned_task(
             task_failure_response(StatusCode::INTERNAL_SERVER_ERROR, &message)
         }
     }
+}
+
+async fn validate_task_catalog_snapshot(
+    state: &AppState,
+    request: &TaskRequest,
+) -> Result<(), Box<Response>> {
+    let Some(expected) = request.catalog_snapshot_id.as_deref() else {
+        return Ok(());
+    };
+    let catalog = state.catalog.read().await;
+    let actual = catalog_snapshot_identity(&catalog, &request.catalog).map_err(|error| {
+        Box::new(task_failure_response(
+            StatusCode::BAD_REQUEST,
+            &error.to_string(),
+        ))
+    })?;
+    if actual != expected {
+        return Err(Box::new(
+            (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "worker catalog snapshot does not match coordinator",
+                    "code": "CATALOG_SNAPSHOT_MISMATCH"
+                })),
+            )
+                .into_response(),
+        ));
+    }
+    Ok(())
+}
+
+fn catalog_snapshot_identity(
+    manager: &kaveon_core::CatalogManager,
+    catalog_name: &str,
+) -> kaveon_core::Result<String> {
+    let catalog = manager.catalog(catalog_name).ok_or_else(|| {
+        kaveon_core::KaveonError::Execution(format!("catalog '{catalog_name}' not found"))
+    })?;
+    let mut schemas = catalog.schema_names();
+    schemas.sort_unstable();
+    let mut digest = Sha256::new();
+    digest.update(b"kaveon-catalog-snapshot-v1\0");
+    digest.update(catalog_name.as_bytes());
+    digest.update([0]);
+    digest.update(format!("{:?}", catalog.storage_type()).as_bytes());
+    digest.update([0]);
+    for schema in schemas {
+        digest.update(schema.as_bytes());
+        digest.update([0]);
+        let mut tables = catalog.table_names(&schema)?;
+        tables.sort_unstable();
+        for table_name in tables {
+            let table = catalog.table(&schema, &table_name)?.ok_or_else(|| {
+                kaveon_core::KaveonError::Execution(format!(
+                    "table '{catalog_name}.{schema}.{table_name}' disappeared while identifying catalog snapshot"
+                ))
+            })?;
+            for value in [
+                table_name.as_str(),
+                table.location.as_str(),
+                &format!("{:?}", table.access),
+                &format!("{:?}", table.format),
+                &format!("{:?}", table.arrow_schema),
+            ] {
+                digest.update(value.as_bytes());
+                digest.update([0]);
+            }
+        }
+    }
+    Ok(format!("sha256:{:x}", digest.finalize()))
 }
 
 struct PrefetchedExchangeInputs {
@@ -919,6 +1001,24 @@ async fn submit_statement(
     // physical planning. Publishing a newer manager swaps the outer Arc and
     // cannot change the definitions observed by this query.
     let catalog_snapshot = state.catalog.read().await.clone();
+    let requested_catalog = req
+        .catalog
+        .as_deref()
+        .unwrap_or_else(|| catalog_snapshot.default_catalog());
+    let catalog_snapshot_id = match catalog_snapshot_identity(&catalog_snapshot, requested_catalog)
+    {
+        Ok(identity) => identity,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": error.to_string(),
+                    "code": "CATALOG_NOT_FOUND"
+                })),
+            )
+                .into_response();
+        }
+    };
     let context = {
         let catalog = &catalog_snapshot;
         let catalog_name = req
@@ -968,6 +1068,7 @@ async fn submit_statement(
             client_address: None,
             client_tags: req.client_tags,
             result_delivery: req.result_delivery,
+            catalog_snapshot_id,
         }
     };
     let cancellation = match state.lifecycle.cancellations.token(&query_id) {
@@ -3027,6 +3128,9 @@ fn task_request_from_dispatch(dispatch: &TaskDispatch, context: &QueryContext) -
         query: String::new(),
         catalog: context.catalog.clone(),
         schema: context.schema.clone(),
+        // Executable fragments already carry resolved scan locations and data
+        // snapshot versions; they do not consult the worker catalog.
+        catalog_snapshot_id: None,
         partition_index: dispatch.assignment.task_id.partition,
         partition_count: dispatch.execution_partition.count,
         fragment: Some(dispatch.fragment.clone()),
@@ -3114,6 +3218,7 @@ async fn execute_distributed_top_n(
         let query = sql.to_owned();
         let catalog = context.catalog.clone();
         let schema_name = context.schema.clone();
+        let catalog_snapshot_id = context.catalog_snapshot_id.clone();
         tasks.spawn(async move {
             let mut failures = Vec::new();
             for (attempt, worker) in candidates {
@@ -3124,6 +3229,7 @@ async fn execute_distributed_top_n(
                     query: query.clone(),
                     catalog: catalog.clone(),
                     schema: schema_name.clone(),
+                    catalog_snapshot_id: Some(catalog_snapshot_id.clone()),
                     partition_index,
                     partition_count,
                     fragment: None,
@@ -3278,6 +3384,7 @@ async fn execute_distributed_aggregate(
         let query = sql.to_owned();
         let catalog = context.catalog.clone();
         let schema_name = context.schema.clone();
+        let catalog_snapshot_id = context.catalog_snapshot_id.clone();
         tasks.spawn(async move {
             let mut failures = Vec::new();
             for (attempt, worker) in candidates {
@@ -3288,6 +3395,7 @@ async fn execute_distributed_aggregate(
                     query: query.clone(),
                     catalog: catalog.clone(),
                     schema: schema_name.clone(),
+                    catalog_snapshot_id: Some(catalog_snapshot_id.clone()),
                     partition_index,
                     partition_count,
                     fragment: None,
@@ -3997,6 +4105,75 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn worker_rejects_mismatched_catalog_identity_before_raw_sql_execution() {
+        use kaveon_core::{
+            AccessPattern, CatalogManager, CatalogProvider, DataFormat, MemoryCatalog, StorageType,
+            TableMeta,
+        };
+
+        let mut catalog = MemoryCatalog::new(
+            "lake",
+            StorageType::Local {
+                base_path: std::path::PathBuf::from("/catalog-root"),
+            },
+        )
+        .with_schema("analytics");
+        catalog
+            .register_table(
+                "analytics",
+                TableMeta {
+                    name: "events".into(),
+                    arrow_schema: Arc::new(Schema::new(vec![Field::new(
+                        "id",
+                        DataType::Int64,
+                        false,
+                    )])),
+                    location: "snapshot-v2/events.parquet".into(),
+                    access: AccessPattern::Shortcut,
+                    format: DataFormat::Parquet,
+                },
+            )
+            .unwrap();
+        let mut manager = CatalogManager::new("lake", "analytics");
+        manager.register_catalog(Box::new(catalog));
+        let state = catalog_test_state();
+        *state.catalog.write().await = Arc::new(manager);
+        let matching = {
+            let published = state.catalog.read().await;
+            super::catalog_snapshot_identity(published.as_ref(), "lake").unwrap()
+        };
+
+        let request = |identity: &str| TaskRequest {
+            query_id: "query-raw".into(),
+            stage_id: 0,
+            attempt: 0,
+            query: "SELECT id FROM lake.analytics.events".into(),
+            catalog: "lake".into(),
+            schema: "analytics".into(),
+            catalog_snapshot_id: Some(identity.into()),
+            partition_index: 0,
+            partition_count: 1,
+            fragment: None,
+            execution_partition: None,
+            exchange_inputs: vec![],
+            exchange_outputs: vec![],
+        };
+
+        assert!(
+            super::validate_task_catalog_snapshot(&state, &request(&matching))
+                .await
+                .is_ok()
+        );
+        let mismatch = super::validate_task_catalog_snapshot(
+            &state,
+            &request("sha256:coordinator-pinned-an-older-head"),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(mismatch.status(), axum::http::StatusCode::CONFLICT);
+    }
+
     fn columns() -> Vec<ColumnInfo> {
         vec![
             ColumnInfo {
@@ -4074,6 +4251,7 @@ mod tests {
             client_address: None,
             client_tags: vec![],
             result_delivery: None,
+            catalog_snapshot_id: "sha256:test".into(),
         };
 
         let request = task_request_from_dispatch(&dispatch, &context);
@@ -4082,6 +4260,7 @@ mod tests {
         assert_eq!(request.attempt, 1);
         assert_eq!(request.partition_index, 2);
         assert_eq!(request.partition_count, 4);
+        assert!(request.catalog_snapshot_id.is_none());
         assert_eq!(request.execution_partition.unwrap().count, 4);
         assert!(request.fragment.is_some());
     }

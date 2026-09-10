@@ -17,13 +17,18 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    product_manifest::{CatalogSnapshot, PrepareChange, SnapshotRef},
+    product_manifest::{
+        CatalogChange, CatalogSnapshot, ImmutableFileRef, PrepareChange, SnapshotRef,
+    },
     product_metrics::{TransactionMetrics, TransactionOutcome},
 };
 
 const MAX_HEAD_BYTES: usize = 64 * 1024;
 const MAX_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_INDEX_SHARD_ENTRIES: usize = 1_024;
+const MAX_PRODUCT_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
+
+pub type ProductDocuments = BTreeMap<String, Vec<u8>>;
 
 #[derive(Clone)]
 pub struct ProductCatalogCommit {
@@ -149,6 +154,16 @@ impl ProductCatalogCommit {
 
     /// Publishes the prepared immutable snapshot, then conditionally advances the head.
     pub async fn commit(&self, request: PrepareChange) -> CommitOutcome {
+        self.commit_with_documents(request, BTreeMap::new()).await
+    }
+
+    /// Publishes create-only product documents before advancing the snapshot head.
+    /// Only documents referenced by product creates or updates are accepted.
+    pub async fn commit_with_documents(
+        &self,
+        request: PrepareChange,
+        documents: ProductDocuments,
+    ) -> CommitOutcome {
         let attempt = self.metrics.begin();
         let head = match self.read_head().await {
             Ok(head) => head,
@@ -188,6 +203,40 @@ impl ProductCatalogCommit {
                 return CommitOutcome::Rejected;
             }
         };
+        let required_documents = match required_documents(&request) {
+            Ok(required) => required,
+            Err(()) => {
+                attempt.finish(TransactionOutcome::Rejected);
+                return CommitOutcome::Rejected;
+            }
+        };
+        if documents.len() != required_documents.len()
+            || documents
+                .keys()
+                .any(|path| !required_documents.contains_key(path))
+        {
+            attempt.finish(TransactionOutcome::Rejected);
+            return CommitOutcome::Rejected;
+        }
+        for (path, reference) in &required_documents {
+            let Some(document) = documents.get(path) else {
+                attempt.finish(TransactionOutcome::Rejected);
+                return CommitOutcome::Rejected;
+            };
+            if document.len() > MAX_PRODUCT_DOCUMENT_BYTES || digest(document) != reference.sha256 {
+                attempt.finish(TransactionOutcome::Rejected);
+                return CommitOutcome::Rejected;
+            }
+        }
+        for (path, document) in documents {
+            match self
+                .publish_document(&required_documents[&path], document)
+                .await
+            {
+                Ok(()) => {}
+                Err(kind) => return finish_storage(attempt, kind),
+            }
+        }
         let bytes = match encode(&next) {
             Ok(bytes) => bytes,
             Err(()) => {
@@ -305,6 +354,7 @@ impl ProductCatalogCommit {
         if digest(&snapshot_bytes) != record.snapshot_sha256 {
             return Err(CommitErrorKind::Invalid);
         }
+        self.verify_snapshot_documents(&snapshot).await?;
         Ok(Head {
             snapshot,
             version: object.version,
@@ -366,6 +416,50 @@ impl ProductCatalogCommit {
             }
             Err(error) => Err(error.kind),
         }
+    }
+
+    async fn publish_document(
+        &self,
+        reference: &ImmutableFileRef,
+        bytes: Vec<u8>,
+    ) -> Result<(), CommitErrorKind> {
+        let path = format!("{}/{}", self.prefix, reference.path);
+        match self.storage.create_immutable(&path, bytes.clone()).await {
+            Ok(_) => Ok(()),
+            Err(error) if error.kind == CommitErrorKind::Conflict => {
+                let existing = self
+                    .storage
+                    .read_bounded(&path, MAX_PRODUCT_DOCUMENT_BYTES)
+                    .await
+                    .map_err(|read| read.kind)?;
+                if existing.bytes == bytes && digest(&existing.bytes) == reference.sha256 {
+                    Ok(())
+                } else {
+                    Err(CommitErrorKind::Conflict)
+                }
+            }
+            Err(error) => Err(error.kind),
+        }
+    }
+
+    async fn verify_snapshot_documents(
+        &self,
+        snapshot: &CatalogSnapshot,
+    ) -> Result<(), CommitErrorKind> {
+        for record in snapshot.product_records.values() {
+            let object = self
+                .storage
+                .read_bounded(
+                    &format!("{}/{}", self.prefix, record.document.path),
+                    MAX_PRODUCT_DOCUMENT_BYTES,
+                )
+                .await
+                .map_err(|error| error.kind)?;
+            if digest(&object.bytes) != record.document.sha256 {
+                return Err(CommitErrorKind::Invalid);
+            }
+        }
+        Ok(())
     }
 
     async fn read_shard(
@@ -438,6 +532,22 @@ fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, ()> {
         return Err(());
     }
     Ok(bytes)
+}
+
+fn required_documents(request: &PrepareChange) -> Result<BTreeMap<String, ImmutableFileRef>, ()> {
+    let mut required = BTreeMap::new();
+    for change in &request.changes {
+        let record = match change {
+            CatalogChange::CreateProduct { record }
+            | CatalogChange::UpdateProduct { record, .. } => record,
+            _ => continue,
+        };
+        match required.insert(record.document.path.clone(), record.document.clone()) {
+            Some(previous) if previous.sha256 != record.document.sha256 => return Err(()),
+            _ => {}
+        }
+    }
+    Ok(required)
 }
 
 fn encode_head(value: &HeadRecord) -> Result<Vec<u8>, ()> {
@@ -539,10 +649,24 @@ mod tests {
     }
 
     fn control(path: &str) -> ImmutableFileRef {
+        let object_path = format!("control/{path}.json");
         ImmutableFileRef {
-            path: format!("control/{path}.json"),
-            sha256: DIGEST.into(),
+            sha256: digest(&document_bytes(&object_path)),
+            path: object_path,
         }
+    }
+    fn document_bytes(path: &str) -> Vec<u8> {
+        format!("payload:{path}").into_bytes()
+    }
+    fn documents_for(request: &PrepareChange) -> ProductDocuments {
+        required_documents(request)
+            .unwrap()
+            .into_keys()
+            .map(|path| {
+                let bytes = document_bytes(&path);
+                (path, bytes)
+            })
+            .collect()
     }
     fn dashboard(id: &str, revision: u64, name: &str) -> ProductRecordRef {
         ProductRecordRef {
@@ -643,16 +767,17 @@ mod tests {
         let catalog = catalog_with(storage.clone());
         let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
         catalog.initialize(genesis.clone()).await;
+        let create_request = PrepareChange {
+            base: genesis.reference(),
+            snapshot_id: "snapshot-created".into(),
+            operation_id: "create-dashboard".into(),
+            request_digest: DIGEST.into(),
+            changes: vec![CatalogChange::CreateProduct {
+                record: dashboard("dash-1", 1, "alice/home"),
+            }],
+        };
         let created = match catalog
-            .commit(PrepareChange {
-                base: genesis.reference(),
-                snapshot_id: "snapshot-created".into(),
-                operation_id: "create-dashboard".into(),
-                request_digest: DIGEST.into(),
-                changes: vec![CatalogChange::CreateProduct {
-                    record: dashboard("dash-1", 1, "alice/home"),
-                }],
-            })
+            .commit_with_documents(create_request.clone(), documents_for(&create_request))
             .await
         {
             CommitOutcome::Committed(snapshot) => snapshot,
@@ -669,9 +794,11 @@ mod tests {
             }],
         };
 
+        let left_request = update("left", "alice/left");
+        let right_request = update("right", "alice/right");
         let (left, right) = tokio::join!(
-            catalog.commit(update("left", "alice/left")),
-            catalog.commit(update("right", "alice/right"))
+            catalog.commit_with_documents(left_request.clone(), documents_for(&left_request)),
+            catalog.commit_with_documents(right_request.clone(), documents_for(&right_request))
         );
         assert_eq!(
             [left, right]
@@ -717,7 +844,9 @@ mod tests {
             ],
         };
         assert!(matches!(
-            catalog.commit(request).await,
+            catalog
+                .commit_with_documents(request.clone(), documents_for(&request))
+                .await,
             CommitOutcome::Committed(_)
         ));
 
@@ -731,6 +860,88 @@ mod tests {
                     id: "dataset-1".into(),
                 })
         );
+    }
+
+    #[tokio::test]
+    async fn product_documents_are_required_digest_checked_and_idempotent() {
+        let storage = AdlsConditionalCommit::new(Arc::new(InMemory::new()));
+        let catalog = catalog_with(storage.clone());
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        catalog.initialize(genesis.clone()).await;
+        let request = PrepareChange {
+            base: genesis.reference(),
+            snapshot_id: "snapshot-document".into(),
+            operation_id: "create-document".into(),
+            request_digest: DIGEST.into(),
+            changes: vec![CatalogChange::CreateProduct {
+                record: dashboard("dash-document", 1, "alice/document"),
+            }],
+        };
+
+        assert_eq!(
+            catalog.commit(request.clone()).await,
+            CommitOutcome::Rejected
+        );
+        assert_eq!(catalog.read_current().await.unwrap(), genesis);
+
+        let mut mismatched = documents_for(&request);
+        *mismatched.values_mut().next().unwrap() = b"mismatched".to_vec();
+        assert_eq!(
+            catalog
+                .commit_with_documents(request.clone(), mismatched)
+                .await,
+            CommitOutcome::Rejected
+        );
+        assert_eq!(catalog.read_current().await.unwrap(), genesis);
+
+        let committed = catalog
+            .commit_with_documents(request.clone(), documents_for(&request))
+            .await;
+        assert!(matches!(committed, CommitOutcome::Committed(_)));
+        assert!(matches!(
+            catalog.commit(request).await,
+            CommitOutcome::Replayed(_)
+        ));
+        let reopened = catalog_with(storage).read_current().await.unwrap();
+        assert!(
+            reopened
+                .product_records
+                .contains_key("dashboard/dash-document")
+        );
+    }
+
+    #[tokio::test]
+    async fn conflicting_immutable_document_prevents_snapshot_publication() {
+        let storage = AdlsConditionalCommit::new(Arc::new(InMemory::new()));
+        let catalog = catalog_with(storage.clone());
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        catalog.initialize(genesis.clone()).await;
+        let request = PrepareChange {
+            base: genesis.reference(),
+            snapshot_id: "snapshot-conflicting-document".into(),
+            operation_id: "conflicting-document".into(),
+            request_digest: DIGEST.into(),
+            changes: vec![CatalogChange::CreateProduct {
+                record: dashboard("dash-conflict", 1, "alice/conflict"),
+            }],
+        };
+        let path = required_documents(&request)
+            .unwrap()
+            .into_keys()
+            .next()
+            .unwrap();
+        storage
+            .create_immutable(&format!("product/{path}"), b"wrong-existing-bytes".to_vec())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            catalog
+                .commit_with_documents(request.clone(), documents_for(&request))
+                .await,
+            CommitOutcome::Conflict
+        );
+        assert_eq!(catalog.read_current().await.unwrap(), genesis);
     }
 
     #[tokio::test]
