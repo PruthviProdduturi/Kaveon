@@ -14,10 +14,20 @@ That documentation also specifies strong consistency for subsequent reads and
 lists after an insert or update. The protocol nevertheless treats listings as
 non-authoritative: only a directly read head and its digest-verified manifest
 establish committed state.
-Blob versioning is not available for hierarchical-namespace ADLS Gen2 accounts,
-as documented in [Blob versioning overview](https://learn.microsoft.com/azure/storage/blobs/versioning-overview),
-so this protocol does not depend on it for head recovery. One conditional head
-write is the only visible commit point. Azure's documented storage primitives
+Neither of the two platform-level point-in-time recovery mechanisms is available
+on this account type, so application-level history is not a design preference
+here — it is the only option. Blob versioning is unavailable for
+hierarchical-namespace ADLS Gen2 accounts: [Blob versioning overview](https://learn.microsoft.com/azure/storage/blobs/versioning-overview)
+states that versioning is supported for standard general-purpose v2, premium
+block blob and legacy Blob storage accounts, and that accounts with a
+hierarchical namespace enabled "aren't currently supported". Blob snapshots are
+likewise closed: [Blob snapshots](https://learn.microsoft.com/azure/storage/blobs/snapshots-overview)
+records that the Snapshots Preview for hierarchical-namespace accounts "is no
+longer accepting new customers". A recovery design that assumed either primitive
+would therefore fail closed on the accounts Kaveon actually runs on. One
+conditional head write remains the only visible commit point, and the immutable
+`head-history` / `head-backups` records this protocol writes after each verified
+read-back are the sole recovery evidence. Azure's documented storage primitives
 are not, by themselves, evidence of a Kaveon transaction implementation.
 
 ## Object layout

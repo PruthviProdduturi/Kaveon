@@ -11,7 +11,7 @@ discovery and its existing TLS DNS identity; this client alias requires no token
 certificate or workload changes. Direct TLS clients must use a certificate-covered
 hostname rather than assuming the new Service name is in the certificate.
 
-Deploy into namespace `kaveon` with release name `kaveon` to match the Bicep workload identity subject. Supply `image.repository`, immutable `image.digest` and `workloadIdentity.clientId`. To enable product transactions, also supply the Bicep outputs `storageAccountName`, `productTransactionContainer`, and `productCatalogPrefix`. These are resource coordinates, not credentials. The workload identity has contributor access only on the dedicated product container and remains read-only on analytics containers.
+Deploy into namespace `kaveon` with release name `kaveon` to match the Bicep workload identity subject. Supply `image.repository`, immutable `image.digest` and `workloadIdentity.clientId`. To enable product transactions, first deploy `infra/bicep/environments/aks-product-transactions.bicep`, then supply its `storageAccountName`, `productTransactionContainer`, and `productCatalogPrefix` outputs. These are resource coordinates, not credentials. The workload identity has contributor access only on the dedicated product container and remains read-only on analytics containers.
 
 Create existing Secret `kaveon-engine-auth` with keys `security.json`, `exchange-token` and `catalog-token`. The JSON uses the server's security schema, for example `{"principals":[{"principal":"test-admin","role":"admin","token":"<random token at least 32 bytes>"}]}`. Generate separate random credentials for every token domain. Do not put real credentials in values or version control.
 

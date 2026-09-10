@@ -80,6 +80,7 @@ class ChartFreshnessTests(unittest.TestCase):
 
         self.assertEqual(counts, {"trips": 5000})
         self.assertEqual(stats["watermark"]["row_count"], 5000)
+        self.assertEqual(stats["row_count_source"], "kaveon_engine_exact")
         stored = persist.call_args.args[1]
         self.assertIn('"row_counts": {"trips": 5000}', stored[0])
         self.assertEqual(stored[1], "7")

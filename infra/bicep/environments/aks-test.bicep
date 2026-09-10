@@ -8,12 +8,6 @@ param additionalOperatorIpCidrs array = []
 @description('Enable only with stable, verified operator egress CIDRs. Entra authentication and Azure RBAC remain enabled either way.')
 param restrictApiToOperatorIps bool = false
 param nodeSize string = 'Standard_D4s_v3'
-@minLength(3)
-@maxLength(63)
-@description('Dedicated container for Kaveon product transaction manifests and documents. Analytics data remains in separate read-only containers.')
-param productTransactionContainerName string = 'product-transactions'
-@description('Normalized prefix inside the dedicated product transaction container.')
-param productTransactionPrefix string = 'kaveon/product-catalog'
 
 var suffix = uniqueString(resourceGroup().id)
 var tags = { project: 'kaveon', environment: 'test', owner: 'prproddu' }
@@ -55,11 +49,6 @@ resource containers 'Microsoft.Storage/storageAccounts/blobServices/containers@2
   name: layer
   properties: { publicAccess: 'None' }
 }]
-resource productTransactions 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
-  parent: blobs
-  name: productTransactionContainerName
-  properties: { publicAccess: 'None' }
-}
 
 resource network 'Microsoft.Network/virtualNetworks@2024-05-01' = {
   name: 'kaveon-test-vnet'
@@ -193,18 +182,7 @@ resource readerRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')
   }
 }
-resource productTransactionWriterRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: productTransactions
-  name: guid(productTransactions.id, readerIdentity.id, 'product-transaction-write')
-  properties: {
-    principalId: readerIdentity.properties.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
-  }
-}
 output clusterName string = cluster.name
 output registryName string = registry.name
 output storageAccountName string = storage.name
 output readerClientId string = readerIdentity.properties.clientId
-output productTransactionContainer string = productTransactions.name
-output productCatalogPrefix string = productTransactionPrefix
