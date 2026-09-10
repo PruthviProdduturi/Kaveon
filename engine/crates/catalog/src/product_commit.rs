@@ -296,6 +296,35 @@ impl ProductCatalogCommit {
         self.read_head().await.map(|head| head.snapshot)
     }
 
+    /// Reads and verifies one immutable product document on demand. Snapshot
+    /// head reads deliberately do not scan all product documents.
+    pub async fn fetch_product_document(
+        &self,
+        kind: crate::product_manifest::ProductRecordKind,
+        id: &str,
+    ) -> Result<Option<Vec<u8>>, CommitErrorKind> {
+        let head = self.read_head().await?;
+        let record = head
+            .snapshot
+            .product_record(kind, id)
+            .map_err(|_| CommitErrorKind::Invalid)?;
+        let Some(record) = record else {
+            return Ok(None);
+        };
+        let object = self
+            .storage
+            .read_bounded(
+                &format!("{}/{}", self.prefix, record.document.path),
+                MAX_PRODUCT_DOCUMENT_BYTES,
+            )
+            .await
+            .map_err(|error| error.kind)?;
+        if digest(&object.bytes) != record.document.sha256 {
+            return Err(CommitErrorKind::Invalid);
+        }
+        Ok(Some(object.bytes))
+    }
+
     /// Searches a bounded parent chain. Missing history and an exhausted budget
     /// are deliberately `Unresolved`, never proof that an operation is absent.
     pub async fn resolve_operation(
@@ -354,7 +383,6 @@ impl ProductCatalogCommit {
         if digest(&snapshot_bytes) != record.snapshot_sha256 {
             return Err(CommitErrorKind::Invalid);
         }
-        self.verify_snapshot_documents(&snapshot).await?;
         Ok(Head {
             snapshot,
             version: object.version,
@@ -440,26 +468,6 @@ impl ProductCatalogCommit {
             }
             Err(error) => Err(error.kind),
         }
-    }
-
-    async fn verify_snapshot_documents(
-        &self,
-        snapshot: &CatalogSnapshot,
-    ) -> Result<(), CommitErrorKind> {
-        for record in snapshot.product_records.values() {
-            let object = self
-                .storage
-                .read_bounded(
-                    &format!("{}/{}", self.prefix, record.document.path),
-                    MAX_PRODUCT_DOCUMENT_BYTES,
-                )
-                .await
-                .map_err(|error| error.kind)?;
-            if digest(&object.bytes) != record.document.sha256 {
-                return Err(CommitErrorKind::Invalid);
-            }
-        }
-        Ok(())
     }
 
     async fn read_shard(
@@ -612,7 +620,7 @@ mod tests {
         CatalogChange, ImmutableFileRef, ProductRecordKind, ProductRecordRef,
         ProductRecordReference, TableManifestRef,
     };
-    use object_store::memory::InMemory;
+    use object_store::{ObjectStore, memory::InMemory, path::Path};
 
     const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -942,6 +950,49 @@ mod tests {
             CommitOutcome::Conflict
         );
         assert_eq!(catalog.read_current().await.unwrap(), genesis);
+    }
+
+    #[tokio::test]
+    async fn head_read_is_constant_and_document_fetch_detects_corruption() {
+        let raw_store = Arc::new(InMemory::new());
+        let storage = AdlsConditionalCommit::new(raw_store.clone());
+        let catalog = catalog_with(storage);
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        catalog.initialize(genesis.clone()).await;
+        let request = PrepareChange {
+            base: genesis.reference(),
+            snapshot_id: "snapshot-corruption".into(),
+            operation_id: "create-corruption-fixture".into(),
+            request_digest: DIGEST.into(),
+            changes: vec![CatalogChange::CreateProduct {
+                record: dashboard("dash-corrupt", 1, "alice/corrupt"),
+            }],
+        };
+        catalog
+            .commit_with_documents(request.clone(), documents_for(&request))
+            .await;
+        let document_path = required_documents(&request)
+            .unwrap()
+            .into_keys()
+            .next()
+            .unwrap();
+        raw_store
+            .put(
+                &Path::from(format!("product/{document_path}")),
+                b"corrupted-after-publication".to_vec().into(),
+            )
+            .await
+            .unwrap();
+
+        // Reading the two-object head/snapshot path does not fan out over documents.
+        assert_eq!(catalog.read_current().await.unwrap().generation, 1);
+        assert_eq!(
+            catalog
+                .fetch_product_document(ProductRecordKind::Dashboard, "dash-corrupt")
+                .await
+                .unwrap_err(),
+            CommitErrorKind::Invalid
+        );
     }
 
     #[tokio::test]

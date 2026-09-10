@@ -18,6 +18,7 @@ pub const MAX_CONTROL_RECORDS: usize = 10_000;
 pub const MAX_PRODUCT_RECORDS: usize = 100_000;
 pub const MAX_REFERENCES_PER_PRODUCT_RECORD: usize = 100;
 pub const MAX_UNIQUE_VALUES_PER_PRODUCT_RECORD: usize = 32;
+pub const MAX_PRODUCT_PAGE_SIZE: usize = 100;
 pub const MAX_CHANGES: usize = 100;
 pub const MAX_PARQUET_FILES_PER_TABLE: usize = 10_000;
 
@@ -135,6 +136,71 @@ impl CatalogSnapshot {
             generation: self.generation,
             snapshot_id: self.snapshot_id.clone(),
         }
+    }
+
+    pub fn product_record(
+        &self,
+        kind: ProductRecordKind,
+        id: &str,
+    ) -> Result<Option<&ProductRecordRef>, ProductReadError> {
+        validate_product_id(id).map_err(read_error)?;
+        Ok(self.product_records.get(&product_record_key(kind, id)))
+    }
+
+    /// Exact byte-sensitive equality over a snapshot-validated unique index.
+    pub fn product_record_by_unique_value(
+        &self,
+        kind: ProductRecordKind,
+        index: &str,
+        value: &str,
+    ) -> Result<Option<&ProductRecordRef>, ProductReadError> {
+        validate_unique_value(index, value).map_err(read_error)?;
+        Ok(self.product_records.values().find(|record| {
+            record.kind == kind
+                && record
+                    .unique_values
+                    .get(index)
+                    .is_some_and(|candidate| candidate == value)
+        }))
+    }
+
+    /// Bytewise ID pagination bound to this immutable snapshot reference.
+    pub fn product_records_page(
+        &self,
+        kind: ProductRecordKind,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<ProductRecordPage, ProductReadError> {
+        if limit == 0 || limit > MAX_PRODUCT_PAGE_SIZE {
+            return Err(ProductReadError(format!(
+                "product page size must be between 1 and {MAX_PRODUCT_PAGE_SIZE}"
+            )));
+        }
+        let after = cursor
+            .map(|value| decode_product_cursor(value, &self.reference(), kind))
+            .transpose()?;
+        let prefix = format!("{}/", kind.name());
+        let mut matching = self
+            .product_records
+            .range(prefix.clone()..)
+            .take_while(|(key, _)| key.starts_with(&prefix))
+            .filter(|(_, record)| {
+                after
+                    .as_ref()
+                    .is_none_or(|id| record.id.as_bytes() > id.as_bytes())
+            })
+            .map(|(_, record)| record.clone());
+        let records = matching.by_ref().take(limit).collect::<Vec<_>>();
+        let has_more = matching.next().is_some();
+        let next_cursor = has_more
+            .then(|| records.last())
+            .flatten()
+            .map(|record| encode_product_cursor(&self.reference(), kind, &record.id));
+        Ok(ProductRecordPage {
+            snapshot: self.reference(),
+            records,
+            next_cursor,
+        })
     }
 
     /// Prepares an all-or-nothing next snapshot. The caller must make storage
@@ -443,6 +509,17 @@ impl ProductRecordKind {
             Self::UserTheme => "user_theme",
         }
     }
+
+    fn from_name(value: &str) -> Option<Self> {
+        match value {
+            "dataset" => Some(Self::Dataset),
+            "chart" => Some(Self::Chart),
+            "dashboard" => Some(Self::Dashboard),
+            "saved_query" => Some(Self::SavedQuery),
+            "user_theme" => Some(Self::UserTheme),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -464,6 +541,24 @@ pub struct ProductRecordReference {
     pub kind: ProductRecordKind,
     pub id: String,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductRecordPage {
+    pub snapshot: SnapshotRef,
+    pub records: Vec<ProductRecordRef>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductReadError(String);
+
+impl fmt::Display for ProductReadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl Error for ProductReadError {}
 
 impl ProductRecordRef {
     fn key(&self) -> String {
@@ -509,16 +604,7 @@ fn validate_product_record(record: &ProductRecordRef) -> Result<(), ManifestErro
         return Err(error("product record unique-value limit exceeded"));
     }
     for (name, value) in &record.unique_values {
-        validate_identifier("unique index name", name)?;
-        if !name
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || character == '_')
-            || value.is_empty()
-            || value.len() > 512
-            || value.chars().any(char::is_control)
-        {
-            return Err(error("product record unique value is invalid"));
-        }
+        validate_unique_value(name, value)?;
     }
     if record.references.len() > MAX_REFERENCES_PER_PRODUCT_RECORD {
         return Err(error("product record reference limit exceeded"));
@@ -547,6 +633,82 @@ fn validate_product_record(record: &ProductRecordRef) -> Result<(), ManifestErro
         }
     }
     Ok(())
+}
+
+fn validate_unique_value(name: &str, value: &str) -> Result<(), ManifestError> {
+    validate_identifier("unique index name", name)?;
+    if !name
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || character == '_')
+        || value.is_empty()
+        || value.len() > 512
+        || value.chars().any(char::is_control)
+    {
+        return Err(error("product record unique value is invalid"));
+    }
+    Ok(())
+}
+
+fn encode_product_cursor(snapshot: &SnapshotRef, kind: ProductRecordKind, id: &str) -> String {
+    let encoded_id = id
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!(
+        "v1:{}:{}:{}:{encoded_id}",
+        snapshot.generation,
+        snapshot.snapshot_id,
+        kind.name()
+    )
+}
+
+fn decode_product_cursor(
+    cursor: &str,
+    snapshot: &SnapshotRef,
+    expected_kind: ProductRecordKind,
+) -> Result<String, ProductReadError> {
+    let parts = cursor.split(':').collect::<Vec<_>>();
+    if parts.len() != 5 || parts[0] != "v1" {
+        return Err(ProductReadError("malformed product cursor".into()));
+    }
+    let generation = parts[1]
+        .parse::<u64>()
+        .map_err(|_| ProductReadError("malformed product cursor".into()))?;
+    let kind = ProductRecordKind::from_name(parts[3])
+        .ok_or_else(|| ProductReadError("malformed product cursor".into()))?;
+    if generation != snapshot.generation || parts[2] != snapshot.snapshot_id {
+        return Err(ProductReadError(
+            "product cursor belongs to a different snapshot".into(),
+        ));
+    }
+    if kind != expected_kind {
+        return Err(ProductReadError(
+            "product cursor belongs to a different record kind".into(),
+        ));
+    }
+    let encoded = parts[4].as_bytes();
+    if encoded.is_empty() || encoded.len() % 2 != 0 {
+        return Err(ProductReadError("malformed product cursor".into()));
+    }
+    let (pairs, _) = encoded.as_chunks::<2>();
+    let bytes = pairs
+        .iter()
+        .map(|pair| {
+            std::str::from_utf8(pair)
+                .ok()
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+                .ok_or_else(|| ProductReadError("malformed product cursor".into()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let id = String::from_utf8(bytes)
+        .map_err(|_| ProductReadError("malformed product cursor".into()))?;
+    validate_product_id(&id).map_err(read_error)?;
+    Ok(id)
+}
+
+fn read_error(error: ManifestError) -> ProductReadError {
+    ProductReadError(error.to_string())
 }
 
 fn validate_product_records(
@@ -1032,6 +1194,167 @@ mod tests {
         let decoded: ProductRecordRef = serde_json::from_value(record).unwrap();
         assert!(decoded.references.is_empty());
         validate_product_record(&decoded).unwrap();
+    }
+
+    #[test]
+    fn product_reads_support_point_unique_and_deterministic_pages() {
+        let base = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        let snapshot = base
+            .prepare(change(
+                base.reference(),
+                "read-fixture",
+                DIGEST,
+                ["charlie", "alpha", "bravo"]
+                    .into_iter()
+                    .map(|id| CatalogChange::CreateProduct {
+                        record: product(
+                            ProductRecordKind::Dashboard,
+                            id,
+                            1,
+                            &format!("alice/{id}"),
+                        ),
+                    })
+                    .collect(),
+            ))
+            .unwrap();
+
+        assert_eq!(
+            snapshot
+                .product_record(ProductRecordKind::Dashboard, "bravo")
+                .unwrap()
+                .unwrap()
+                .id,
+            "bravo"
+        );
+        assert_eq!(
+            snapshot
+                .product_record_by_unique_value(
+                    ProductRecordKind::Dashboard,
+                    "owner_name",
+                    "alice/charlie",
+                )
+                .unwrap()
+                .unwrap()
+                .id,
+            "charlie"
+        );
+        assert!(
+            snapshot
+                .product_record_by_unique_value(
+                    ProductRecordKind::Dashboard,
+                    "owner_name",
+                    "Alice/charlie",
+                )
+                .unwrap()
+                .is_none()
+        );
+        let first = snapshot
+            .product_records_page(ProductRecordKind::Dashboard, 2, None)
+            .unwrap();
+        assert_eq!(
+            first
+                .records
+                .iter()
+                .map(|record| record.id.as_str())
+                .collect::<Vec<_>>(),
+            ["alpha", "bravo"]
+        );
+        assert_eq!(first.snapshot, snapshot.reference());
+        let second = snapshot
+            .product_records_page(
+                ProductRecordKind::Dashboard,
+                2,
+                first.next_cursor.as_deref(),
+            )
+            .unwrap();
+        assert_eq!(
+            second
+                .records
+                .iter()
+                .map(|record| record.id.as_str())
+                .collect::<Vec<_>>(),
+            ["charlie"]
+        );
+        assert!(second.next_cursor.is_none());
+    }
+
+    #[test]
+    fn product_cursor_is_snapshot_and_kind_pinned_and_malformed_input_fails() {
+        let base = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        let snapshot = base
+            .prepare(change(
+                base.reference(),
+                "cursor-fixture",
+                DIGEST,
+                ["alpha", "bravo"]
+                    .into_iter()
+                    .map(|id| CatalogChange::CreateProduct {
+                        record: product(
+                            ProductRecordKind::Dashboard,
+                            id,
+                            1,
+                            &format!("alice/{id}"),
+                        ),
+                    })
+                    .collect(),
+            ))
+            .unwrap();
+        let cursor = snapshot
+            .product_records_page(ProductRecordKind::Dashboard, 1, None)
+            .unwrap()
+            .next_cursor
+            .unwrap();
+        let newer = snapshot
+            .prepare(change(
+                snapshot.reference(),
+                "newer-snapshot",
+                DIGEST,
+                vec![CatalogChange::CreateProduct {
+                    record: product(ProductRecordKind::Dashboard, "charlie", 1, "alice/charlie"),
+                }],
+            ))
+            .unwrap();
+
+        assert_eq!(
+            snapshot
+                .product_records_page(ProductRecordKind::Dashboard, 10, Some(&cursor))
+                .unwrap()
+                .records[0]
+                .id,
+            "bravo"
+        );
+        assert!(
+            newer
+                .product_records_page(ProductRecordKind::Dashboard, 10, Some(&cursor))
+                .unwrap_err()
+                .to_string()
+                .contains("different snapshot")
+        );
+        assert!(
+            snapshot
+                .product_records_page(ProductRecordKind::Chart, 10, Some(&cursor))
+                .unwrap_err()
+                .to_string()
+                .contains("different record kind")
+        );
+        for malformed in [
+            "",
+            "v2:1:x:dashboard:61",
+            "v1:x:x:dashboard:61",
+            "v1:1:x:dashboard:zz",
+        ] {
+            assert!(
+                snapshot
+                    .product_records_page(ProductRecordKind::Dashboard, 10, Some(malformed))
+                    .is_err(),
+                "{malformed}"
+            );
+        }
+        assert!(
+            snapshot
+                .product_records_page(ProductRecordKind::Dashboard, 0, None)
+                .is_err()
+        );
     }
 
     #[test]

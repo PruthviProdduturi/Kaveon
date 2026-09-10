@@ -587,14 +587,36 @@ fn catalog_snapshot_identity(
     let mut schemas = catalog.schema_names();
     schemas.sort_unstable();
     let mut digest = Sha256::new();
-    digest.update(b"kaveon-catalog-snapshot-v1\0");
-    digest.update(catalog_name.as_bytes());
-    digest.update([0]);
-    digest.update(format!("{:?}", catalog.storage_type()).as_bytes());
-    digest.update([0]);
+    digest.update(b"kaveon-catalog-snapshot-v2");
+    digest_field(&mut digest, catalog_name.as_bytes());
+    match catalog.storage_type() {
+        kaveon_core::StorageType::Local { base_path } => {
+            digest_field(&mut digest, b"local");
+            digest_field(&mut digest, base_path.to_string_lossy().as_bytes());
+        }
+        kaveon_core::StorageType::AdlsGen2 {
+            account,
+            container,
+            root_path,
+        } => {
+            digest_field(&mut digest, b"adls-gen2");
+            digest_field(&mut digest, account.as_bytes());
+            digest_field(&mut digest, container.as_bytes());
+            digest_field(&mut digest, root_path.as_bytes());
+        }
+        kaveon_core::StorageType::S3 {
+            bucket,
+            region,
+            prefix,
+        } => {
+            digest_field(&mut digest, b"s3");
+            digest_field(&mut digest, bucket.as_bytes());
+            digest_field(&mut digest, region.as_bytes());
+            digest_field(&mut digest, prefix.as_bytes());
+        }
+    }
     for schema in schemas {
-        digest.update(schema.as_bytes());
-        digest.update([0]);
+        digest_field(&mut digest, schema.as_bytes());
         let mut tables = catalog.table_names(&schema)?;
         tables.sort_unstable();
         for table_name in tables {
@@ -603,19 +625,65 @@ fn catalog_snapshot_identity(
                     "table '{catalog_name}.{schema}.{table_name}' disappeared while identifying catalog snapshot"
                 ))
             })?;
-            for value in [
-                table_name.as_str(),
-                table.location.as_str(),
-                &format!("{:?}", table.access),
-                &format!("{:?}", table.format),
-                &format!("{:?}", table.arrow_schema),
-            ] {
-                digest.update(value.as_bytes());
-                digest.update([0]);
-            }
+            digest_field(&mut digest, table_name.as_bytes());
+            digest_field(&mut digest, table.location.as_bytes());
+            digest_field(
+                &mut digest,
+                match table.access {
+                    kaveon_core::AccessPattern::Shortcut => b"shortcut",
+                    kaveon_core::AccessPattern::Optimized => b"optimized",
+                },
+            );
+            digest_field(
+                &mut digest,
+                match table.format {
+                    kaveon_core::DataFormat::Parquet => b"parquet",
+                    kaveon_core::DataFormat::Delta => b"delta",
+                    kaveon_core::DataFormat::Iceberg => b"iceberg",
+                },
+            );
+            let schema = serde_json::to_value(table.arrow_schema.as_ref()).map_err(|error| {
+                kaveon_core::KaveonError::Execution(format!(
+                    "cannot encode table schema for catalog identity: {error}"
+                ))
+            })?;
+            digest_canonical_json(&mut digest, &schema);
         }
     }
     Ok(format!("sha256:{:x}", digest.finalize()))
+}
+
+fn digest_field(digest: &mut Sha256, bytes: &[u8]) {
+    digest.update((bytes.len() as u64).to_be_bytes());
+    digest.update(bytes);
+}
+
+fn digest_canonical_json(digest: &mut Sha256, value: &serde_json::Value) {
+    match value {
+        serde_json::Value::Null => digest_field(digest, b"null"),
+        serde_json::Value::Bool(value) => {
+            digest_field(digest, if *value { b"true" } else { b"false" })
+        }
+        serde_json::Value::Number(value) => digest_field(digest, value.to_string().as_bytes()),
+        serde_json::Value::String(value) => digest_field(digest, value.as_bytes()),
+        serde_json::Value::Array(values) => {
+            digest_field(digest, b"array");
+            digest.update((values.len() as u64).to_be_bytes());
+            for value in values {
+                digest_canonical_json(digest, value);
+            }
+        }
+        serde_json::Value::Object(values) => {
+            digest_field(digest, b"object");
+            digest.update((values.len() as u64).to_be_bytes());
+            let mut keys = values.keys().collect::<Vec<_>>();
+            keys.sort_unstable();
+            for key in keys {
+                digest_field(digest, key.as_bytes());
+                digest_canonical_json(digest, &values[key]);
+            }
+        }
+    }
 }
 
 struct PrefetchedExchangeInputs {
@@ -1248,8 +1316,15 @@ async fn submit_statement(
         }
     }
 
-    if let Some(distributed) =
-        execute_distributed_aggregate(&state, &query_id, &sql, &context, &plan).await
+    if let Some(distributed) = execute_distributed_aggregate(
+        &state,
+        &query_id,
+        &sql,
+        &context,
+        &plan,
+        query_memory.pool(),
+    )
+    .await
     {
         match distributed {
             Ok((result, stage)) => {
@@ -3355,6 +3430,7 @@ async fn execute_distributed_aggregate(
     sql: &str,
     context: &QueryContext,
     plan: &LogicalPlan,
+    memory: &kaveon_core::QueryMemoryPool,
 ) -> Option<Result<(TaskResponse, StageTelemetry), String>> {
     let (group_count, operations) = aggregate_merge_contract(plan)?;
     let mut workers = {
@@ -3463,7 +3539,13 @@ async fn execute_distributed_aggregate(
     }
     let total_elapsed_us = elapsed_us(started);
     task_metrics.sort_unstable_by_key(|task| task.partition_index);
-    let merged = merge_partial_aggregates(partials, group_count, &operations, total_elapsed_us);
+    let merged = merge_partial_aggregates(
+        partials,
+        group_count,
+        &operations,
+        total_elapsed_us,
+        Some(memory),
+    );
     Some(merged.map(|result| {
         (
             result,
@@ -3615,6 +3697,7 @@ fn merge_partial_aggregates(
     group_count: usize,
     operations: &[MergeOperation],
     elapsed_us: u64,
+    memory: Option<&kaveon_core::QueryMemoryPool>,
 ) -> Result<TaskResponse, String> {
     let columns = partials
         .first()
@@ -3628,6 +3711,11 @@ fn merge_partial_aggregates(
         ));
     }
     let mut groups = std::collections::BTreeMap::<String, Vec<serde_json::Value>>::new();
+    let account = memory
+        .map(|memory| memory.operator("distributed-aggregate-merge"))
+        .transpose()
+        .map_err(|error| error.to_string())?;
+    let mut reservations = Vec::new();
     for partial in partials {
         if partial.columns != columns {
             return Err("workers returned incompatible aggregate schemas".into());
@@ -3647,6 +3735,16 @@ fn merge_partial_aggregates(
                     }
                 }
                 None => {
+                    if let Some(account) = &account {
+                        let row_bytes = serde_json::to_vec(&row)
+                            .map_err(|error| format!("cannot size aggregate row: {error}"))?
+                            .len() as u64;
+                        reservations.push(
+                            account
+                                .reserve((key.len() as u64).saturating_add(row_bytes))
+                                .map_err(|error| error.to_string())?,
+                        );
+                    }
                     groups.insert(key, row);
                 }
             }
@@ -4174,6 +4272,56 @@ mod tests {
         assert_eq!(mismatch.status(), axum::http::StatusCode::CONFLICT);
     }
 
+    #[test]
+    fn catalog_identity_is_canonical_across_registration_order() {
+        use kaveon_core::{
+            AccessPattern, CatalogManager, CatalogProvider, DataFormat, MemoryCatalog, StorageType,
+            TableMeta,
+        };
+
+        fn manager(schema_order: &[&str], table_order: &[&str]) -> CatalogManager {
+            let mut catalog = MemoryCatalog::new(
+                "lake",
+                StorageType::AdlsGen2 {
+                    account: "account".into(),
+                    container: "container".into(),
+                    root_path: "root".into(),
+                },
+            );
+            for schema in schema_order {
+                catalog = catalog.with_schema(*schema);
+            }
+            for table in table_order {
+                catalog
+                    .register_table(
+                        "analytics",
+                        TableMeta {
+                            name: (*table).into(),
+                            arrow_schema: Arc::new(Schema::new(vec![Field::new(
+                                "id",
+                                DataType::Int64,
+                                false,
+                            )])),
+                            location: format!("snapshot/{table}.parquet"),
+                            access: AccessPattern::Shortcut,
+                            format: DataFormat::Parquet,
+                        },
+                    )
+                    .unwrap();
+            }
+            let mut manager = CatalogManager::new("lake", "analytics");
+            manager.register_catalog(Box::new(catalog));
+            manager
+        }
+
+        let first = manager(&["analytics", "empty"], &["events", "users"]);
+        let reversed = manager(&["empty", "analytics"], &["users", "events"]);
+        assert_eq!(
+            super::catalog_snapshot_identity(&first, "lake").unwrap(),
+            super::catalog_snapshot_identity(&reversed, "lake").unwrap()
+        );
+    }
+
     fn columns() -> Vec<ColumnInfo> {
         vec![
             ColumnInfo {
@@ -4319,7 +4467,8 @@ mod tests {
                 elapsed_us: 1,
             },
         ];
-        let merged = merge_partial_aggregates(partials, 1, &[MergeOperation::Add], 2).unwrap();
+        let merged =
+            merge_partial_aggregates(partials, 1, &[MergeOperation::Add], 2, None).unwrap();
         assert_eq!(
             merged.data,
             vec![
@@ -4327,6 +4476,36 @@ mod tests {
                 vec![serde_json::json!("west"), serde_json::json!(4)],
             ]
         );
+    }
+
+    #[test]
+    fn distributed_aggregate_merge_fails_closed_and_releases_memory() {
+        let pool = kaveon_core::QueryMemoryPool::new("aggregate-merge-pressure", 64).unwrap();
+        let partials = vec![TaskResponse {
+            columns: vec![
+                ColumnInfo {
+                    name: "region".into(),
+                    data_type: "Utf8".into(),
+                },
+                ColumnInfo {
+                    name: "count".into(),
+                    data_type: "Int64".into(),
+                },
+            ],
+            data: vec![vec![
+                serde_json::json!("a-region-name-large-enough-to-exceed-the-budget"),
+                serde_json::json!(1),
+            ]],
+            elapsed_us: 1,
+        }];
+
+        let error =
+            match merge_partial_aggregates(partials, 1, &[MergeOperation::Add], 2, Some(&pool)) {
+                Ok(_) => panic!("aggregate merge unexpectedly exceeded its memory budget"),
+                Err(error) => error,
+            };
+        assert!(error.contains("cannot reserve"), "{error}");
+        assert_eq!(pool.snapshot().current_bytes, 0);
     }
 
     #[test]
