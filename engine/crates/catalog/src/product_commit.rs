@@ -535,6 +535,13 @@ mod tests {
         }
     }
 
+    fn control(path: &str) -> ImmutableFileRef {
+        ImmutableFileRef {
+            path: format!("control/{path}.json"),
+            sha256: DIGEST.into(),
+        }
+    }
+
     #[test]
     fn oversized_publication_cannot_create_an_unreadable_snapshot() {
         assert!(encode(&"x".repeat(MAX_SNAPSHOT_BYTES)).is_err());
@@ -563,6 +570,43 @@ mod tests {
         let reopened = catalog_with(storage).read_current().await.unwrap();
         assert_eq!(reopened.generation, 1);
         assert_eq!(reopened.tables.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn committed_control_records_reopen_with_their_table_generation() {
+        let storage = AdlsConditionalCommit::new(Arc::new(InMemory::new()));
+        let catalog = catalog_with(storage.clone());
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        catalog.initialize(genesis.clone()).await;
+        let request = PrepareChange {
+            base: genesis.reference(),
+            snapshot_id: "snapshot-product-state".into(),
+            operation_id: "op-product-state".into(),
+            request_digest: DIGEST.into(),
+            changes: vec![
+                CatalogChange::Put {
+                    table: "kaveon.system_events".into(),
+                    reference: table("system_events"),
+                },
+                CatalogChange::PutControl {
+                    key: "dashboards.executive-overview".into(),
+                    reference: control("dashboard-1"),
+                },
+            ],
+        };
+
+        assert!(matches!(
+            catalog.commit(request).await,
+            CommitOutcome::Committed(_)
+        ));
+        let reopened = catalog_with(storage).read_current().await.unwrap();
+        assert_eq!(reopened.generation, 1);
+        assert!(reopened.tables.contains_key("kaveon.system_events"));
+        assert!(
+            reopened
+                .control_records
+                .contains_key("dashboards.executive-overview")
+        );
     }
 
     #[tokio::test]

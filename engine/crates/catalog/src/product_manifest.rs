@@ -14,6 +14,7 @@ use std::{
 
 pub const SNAPSHOT_FORMAT_VERSION: u32 = 1;
 pub const MAX_TABLES: usize = 1_000;
+pub const MAX_CONTROL_RECORDS: usize = 10_000;
 pub const MAX_CHANGES: usize = 100;
 pub const MAX_PARQUET_FILES_PER_TABLE: usize = 10_000;
 
@@ -48,6 +49,10 @@ pub struct CatalogSnapshot {
     pub operation_id: String,
     pub request_digest: String,
     pub tables: BTreeMap<String, TableManifestRef>,
+    /// Immutable product-control documents (datasets, charts, dashboards, and
+    /// similar metadata) published under the same atomic snapshot head.
+    #[serde(default)]
+    pub control_records: BTreeMap<String, ImmutableFileRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +63,13 @@ pub enum CatalogChange {
     },
     Delete {
         table: String,
+    },
+    PutControl {
+        key: String,
+        reference: ImmutableFileRef,
+    },
+    DeleteControl {
+        key: String,
     },
 }
 
@@ -96,6 +108,7 @@ impl CatalogSnapshot {
             operation_id: "genesis".to_owned(),
             request_digest: "0".repeat(64),
             tables: BTreeMap::new(),
+            control_records: BTreeMap::new(),
         })
     }
 
@@ -130,6 +143,7 @@ impl CatalogSnapshot {
         }
 
         let mut tables = self.tables.clone();
+        let mut control_records = self.control_records.clone();
         for change in request.changes {
             match change {
                 CatalogChange::Put { table, reference } => {
@@ -140,10 +154,23 @@ impl CatalogSnapshot {
                         return Err(error(format!("cannot delete absent table '{table}'")));
                     }
                 }
+                CatalogChange::PutControl { key, reference } => {
+                    control_records.insert(key, reference);
+                }
+                CatalogChange::DeleteControl { key } => {
+                    if control_records.remove(&key).is_none() {
+                        return Err(error(format!(
+                            "cannot delete absent control record '{key}'"
+                        )));
+                    }
+                }
             }
         }
         if tables.len() > MAX_TABLES {
             return Err(error("snapshot table limit exceeded"));
+        }
+        if control_records.len() > MAX_CONTROL_RECORDS {
+            return Err(error("snapshot control-record limit exceeded"));
         }
         let generation = self
             .generation
@@ -157,6 +184,7 @@ impl CatalogSnapshot {
             operation_id: request.operation_id,
             request_digest: request.request_digest,
             tables,
+            control_records,
         };
         next.validate()?;
         Ok(next)
@@ -172,9 +200,16 @@ impl CatalogSnapshot {
         if self.tables.len() > MAX_TABLES {
             return Err(error("snapshot table limit exceeded"));
         }
+        if self.control_records.len() > MAX_CONTROL_RECORDS {
+            return Err(error("snapshot control-record limit exceeded"));
+        }
         for (table, reference) in &self.tables {
             validate_table_name(table)?;
             validate_table_reference(reference)?;
+        }
+        for (key, reference) in &self.control_records {
+            validate_control_key(key)?;
+            validate_file(reference, false)?;
         }
         if let Some(parent) = &self.parent {
             validate_snapshot_id("parent snapshot ID", &parent.snapshot_id)?;
@@ -198,18 +233,40 @@ fn validate_request(request: &PrepareChange) -> Result<(), ManifestError> {
             "change count must be between 1 and the configured limit",
         ));
     }
-    let mut names = BTreeSet::new();
+    let mut table_names = BTreeSet::new();
+    let mut control_keys = BTreeSet::new();
     for change in &request.changes {
-        let table = match change {
+        match change {
             CatalogChange::Put { table, reference } => {
                 validate_table_reference(reference)?;
-                table
+                validate_table_name(table)?;
+                if !table_names.insert(table) {
+                    return Err(error(format!("table '{table}' is changed more than once")));
+                }
             }
-            CatalogChange::Delete { table } => table,
-        };
-        validate_table_name(table)?;
-        if !names.insert(table) {
-            return Err(error(format!("table '{table}' is changed more than once")));
+            CatalogChange::Delete { table } => {
+                validate_table_name(table)?;
+                if !table_names.insert(table) {
+                    return Err(error(format!("table '{table}' is changed more than once")));
+                }
+            }
+            CatalogChange::PutControl { key, reference } => {
+                validate_control_key(key)?;
+                validate_file(reference, false)?;
+                if !control_keys.insert(key) {
+                    return Err(error(format!(
+                        "control record '{key}' is changed more than once"
+                    )));
+                }
+            }
+            CatalogChange::DeleteControl { key } => {
+                validate_control_key(key)?;
+                if !control_keys.insert(key) {
+                    return Err(error(format!(
+                        "control record '{key}' is changed more than once"
+                    )));
+                }
+            }
         }
     }
     Ok(())
@@ -279,6 +336,22 @@ fn validate_table_name(name: &str) -> Result<(), ManifestError> {
     Ok(())
 }
 
+fn validate_control_key(key: &str) -> Result<(), ManifestError> {
+    if key.is_empty()
+        || key.len() > 512
+        || key.starts_with('.')
+        || key.ends_with('.')
+        || key.contains("..")
+        || key.chars().any(char::is_control)
+        || !key.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.')
+        })
+    {
+        return Err(error("control-record key is invalid"));
+    }
+    Ok(())
+}
+
 fn validate_identifier(kind: &str, value: &str) -> Result<(), ManifestError> {
     if value.is_empty() || value.len() > 128 || value.chars().any(char::is_control) {
         return Err(error(format!("{kind} is invalid")));
@@ -332,6 +405,12 @@ mod tests {
             }],
         }
     }
+    fn control(path: &str) -> ImmutableFileRef {
+        ImmutableFileRef {
+            path: format!("control/{path}.json"),
+            sha256: DIGEST.into(),
+        }
+    }
     fn change(
         base: SnapshotRef,
         id: &str,
@@ -370,6 +449,78 @@ mod tests {
         assert_eq!(next.generation, 1);
         assert_eq!(next.parent, Some(base.reference()));
         assert_eq!(next.tables.len(), 2);
+    }
+
+    #[test]
+    fn publishes_table_and_control_records_in_one_snapshot() {
+        let base = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        let next = base
+            .prepare(change(
+                base.reference(),
+                "op-product-migration",
+                DIGEST,
+                vec![
+                    CatalogChange::Put {
+                        table: "kaveon.system_events".into(),
+                        reference: table("system_events"),
+                    },
+                    CatalogChange::PutControl {
+                        key: "datasets.550e8400-e29b-41d4-a716-446655440000".into(),
+                        reference: control("dataset-1"),
+                    },
+                    CatalogChange::PutControl {
+                        key: "dashboards.executive-overview".into(),
+                        reference: control("dashboard-1"),
+                    },
+                ],
+            ))
+            .unwrap();
+
+        assert_eq!(next.tables.len(), 1);
+        assert_eq!(next.control_records.len(), 2);
+        assert!(base.tables.is_empty());
+        assert!(base.control_records.is_empty());
+    }
+
+    #[test]
+    fn invalid_control_change_aborts_the_whole_preparation() {
+        let base = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        let result = base.prepare(change(
+            base.reference(),
+            "op-invalid-control",
+            DIGEST,
+            vec![
+                CatalogChange::Put {
+                    table: "kaveon.system_events".into(),
+                    reference: table("system_events"),
+                },
+                CatalogChange::PutControl {
+                    key: "../credentials".into(),
+                    reference: control("invalid"),
+                },
+            ],
+        ));
+
+        assert!(result.is_err());
+        assert!(base.tables.is_empty());
+        assert!(base.control_records.is_empty());
+    }
+
+    #[test]
+    fn snapshots_without_control_records_remain_readable() {
+        let legacy = serde_json::json!({
+            "version": SNAPSHOT_FORMAT_VERSION,
+            "generation": 0,
+            "snapshot_id": "snapshot-genesis",
+            "parent": null,
+            "operation_id": "genesis",
+            "request_digest": "0".repeat(64),
+            "tables": {}
+        });
+        let decoded: CatalogSnapshot = serde_json::from_value(legacy).unwrap();
+
+        assert!(decoded.control_records.is_empty());
+        decoded.validate().unwrap();
     }
 
     #[test]

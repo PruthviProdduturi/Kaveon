@@ -33,6 +33,32 @@ inventory is:
 | Adaptive/DLM state | `context_snapshots`, `context_answer_cache`, `dlm_artifact`, `dlm_value_index`, `dlm_router` | Unique keys, bounded cache semantics, generated artifacts and value indexes |
 | Legacy chat | `chat_sessions`, `chat_messages` | Owner checks, ordered messages, potentially sensitive payloads; separately provisioned today |
 
+The schema file is not the whole live inventory. `dlm_answers` and `dlm_sketch`
+are created by `api/dlm/engine.py`; `chat_sessions` and `chat_messages` live in
+`data/migrations/chat_history.sql`; and `ai_providers` and `user_ai_keys` are
+created at runtime by `api/services/ai_service.py`. A migration inventory must
+discover the deployed database as well as compare it with these definitions.
+
+### Service and dependency map
+
+| Order | Objects | Writers and readers | Required invariants |
+| ---: | --- | --- | --- |
+| 0 | Entra principal and role mapping | authentication middleware | Tenant plus immutable provider subject is authoritative; email is mutable metadata |
+| 1 | `catalog_sources`, `data_sources` | catalog-source/data-source routers, Engine bridge, SQL routing | Unique source identity/name, valid lifecycle, encrypted credential references only |
+| 2 | `datasets` | dataset service, chat, SQL and Lab routers | Stable ID, owner/visibility, valid physical catalog/schema/table reference |
+| 3 | `dataset_dimensions`, `dataset_columns`, `dataset_metrics` | dataset service, query generator, chat, DLM compiler | Existing parent; unique semantic identity; replace-all edits are atomic |
+| 4 | `charts` | chart service and dashboard renderer | Existing dataset, typed query/viz configuration, owner/visibility |
+| 5 | `dashboards` | dashboard service and DLM curator | Chart and filter-dataset references resolve at one revision; layout and chart list change together |
+| 6 | `favorites`, `saved_queries`, `user_themes`, `user_recents` | corresponding services | Owner-scoped uniqueness and authorization-filtered reads |
+| 7 | `query_history`, `activity` | query history and catalog-source audit | Append identity, trace/query ID, deterministic ordering and retention |
+| 8 | `chat_sessions`, `chat_messages` | chat-history/chat routers | Session owner check; message append and session timestamp update are atomic |
+| 9 | `context_snapshots`, `context_answer_cache`, `dlm_artifact`, `dlm_value_index`, `dlm_router`, `dlm_answers`, `dlm_sketch` | DLM profiler/router/engine | Existing dataset and one source revision; a complete generation publishes atomically |
+
+`ai_providers`, `user_ai_keys`, `data_sources.connection_string`, and other
+encrypted credential envelopes stay in the key-managed secret boundary.
+KaveonDB may store a non-secret reference and rotation metadata, but ordinary
+catalog Parquet must not contain the credential envelope.
+
 There is no canonical product users table. API authorization derives a verified
 Entra principal and role; email is presently used in many ownership rows. The
 target object model must retain immutable tenant and provider-subject identity
@@ -54,6 +80,14 @@ definition operation. The API metadata adapter exposes independent
 `query`/`execute` calls; its PostgreSQL connections use autocommit. Existing
 multi-write operations consequently cannot be reproduced by replacing one SQL
 query with a Parquet write.
+
+Several compound mutations therefore lack an atomic boundary today: dataset
+creation and semantic child inserts; delete-and-recreate semantic edits;
+dashboard/chart cleanup and imports; data-source favorite replacement; chat
+message append plus session timestamp update; and DLM answer/value/sketch
+replacement plus artifact publication. These need explicit repository
+transactions before dual write. An outbox added after the writes would still
+permit a partial source mutation.
 
 The target must preserve primary/unique/foreign-key-like rules, ownership and
 role checks, pagination and ordering, and atomic cross-table changes. SQL
@@ -103,6 +137,116 @@ families move.
 During transition PostgreSQL is source-authoritative with a durable outbox;
 there is no claim of cross-system atomic commit. After cutover the ADLS service
 is the family’s sole writer. A reverse mirror needs its own protocol and proof.
+
+## Staged KaveonDB delivery
+
+KaveonDB is the logical transactional product database. Its durable tables and
+indexes may use the ADLS manifest protocol, but callers use typed repositories
+and transactions instead of arbitrary metadata SQL.
+
+### Stage 0 — contract and PostgreSQL transaction repair
+
+Define typed schemas, canonical JSON/timestamp encodings, immutable
+tenant/subject identity, foreign and unique constraints, revision tokens,
+idempotency keys and retention classes. Add a PostgreSQL unit-of-work API and
+move every compound mutation into it. Add one outbox record in that same commit.
+
+Exit when failure injection after every statement proves all-or-nothing source
+state and exactly one durable outbox event per committed request.
+
+### Stage 1 — KaveonDB transaction substrate
+
+Implement versioned schemas, immutable data/index objects, manifest validation,
+one conditional head update, pinned-head readers, request-digest idempotency,
+bounded constraint indexes and application-level head history. Prove concurrent
+conflicts, lost-response replay, restart recovery, corruption detection and
+restoration from a verified prior head.
+
+### Stage 2 — bounded product objects
+
+Move `datasets` plus semantic children, then `charts`, `dashboards` and
+`favorites`. This slice exercises parent/child cascades, JSON payloads,
+cross-object references, visibility, owner uniqueness and dashboard changes
+spanning multiple objects. Backfill in dependency order, replay the source
+outbox, and run authorization-filtered shadow reads. PostgreSQL stays
+authoritative.
+
+### Stage 3 — sources and personal state
+
+Move non-secret `catalog_sources` and `data_sources` metadata, saved queries,
+themes and recents. Keep secret values in their existing key-managed boundary.
+Resolve a source and its Engine definition at one pinned KaveonDB revision.
+
+### Stage 4 — append-heavy history and chat
+
+Move activity, query history and chat only after partitioning, ordered cursor
+reads, retention/deletion and payload-encryption policies exist. High-volume
+history must not rewrite unrelated product objects.
+
+### Stage 5 — derived context
+
+Rebuild DLM/context state from cut-over dataset definitions and current data
+instead of treating old derived rows as authority. Publish each dataset's
+artifact, router, values, answers and sketches against one source revision. An
+old generation cannot remain routable after the dataset revision changes.
+
+### Stage 6 — family-by-family cutover
+
+Fence one repository family’s PostgreSQL writers, drain through a recorded
+outbox sequence, reconcile the final watermark, switch reads, then enable
+KaveonDB writes. Do not run unfenced bidirectional writes. Retain PostgreSQL and
+its outbox throughout the rollback window.
+
+## Dual-write and rollback criteria
+
+Dual write means a PostgreSQL transaction plus outbox followed asynchronously
+by idempotent KaveonDB apply. It is not two best-effort synchronous writes. The
+target apply key is `(tenant, repository family, source sequence)`; reusing it
+with another request digest is rejected.
+
+A family may cut over only when outbox lag is zero at the fence; counts, IDs,
+canonical payload hashes, revisions and references reconcile at one watermark;
+role-filtered list/detail reads match for Admin, Analyst and Viewer; CRUD,
+cascade, replay and revision-conflict tests pass; pod restart and ambiguous
+timeout tests never expose a partial revision; and dashboard/chart resolution
+pins one catalog revision.
+
+Rollback is mandatory for a reconciliation mismatch, invariant bypass, lag
+breach, commit-error-budget breach, invalid head, or authorization difference.
+Fence KaveonDB writes, preserve the failing head and telemetry, switch reads to
+PostgreSQL, and do not replay target-only writes without a separately tested
+reverse-reconciliation procedure.
+
+## AKS acceptance suite
+
+Run against an isolated namespace/storage prefix with three Engine workers and
+at least two API replicas:
+
+1. Seed sources, a dataset with semantic children, charts, a dashboard,
+   favorites, saved queries, history and chat; record hashes and head revision.
+2. Execute the API CRUD/role matrix. Reject cross-tenant and another user’s
+   private-object access.
+3. Update a dataset and children while rendering its dashboard. Each request
+   sees the prior or new revision, never mixed references.
+4. Race two updates with one expected revision. Require one commit and one
+   retryable conflict; replay the winner’s idempotency key without a new head.
+5. Kill coordinator/API pods before upload, after upload and around head CAS.
+   The visible head remains complete; orphan data is unreachable and collected.
+6. Inject ADLS timeout/throttling and ambiguous responses. Bounded retries must
+   produce no duplicate object, favorite, message or outbox application.
+7. Corrupt an isolated candidate manifest/index. Readers reject it and recover
+   only from verified head history, never blob-listing order.
+8. Backfill while source writes continue, catch up, fence, reconcile, shadow
+   read and cut over. Render the canonical eight dashboards and execute all 70
+   chart definitions at the final watermark.
+9. Force every rollback trigger and meet the recovery objective without object
+   or authorization loss.
+10. Rebuild DLM after object cutover. Verify no stale dataset IDs, source-revision
+    agreement, exact eligible hits and SQL fallback for stale, approximate or
+    unsupported context.
+
+Archive image digests, watermarks, KaveonDB head, hash reconciliation, role and
+failure matrices, dashboard query IDs, latency percentiles and rollback times.
 
 ## Acceptance and telemetry gates
 
