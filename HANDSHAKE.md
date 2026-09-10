@@ -60,13 +60,28 @@ before parsing or planning and return `409 CATALOG_SNAPSHOT_MISMATCH` rather
 than reading a newer or divergent definition. Missing identity remains accepted
 only for rolling compatibility with older task senders. Executable fragments
 omit it because they already serialize resolved sources and data snapshot IDs.
-Wire compatibility, matching identity and fail-closed mismatch tests pass; all
-103 server tests pass.
+The versioned digest uses explicit storage/access/format tags, length-framed
+fields, sorted schema/table names and recursively key-sorted schema JSON; it
+does not depend on Rust `Debug` output. Registration-order determinism, wire
+compatibility, matching identity and fail-closed mismatch tests pass.
 
-The identity is a deterministic in-memory definition digest, not yet the
+The optional field is a rolling-upgrade bridge only: a missing identity is
+accepted for an older sender and therefore provides no pinning guarantee. The
+identity is a deterministic in-memory definition digest, not yet the
 durable ADLS catalog-head generation. It prevents silent mixed catalog reads but
 cannot make an older worker materialize a missing head. Durable head propagation
-and worker catch-up/retry remain the deployment-level prerequisite.
+and worker catch-up/retry remain the deployment-level prerequisite. Computing
+the bridge digest still walks the selected catalog once at coordinator admission
+and once at worker validation; a durable O(1) head ID should replace it.
+
+Round 4 puts the coordinator's legacy distributed grouped-aggregate merge under
+the admitted query memory pool. Each newly retained group reserves its encoded
+key and JSON row footprint before insertion; exhausted budgets fail the query
+closed, and RAII releases every earlier reservation on failure. A pressure test
+proves both rejection and zero retained bytes afterward. This bounds the merge
+map prerequisite; worker partial responses and the returned result still need a
+single streaming/retained-result accounting contract before this path can claim
+complete end-to-end memory coverage.
 
 ## Current integration ledger — September 10, 2026
 
@@ -77,10 +92,10 @@ Historical detail belongs in the log or the linked engineering document.
 
 | Workstream | Baseline | Verified | Boundary | Next gate |
 |---|---|---|---|---|
-| Repository | `dev` at `755d9a7` | CI, Engine and Deploy runs `34523052121`, `34523052001` and `34523052036` passed; Linux, macOS and Windows CLI release builds passed | The full-stack Containers run `34523051977` is still in progress; green component CI does not qualify unfinished transaction work | Require the Containers result, then run the matrix below on the next integrated transaction/runtime head |
+| Repository | `dev` at `489585d` plus locally verified round-4 changes | Exact `489585d` passed 415 tests plus one intentional ignored fixture, workspace formatting, strict Clippy, and benchmark harnesses; round 4 passes 36 catalog and 105 server tests | Local round-4 evidence is not deployed AKS evidence; green component CI does not qualify unfinished transaction work | Commit round 4, require CI/Containers, then run the deployment matrix |
 | AKS runtime | API `dd48b8b7`, Studio `eaa3bbae`, Engine `c8b227a0`; 1 coordinator and 3 workers Ready | Read-only pod/deployment inventory on September 10 | Three Ready workers do not prove failure recovery, pressure behavior, or multi-coordinator consistency | Run bounded AKS correctness, fault, concurrency, and restart gates |
 | DLM showcase | Evidence commit `db54b33` | 9/9 artifacts ready; 716 answers; 45/45 conservative chart shapes served; 7/7 representative SQL comparisons exact; no orphan artifacts/answers | PostgreSQL statistics/value index are unavailable for the Engine catalog; 25 complex or shape-sensitive charts remain on SQL | Qualify freshness for immutable Engine snapshots and every remaining chart shape before removing the Studio Engine-source gate |
-| Transaction publication | Typed product records committed at `755d9a7` on top of the snapshot publication foundation | A prepared snapshot can publish table and typed product references in one generation; revision, uniqueness, concurrent-CAS and reopen tests exist | No native row DML, SQL transaction/session semantics, product repository/cutover, or multi-coordinator service is implemented | Complete the transactional correctness rows below before migration |
+| Transaction publication | Typed records/references at `fd1f879`; immutable document and repository reads verified in round 4 | Atomic revisions, uniqueness, typed references, create-only digest-checked documents, point/unique lookup and snapshot-bound pagination pass locally | No native row DML, SQL transaction/session semantics, API cutover, or multi-coordinator service is implemented | Add typed API repositories and shadow reads before migration |
 | Distributed analytics | Engine digest `c8b227a0` | Existing three-worker AKS dashboard queries and the documented distributed operator suite pass | Current evidence does not establish transactional/analytical snapshot interaction, scheduler fault tolerance under the new changes, or Trino parity | Re-run distributed equivalence and fault gates against committed snapshots |
 | Product migration | PostgreSQL remains authoritative | Canonical dashboards and DLM metadata are healthy before cutover | Product system tables have not moved to ADLS and rollback/fencing are unproved | Inventory, reconcile, fence writes, cut over, restart, and demonstrate rollback |
 
@@ -100,11 +115,11 @@ AKS separately. Never promote a local result to a deployed claim.
 | Transaction telemetry | Exercise commit, reject, cancel, and ambiguous attempts | Counters reconcile without payloads; ambiguous/cancelled attempts are not labeled commit or rollback | Local metric tests exist; API/operations exposure pending |
 | Native SQL transactions | Parameterized INSERT/UPDATE/DELETE plus BEGIN/COMMIT/ROLLBACK and multi-table writes | Typed results, read-your-writes, rollback, atomic visibility, and explicit rejection of unsupported syntax | Not implemented |
 | Isolation/conflicts | Contended keys, write skew, range predicates, phantoms, and snapshot reads during commits | Documented isolation level matches observed conflicts; readers stay on one committed generation | Not implemented end to end |
-| Constraints/indexes | Primary/unique/not-null/check/foreign-key violations and point/range lookup plans | Constraints survive concurrency/retry/restart; point operations remain bounded | Not implemented |
+| Constraints/indexes | Primary/unique/not-null/check/foreign-key violations and point/range lookup plans | Constraints survive concurrency/retry/restart; point operations remain bounded | Typed product uniqueness and Chart/Dashboard references pass locally; SQL row constraints and range indexes remain pending |
 | Scheduler correctness | Run scan, grouped/global aggregate, TopN, join, window, and set operations locally and with three workers | Result schema, ordered/unordered row hash, nulls, errors, and query state match | Existing suite is baseline; rerun on integrated head |
 | Retry/work stealing | Kill or delay a worker after lease/exchange production and create a skewed tail | No partition is lost or double-counted; retry avoids the failed worker; stolen attempt invalidates the old attempt | Unit coverage exists; Docker/AKS fault evidence pending |
-| Snapshot pinning | Publish a new table/control generation while a distributed query is in flight | Every fragment reads the query's pinned immutable references; one query never mixes generations | Pending integration test |
-| Memory/spill/admission | Concurrent large aggregate/join/sort workloads at and above configured limits | Bounded reservations/spill, deterministic admission, cleanup, and no silent local fallback after distributed execution starts | Local component coverage exists; pressure run pending |
+| Snapshot pinning | Publish a new table/control generation while a distributed query is in flight | Every fragment reads the query's pinned immutable references; one query never mixes generations | Coordinator/executable-fragment pinning and raw-task mismatch rejection pass locally; durable head propagation and AKS race test remain pending |
+| Memory/spill/admission | Concurrent large aggregate/join/sort workloads at and above configured limits | Bounded reservations/spill, deterministic admission, cleanup, and no silent local fallback after distributed execution starts | Aggregate merge reservation/failure cleanup and component coverage pass locally; join spill and AKS pressure remain pending |
 | Cancellation/restart | Cancel during scan/exchange/final stage; restart coordinator and one worker | Terminal state is stable, exchanges/tasks clean up, committed catalog reopens, and unknown writes stay indeterminate | Pending combined runtime test |
 | Product cutover | Migrate datasets, charts, dashboards, filters, favorites, roles, ownership, history and DLM metadata | Reconciled counts/hashes; create-save-reopen works; restart preserves edits; write fence prevents PostgreSQL drift; rollback is demonstrated | Not started; PostgreSQL remains authoritative |
 | Comparative performance | Repeat equivalent analytics against Trino and transactions against PostgreSQL with matched resources/cache state | Result hashes plus throughput, p50/p95/p99, conflicts/errors, scan/memory/network/storage and cost | Pending; no 90% superiority claim is supported |
@@ -121,6 +136,7 @@ AKS separately. Never promote a local result to a deployed claim.
 | 2026-09-10 | `755d9a7` plus in-flight typed-reference/runtime integration | Local Windows | `cargo test --workspace --all-targets`; `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets -- -D warnings` | **Passed:** 409 tests, one intentional ignored CLI fixture, aggregate/storage benchmark harnesses, workspace formatting and strict Clippy | Repeatable local commands from the round-two integration session; this validates the shared working tree, not an AKS image |
 | 2026-09-10 | `755d9a7` | GitHub Actions | CI `34523052121`; Engine `34523052001`; Deploy `34523052036` | **Passed:** Web lint/type/build, API tests, secret scan, Vercel deploy, Rust format/Clippy/tests, three-platform release builds, dev release and deploy | Linked workflow runs; Containers `34523051977` remained in progress when recorded |
 | 2026-09-10 | `fd1f879` | Local Windows | `cargo test --workspace --all-targets`; `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets -- -D warnings` | **Passed:** 412 tests, one intentional ignored CLI fixture, aggregate/storage benchmark harnesses, workspace formatting and strict Clippy | Exact clean commit; local evidence covers typed references and coordinator query catalog pinning, not deployment or legacy worker raw-SQL catalog consistency |
+| 2026-09-10 | `489585d` | Local Windows | `cargo test --workspace --all-targets`; `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets -- -D warnings` | **Passed:** 415 tests, one intentional ignored CLI fixture, aggregate/storage benchmark harnesses, workspace formatting and strict Clippy | Exact committed Round 4 implementation; review blocks scale qualification because every head read verifies every product document, and the computed catalog identity uses Rust debug formatting rather than a durable canonical generation |
 
 The two failed rows above record the intentionally caught intermediate state,
 before the owning agent completed its edit. The integrated passing row supersedes
@@ -140,18 +156,24 @@ per-index normalization and collation policy is required before product cutover.
 Immutable product documents are now published create-only before the head CAS,
 bounded to 8 MiB each, and verified against their declared SHA-256. Missing,
 extra, oversized, or mismatched candidate payloads fail closed; an existing
-object is accepted only when its bytes and digest are identical. Reopening a
-snapshot revalidates every referenced product document. Typed references enforce chart-to-dataset and
+object is accepted only when its bytes and digest are identical. Head and
+snapshot reads remain constant-object operations; product documents are fetched
+and digest-verified lazily by typed point lookup, so corruption fails at payload
+access without a 100,000-object reopen fan-out. Typed references enforce chart-to-dataset and
 dashboard-to-chart/dataset relationships against the final snapshot. Deletes
 use explicit restrict semantics; cascade is not implicit. This permits atomic
 parent-and-child creation while rejecting dangling references and referenced
 parent deletion. Existing snapshots and typed records without references remain
 readable. Tests cover CRUD revisions, uniqueness and reference failures,
 same-transaction relationships, concurrent same-base updates with one durable
-CAS winner, and reopen recovery. This is a transactional metadata foundation;
+CAS winner, reopen recovery, and lazy corruption detection. Snapshot reads now
+provide bounded point lookup, exact named-unique lookup, and kind-scoped bytewise
+ID pagination up to 100 records. Versioned opaque cursors bind generation,
+snapshot ID, kind, and the last ID; malformed, cross-kind, and newer-snapshot
+reuse is rejected. This is a transactional metadata foundation;
 PostgreSQL remains authoritative until the repository adapter, migration,
 dual-read validation, rollback, and live qualification gates are complete.
-Catalog validation is 33/33 tests with strict Clippy clean.
+Catalog validation is 36/36 tests with strict Clippy clean.
 
 ### Catalog cleanup and SQL Lab navigation - September 8 (UTC September 9)
 
