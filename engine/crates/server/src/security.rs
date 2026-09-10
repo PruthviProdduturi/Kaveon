@@ -91,6 +91,7 @@ impl SecurityConfig {
         }
         let mut group_names = std::collections::HashSet::new();
         let mut grouped_principals = std::collections::HashSet::new();
+        let mut wildcard_group = None;
         for group in &self.resource_groups {
             anyhow::ensure!(
                 !group.name.trim().is_empty() && group_names.insert(&group.name),
@@ -106,9 +107,17 @@ impl SecurityConfig {
             );
             for principal in &group.principals {
                 anyhow::ensure!(
-                    !principal.trim().is_empty() && grouped_principals.insert(principal),
+                    !principal.trim().is_empty()
+                        && principal == principal.trim()
+                        && grouped_principals.insert(principal),
                     "each principal may belong to only one resource group"
                 );
+                if principal == "*" {
+                    anyhow::ensure!(
+                        wildcard_group.replace(group.name.as_str()).is_none(),
+                        "only one wildcard resource group is allowed"
+                    );
+                }
             }
         }
         let mut tokens = std::collections::HashSet::new();
@@ -264,6 +273,12 @@ impl PrincipalAdmission {
             .resource_groups
             .iter()
             .find(|group| group.principals.iter().any(|member| member == principal))
+            .or_else(|| {
+                config
+                    .resource_groups
+                    .iter()
+                    .find(|group| group.principals.iter().any(|member| member == "*"))
+            })
         else {
             return Ok(None);
         };
@@ -572,5 +587,60 @@ mod tests {
         );
         drop(first);
         assert!(waiting.await.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn wildcard_group_admits_unlisted_principals_and_exact_group_wins() {
+        let admission = PrincipalAdmission::default();
+        let config = SecurityConfig {
+            resource_groups: vec![
+                ResourceGroupConfig {
+                    name: "interactive".into(),
+                    principals: vec!["alice".into()],
+                    max_running: 1,
+                    max_queued: 0,
+                    queue_timeout_ms: 100,
+                },
+                ResourceGroupConfig {
+                    name: "default".into(),
+                    principals: vec!["*".into()],
+                    max_running: 1,
+                    max_queued: 0,
+                    queue_timeout_ms: 100,
+                },
+            ],
+            ..Default::default()
+        };
+        config.validate().unwrap();
+
+        let alice = admission.admit_group("alice", &config).await.unwrap();
+        let bob = admission.admit_group("bob", &config).await.unwrap();
+        assert!(alice.is_some());
+        assert!(bob.is_some());
+        assert!(admission.groups.lock().unwrap().contains_key("interactive"));
+        assert!(admission.groups.lock().unwrap().contains_key("default"));
+        assert_eq!(admission.groups.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn resource_groups_reject_multiple_wildcards_and_whitespace_principals() {
+        let group = |name: &str, principal: &str| ResourceGroupConfig {
+            name: name.into(),
+            principals: vec![principal.into()],
+            max_running: 1,
+            max_queued: 0,
+            queue_timeout_ms: 100,
+        };
+        let duplicate_default = SecurityConfig {
+            resource_groups: vec![group("one", "*"), group("two", "*")],
+            ..Default::default()
+        };
+        assert!(duplicate_default.validate().is_err());
+
+        let whitespace = SecurityConfig {
+            resource_groups: vec![group("one", " alice ")],
+            ..Default::default()
+        };
+        assert!(whitespace.validate().is_err());
     }
 }
