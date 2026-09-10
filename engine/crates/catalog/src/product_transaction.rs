@@ -1,0 +1,279 @@
+//! Explicit transaction sessions over the durable product-catalog head.
+//!
+//! A session pins the head observed by `begin`, validates the complete staged
+//! write set in memory, exposes that preview for read-your-writes, and submits
+//! exactly one conditional publication on commit. Dropping or rolling back a
+//! session publishes nothing.
+
+use std::fmt;
+
+use crate::{
+    product_commit::{CommitOutcome, ProductCatalogCommit, ProductDocuments},
+    product_manifest::{CatalogChange, CatalogSnapshot, PrepareChange},
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransactionError {
+    CannotReadHead,
+    InvalidWriteSet(String),
+}
+
+impl fmt::Display for TransactionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CannotReadHead => formatter.write_str("cannot read the current catalog head"),
+            Self::InvalidWriteSet(message) => write!(formatter, "invalid transaction: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for TransactionError {}
+
+/// One optimistic transaction. `commit` and `rollback` consume the session so
+/// a caller cannot accidentally reuse it after completion.
+pub struct ProductTransaction {
+    catalog: ProductCatalogCommit,
+    base: CatalogSnapshot,
+    request: PrepareChange,
+    documents: ProductDocuments,
+    preview: Option<CatalogSnapshot>,
+}
+
+impl ProductTransaction {
+    pub async fn begin(
+        catalog: ProductCatalogCommit,
+        snapshot_id: impl Into<String>,
+        operation_id: impl Into<String>,
+        request_digest: impl Into<String>,
+    ) -> Result<Self, TransactionError> {
+        let base = catalog
+            .read_current()
+            .await
+            .map_err(|_| TransactionError::CannotReadHead)?;
+        Ok(Self {
+            catalog,
+            request: PrepareChange {
+                base: base.reference(),
+                snapshot_id: snapshot_id.into(),
+                operation_id: operation_id.into(),
+                request_digest: request_digest.into(),
+                changes: Vec::new(),
+            },
+            base,
+            documents: ProductDocuments::new(),
+            preview: None,
+        })
+    }
+
+    /// Stages a write and validates the entire transaction. Failed staging is
+    /// atomic: the previous staged state remains available.
+    pub fn stage(&mut self, change: CatalogChange) -> Result<(), TransactionError> {
+        let mut candidate = self.request.clone();
+        candidate.changes.push(change);
+        let preview = self
+            .base
+            .prepare(candidate.clone())
+            .map_err(|error| TransactionError::InvalidWriteSet(error.to_string()))?;
+        self.request = candidate;
+        self.preview = Some(preview);
+        Ok(())
+    }
+
+    /// Adds immutable bytes needed by staged product-record writes. Exact path
+    /// and digest coverage is checked by the durable commit boundary.
+    pub fn stage_document(&mut self, path: impl Into<String>, bytes: Vec<u8>) {
+        self.documents.insert(path.into(), bytes);
+    }
+
+    #[must_use]
+    pub fn base_snapshot(&self) -> &CatalogSnapshot {
+        &self.base
+    }
+
+    /// Returns the transaction-local snapshot, including all staged writes.
+    #[must_use]
+    pub fn snapshot(&self) -> &CatalogSnapshot {
+        self.preview.as_ref().unwrap_or(&self.base)
+    }
+
+    #[must_use]
+    pub fn staged_change_count(&self) -> usize {
+        self.request.changes.len()
+    }
+
+    pub async fn commit(self) -> Result<CommitOutcome, TransactionError> {
+        if self.request.changes.is_empty() {
+            return Err(TransactionError::InvalidWriteSet(
+                "at least one change is required".to_owned(),
+            ));
+        }
+        Ok(self
+            .catalog
+            .commit_with_documents(self.request, self.documents)
+            .await)
+    }
+
+    /// Ends the session without storage writes and returns its pinned base.
+    #[must_use]
+    pub fn rollback(self) -> CatalogSnapshot {
+        self.base
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use kaveon_storage::AdlsConditionalCommit;
+    use object_store::memory::InMemory;
+
+    use super::*;
+    use crate::{
+        product_manifest::{ImmutableFileRef, TableManifestRef},
+        product_metrics::TransactionMetrics,
+    };
+
+    const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    fn table(name: &str) -> TableManifestRef {
+        TableManifestRef {
+            manifest: ImmutableFileRef {
+                path: format!("manifests/{name}.json"),
+                sha256: DIGEST.into(),
+            },
+            parquet_files: Vec::new(),
+        }
+    }
+
+    async fn catalog() -> ProductCatalogCommit {
+        let storage = AdlsConditionalCommit::new(Arc::new(InMemory::new()));
+        let catalog =
+            ProductCatalogCommit::new(storage, "catalog", Arc::new(TransactionMetrics::default()))
+                .unwrap();
+        assert!(matches!(
+            catalog
+                .initialize(CatalogSnapshot::empty("snapshot-genesis").unwrap())
+                .await,
+            CommitOutcome::Committed(_)
+        ));
+        catalog
+    }
+
+    #[tokio::test]
+    async fn staged_writes_are_visible_together_and_commit_atomically() {
+        let catalog = catalog().await;
+        let mut transaction =
+            ProductTransaction::begin(catalog.clone(), "snapshot-1", "operation-1", DIGEST)
+                .await
+                .unwrap();
+        transaction
+            .stage(CatalogChange::Put {
+                table: "app.users".into(),
+                reference: table("users"),
+            })
+            .unwrap();
+        transaction
+            .stage(CatalogChange::Put {
+                table: "app.orders".into(),
+                reference: table("orders"),
+            })
+            .unwrap();
+
+        assert_eq!(transaction.base_snapshot().tables.len(), 0);
+        assert_eq!(transaction.snapshot().tables.len(), 2);
+        assert_eq!(transaction.staged_change_count(), 2);
+        assert!(matches!(
+            transaction.commit().await.unwrap(),
+            CommitOutcome::Committed(_)
+        ));
+        assert_eq!(catalog.read_current().await.unwrap().tables.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn rollback_does_not_publish_staged_writes() {
+        let catalog = catalog().await;
+        let mut transaction =
+            ProductTransaction::begin(catalog.clone(), "snapshot-1", "operation-1", DIGEST)
+                .await
+                .unwrap();
+        transaction
+            .stage(CatalogChange::Put {
+                table: "app.users".into(),
+                reference: table("users"),
+            })
+            .unwrap();
+        let base = transaction.rollback();
+
+        assert_eq!(base.generation, 0);
+        assert!(catalog.read_current().await.unwrap().tables.is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_stage_preserves_the_prior_transaction_view() {
+        let catalog = catalog().await;
+        let mut transaction =
+            ProductTransaction::begin(catalog, "snapshot-1", "operation-1", DIGEST)
+                .await
+                .unwrap();
+        let change = CatalogChange::Put {
+            table: "app.users".into(),
+            reference: table("users"),
+        };
+        transaction.stage(change.clone()).unwrap();
+        assert!(transaction.stage(change).is_err());
+        assert_eq!(transaction.staged_change_count(), 1);
+        assert_eq!(transaction.snapshot().tables.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn concurrent_sessions_from_one_head_have_one_commit_winner() {
+        let catalog = catalog().await;
+        let mut left = ProductTransaction::begin(catalog.clone(), "snapshot-left", "left", DIGEST)
+            .await
+            .unwrap();
+        let mut right =
+            ProductTransaction::begin(catalog.clone(), "snapshot-right", "right", DIGEST)
+                .await
+                .unwrap();
+        left.stage(CatalogChange::Put {
+            table: "app.left".into(),
+            reference: table("left"),
+        })
+        .unwrap();
+        right
+            .stage(CatalogChange::Put {
+                table: "app.right".into(),
+                reference: table("right"),
+            })
+            .unwrap();
+
+        let (left, right) = tokio::join!(left.commit(), right.commit());
+        let outcomes = [left.unwrap(), right.unwrap()];
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| matches!(outcome, CommitOutcome::Committed(_)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| matches!(outcome, CommitOutcome::Conflict))
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_transaction_cannot_commit() {
+        let catalog = catalog().await;
+        let transaction = ProductTransaction::begin(catalog, "snapshot-1", "operation-1", DIGEST)
+            .await
+            .unwrap();
+        assert!(matches!(
+            transaction.commit().await,
+            Err(TransactionError::InvalidWriteSet(_))
+        ));
+    }
+}

@@ -3,6 +3,7 @@
 pub mod product_commit;
 pub mod product_manifest;
 pub mod product_metrics;
+pub mod product_transaction;
 
 use kaveon_core::{
     CatalogDefinition, CatalogId, CatalogRevision, KaveonError, Result, SchemaDefinition, SchemaId,
@@ -10,6 +11,7 @@ use kaveon_core::{
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     path::Path,
@@ -49,7 +51,7 @@ impl CatalogStore {
     pub fn open_in_memory() -> Result<Self> {
         Self::initialize(Connection::open_in_memory().map_err(db_error)?)
     }
-    fn initialize(connection: Connection) -> Result<Self> {
+    fn initialize(mut connection: Connection) -> Result<Self> {
         connection
             .busy_timeout(DATABASE_BUSY_TIMEOUT)
             .map_err(db_error)?;
@@ -57,6 +59,9 @@ impl CatalogStore {
             .execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")
             .map_err(db_error)?;
         migrate(&connection)?;
+        let transaction = immediate(&mut connection)?;
+        refresh_snapshot_identity(&transaction)?;
+        transaction.commit().map_err(db_error)?;
         Ok(Self {
             connection: Mutex::new(connection),
         })
@@ -226,6 +231,7 @@ impl CatalogStore {
             id.as_str(),
             expected,
         )?;
+        refresh_snapshot_identity(&transaction)?;
         transaction.commit().map_err(db_error)
     }
 
@@ -241,6 +247,19 @@ impl CatalogStore {
                 .query_map(params![after_id.unwrap_or(0), limit], audit_row)
                 .map_err(db_error)?,
         )
+    }
+
+    /// Returns the durable identity of the current catalog definition set.
+    /// Updated atomically with each successful catalog mutation.
+    pub fn snapshot_identity(&self) -> Result<String> {
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "SELECT identity FROM catalog_snapshot WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(db_error)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -275,6 +294,7 @@ impl CatalogStore {
         }
         .map_err(db_error)?;
         audit(&transaction, actor, "create", object_type, id, revision)?;
+        refresh_snapshot_identity(&transaction)?;
         transaction.commit().map_err(db_error)
     }
 
@@ -311,6 +331,7 @@ impl CatalogStore {
             .map_err(db_error)?;
         require_changed(&transaction, table, id, expected, changed)?;
         audit(&transaction, actor, "update", object_type, id, actual)?;
+        refresh_snapshot_identity(&transaction)?;
         transaction.commit().map_err(db_error)
     }
 
@@ -353,6 +374,7 @@ impl CatalogStore {
             expected,
             &details,
         )?;
+        refresh_snapshot_identity(&transaction)?;
         transaction.commit().map_err(db_error)
     }
 
@@ -404,6 +426,8 @@ fn migrate(connection: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS schemas(id TEXT PRIMARY KEY, catalog_id TEXT NOT NULL, name TEXT NOT NULL, revision INTEGER NOT NULL, definition_json TEXT NOT NULL, UNIQUE(catalog_id,name), FOREIGN KEY(catalog_id) REFERENCES catalogs(id) ON DELETE CASCADE);
         CREATE TABLE IF NOT EXISTS tables(id TEXT PRIMARY KEY, schema_id TEXT NOT NULL, name TEXT NOT NULL, revision INTEGER NOT NULL, definition_json TEXT NOT NULL, UNIQUE(schema_id,name), FOREIGN KEY(schema_id) REFERENCES schemas(id) ON DELETE CASCADE);
         CREATE TABLE IF NOT EXISTS audit_events(id INTEGER PRIMARY KEY AUTOINCREMENT, occurred_at_ms INTEGER NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, object_type TEXT NOT NULL, object_id TEXT NOT NULL, revision INTEGER NOT NULL, details_json TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS catalog_snapshot(singleton INTEGER PRIMARY KEY CHECK(singleton = 1), identity TEXT NOT NULL);
+        INSERT OR IGNORE INTO catalog_snapshot(singleton, identity) VALUES (1, 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
         CREATE INDEX IF NOT EXISTS idx_audit_object ON audit_events(object_type, object_id, id);
         INSERT OR IGNORE INTO schema_migrations(version) VALUES ({MIGRATION_VERSION});
     "#)).map_err(db_error)
@@ -413,6 +437,42 @@ fn immediate(connection: &mut Connection) -> Result<Transaction<'_>> {
     connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(db_error)
+}
+
+fn refresh_snapshot_identity(transaction: &Transaction<'_>) -> Result<String> {
+    let mut digest = Sha256::new();
+    digest.update(b"kaveon-durable-catalog-v1");
+    for table in ["catalogs", "schemas", "tables"] {
+        digest_field(&mut digest, table.as_bytes());
+        let mut statement = transaction
+            .prepare(&format!(
+                "SELECT id, definition_json FROM {table} ORDER BY id"
+            ))
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(db_error)?;
+        for row in rows {
+            let (id, definition) = row.map_err(db_error)?;
+            digest_field(&mut digest, id.as_bytes());
+            digest_field(&mut digest, definition.as_bytes());
+        }
+    }
+    let identity = format!("sha256:{:x}", digest.finalize());
+    transaction
+        .execute(
+            "UPDATE catalog_snapshot SET identity = ?1 WHERE singleton = 1",
+            [&identity],
+        )
+        .map_err(db_error)?;
+    Ok(identity)
+}
+
+fn digest_field(digest: &mut Sha256, value: &[u8]) {
+    digest.update((value.len() as u64).to_be_bytes());
+    digest.update(value);
 }
 fn delete_row(
     transaction: &Transaction<'_>,
@@ -657,5 +717,60 @@ mod tests {
         let (_, schema, _) = values();
         assert!(store.create_schema("test", &schema).is_err());
         assert!(store.audit_events(None, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn snapshot_identity_is_durable_and_content_addressed() {
+        let directory =
+            std::env::temp_dir().join(format!("kaveon-catalog-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("catalog.db");
+        let identity = {
+            let store = CatalogStore::open(&path).unwrap();
+            let empty = store.snapshot_identity().unwrap();
+            seed(&store);
+            let populated = store.snapshot_identity().unwrap();
+            assert_ne!(empty, populated);
+            populated
+        };
+        assert_eq!(
+            CatalogStore::open(&path)
+                .unwrap()
+                .snapshot_identity()
+                .unwrap(),
+            identity
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn equivalent_catalogs_have_the_same_snapshot_identity() {
+        let first = CatalogStore::open_in_memory().unwrap();
+        let second = CatalogStore::open_in_memory().unwrap();
+        seed(&first);
+        seed(&second);
+        assert_eq!(
+            first.snapshot_identity().unwrap(),
+            second.snapshot_identity().unwrap()
+        );
+    }
+
+    #[test]
+    fn failed_mutation_does_not_advance_snapshot_identity() {
+        let store = CatalogStore::open_in_memory().unwrap();
+        let (catalog, _, _) = seed(&store);
+        let before = store.snapshot_identity().unwrap();
+        let active = catalog.transition(CatalogLifecycle::Active).unwrap();
+        store
+            .replace_catalog("test", catalog.revision(), &active)
+            .unwrap();
+        let committed = store.snapshot_identity().unwrap();
+        assert_ne!(before, committed);
+        assert!(
+            store
+                .replace_catalog("test", catalog.revision(), &active)
+                .is_err()
+        );
+        assert_eq!(store.snapshot_identity().unwrap(), committed);
     }
 }

@@ -119,3 +119,33 @@ For performance work follow the [benchmark protocol](../benches/README.md).
 Expand qualification to typed numeric semantics, randomized/property cases,
 cloud snapshots, constrained memory, concurrency, skew, worker loss, retries,
 and cancellation before making production-readiness claims.
+
+## Combined PostgreSQL and Trino publication gate
+
+`comparison_gate.py` combines two independent reports and fails closed. The
+analytics input is the `report.json` emitted by `same_files.py`. The transaction
+input must be emitted by a resource-matched Kaveon/PostgreSQL runner and contain:
+
+- `resources_matched`, `publication_workload_gate`, and `correctness_passed` set
+  to true;
+- at least 30 measured, correctness-checked samples for `point_read`, `insert`,
+  `update`, `delete`, `conflicting_update`, and `multi_record_commit`;
+- a deterministic `state_sha256` for each operation;
+- `kaveon_over_postgresql_qps` greater than 1.0 and
+  `kaveon_over_postgresql_p95_ratio` below 1.0.
+
+Run the evaluator even when one service is unavailable; omitted inputs are
+reported as `pending` and the process returns exit code 2 instead of manufacturing
+a result:
+
+```powershell
+& engine/qualification/venv/Scripts/python.exe engine/qualification/comparison_gate.py `
+  --analytics tmp/qualification-extended/report.json `
+  --transactions tmp/qualification-transactions/report.json `
+  --output tmp/qualification-combined/report.json
+```
+
+The combined report claims only the declared workloads. It cannot establish
+general PostgreSQL or Trino superiority. Kaveon's transactional HTTP/SQL surface
+does not yet expose the operations required to produce the transaction input, so
+that half of the publication gate remains pending.

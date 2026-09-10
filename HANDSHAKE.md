@@ -83,6 +83,36 @@ map prerequisite; worker partial responses and the returned result still need a
 single streaming/retained-result accounting contract before this path can claim
 complete end-to-end memory coverage.
 
+The next distributed hardening slice adds a durable, content-addressed catalog
+identity to `CatalogStore`. Catalog, schema and table create/update/delete
+transactions recompute the canonical SHA-256 identity before commit; failed
+optimistic revisions and constraint failures roll it back with the mutation.
+Admission and worker validation can now fetch the persisted identity with one
+indexed singleton read instead of walking every selected table. Focused tests
+cover restart durability, equal identity for equivalent stores, identity change
+after a committed mutation, and no advancement after a failed mutation.
+
+This is the storage foundation for O(1) propagation, not the completed wire
+cutover: `AppState` and raw-SQL task construction still use the in-memory v2
+definition digest. A follow-up must publish the durable identity alongside the
+immutable manager snapshot and require it on all upgraded worker requests;
+rolling compatibility still allows an absent identity.
+
+### Native transaction session workstream — September 10, 2026
+
+`ProductTransaction` now begins from one pinned durable product-catalog head,
+validates the complete staged change set after every write, exposes an immutable
+transaction-local snapshot for read-your-writes, and submits the full write set
+through one conditional head publication. Commit and rollback consume the
+session, preventing accidental reuse. A rejected staged change leaves the prior
+transaction view unchanged; rollback performs no storage publication; and two
+sessions begun from the same head produce exactly one commit and one conflict.
+
+This is a typed repository transaction session, not a SQL transaction claim.
+There is no INSERT/UPDATE/DELETE parser or HTTP session binding, row storage,
+predicate locking, write-skew protection, crash-resumable client session, or
+automatic conflict retry. Five focused tests and strict catalog Clippy pass.
+
 ## Current integration ledger — September 10, 2026
 
 Use one row per independently reviewable workstream. Keep entries short and use
@@ -95,7 +125,7 @@ Historical detail belongs in the log or the linked engineering document.
 | Repository | `dev` at `8157205` | Exact `489585d` passed the 415-test workspace baseline plus one intentional ignored fixture; exact `8157205` passes 36 catalog and 105 server tests, strict component Clippy, formatting, and docs validation | Local round-4 evidence is not deployed AKS evidence; green component tests do not qualify unfinished transaction work | Require CI/Engine/Containers, then run the deployment matrix |
 | AKS runtime | API `dd48b8b7`, Studio `eaa3bbae`, Engine `c8b227a0`; 1 coordinator and 3 workers Ready | Read-only pod/deployment inventory on September 10 | Three Ready workers do not prove failure recovery, pressure behavior, or multi-coordinator consistency | Run bounded AKS correctness, fault, concurrency, and restart gates |
 | DLM showcase | Evidence commit `db54b33` | 9/9 artifacts ready; 716 answers; 45/45 conservative chart shapes served; 7/7 representative SQL comparisons exact; no orphan artifacts/answers | PostgreSQL statistics/value index are unavailable for the Engine catalog; 25 complex or shape-sensitive charts remain on SQL | Qualify freshness for immutable Engine snapshots and every remaining chart shape before removing the Studio Engine-source gate |
-| Transaction publication | Typed records/references at `fd1f879`; immutable document and repository reads verified in round 4 | Atomic revisions, uniqueness, typed references, create-only digest-checked documents, point/unique lookup and snapshot-bound pagination pass locally | No native row DML, SQL transaction/session semantics, API cutover, or multi-coordinator service is implemented | Add typed API repositories and shadow reads before migration |
+| Transaction publication | Typed records/references at `fd1f879`; later immutable reads plus in-flight transaction-session work | Atomic revisions, uniqueness, references, immutable documents, snapshot reads, typed read-your-writes, rollback, and same-head CAS conflict pass locally | No native row DML, SQL/HTTP session binding, API cutover, or multi-coordinator service is implemented | Bind typed sessions to an authenticated API, then add constrained native DML |
 | Distributed analytics | Engine digest `c8b227a0` | Existing three-worker AKS dashboard queries and the documented distributed operator suite pass | Current evidence does not establish transactional/analytical snapshot interaction, scheduler fault tolerance under the new changes, or Trino parity | Re-run distributed equivalence and fault gates against committed snapshots |
 | Product migration | PostgreSQL remains authoritative | Canonical dashboards and DLM metadata are healthy before cutover | Product system tables have not moved to ADLS and rollback/fencing are unproved | Inventory, reconcile, fence writes, cut over, restart, and demonstrate rollback |
 
@@ -113,7 +143,7 @@ AKS separately. Never promote a local result to a deployed claim.
 | Unknown outcomes | Lose the response after snapshot create and around head CAS; remove or corrupt history | Outcome is committed, rejected, or explicitly indeterminate; never falsely reported rolled back | Local fault tests exist; live storage fault evidence pending |
 | Bounds | Exceed snapshot bytes and the 1,024-operation index/shard bound | Fail before publishing an unreadable head; no silent unbounded growth | Snapshot bound covered; shard splitting remains pending |
 | Transaction telemetry | Exercise commit, reject, cancel, and ambiguous attempts | Counters reconcile without payloads; ambiguous/cancelled attempts are not labeled commit or rollback | Local metric tests exist; API/operations exposure pending |
-| Native SQL transactions | Parameterized INSERT/UPDATE/DELETE plus BEGIN/COMMIT/ROLLBACK and multi-table writes | Typed results, read-your-writes, rollback, atomic visibility, and explicit rejection of unsupported syntax | Not implemented |
+| Native SQL transactions | Parameterized INSERT/UPDATE/DELETE plus BEGIN/COMMIT/ROLLBACK and multi-table writes | Typed results, read-your-writes, rollback, atomic visibility, and explicit rejection of unsupported syntax | Typed repository session locally covers read-your-writes, rollback, atomic publication, and conflicts; SQL parsing/execution and client sessions remain unimplemented |
 | Isolation/conflicts | Contended keys, write skew, range predicates, phantoms, and snapshot reads during commits | Documented isolation level matches observed conflicts; readers stay on one committed generation | Not implemented end to end |
 | Constraints/indexes | Primary/unique/not-null/check/foreign-key violations and point/range lookup plans | Constraints survive concurrency/retry/restart; point operations remain bounded | Typed product uniqueness and Chart/Dashboard references pass locally; SQL row constraints and range indexes remain pending |
 | Scheduler correctness | Run scan, grouped/global aggregate, TopN, join, window, and set operations locally and with three workers | Result schema, ordered/unordered row hash, nulls, errors, and query state match | Existing suite is baseline; rerun on integrated head |
@@ -123,6 +153,17 @@ AKS separately. Never promote a local result to a deployed claim.
 | Cancellation/restart | Cancel during scan/exchange/final stage; restart coordinator and one worker | Terminal state is stable, exchanges/tasks clean up, committed catalog reopens, and unknown writes stay indeterminate | Pending combined runtime test |
 | Product cutover | Migrate datasets, charts, dashboards, filters, favorites, roles, ownership, history and DLM metadata | Reconciled counts/hashes; create-save-reopen works; restart preserves edits; write fence prevents PostgreSQL drift; rollback is demonstrated | Not started; PostgreSQL remains authoritative |
 | Comparative performance | Repeat equivalent analytics against Trino and transactions against PostgreSQL with matched resources/cache state | Result hashes plus throughput, p50/p95/p99, conflicts/errors, scan/memory/network/storage and cost | Pending; no 90% superiority claim is supported |
+
+The combined comparison evaluator at
+`engine/qualification/comparison_gate.py` now makes that last row executable and
+machine-readable. It accepts the existing same-file Trino report and a separate
+transaction report, requires correctness hashes, publication-scale/sample gates,
+matched resources, the complete declared operation corpus, a 1.9x Kaveon/Trino
+throughput result, and both PostgreSQL throughput and p95 wins. Missing inputs are
+`pending`; failed gates are `not_qualified`; neither state can publish a win.
+The evaluator is locally covered by three fail-closed tests. A Kaveon transaction
+runner remains blocked on the unimplemented transactional HTTP/SQL surface, so no
+PostgreSQL result or combined superiority claim exists yet.
 
 ### Latest baseline executions
 
