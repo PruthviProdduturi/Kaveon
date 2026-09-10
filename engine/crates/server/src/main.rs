@@ -29,7 +29,9 @@ pub struct AppState {
     pub principal_admission: security::PrincipalAdmission,
     pub config: ServerConfig,
     pub cluster: RwLock<ClusterState>,
-    pub catalog: RwLock<kaveon_core::CatalogManager>,
+    /// Published catalog view. Queries clone the `Arc` once and retain that
+    /// immutable manager while a newer view may be published here.
+    pub catalog: RwLock<Arc<kaveon_core::CatalogManager>>,
     pub catalog_store: kaveon_catalog::CatalogStore,
     pub exchange_store: exchange::ExchangeStore,
     pub lifecycle: lifecycle::WorkerLifecycle<transport::CachedTaskResult>,
@@ -112,7 +114,7 @@ async fn main() {
         principal_admission: security::PrincipalAdmission::default(),
         config,
         cluster: RwLock::new(cluster),
-        catalog: RwLock::new(catalog),
+        catalog: RwLock::new(Arc::new(catalog)),
         catalog_store,
         exchange_store: exchange::ExchangeStore::default(),
         lifecycle: lifecycle::WorkerLifecycle::default(),

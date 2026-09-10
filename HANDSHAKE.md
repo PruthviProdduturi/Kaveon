@@ -38,6 +38,21 @@ Focused resource-group qualification passes all eight security tests. The
 integrated catalog/server tree passes repository-wide formatting, scoped strict
 Clippy, and diff checks.
 
+Round 2 changes the published in-process catalog to an immutable
+`Arc<CatalogManager>` snapshot. Statement submission pins one Arc before schema
+validation and reuses that reference for join optimization, executable fragment
+construction and local physical planning. Publishing a newer manager swaps the
+outer Arc without changing an admitted query's definitions. The integration
+regression publishes a v2 table location after pinning v1 and proves distributed
+fragments still contain only the v1 source. All 102 server tests pass.
+
+This covers coordinator planning and the executable-fragment path, whose scan
+source and Delta/Iceberg versions are serialized to workers. Legacy raw-SQL
+aggregate/TopN task requests still resolve catalog names on each worker and do
+not carry a catalog-head identity. They remain a boundary until those fallbacks
+use executable fragments or enforce a shared revision; do not claim full
+cross-worker catalog-head pinning for them.
+
 ## Current integration ledger — September 10, 2026
 
 Use one row per independently reviewable workstream. Keep entries short and use
@@ -47,10 +62,10 @@ Historical detail belongs in the log or the linked engineering document.
 
 | Workstream | Baseline | Verified | Boundary | Next gate |
 |---|---|---|---|---|
-| Repository | `dev` at `db54b33` | CI and Deploy runs `34426997861` and `34426997828` passed | A green docs/API pipeline does not qualify unfinished Engine transaction work | Run the matrix below on the integrated transaction/runtime head |
+| Repository | `dev` at `755d9a7` | CI, Engine and Deploy runs `34523052121`, `34523052001` and `34523052036` passed; Linux, macOS and Windows CLI release builds passed | The full-stack Containers run `34523051977` is still in progress; green component CI does not qualify unfinished transaction work | Require the Containers result, then run the matrix below on the next integrated transaction/runtime head |
 | AKS runtime | API `dd48b8b7`, Studio `eaa3bbae`, Engine `c8b227a0`; 1 coordinator and 3 workers Ready | Read-only pod/deployment inventory on September 10 | Three Ready workers do not prove failure recovery, pressure behavior, or multi-coordinator consistency | Run bounded AKS correctness, fault, concurrency, and restart gates |
 | DLM showcase | Evidence commit `db54b33` | 9/9 artifacts ready; 716 answers; 45/45 conservative chart shapes served; 7/7 representative SQL comparisons exact; no orphan artifacts/answers | PostgreSQL statistics/value index are unavailable for the Engine catalog; 25 complex or shape-sensitive charts remain on SQL | Qualify freshness for immutable Engine snapshots and every remaining chart shape before removing the Studio Engine-source gate |
-| Transaction publication | `efe125c` on top of operation-index work in `5a13c0a` | A prepared snapshot can publish table and product control-record references in one generation; reopen and validation tests exist | No native row DML, SQL transaction/session semantics, constraints, product cutover, or multi-coordinator service is implemented | Complete the transactional correctness rows below before migration |
+| Transaction publication | Typed product records committed at `755d9a7` on top of the snapshot publication foundation | A prepared snapshot can publish table and typed product references in one generation; revision, uniqueness, concurrent-CAS and reopen tests exist | No native row DML, SQL transaction/session semantics, product repository/cutover, or multi-coordinator service is implemented | Complete the transactional correctness rows below before migration |
 | Distributed analytics | Engine digest `c8b227a0` | Existing three-worker AKS dashboard queries and the documented distributed operator suite pass | Current evidence does not establish transactional/analytical snapshot interaction, scheduler fault tolerance under the new changes, or Trino parity | Re-run distributed equivalence and fault gates against committed snapshots |
 | Product migration | PostgreSQL remains authoritative | Canonical dashboards and DLM metadata are healthy before cutover | Product system tables have not moved to ADLS and rollback/fencing are unproved | Inventory, reconcile, fence writes, cut over, restart, and demonstrate rollback |
 
@@ -88,6 +103,8 @@ AKS separately. Never promote a local result to a deployed claim.
 | 2026-09-10 | `db54b33` | Local Windows | `node scripts/validate-docs.mjs` | **Passed:** 79 Markdown files, 30 routes and 8 SVGs | Command output from the integration session |
 | 2026-09-10 | Deployed digests in the ledger above | AKS `kaveon` namespace | Read-only pod and workload inventory | **Passed:** API, Studio, PostgreSQL, coordinator and all three workers Ready with zero restarts | `kubectl get pods` and digest-pinned workload inventory from the integration session |
 | 2026-09-10 | Integrated typed-product/resource-group working tree | Local Windows | `cargo fmt --all -- --check`; catalog and security tests; strict catalog/server Clippy | **Passed:** 25 catalog tests, 8 focused server security tests, formatting, and `-D warnings` | Repeatable local commands from the integration session |
+| 2026-09-10 | `755d9a7` plus in-flight typed-reference/runtime integration | Local Windows | `cargo test --workspace --all-targets`; `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets -- -D warnings` | **Passed:** 409 tests, one intentional ignored CLI fixture, aggregate/storage benchmark harnesses, workspace formatting and strict Clippy | Repeatable local commands from the round-two integration session; this validates the shared working tree, not an AKS image |
+| 2026-09-10 | `755d9a7` | GitHub Actions | CI `34523052121`; Engine `34523052001`; Deploy `34523052036` | **Passed:** Web lint/type/build, API tests, secret scan, Vercel deploy, Rust format/Clippy/tests, three-platform release builds, dev release and deploy | Linked workflow runs; Containers `34523051977` remained in progress when recorded |
 
 The two failed rows above record the intentionally caught intermediate state,
 before the owning agent completed its edit. The integrated passing row supersedes
@@ -101,14 +118,21 @@ The ADLS product snapshot now has a typed product-record layer for datasets,
 charts, dashboards, saved queries, and user themes. Creates require revision 1;
 updates and deletes require the exact current revision; updates advance by one.
 Named equality indexes are validated for uniqueness within each record kind over
-the final all-or-nothing snapshot. Immutable document paths and digests remain
-the durable payload boundary. Existing snapshots decode with an empty typed
-record map. Tests cover CRUD revisions, atomic uniqueness failure, concurrent
-same-base updates with one durable CAS winner, and reopen recovery. This is a
-transactional metadata foundation; PostgreSQL remains authoritative until the
-repository adapter, referential constraints, migration, dual-read validation,
-rollback, and live qualification gates are complete.
-Catalog validation is 25/25 tests with strict Clippy clean.
+the final all-or-nothing snapshot and are bounded to 32 entries per record.
+Index names and values currently use exact byte-sensitive equality; a typed
+per-index normalization and collation policy is required before product cutover.
+Immutable document paths and digests remain
+the durable payload boundary. Typed references enforce chart-to-dataset and
+dashboard-to-chart/dataset relationships against the final snapshot. Deletes
+use explicit restrict semantics; cascade is not implicit. This permits atomic
+parent-and-child creation while rejecting dangling references and referenced
+parent deletion. Existing snapshots and typed records without references remain
+readable. Tests cover CRUD revisions, uniqueness and reference failures,
+same-transaction relationships, concurrent same-base updates with one durable
+CAS winner, and reopen recovery. This is a transactional metadata foundation;
+PostgreSQL remains authoritative until the repository adapter, migration,
+dual-read validation, rollback, and live qualification gates are complete.
+Catalog validation is 31/31 tests with strict Clippy clean.
 
 ### Catalog cleanup and SQL Lab navigation - September 8 (UTC September 9)
 
