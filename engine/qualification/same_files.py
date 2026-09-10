@@ -101,6 +101,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     queries = EXTENDED_QUERIES if args.suite == "extended" else QUERIES
+    corpus_sha256 = hashlib.sha256(json.dumps(queries, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     if args.warmups < 1 or args.customers < 1:
         parser.error("warmups and customers must be positive")
     if args.rows < 1 or args.repetitions < 1 or args.throughput_rounds < 0 or args.throughput_repeats < 1:
@@ -123,6 +124,10 @@ def main():
               "limitation": "Kaveon runs natively; Trino runs in Docker with 4 CPUs/8 GiB. Timings cannot establish a relative performance score.",
               "workers": args.workers, "local_parallelism": args.local_parallelism, "rows": args.rows, "run": run, "cases": [],
               "suite": args.suite, "warmups_per_query": args.warmups,
+              "query_corpus": {"names": list(queries), "sha256": corpus_sha256},
+              "cache_policy": {"primary": "warm", "warmup_executions_per_query": args.warmups,
+                               "cold_cache": "excluded_from_primary_and_must_be_run_as_a_separate_matched experiment",
+                               "reason": "portable user-space cache eviction cannot prove equivalent OS, filesystem, JVM and Engine cache state"},
               "customers": min(args.customers, args.rows),
               "publication_workload_gate": args.suite == "extended" and args.rows >= 5_000_000 and min(args.customers, args.rows) >= 100_000 and args.warmups >= 5 and args.repetitions >= 30,
               "kaveon_query_memory_bytes": query_memory_bytes if args.docker_image else None,

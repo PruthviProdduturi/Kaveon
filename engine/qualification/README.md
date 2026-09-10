@@ -116,6 +116,8 @@ docker compose -f engine/qualification/compose.yml stop
 ```
 
 For performance work follow the [benchmark protocol](../benches/README.md).
+The proposed 1.90× metric, fail-closed evaluator, cache policy and AKS boundary
+are defined in the [Trino comparison proposal](../../docs/engineering/trino-90-percent-benchmark.md).
 Expand qualification to typed numeric semantics, randomized/property cases,
 cloud snapshots, constrained memory, concurrency, skew, worker loss, retries,
 and cancellation before making production-readiness claims.
