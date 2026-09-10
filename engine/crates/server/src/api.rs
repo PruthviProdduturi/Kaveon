@@ -8,7 +8,13 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Extension, Json, Router};
-use kaveon_catalog::CascadePolicy;
+use kaveon_catalog::{
+    CascadePolicy,
+    product_commit::{CommitOutcome, ProductDocuments},
+    product_manifest::{
+        CatalogChange, ImmutableFileRef, PrepareChange, RuntimeTableSourceRef, TableStatisticsRef,
+    },
+};
 use kaveon_core::collect_batches;
 use kaveon_core::{
     CatalogDefinition, CatalogId, CatalogLifecycle, CatalogRevision, ColumnDefinition, ExchangeId,
@@ -19,7 +25,6 @@ use kaveon_exec::topn::merge_top_n;
 use kaveon_sql::logical_plan::sql_to_logical_plan;
 use kaveon_sql::logical_plan::{AggregateExpr, LogicalPlan};
 use serde::{Deserialize, Serialize};
-#[cfg(test)]
 use sha2::{Digest, Sha256};
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap};
@@ -228,6 +233,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/ui", get(crate::ui::dashboard))
         .route("/ui/msal-browser.min.js", get(crate::ui::msal_script))
         .route("/v1/auth/config", get(crate::entra::public_config))
+        .route("/v1/capabilities", get(capabilities))
         .route("/health", get(health))
         .route("/ready", get(ready))
         .layer(axum::middleware::from_fn_with_state(
@@ -1189,6 +1195,10 @@ async fn submit_statement(
         },
     );
 
+    if let Some(table) = parse_analyze_table(&sql) {
+        return execute_analyze(&state, &identity, &query_id, &context, table, start).await;
+    }
+
     let analysis_start = Instant::now();
     let mut plan = match sql_to_logical_plan(&sql) {
         Ok(p) => p,
@@ -1210,7 +1220,7 @@ async fn submit_statement(
     let logical_plan = crate::planner::logical_plan_tree(&plan);
     let plan = kaveon_optim::rules::push_filter_down(plan);
     let plan = kaveon_optim::rules::push_projection_down(plan);
-    let plan = kaveon_optim::statistics::optimize_join_builds(plan, &catalog_snapshot);
+    let plan = optimize_with_durable_statistics(&state, plan, &catalog_snapshot).await;
     let optimized_plan = crate::planner::optimized_plan_tree(&plan);
     let physical_plan = crate::planner::physical_plan_tree(&plan);
     if let Some(record) = QUERY_STORE.write().await.queries.get_mut(&query_id) {
@@ -1762,6 +1772,313 @@ async fn submit_statement(
     };
 
     Json(resp).into_response()
+}
+
+fn parse_analyze_table(sql: &str) -> Option<String> {
+    let rest = sql
+        .strip_prefix("ANALYZE ")
+        .or_else(|| sql.strip_prefix("analyze "))?
+        .trim();
+    if rest.is_empty() || rest.bytes().any(|b| b.is_ascii_whitespace() || b == b';') {
+        return None;
+    }
+    let parts = rest
+        .split('.')
+        .map(|p| p.trim_matches('"'))
+        .collect::<Vec<_>>();
+    if !(1..=3).contains(&parts.len())
+        || parts
+            .iter()
+            .any(|p| p.is_empty() || !p.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
+    {
+        return None;
+    }
+    Some(parts.join("."))
+}
+
+async fn execute_analyze(
+    state: &Arc<AppState>,
+    identity: &Identity,
+    query_id: &str,
+    context: &QueryContext,
+    table: String,
+    started: Instant,
+) -> Response {
+    if identity.role != crate::security::Role::Admin {
+        finish_failed_query(
+            query_id,
+            "ANALYZE requires admin role".into(),
+            started,
+            None,
+            None,
+            None,
+        )
+        .await;
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error":"ANALYZE requires admin role","code":"FORBIDDEN"})),
+        )
+            .into_response();
+    }
+    let Some(commit) = state.product_transactions.catalog() else {
+        finish_failed_query(
+            query_id,
+            "native ANALYZE is disabled".into(),
+            started,
+            None,
+            None,
+            None,
+        )
+        .await;
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(
+                serde_json::json!({"error":"native ANALYZE is disabled","code":"ANALYZE_DISABLED"}),
+            ),
+        )
+            .into_response();
+    };
+    let qualified = match table.split('.').count() {
+        1 => format!("{}.{}.{}", context.catalog, context.schema, table),
+        2 => format!("{}.{}", context.catalog, table),
+        _ => table,
+    };
+    let resolved = match state
+        .catalog
+        .read()
+        .await
+        .resolve_table(&kaveon_core::TableReference::parse(&qualified))
+    {
+        Ok(value) => value,
+        Err(error) => {
+            return analyze_failure(
+                query_id,
+                started,
+                StatusCode::BAD_REQUEST,
+                "TABLE_NOT_FOUND",
+                error.to_string(),
+            )
+            .await;
+        }
+    };
+    let first = match kaveon_storage::analyze_source(&resolved.full_path(), resolved.table.format) {
+        Ok(value) => value,
+        Err(error) => {
+            return analyze_failure(
+                query_id,
+                started,
+                StatusCode::BAD_REQUEST,
+                "ANALYZE_FAILED",
+                error.to_string(),
+            )
+            .await;
+        }
+    };
+    let second = match kaveon_storage::analyze_source(&resolved.full_path(), resolved.table.format)
+    {
+        Ok(value) if value.identity_sha256 == first.identity_sha256 => value,
+        Ok(_) => {
+            return analyze_failure(
+                query_id,
+                started,
+                StatusCode::CONFLICT,
+                "SOURCE_CHANGED",
+                "table source changed during ANALYZE".into(),
+            )
+            .await;
+        }
+        Err(error) => {
+            return analyze_failure(
+                query_id,
+                started,
+                StatusCode::BAD_REQUEST,
+                "ANALYZE_FAILED",
+                error.to_string(),
+            )
+            .await;
+        }
+    };
+    let catalog_snapshot_sha256 = format!(
+        "{:x}",
+        Sha256::digest(context.catalog_snapshot_id.as_bytes())
+    );
+    let document = serde_json::to_vec(&serde_json::json!({"version":1,"table":qualified,"catalog_snapshot_sha256":catalog_snapshot_sha256,"source_identity_sha256":second.identity_sha256,"row_count":second.row_count,"columns":second.columns})).unwrap();
+    let document_sha = format!("{:x}", Sha256::digest(&document));
+    let current = match commit.read_current().await {
+        Ok(v) => v,
+        Err(_) => {
+            return analyze_failure(
+                query_id,
+                started,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "CATALOG_UNAVAILABLE",
+                "cannot read product catalog head".into(),
+            )
+            .await;
+        }
+    };
+    let operation = Uuid::new_v4().simple().to_string();
+    let path = format!("statistics/{operation}.json");
+    let request = PrepareChange {
+        base: current.reference(),
+        snapshot_id: format!("analyze-{operation}"),
+        operation_id: format!("analyze-{operation}"),
+        request_digest: document_sha.clone(),
+        changes: vec![
+            CatalogChange::PutRuntimeTableSource {
+                table: qualified.clone(),
+                source: RuntimeTableSourceRef {
+                    catalog_snapshot_sha256: catalog_snapshot_sha256.clone(),
+                    source_identity_sha256: second.identity_sha256.clone(),
+                },
+            },
+            CatalogChange::PutStatistics {
+                table: qualified.clone(),
+                statistics: TableStatisticsRef {
+                    catalog_snapshot_sha256,
+                    source_identity_sha256: second.identity_sha256,
+                    document: ImmutableFileRef {
+                        path: path.clone(),
+                        sha256: document_sha,
+                    },
+                    row_count: second.row_count,
+                },
+            },
+        ],
+    };
+    match commit
+        .commit_with_documents(request, ProductDocuments::from([(path, document)]))
+        .await
+    {
+        CommitOutcome::Committed(_) | CommitOutcome::Replayed(_) => {}
+        CommitOutcome::Conflict => {
+            return analyze_failure(
+                query_id,
+                started,
+                StatusCode::CONFLICT,
+                "CATALOG_CONFLICT",
+                "catalog head changed during ANALYZE; retry".into(),
+            )
+            .await;
+        }
+        CommitOutcome::Rejected => {
+            return analyze_failure(
+                query_id,
+                started,
+                StatusCode::BAD_REQUEST,
+                "ANALYZE_REJECTED",
+                "statistics publication was rejected".into(),
+            )
+            .await;
+        }
+        CommitOutcome::Indeterminate => {
+            return analyze_failure(
+                query_id,
+                started,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "ANALYZE_INDETERMINATE",
+                "statistics publication outcome is indeterminate".into(),
+            )
+            .await;
+        }
+    }
+    let elapsed = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+    let columns = vec![
+        ColumnInfo {
+            name: "table".into(),
+            data_type: "VARCHAR".into(),
+        },
+        ColumnInfo {
+            name: "row_count".into(),
+            data_type: "BIGINT".into(),
+        },
+    ];
+    let rows = vec![vec![
+        serde_json::json!(qualified),
+        serde_json::json!(second.row_count),
+    ]];
+    if let Some(record) = QUERY_STORE.write().await.queries.get_mut(query_id) {
+        record.state = QueryState::Finished;
+        record.columns = columns.clone();
+        record.rows = rows.clone();
+        record.elapsed_ms = elapsed;
+        record.completed_at_ms = unix_time_ms();
+    }
+    Json(StatementResponse {
+        next_uri: None,
+        id: query_id.into(),
+        state: QueryState::Finished,
+        columns: Some(columns),
+        data: Some(rows),
+        error: None,
+        elapsed_ms: elapsed,
+    })
+    .into_response()
+}
+
+async fn analyze_failure(
+    query_id: &str,
+    started: Instant,
+    status: StatusCode,
+    code: &str,
+    message: String,
+) -> Response {
+    finish_failed_query(query_id, message.clone(), started, None, None, None).await;
+    (
+        status,
+        Json(serde_json::json!({"error":message,"code":code})),
+    )
+        .into_response()
+}
+
+async fn capabilities(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    Json(
+        serde_json::json!({"native_analyze": state.config.coordinator && state.product_transactions.catalog().is_some()}),
+    )
+}
+
+async fn optimize_with_durable_statistics(
+    state: &AppState,
+    plan: LogicalPlan,
+    catalog: &crate::PublishedCatalog,
+) -> LogicalPlan {
+    let durable = match state.product_transactions.catalog() {
+        Some(commit) => commit.read_current().await.ok(),
+        None => None,
+    };
+    let mut cache: HashMap<String, Option<kaveon_optim::statistics::RelationStatistics>> =
+        HashMap::new();
+    kaveon_optim::statistics::optimize_with_statistics(plan, &mut |table| {
+        if let Some(found) = cache.get(table) {
+            return found.clone();
+        }
+        let value = (|| {
+            let resolved = catalog
+                .resolve_table(&kaveon_core::TableReference::parse(table))
+                .ok()?;
+            let qualified = format!(
+                "{}.{}.{}",
+                resolved.catalog, resolved.schema, resolved.table.name
+            );
+            let stored = durable.as_ref()?.table_statistics.get(&qualified)?;
+            let catalog_digest = format!("{:x}", Sha256::digest(catalog.snapshot_id.as_bytes()));
+            if stored.catalog_snapshot_sha256 != catalog_digest {
+                return None;
+            }
+            let current =
+                kaveon_storage::analyze_source(&resolved.full_path(), resolved.table.format)
+                    .ok()?;
+            if current.identity_sha256 != stored.source_identity_sha256 {
+                return None;
+            }
+            Some(kaveon_optim::statistics::RelationStatistics {
+                rows: stored.row_count,
+                columns: current.columns,
+            })
+        })();
+        cache.insert(table.to_owned(), value.clone());
+        value
+    })
 }
 
 async fn commit_query_record(record: QueryRecord) -> bool {
@@ -4099,11 +4416,25 @@ mod tests {
     use super::{
         ColumnInfo, MergeOperation, TaskRequest, TaskResponse, aggregate_merge_contract,
         decode_arrow_stream, encode_arrow_stream, general_distributed_eligible,
-        merge_partial_aggregates, mutation_actor, task_request_from_dispatch, top_n_merge_contract,
-        validate_replacement,
+        merge_partial_aggregates, mutation_actor, parse_analyze_table, task_request_from_dispatch,
+        top_n_merge_contract, validate_replacement,
     };
     use crate::security::Role;
     use arrow::array::{Int64Array, StringArray};
+
+    #[test]
+    fn analyze_parser_accepts_bounded_table_names_only() {
+        assert_eq!(
+            parse_analyze_table("ANALYZE \"sales\".\"orders\""),
+            Some("sales.orders".into())
+        );
+        assert_eq!(
+            parse_analyze_table("analyze lake.sales.orders"),
+            Some("lake.sales.orders".into())
+        );
+        assert_eq!(parse_analyze_table("ANALYZE orders WHERE true"), None);
+        assert_eq!(parse_analyze_table("ANALYZE a.b.c.d"), None);
+    }
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use std::sync::Arc;

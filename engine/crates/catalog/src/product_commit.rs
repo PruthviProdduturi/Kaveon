@@ -48,6 +48,7 @@ pub enum CommitOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum OperationResolution {
     Committed(CatalogSnapshot),
     Conflict,
@@ -559,6 +560,18 @@ fn required_documents(request: &PrepareChange) -> Result<BTreeMap<String, Immuta
         let record = match change {
             CatalogChange::CreateProduct { record }
             | CatalogChange::UpdateProduct { record, .. } => record,
+            CatalogChange::PutStatistics { statistics, .. } => {
+                match required.insert(
+                    statistics.document.path.clone(),
+                    statistics.document.clone(),
+                ) {
+                    Some(previous) if previous.sha256 != statistics.document.sha256 => {
+                        return Err(());
+                    }
+                    _ => {}
+                }
+                continue;
+            }
             _ => continue,
         };
         match required.insert(record.document.path.clone(), record.document.clone()) {
@@ -778,6 +791,70 @@ mod tests {
                 .control_records
                 .contains_key("dashboards.executive-overview")
         );
+    }
+
+    #[tokio::test]
+    async fn statistics_document_is_required_and_reopens_with_exact_source() {
+        let storage = AdlsConditionalCommit::new(Arc::new(InMemory::new()));
+        let catalog = catalog_with(storage.clone());
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        catalog.initialize(genesis.clone()).await;
+        let source = table("orders");
+        let table_request = PrepareChange {
+            base: genesis.reference(),
+            snapshot_id: "snapshot-table".into(),
+            operation_id: "put-table".into(),
+            request_digest: DIGEST.into(),
+            changes: vec![CatalogChange::Put {
+                table: "sales.orders".into(),
+                reference: source.clone(),
+            }],
+        };
+        let table_snapshot = match catalog.commit(table_request).await {
+            CommitOutcome::Committed(value) => value,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let bytes = br#"{"row_count":42}"#.to_vec();
+        let path = "statistics/sales-orders.json".to_owned();
+        let request = PrepareChange {
+            base: table_snapshot.reference(),
+            snapshot_id: "snapshot-analyzed".into(),
+            operation_id: "analyze-table".into(),
+            request_digest: DIGEST.into(),
+            changes: vec![
+                CatalogChange::PutRuntimeTableSource {
+                    table: "sales.orders".into(),
+                    source: crate::product_manifest::RuntimeTableSourceRef {
+                        catalog_snapshot_sha256: DIGEST.into(),
+                        source_identity_sha256: DIGEST.into(),
+                    },
+                },
+                CatalogChange::PutStatistics {
+                    table: "sales.orders".into(),
+                    statistics: crate::product_manifest::TableStatisticsRef {
+                        catalog_snapshot_sha256: DIGEST.into(),
+                        source_identity_sha256: DIGEST.into(),
+                        document: ImmutableFileRef {
+                            path: path.clone(),
+                            sha256: digest(&bytes),
+                        },
+                        row_count: 42,
+                    },
+                },
+            ],
+        };
+        assert_eq!(
+            catalog.commit(request.clone()).await,
+            CommitOutcome::Rejected
+        );
+        assert!(matches!(
+            catalog
+                .commit_with_documents(request, BTreeMap::from([(path, bytes)]))
+                .await,
+            CommitOutcome::Committed(_)
+        ));
+        let reopened = catalog_with(storage).read_current().await.unwrap();
+        assert_eq!(reopened.table_statistics["sales.orders"].row_count, 42);
     }
 
     #[tokio::test]
