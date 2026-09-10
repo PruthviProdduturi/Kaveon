@@ -88,6 +88,30 @@ positive exact row count and writes only dataset IDs, names, statuses, counts,
 errors and the API URL. It never writes the access token. A failed or missing
 dataset makes the command exit nonzero.
 
+Qualify native `ANALYZE` persistence in two phases. The verifier uses the same
+authenticated API bridge and stores no bearer token, storage path, manifest, or
+credential. Phase one analyzes the known 34-row leaderboard and records only
+the Engine query ID/state and bounded statistics diagnostics:
+
+```powershell
+python scripts/verify-aks-native-analyze.py --api-url http://127.0.0.1:18000 `
+  --phase analyze --report tmp/aks-native-analyze-before-restart.json
+
+kubectl --context kaveon-test-aks -n kaveon delete pod kaveon-coordinator-0
+kubectl --context kaveon-test-aks -n kaveon wait --for=condition=Ready `
+  pod/kaveon-coordinator-0 --timeout=300s
+
+python scripts/verify-aks-native-analyze.py --api-url http://127.0.0.1:18000 `
+  --phase restart --report tmp/aks-native-analyze-after-restart.json
+Remove-Item Env:KAVEON_API_ACCESS_TOKEN
+```
+
+The restart phase fails unless `OpenSource.ai_benchmarks.leaderboard` still has
+34 rows and its current catalog and storage identities match the durable ADLS
+record. Join-plan usage remains unqualified until a stable showcase join pair
+with independently known cardinalities is designated; the report marks that
+check as deferred instead of implying optimizer evidence.
+
 ## Stop and resume
 
 The final rollout has all four Engine pods Ready on

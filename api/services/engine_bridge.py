@@ -160,6 +160,13 @@ def native_analyze_supported():
     return isinstance(result, dict) and result.get("native_analyze") is True
 
 
+def statistics(actor, role):
+    """Bounded, credential-free durable statistics diagnostics for administrators."""
+    if role != "Admin":
+        raise HTTPException(403, "Administrator access is required for Engine statistics")
+    return _request("GET", "/v1/statistics", "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role="admin")
+
+
 def _read_role(role):
     roles = {"Viewer": "reader", "Analyst": "analyst", "Editor": "analyst", "Admin": "admin"}
     try:

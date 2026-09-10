@@ -52,6 +52,27 @@ class EngineConsoleTests(unittest.TestCase):
         self.assertEqual(error.exception.status_code, 403)
         request.assert_not_called()
 
+    def test_statistics_are_admin_scoped_and_bounded_bridge_data(self):
+        ctx = UserContext("admin@example.com", "Admin")
+        payload = {"statistics": [{"table": "OpenSource.ai_benchmarks.leaderboard", "row_count": 34, "current": True}], "total": 1, "truncated": False}
+        with patch.object(engine_bridge, "_request", return_value=payload) as request:
+            self.assertEqual(engine_console.console_statistics(ctx), payload)
+        self.assertEqual(request.call_args.args[1], "/v1/statistics")
+        self.assertEqual(request.call_args.kwargs["role"], "admin")
+
+    def test_qualification_uses_fixed_native_table_and_requires_capability(self):
+        ctx = UserContext("admin@example.com", "Admin")
+        with patch.object(engine_bridge, "native_analyze_supported", return_value=True), \
+             patch.object(engine_bridge, "execute", return_value={"id": "q1", "state": "FINISHED"}) as execute:
+            qualified = engine_console.qualify_native_statistics(ctx)
+            self.assertEqual(qualified["query"]["id"], "q1")
+            self.assertIs(qualified["capability"]["native_analyze"], True)
+        execute.assert_called_once_with('ANALYZE "ai_benchmarks"."leaderboard"', "OpenSource", "admin@example.com", "Admin", schema="ai_benchmarks")
+        with patch.object(engine_bridge, "native_analyze_supported", return_value=False):
+            with self.assertRaises(HTTPException) as error:
+                engine_console.qualify_native_statistics(ctx)
+        self.assertEqual(error.exception.status_code, 409)
+
 
 if __name__ == "__main__":
     unittest.main()
