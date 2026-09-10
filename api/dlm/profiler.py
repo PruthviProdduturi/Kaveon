@@ -136,6 +136,11 @@ def _warehouse_is_postgres(database: str) -> bool:
         return False
 
 
+def supports_database(database: str) -> bool:
+    """Whether PostgreSQL catalog statistics and maintenance apply."""
+    return is_supported() and _warehouse_is_postgres(database)
+
+
 def _table_change_stats(database: str, schema: str) -> Dict[str, Dict[str, Any]]:
     """One cheap catalog read: live rows + modifications since analyze +
     last analyze time, for every table in *schema*. This is factors (a) and (b)
@@ -291,7 +296,7 @@ def build_context(database: str, schema: str = "public",
                   tables: Optional[List[str]] = None) -> Dict[str, Any]:
     """Profile *schema* in *database* and persist one snapshot row per table
     element and per column element. Returns a summary of what was captured."""
-    if not is_supported() or not _warehouse_is_postgres(database):
+    if not supports_database(database):
         return {"supported": False, "reason": "context engine requires Postgres", "elements": 0}
 
     ensure_tables()

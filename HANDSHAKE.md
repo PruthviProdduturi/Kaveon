@@ -188,6 +188,16 @@ triggering the one-time backfill, and fails unless the nine canonical showcase
 datasets are `ready` with positive exact counts. Its JSON report contains no
 credential material. Pure validation tests cover success and fail-closed cases;
 the AKS deployment guide includes the port-forward, token and report commands.
+
+Failed query `3d60efaa-f5f2-4ae8-ba4e-1ca5bb8b5579` was traced to DLM
+generation issuing PostgreSQL `ANALYZE ai_benchmarks.leaderboard` before its
+profiler detected that `ai_benchmarks` is an Engine-native catalog. DLM table
+analysis now first requires `profiler.supports_database(database)`, which is
+true only for a supported PostgreSQL connection. Native catalogs skip ANALYZE
+entirely and use the exact Engine aggregate statistics path, including the new
+row-count population. The Engine SQL normalizer no longer treats ANALYZE as a
+valid schema-discovery statement. Focused tests prove native catalogs issue no
+maintenance query while PostgreSQL retains best-effort ANALYZE behavior.
 The identity currently covers the complete catalog store, so an unrelated
 catalog mutation can conservatively reject a task until every worker catches up.
 
