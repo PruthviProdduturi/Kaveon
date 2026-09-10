@@ -3019,7 +3019,7 @@ def _execute_dataset_query(sql: str, database: str) -> Dict[str, Any]:
 
     from services.engine_bridge import execute
     result = execute(
-        sql, source["engine_catalog"], "dlm-curation@kaveon.internal", "Admin"
+        sql, source["engine_catalog"], "kaveon-system", "Admin"
     )
     raw_columns = result.get("columns") or []
     columns = [
