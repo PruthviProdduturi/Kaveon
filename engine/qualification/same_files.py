@@ -17,13 +17,6 @@ import subprocess
 import tempfile
 import time
 
-import duckdb
-import pyarrow as pa
-import pyarrow.parquet as pq
-import requests
-import psutil
-import trino.dbapi
-
 from smoke import free_port, wait_for
 
 QUERIES = {
@@ -84,6 +77,16 @@ def redact_config(text):
 
 
 def main():
+    # Keep the workload contract importable by the fail-closed claim evaluator
+    # without requiring benchmark-only native dependencies during collection.
+    global duckdb, pa, pq, requests, psutil, trino
+    import duckdb
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    import requests
+    import psutil
+    import trino
+
     parser = argparse.ArgumentParser(description=__doc__)
     runner = parser.add_mutually_exclusive_group(required=True)
     runner.add_argument("--server-bin", type=Path)
