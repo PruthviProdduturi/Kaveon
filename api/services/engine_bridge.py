@@ -148,6 +148,18 @@ def execute(sql, catalog, actor, role, schema=None):
     return result
 
 
+def native_analyze_supported():
+    """Return true only when the connected Engine explicitly advertises ANALYZE."""
+    try:
+        result = _request(
+            "GET", "/v1/capabilities", "KAVEON_ENGINE_BRIDGE_TOKEN",
+            "kaveon-system", role="reader",
+        )
+    except HTTPException:
+        return False
+    return isinstance(result, dict) and result.get("native_analyze") is True
+
+
 def _read_role(role):
     roles = {"Viewer": "reader", "Analyst": "analyst", "Editor": "analyst", "Admin": "admin"}
     try:

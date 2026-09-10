@@ -129,6 +129,18 @@ class EngineBridgeTests(unittest.TestCase):
         self.assertEqual(raised.exception.detail["query_id"], "query-failed-1")
         self.assertEqual(raised.exception.detail["engine_details"]["state"], "FAILED")
 
+    def test_native_analyze_requires_explicit_engine_capability(self):
+        with patch.object(bridge, "_request", return_value={"native_analyze": True}) as request:
+            self.assertTrue(bridge.native_analyze_supported())
+        self.assertEqual(request.call_args.args[1], "/v1/capabilities")
+
+        with patch.object(bridge, "_request", return_value={"native_analyze": False}):
+            self.assertFalse(bridge.native_analyze_supported())
+
+    def test_native_analyze_capability_discovery_fails_closed(self):
+        with patch.object(bridge, "_request", side_effect=HTTPException(404, "old engine")):
+            self.assertFalse(bridge.native_analyze_supported())
+
 
 if __name__ == "__main__":
     unittest.main()

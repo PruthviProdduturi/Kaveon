@@ -2907,11 +2907,7 @@ def _native_row_counts(database: str, schema: str, tables: List[str]) -> Dict[st
     """
     if not database or not tables:
         return {}
-    source = meta.query_one(
-        "SELECT engine_catalog FROM catalog_sources "
-        "WHERE engine_catalog = @param0 AND lifecycle = 'active' AND adapter_type = 'native'",
-        [database],
-    )
+    source = _native_catalog(database)
     if not source:
         return {}
     counts: Dict[str, int] = {}
@@ -2932,6 +2928,14 @@ def _native_row_counts(database: str, schema: str, tables: List[str]) -> Dict[st
         except Exception:
             logger.exception("Engine row count failed for %s.%s", schema, table)
     return counts
+
+
+def _native_catalog(database: str) -> Optional[Dict[str, Any]]:
+    return meta.query_one(
+        "SELECT engine_catalog FROM catalog_sources "
+        "WHERE engine_catalog = @param0 AND lifecycle = 'active' AND adapter_type = 'native'",
+        [database],
+    )
 
 
 def _backfill_native_row_counts(dataset_id: str, stats: Dict[str, Any]) -> Dict[str, int]:
@@ -3143,13 +3147,17 @@ def _estimate_distinct(n_distinct: Any, row_count: Any) -> Optional[float]:
 
 
 def _analyze_tables(database: str, schema: str, tables: List[str]) -> None:
-    """Best-effort ANALYZE so pg_stats is complete before we read it — freshly
-    loaded tables may not be auto-analyzed yet. Cheap (sampled), Postgres-only,
-    and never fatal to the build."""
-    # Native Kaveon catalogs use immutable file snapshots and exact Engine
-    # aggregates for DLM row statistics. ANALYZE is PostgreSQL maintenance SQL
-    # and must never be routed through the Engine bridge.
-    if not profiler.supports_database(database):
+    """Best-effort ANALYZE through the catalog's own query plane.
+
+    PostgreSQL refreshes pg_stats; native catalogs ask Kaveon Engine to persist
+    snapshot-bound statistics. Other external engines are left untouched.
+    """
+    native = bool(_native_catalog(database))
+    if native:
+        from services.engine_bridge import native_analyze_supported
+        if not native_analyze_supported():
+            return
+    if not native and not profiler.supports_database(database):
         return
     for tbl in tables:
         t = (tbl or "").strip()

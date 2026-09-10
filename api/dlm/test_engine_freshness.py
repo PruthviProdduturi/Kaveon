@@ -67,15 +67,28 @@ class ChartFreshnessTests(unittest.TestCase):
         self.assertEqual(counts, {})
         execute.assert_not_called()
 
-    def test_native_catalog_never_receives_postgres_analyze(self):
-        with patch.object(engine.profiler, "supports_database", return_value=False), \
+    def test_native_catalog_uses_engine_analyze(self):
+        with patch.object(engine, "_native_catalog", return_value={"engine_catalog": "ai_benchmarks"}), \
+             patch.object(engine.profiler, "supports_database", return_value=False), \
+             patch("services.engine_bridge.native_analyze_supported", return_value=True), \
+             patch.object(engine, "_execute_dataset_query") as execute:
+            engine._analyze_tables("ai_benchmarks", "ai_benchmarks", ["leaderboard"])
+
+        execute.assert_called_once_with(
+            'ANALYZE "ai_benchmarks"."leaderboard"', "ai_benchmarks"
+        )
+
+    def test_native_analyze_stays_off_until_engine_contract_is_enabled(self):
+        with patch.object(engine, "_native_catalog", return_value={"engine_catalog": "ai_benchmarks"}), \
+             patch("services.engine_bridge.native_analyze_supported", return_value=False), \
              patch.object(engine, "_execute_dataset_query") as execute:
             engine._analyze_tables("ai_benchmarks", "ai_benchmarks", ["leaderboard"])
 
         execute.assert_not_called()
 
     def test_postgres_catalog_keeps_best_effort_analyze(self):
-        with patch.object(engine.profiler, "supports_database", return_value=True), \
+        with patch.object(engine, "_native_catalog", return_value=None), \
+             patch.object(engine.profiler, "supports_database", return_value=True), \
              patch.object(engine, "_execute_dataset_query") as execute:
             engine._analyze_tables("metadata", "public", ["datasets", ""])
 
