@@ -3018,8 +3018,18 @@ def _execute_dataset_query(sql: str, database: str) -> Dict[str, Any]:
         return pool.execute_query(sql, database)
 
     from services.engine_bridge import execute
+    # Engine sessions require a schema even when the table reference itself is
+    # schema-qualified. DLM-generated scans consistently put the schema on the
+    # first FROM/ANALYZE relation, so recover it without widening every helper's
+    # call signature.
+    schema_match = re.search(
+        r'\b(?:FROM|ANALYZE)\s+(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))\s*\.',
+        sql,
+        re.IGNORECASE,
+    )
+    schema = (schema_match.group(1) or schema_match.group(2)) if schema_match else None
     result = execute(
-        sql, source["engine_catalog"], "kaveon-system", "Admin"
+        sql, source["engine_catalog"], "kaveon-system", "Admin", schema
     )
     raw_columns = result.get("columns") or []
     columns = [
