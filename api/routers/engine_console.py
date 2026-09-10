@@ -38,3 +38,24 @@ def console_query(query_id: str, ctx: UserContext = Depends(require_min_role("Vi
     if not isinstance(result, dict):
         raise HTTPException(502, "Engine returned an invalid query record")
     return result
+
+
+@router.get("/engine/console/statistics")
+def console_statistics(ctx: UserContext = Depends(require_min_role("Admin"))):
+    result = engine_bridge.statistics(ctx.email, ctx.role)
+    if not isinstance(result, dict) or not isinstance(result.get("statistics"), list):
+        raise HTTPException(502, "Engine returned invalid statistics diagnostics")
+    return result
+
+
+@router.post("/engine/console/statistics/qualify")
+def qualify_native_statistics(ctx: UserContext = Depends(require_min_role("Admin"))):
+    if not engine_bridge.native_analyze_supported():
+        raise HTTPException(409, "Connected Engine does not advertise native ANALYZE")
+    result = engine_bridge.execute(
+        'ANALYZE "ai_benchmarks"."leaderboard"', "OpenSource",
+        ctx.email, ctx.role, schema="ai_benchmarks",
+    )
+    if not isinstance(result, dict):
+        raise HTTPException(502, "Engine returned an invalid ANALYZE result")
+    return {"capability": {"native_analyze": True}, "query": result}
