@@ -9,7 +9,7 @@ East US hosts `kaveon-test-aks`, a Kubernetes 1.35.7 test cluster with one syste
 - ACR: `kvtestegmf6oweugsno.azurecr.io`, Basic, admin credentials disabled.
 - ADLS Gen2: `kvtestegmf6oweugsno`, Standard LRS, including the `kavedb` test catalog container; HTTPS only, shared keys and anonymous blob access disabled, firewall default deny with AKS subnet access.
 - Network: `kaveon-test-vnet`, dedicated AKS subnet, Azure CNI overlay.
-- Identity: Entra/Azure RBAC cluster access, local cluster accounts disabled, OIDC and workload identity enabled. `kaveon-test-reader` has read-only blob access to this test account. Caller upload permission is scoped to the test account; image pull and cluster administration roles are scoped to their new resources.
+- Identity: Entra/Azure RBAC cluster access, local cluster accounts disabled, OIDC and workload identity enabled. `kaveon-test-reader` has read-only blob access to the test account and contributor access only on the dedicated `product-transactions` container. It cannot write to the bronze, silver, or gold analytics containers. Caller upload permission is scoped to the test account; image pull and cluster administration roles are scoped to their new resources.
 - AKS-managed resources are in `MC_test-prproddu-test_kaveon-test-aks_eastus`.
 
 `infra/bicep/environments/aks-test.bicep` is the resource-group template. Supply the operator object ID and verified outbound IP CIDRs. The initial what-if contained only creates in the test group. Two verified workstation egress addresses were allowed at these resources, but direct workstation access still timed out; deployment uses authenticated `az aks command invoke`. Do not widen access or change subscription policy to work around that network limitation.

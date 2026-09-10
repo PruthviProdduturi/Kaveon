@@ -298,6 +298,13 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
     # 5) stats rollup — cardinalities / row counts / freshness / date-range digest
     stats_rollup = _stats_rollup(database, schema, columns, dimensions, snapshots, metrics,
                                  ds.get("date_column"), ds.get("table_name") or ds.get("fact_table"))
+    if not (stats_rollup.get("row_counts") or {}):
+        stats_rollup["row_counts"] = _native_row_counts(
+            database,
+            schema,
+            _dataset_tables(columns, dimensions,
+                            ds.get("table_name") or ds.get("fact_table")),
+        )
 
     # 6) manifest — the deterministic assembler's map of the dataset
     manifest = _manifest(ds, columns, dimensions, metrics)
@@ -2859,6 +2866,8 @@ def coverage() -> List[Dict[str, Any]]:
         manifest = _loads(r.get("manifest")) or {}
         stats = _loads(r.get("stats_rollup")) or {}
         row_counts = stats.get("row_counts") or {}
+        if not row_counts:
+            row_counts = _backfill_native_row_counts(did, stats)
         max_rows = max(row_counts.values()) if row_counts else None
         if max_rows is None:
             wm = stats.get("watermark") or {}
@@ -2882,6 +2891,65 @@ def coverage() -> List[Dict[str, Any]]:
             "built_at": r.get("built_at"),
         })
     return out
+
+
+def _native_row_counts(database: str, schema: str, tables: List[str]) -> Dict[str, int]:
+    """Return exact row counts through Kaveon Engine for native catalog tables.
+
+    External databases deliberately return no values here: this migration path
+    must not introduce PostgreSQL data scans merely to decorate a dataset card.
+    """
+    if not database or not tables:
+        return {}
+    source = meta.query_one(
+        "SELECT engine_catalog FROM catalog_sources "
+        "WHERE engine_catalog = @param0 AND lifecycle = 'active' AND adapter_type = 'native'",
+        [database],
+    )
+    if not source:
+        return {}
+    counts: Dict[str, int] = {}
+    for table in sorted(set(t for t in tables if t)):
+        relation = f"{_qid(schema)}.{_qid(table)}" if schema else _qid(table)
+        try:
+            result = _execute_dataset_query(
+                f"SELECT COUNT(*) AS row_count FROM {relation}", database)
+            rows = result.get("rows_objects") or result.get("rows") or []
+            if not rows:
+                continue
+            row = rows[0]
+            value = row.get("row_count") if isinstance(row, dict) else row[0]
+            if value is not None and int(value) >= 0:
+                counts[table] = int(value)
+        except (IndexError, KeyError, TypeError, ValueError):
+            logger.warning("Engine row count was invalid for %s.%s", schema, table)
+        except Exception:
+            logger.exception("Engine row count failed for %s.%s", schema, table)
+    return counts
+
+
+def _backfill_native_row_counts(dataset_id: str, stats: Dict[str, Any]) -> Dict[str, int]:
+    """Backfill old ready artifacts once, preserving the existing DLM payload."""
+    ds = datasets_svc.get_dataset_by_id(str(dataset_id))
+    if not ds:
+        return {}
+    database = ds.get("database_name") or _metadata_database()
+    schema = ds.get("schema_name") or "public"
+    counts = _native_row_counts(
+        database,
+        schema,
+        _dataset_tables(ds.get("columns") or [], ds.get("dimensions") or [],
+                        ds.get("table_name") or ds.get("fact_table")),
+    )
+    if counts:
+        stats["row_counts"] = counts
+        watermark = stats.setdefault("watermark", {})
+        watermark["row_count"] = max(counts.values())
+        meta.execute(
+            "UPDATE dlm_artifact SET stats_rollup = @param0 WHERE dataset_id = @param1",
+            [json.dumps(stats, default=str), str(dataset_id)],
+        )
+    return counts
 
 
 def _sample_values(dataset_id: str, per_col: int = 6) -> Dict[str, List[str]]:

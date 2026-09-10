@@ -42,6 +42,48 @@ class ChartFreshnessTests(unittest.TestCase):
         self.assertIs(result, expected)
         execute.assert_called_once_with("SELECT COUNT(*)", "warehouse")
 
+    def test_native_row_counts_are_exact_engine_queries(self):
+        with patch.object(engine.meta, "query_one", return_value={"engine_catalog": "OpenSource"}), \
+             patch.object(engine, "_execute_dataset_query", side_effect=[
+                 {"rows_objects": [{"row_count": 12}]},
+                 {"rows": [[34]]},
+             ]) as execute:
+            counts = engine._native_row_counts(
+                "OpenSource", "silver", ["orders", "customers", "orders"]
+            )
+
+        self.assertEqual(counts, {"customers": 12, "orders": 34})
+        self.assertEqual(execute.call_count, 2)
+        self.assertEqual(
+            execute.call_args_list[0].args,
+            ('SELECT COUNT(*) AS row_count FROM "silver"."customers"', "OpenSource"),
+        )
+
+    def test_external_catalog_row_count_never_scans_postgres(self):
+        with patch.object(engine.meta, "query_one", return_value=None), \
+             patch.object(engine, "_execute_dataset_query") as execute:
+            counts = engine._native_row_counts("metadata", "public", ["datasets"])
+
+        self.assertEqual(counts, {})
+        execute.assert_not_called()
+
+    def test_old_ready_artifact_backfills_engine_count_and_watermark(self):
+        dataset = {
+            "id": "7", "database_name": "OpenSource", "schema_name": "silver",
+            "table_name": "trips", "columns": [], "dimensions": [],
+        }
+        stats = {"generation": {"answers_precomputed": 5}}
+        with patch.object(engine.datasets_svc, "get_dataset_by_id", return_value=dataset), \
+             patch.object(engine, "_native_row_counts", return_value={"trips": 5000}), \
+             patch.object(engine.meta, "execute") as persist:
+            counts = engine._backfill_native_row_counts("7", stats)
+
+        self.assertEqual(counts, {"trips": 5000})
+        self.assertEqual(stats["watermark"]["row_count"], 5000)
+        stored = persist.call_args.args[1]
+        self.assertIn('"row_counts": {"trips": 5000}', stored[0])
+        self.assertEqual(stored[1], "7")
+
     def test_stale_single_metric_context_falls_back_and_starts_rebuild(self):
         dataset = {"id": "7", "metrics": [{"name": "Trips", "expression": "SUM(trips)"}]}
         with patch.object(engine.datasets_svc, "get_dataset_by_id", return_value=dataset), \

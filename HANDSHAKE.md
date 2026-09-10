@@ -114,6 +114,18 @@ stale metadata or changing execution mode. Two focused scheduler tests cover
 legacy/mismatched exclusion, partial compatibility, and the fully incompatible
 case. This is safe readiness behavior, not synchronization: operators must still
 roll out identical catalog state, and automatic worker catch-up remains pending.
+
+Engine-backed DLM coverage now obtains exact table row counts through Kaveon
+Engine (`SELECT COUNT(*)`) when PostgreSQL profiler snapshots are unavailable.
+New DLM builds store those counts in `stats_rollup.row_counts`; existing ready
+artifacts with missing counts are backfilled once when coverage is requested,
+including the DLM watermark, so dataset cards no longer render `— rows` after
+successful native curation. The helper first verifies the dataset catalog is an
+active native Engine source and returns no count for external catalogs, so this
+path never scans PostgreSQL data or fabricates a value. Focused tests cover
+Engine routing, deterministic table de-duplication, legacy-artifact persistence,
+and the external-source no-scan boundary. Live AKS backfill of the nine showcase
+artifacts remains a deployment verification step.
 The identity currently covers the complete catalog store, so an unrelated
 catalog mutation can conservatively reject a task until every worker catches up.
 
@@ -152,6 +164,17 @@ exits on invalid configuration, authentication, authorization, corrupt state or
 an indeterminate initialization. Workers receive no transaction configuration.
 Disabled coordinators keep returning 503 and cannot silently fall back to memory
 or SQLite.
+
+The resource-group AKS Bicep now creates a dedicated `product-transactions`
+container and grants the existing Engine workload identity Storage Blob Data
+Contributor at that container scope only. Its account-scoped Blob Data Reader
+assignment remains unchanged, so the Engine can query bronze/silver/gold but
+cannot write them. Outputs feed the non-secret Helm account/container/prefix
+values. This changes no subscription policy and grants no subscription-scoped
+role. `az bicep build` passes. A resource-group what-if against
+`test-prproddu-test` succeeded and identified exactly the dedicated container
+and its container-scoped role assignment as creates; existing managed resources
+were deploy/no-change operations. No deployment was executed.
 
 ## Current integration ledger — September 10, 2026
 
@@ -236,6 +259,25 @@ binding, result rows, or SQL client session affinity. Production remains disable
 until an ADLS-backed product store is configured, and PostgreSQL remains metadata
 authority until migration, shadow-read, fencing, rollback, and restart gates pass.
 
+`engine/qualification/transaction_compare.py` is the reproducible product SQL
+transaction runner against PostgreSQL. It requires equal Docker CPU, memory,
+swap, affinity and quota settings; reads credentials only from named environment
+variables; alternates engine order; records individual samples; and compares a
+canonical `(id, revision, document_sha256)` state hash. Its fixed corpus covers
+point read, insert, update, delete, two-writer optimistic conflict, and a
+three-record atomic commit with five warmups and at least thirty measured samples
+for publication scale. The machine report is consumed directly by
+`comparison_gate.py`.
+
+The runner currently sets `bounded_point_read: false` and always exits 2 after a
+successful diagnostic. Kaveon's only remote product read is the entire base
+snapshot returned by `BEGIN`; timing that transfer as an indexed point lookup
+would be unfair to PostgreSQL. The combined gate now requires a true bounded
+point-read flag, so no synthetic or diagnostic report can claim a PostgreSQL win.
+Four comparison-gate tests and three transaction-runner utility tests pass. The
+runner has not been executed against ADLS because the deployed transaction store
+is not enabled; no PostgreSQL performance result exists yet.
+
 Dashboard chart hydration mounts tiles concurrently, but the shared Studio
 query semaphore was configured to one slot, making every SQL/DLM fallback
 request sequential and preventing the existing three-slot Engine limiter from
@@ -276,6 +318,7 @@ metadata persistence remains on PostgreSQL until product cutover.
 | 2026-09-10 | `65af483` | Local Windows | `cargo test --workspace --all-targets`; strict workspace Clippy; formatting; comparison-gate tests and compilation; docs validation | **Passed:** integrated typed transaction sessions, durable catalog identity, and fail-closed PostgreSQL/Trino publication gate | No external benchmark was run and the durable identity is not wired into task transport; this is foundation evidence, not a superiority or deployment claim |
 | 2026-09-10 | `796ed11` | Local Windows | Full Rust workspace tests; strict workspace Clippy/formatting; full API tests; semaphore tests; local TypeScript compile; docs validation | **Passed:** authenticated bounded transaction sessions, constrained DML parsing, durable task identity enforcement, four-way dashboard scheduling with three Engine slots, and failed-query persistence | The historical failed query `ad9889d3-bf7a-46cd-b7f7-87c747d66da7` predates failure persistence and cannot be reconstructed from AKS logs or `query_history`; no external benchmark or AKS deployment was run |
 | 2026-09-10 | `18cf1de` | Local Windows | Full Rust workspace/all-target tests; strict workspace Clippy/formatting; 77 API tests plus four subtests; docs validation | **Passed:** workload-identity ADLS store configuration, product SQL transaction binding, and catalog-compatible worker scheduling; 118 server, 45 catalog, 44 SQL, and 40 storage tests pass | Helm rendering, live ADLS initialization/restart, AKS worker compatibility, generic OLTP, and external comparative performance remain unqualified |
+| 2026-09-10 | `18cf1de` plus product-container Bicep/docs | Local and Azure resource-group what-if | `az bicep build`; `az deployment group what-if` for `test-prproddu-test` | **Passed:** preview creates only `product-transactions` and its container-scoped Storage Blob Data Contributor assignment; no deployment executed | ResourceIdOnly reports existing managed resources as deploy operations; apply and live RBAC/data-plane verification remain pending |
 
 The two failed rows above record the intentionally caught intermediate state,
 before the owning agent completed its edit. The integrated passing row supersedes

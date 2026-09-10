@@ -57,8 +57,10 @@ def transaction_gate(report):
     missing = sorted(REQUIRED_TRANSACTION_OPERATIONS - names)
     checks = {
         "resources_matched": report.get("resources_matched") is True,
+        "concurrency_matched": report.get("concurrency_matched") is True,
         "publication_workload": report.get("publication_workload_gate") is True,
         "correctness": report.get("correctness_passed") is True,
+        "bounded_point_read": report.get("bounded_point_read") is True,
         "required_operations": not missing,
         "operation_samples": bool(operations) and all(item.get("samples", 0) >= 30 for item in operations),
         "operation_results": bool(operations) and all(item.get("passed") is True and item.get("state_sha256") for item in operations),

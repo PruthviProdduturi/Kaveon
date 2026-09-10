@@ -15,7 +15,9 @@ def analytics(ratio=1.9):
 
 def transactions(qps=1.01, p95=.99):
     names = ["point_read", "insert", "update", "delete", "conflicting_update", "multi_record_commit"]
-    return {"resources_matched": True, "publication_workload_gate": True,
+    return {"resources_matched": True, "concurrency_matched": True,
+            "publication_workload_gate": True,
+            "bounded_point_read": True,
             "correctness_passed": True, "kaveon_over_postgresql_qps": qps,
             "kaveon_over_postgresql_p95_ratio": p95,
             "operations": [{"name": name, "samples": 30, "passed": True,
@@ -43,6 +45,13 @@ class ComparisonGateTests(unittest.TestCase):
         result = evaluate(analytics(), transactional)
         self.assertFalse(result["qualified"])
         self.assertIn("multi_record_commit", result["transactions_vs_postgresql"]["reasons"][-1])
+
+    def test_snapshot_scan_cannot_masquerade_as_point_read(self):
+        transactional = transactions()
+        transactional["bounded_point_read"] = False
+        result = evaluate(analytics(), transactional)
+        self.assertFalse(result["qualified"])
+        self.assertFalse(result["transactions_vs_postgresql"]["checks"]["bounded_point_read"])
 
 
 if __name__ == "__main__":
