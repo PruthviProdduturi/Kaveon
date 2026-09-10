@@ -2052,33 +2052,39 @@ async fn optimize_with_durable_statistics(
         if let Some(found) = cache.get(table) {
             return found.clone();
         }
-        let value = (|| {
-            let resolved = catalog
-                .resolve_table(&kaveon_core::TableReference::parse(table))
-                .ok()?;
-            let qualified = format!(
-                "{}.{}.{}",
-                resolved.catalog, resolved.schema, resolved.table.name
-            );
-            let stored = durable.as_ref()?.table_statistics.get(&qualified)?;
-            let catalog_digest = format!("{:x}", Sha256::digest(catalog.snapshot_id.as_bytes()));
-            if stored.catalog_snapshot_sha256 != catalog_digest {
-                return None;
-            }
-            let current =
-                kaveon_storage::analyze_source(&resolved.full_path(), resolved.table.format)
-                    .ok()?;
-            if current.identity_sha256 != stored.source_identity_sha256 {
-                return None;
-            }
-            Some(kaveon_optim::statistics::RelationStatistics {
-                rows: stored.row_count,
-                columns: current.columns,
-            })
-        })();
+        let value = durable
+            .as_ref()
+            .and_then(|snapshot| durable_relation_statistics(catalog, snapshot, table));
         cache.insert(table.to_owned(), value.clone());
         value
     })
+}
+
+fn durable_relation_statistics(
+    catalog: &crate::PublishedCatalog,
+    durable: &kaveon_catalog::product_manifest::CatalogSnapshot,
+    table: &str,
+) -> Option<kaveon_optim::statistics::RelationStatistics> {
+    let resolved = catalog
+        .resolve_table(&kaveon_core::TableReference::parse(table))
+        .ok()?;
+    let qualified = format!(
+        "{}.{}.{}",
+        resolved.catalog, resolved.schema, resolved.table.name
+    );
+    let stored = durable.table_statistics.get(&qualified)?;
+    let catalog_digest = format!("{:x}", Sha256::digest(catalog.snapshot_id.as_bytes()));
+    if stored.catalog_snapshot_sha256 != catalog_digest {
+        return None;
+    }
+    let current =
+        kaveon_storage::analyze_source(&resolved.full_path(), resolved.table.format).ok()?;
+    (current.identity_sha256 == stored.source_identity_sha256).then_some(
+        kaveon_optim::statistics::RelationStatistics {
+            rows: stored.row_count,
+            columns: current.columns,
+        },
+    )
 }
 
 async fn commit_query_record(record: QueryRecord) -> bool {
@@ -4415,9 +4421,10 @@ mod tests {
 
     use super::{
         ColumnInfo, MergeOperation, TaskRequest, TaskResponse, aggregate_merge_contract,
-        decode_arrow_stream, encode_arrow_stream, general_distributed_eligible,
-        merge_partial_aggregates, mutation_actor, parse_analyze_table, task_request_from_dispatch,
-        top_n_merge_contract, validate_replacement,
+        capabilities, decode_arrow_stream, durable_relation_statistics, encode_arrow_stream,
+        execute_analyze, general_distributed_eligible, merge_partial_aggregates, mutation_actor,
+        parse_analyze_table, task_request_from_dispatch, top_n_merge_contract,
+        validate_replacement,
     };
     use crate::security::Role;
     use arrow::array::{Int64Array, StringArray};
@@ -4438,6 +4445,178 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use std::sync::Arc;
+
+    async fn analyze_test_state() -> (
+        Arc<crate::AppState>,
+        kaveon_catalog::product_commit::ProductCatalogCommit,
+        std::path::PathBuf,
+    ) {
+        use kaveon_core::CatalogProvider;
+        use parquet::arrow::ArrowWriter;
+        let directory =
+            std::env::temp_dir().join(format!("kaveon-server-analyze-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("orders.parquet");
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
+        )
+        .unwrap();
+        let mut writer =
+            ArrowWriter::try_new(std::fs::File::create(&path).unwrap(), schema.clone(), None)
+                .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let storage = kaveon_storage::AdlsConditionalCommit::new(Arc::new(
+            object_store::memory::InMemory::new(),
+        ));
+        let commit = kaveon_catalog::product_commit::ProductCatalogCommit::new(
+            storage,
+            "product",
+            Arc::new(kaveon_catalog::product_metrics::TransactionMetrics::default()),
+        )
+        .unwrap();
+        assert!(matches!(
+            commit
+                .initialize(
+                    kaveon_catalog::product_manifest::CatalogSnapshot::empty("genesis").unwrap()
+                )
+                .await,
+            kaveon_catalog::product_commit::CommitOutcome::Committed(_)
+        ));
+        let mut manager = kaveon_core::CatalogManager::new("lake", "sales");
+        let mut provider = kaveon_core::MemoryCatalog::new(
+            "lake",
+            kaveon_core::StorageType::Local {
+                base_path: directory.clone(),
+            },
+        )
+        .with_schema("sales");
+        provider
+            .register_table(
+                "sales",
+                kaveon_core::TableMeta {
+                    name: "orders".into(),
+                    arrow_schema: schema,
+                    location: "orders.parquet".into(),
+                    access: kaveon_core::AccessPattern::Optimized,
+                    format: kaveon_core::DataFormat::Parquet,
+                },
+            )
+            .unwrap();
+        manager.register_catalog(Box::new(provider));
+        let mut state = catalog_test_state();
+        state.catalog = tokio::sync::RwLock::new(Arc::new(crate::PublishedCatalog {
+            manager,
+            snapshot_id: "sha256:catalog-one".into(),
+        }));
+        state.product_transactions =
+            crate::transaction_api::TransactionRegistry::enabled(commit.clone());
+        (Arc::new(state), commit, directory)
+    }
+
+    fn analyze_context() -> super::QueryContext {
+        super::QueryContext {
+            engine_version: "test".into(),
+            environment: "test".into(),
+            principal: Some("admin".into()),
+            user: Some("admin".into()),
+            source: None,
+            client: None,
+            catalog: "lake".into(),
+            schema: "sales".into(),
+            time_zone: None,
+            client_address: None,
+            client_tags: vec![],
+            result_delivery: None,
+            catalog_snapshot_id: "sha256:catalog-one".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn analyze_requires_admin_and_publishes_exact_durable_binding() {
+        let (state, commit, directory) = analyze_test_state().await;
+        let reader = crate::security::Identity {
+            principal: "reader".into(),
+            display_identity: None,
+            role: Role::Reader,
+        };
+        let denied = execute_analyze(
+            &state,
+            &reader,
+            "denied",
+            &analyze_context(),
+            "orders".into(),
+            std::time::Instant::now(),
+        )
+        .await;
+        assert_eq!(denied.status(), axum::http::StatusCode::FORBIDDEN);
+        assert!(
+            commit
+                .read_current()
+                .await
+                .unwrap()
+                .table_statistics
+                .is_empty()
+        );
+        let admin = crate::security::Identity {
+            principal: "admin".into(),
+            display_identity: None,
+            role: Role::Admin,
+        };
+        let response = execute_analyze(
+            &state,
+            &admin,
+            "allowed",
+            &analyze_context(),
+            "orders".into(),
+            std::time::Instant::now(),
+        )
+        .await;
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let snapshot = commit.read_current().await.unwrap();
+        let stats = &snapshot.table_statistics["lake.sales.orders"];
+        assert_eq!(stats.row_count, 3);
+        assert_eq!(
+            snapshot.runtime_table_sources["lake.sales.orders"].source_identity_sha256,
+            stats.source_identity_sha256
+        );
+        let catalog = state.catalog.read().await.clone();
+        assert_eq!(
+            durable_relation_statistics(&catalog, &snapshot, "lake.sales.orders")
+                .unwrap()
+                .rows,
+            3
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int64Array::from(vec![10, 11, 12, 13]))],
+        )
+        .unwrap();
+        let mut writer = parquet::arrow::ArrowWriter::try_new(
+            std::fs::File::create(directory.join("orders.parquet")).unwrap(),
+            schema,
+            None,
+        )
+        .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        assert!(durable_relation_statistics(&catalog, &snapshot, "lake.sales.orders").is_none());
+        let enabled = capabilities(axum::extract::State(state)).await.0;
+        assert_eq!(enabled["native_analyze"], true);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn capability_is_false_without_durable_statistics_authority() {
+        let state = Arc::new(catalog_test_state());
+        assert_eq!(
+            capabilities(axum::extract::State(state)).await.0["native_analyze"],
+            false
+        );
+    }
 
     #[test]
     fn statement_lifecycle_guard_releases_capacity_and_cancels_detached_work() {
