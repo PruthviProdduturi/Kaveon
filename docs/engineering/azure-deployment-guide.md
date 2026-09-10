@@ -242,10 +242,15 @@ $cluster = $outputs.clusterName.value
 $registry = $outputs.registryName.value
 $storage = $outputs.storageAccountName.value
 $readerClientId = $outputs.readerClientId.value
+$productContainer = $outputs.productTransactionContainer.value
+$productPrefix = $outputs.productCatalogPrefix.value
 ```
 
 This creates one system node plus three worker nodes, ACR, ADLS Gen2
-bronze/silver/gold containers, network and scoped identities/RBAC. Defaults are
+bronze/silver/gold containers, a dedicated product transaction container,
+network and scoped identities/RBAC. The Engine identity is Storage Blob Data
+Reader at the account and Storage Blob Data Contributor only at the product
+container. It cannot write to bronze, silver, or gold. Defaults are
 Standard_D4s_v3 and Kubernetes 1.35.7; override `nodeSize`/`kubernetesVersion` if
 Azure validation requires an allowed alternative. Four VMs and associated resources
 are billable. Fixed node counts and Free AKS control-plane tier are not a spending cap.
@@ -295,7 +300,7 @@ Engine admin credentials and private keys stay with the administrator.
 ### 7. Deploy the coordinator and three workers
 
 ```powershell
-helm upgrade --install kaveon infra/helm/kaveon-test --namespace kaveon --set image.repository="${registry}.azurecr.io/kaveon-engine" --set image.digest=$digest --set coordinator.credentialsSecret=kaveon-coordinator-auth --set workloadIdentity.clientId=$readerClientId
+helm upgrade --install kaveon infra/helm/kaveon-test --namespace kaveon --set image.repository="${registry}.azurecr.io/kaveon-engine" --set image.digest=$digest --set coordinator.credentialsSecret=kaveon-coordinator-auth --set workloadIdentity.clientId=$readerClientId --set productTransactions.enabled=true --set productTransactions.account=$storage --set productTransactions.container=$productContainer --set productTransactions.prefix=$productPrefix
 kubectl get pods -n kaveon -o wide
 ```
 

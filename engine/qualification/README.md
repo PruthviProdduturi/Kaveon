@@ -146,6 +146,34 @@ a result:
 ```
 
 The combined report claims only the declared workloads. It cannot establish
-general PostgreSQL or Trino superiority. Kaveon's transactional HTTP/SQL surface
-does not yet expose the operations required to produce the transaction input, so
-that half of the publication gate remains pending.
+general PostgreSQL or Trino superiority. Kaveon's product SQL surface now exposes
+the write operations, while its bounded point-read operation remains pending.
+
+`transaction_compare.py` now produces the transaction input for the product SQL
+facade. It executes point read, insert, update, delete, conflicting update, and a
+three-record commit against identical logical records. PostgreSQL stores the
+fixture in a fresh disposable table; Kaveon uses a random ID prefix. Every timed
+operation is followed by a canonical `(id, revision, document_sha256)` state
+comparison. Runs alternate engine order and record individual latency samples.
+
+Both services must run in containers with identical CPU, memory, swap, affinity,
+and quota settings. Credentials are read from environment variables and are not
+written to the report:
+
+```powershell
+$env:KAVEON_QUALIFICATION_TOKEN = "<disposable qualification token>"
+$env:KAVEON_QUALIFICATION_POSTGRES_DSN = "host=127.0.0.1 port=15432 dbname=qualification user=qualification password=<local fixture password>"
+& engine/qualification/venv/Scripts/python.exe engine/qualification/transaction_compare.py `
+  --kaveon-url https://127.0.0.1:18443 --ca-cert tmp/kaveon-ca.crt `
+  --kaveon-container kaveon-transaction-benchmark `
+  --postgres-container kaveon-postgres-benchmark `
+  --warmups 5 --repetitions 30 `
+  --output tmp/qualification-transactions/report.json
+```
+
+The current runner always exits 2 and sets `bounded_point_read: false`. Kaveon
+can expose product records only through the complete base snapshot returned by
+`BEGIN`, which is not equivalent to PostgreSQL's indexed point lookup. The
+diagnostic still checks all six operation classes, but `comparison_gate.py`
+rejects it for publication until a bounded authenticated product-read route is
+implemented. Do not remove or override that gate.
