@@ -1,0 +1,781 @@
+{
+  "generated_at": "2026-09-09",
+  "artifacts": [
+    {
+      "dataset_id": "23",
+      "name": "Kaveon Events",
+      "status": "ready"
+    },
+    {
+      "dataset_id": "22",
+      "name": "NYC Taxi by Borough",
+      "status": "ready"
+    },
+    {
+      "dataset_id": "21",
+      "name": "COVID-19 Global",
+      "status": "ready"
+    },
+    {
+      "dataset_id": "20",
+      "name": "AI Model Pricing",
+      "status": "ready"
+    },
+    {
+      "dataset_id": "19",
+      "name": "AI Arena Battles",
+      "status": "ready"
+    },
+    {
+      "dataset_id": "18",
+      "name": "AI Model Leaderboard",
+      "status": "ready"
+    },
+    {
+      "dataset_id": "17",
+      "name": "Climate \u00d7 Energy",
+      "status": "ready"
+    },
+    {
+      "dataset_id": "16",
+      "name": "Global Temperature",
+      "status": "ready"
+    },
+    {
+      "dataset_id": "15",
+      "name": "Global Energy",
+      "status": "ready"
+    }
+  ],
+  "chart_checks": [
+    {
+      "chart_id": "529",
+      "name": "Total Population",
+      "dataset_id": 21,
+      "eligible": true,
+      "serve_ms": 124.2,
+      "served": true,
+      "row_count": 1,
+      "reason": null
+    },
+    {
+      "chart_id": "530",
+      "name": "Total Confirmed Cases",
+      "dataset_id": 21,
+      "eligible": false,
+      "reason": "complex_or_shape_sensitive"
+    },
+    {
+      "chart_id": "531",
+      "name": "Total Deaths",
+      "dataset_id": 21,
+      "eligible": false,
+      "reason": "complex_or_shape_sensitive"
+    },
+    {
+      "chart_id": "532",
+      "name": "Case Fatality Rate",
+      "dataset_id": 21,
+      "eligible": false,
+      "reason": "custom_expression_not_represented_by_metric"
+    },
+    {
+      "chart_id": "533",
+      "name": "Confirmed Cases by Country",
+      "dataset_id": 21,
+      "eligible": false,
+      "reason": "complex_or_shape_sensitive"
+    },
+    {
+      "chart_id": "534",
+      "name": "Case Outcomes",
+      "dataset_id": 21,
+      "eligible": true,
+      "serve_ms": 106.6,
+      "served": true,
+      "row_count": 6,
+      "reason": null
+    },
+    {
+      "chart_id": "590",
+      "name": "Charts Created",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 1535.4,
+      "served": true,
+      "row_count": 1,
+      "reason": null
+    },
+    {
+      "chart_id": "591",
+      "name": "Queries Run",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 114.2,
+      "served": true,
+      "row_count": 1,
+      "reason": null
+    },
+    {
+      "chart_id": "592",
+      "name": "Rows Scanned",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 112.0,
+      "served": true,
+      "row_count": 1,
+      "reason": null
+    },
+    {
+      "chart_id": "593",
+      "name": "Cache Hits",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 110.6,
+      "served": true,
+      "row_count": 1,
+      "reason": null
+    },
+    {
+      "chart_id": "594",
+      "name": "Users by Region",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 116.4,
+      "served": true,
+      "row_count": 6,
+      "reason": null
+    },
+    {
+      "chart_id": "595",
+      "name": "Users by Deployment",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 113.2,
+      "served": true,
+      "row_count": 3,
+      "reason": null
+    },
+    {
+      "chart_id": "596",
+      "name": "Queries by Team Size",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 111.9,
+      "served": true,
+      "row_count": 5,
+      "reason": null
+    },
+    {
+      "chart_id": "597",
+      "name": "Queries by Platform",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 107.2,
+      "served": true,
+      "row_count": 3,
+      "reason": null
+    },
+    {
+      "chart_id": "598",
+      "name": "Users by Channel",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 114.1,
+      "served": true,
+      "row_count": 5,
+      "reason": null
+    },
+    {
+      "chart_id": "599",
+      "name": "Actions by License",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 109.8,
+      "served": true,
+      "row_count": 4,
+      "reason": null
+    },
+    {
+      "chart_id": "578",
+      "name": "Total Actions",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 107.8,
+      "served": true,
+      "row_count": 1,
+      "reason": null
+    },
+    {
+      "chart_id": "579",
+      "name": "Active Users",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 104.6,
+      "served": true,
+      "row_count": 1,
+      "reason": null
+    },
+    {
+      "chart_id": "580",
+      "name": "Total Sessions",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 106.3,
+      "served": true,
+      "row_count": 1,
+      "reason": null
+    },
+    {
+      "chart_id": "581",
+      "name": "Avg Latency",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 110.3,
+      "served": true,
+      "row_count": 1,
+      "reason": null
+    },
+    {
+      "chart_id": "582",
+      "name": "Actions by Surface",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 105.1,
+      "served": true,
+      "row_count": 6,
+      "reason": null
+    },
+    {
+      "chart_id": "583",
+      "name": "Global Usage by Country",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 105.9,
+      "served": true,
+      "row_count": 26,
+      "reason": null
+    },
+    {
+      "chart_id": "584",
+      "name": "Users by Industry",
+      "dataset_id": 23,
+      "eligible": false,
+      "reason": "complex_or_shape_sensitive"
+    },
+    {
+      "chart_id": "585",
+      "name": "Users by Platform",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 106.8,
+      "served": true,
+      "row_count": 3,
+      "reason": null
+    },
+    {
+      "chart_id": "586",
+      "name": "Queries by License",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 123.1,
+      "served": true,
+      "row_count": 4,
+      "reason": null
+    },
+    {
+      "chart_id": "587",
+      "name": "Sessions by Segment",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 111.5,
+      "served": true,
+      "row_count": 4,
+      "reason": null
+    },
+    {
+      "chart_id": "588",
+      "name": "Actions by Region",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 114.1,
+      "served": true,
+      "row_count": 6,
+      "reason": null
+    },
+    {
+      "chart_id": "589",
+      "name": "Errors by Surface",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 106.6,
+      "served": true,
+      "row_count": 6,
+      "reason": null
+    },
+    {
+      "chart_id": "600",
+      "name": "Total Actions",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 106.3,
+      "served": true,
+      "row_count": 1,
+      "reason": null
+    },
+    {
+      "chart_id": "601",
+      "name": "Active Users",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 114.4,
+      "served": true,
+      "row_count": 1,
+      "reason": null
+    },
+    {
+      "chart_id": "602",
+      "name": "Total Errors",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 109.0,
+      "served": true,
+      "row_count": 1,
+      "reason": null
+    },
+    {
+      "chart_id": "603",
+      "name": "Avg Latency",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 115.6,
+      "served": true,
+      "row_count": 1,
+      "reason": null
+    },
+    {
+      "chart_id": "604",
+      "name": "Global Actions by Country",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 108.9,
+      "served": true,
+      "row_count": 26,
+      "reason": null
+    },
+    {
+      "chart_id": "605",
+      "name": "Top Countries by Actions",
+      "dataset_id": 23,
+      "eligible": false,
+      "reason": "complex_or_shape_sensitive"
+    },
+    {
+      "chart_id": "606",
+      "name": "Sessions by Country",
+      "dataset_id": 23,
+      "eligible": false,
+      "reason": "complex_or_shape_sensitive"
+    },
+    {
+      "chart_id": "607",
+      "name": "Users by Industry",
+      "dataset_id": 23,
+      "eligible": false,
+      "reason": "complex_or_shape_sensitive"
+    },
+    {
+      "chart_id": "608",
+      "name": "Sessions by Segment",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 103.7,
+      "served": true,
+      "row_count": 4,
+      "reason": null
+    },
+    {
+      "chart_id": "609",
+      "name": "Errors by Region",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 104.4,
+      "served": true,
+      "row_count": 6,
+      "reason": null
+    },
+    {
+      "chart_id": "610",
+      "name": "Latency by Surface",
+      "dataset_id": 23,
+      "eligible": true,
+      "serve_ms": 101.7,
+      "served": true,
+      "row_count": 6,
+      "reason": null
+    },
+    {
+      "chart_id": "482",
+      "name": "Models Tracked",
+      "dataset_id": 18,
+      "eligible": true,
+      "serve_ms": 107.5,
+      "served": true,
+      "row_count": 1,
+      "reason": null
+    },
+    {
+      "chart_id": "483",
+      "name": "Highest ELO",
+      "dataset_id": 18,
+      "eligible": true,
+      "serve_ms": 105.9,
+      "served": true,
+      "row_count": 1,
+      "reason": null
+    },
+    {
+      "chart_id": "484",
+      "name": "Best MMLU",
+      "dataset_id": 18,
+      "eligible": true,
+      "serve_ms": 109.6,
+      "served": true,
+      "row_count": 1,
+      "reason": null
+    },
+    {
+      "chart_id": "485",
+      "name": "Cheapest Input",
+      "dataset_id": 20,
+      "eligible": true,
+      "serve_ms": 111.8,
+      "served": true,
+      "row_count": 1,
+      "reason": null
+    },
+    {
+      "chart_id": "486",
+      "name": "Arena ELO Ranking",
+      "dataset_id": 18,
+      "eligible": false,
+      "reason": "complex_or_shape_sensitive"
+    },
+    {
+      "chart_id": "487",
+      "name": "MMLU vs HumanEval",
+      "dataset_id": 18,
+      "eligible": false,
+      "reason": "complex_or_shape_sensitive"
+    },
+    {
+      "chart_id": "488",
+      "name": "Cost vs Arena ELO",
+      "dataset_id": 18,
+      "eligible": false,
+      "reason": "complex_or_shape_sensitive"
+    },
+    {
+      "chart_id": "489",
+      "name": "Models by Provider",
+      "dataset_id": 18,
+      "eligible": true,
+      "serve_ms": 105.7,
+      "served": true,
+      "row_count": 10,
+      "reason": null
+    },
+    {
+      "chart_id": "490",
+      "name": "Open Source vs Proprietary",
+      "dataset_id": 18,
+      "eligible": true,
+      "serve_ms": 271.9,
+      "served": true,
+      "row_count": 2,
+      "reason": null
+    },
+    {
+      "chart_id": "491",
+      "name": "Arena Head-to-Head",
+      "dataset_id": 19,
+      "eligible": true,
+      "serve_ms": 133.2,
+      "served": true,
+      "row_count": 10,
+      "reason": null
+    },
+    {
+      "chart_id": "521",
+      "name": "Total Trips",
+      "dataset_id": 22,
+      "eligible": true,
+      "serve_ms": 111.1,
+      "served": true,
+      "row_count": 1,
+      "reason": null
+    },
+    {
+      "chart_id": "522",
+      "name": "Total Revenue",
+      "dataset_id": 22,
+      "eligible": true,
+      "serve_ms": 108.9,
+      "served": true,
+      "row_count": 1,
+      "reason": null
+    },
+    {
+      "chart_id": "523",
+      "name": "Avg Fare",
+      "dataset_id": 22,
+      "eligible": true,
+      "serve_ms": 117.7,
+      "served": true,
+      "row_count": 1,
+      "reason": null
+    },
+    {
+      "chart_id": "526",
+      "name": "Taxi Trips by Borough",
+      "dataset_id": 22,
+      "eligible": false,
+      "reason": "complex_or_shape_sensitive"
+    },
+    {
+      "chart_id": "525",
+      "name": "Revenue by Borough",
+      "dataset_id": 22,
+      "eligible": true,
+      "serve_ms": 113.1,
+      "served": true,
+      "row_count": 5,
+      "reason": null
+    },
+    {
+      "chart_id": "524",
+      "name": "Trips by Borough",
+      "dataset_id": 22,
+      "eligible": true,
+      "serve_ms": 119.5,
+      "served": true,
+      "row_count": 5,
+      "reason": null
+    },
+    {
+      "chart_id": "499",
+      "name": "Total Energy 2023",
+      "dataset_id": 15,
+      "eligible": false,
+      "reason": "complex_or_shape_sensitive"
+    },
+    {
+      "chart_id": "500",
+      "name": "Avg Renewables %",
+      "dataset_id": 15,
+      "eligible": false,
+      "reason": "complex_or_shape_sensitive"
+    },
+    {
+      "chart_id": "501",
+      "name": "Avg Carbon Intensity",
+      "dataset_id": 15,
+      "eligible": false,
+      "reason": "complex_or_shape_sensitive"
+    },
+    {
+      "chart_id": "502",
+      "name": "Total GHG 2023",
+      "dataset_id": 15,
+      "eligible": false,
+      "reason": "complex_or_shape_sensitive"
+    },
+    {
+      "chart_id": "503",
+      "name": "Energy Consumption Map",
+      "dataset_id": 15,
+      "eligible": false,
+      "reason": "complex_or_shape_sensitive"
+    },
+    {
+      "chart_id": "504",
+      "name": "Top 15 Carbon Intensity",
+      "dataset_id": 15,
+      "eligible": false,
+      "reason": "complex_or_shape_sensitive"
+    },
+    {
+      "chart_id": "505",
+      "name": "Energy Mix - Top 10",
+      "dataset_id": 15,
+      "eligible": false,
+      "reason": "complex_or_shape_sensitive"
+    },
+    {
+      "chart_id": "506",
+      "name": "GHG Trend - Top 5",
+      "dataset_id": 15,
+      "eligible": false,
+      "reason": "complex_or_shape_sensitive"
+    },
+    {
+      "chart_id": "492",
+      "name": "Countries Tracked",
+      "dataset_id": 16,
+      "eligible": true,
+      "serve_ms": 174.2,
+      "served": true,
+      "row_count": 1,
+      "reason": null
+    },
+    {
+      "chart_id": "493",
+      "name": "Avg Temp Anomaly 2023",
+      "dataset_id": 16,
+      "eligible": false,
+      "reason": "complex_or_shape_sensitive"
+    },
+    {
+      "chart_id": "494",
+      "name": "Max Temp Anomaly 2023",
+      "dataset_id": 16,
+      "eligible": false,
+      "reason": "complex_or_shape_sensitive"
+    },
+    {
+      "chart_id": "495",
+      "name": "Data Coverage",
+      "dataset_id": 16,
+      "eligible": true,
+      "serve_ms": 121.5,
+      "served": true,
+      "row_count": 1,
+      "reason": null
+    },
+    {
+      "chart_id": "496",
+      "name": "Temperature Anomaly Map",
+      "dataset_id": 17,
+      "eligible": false,
+      "reason": "complex_or_shape_sensitive"
+    },
+    {
+      "chart_id": "497",
+      "name": "Warming Trend - Arctic Nations",
+      "dataset_id": 16,
+      "eligible": false,
+      "reason": "complex_or_shape_sensitive"
+    },
+    {
+      "chart_id": "498",
+      "name": "Monthly Pattern 2023",
+      "dataset_id": 16,
+      "eligible": false,
+      "reason": "complex_or_shape_sensitive"
+    }
+  ],
+  "representative_sql_comparisons": [
+    {
+      "dataset_id": 21,
+      "chart_id": "529",
+      "name": "Total Population",
+      "dlm_rows": 1,
+      "sql_rows": 1,
+      "exact_rows": true,
+      "query_id": "cf456f80-5b50-450e-a113-ec4184869e57"
+    },
+    {
+      "dataset_id": 23,
+      "chart_id": "590",
+      "name": "Charts Created",
+      "dlm_rows": 1,
+      "sql_rows": 1,
+      "exact_rows": true,
+      "query_id": "8ce4287e-fc62-4883-9a56-ad0b1f515dd4"
+    },
+    {
+      "dataset_id": 18,
+      "chart_id": "482",
+      "name": "Models Tracked",
+      "dlm_rows": 1,
+      "sql_rows": 1,
+      "exact_rows": true,
+      "query_id": "200123e2-e69c-4c79-920c-e2922e6712bd"
+    },
+    {
+      "dataset_id": 20,
+      "chart_id": "485",
+      "name": "Cheapest Input",
+      "dlm_rows": 1,
+      "sql_rows": 1,
+      "exact_rows": true,
+      "query_id": "3c824b0a-53bd-46b3-b5bc-71b71a5d60fb"
+    },
+    {
+      "dataset_id": 19,
+      "chart_id": "491",
+      "name": "Arena Head-to-Head",
+      "dlm_rows": 10,
+      "sql_rows": 10,
+      "exact_rows": true,
+      "query_id": "2f62755c-5433-49e0-a8df-b8228d42403c"
+    },
+    {
+      "dataset_id": 22,
+      "chart_id": "521",
+      "name": "Total Trips",
+      "dlm_rows": 1,
+      "sql_rows": 1,
+      "exact_rows": true,
+      "query_id": "d33471ea-9f5b-4994-8961-03cce6a8b065"
+    },
+    {
+      "dataset_id": 16,
+      "chart_id": "492",
+      "name": "Countries Tracked",
+      "dlm_rows": 1,
+      "sql_rows": 1,
+      "exact_rows": true,
+      "query_id": "0030c6ab-9b8a-4f92-aa63-ecda93f42332"
+    }
+  ],
+  "summary": {
+    "artifacts_ready": 9,
+    "eligible": 45,
+    "served": 45,
+    "sql_comparisons": 7,
+    "sql_exact": 7,
+    "stored_answers": 716,
+    "serve_ms": {
+      "min": 101.7,
+      "median": 110.6,
+      "p95": 174.2,
+      "max": 1535.4
+    }
+  },
+  "answer_inventory": {
+    "15": 80,
+    "16": 32,
+    "17": 2,
+    "18": 48,
+    "19": 4,
+    "20": 1,
+    "21": 12,
+    "22": 6,
+    "23": 531
+  },
+  "qualification_scope": {
+    "simple_shape_definition": "aggregate metrics; at most one group-by; no saved filters, time grain, series group-by, map code, row limit, or raw columns",
+    "excluded_charts": 25,
+    "representative_sql_limit": "one comparison per eligible dataset; datasets 15 and 17 have no eligible simple saved chart"
+  },
+  "metadata_inventory": {
+    "artifacts": 9,
+    "routers": 9,
+    "answers": 716,
+    "value_index_rows": 0,
+    "sketches": 0,
+    "orphan_artifacts": 0,
+    "orphan_answers": 0
+  }
+}
