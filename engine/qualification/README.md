@@ -160,6 +160,13 @@ Both services must run in containers with identical CPU, memory, swap, affinity,
 and quota settings. Credentials are read from environment variables and are not
 written to the report:
 
+Build the image from the exact commit under test. Start it with
+`KAVEON_PRODUCT_TRANSACTIONS_ENABLED=true`, the three
+`KAVEON_PRODUCT_ADLS_{ACCOUNT,CONTAINER,PREFIX}` values, its normal authenticated
+security configuration, and a read/write ADLS identity. Start PostgreSQL with
+the same Docker CPU and memory flags as the Kaveon container. Confirm both names
+are running with `docker inspect` before invoking the runner.
+
 ```powershell
 $env:KAVEON_QUALIFICATION_TOKEN = "<disposable qualification token>"
 $env:KAVEON_QUALIFICATION_POSTGRES_DSN = "host=127.0.0.1 port=15432 dbname=qualification user=qualification password=<local fixture password>"
@@ -171,9 +178,10 @@ $env:KAVEON_QUALIFICATION_POSTGRES_DSN = "host=127.0.0.1 port=15432 dbname=quali
   --output tmp/qualification-transactions/report.json
 ```
 
-The current runner always exits 2 and sets `bounded_point_read: false`. Kaveon
-can expose product records only through the complete base snapshot returned by
-`BEGIN`, which is not equivalent to PostgreSQL's indexed point lookup. The
-diagnostic still checks all six operation classes, but `comparison_gate.py`
-rejects it for publication until a bounded authenticated product-read route is
-implemented. Do not remove or override that gate.
+Point reads use only authenticated `GET /v1/product/{kind}/{id}`; the timed path
+never opens a transaction or filters the complete `BEGIN` snapshot. A missing,
+unauthorized, disabled, or malformed endpoint sets `bounded_point_read: false`,
+clears its samples, and returns exit code 2. `comparison_gate.py` independently
+requires that flag. A complete correctness and publication-scale run returns
+zero, but only the combined gate may decide whether the measured PostgreSQL
+throughput and p95 targets were met.

@@ -13,6 +13,7 @@ import json
 import math
 import os
 from pathlib import Path
+from urllib.parse import quote
 import secrets
 import statistics
 import subprocess
@@ -77,6 +78,15 @@ class Kaveon:
         response = self.session.post(self.endpoint + "/v1/transaction/sql",
                                      json={"sql": "ROLLBACK", "transaction_id": transaction_id}, timeout=120)
         response.raise_for_status()
+
+    def point(self, kind, record_id):
+        response = self.session.get(
+            f"{self.endpoint}/v1/product/{quote(kind, safe='')}/{quote(record_id, safe='')}",
+            timeout=120,
+        )
+        response.raise_for_status()
+        value = response.json()
+        return [value["id"], value["revision"], value["document"]]
 
     def create(self, transaction_id, record_id, document):
         value = json.dumps(document, separators=(",", ":")).replace("'", "''")
@@ -146,6 +156,13 @@ class Postgres:
             cursor.execute(f'SELECT id,revision,document_sha256 FROM "{self.table}" WHERE id LIKE %s ORDER BY id', (prefix + "%",))
             return [list(row) for row in cursor.fetchall()]
 
+    def point(self, record_id):
+        with self.connection as connection, connection.cursor() as cursor:
+            cursor.execute(f'SELECT id,revision,document FROM "{self.table}" WHERE id=%s', (record_id,))
+            row = cursor.fetchone()
+            if row is None: raise RuntimeError("PostgreSQL product record not found")
+            return [row[0], row[1], row[2]]
+
     def close(self):
         with self.connection as connection, connection.cursor() as cursor:
             cursor.execute(f'DROP TABLE "{self.table}"')
@@ -163,6 +180,12 @@ def document_hash(document):
 
 def timed(call):
     start = time.perf_counter(); call(); return (time.perf_counter() - start) * 1000
+
+
+def timed_result(call):
+    start = time.perf_counter()
+    result = call()
+    return result, (time.perf_counter() - start) * 1000
 
 
 def run(args):
@@ -201,10 +224,23 @@ def run(args):
             if measured: samples["multi_record_commit"]["kaveon"].append(elapsed)
             elapsed = timed(lambda: postgres.multi_create(items));
             if measured: samples["multi_record_commit"]["postgresql"].append(elapsed)
-        # Point-read is a diagnostic full-snapshot transfer in Kaveon today.
+        # This must remain a direct bounded GET. Never replace it with BEGIN's
+        # full base snapshot or client-side filtering.
+        bounded_point_read = True
+        point_correct = True
         for _ in range(args.repetitions):
-            samples["point_read"]["kaveon"].append(timed(lambda: kaveon.state(prefix)))
-            samples["point_read"]["postgresql"].append(timed(lambda: postgres.state(prefix)))
+            try:
+                k_value, k_ms = timed_result(lambda: kaveon.point("dataset", insert_id))
+                p_value, p_ms = timed_result(lambda: postgres.point(insert_id))
+                samples["point_read"]["kaveon"].append(k_ms)
+                samples["point_read"]["postgresql"].append(p_ms)
+                point_correct &= k_value == p_value
+            except (requests.RequestException, KeyError, ValueError):
+                bounded_point_read = False
+                point_correct = False
+                samples["point_read"]["kaveon"].clear()
+                samples["point_read"]["postgresql"].clear()
+                break
         # Conflict correctness is required but timed as one paired optimistic race per sample.
         conflict_passed = True
         for index in range(args.repetitions):
@@ -216,6 +252,7 @@ def run(args):
         expected, actual = postgres.state(prefix), kaveon.state(prefix)
         expected_hash, actual_hash = state_hash(expected), state_hash(actual)
         operations = [summarize(name, samples[name]["kaveon"], samples[name]["postgresql"], expected_hash, actual_hash) for name in OPERATIONS]
+        next(item for item in operations if item["name"] == "point_read")["passed"] &= point_correct
         next(item for item in operations if item["name"] == "conflicting_update")["passed"] &= conflict_passed
         total_k = sum(sum(value["kaveon"]) for value in samples.values()) / 1000
         total_p = sum(sum(value["postgresql"]) for value in samples.values()) / 1000
@@ -228,8 +265,8 @@ def run(args):
                 "run_prefix": prefix,
                 "containers": containers, "resources_matched": resources_matched,
                 "versions": {"postgresql": postgres.version()},
-                "bounded_point_read": False,
-                "point_read_limitation": "Kaveon BEGIN returns the complete base snapshot; no bounded product point-read HTTP route exists.",
+                "bounded_point_read": bounded_point_read,
+                **({} if bounded_point_read else {"point_read_limitation": "Authenticated bounded product GET is unavailable or returned an invalid response."}),
                 "publication_workload_gate": args.warmups >= 5 and args.repetitions >= 30 and resources_matched,
                 "correctness_passed": all(item["passed"] for item in operations), "operations": operations,
                 "concurrency": {"kaveon": 1, "postgresql": 1}, "concurrency_matched": True,
@@ -295,7 +332,8 @@ def main():
         parser.error("warmups and repetitions must be positive")
     report = run(args); args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    print(f"{'PASS' if report['correctness_passed'] else 'FAIL'} diagnostic; publication blocked by unbounded Kaveon point read")
-    return 2
+    publishable = report["correctness_passed"] and report["publication_workload_gate"] and report["bounded_point_read"]
+    print(f"{'PASS' if publishable else 'FAIL'} transaction comparison")
+    return 0 if publishable else 2
 
 if __name__ == "__main__": raise SystemExit(main())

@@ -66,6 +66,28 @@ Temporary upload credentials and test payloads were removed from the running
 coordinator after validation. This verifies restart persistence, not backup
 restore or recovery of interrupted queries.
 
+After deploying an API image containing the Engine-native DLM row-count
+backfill, authenticate to the API and run the repeatable coverage gate. Keep the
+port-forward process open in a separate terminal:
+
+```powershell
+kubectl --context kaveon-test-aks -n kaveon port-forward service/kaveon-api 18000:8000 --address 127.0.0.1
+
+$env:KAVEON_API_ACCESS_TOKEN = (az account get-access-token `
+  --resource api://d0ce7c35-cc10-4ae7-b6be-60d002f43059 `
+  --query accessToken -o tsv).Trim()
+python scripts/verify-aks-dlm-coverage.py `
+  --api-url http://127.0.0.1:18000 `
+  --report tmp/aks-dlm-row-count-validation.json
+Remove-Item Env:KAVEON_API_ACCESS_TOKEN
+```
+
+The request triggers the lazy backfill through the normal authenticated API.
+The verifier requires all nine canonical Engine datasets to be `ready` with a
+positive exact row count and writes only dataset IDs, names, statuses, counts,
+errors and the API URL. It never writes the access token. A failed or missing
+dataset makes the command exit nonzero.
+
 ## Stop and resume
 
 The final rollout has all four Engine pods Ready on

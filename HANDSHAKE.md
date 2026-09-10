@@ -126,6 +126,14 @@ path never scans PostgreSQL data or fabricates a value. Focused tests cover
 Engine routing, deterministic table de-duplication, legacy-artifact persistence,
 and the external-source no-scan boundary. Live AKS backfill of the nine showcase
 artifacts remains a deployment verification step.
+
+`scripts/verify-aks-dlm-coverage.py` makes that deployment check repeatable. It
+authenticates to `/api/v1/dlm/coverage` with an Entra bearer token (or the
+existing trusted proxy bridge for during controlled internal execution), thereby
+triggering the one-time backfill, and fails unless the nine canonical showcase
+datasets are `ready` with positive exact counts. Its JSON report contains no
+credential material. Pure validation tests cover success and fail-closed cases;
+the AKS deployment guide includes the port-forward, token and report commands.
 The identity currently covers the complete catalog store, so an unrelated
 catalog mutation can conservatively reject a task until every worker catches up.
 
@@ -165,16 +173,28 @@ an indeterminate initialization. Workers receive no transaction configuration.
 Disabled coordinators keep returning 503 and cannot silently fall back to memory
 or SQLite.
 
-The resource-group AKS Bicep now creates a dedicated `product-transactions`
-container and grants the existing Engine workload identity Storage Blob Data
+Authenticated `GET /v1/product/{kind}/{id}` now performs one point lookup in a
+pinned snapshot, authorizes `owner_principal` (or an admin), and fetches only that
+snapshot's bounded immutable document with SHA-256 verification. It returns
+kind, ID, revision, generation, snapshot ID and parsed document, never the full
+catalog snapshot. Missing records return 404, cross-owner and ownerless legacy
+records fail closed for non-admins with 403, invalid identifiers return 400, and
+missing/corrupt/digest-mismatched documents return an explicit 500. Product SQL
+creates stamp the authenticated owner. Focused tests cover owner/admin access,
+cross-owner denial, invalid/missing IDs and response shape. Live ADLS corruption
+injection remains a deployment gate.
+
+The standalone resource-group Bicep entrypoint
+`infra/bicep/environments/aks-product-transactions.bicep` creates a dedicated
+`product-transactions` container and grants the existing Engine workload identity Storage Blob Data
 Contributor at that container scope only. Its account-scoped Blob Data Reader
 assignment remains unchanged, so the Engine can query bronze/silver/gold but
 cannot write them. Outputs feed the non-secret Helm account/container/prefix
 values. This changes no subscription policy and grants no subscription-scoped
-role. `az bicep build` passes. A resource-group what-if against
-`test-prproddu-test` succeeded and identified exactly the dedicated container
-and its container-scoped role assignment as creates; existing managed resources
-were deploy/no-change operations. No deployment was executed.
+role. Both Bicep entrypoints build. A full-payload resource-group what-if of the
+standalone entrypoint against `test-prproddu-test` succeeded: the dedicated
+container and its container-scoped role assignment are the only `Create`
+operations, while all unrelated resources are `Ignore`. No deployment was executed.
 
 ## Current integration ledger — September 10, 2026
 
@@ -269,12 +289,14 @@ three-record atomic commit with five warmups and at least thirty measured sample
 for publication scale. The machine report is consumed directly by
 `comparison_gate.py`.
 
-The runner currently sets `bounded_point_read: false` and always exits 2 after a
-successful diagnostic. Kaveon's only remote product read is the entire base
-snapshot returned by `BEGIN`; timing that transfer as an indexed point lookup
-would be unfair to PostgreSQL. The combined gate now requires a true bounded
-point-read flag, so no synthetic or diagnostic report can claim a PostgreSQL win.
-Four comparison-gate tests and three transaction-runner utility tests pass. The
+Point-read timing now uses only authenticated
+`GET /v1/product/{kind}/{id}` and validates its ID, revision and JSON document
+against PostgreSQL. It never begins a Kaveon transaction or scans the returned
+base snapshot in that timed path. A missing, unauthorized, disabled, or malformed
+GET clears point-read samples, sets `bounded_point_read: false`, and makes the
+runner nonzero; the combined gate independently requires the flag. Mock transport
+tests prove the direct encoded GET and absence of `BEGIN`, including fail-closed
+404 behavior. Four comparison-gate and five transaction-runner tests pass. The
 runner has not been executed against ADLS because the deployed transaction store
 is not enabled; no PostgreSQL performance result exists yet.
 
@@ -318,7 +340,7 @@ metadata persistence remains on PostgreSQL until product cutover.
 | 2026-09-10 | `65af483` | Local Windows | `cargo test --workspace --all-targets`; strict workspace Clippy; formatting; comparison-gate tests and compilation; docs validation | **Passed:** integrated typed transaction sessions, durable catalog identity, and fail-closed PostgreSQL/Trino publication gate | No external benchmark was run and the durable identity is not wired into task transport; this is foundation evidence, not a superiority or deployment claim |
 | 2026-09-10 | `796ed11` | Local Windows | Full Rust workspace tests; strict workspace Clippy/formatting; full API tests; semaphore tests; local TypeScript compile; docs validation | **Passed:** authenticated bounded transaction sessions, constrained DML parsing, durable task identity enforcement, four-way dashboard scheduling with three Engine slots, and failed-query persistence | The historical failed query `ad9889d3-bf7a-46cd-b7f7-87c747d66da7` predates failure persistence and cannot be reconstructed from AKS logs or `query_history`; no external benchmark or AKS deployment was run |
 | 2026-09-10 | `18cf1de` | Local Windows | Full Rust workspace/all-target tests; strict workspace Clippy/formatting; 77 API tests plus four subtests; docs validation | **Passed:** workload-identity ADLS store configuration, product SQL transaction binding, and catalog-compatible worker scheduling; 118 server, 45 catalog, 44 SQL, and 40 storage tests pass | Helm rendering, live ADLS initialization/restart, AKS worker compatibility, generic OLTP, and external comparative performance remain unqualified |
-| 2026-09-10 | `18cf1de` plus product-container Bicep/docs | Local and Azure resource-group what-if | `az bicep build`; `az deployment group what-if` for `test-prproddu-test` | **Passed:** preview creates only `product-transactions` and its container-scoped Storage Blob Data Contributor assignment; no deployment executed | ResourceIdOnly reports existing managed resources as deploy operations; apply and live RBAC/data-plane verification remain pending |
+| 2026-09-10 | `18cf1de` plus standalone product-container Bicep/docs | Local and Azure resource-group what-if | `az bicep build` for both entrypoints; full-payload `az deployment group what-if` for standalone template in `test-prproddu-test` | **Passed:** only `product-transactions` and its container-scoped Storage Blob Data Contributor assignment are creates; unrelated resources are ignored; no deployment executed | Apply and live RBAC/data-plane verification remain pending |
 | 2026-09-10 | `c18debf` | Local Windows and Azure resource-group what-if | 80 API tests plus four subtests; seven comparison-runner tests; Python compilation; Bicep build; docs validation | **Passed:** Engine-native DLM row-count collection/backfill, scoped product-container plan, and a correctness/resource-gated transaction runner | The runner fails closed because bounded remote product point reads, live ADLS deployment, and matched PostgreSQL execution remain pending; no superiority result exists |
 
 The two failed rows above record the intentionally caught intermediate state,
@@ -1155,3 +1177,4 @@ let source = DeltaTableReader::new(table_directory)
 | 2026-09-04 | Codex | Closed the production Catalog Sources outage: the authenticated endpoint returns HTTP 200, the unsafe obsolete migration job/image were removed, the exposed Azure PostgreSQL administrator credential was rotated into Key Vault, and the published Engine digest passed local health/node smoke checks. Legacy Neon credential revocation and versioned metadata migrations remain explicit continuation gates. |
 
 | 2026-09-09 | Codex | Built the OpenSource showcase: four published dashboards and twelve live Engine charts over ADLS. Corrected chart metadata CRUD for the deployed config/UUID schema, preserved UUIDs through Studio, routed chart execution through server-resolved Engine catalogs, and fixed virtual dataset updates plus generated LIMIT/outer-column/metric-sort SQL. Added repeatable seeding and authenticated browser qualification; PostgreSQL metadata migration and general Engine alias/aggregate-sort compatibility remain pending. |
+| 2026-09-10 | Claude | Grounded the ADLS head-recovery rationale in first-party Microsoft documentation: blob versioning is unsupported on hierarchical-namespace accounts and the HNS blob-snapshots preview is closed to new customers, so the immutable `head-history` / `head-backups` records are the only available recovery evidence rather than a chosen one. `docs/engineering/adls-transaction-protocol.md` now cites both Learn pages. No protocol behavior, contract, or Engine code changed. |

@@ -299,12 +299,15 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
     stats_rollup = _stats_rollup(database, schema, columns, dimensions, snapshots, metrics,
                                  ds.get("date_column"), ds.get("table_name") or ds.get("fact_table"))
     if not (stats_rollup.get("row_counts") or {}):
-        stats_rollup["row_counts"] = _native_row_counts(
+        native_counts = _native_row_counts(
             database,
             schema,
             _dataset_tables(columns, dimensions,
                             ds.get("table_name") or ds.get("fact_table")),
         )
+        stats_rollup["row_counts"] = native_counts
+        if native_counts:
+            stats_rollup["row_count_source"] = "kaveon_engine_exact"
 
     # 6) manifest — the deterministic assembler's map of the dataset
     manifest = _manifest(ds, columns, dimensions, metrics)
@@ -2866,8 +2869,10 @@ def coverage() -> List[Dict[str, Any]]:
         manifest = _loads(r.get("manifest")) or {}
         stats = _loads(r.get("stats_rollup")) or {}
         row_counts = stats.get("row_counts") or {}
-        if not row_counts:
-            row_counts = _backfill_native_row_counts(did, stats)
+        if not row_counts or stats.get("row_count_source") != "kaveon_engine_exact":
+            backfilled_counts = _backfill_native_row_counts(did, stats)
+            if backfilled_counts:
+                row_counts = backfilled_counts
         max_rows = max(row_counts.values()) if row_counts else None
         if max_rows is None:
             wm = stats.get("watermark") or {}
@@ -2880,6 +2885,7 @@ def coverage() -> List[Dict[str, Any]]:
             "date_column": manifest.get("date_column"),
             "date_range": stats.get("date_range"),
             "row_count": max_rows,
+            "row_count_source": stats.get("row_count_source"),
             "values_indexed": _value_count(did),
             "columns_count": len(cols),
             "dimensions": [
@@ -2943,6 +2949,7 @@ def _backfill_native_row_counts(dataset_id: str, stats: Dict[str, Any]) -> Dict[
     )
     if counts:
         stats["row_counts"] = counts
+        stats["row_count_source"] = "kaveon_engine_exact"
         watermark = stats.setdefault("watermark", {})
         watermark["row_count"] = max(counts.values())
         meta.execute(

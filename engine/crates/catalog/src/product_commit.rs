@@ -304,8 +304,19 @@ impl ProductCatalogCommit {
         id: &str,
     ) -> Result<Option<Vec<u8>>, CommitErrorKind> {
         let head = self.read_head().await?;
-        let record = head
-            .snapshot
+        self.fetch_product_document_at(&head.snapshot, kind, id)
+            .await
+    }
+
+    /// Reads one document referenced by an already pinned snapshot. This keeps
+    /// authorization metadata and returned bytes on the same catalog generation.
+    pub async fn fetch_product_document_at(
+        &self,
+        snapshot: &CatalogSnapshot,
+        kind: crate::product_manifest::ProductRecordKind,
+        id: &str,
+    ) -> Result<Option<Vec<u8>>, CommitErrorKind> {
+        let record = snapshot
             .product_record(kind, id)
             .map_err(|_| CommitErrorKind::Invalid)?;
         let Some(record) = record else {

@@ -242,13 +242,24 @@ $cluster = $outputs.clusterName.value
 $registry = $outputs.registryName.value
 $storage = $outputs.storageAccountName.value
 $readerClientId = $outputs.readerClientId.value
-$productContainer = $outputs.productTransactionContainer.value
-$productPrefix = $outputs.productCatalogPrefix.value
+```
+
+Preview and deploy the isolated product transaction storage entrypoint only
+after the main infrastructure is present. Its dependencies are declared
+`existing`, so the full-payload what-if must show only the container and its
+container-scoped role assignment as `Create` operations:
+
+```powershell
+az deployment group what-if --resource-group $group --template-file infra/bicep/environments/aks-product-transactions.bicep --parameters storageAccountName=$storage workloadIdentityName=kaveon-test-reader --result-format FullResourcePayloads
+az deployment group create --name kaveon-product-transactions --resource-group $group --template-file infra/bicep/environments/aks-product-transactions.bicep --parameters storageAccountName=$storage workloadIdentityName=kaveon-test-reader
+$productOutputs = az deployment group show --name kaveon-product-transactions --resource-group $group --query properties.outputs -o json | ConvertFrom-Json
+$productContainer = $productOutputs.productTransactionContainer.value
+$productPrefix = $productOutputs.productCatalogPrefix.value
 ```
 
 This creates one system node plus three worker nodes, ACR, ADLS Gen2
-bronze/silver/gold containers, a dedicated product transaction container,
-network and scoped identities/RBAC. The Engine identity is Storage Blob Data
+bronze/silver/gold containers, network and scoped identities/RBAC. The isolated
+product template adds the dedicated transaction container. The Engine identity is Storage Blob Data
 Reader at the account and Storage Blob Data Contributor only at the product
 container. It cannot write to bronze, silver, or gold. Defaults are
 Standard_D4s_v3 and Kubernetes 1.35.7; override `nodeSize`/`kubernetesVersion` if

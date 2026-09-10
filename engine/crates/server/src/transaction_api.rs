@@ -11,7 +11,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::post,
+    routing::{get, post},
 };
 use kaveon_catalog::{
     product_commit::{CommitOutcome, ProductCatalogCommit},
@@ -42,6 +42,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/v1/transaction/{transaction_id}/commit", post(commit))
         .route("/v1/transaction/{transaction_id}/rollback", post(rollback))
         .route("/v1/transaction/sql", post(execute_sql))
+        .route("/v1/product/{kind}/{id}", get(read_product))
 }
 
 #[derive(Clone)]
@@ -63,9 +64,12 @@ enum RegistryError {
     Disabled,
     Capacity,
     Missing,
+    ProductMissing,
     Forbidden,
     Conflict,
     Invalid(String),
+    Corrupt,
+    Unavailable,
 }
 
 impl TransactionRegistry {
@@ -194,7 +198,7 @@ impl TransactionRegistry {
         let mut sessions = self.sessions.lock().await;
         expire(&mut sessions);
         let session = owned_session(&mut sessions, owner, id)?;
-        let (change, document) = product_change(session.transaction.snapshot(), command)?;
+        let (change, document) = product_change(session.transaction.snapshot(), owner, command)?;
         let document_total =
             document
                 .as_ref()
@@ -218,10 +222,55 @@ impl TransactionRegistry {
         session.expires_at = Instant::now() + self.ttl;
         Ok(session.transaction.snapshot().clone())
     }
+
+    async fn read_product(
+        &self,
+        identity: &Identity,
+        kind: ProductRecordKind,
+        id: &str,
+    ) -> Result<ProductReadResponse, RegistryError> {
+        let catalog = self.catalog.as_ref().ok_or(RegistryError::Disabled)?;
+        let snapshot = catalog.read_current().await.map_err(|error| match error {
+            kaveon_storage::CommitErrorKind::Missing | kaveon_storage::CommitErrorKind::Invalid => {
+                RegistryError::Corrupt
+            }
+            _ => RegistryError::Unavailable,
+        })?;
+        let record = snapshot
+            .product_record(kind, id)
+            .map_err(|error| RegistryError::Invalid(error.to_string()))?
+            .cloned()
+            .ok_or(RegistryError::ProductMissing)?;
+        let owner = record.unique_values.get("owner_principal");
+        if identity.role != crate::security::Role::Admin
+            && owner.map(String::as_str) != Some(identity.principal.as_str())
+        {
+            return Err(RegistryError::Forbidden);
+        }
+        let bytes = catalog
+            .fetch_product_document_at(&snapshot, kind, id)
+            .await
+            .map_err(|error| match error {
+                kaveon_storage::CommitErrorKind::Missing
+                | kaveon_storage::CommitErrorKind::Invalid => RegistryError::Corrupt,
+                _ => RegistryError::Unavailable,
+            })?
+            .ok_or(RegistryError::Corrupt)?;
+        let document = serde_json::from_slice(&bytes).map_err(|_| RegistryError::Corrupt)?;
+        Ok(ProductReadResponse {
+            kind,
+            id: record.id,
+            revision: record.revision,
+            generation: snapshot.generation,
+            snapshot_id: snapshot.snapshot_id,
+            document,
+        })
+    }
 }
 
 fn product_change(
     snapshot: &CatalogSnapshot,
+    owner: &str,
     command: kaveon_sql::parser::ProductDmlCommand,
 ) -> Result<ProductStage, RegistryError> {
     use kaveon_sql::parser::ProductDmlCommand;
@@ -240,7 +289,7 @@ fn product_change(
                         id,
                         revision: 1,
                         document,
-                        unique_values: BTreeMap::new(),
+                        unique_values: BTreeMap::from([("owner_principal".into(), owner.into())]),
                         references: BTreeSet::new(),
                     },
                 },
@@ -376,6 +425,35 @@ struct SqlTransactionRequest {
     sql: String,
     #[serde(default)]
     transaction_id: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ProductReadResponse {
+    kind: ProductRecordKind,
+    id: String,
+    revision: u64,
+    generation: u64,
+    snapshot_id: String,
+    document: serde_json::Value,
+}
+
+async fn read_product(
+    State(state): State<Arc<AppState>>,
+    Extension(identity): Extension<Identity>,
+    Path((kind, id)): Path<(String, String)>,
+) -> Response {
+    let kind = match record_kind(&kind) {
+        Ok(kind) => kind,
+        Err(error) => return error_response(error),
+    };
+    match state
+        .product_transactions
+        .read_product(&identity, kind, &id)
+        .await
+    {
+        Ok(record) => Json(record).into_response(),
+        Err(error) => error_response(error),
+    }
 }
 
 async fn execute_sql(
@@ -549,12 +627,23 @@ fn error_response(error: RegistryError) -> Response {
             StatusCode::NOT_FOUND,
             "transaction session not found or expired".to_owned(),
         ),
+        RegistryError::ProductMissing => {
+            (StatusCode::NOT_FOUND, "product record not found".to_owned())
+        }
         RegistryError::Forbidden => (
             StatusCode::FORBIDDEN,
             "transaction session belongs to another principal".to_owned(),
         ),
         RegistryError::Conflict => (StatusCode::CONFLICT, "transaction conflict".to_owned()),
         RegistryError::Invalid(message) => (StatusCode::BAD_REQUEST, message),
+        RegistryError::Corrupt => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "product document is missing, corrupt, or does not match its digest".to_owned(),
+        ),
+        RegistryError::Unavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "product store is unavailable".to_owned(),
+        ),
     };
     (status, Json(serde_json::json!({"error": message}))).into_response()
 }
@@ -878,5 +967,147 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let transaction = registry.take("alice", &begun.transaction_id).await.unwrap();
         assert_eq!(transaction.staged_change_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn product_point_read_is_owner_isolated_and_returns_no_snapshot_body() {
+        let (registry, _) = registry().await;
+        let begun = registry.begin("alice").await.unwrap();
+        registry
+            .stage_product_command(
+                "alice",
+                &begun.transaction_id,
+                ProductDmlCommand::Create {
+                    kind: "dataset".into(),
+                    id: "orders".into(),
+                    document_json: r#"{"name":"Orders"}"#.into(),
+                },
+            )
+            .await
+            .unwrap();
+        let mut transaction = registry.take("alice", &begun.transaction_id).await.unwrap();
+        transaction.bind_request_digest(b"alice").unwrap();
+        transaction.commit().await.unwrap();
+
+        let alice = Identity {
+            principal: "alice".into(),
+            display_identity: None,
+            role: crate::security::Role::Analyst,
+        };
+        let bob = Identity {
+            principal: "bob".into(),
+            ..alice.clone()
+        };
+        let admin = Identity {
+            principal: "admin".into(),
+            role: crate::security::Role::Admin,
+            display_identity: None,
+        };
+        let record = registry
+            .read_product(&alice, ProductRecordKind::Dataset, "orders")
+            .await
+            .unwrap();
+        let json = serde_json::to_value(&record).unwrap();
+        assert_eq!(json["document"]["name"], "Orders");
+        assert_eq!(json["revision"], 1);
+        assert!(json.get("tables").is_none());
+        assert!(json.get("product_records").is_none());
+        assert_eq!(
+            registry
+                .read_product(&bob, ProductRecordKind::Dataset, "orders")
+                .await
+                .err()
+                .unwrap(),
+            RegistryError::Forbidden
+        );
+        assert!(
+            registry
+                .read_product(&admin, ProductRecordKind::Dataset, "orders")
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn product_point_read_distinguishes_missing_and_invalid_ids() {
+        let (registry, _) = registry().await;
+        let admin = Identity {
+            principal: "admin".into(),
+            role: crate::security::Role::Admin,
+            display_identity: None,
+        };
+        assert_eq!(
+            registry
+                .read_product(&admin, ProductRecordKind::Dataset, "missing")
+                .await
+                .err()
+                .unwrap(),
+            RegistryError::ProductMissing
+        );
+        assert!(matches!(
+            registry
+                .read_product(&admin, ProductRecordKind::Dataset, "../unsafe")
+                .await,
+            Err(RegistryError::Invalid(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn product_point_read_reports_document_corruption() {
+        use object_store::{ObjectStore, path::Path as ObjectPath};
+
+        let raw = Arc::new(InMemory::new());
+        let catalog = ProductCatalogCommit::new(
+            AdlsConditionalCommit::new(raw.clone()),
+            "product",
+            Arc::new(TransactionMetrics::default()),
+        )
+        .unwrap();
+        catalog
+            .initialize(CatalogSnapshot::empty("genesis").unwrap())
+            .await;
+        let registry = TransactionRegistry::enabled(catalog.clone());
+        let begun = registry.begin("alice").await.unwrap();
+        registry
+            .stage_product_command(
+                "alice",
+                &begun.transaction_id,
+                ProductDmlCommand::Create {
+                    kind: "dataset".into(),
+                    id: "orders".into(),
+                    document_json: r#"{"name":"Orders"}"#.into(),
+                },
+            )
+            .await
+            .unwrap();
+        let mut transaction = registry.take("alice", &begun.transaction_id).await.unwrap();
+        transaction.bind_request_digest(b"alice").unwrap();
+        transaction.commit().await.unwrap();
+        let snapshot = catalog.read_current().await.unwrap();
+        let path = &snapshot
+            .product_record(ProductRecordKind::Dataset, "orders")
+            .unwrap()
+            .unwrap()
+            .document
+            .path;
+        raw.put(
+            &ObjectPath::from(format!("product/{path}")),
+            b"corrupt".to_vec().into(),
+        )
+        .await
+        .unwrap();
+        let admin = Identity {
+            principal: "admin".into(),
+            role: crate::security::Role::Admin,
+            display_identity: None,
+        };
+        assert_eq!(
+            registry
+                .read_product(&admin, ProductRecordKind::Dataset, "orders")
+                .await
+                .err()
+                .unwrap(),
+            RegistryError::Corrupt
+        );
     }
 }
