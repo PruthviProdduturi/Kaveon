@@ -24,7 +24,91 @@ tests, frequent CI polling and optional scope expansion. Preserve meaningful
 security/correctness checks. A parent agent cannot claim the current chat model
 changed unless the application actually changes it; the user controls that picker.
 
+## Distributed runtime workstream — September 10, 2026
+
+Resource-group admission now supports one explicit `"*"` catch-all group for
+authenticated principals that are not statically enumerated. Exact principal
+membership takes precedence, so dedicated workload groups retain their own
+queue and running limits while new Entra principals can no longer bypass a
+configured default group. Configuration rejects multiple wildcard groups and
+principal entries with surrounding whitespace. Focused tests cover wildcard
+admission, exact-group precedence, and invalid configuration.
+
+Focused resource-group qualification passes all eight security tests. The
+integrated catalog/server tree passes repository-wide formatting, scoped strict
+Clippy, and diff checks.
+
+## Current integration ledger — September 10, 2026
+
+Use one row per independently reviewable workstream. Keep entries short and use
+these fields: **baseline** (commit or deployed digest), **verified** (repeatable
+evidence), **boundary** (what the evidence does not prove), and **next gate**.
+Historical detail belongs in the log or the linked engineering document.
+
+| Workstream | Baseline | Verified | Boundary | Next gate |
+|---|---|---|---|---|
+| Repository | `dev` at `db54b33` | CI and Deploy runs `34426997861` and `34426997828` passed | A green docs/API pipeline does not qualify unfinished Engine transaction work | Run the matrix below on the integrated transaction/runtime head |
+| AKS runtime | API `dd48b8b7`, Studio `eaa3bbae`, Engine `c8b227a0`; 1 coordinator and 3 workers Ready | Read-only pod/deployment inventory on September 10 | Three Ready workers do not prove failure recovery, pressure behavior, or multi-coordinator consistency | Run bounded AKS correctness, fault, concurrency, and restart gates |
+| DLM showcase | Evidence commit `db54b33` | 9/9 artifacts ready; 716 answers; 45/45 conservative chart shapes served; 7/7 representative SQL comparisons exact; no orphan artifacts/answers | PostgreSQL statistics/value index are unavailable for the Engine catalog; 25 complex or shape-sensitive charts remain on SQL | Qualify freshness for immutable Engine snapshots and every remaining chart shape before removing the Studio Engine-source gate |
+| Transaction publication | `efe125c` on top of operation-index work in `5a13c0a` | A prepared snapshot can publish table and product control-record references in one generation; reopen and validation tests exist | No native row DML, SQL transaction/session semantics, constraints, product cutover, or multi-coordinator service is implemented | Complete the transactional correctness rows below before migration |
+| Distributed analytics | Engine digest `c8b227a0` | Existing three-worker AKS dashboard queries and the documented distributed operator suite pass | Current evidence does not establish transactional/analytical snapshot interaction, scheduler fault tolerance under the new changes, or Trino parity | Re-run distributed equivalence and fault gates against committed snapshots |
+| Product migration | PostgreSQL remains authoritative | Canonical dashboards and DLM metadata are healthy before cutover | Product system tables have not moved to ADLS and rollback/fencing are unproved | Inventory, reconcile, fence writes, cut over, restart, and demonstrate rollback |
+
+### Transactional and distributed acceptance matrix
+
+Record each execution as `date | commit/image | environment | command/scenario |
+result | evidence path`. A passing unit test is local evidence; label Docker and
+AKS separately. Never promote a local result to a deployed claim.
+
+| Area | Required test | Required evidence / invariant | Current state |
+|---|---|---|---|
+| Manifest atomicity | Commit table and control-record changes together; inject an invalid control change | One generation contains all valid changes; any invalid member publishes nothing and leaves head unchanged | Local tests exist; integration rerun required after current work merges |
+| Optimistic concurrency | Race two writers from the same base and retry the loser | Exactly one CAS wins; stale writer cannot overwrite head; retry reads the winning snapshot | Foundation exists; concurrent storage-backed test required |
+| Idempotency | Repeat an operation with the same digest, then with a conflicting digest, including after more than 110 intervening commits | Same request replays one outcome; changed digest conflicts; oldest indexed operation remains resolvable | Locally covered; ADLS restart replay required |
+| Unknown outcomes | Lose the response after snapshot create and around head CAS; remove or corrupt history | Outcome is committed, rejected, or explicitly indeterminate; never falsely reported rolled back | Local fault tests exist; live storage fault evidence pending |
+| Bounds | Exceed snapshot bytes and the 1,024-operation index/shard bound | Fail before publishing an unreadable head; no silent unbounded growth | Snapshot bound covered; shard splitting remains pending |
+| Transaction telemetry | Exercise commit, reject, cancel, and ambiguous attempts | Counters reconcile without payloads; ambiguous/cancelled attempts are not labeled commit or rollback | Local metric tests exist; API/operations exposure pending |
+| Native SQL transactions | Parameterized INSERT/UPDATE/DELETE plus BEGIN/COMMIT/ROLLBACK and multi-table writes | Typed results, read-your-writes, rollback, atomic visibility, and explicit rejection of unsupported syntax | Not implemented |
+| Isolation/conflicts | Contended keys, write skew, range predicates, phantoms, and snapshot reads during commits | Documented isolation level matches observed conflicts; readers stay on one committed generation | Not implemented end to end |
+| Constraints/indexes | Primary/unique/not-null/check/foreign-key violations and point/range lookup plans | Constraints survive concurrency/retry/restart; point operations remain bounded | Not implemented |
+| Scheduler correctness | Run scan, grouped/global aggregate, TopN, join, window, and set operations locally and with three workers | Result schema, ordered/unordered row hash, nulls, errors, and query state match | Existing suite is baseline; rerun on integrated head |
+| Retry/work stealing | Kill or delay a worker after lease/exchange production and create a skewed tail | No partition is lost or double-counted; retry avoids the failed worker; stolen attempt invalidates the old attempt | Unit coverage exists; Docker/AKS fault evidence pending |
+| Snapshot pinning | Publish a new table/control generation while a distributed query is in flight | Every fragment reads the query's pinned immutable references; one query never mixes generations | Pending integration test |
+| Memory/spill/admission | Concurrent large aggregate/join/sort workloads at and above configured limits | Bounded reservations/spill, deterministic admission, cleanup, and no silent local fallback after distributed execution starts | Local component coverage exists; pressure run pending |
+| Cancellation/restart | Cancel during scan/exchange/final stage; restart coordinator and one worker | Terminal state is stable, exchanges/tasks clean up, committed catalog reopens, and unknown writes stay indeterminate | Pending combined runtime test |
+| Product cutover | Migrate datasets, charts, dashboards, filters, favorites, roles, ownership, history and DLM metadata | Reconciled counts/hashes; create-save-reopen works; restart preserves edits; write fence prevents PostgreSQL drift; rollback is demonstrated | Not started; PostgreSQL remains authoritative |
+| Comparative performance | Repeat equivalent analytics against Trino and transactions against PostgreSQL with matched resources/cache state | Result hashes plus throughput, p50/p95/p99, conflicts/errors, scan/memory/network/storage and cost | Pending; no 90% superiority claim is supported |
+
+### Latest baseline executions
+
+| Date | Baseline | Environment | Check | Result | Evidence |
+|---|---|---|---|---|---|
+| 2026-09-10 | `db54b33` plus in-flight `product_manifest.rs` and `security.rs` edits | Local Windows | `cargo test -p kaveon-catalog product_` | **Failed to compile:** missing `product_record_key` and `validate_product_records`; create/update/delete product variants are absent from one exhaustive match | Compiler output from the integration session; rerun after the owning implementation is complete |
+| 2026-09-10 | Same working tree | Local Windows | `cargo fmt --all -- --check` | **Failed:** unformatted `CreateProduct` variant in `product_manifest.rs` | Rustfmt diff from the integration session |
+| 2026-09-10 | `db54b33` | Local Windows | `node scripts/validate-docs.mjs` | **Passed:** 79 Markdown files, 30 routes and 8 SVGs | Command output from the integration session |
+| 2026-09-10 | Deployed digests in the ledger above | AKS `kaveon` namespace | Read-only pod and workload inventory | **Passed:** API, Studio, PostgreSQL, coordinator and all three workers Ready with zero restarts | `kubectl get pods` and digest-pinned workload inventory from the integration session |
+| 2026-09-10 | Integrated typed-product/resource-group working tree | Local Windows | `cargo fmt --all -- --check`; catalog and security tests; strict catalog/server Clippy | **Passed:** 25 catalog tests, 8 focused server security tests, formatting, and `-D warnings` | Repeatable local commands from the integration session |
+
+The two failed rows above record the intentionally caught intermediate state,
+before the owning agent completed its edit. The integrated passing row supersedes
+them. Broader scheduler and AKS fault qualification remains pending.
+
 ## Ownership map
+
+### Transactional workstream — typed product records (implemented locally)
+
+The ADLS product snapshot now has a typed product-record layer for datasets,
+charts, dashboards, saved queries, and user themes. Creates require revision 1;
+updates and deletes require the exact current revision; updates advance by one.
+Named equality indexes are validated for uniqueness within each record kind over
+the final all-or-nothing snapshot. Immutable document paths and digests remain
+the durable payload boundary. Existing snapshots decode with an empty typed
+record map. Tests cover CRUD revisions, atomic uniqueness failure, concurrent
+same-base updates with one durable CAS winner, and reopen recovery. This is a
+transactional metadata foundation; PostgreSQL remains authoritative until the
+repository adapter, referential constraints, migration, dual-read validation,
+rollback, and live qualification gates are complete.
+Catalog validation is 25/25 tests with strict Clippy clean.
 
 ### Catalog cleanup and SQL Lab navigation - September 8 (UTC September 9)
 
@@ -191,7 +275,7 @@ Vercel URL/runtime access is still needed to verify the user's reported page.
 
 | Area | Owner | Status |
 |------|-------|--------|
-| DLM engine (`api/dlm/`) | **Claude** | Done (shipping) |
+| DLM engine (`api/dlm/`) | **Claude** | Engine-backed precompute qualified for 45 conservative showcase shapes; complex chart semantics and immutable-snapshot freshness remain gated |
 | DLM standalone API extraction | **Claude** | Not started |
 | Routers, services, middleware | **Claude** | Done (shipping) |
 | Catalog source CRUD (`api/routers/catalog_sources.py`) | **Claude** | In progress — Entra-authorized endpoints, Key Vault credential refs, audit events |

@@ -498,7 +498,9 @@ fn finish_storage(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::product_manifest::{CatalogChange, ImmutableFileRef, TableManifestRef};
+    use crate::product_manifest::{
+        CatalogChange, ImmutableFileRef, ProductRecordKind, ProductRecordRef, TableManifestRef,
+    };
     use object_store::memory::InMemory;
 
     const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -539,6 +541,15 @@ mod tests {
         ImmutableFileRef {
             path: format!("control/{path}.json"),
             sha256: DIGEST.into(),
+        }
+    }
+    fn dashboard(id: &str, revision: u64, name: &str) -> ProductRecordRef {
+        ProductRecordRef {
+            kind: ProductRecordKind::Dashboard,
+            id: id.into(),
+            revision,
+            document: control(&format!("{id}-{revision}")),
+            unique_values: BTreeMap::from([("owner_name".into(), name.into())]),
         }
     }
 
@@ -607,6 +618,58 @@ mod tests {
                 .control_records
                 .contains_key("dashboards.executive-overview")
         );
+    }
+
+    #[tokio::test]
+    async fn concurrent_product_updates_have_one_durable_winner() {
+        let storage = AdlsConditionalCommit::new(Arc::new(InMemory::new()));
+        let catalog = catalog_with(storage.clone());
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        catalog.initialize(genesis.clone()).await;
+        let created = match catalog
+            .commit(PrepareChange {
+                base: genesis.reference(),
+                snapshot_id: "snapshot-created".into(),
+                operation_id: "create-dashboard".into(),
+                request_digest: DIGEST.into(),
+                changes: vec![CatalogChange::CreateProduct {
+                    record: dashboard("dash-1", 1, "alice/home"),
+                }],
+            })
+            .await
+        {
+            CommitOutcome::Committed(snapshot) => snapshot,
+            other => panic!("unexpected create outcome: {other:?}"),
+        };
+        let update = |operation: &str, name: &str| PrepareChange {
+            base: created.reference(),
+            snapshot_id: format!("snapshot-{operation}"),
+            operation_id: operation.into(),
+            request_digest: DIGEST.into(),
+            changes: vec![CatalogChange::UpdateProduct {
+                expected_revision: 1,
+                record: dashboard("dash-1", 2, name),
+            }],
+        };
+
+        let (left, right) = tokio::join!(
+            catalog.commit(update("left", "alice/left")),
+            catalog.commit(update("right", "alice/right"))
+        );
+        assert_eq!(
+            [left, right]
+                .iter()
+                .filter(|outcome| matches!(outcome, CommitOutcome::Committed(_)))
+                .count(),
+            1
+        );
+        let reopened = catalog_with(storage).read_current().await.unwrap();
+        assert_eq!(reopened.generation, 2);
+        assert_eq!(reopened.product_records["dashboard/dash-1"].revision, 2);
+        assert!(matches!(
+            reopened.product_records["dashboard/dash-1"].unique_values["owner_name"].as_str(),
+            "alice/left" | "alice/right"
+        ));
     }
 
     #[tokio::test]

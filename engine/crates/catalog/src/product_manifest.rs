@@ -15,6 +15,7 @@ use std::{
 pub const SNAPSHOT_FORMAT_VERSION: u32 = 1;
 pub const MAX_TABLES: usize = 1_000;
 pub const MAX_CONTROL_RECORDS: usize = 10_000;
+pub const MAX_PRODUCT_RECORDS: usize = 100_000;
 pub const MAX_CHANGES: usize = 100;
 pub const MAX_PARQUET_FILES_PER_TABLE: usize = 10_000;
 
@@ -53,6 +54,8 @@ pub struct CatalogSnapshot {
     /// similar metadata) published under the same atomic snapshot head.
     #[serde(default)]
     pub control_records: BTreeMap<String, ImmutableFileRef>,
+    #[serde(default)]
+    pub product_records: BTreeMap<String, ProductRecordRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +73,18 @@ pub enum CatalogChange {
     },
     DeleteControl {
         key: String,
+    },
+    CreateProduct {
+        record: ProductRecordRef,
+    },
+    UpdateProduct {
+        expected_revision: u64,
+        record: ProductRecordRef,
+    },
+    DeleteProduct {
+        kind: ProductRecordKind,
+        id: String,
+        expected_revision: u64,
     },
 }
 
@@ -109,6 +124,7 @@ impl CatalogSnapshot {
             request_digest: "0".repeat(64),
             tables: BTreeMap::new(),
             control_records: BTreeMap::new(),
+            product_records: BTreeMap::new(),
         })
     }
 
@@ -144,6 +160,7 @@ impl CatalogSnapshot {
 
         let mut tables = self.tables.clone();
         let mut control_records = self.control_records.clone();
+        let mut product_records = self.product_records.clone();
         for change in request.changes {
             match change {
                 CatalogChange::Put { table, reference } => {
@@ -164,6 +181,51 @@ impl CatalogSnapshot {
                         )));
                     }
                 }
+                CatalogChange::CreateProduct { record } => {
+                    let key = record.key();
+                    if product_records.contains_key(&key) {
+                        return Err(error(format!("product record '{key}' already exists")));
+                    }
+                    if record.revision != 1 {
+                        return Err(error("new product record revision must be one"));
+                    }
+                    product_records.insert(key, record);
+                }
+                CatalogChange::UpdateProduct {
+                    expected_revision,
+                    record,
+                } => {
+                    let key = record.key();
+                    let Some(current) = product_records.get(&key) else {
+                        return Err(error(format!("product record '{key}' does not exist")));
+                    };
+                    if current.revision != expected_revision {
+                        return Err(error(format!("stale product record revision for '{key}'")));
+                    }
+                    let next_revision = expected_revision.checked_add(1).ok_or_else(|| {
+                        error(format!("product record revision overflow for '{key}'"))
+                    })?;
+                    if record.revision != next_revision {
+                        return Err(error(format!(
+                            "product record '{key}' revision must advance by one"
+                        )));
+                    }
+                    product_records.insert(key, record);
+                }
+                CatalogChange::DeleteProduct {
+                    kind,
+                    id,
+                    expected_revision,
+                } => {
+                    let key = product_record_key(kind, &id);
+                    let Some(current) = product_records.get(&key) else {
+                        return Err(error(format!("product record '{key}' does not exist")));
+                    };
+                    if current.revision != expected_revision {
+                        return Err(error(format!("stale product record revision for '{key}'")));
+                    }
+                    product_records.remove(&key);
+                }
             }
         }
         if tables.len() > MAX_TABLES {
@@ -172,6 +234,7 @@ impl CatalogSnapshot {
         if control_records.len() > MAX_CONTROL_RECORDS {
             return Err(error("snapshot control-record limit exceeded"));
         }
+        validate_product_records(&product_records)?;
         let generation = self
             .generation
             .checked_add(1)
@@ -185,6 +248,7 @@ impl CatalogSnapshot {
             request_digest: request.request_digest,
             tables,
             control_records,
+            product_records,
         };
         next.validate()?;
         Ok(next)
@@ -203,6 +267,7 @@ impl CatalogSnapshot {
         if self.control_records.len() > MAX_CONTROL_RECORDS {
             return Err(error("snapshot control-record limit exceeded"));
         }
+        validate_product_records(&self.product_records)?;
         for (table, reference) in &self.tables {
             validate_table_name(table)?;
             validate_table_reference(reference)?;
@@ -235,6 +300,7 @@ fn validate_request(request: &PrepareChange) -> Result<(), ManifestError> {
     }
     let mut table_names = BTreeSet::new();
     let mut control_keys = BTreeSet::new();
+    let mut product_keys = BTreeSet::new();
     for change in &request.changes {
         match change {
             CatalogChange::Put { table, reference } => {
@@ -264,6 +330,25 @@ fn validate_request(request: &PrepareChange) -> Result<(), ManifestError> {
                 if !control_keys.insert(key) {
                     return Err(error(format!(
                         "control record '{key}' is changed more than once"
+                    )));
+                }
+            }
+            CatalogChange::CreateProduct { record }
+            | CatalogChange::UpdateProduct { record, .. } => {
+                validate_product_record(record)?;
+                let key = record.key();
+                if !product_keys.insert(key.clone()) {
+                    return Err(error(format!(
+                        "product record '{key}' is changed more than once"
+                    )));
+                }
+            }
+            CatalogChange::DeleteProduct { kind, id, .. } => {
+                validate_product_id(id)?;
+                let key = product_record_key(*kind, id);
+                if !product_keys.insert(key.clone()) {
+                    return Err(error(format!(
+                        "product record '{key}' is changed more than once"
                     )));
                 }
             }
@@ -336,6 +421,44 @@ fn validate_table_name(name: &str) -> Result<(), ManifestError> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProductRecordKind {
+    Dataset,
+    Chart,
+    Dashboard,
+    SavedQuery,
+    UserTheme,
+}
+
+impl ProductRecordKind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Dataset => "dataset",
+            Self::Chart => "chart",
+            Self::Dashboard => "dashboard",
+            Self::SavedQuery => "saved_query",
+            Self::UserTheme => "user_theme",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProductRecordRef {
+    pub kind: ProductRecordKind,
+    pub id: String,
+    pub revision: u64,
+    pub document: ImmutableFileRef,
+    #[serde(default)]
+    pub unique_values: BTreeMap<String, String>,
+}
+
+impl ProductRecordRef {
+    fn key(&self) -> String {
+        product_record_key(self.kind, &self.id)
+    }
+}
+
 fn validate_control_key(key: &str) -> Result<(), ManifestError> {
     if key.is_empty()
         || key.len() > 512
@@ -348,6 +471,63 @@ fn validate_control_key(key: &str) -> Result<(), ManifestError> {
         })
     {
         return Err(error("control-record key is invalid"));
+    }
+    Ok(())
+}
+
+fn product_record_key(kind: ProductRecordKind, id: &str) -> String {
+    format!("{}/{}", kind.name(), id)
+}
+
+fn validate_product_id(id: &str) -> Result<(), ManifestError> {
+    validate_identifier("product record ID", id)?;
+    if id.contains(['/', '\\']) {
+        return Err(error("product record ID is invalid"));
+    }
+    Ok(())
+}
+
+fn validate_product_record(record: &ProductRecordRef) -> Result<(), ManifestError> {
+    validate_product_id(&record.id)?;
+    if record.revision == 0 {
+        return Err(error("product record revision must be positive"));
+    }
+    validate_file(&record.document, false)?;
+    for (name, value) in &record.unique_values {
+        validate_identifier("unique index name", name)?;
+        if !name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_')
+            || value.is_empty()
+            || value.len() > 512
+            || value.chars().any(char::is_control)
+        {
+            return Err(error("product record unique value is invalid"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_product_records(
+    records: &BTreeMap<String, ProductRecordRef>,
+) -> Result<(), ManifestError> {
+    if records.len() > MAX_PRODUCT_RECORDS {
+        return Err(error("snapshot product-record limit exceeded"));
+    }
+    let mut unique = BTreeSet::new();
+    for (key, record) in records {
+        validate_product_record(record)?;
+        if key != &record.key() {
+            return Err(error("product record map key does not match its identity"));
+        }
+        for (index, value) in &record.unique_values {
+            if !unique.insert((record.kind, index.as_str(), value.as_str())) {
+                return Err(error(format!(
+                    "duplicate {} unique index '{index}' value",
+                    record.kind.name()
+                )));
+            }
+        }
     }
     Ok(())
 }
@@ -409,6 +589,20 @@ mod tests {
         ImmutableFileRef {
             path: format!("control/{path}.json"),
             sha256: DIGEST.into(),
+        }
+    }
+    fn product(
+        kind: ProductRecordKind,
+        id: &str,
+        revision: u64,
+        unique_name: &str,
+    ) -> ProductRecordRef {
+        ProductRecordRef {
+            kind,
+            id: id.into(),
+            revision,
+            document: control(&format!("{id}-{revision}")),
+            unique_values: BTreeMap::from([("owner_name".into(), unique_name.into())]),
         }
     }
     fn change(
@@ -520,7 +714,101 @@ mod tests {
         let decoded: CatalogSnapshot = serde_json::from_value(legacy).unwrap();
 
         assert!(decoded.control_records.is_empty());
+        assert!(decoded.product_records.is_empty());
         decoded.validate().unwrap();
+    }
+
+    #[test]
+    fn typed_product_crud_enforces_revisions() {
+        let base = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        let created = base
+            .prepare(change(
+                base.reference(),
+                "create-dashboard",
+                DIGEST,
+                vec![CatalogChange::CreateProduct {
+                    record: product(ProductRecordKind::Dashboard, "dash-1", 1, "alice/home"),
+                }],
+            ))
+            .unwrap();
+        let stale = created.prepare(change(
+            created.reference(),
+            "stale-dashboard",
+            DIGEST,
+            vec![CatalogChange::UpdateProduct {
+                expected_revision: 0,
+                record: product(ProductRecordKind::Dashboard, "dash-1", 1, "alice/new"),
+            }],
+        ));
+        assert!(stale.unwrap_err().to_string().contains("stale"));
+
+        let updated = created
+            .prepare(change(
+                created.reference(),
+                "update-dashboard",
+                DIGEST,
+                vec![CatalogChange::UpdateProduct {
+                    expected_revision: 1,
+                    record: product(ProductRecordKind::Dashboard, "dash-1", 2, "alice/new"),
+                }],
+            ))
+            .unwrap();
+        assert_eq!(updated.product_records["dashboard/dash-1"].revision, 2);
+        let deleted = updated
+            .prepare(change(
+                updated.reference(),
+                "delete-dashboard",
+                DIGEST,
+                vec![CatalogChange::DeleteProduct {
+                    kind: ProductRecordKind::Dashboard,
+                    id: "dash-1".into(),
+                    expected_revision: 2,
+                }],
+            ))
+            .unwrap();
+        assert!(deleted.product_records.is_empty());
+    }
+
+    #[test]
+    fn unique_indexes_validate_the_final_atomic_snapshot() {
+        let base = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        let collision = base.prepare(change(
+            base.reference(),
+            "duplicate-dashboard-name",
+            DIGEST,
+            vec![
+                CatalogChange::CreateProduct {
+                    record: product(ProductRecordKind::Dashboard, "dash-1", 1, "alice/home"),
+                },
+                CatalogChange::CreateProduct {
+                    record: product(ProductRecordKind::Dashboard, "dash-2", 1, "alice/home"),
+                },
+            ],
+        ));
+        assert!(
+            collision
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate dashboard")
+        );
+        assert!(base.product_records.is_empty());
+
+        let same_value_different_kind = base
+            .prepare(change(
+                base.reference(),
+                "different-kind-index",
+                DIGEST,
+                vec![
+                    CatalogChange::CreateProduct {
+                        record: product(ProductRecordKind::Dashboard, "dash-1", 1, "alice/home"),
+                    },
+                    CatalogChange::CreateProduct {
+                        record: product(ProductRecordKind::Chart, "chart-1", 1, "alice/home"),
+                    },
+                ],
+            ))
+            .unwrap();
+        assert_eq!(same_value_different_kind.product_records.len(), 2);
     }
 
     #[test]
