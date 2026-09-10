@@ -378,9 +378,9 @@ mod tests {
             results: crate::results::ResultStore::default(),
             principal_admission: PrincipalAdmission::default(),
             cluster: tokio::sync::RwLock::new(crate::cluster::ClusterState::new(&config)),
-            catalog: tokio::sync::RwLock::new(kaveon_core::CatalogManager::new(
+            catalog: tokio::sync::RwLock::new(Arc::new(kaveon_core::CatalogManager::new(
                 "kaveon", "default",
-            )),
+            ))),
             catalog_store: kaveon_catalog::CatalogStore::open_in_memory().unwrap(),
             exchange_store: crate::exchange::ExchangeStore::default(),
             lifecycle: crate::lifecycle::WorkerLifecycle::default(),

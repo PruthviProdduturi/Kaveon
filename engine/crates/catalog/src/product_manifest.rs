@@ -16,6 +16,8 @@ pub const SNAPSHOT_FORMAT_VERSION: u32 = 1;
 pub const MAX_TABLES: usize = 1_000;
 pub const MAX_CONTROL_RECORDS: usize = 10_000;
 pub const MAX_PRODUCT_RECORDS: usize = 100_000;
+pub const MAX_REFERENCES_PER_PRODUCT_RECORD: usize = 100;
+pub const MAX_UNIQUE_VALUES_PER_PRODUCT_RECORD: usize = 32;
 pub const MAX_CHANGES: usize = 100;
 pub const MAX_PARQUET_FILES_PER_TABLE: usize = 10_000;
 
@@ -451,6 +453,16 @@ pub struct ProductRecordRef {
     pub document: ImmutableFileRef,
     #[serde(default)]
     pub unique_values: BTreeMap<String, String>,
+    /// Typed foreign-key-like references resolved against the final snapshot.
+    /// Deletion uses restrict semantics; this layer never cascades implicitly.
+    #[serde(default)]
+    pub references: BTreeSet<ProductRecordReference>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ProductRecordReference {
+    pub kind: ProductRecordKind,
+    pub id: String,
 }
 
 impl ProductRecordRef {
@@ -493,6 +505,9 @@ fn validate_product_record(record: &ProductRecordRef) -> Result<(), ManifestErro
         return Err(error("product record revision must be positive"));
     }
     validate_file(&record.document, false)?;
+    if record.unique_values.len() > MAX_UNIQUE_VALUES_PER_PRODUCT_RECORD {
+        return Err(error("product record unique-value limit exceeded"));
+    }
     for (name, value) in &record.unique_values {
         validate_identifier("unique index name", name)?;
         if !name
@@ -503,6 +518,32 @@ fn validate_product_record(record: &ProductRecordRef) -> Result<(), ManifestErro
             || value.chars().any(char::is_control)
         {
             return Err(error("product record unique value is invalid"));
+        }
+    }
+    if record.references.len() > MAX_REFERENCES_PER_PRODUCT_RECORD {
+        return Err(error("product record reference limit exceeded"));
+    }
+    for reference in &record.references {
+        validate_product_id(&reference.id)?;
+        if reference.kind == record.kind && reference.id == record.id {
+            return Err(error("product record cannot reference itself"));
+        }
+        let allowed = match record.kind {
+            ProductRecordKind::Chart => reference.kind == ProductRecordKind::Dataset,
+            ProductRecordKind::Dashboard => matches!(
+                reference.kind,
+                ProductRecordKind::Chart | ProductRecordKind::Dataset
+            ),
+            ProductRecordKind::Dataset
+            | ProductRecordKind::SavedQuery
+            | ProductRecordKind::UserTheme => false,
+        };
+        if !allowed {
+            return Err(error(format!(
+                "{} cannot reference {}",
+                record.kind.name(),
+                reference.kind.name()
+            )));
         }
     }
     Ok(())
@@ -525,6 +566,14 @@ fn validate_product_records(
                 return Err(error(format!(
                     "duplicate {} unique index '{index}' value",
                     record.kind.name()
+                )));
+            }
+        }
+        for reference in &record.references {
+            let target = product_record_key(reference.kind, &reference.id);
+            if !records.contains_key(&target) {
+                return Err(error(format!(
+                    "product record '{key}' references missing '{target}'"
                 )));
             }
         }
@@ -603,6 +652,13 @@ mod tests {
             revision,
             document: control(&format!("{id}-{revision}")),
             unique_values: BTreeMap::from([("owner_name".into(), unique_name.into())]),
+            references: BTreeSet::new(),
+        }
+    }
+    fn reference(kind: ProductRecordKind, id: &str) -> ProductRecordReference {
+        ProductRecordReference {
+            kind,
+            id: id.into(),
         }
     }
     fn change(
@@ -809,6 +865,173 @@ mod tests {
             ))
             .unwrap();
         assert_eq!(same_value_different_kind.product_records.len(), 2);
+    }
+
+    #[test]
+    fn bounds_unique_values_per_product_record() {
+        let base = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        let mut record = product(ProductRecordKind::Dashboard, "dash-1", 1, "alice/home");
+        record.unique_values = (0..=MAX_UNIQUE_VALUES_PER_PRODUCT_RECORD)
+            .map(|index| (format!("index_{index}"), format!("value-{index}")))
+            .collect();
+
+        let result = base.prepare(change(
+            base.reference(),
+            "too-many-unique-values",
+            DIGEST,
+            vec![CatalogChange::CreateProduct { record }],
+        ));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("unique-value limit")
+        );
+        assert!(base.product_records.is_empty());
+    }
+
+    #[test]
+    fn rejects_dangling_and_wrong_kind_product_references() {
+        let base = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        let mut chart = product(ProductRecordKind::Chart, "chart-1", 1, "alice/chart");
+        chart
+            .references
+            .insert(reference(ProductRecordKind::Dataset, "missing"));
+        assert!(
+            base.prepare(change(
+                base.reference(),
+                "dangling-chart",
+                DIGEST,
+                vec![CatalogChange::CreateProduct { record: chart }],
+            ))
+            .unwrap_err()
+            .to_string()
+            .contains("references missing")
+        );
+
+        let mut dataset = product(ProductRecordKind::Dataset, "dataset-1", 1, "alice/data");
+        dataset
+            .references
+            .insert(reference(ProductRecordKind::Chart, "chart-1"));
+        assert!(
+            base.prepare(change(
+                base.reference(),
+                "wrong-kind-reference",
+                DIGEST,
+                vec![CatalogChange::CreateProduct { record: dataset }],
+            ))
+            .unwrap_err()
+            .to_string()
+            .contains("dataset cannot reference chart")
+        );
+    }
+
+    #[test]
+    fn same_transaction_parent_and_child_resolve_in_final_snapshot() {
+        let base = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        let dataset = product(ProductRecordKind::Dataset, "dataset-1", 1, "alice/data");
+        let mut chart = product(ProductRecordKind::Chart, "chart-1", 1, "alice/chart");
+        chart
+            .references
+            .insert(reference(ProductRecordKind::Dataset, "dataset-1"));
+        let mut dashboard = product(
+            ProductRecordKind::Dashboard,
+            "dashboard-1",
+            1,
+            "alice/dashboard",
+        );
+        dashboard.references.extend([
+            reference(ProductRecordKind::Dataset, "dataset-1"),
+            reference(ProductRecordKind::Chart, "chart-1"),
+        ]);
+
+        let snapshot = base
+            .prepare(change(
+                base.reference(),
+                "create-related-records",
+                DIGEST,
+                vec![
+                    CatalogChange::CreateProduct { record: dashboard },
+                    CatalogChange::CreateProduct { record: chart },
+                    CatalogChange::CreateProduct { record: dataset },
+                ],
+            ))
+            .unwrap();
+        assert_eq!(snapshot.product_records.len(), 3);
+    }
+
+    #[test]
+    fn delete_restricts_referenced_product_records() {
+        let base = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        let dataset = product(ProductRecordKind::Dataset, "dataset-1", 1, "alice/data");
+        let mut chart = product(ProductRecordKind::Chart, "chart-1", 1, "alice/chart");
+        chart
+            .references
+            .insert(reference(ProductRecordKind::Dataset, "dataset-1"));
+        let populated = base
+            .prepare(change(
+                base.reference(),
+                "populate",
+                DIGEST,
+                vec![
+                    CatalogChange::CreateProduct { record: dataset },
+                    CatalogChange::CreateProduct { record: chart },
+                ],
+            ))
+            .unwrap();
+
+        let deletion = populated.prepare(change(
+            populated.reference(),
+            "delete-parent",
+            DIGEST,
+            vec![CatalogChange::DeleteProduct {
+                kind: ProductRecordKind::Dataset,
+                id: "dataset-1".into(),
+                expected_revision: 1,
+            }],
+        ));
+        assert!(
+            deletion
+                .unwrap_err()
+                .to_string()
+                .contains("references missing")
+        );
+        assert!(populated.product_records.contains_key("dataset/dataset-1"));
+
+        let explicit_graph_delete = populated
+            .prepare(change(
+                populated.reference(),
+                "delete-explicit-graph",
+                DIGEST,
+                vec![
+                    CatalogChange::DeleteProduct {
+                        kind: ProductRecordKind::Dataset,
+                        id: "dataset-1".into(),
+                        expected_revision: 1,
+                    },
+                    CatalogChange::DeleteProduct {
+                        kind: ProductRecordKind::Chart,
+                        id: "chart-1".into(),
+                        expected_revision: 1,
+                    },
+                ],
+            ))
+            .unwrap();
+        assert!(explicit_graph_delete.product_records.is_empty());
+    }
+
+    #[test]
+    fn legacy_typed_records_without_references_remain_readable() {
+        let record = serde_json::json!({
+            "kind": "dashboard",
+            "id": "dashboard-1",
+            "revision": 1,
+            "document": {"path": "control/dashboard-1.json", "sha256": DIGEST},
+            "unique_values": {"owner_name": "alice/home"}
+        });
+        let decoded: ProductRecordRef = serde_json::from_value(record).unwrap();
+        assert!(decoded.references.is_empty());
+        validate_product_record(&decoded).unwrap();
     }
 
     #[test]

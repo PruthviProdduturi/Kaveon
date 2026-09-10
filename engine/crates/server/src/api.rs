@@ -915,8 +915,12 @@ async fn submit_statement(
         .unwrap_or_default()
         .as_millis() as u64;
     let start = Instant::now();
+    // Pin one immutable catalog manager for validation, optimization and
+    // physical planning. Publishing a newer manager swaps the outer Arc and
+    // cannot change the definitions observed by this query.
+    let catalog_snapshot = state.catalog.read().await.clone();
     let context = {
-        let catalog = state.catalog.read().await;
+        let catalog = &catalog_snapshot;
         let catalog_name = req
             .catalog
             .as_deref()
@@ -1034,10 +1038,7 @@ async fn submit_statement(
     let logical_plan = crate::planner::logical_plan_tree(&plan);
     let plan = kaveon_optim::rules::push_filter_down(plan);
     let plan = kaveon_optim::rules::push_projection_down(plan);
-    let plan = {
-        let catalog = state.catalog.read().await;
-        kaveon_optim::statistics::optimize_join_builds(plan, &catalog)
-    };
+    let plan = kaveon_optim::statistics::optimize_join_builds(plan, &catalog_snapshot);
     let optimized_plan = crate::planner::optimized_plan_tree(&plan);
     let physical_plan = crate::planner::physical_plan_tree(&plan);
     if let Some(record) = QUERY_STORE.write().await.queries.get_mut(&query_id) {
@@ -1048,7 +1049,7 @@ async fn submit_statement(
     }
 
     if let Some(distributed) =
-        execute_distributed_fragments(&state, &query_id, &context, &plan).await
+        execute_distributed_fragments(&state, &query_id, &context, &plan, &catalog_snapshot).await
     {
         match distributed {
             Ok((result, stages, planning_us)) => {
@@ -1354,39 +1355,41 @@ async fn submit_statement(
     } else {
         None
     };
-    let execution_state = Arc::clone(&state);
+    let local_catalog_snapshot = Arc::clone(&catalog_snapshot);
     // Build non-Send operators inside the blocking task. Retain admission until
     // both execution and result publication complete, even if the HTTP future drops.
     let local_execution = tokio::task::spawn_blocking(move || {
         let mut local_columns = Vec::new();
         let planned_execution = {
-            let catalog = execution_state.catalog.blocking_read();
             let planning_start = Instant::now();
-            crate::planner::plan_query_with_memory(&plan, &catalog, query_memory.pool()).map(
-                |planned| {
-                    let planning_us = elapsed_us(planning_start);
-                    let scan_handles = planned.scan_metrics;
-                    let mut operator = planned.operator;
-                    local_columns = operator
-                        .schema()
-                        .fields()
-                        .iter()
-                        .map(|field| ColumnInfo {
-                            name: field.name().clone(),
-                            data_type: field.data_type().to_string(),
-                        })
-                        .collect();
-                    let execution_start = Instant::now();
-                    let result = if let Some(writer) = result_writer.as_mut() {
-                        spool_operator(&mut *operator, writer)
-                    } else {
-                        collect_inline_bounded(&mut *operator)
-                    };
-                    let execution_us = elapsed_us(execution_start);
-                    let scans = scan_handles.iter().map(scan_telemetry).collect::<Vec<_>>();
-                    (planning_us, execution_us, scans, result)
-                },
+            crate::planner::plan_query_with_memory(
+                &plan,
+                &local_catalog_snapshot,
+                query_memory.pool(),
             )
+            .map(|planned| {
+                let planning_us = elapsed_us(planning_start);
+                let scan_handles = planned.scan_metrics;
+                let mut operator = planned.operator;
+                local_columns = operator
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|field| ColumnInfo {
+                        name: field.name().clone(),
+                        data_type: field.data_type().to_string(),
+                    })
+                    .collect();
+                let execution_start = Instant::now();
+                let result = if let Some(writer) = result_writer.as_mut() {
+                    spool_operator(&mut *operator, writer)
+                } else {
+                    collect_inline_bounded(&mut *operator)
+                };
+                let execution_us = elapsed_us(execution_start);
+                let scans = scan_handles.iter().map(scan_telemetry).collect::<Vec<_>>();
+                (planning_us, execution_us, scans, result)
+            })
         };
         (
             planned_execution,
@@ -2085,7 +2088,7 @@ async fn refresh_catalog_snapshot(state: &AppState) -> Result<(), Box<Response>>
                     .into_response(),
             )
         })?;
-    *state.catalog.write().await = snapshot;
+    *state.catalog.write().await = Arc::new(snapshot);
     Ok(())
 }
 
@@ -2748,6 +2751,7 @@ async fn execute_distributed_fragments(
     query_id: &str,
     context: &QueryContext,
     plan: &LogicalPlan,
+    catalog_snapshot: &kaveon_core::CatalogManager,
 ) -> Option<Result<(TaskResponse, Vec<StageTelemetry>, u64), String>> {
     if !general_distributed_eligible(plan) {
         return None;
@@ -2764,14 +2768,10 @@ async fn execute_distributed_fragments(
     }
 
     let planning_start = Instant::now();
-    let (graph, fragments) = {
-        let catalog = state.catalog.read().await;
-        let graph = crate::planner::build_stage_graph(query_id, plan, workers.len()).ok()?;
-        let fragments =
-            crate::planner::build_executable_fragments(query_id, plan, &catalog, workers.len())
-                .ok()?;
-        (graph, fragments)
-    };
+    let graph = crate::planner::build_stage_graph(query_id, plan, workers.len()).ok()?;
+    let fragments =
+        crate::planner::build_executable_fragments(query_id, plan, catalog_snapshot, workers.len())
+            .ok()?;
     let planning_us = elapsed_us(planning_start);
     let mut orchestrator = match CoordinatorOrchestrator::new(graph, fragments, workers.clone()) {
         Ok(orchestrator) => orchestrator,
@@ -3862,9 +3862,9 @@ mod tests {
             results: crate::results::ResultStore::default(),
             principal_admission: crate::security::PrincipalAdmission::default(),
             cluster: tokio::sync::RwLock::new(crate::cluster::ClusterState::new(&config)),
-            catalog: tokio::sync::RwLock::new(kaveon_core::CatalogManager::new(
+            catalog: tokio::sync::RwLock::new(Arc::new(kaveon_core::CatalogManager::new(
                 "kaveon", "default",
-            )),
+            ))),
             catalog_store: kaveon_catalog::CatalogStore::open_in_memory().unwrap(),
             exchange_store: crate::exchange::ExchangeStore::default(),
             lifecycle: crate::lifecycle::WorkerLifecycle::default(),
@@ -3917,6 +3917,83 @@ mod tests {
                 kaveon_core::CatalogLifecycle::Active,
             )
             .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn distributed_fragment_planning_retains_pinned_catalog_after_publish() {
+        use kaveon_core::{
+            AccessPattern, CatalogManager, CatalogProvider, DataFormat, FragmentOperator,
+            MemoryCatalog, StorageType, TableMeta,
+        };
+
+        fn manager(location: &str) -> CatalogManager {
+            let mut catalog = MemoryCatalog::new(
+                "lake",
+                StorageType::Local {
+                    base_path: std::path::PathBuf::from("/catalog-root"),
+                },
+            )
+            .with_schema("analytics");
+            catalog
+                .register_table(
+                    "analytics",
+                    TableMeta {
+                        name: "events".into(),
+                        arrow_schema: Arc::new(Schema::new(vec![Field::new(
+                            "id",
+                            DataType::Int64,
+                            false,
+                        )])),
+                        location: location.into(),
+                        access: AccessPattern::Shortcut,
+                        format: DataFormat::Parquet,
+                    },
+                )
+                .unwrap();
+            let mut manager = CatalogManager::new("lake", "analytics");
+            manager.register_catalog(Box::new(catalog));
+            manager
+        }
+
+        let state = catalog_test_state();
+        *state.catalog.write().await = Arc::new(manager("snapshot-v1/events.parquet"));
+        let pinned = state.catalog.read().await.clone();
+
+        // Publish a new catalog head while the query retains its original Arc.
+        *state.catalog.write().await = Arc::new(manager("snapshot-v2/events.parquet"));
+
+        let mut plan =
+            kaveon_sql::logical_plan::sql_to_logical_plan("SELECT id FROM lake.analytics.events")
+                .unwrap();
+        crate::planner::qualify_tables(&mut plan, "lake", "analytics");
+        let fragments =
+            crate::planner::build_executable_fragments("query-pinned", &plan, &pinned, 2).unwrap();
+        let pinned_sources = fragments
+            .values()
+            .flat_map(|fragment| fragment.nodes.iter())
+            .filter_map(|node| match &node.operator {
+                FragmentOperator::Scan(scan) => Some(scan.source_uri.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(!pinned_sources.is_empty());
+        assert!(
+            pinned_sources
+                .iter()
+                .all(|source| source.contains("snapshot-v1/events.parquet"))
+        );
+        assert!(
+            state
+                .catalog
+                .read()
+                .await
+                .resolve_table(&kaveon_core::TableReference::parse("lake.analytics.events",))
+                .unwrap()
+                .table
+                .location
+                .contains("snapshot-v2/events.parquet")
         );
     }
 

@@ -499,7 +499,8 @@ fn finish_storage(
 mod tests {
     use super::*;
     use crate::product_manifest::{
-        CatalogChange, ImmutableFileRef, ProductRecordKind, ProductRecordRef, TableManifestRef,
+        CatalogChange, ImmutableFileRef, ProductRecordKind, ProductRecordRef,
+        ProductRecordReference, TableManifestRef,
     };
     use object_store::memory::InMemory;
 
@@ -550,6 +551,22 @@ mod tests {
             revision,
             document: control(&format!("{id}-{revision}")),
             unique_values: BTreeMap::from([("owner_name".into(), name.into())]),
+            references: Default::default(),
+        }
+    }
+
+    fn related_record(
+        kind: ProductRecordKind,
+        id: &str,
+        reference: Option<ProductRecordReference>,
+    ) -> ProductRecordRef {
+        ProductRecordRef {
+            kind,
+            id: id.into(),
+            revision: 1,
+            document: control(id),
+            unique_values: BTreeMap::new(),
+            references: reference.into_iter().collect(),
         }
     }
 
@@ -670,6 +687,50 @@ mod tests {
             reopened.product_records["dashboard/dash-1"].unique_values["owner_name"].as_str(),
             "alice/left" | "alice/right"
         ));
+    }
+
+    #[tokio::test]
+    async fn related_product_records_survive_commit_reopen() {
+        let storage = AdlsConditionalCommit::new(Arc::new(InMemory::new()));
+        let catalog = catalog_with(storage.clone());
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        catalog.initialize(genesis.clone()).await;
+        let request = PrepareChange {
+            base: genesis.reference(),
+            snapshot_id: "snapshot-related".into(),
+            operation_id: "create-related".into(),
+            request_digest: DIGEST.into(),
+            changes: vec![
+                CatalogChange::CreateProduct {
+                    record: related_record(ProductRecordKind::Dataset, "dataset-1", None),
+                },
+                CatalogChange::CreateProduct {
+                    record: related_record(
+                        ProductRecordKind::Chart,
+                        "chart-1",
+                        Some(ProductRecordReference {
+                            kind: ProductRecordKind::Dataset,
+                            id: "dataset-1".into(),
+                        }),
+                    ),
+                },
+            ],
+        };
+        assert!(matches!(
+            catalog.commit(request).await,
+            CommitOutcome::Committed(_)
+        ));
+
+        let reopened = catalog_with(storage).read_current().await.unwrap();
+        reopened.validate().unwrap();
+        assert!(
+            reopened.product_records["chart/chart-1"]
+                .references
+                .contains(&ProductRecordReference {
+                    kind: ProductRecordKind::Dataset,
+                    id: "dataset-1".into(),
+                })
+        );
     }
 
     #[tokio::test]
