@@ -67,6 +67,20 @@ class ChartFreshnessTests(unittest.TestCase):
         self.assertEqual(counts, {})
         execute.assert_not_called()
 
+    def test_native_catalog_never_receives_postgres_analyze(self):
+        with patch.object(engine.profiler, "supports_database", return_value=False), \
+             patch.object(engine, "_execute_dataset_query") as execute:
+            engine._analyze_tables("ai_benchmarks", "ai_benchmarks", ["leaderboard"])
+
+        execute.assert_not_called()
+
+    def test_postgres_catalog_keeps_best_effort_analyze(self):
+        with patch.object(engine.profiler, "supports_database", return_value=True), \
+             patch.object(engine, "_execute_dataset_query") as execute:
+            engine._analyze_tables("metadata", "public", ["datasets", ""])
+
+        execute.assert_called_once_with('ANALYZE "public"."datasets"', "metadata")
+
     def test_old_ready_artifact_backfills_engine_count_and_watermark(self):
         dataset = {
             "id": "7", "database_name": "OpenSource", "schema_name": "silver",

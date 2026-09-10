@@ -3095,7 +3095,7 @@ def _execute_dataset_query(sql: str, database: str) -> Dict[str, Any]:
     from services.engine_bridge import execute
     # Engine sessions require a schema even when the table reference itself is
     # schema-qualified. DLM-generated scans consistently put the schema on the
-    # first FROM/ANALYZE relation, so recover it without widening every helper's
+    # first FROM relation, so recover it without widening every helper's
     # call signature.
     # The Engine parser currently preserves ANSI identifier quotes as part of
     # a catalog/schema lookup (for example, it searches for `"public"`). DLM
@@ -3103,7 +3103,7 @@ def _execute_dataset_query(sql: str, database: str) -> Dict[str, Any]:
     # identifier characters, so normalize those quotes for the native path.
     engine_sql = re.sub(r'"([A-Za-z_][A-Za-z0-9_]*)"', r'\1', sql)
     schema_match = re.search(
-        r'\b(?:FROM|ANALYZE)\s+(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))\s*\.',
+        r'\bFROM\s+(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))\s*\.',
         engine_sql,
         re.IGNORECASE,
     )
@@ -3146,7 +3146,11 @@ def _analyze_tables(database: str, schema: str, tables: List[str]) -> None:
     """Best-effort ANALYZE so pg_stats is complete before we read it — freshly
     loaded tables may not be auto-analyzed yet. Cheap (sampled), Postgres-only,
     and never fatal to the build."""
-    import database.pool as pool
+    # Native Kaveon catalogs use immutable file snapshots and exact Engine
+    # aggregates for DLM row statistics. ANALYZE is PostgreSQL maintenance SQL
+    # and must never be routed through the Engine bridge.
+    if not profiler.supports_database(database):
+        return
     for tbl in tables:
         t = (tbl or "").strip()
         if not t:
