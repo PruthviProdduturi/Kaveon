@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kaveon Engine</title>
+<title>KaveonDB</title>
 <style>
 :root {
   --brand: #4A9EE8;
@@ -27,7 +27,7 @@
   --error: #ef4444;
   --error-rgb: 239, 68, 68;
   --mono: 'Cascadia Code','JetBrains Mono','SF Mono','Fira Code',monospace;
-  --sans: 'Segoe UI',Inter,-apple-system,BlinkMacSystemFont,Roboto,'Helvetica Neue',sans-serif;
+  --sans: Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',sans-serif;
   --radius: 12px;
   --radius-sm: 8px;
 }
@@ -60,18 +60,17 @@ body{font-family:var(--sans);background:radial-gradient(circle at 50% -20%,rgba(
 
 /* ===== GAUGES BAR ===== */
 .gauges{
-  display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:10px;
-  background:var(--bg-surface);border-bottom:1px solid var(--border);
-  padding:16px 28px;
-  overflow-x:auto;
+  display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:0;
+  max-width:1440px;margin:0 auto;padding:24px 32px 0;
+  border:0;overflow-x:auto;
 }
 .gauge{
   min-width:120px;
   display:flex;flex-direction:column;align-items:flex-start;gap:6px;
-  padding:14px 16px;border:1px solid var(--border);border-radius:10px;background:var(--bg);
-  position:relative;
+  padding:14px 18px;border:1px solid var(--border);border-radius:0;background:var(--bg-surface);
+  position:relative;border-right-width:0;
 }
-.gauge+.gauge::before{display:none}
+.gauge:first-child{border-radius:12px 0 0 12px}.gauge:last-child{border-radius:0 12px 12px 0;border-right-width:1px}.gauge.is-button{cursor:pointer;font:inherit;color:inherit;text-align:left}.gauge.is-button:hover{background:var(--bg-elevated)}.gauge.is-button[aria-pressed=true]{box-shadow:inset 0 -2px 0 var(--error)}.gauge-spark{display:block;width:100%;height:24px;margin-top:6px}.gauge-spark polyline{fill:none;stroke:var(--text-secondary);stroke-width:1.5}
 .gauge-ring{width:auto;height:auto;position:relative}
 .gauge-ring svg{display:none}
 .gauge-ring circle.track{fill:none;stroke:rgba(255,255,255,.05);stroke-width:4}
@@ -79,22 +78,21 @@ body{font-family:var(--sans);background:radial-gradient(circle at 50% -20%,rgba(
 .gauge-num{
   position:static;font-size:24px;font-weight:700;font-family:var(--mono);letter-spacing:-.04em;
 }
-.gauge-label{font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.07em;white-space:nowrap;order:-1}
+.gauge-label{font-size:12px;color:var(--text-muted);white-space:nowrap;order:-1}
 
 /* ===== LAYOUT ===== */
-.main{max-width:1440px;margin:0 auto;padding:32px}
+.main{max-width:1440px;margin:0 auto;padding:24px 32px 32px}
 .mast{display:flex;align-items:flex-end;justify-content:space-between;gap:28px;margin:4px 0 28px}
-.eyebrow{font:600 11px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--brand);margin-bottom:8px}
-.mast h1{font-size:30px;line-height:1.15;letter-spacing:-.035em;font-weight:650}
+.eyebrow{display:none}
+.mast h1{font-size:24px;line-height:1.15;letter-spacing:-.025em;font-weight:650}
 .mast p{color:var(--text-secondary);font-size:13px;max-width:650px;margin-top:8px}
-.actions{display:flex;align-items:center;gap:10px}.read-only{font:600 10px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--text-muted);border:1px solid var(--border);border-radius:999px;padding:7px 10px}
+.actions{display:flex;align-items:center;gap:10px}.read-only{font:600 11px var(--sans);color:var(--text-muted);border:1px solid var(--border);border-radius:999px;padding:7px 10px}
 .refresh{color:var(--text);background:var(--brand);border:0;border-radius:8px;padding:8px 13px;font:600 12px var(--sans);cursor:pointer;box-shadow:0 8px 24px rgba(var(--brand-rgb),.2)}.refresh:hover{background:var(--brand-light)}
 .section-row{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:14px}.section-row .section-hdr{margin:0}
 .query-tools{display:flex;gap:8px;align-items:center}.query-tools input,.query-tools select{height:34px;color:var(--text-secondary);background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;padding:0 10px;font:12px var(--sans)}.query-tools input{width:250px}
-.telemetry{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:32px}.chart{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px}.chart-top{display:flex;justify-content:space-between;align-items:baseline}.chart-label{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted)}.chart-value{font:650 18px var(--mono)}.spark{width:100%;height:72px;margin-top:12px;overflow:visible}.spark .grid{stroke:var(--border);stroke-width:1}.spark .line{fill:none;stroke:var(--brand);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.spark .area{fill:url(#fade)}.chart-note{font-size:10px;color:var(--text-muted);margin-top:4px}
+.telemetry{display:none}.chart{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px}.chart-top{display:flex;justify-content:space-between;align-items:baseline}.chart-label{font-size:12px;color:var(--text-muted)}.chart-value{font:650 18px var(--mono)}.spark{width:100%;height:72px;margin-top:12px;overflow:visible}.spark .grid{stroke:var(--border);stroke-width:1}.spark .line{fill:none;stroke:var(--brand);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.spark .area{fill:url(#fade)}.chart-note{font-size:10px;color:var(--text-muted);margin-top:4px}
 .section-hdr{
-  font-size:12px;font-weight:600;color:var(--text-muted);
-  text-transform:uppercase;letter-spacing:.06em;
+  font-size:13px;font-weight:600;color:var(--text-secondary);
   margin-bottom:14px;display:flex;align-items:center;gap:8px;
 }
 .section-hdr .ct{
@@ -109,9 +107,9 @@ body{font-family:var(--sans);background:radial-gradient(circle at 50% -20%,rgba(
 .query-card-top{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:9px 14px;background:var(--bg-elevated);border-bottom:1px solid var(--border)}
 .query-identity{display:flex;align-items:center;gap:10px;min-width:0}.query-id{font:600 11px var(--mono);color:var(--brand-light);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.query-time{font:11px var(--mono);color:var(--text-muted);white-space:nowrap}
 .query-body{display:grid;grid-template-columns:minmax(230px,28%) 1fr;min-height:112px}.query-meta{display:flex;align-content:flex-start;gap:14px 20px;flex-wrap:wrap;padding:16px;border-right:1px solid var(--border)}
-.query-main{min-width:0}.query-state{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:rgba(var(--success-rgb),.1);border-bottom:1px solid rgba(var(--success-rgb),.2);color:var(--success);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}.query-state.running{background:rgba(var(--warning-rgb),.1);border-color:rgba(var(--warning-rgb),.2);color:var(--warning)}.query-state.failed{background:rgba(var(--error-rgb),.1);border-color:rgba(var(--error-rgb),.2);color:var(--error)}
+.query-main{min-width:0}.query-state{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:rgba(var(--success-rgb),.1);border-bottom:1px solid rgba(var(--success-rgb),.2);color:var(--text-secondary);font-size:11px;font-weight:600}.query-state.running{background:rgba(var(--warning-rgb),.1);border-color:rgba(var(--warning-rgb),.2);color:var(--warning)}.query-state.failed{background:rgba(var(--error-rgb),.1);border-color:rgba(var(--error-rgb),.2);color:var(--error)}
 .query-sql{display:block;font:13px/1.65 var(--mono);color:var(--text);padding:16px 18px;white-space:pre-wrap;overflow-wrap:anywhere}
-.query-stat{display:flex;flex-direction:column;gap:2px;min-width:74px}.query-stat-label{font-size:9px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted)}.query-stat-value{font:600 12px var(--mono);color:var(--text-secondary)}
+.query-stat{display:flex;flex-direction:column;gap:2px;min-width:74px}.query-stat-label{font-size:11px;color:var(--text-muted)}.query-stat-value{font:600 12px var(--mono);color:var(--text-secondary)}
 table{width:100%;border-collapse:collapse;font-size:13px}
 thead{position:static}
 th{text-align:left;padding:10px 16px;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);background:var(--bg-elevated);border-bottom:1px solid var(--border);white-space:nowrap}
@@ -230,7 +228,7 @@ td.nl{color:var(--text-muted);font-style:italic}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 @media(max-width:900px){.telemetry,.qd-columns{grid-template-columns:1fr}}
 @media(max-width:700px){.mast,.qd-header{align-items:flex-start;flex-direction:column}.section-row{align-items:flex-start;flex-direction:column}.query-tools{width:100%}.query-tools input{width:100%}.query-body{grid-template-columns:1fr}.query-meta{border-right:0;border-bottom:1px solid var(--border)}.main{padding:20px}.header{position:static;height:auto;min-height:64px;padding:12px 18px;align-items:flex-start;flex-wrap:wrap;gap:8px}.header-r{width:100%;justify-content:space-between;gap:8px}.gauges{padding:12px 18px}.qd-inner{padding:16px}.qd-tabs{overflow-x:auto}.qd-tab{white-space:nowrap}.qd-definition{grid-template-columns:1fr}.qd-definition dt{border-bottom:0;padding-bottom:2px}.qd-definition dd{padding-top:0}.plan-shell{padding:14px}.plan-node{min-width:210px}.qd-actions{width:100%;justify-content:flex-start}.copy-status{text-align:left}}
-.auth{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:14px 24px;border-bottom:1px solid var(--border)}
+.auth{display:flex;flex-wrap:wrap;align-items:center;gap:12px;max-width:1440px;margin:0 auto;padding:16px 32px 0}.auth.is-signed-in #microsoft-sign-in,.auth.is-signed-in #auth-status{display:none}.auth .refresh.secondary{background:var(--bg-surface);border:1px solid var(--border);color:var(--text-secondary);box-shadow:none}.auth .refresh.secondary:hover{background:var(--bg-elevated);color:var(--text)}.gate{max-width:520px;margin:96px auto;padding:32px;text-align:center;background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius)}.gate h1{font-size:20px;margin-bottom:8px}.gate p{color:var(--text-secondary);font-size:13px;line-height:1.6;margin-bottom:20px}.gate a{display:inline-block;color:#fff;background:var(--brand);border-radius:8px;padding:10px 16px;font-weight:600;font-size:13px;text-decoration:none}
 .auth input{padding:8px;background:var(--bg-surface);color:var(--text);border:1px solid var(--border);border-radius:6px}
 .auth small{color:var(--text-muted)}
 </style>
@@ -240,7 +238,7 @@ td.nl{color:var(--text-muted);font-style:italic}
 <div class="header">
   <div class="logo">
     <svg class="logo-mark" viewBox="70 55 1168 200" fill="none" role="img" aria-label="Kaveon"><g fill="var(--text)"><rect x="90" y="70" width="20" height="165"/><polygon points="108.73,161.2 215.73,86.39 204.27,70 97.27,144.8"/><polygon points="97.51,161.36 209.51,235 220.49,218.29 108.49,144.64"/><path d="M260 235L330 70H350L420 235H397L340 104L283 235Z"/><path d="M465 70H488L545 201L602 70H625L555 235H535Z"/><rect x="675" y="70" width="20" height="165"/><rect x="675" y="70" width="130" height="20"/><rect x="675" y="142.5" width="108" height="20"/><rect x="675" y="215" width="130" height="20"/><rect x="1060" y="70" width="20" height="165"/><rect x="1195" y="70" width="20" height="165"/><polygon points="1062.53,83.3 1197.53,235 1212.47,221.7 1077.47,70"/></g><path d="M966.25 215.29A72.5 72.5 0 1 0 893.75 215.29" stroke="#4A9EE8" stroke-width="20"/></svg>
-    <span class="logo-text">Engine<span class="d" id="env-l"></span></span>
+    <span class="logo-text">KaveonDB<span class="d" id="env-l"></span></span>
   </div>
   <div class="header-r">
     <span class="ver" id="header-uptime">Uptime —</span>
@@ -251,7 +249,7 @@ td.nl{color:var(--text-muted);font-style:italic}
 
 <div class="auth">
   <button class="refresh" type="button" id="microsoft-sign-in" hidden>Sign in with Microsoft</button>
-  <button class="refresh" type="button" id="disconnect">Disconnect</button>
+  <button class="refresh secondary" type="button" id="disconnect">Sign out</button>
   <span id="auth-status" role="status" aria-live="polite">Loading sign-in options…</span>
   <span id="auth-identity" class="auth-identity" aria-live="polite"></span>
   <details id="advanced-auth" hidden>
@@ -267,33 +265,30 @@ td.nl{color:var(--text-muted);font-style:italic}
 <div class="gauges">
   <div class="gauge">
     <div class="gauge-ring"><svg viewBox="0 0 56 56"><circle class="track" cx="28" cy="28" r="24"/><circle class="val" cx="28" cy="28" r="24" stroke="var(--success)" stroke-dasharray="150.8" id="g-workers-ring"/></svg><span class="gauge-num" style="color:var(--success)" id="g-workers">0</span></div>
-    <div class="gauge-label">Active Workers</div>
+    <div class="gauge-label">Active workers</div>
   </div>
   <div class="gauge">
     <div class="gauge-ring"><svg viewBox="0 0 56 56"><circle class="track" cx="28" cy="28" r="24"/><circle class="val" cx="28" cy="28" r="24" stroke="var(--warning)" stroke-dasharray="150.8" id="g-queries-ring"/></svg><span class="gauge-num" style="color:var(--warning)" id="g-queries">0</span></div>
-    <div class="gauge-label">Queries</div>
+    <div class="gauge-label">Queries in history</div>
   </div>
-  <div class="gauge">
+  <button class="gauge is-button" type="button" id="g-failed-btn" aria-pressed="false" title="Show only failed queries">
     <div class="gauge-ring"><svg viewBox="0 0 56 56"><circle class="track" cx="28" cy="28" r="24"/><circle class="val" cx="28" cy="28" r="24" stroke="var(--error)" stroke-dasharray="150.8" id="g-failed-ring"/></svg><span class="gauge-num" style="color:var(--error)" id="g-failed">0</span></div>
     <div class="gauge-label">Failed</div>
-  </div>
+  </button>
   <div class="gauge" title="Resident memory used by the coordinator and all active worker processes">
     <div class="gauge-ring"><span class="gauge-num" style="color:var(--brand-light)" id="g-memory">0 B</span></div>
-    <div class="gauge-label">Engine Memory Used</div>
+    <div class="gauge-label">Memory</div>
+    <svg class="gauge-spark" id="chart-memory" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true"></svg>
   </div>
 </div>
 
 <div class="main">
   <div id="view-list">
     <div class="mast">
-      <div><div class="eyebrow">Control plane</div><h1>Engine operations</h1><p>Live cluster, query, and memory telemetry. This console observes the Engine; analytical work belongs in Kaveon Studio.</p></div>
+      <div><h1>KaveonDB operations</h1><p>Live cluster, memory and query telemetry, read directly from this coordinator. Analytical work belongs in Kaveon Studio.</p></div>
       <div class="actions"><span class="read-only">Read only</span><button class="refresh" id="refresh" type="button">Refresh now</button></div>
     </div>
-    <div class="telemetry">
-      <div class="chart"><div class="chart-top"><span class="chart-label">Observed queries</span><span class="chart-value" id="cv-queries">0</span></div><svg class="spark" id="chart-queries" viewBox="0 0 320 72" preserveAspectRatio="none"></svg><div class="chart-note">Coordinator process history</div></div>
-      <div class="chart"><div class="chart-top"><span class="chart-label">Engine memory</span><span class="chart-value" id="cv-memory">0 B</span></div><svg class="spark" id="chart-memory" viewBox="0 0 320 72" preserveAspectRatio="none"></svg><div class="chart-note">Resident memory across Engine processes</div></div>
-    </div>
-    <div class="section-row"><div><div class="section-hdr">Query history <span class="ct" id="qc">0</span></div><div class="history-status" id="history-status" role="status" aria-live="polite"></div></div><div class="query-tools"><input id="qsearch" type="search" placeholder="Search SQL or query ID" aria-label="Search query history"><select id="qstate" aria-label="Filter query state"><option value="ALL">All states</option><option value="RUNNING">Running</option><option value="FINISHED">Finished</option><option value="FAILED">Failed</option></select></div></div>
+    <div class="section-row"><div><div class="section-hdr">Query history <span class="ct" id="qc">0</span></div><div class="history-status" id="history-status" role="status" aria-live="polite"></div></div><div class="query-tools"><input id="qsearch" type="search" placeholder="Search SQL, query ID, user, client or error" aria-label="Search query history"><select id="qstate" aria-label="Filter query state"><option value="ALL">All states</option><option value="RUNNING">Running</option><option value="FINISHED">Finished</option><option value="FAILED">Failed</option></select></div></div>
     <div id="qarea">
       <div class="empty">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
@@ -320,10 +315,10 @@ function disconnect(message='Disconnected'){
   document.getElementById('view-list').style.display='';
   document.getElementById('qsearch').value='';
   document.getElementById('qstate').value='ALL';
-  ['ver','env-l','chart-queries','chart-memory'].forEach(id=>document.getElementById(id).textContent='');
+  ['ver','env-l','chart-memory'].forEach(id=>document.getElementById(id).textContent='');
   ['g-workers','g-queries','g-failed'].forEach(id=>setGauge(id,0,0));
-  ['g-memory','cv-memory'].forEach(id=>document.getElementById(id).textContent='0 B');
-  document.getElementById('cv-queries').textContent='0';
+  document.getElementById('g-memory').textContent='0 B';
+  document.querySelector('.auth').classList.remove('is-signed-in');
   document.getElementById('header-uptime').textContent='Uptime —';
   document.getElementById('cd').className='conn-dot err';
   document.getElementById('ct').textContent='Disconnected';
@@ -371,6 +366,8 @@ function fmt(s){
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
 function bytes(value){if(value<1024)return value+' B';if(value<1048576)return(value/1024).toFixed(1)+' KiB';if(value<1073741824)return(value/1048576).toFixed(1)+' MiB';return(value/1073741824).toFixed(2)+' GiB'}
 function submitted(value){return new Date(value).toLocaleString([],{month:'short',day:'numeric',hour:'numeric',minute:'2-digit',second:'2-digit'})}
+function ago(value){const d=Math.max(0,Date.now()-value);if(d<5000)return 'just now';if(d<60000)return Math.floor(d/1000)+'s ago';if(d<3600000)return Math.floor(d/60000)+'m ago';if(d<86400000)return Math.floor(d/3600000)+'h ago';return Math.floor(d/86400000)+'d ago'}
+function excerpt(value,max){const flat=String(value||'').replace(/\s+/g,' ').trim();return flat.length>max?flat.slice(0,max-1)+'…':flat}
 function durationUs(value){
   if(value===undefined||value===null)return 'Not measured';
   if(value<1000)return value+' µs';
@@ -386,10 +383,10 @@ function durationNs(value){
 }
 function rate(value,unit){return Number.isFinite(value)?value.toLocaleString(undefined,{maximumFractionDigits:1})+' '+unit:'Not measured'}
 function spark(id,values){
-  const svg=document.getElementById(id);if(!values.length)return;
-  const max=Math.max(...values,1),step=values.length>1?320/(values.length-1):0;
-  const points=values.map((v,i)=>`${i*step},${68-(v/max)*60}`).join(' ');
-  svg.innerHTML='<line class="grid" x1="0" y1="68" x2="320" y2="68"/><polyline class="line" points="'+points+'"/>';
+  const svg=document.getElementById(id);if(values.length<2)return;
+  const max=Math.max(...values),min=Math.min(...values),span=Math.max(max-min,1),step=100/(values.length-1);
+  const points=values.map((v,i)=>`${(i*step).toFixed(1)},${(22-((v-min)/span)*18).toFixed(1)}`).join(' ');
+  svg.innerHTML='<polyline points="'+points+'"/>';
 }
 function sample(name,value){samples[name].push(value);if(samples[name].length>MAX_SAMPLES)samples[name].shift()}
 
@@ -436,10 +433,8 @@ async function fetchCluster(){
     setGauge('g-failed',failed,Math.max(qorder.length,1));
     const memory=[d.coordinator,...d.workers].reduce((sum,node)=>sum+(node.memory_rss_bytes||0),0);
     document.getElementById('g-memory').textContent=bytes(memory);
-    sample('queries',qorder.length);sample('memory',memory);
-    document.getElementById('cv-queries').textContent=qorder.length;
-    document.getElementById('cv-memory').textContent=bytes(memory);
-    spark('chart-queries',samples.queries);spark('chart-memory',samples.memory);
+    sample('memory',memory);
+    spark('chart-memory',samples.memory);
 
   }catch{
     if(current!==session)return;
@@ -638,8 +633,9 @@ function hideDetail(){
 function renderHistory(){
   const term=document.getElementById('qsearch').value.trim().toLowerCase();
   const state=document.getElementById('qstate').value;
-  const visible=qorder.filter(id=>{const q=queries[id];return q&&(state==='ALL'||q.state===state)&&(!term||q.sql.toLowerCase().includes(term)||id.toLowerCase().includes(term));});
-  document.getElementById('qc').textContent=visible.length===qorder.length?qorder.length:visible.length+' / '+qorder.length;
+  const visible=qorder.filter(id=>{const q=queries[id];if(!q||(state!=='ALL'&&q.state!==state))return false;if(!term)return true;return [id,q.sql,queryUser(q),queryClient(q),q.error].some(v=>String(v||'').toLowerCase().includes(term));});
+  document.getElementById('qc').textContent=visible.length===qorder.length?qorder.length+' queries':visible.length+' of '+qorder.length;
+  document.getElementById('g-failed-btn').setAttribute('aria-pressed',state==='FAILED'?'true':'false');
   if(!visible.length){
     historyState('',qorder.length?'No matching queries':'No queries yet',qorder.length?'Adjust the search or state filter.':'Queries submitted through the Engine appear here.');
     return;
@@ -650,14 +646,14 @@ function renderHistory(){
     const preview=esc(q.sql);
     const stateClass=q.state==='FAILED'?' failed':q.state==='RUNNING'?' running':'';
     h+=`<button class="query-card" type="button" data-query-id="${esc(id)}">
-      <span class="query-card-top"><span class="query-identity"><span class="query-id">${esc(id)}</span></span><span class="query-time">${submitted(q.submitted_at_ms)}</span></span>
+      <span class="query-card-top"><span class="query-identity"><span class="query-id">${esc(id)}</span></span><span class="query-time" title="${esc(submitted(q.submitted_at_ms))}">${ago(q.submitted_at_ms)}</span></span>
       <span class="query-body"><span class="query-meta">
         <span class="query-stat"><span class="query-stat-label">Elapsed</span><span class="query-stat-value">${q.elapsed_ms||0} ms</span></span>
         <span class="query-stat"><span class="query-stat-label">In response</span><span class="query-stat-value">${q.rows?q.rows.length:0} rows</span></span>
         <span class="query-stat"><span class="query-stat-label">Columns</span><span class="query-stat-value">${q.columns?q.columns.length:0}</span></span>
         <span class="query-stat"><span class="query-stat-label">Entry point</span><span class="query-stat-value">${esc(queryClient(q))}</span></span>
         <span class="query-stat"><span class="query-stat-label">User</span><span class="query-stat-value" style="overflow-wrap:anywhere">${esc(queryUser(q))}</span></span>
-      </span><span class="query-main"><span class="query-state${stateClass}"><span>${q.state}</span><span>Query text</span></span><span class="query-sql">${preview}</span></span></span>
+      </span><span class="query-main"><span class="query-state${stateClass}"><span>${q.state[0]+q.state.slice(1).toLowerCase()}${q.state==='FAILED'&&q.error?' — '+esc(excerpt(q.error,110)):''}</span><span>${q.elapsed_ms||0} ms</span></span><span class="query-sql">${preview}</span></span></span>
     </button>`;
   });
   h+='</div>';
@@ -695,6 +691,7 @@ function connect(token,account=null){
   disconnect();accessToken=token;identityAccount=account;connected=true;
   document.getElementById('auth-status').textContent='Connecting…';
   document.getElementById('auth-identity').innerHTML=account?`Signed in as <strong>${esc(account.name||account.username||'Microsoft user')}</strong>`:'Connected with an engine access token';
+  document.querySelector('.auth').classList.add('is-signed-in');
   refresh();pollTimer=setInterval(refresh,5000);
 }
 async function initializeSignIn(){
@@ -703,6 +700,13 @@ async function initializeSignIn(){
     const response=await fetch('/v1/auth/config',{cache:'no-store',credentials:'omit'});
     if(!response.ok)throw new Error('Sign-in configuration unavailable');
     const config=await response.json();
+    const studio=typeof config.studio_url==='string'&&/^https:\/\//.test(config.studio_url)?config.studio_url.replace(/\/+$/,''):'';
+    if(studio&&new URLSearchParams(location.search).get('direct')!=='1'){
+      const target=studio+'/engine';
+      document.body.innerHTML=`<div class="gate"><h1>Sign in through Kaveon</h1><p>The KaveonDB console uses your Kaveon sign-in. You are being sent to Kaveon Studio; if nothing happens, use the link below.</p><a href="${esc(target)}">Continue to Kaveon</a></div>`;
+      location.replace(target);
+      return;
+    }
     if(!config.entra){
       document.getElementById('advanced-auth').hidden=false;
       document.getElementById('advanced-auth').open=true;
@@ -747,6 +751,7 @@ document.getElementById('disconnect').addEventListener('click',async()=>{
 window.addEventListener('pagehide',()=>disconnect());
 document.getElementById('qsearch').addEventListener('input',renderHistory);
 document.getElementById('qstate').addEventListener('change',renderHistory);
+document.getElementById('g-failed-btn').addEventListener('click',()=>{const sel=document.getElementById('qstate');sel.value=sel.value==='FAILED'?'ALL':'FAILED';renderHistory();});
 document.getElementById('refresh').addEventListener('click',refresh);
 </script>
 </body>

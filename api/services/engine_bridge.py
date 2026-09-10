@@ -172,6 +172,24 @@ def catalogs(actor, role):
     return _request("GET", "/v1/catalog", "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role))
 
 
+def cluster(actor, role):
+    """Coordinator, worker, uptime, and memory telemetry for the operations console."""
+    return _request("GET", "/v1/cluster", "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role))
+
+
+def queries(actor, role):
+    """Query history visible to this principal. The Engine applies ownership scoping."""
+    return _request("GET", "/v1/query", "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role))
+
+
+def query(query_id, actor, role):
+    """One query record, or None when it does not exist or is not visible to this principal."""
+    return _request(
+        "GET", "/v1/query/" + quote(query_id, safe=""),
+        "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role),
+    )
+
+
 def schemas(catalog, actor, role):
     return _request(
         "GET", "/v1/catalog/" + quote(catalog, safe="") + "/schema",
