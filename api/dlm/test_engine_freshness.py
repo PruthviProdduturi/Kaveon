@@ -28,7 +28,7 @@ class ChartFreshnessTests(unittest.TestCase):
         self.assertEqual(result["rows"], [["US", 42]])
         self.assertEqual(result["rows_objects"], [{"country": "US", "total": 42}])
         execute.assert_called_once_with(
-            'SELECT "country", SUM("trips") AS total FROM "silver"."trips" GROUP BY "country"',
+            'SELECT country, SUM(trips) AS total FROM silver.trips GROUP BY country',
             "OpenSource", "kaveon-system", "Admin", "silver",
         )
         pool_execute.assert_not_called()

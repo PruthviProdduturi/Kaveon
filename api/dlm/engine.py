@@ -3022,14 +3022,19 @@ def _execute_dataset_query(sql: str, database: str) -> Dict[str, Any]:
     # schema-qualified. DLM-generated scans consistently put the schema on the
     # first FROM/ANALYZE relation, so recover it without widening every helper's
     # call signature.
+    # The Engine parser currently preserves ANSI identifier quotes as part of
+    # a catalog/schema lookup (for example, it searches for `"public"`). DLM
+    # identifiers come from registered metadata and are restricted to ordinary
+    # identifier characters, so normalize those quotes for the native path.
+    engine_sql = re.sub(r'"([A-Za-z_][A-Za-z0-9_]*)"', r'\1', sql)
     schema_match = re.search(
         r'\b(?:FROM|ANALYZE)\s+(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))\s*\.',
-        sql,
+        engine_sql,
         re.IGNORECASE,
     )
     schema = (schema_match.group(1) or schema_match.group(2)) if schema_match else None
     result = execute(
-        sql, source["engine_catalog"], "kaveon-system", "Admin", schema
+        engine_sql, source["engine_catalog"], "kaveon-system", "Admin", schema
     )
     raw_columns = result.get("columns") or []
     columns = [
