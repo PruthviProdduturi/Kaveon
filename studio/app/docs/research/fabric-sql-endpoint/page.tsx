@@ -29,6 +29,6 @@ export default function KaveonVsFabricSqlDocs() {
 
     <h2>Canonical paper</h2>
     <p>Read the complete scope, decision guide, and Microsoft primary references in <a href="https://github.com/PruthviProdduturi/Kaveon/blob/dev/docs/research/kaveon-engine-vs-fabric-sql-analytics-endpoint.md">Kaveon Engine and Microsoft Fabric SQL Analytics Endpoint</a>.</p>
-    <Pager prev={{ href: "/docs/research/trino", title: "Kaveon vs Trino" }} />
+    <Pager prev={{ href: "/docs/research/trino", title: "Kaveon vs Trino" }} next={{ href: "/docs/research/htap-platforms", title: "Kaveon vs HTAP platforms" }} />
   </div>;
 }
