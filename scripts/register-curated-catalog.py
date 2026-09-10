@@ -4,6 +4,7 @@ Requires the API's existing Engine credential and CA environment. Manifest
 arguments are local JSON files; no credentials or data rows are printed.
 """
 import json
+import argparse
 import os
 import re
 import sys
@@ -43,7 +44,12 @@ register('/v1/catalog/definitions', '/v1/catalog/definitions/'+CATALOG_ID,
          {'id': CATALOG_ID, 'name': CATALOG, 'adapter': 'Native',
           'storage': {'AdlsGen2': {'account': 'kvtestegmf6oweugsno', 'container': 'opensource', 'root_path': ROOT}},
           'credential': {'kind': 'WorkloadIdentity', 'reference': 'kaveon-test-reader'}})
-tables = [table for filename in sys.argv[1:] for table in json.loads(Path(filename).read_text())['tables']]
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--definitions-only', action='store_true',
+                    help='Register definitions without running reads or updating API metadata')
+parser.add_argument('manifests', nargs='+')
+args = parser.parse_args()
+tables = [table for filename in args.manifests for table in json.loads(Path(filename).read_text())['tables']]
 # Publish subject schemas; physical medallion paths remain unchanged in ADLS.
 publication = {
     ('silver', 'yellow_trips'): ('nyc_taxi', 'yellow_trips'),
@@ -78,6 +84,10 @@ for table in tables:
               'columns': table['columns']})
 
 # Verify actual distributed reads before exposing the source in SQL Lab.
+if args.definitions_only:
+    print(json.dumps({'catalog': CATALOG, 'registered_tables': len(tables),
+                      'definitions_only': True}))
+    raise SystemExit(0)
 checks = []
 for table in tables:
     schema = table['schema']
