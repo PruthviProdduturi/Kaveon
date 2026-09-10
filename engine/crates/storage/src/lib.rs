@@ -9,6 +9,7 @@ pub mod metrics;
 pub mod object_delta;
 pub mod object_reader;
 pub mod parquet_reader;
+pub mod source_statistics;
 
 pub use adls_commit::{
     AdlsConditionalCommit, CommitError, CommitErrorKind, CommitResult, ObjectVersion,
@@ -21,6 +22,7 @@ pub use metrics::{ScanMetrics, ScanMetricsSnapshot};
 pub use object_delta::{ObjectDeltaReader, ObjectDeltaSource};
 pub use object_reader::{ObjectBatchSource, ObjectLocation, ObjectParquetReader};
 pub use parquet_reader::{ParquetBatchIterator, ParquetFileMetadata, ParquetReader};
+pub use source_statistics::{SourceStatistics, analyze_source};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScanPartition {

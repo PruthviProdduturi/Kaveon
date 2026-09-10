@@ -45,6 +45,24 @@ pub struct TableManifestRef {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TableStatisticsRef {
+    /// Immutable catalog-definition snapshot used to resolve the runtime table.
+    pub catalog_snapshot_sha256: String,
+    /// Digest returned by storage for the exact analyzed source state.
+    pub source_identity_sha256: String,
+    /// Immutable detailed statistics document for future column estimates.
+    pub document: ImmutableFileRef,
+    /// Exact physical rows in the pinned immutable table snapshot.
+    pub row_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeTableSourceRef {
+    pub catalog_snapshot_sha256: String,
+    pub source_identity_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogSnapshot {
     pub version: u32,
     pub generation: u64,
@@ -53,6 +71,10 @@ pub struct CatalogSnapshot {
     pub operation_id: String,
     pub request_digest: String,
     pub tables: BTreeMap<String, TableManifestRef>,
+    #[serde(default)]
+    pub runtime_table_sources: BTreeMap<String, RuntimeTableSourceRef>,
+    #[serde(default)]
+    pub table_statistics: BTreeMap<String, TableStatisticsRef>,
     /// Immutable product-control documents (datasets, charts, dashboards, and
     /// similar metadata) published under the same atomic snapshot head.
     #[serde(default)]
@@ -69,6 +91,17 @@ pub enum CatalogChange {
         reference: TableManifestRef,
     },
     Delete {
+        table: String,
+    },
+    PutRuntimeTableSource {
+        table: String,
+        source: RuntimeTableSourceRef,
+    },
+    PutStatistics {
+        table: String,
+        statistics: TableStatisticsRef,
+    },
+    DeleteStatistics {
         table: String,
     },
     PutControl {
@@ -127,6 +160,8 @@ impl CatalogSnapshot {
             operation_id: "genesis".to_owned(),
             request_digest: "0".repeat(64),
             tables: BTreeMap::new(),
+            runtime_table_sources: BTreeMap::new(),
+            table_statistics: BTreeMap::new(),
             control_records: BTreeMap::new(),
             product_records: BTreeMap::new(),
         })
@@ -228,16 +263,33 @@ impl CatalogSnapshot {
         }
 
         let mut tables = self.tables.clone();
+        let mut runtime_table_sources = self.runtime_table_sources.clone();
+        let mut table_statistics = self.table_statistics.clone();
         let mut control_records = self.control_records.clone();
         let mut product_records = self.product_records.clone();
         for change in request.changes {
             match change {
                 CatalogChange::Put { table, reference } => {
+                    table_statistics.remove(&table);
                     tables.insert(table, reference);
                 }
                 CatalogChange::Delete { table } => {
                     if tables.remove(&table).is_none() {
                         return Err(error(format!("cannot delete absent table '{table}'")));
+                    }
+                    table_statistics.remove(&table);
+                }
+                CatalogChange::PutStatistics { table, statistics } => {
+                    table_statistics.insert(table, statistics);
+                }
+                CatalogChange::PutRuntimeTableSource { table, source } => {
+                    runtime_table_sources.insert(table, source);
+                }
+                CatalogChange::DeleteStatistics { table } => {
+                    if table_statistics.remove(&table).is_none() {
+                        return Err(error(format!(
+                            "cannot delete absent statistics for '{table}'"
+                        )));
                     }
                 }
                 CatalogChange::PutControl { key, reference } => {
@@ -316,6 +368,8 @@ impl CatalogSnapshot {
             operation_id: request.operation_id,
             request_digest: request.request_digest,
             tables,
+            runtime_table_sources,
+            table_statistics,
             control_records,
             product_records,
         };
@@ -340,6 +394,25 @@ impl CatalogSnapshot {
         for (table, reference) in &self.tables {
             validate_table_name(table)?;
             validate_table_reference(reference)?;
+        }
+        for (table, statistics) in &self.table_statistics {
+            validate_table_name(table)?;
+            validate_statistics(statistics)?;
+            let source = self.runtime_table_sources.get(table).ok_or_else(|| {
+                error(format!(
+                    "statistics reference absent runtime table '{table}'"
+                ))
+            })?;
+            if source.catalog_snapshot_sha256 != statistics.catalog_snapshot_sha256
+                || source.source_identity_sha256 != statistics.source_identity_sha256
+            {
+                return Err(error("statistics do not match the runtime table source"));
+            }
+        }
+        for (table, source) in &self.runtime_table_sources {
+            validate_table_name(table)?;
+            validate_digest(&source.catalog_snapshot_sha256)?;
+            validate_digest(&source.source_identity_sha256)?;
         }
         for (key, reference) in &self.control_records {
             validate_control_key(key)?;
@@ -368,6 +441,8 @@ fn validate_request(request: &PrepareChange) -> Result<(), ManifestError> {
         ));
     }
     let mut table_names = BTreeSet::new();
+    let mut source_names = BTreeSet::new();
+    let mut statistics_names = BTreeSet::new();
     let mut control_keys = BTreeSet::new();
     let mut product_keys = BTreeSet::new();
     for change in &request.changes {
@@ -383,6 +458,33 @@ fn validate_request(request: &PrepareChange) -> Result<(), ManifestError> {
                 validate_table_name(table)?;
                 if !table_names.insert(table) {
                     return Err(error(format!("table '{table}' is changed more than once")));
+                }
+            }
+            CatalogChange::PutStatistics { table, statistics } => {
+                validate_table_name(table)?;
+                validate_statistics(statistics)?;
+                if !statistics_names.insert(table) {
+                    return Err(error(format!(
+                        "statistics for '{table}' are changed more than once"
+                    )));
+                }
+            }
+            CatalogChange::PutRuntimeTableSource { table, source } => {
+                validate_table_name(table)?;
+                validate_digest(&source.catalog_snapshot_sha256)?;
+                validate_digest(&source.source_identity_sha256)?;
+                if !source_names.insert(table) {
+                    return Err(error(format!(
+                        "runtime source for '{table}' is changed more than once"
+                    )));
+                }
+            }
+            CatalogChange::DeleteStatistics { table } => {
+                validate_table_name(table)?;
+                if !statistics_names.insert(table) {
+                    return Err(error(format!(
+                        "statistics for '{table}' are changed more than once"
+                    )));
                 }
             }
             CatalogChange::PutControl { key, reference } => {
@@ -438,6 +540,13 @@ fn validate_table_reference(reference: &TableManifestRef) -> Result<(), Manifest
             return Err(error("table manifest has duplicate Parquet paths"));
         }
     }
+    Ok(())
+}
+
+fn validate_statistics(statistics: &TableStatisticsRef) -> Result<(), ManifestError> {
+    validate_digest(&statistics.catalog_snapshot_sha256)?;
+    validate_digest(&statistics.source_identity_sha256)?;
+    validate_file(&statistics.document, false)?;
     Ok(())
 }
 
@@ -1457,5 +1566,126 @@ mod tests {
             };
             assert!(validate_table_reference(&reference).is_err(), "{path}");
         }
+    }
+
+    #[test]
+    fn statistics_bind_exact_table_snapshot_and_table_replacement_invalidates_them() {
+        let base = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        let orders = table("orders");
+        let with_table = base
+            .prepare(change(
+                base.reference(),
+                "put-table",
+                DIGEST,
+                vec![CatalogChange::Put {
+                    table: "sales.orders".into(),
+                    reference: orders.clone(),
+                }],
+            ))
+            .unwrap();
+        let statistics = TableStatisticsRef {
+            catalog_snapshot_sha256: DIGEST.into(),
+            source_identity_sha256: DIGEST.into(),
+            document: control("statistics-orders"),
+            row_count: 42,
+        };
+        let analyzed = with_table
+            .prepare(change(
+                with_table.reference(),
+                "analyze-table",
+                DIGEST,
+                vec![
+                    CatalogChange::PutRuntimeTableSource {
+                        table: "sales.orders".into(),
+                        source: RuntimeTableSourceRef {
+                            catalog_snapshot_sha256: DIGEST.into(),
+                            source_identity_sha256: DIGEST.into(),
+                        },
+                    },
+                    CatalogChange::PutStatistics {
+                        table: "sales.orders".into(),
+                        statistics,
+                    },
+                ],
+            ))
+            .unwrap();
+        assert_eq!(analyzed.table_statistics["sales.orders"].row_count, 42);
+
+        let replaced = analyzed
+            .prepare(change(
+                analyzed.reference(),
+                "replace-table",
+                DIGEST,
+                vec![CatalogChange::Put {
+                    table: "sales.orders".into(),
+                    reference: table("orders-v2"),
+                }],
+            ))
+            .unwrap();
+        assert!(!replaced.table_statistics.contains_key("sales.orders"));
+    }
+
+    #[test]
+    fn statistics_validate_runtime_source_binding() {
+        let base = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        let statistics = TableStatisticsRef {
+            catalog_snapshot_sha256: DIGEST.into(),
+            source_identity_sha256: DIGEST.into(),
+            document: control("statistics-orders"),
+            row_count: 42,
+        };
+        assert!(
+            base.prepare(change(
+                base.reference(),
+                "analyze-absent",
+                DIGEST,
+                vec![CatalogChange::PutStatistics {
+                    table: "sales.orders".into(),
+                    statistics: statistics.clone()
+                }]
+            ))
+            .is_err()
+        );
+        let bound = base
+            .prepare(change(
+                base.reference(),
+                "bind-runtime",
+                DIGEST,
+                vec![CatalogChange::PutRuntimeTableSource {
+                    table: "sales.orders".into(),
+                    source: RuntimeTableSourceRef {
+                        catalog_snapshot_sha256: DIGEST.into(),
+                        source_identity_sha256: DIGEST.into(),
+                    },
+                }],
+            ))
+            .unwrap();
+        assert!(
+            bound
+                .prepare(change(
+                    bound.reference(),
+                    "valid-statistics",
+                    DIGEST,
+                    vec![CatalogChange::PutStatistics {
+                        table: "sales.orders".into(),
+                        statistics: statistics.clone()
+                    }]
+                ))
+                .is_ok()
+        );
+        let mut invalid = statistics;
+        invalid.source_identity_sha256 = "bad".into();
+        assert!(
+            base.prepare(change(
+                base.reference(),
+                "bad-statistics",
+                DIGEST,
+                vec![CatalogChange::PutStatistics {
+                    table: "sales.orders".into(),
+                    statistics: invalid
+                }]
+            ))
+            .is_err()
+        );
     }
 }

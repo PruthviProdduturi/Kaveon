@@ -73,6 +73,9 @@ enum RegistryError {
 }
 
 impl TransactionRegistry {
+    pub(crate) fn catalog(&self) -> Option<ProductCatalogCommit> {
+        self.catalog.clone()
+    }
     pub fn disabled() -> Self {
         Self {
             catalog: None,
