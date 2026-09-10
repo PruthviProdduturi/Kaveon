@@ -51,11 +51,23 @@ def _engine_metadata(data: dict) -> tuple[Optional[str], Optional[str]]:
     safe = {
         key: details.get(key)
         for key in (
-            "rows_are_preview", "scan_metrics_complete", "submitted_at_ms",
+            "state", "error", "rows_are_preview", "scan_metrics_complete", "submitted_at_ms",
             "completed_at_ms", "timings", "scans", "stages", "context",
         )
         if key in details
     }
+    if isinstance(safe.get("state"), str):
+        safe["state"] = safe["state"][:32]
+    raw_error = safe.get("error")
+    if isinstance(raw_error, str):
+        safe["error"] = raw_error[:2048]
+    elif isinstance(raw_error, dict):
+        safe["error"] = {
+            key: str(raw_error[key])[:2048]
+            for key in ("code", "message") if key in raw_error
+        }
+    elif raw_error is not None:
+        safe.pop("error")
     return data.get("engine_query_id") or details.get("id"), json.dumps(safe, separators=(",", ":"))
 
 

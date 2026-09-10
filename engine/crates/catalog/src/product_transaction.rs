@@ -5,6 +5,7 @@
 //! exactly one conditional publication on commit. Dropping or rolling back a
 //! session publishes nothing.
 
+use sha2::{Digest, Sha256};
 use std::fmt;
 
 use crate::{
@@ -99,6 +100,28 @@ impl ProductTransaction {
     #[must_use]
     pub fn staged_change_count(&self) -> usize {
         self.request.changes.len()
+    }
+
+    /// Rebinds the durable idempotency digest to the final ordered write set
+    /// and trusted caller context before publication.
+    pub fn bind_request_digest(&mut self, context: &[u8]) -> Result<(), TransactionError> {
+        let changes = serde_json::to_vec(&self.request.changes)
+            .map_err(|error| TransactionError::InvalidWriteSet(error.to_string()))?;
+        let mut digest = Sha256::new();
+        digest.update(b"kaveon-product-transaction-v1");
+        digest.update((context.len() as u64).to_be_bytes());
+        digest.update(context);
+        digest.update((changes.len() as u64).to_be_bytes());
+        digest.update(changes);
+        self.request.request_digest = format!("{:x}", digest.finalize());
+        if !self.request.changes.is_empty() {
+            self.preview = Some(
+                self.base
+                    .prepare(self.request.clone())
+                    .map_err(|error| TransactionError::InvalidWriteSet(error.to_string()))?,
+            );
+        }
+        Ok(())
     }
 
     pub async fn commit(self) -> Result<CommitOutcome, TransactionError> {
@@ -275,5 +298,36 @@ mod tests {
             transaction.commit().await,
             Err(TransactionError::InvalidWriteSet(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn final_digest_binds_ordered_changes_and_principal_context() {
+        let catalog = catalog().await;
+        let mut alice =
+            ProductTransaction::begin(catalog.clone(), "snapshot-a", "operation-a", DIGEST)
+                .await
+                .unwrap();
+        alice
+            .stage(CatalogChange::Put {
+                table: "app.users".into(),
+                reference: table("users"),
+            })
+            .unwrap();
+        alice.bind_request_digest(b"alice").unwrap();
+        let mut bob = ProductTransaction::begin(catalog, "snapshot-b", "operation-b", DIGEST)
+            .await
+            .unwrap();
+        bob.stage(CatalogChange::Put {
+            table: "app.users".into(),
+            reference: table("users"),
+        })
+        .unwrap();
+        bob.bind_request_digest(b"bob").unwrap();
+
+        assert_ne!(alice.snapshot().request_digest, DIGEST);
+        assert_ne!(
+            alice.snapshot().request_digest,
+            bob.snapshot().request_digest
+        );
     }
 }

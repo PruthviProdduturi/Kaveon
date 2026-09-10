@@ -1930,6 +1930,7 @@ dependencies = [
  "kaveon-optim",
  "kaveon-sql",
  "kaveon-storage",
+ "object_store",
  "parquet",
  "rand 0.8.8",
  "reqwest",

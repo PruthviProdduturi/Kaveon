@@ -62,6 +62,26 @@ class EngineChartSqlTests(unittest.TestCase):
         self.assertEqual(error.exception.status_code, 400)
         execute.assert_not_called()
 
+    def test_failed_engine_uuid_and_details_are_persisted_in_query_history(self):
+        body = SqlExecuteBody(sql_text="SELECT broken FROM events", database="OpenSource",
+                              dataset_id=7, source="dashboard-chart")
+        failure = HTTPException(422, {
+            "message": "Engine query failed", "query_id": "engine-failed-1",
+            "engine_details": {"id": "engine-failed-1", "state": "FAILED"},
+        })
+        with patch.object(sql, "_engine_source_for_catalog", return_value={"engine_catalog": "OpenSource"}), \
+             patch.object(sql.datasets_svc, "get_dataset_by_id", return_value={"database_name": "OpenSource", "schema_name": "app"}), \
+             patch.object(sql, "_execute_engine_read_only", side_effect=failure), \
+             patch.object(sql.history_svc, "create_history") as history, \
+             patch.object(sql.sql_execute_limiter, "check"):
+            with self.assertRaises(HTTPException) as raised:
+                sql.execute_engine_sql(body, Response(), UserContext("analyst@example.com", "Analyst"))
+        self.assertEqual(raised.exception.detail, "Engine query failed")
+        recorded = history.call_args.args[0]
+        self.assertEqual(recorded["status"], "error")
+        self.assertEqual(recorded["engine_query_id"], "engine-failed-1")
+        self.assertEqual(recorded["engine_details"]["state"], "FAILED")
+
     def test_viewer_cannot_execute_engine_sql_even_with_dashboard_source(self):
         body = SqlExecuteBody(sql_text="SELECT 1", database="OpenSource", source="dashboard-chart")
         with patch.object(sql.meta_db, "query_one") as lookup, \
