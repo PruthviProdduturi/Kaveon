@@ -21,6 +21,37 @@ Client/source labels are reported metadata; roles and ownership use authenticate
 identity, never the CLI's editable `--user` field. A coordinator restart clears
 in-memory query history, so newly submitted queries carry the new display fields.
 
+## Studio is the front door — September 10
+
+Product naming: the runtime pillar is now presented to users as **KaveonDB**
+(architect decision, September 10). Studio navigation, the System settings card,
+the operations console and the coordinator page use that name. Crate names,
+container images, Helm values, environment variables, the `/engine` Studio route
+and the `/v1` API are technical identifiers and are unchanged. The docs-wide
+rename of "Kaveon Engine" is a separate pass tracked in HANDSHAKE.
+
+The operations console now lives inside Kaveon Studio at `/engine`, with a
+per-query view at `/engine/queries/{id}`. It uses the Studio sign-in only: the
+browser calls the same-origin proxy, the API forwards the verified principal and
+role to the coordinator over the platform bridge (`GET /api/v1/engine/console/*`
+→ `/v1/cluster`, `/v1/query`, `/v1/query/{id}`), and the Engine applies its own
+ownership scoping. No Engine credential reaches the browser and nothing on this
+path mutates Engine state. Any role the API admits may read; the sidebar entry
+is shown to administrators. System settings links to the console from the
+Engine card, which also reports environment, coordinator version, uptime and
+worker count from the same bridge read.
+
+The coordinator's own `/ui` remains for operators running Engine without Studio
+and for diagnostics. When `/v1/auth/config` publishes a `studio_url`, an
+unauthenticated visit to `/ui` is redirected to `{studio_url}/engine`; append
+`?direct=1` to stay on the coordinator page and use Microsoft sign-in or an
+engine token. Publishing `studio_url` is an open request to Codex; until it
+lands, `/ui` behaves exactly as before. `/ui` also received the console's
+presentation fixes: one grid width, Inter before Segoe UI, sentence-case
+labels, no duplicated memory/query cards, one identity line once signed in,
+a clickable Failed gauge that filters history, relative submission times, and
+the error excerpt on failed cards.
+
 ## This workstation and AKS
 
 Direct AKS API access is now working. The workstation uses varying outbound IPs;

@@ -31,6 +31,19 @@ interface EngineStatus {
   catalog_count: number | null;
 }
 
+interface EngineCluster {
+  environment: string;
+  coordinator: { version: string; uptime_secs: number };
+  active_workers: number;
+  total_nodes: number;
+}
+
+function engineUptime(secs: number): string {
+  if (secs < 3600) return `${Math.max(1, Math.floor(secs / 60))}m`;
+  const h = Math.floor(secs / 3600);
+  return h < 24 ? `${h}h ${Math.floor((secs % 3600) / 60)}m` : `${Math.floor(h / 24)}d ${h % 24}h`;
+}
+
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function SystemSettingsPage() {
@@ -43,6 +56,7 @@ export default function SystemSettingsPage() {
   const [pingMs, setPingMs] = useState<number | null>(null);
   const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
   const [engineLoading, setEngineLoading] = useState(true);
+  const [engineCluster, setEngineCluster] = useState<EngineCluster | null>(null);
 
   const [thumbStatus, setThumbStatus] = useState<
     { running: boolean; done: number; total: number; label: string } | null
@@ -136,6 +150,10 @@ export default function SystemSettingsPage() {
     if (roleLoading || !isAdmin) return;
     let cancelled = false;
     setEngineLoading(true);
+    msalFetch(`${API_BASE}/api/v1/engine/console/cluster`)
+      .then(res => (res.ok ? res.json() : null))
+      .then((cluster: EngineCluster | null) => { if (!cancelled) setEngineCluster(cluster); })
+      .catch(() => { if (!cancelled) setEngineCluster(null); });
     msalFetch(`${API_BASE}/api/v1/catalog-sources/engine-status`)
       .then((response) => (response.ok ? response.json() : Promise.reject(response.status)))
       .then((status: EngineStatus) => {
@@ -319,9 +337,9 @@ export default function SystemSettingsPage() {
                   <i className="fas fa-bolt" style={{ fontSize: 18, color: engineStatus?.connected ? green : "var(--text-muted)" }} />
                 </div>
                 <div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>Kaveon Engine</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>KaveonDB</div>
                   <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
-                    Server-managed execution and catalog control plane
+                    Distributed query and transaction runtime
                   </div>
                 </div>
               </div>
@@ -329,10 +347,33 @@ export default function SystemSettingsPage() {
                 {engineLoading ? <><i className="fas fa-spinner fa-spin" /> Checking</> : engineStatus?.connected ? <><i className="fas fa-circle-check" /> Connected</> : <><i className="fas fa-circle-xmark" /> Unavailable</>}
               </div>
             </div>
-            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: "1rem", lineHeight: 1.5 }}>
-              {engineStatus?.connected
-                ? `${engineStatus.catalog_count ?? 0} Engine catalog${engineStatus.catalog_count === 1 ? "" : "s"} visible to this server. Add a catalog source below, then explicitly synchronize it with the Engine.`
-                : "The server could not verify its Engine connection. Catalog sources remain available for configuration."}
+            {engineStatus?.connected && engineCluster && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginTop: "1rem" }}>
+                {[
+                  ["Environment", engineCluster.environment],
+                  ["Coordinator", `v${engineCluster.coordinator.version}`],
+                  ["Uptime", engineUptime(engineCluster.coordinator.uptime_secs)],
+                  ["Workers", `${engineCluster.active_workers} of ${engineCluster.total_nodes} nodes`],
+                  ["Catalogs", String(engineStatus.catalog_count ?? 0)],
+                ].map(([label, value]) => (
+                  <div key={label} style={{ padding: "10px 12px", background: "var(--bg-primary)", border: "1px solid var(--border)", borderRadius: 8 }}>
+                    <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginBottom: 2 }}>{label}</div>
+                    <div style={{ fontSize: 13.5, fontWeight: 600, color: "var(--text-primary)", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" }}>{value}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap", marginTop: "1rem" }}>
+              <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5, maxWidth: 560 }}>
+                {engineStatus?.connected
+                  ? "The operations console shows live workers, memory, and every query KaveonDB has recorded, with plans, scans, and stages per query. It is read-only and uses your Kaveon sign-in."
+                  : "The server could not verify its KaveonDB connection. Catalog sources remain available for configuration."}
+              </div>
+              {engineStatus?.connected && (
+                <Button variant="primary" size="sm" onClick={() => router.push("/engine")}>
+                  <i className="fas fa-arrow-up-right-from-square" style={{ marginRight: 8 }} />Open KaveonDB console
+                </Button>
+              )}
             </div>
           </div>
         </div>
@@ -340,7 +381,7 @@ export default function SystemSettingsPage() {
         {/* ── Engine Catalog Sources ─────────────────────────────────────── */}
         <div className="card" style={{ padding: "1.5rem", overflow: "hidden" }}>
           <div style={{ marginBottom: "1rem" }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>Engine catalog sources</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>KaveonDB catalog sources</div>
             <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 3 }}>
               Register storage metadata here. Synchronization creates or updates the Engine catalog definition; it does not discover tables.
             </div>
