@@ -136,3 +136,52 @@ fn digest(value: String) -> String {
 fn is_object(value: &str) -> bool {
     value.starts_with("abfss://") || value.starts_with("s3://")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::{
+        array::{ArrayRef, Int64Array, StringArray},
+        datatypes::{DataType, Field, Schema},
+        record_batch::RecordBatch,
+    };
+    use parquet::arrow::ArrowWriter;
+    use std::{fs::File, sync::Arc};
+
+    fn write(path: &std::path::Path, rows: usize) {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from_iter_values((0..rows).map(|v| v as i64))) as ArrayRef,
+                Arc::new(StringArray::from_iter_values(
+                    (0..rows).map(|v| format!("r{v}")),
+                )) as ArrayRef,
+            ],
+        )
+        .unwrap();
+        let mut writer = ArrowWriter::try_new(File::create(path).unwrap(), schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+    }
+
+    #[test]
+    fn local_parquet_statistics_are_exact_stable_and_change_on_replacement() {
+        let path =
+            std::env::temp_dir().join(format!("kaveon-analyze-{}.parquet", std::process::id()));
+        write(&path, 3);
+        let first = analyze_source(path.to_str().unwrap(), DataFormat::Parquet).unwrap();
+        let repeated = analyze_source(path.to_str().unwrap(), DataFormat::Parquet).unwrap();
+        assert_eq!(first.row_count, 3);
+        assert_eq!(first.columns, ["id", "name"]);
+        assert_eq!(first.identity_sha256, repeated.identity_sha256);
+        write(&path, 17);
+        let replaced = analyze_source(path.to_str().unwrap(), DataFormat::Parquet).unwrap();
+        assert_eq!(replaced.row_count, 17);
+        assert_ne!(first.identity_sha256, replaced.identity_sha256);
+        std::fs::remove_file(path).unwrap();
+    }
+}
