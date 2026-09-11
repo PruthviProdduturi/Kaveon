@@ -1059,7 +1059,7 @@ mod tests {
         array::{Array, Int64Array, UInt64Array},
         datatypes::{DataType, Field, Schema},
     };
-    use kaveon_core::QueryMemoryPool;
+    use kaveon_core::{MemoryAdmissionController, QueryMemoryPool};
 
     #[test]
     fn projected_repeat_uses_string_schema_and_query_expansion_budget() {
@@ -1739,6 +1739,46 @@ mod tests {
         assert!(snapshot.compactions > 0, "{snapshot:?}");
         assert_eq!(snapshot.current_bytes, 0);
         assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn concurrent_partitioned_queries_fail_closed_at_admission_and_remain_exact() {
+        let controller = Arc::new(MemoryAdmissionController::new(128 * 1024).unwrap());
+        let handles = (0..16)
+            .map(|query| {
+                let controller = Arc::clone(&controller);
+                std::thread::spawn(move || {
+                    let admitted = match controller.admit(format!("spill-query-{query}"), 64 * 1024)
+                    {
+                        Ok(admitted) => admitted,
+                        Err(_) => return false,
+                    };
+                    let pool = admitted.pool().clone();
+                    let mut aggregate = PartitionedHashAggregate::new(
+                        input((0..2_048).map(|value| Some(value % 128)).collect(), 64),
+                        vec!["id".into()],
+                        vec![AggExpr::new(AggFunc::Count, "*")],
+                        pool.operator("aggregate").unwrap(),
+                        spill(),
+                        8,
+                    )
+                    .unwrap();
+                    let mut groups = 0;
+                    while let Some(batch) = aggregate.next_batch().unwrap() {
+                        groups += batch.num_rows();
+                    }
+                    groups == 128 && pool.snapshot().current_bytes == 0
+                })
+            })
+            .collect::<Vec<_>>();
+        let exact = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .filter(|exact| *exact)
+            .count();
+        assert_eq!(exact, 2);
+        assert_eq!(controller.snapshot().current_bytes, 0);
+        assert_eq!(controller.snapshot().peak_bytes, 128 * 1024);
     }
 
     #[test]
