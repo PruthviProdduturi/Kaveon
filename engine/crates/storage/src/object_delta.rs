@@ -60,6 +60,32 @@ impl ObjectDeltaReader {
         let version = self.version;
         blocking(async move { resolve_snapshot(location.store, &location.path, version).await })
     }
+
+    /// Returns whether `version` is still the latest committed Delta version.
+    ///
+    /// Delta commit files are immutable and their numeric versions are
+    /// consecutive. A successful, strongly consistent `HEAD` for version
+    /// `N + 1` therefore invalidates a cached version `N`; `NotFound`
+    /// establishes that `N` is current at the time of the request. Kaveon's
+    /// object readers instantiate only ADLS Gen2 and S3 stores, both of which
+    /// provide read-after-write consistency for object metadata.
+    pub(crate) fn is_latest_version(&self, version: u64) -> Result<bool> {
+        let Some(next) = version.checked_add(1) else {
+            return Ok(true);
+        };
+        let location = self.location.clone();
+        blocking(async move {
+            let path = location
+                .path
+                .child("_delta_log")
+                .child(format!("{next:020}.json"));
+            match location.store.head(&path).await {
+                Ok(_) => Ok(false),
+                Err(object_store::Error::NotFound { .. }) => Ok(true),
+                Err(source) => Err(error(source.to_string())),
+            }
+        })
+    }
     pub fn metadata(&self) -> Result<ParquetFileMetadata> {
         let snapshot = self.snapshot()?;
         self.metadata_for_snapshot(snapshot)
@@ -249,6 +275,29 @@ mod tests {
         datatypes::{DataType, Field, Schema},
     };
     use object_store::memory::InMemory;
+
+    #[test]
+    fn latest_version_probe_invalidates_on_the_next_atomic_commit() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime
+            .block_on(store.put(
+                &Path::from("table/_delta_log/00000000000000000000.json"),
+                b"{}".to_vec().into(),
+            ))
+            .unwrap();
+        let reader = ObjectDeltaReader::new(store.clone(), Path::from("table"));
+        assert!(reader.is_latest_version(0).unwrap());
+
+        runtime
+            .block_on(store.put(
+                &Path::from("table/_delta_log/00000000000000000001.json"),
+                b"{}".to_vec().into(),
+            ))
+            .unwrap();
+        assert!(!reader.is_latest_version(0).unwrap());
+        assert!(reader.is_latest_version(1).unwrap());
+    }
 
     #[test]
     fn empty_object_snapshot_has_schema_without_opening_data_files() {
