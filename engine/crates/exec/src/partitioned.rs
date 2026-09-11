@@ -1699,6 +1699,11 @@ mod tests {
         assert_eq!(groups, 2000);
         assert_eq!(pool.snapshot().current_bytes, 0);
         assert!(pool.snapshot().peak_bytes <= 64 * 1024);
+        // The bounded fallback must have exercised the disk path, then release
+        // every run before returning. A zero current-byte count alone would
+        // also pass if the operator silently rejected the input.
+        assert!(spill.snapshot().runs_written > 0);
+        assert!(spill.snapshot().bytes_written > 0);
         assert_eq!(spill.snapshot().current_bytes, 0);
     }
 
@@ -1718,7 +1723,8 @@ mod tests {
             16,
         )
         .unwrap();
-        assert!(join.next_batch().is_err());
+        let error = join.next_batch().unwrap_err().to_string();
+        assert!(error.contains("memory") || error.contains("skew"), "{error}");
         assert!(join.next_batch().unwrap().is_none());
         assert_eq!(pool.snapshot().current_bytes, 0);
         assert_eq!(spill.snapshot().current_bytes, 0);
