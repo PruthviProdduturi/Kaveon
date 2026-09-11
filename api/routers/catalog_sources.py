@@ -7,11 +7,14 @@ this API owns the metadata and lifecycle transitions.
 """
 
 import json
+import os
+import logging
 from fastapi import APIRouter, HTTPException, Depends
 from middleware.auth import UserContext
 from middleware.permissions import require_min_role
 import database.metadata as db
-from services import source_mutations, source_secret_store
+from services import source_mutations, source_secret_store, product_outbox
+from services.activity_backfill import document as activity_document
 
 router = APIRouter()
 
@@ -37,7 +40,18 @@ _TRANSITIONS = {
 
 
 def _audit(action: str, obj_id: str, obj_name: str, user: str, details: str = None, transaction=None):
-    (transaction or db).execute(
+    if os.getenv("KAVEON_ACTIVITY_OUTBOX_ENABLED") == "true" and transaction is None:
+        with db.transaction() as tx:return _audit(action,obj_id,obj_name,user,details,tx)
+    executor=transaction or db
+    if os.getenv("KAVEON_ACTIVITY_OUTBOX_ENABLED") == "true":
+        row=executor.query_one(
+        "INSERT INTO activity (action, object_type, object_id, object_name, user_email, details) "
+        "VALUES (@param0, 'catalog_source', @param1, @param2, @param3, @param4) RETURNING id,action,object_type,object_id,object_name,timestamp,user_email,details",
+        [action,obj_id,obj_name,user,details])
+        if not row:raise RuntimeError("activity insert returned no row")
+        product_outbox.enqueue(executor,family="activity",operation="create",record_id=str(row["id"]),payload=activity_document(row),actor=user,owner=user)
+        return
+    executor.execute(
         "INSERT INTO activity (action, object_type, object_id, object_name, user_email, details) "
         "VALUES (@param0, 'catalog_source', @param1, @param2, @param3, @param4)",
         [action, obj_id, obj_name, user, details],
@@ -338,11 +352,16 @@ def get_audit_trail(cs_id: str, ctx: UserContext = Depends(require_min_role("Vie
         raise HTTPException(404, {"code": "NOT_FOUND", "message": "Catalog source not found"})
 
     result = db.query(
-        "SELECT id, action, object_name, timestamp, user_email, details "
+        "SELECT id, action, object_type, object_id, object_name, timestamp, user_email, details "
         "FROM activity WHERE object_type = 'catalog_source' AND object_id = @param0 "
         "ORDER BY timestamp DESC LIMIT 50",
         [cs_id],
     )
+    try:
+        from services import product_shadow_read
+        report=product_shadow_read.observe_activity_list(result["rows"])
+        if report.get("enabled"):logging.getLogger(__name__).info("activity_shadow %s",report)
+    except Exception as error:logging.getLogger(__name__).warning("activity_shadow_error type=%s",type(error).__name__)
     return {"success": True, "events": result["rows"]}
 
 

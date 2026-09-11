@@ -386,6 +386,7 @@ fn validate_favorite_owner(
         || (kind == ProductRecordKind::UserRecent
             && !values["recent_owner_item"].starts_with(&format!("{owner}:")))
         || (kind == ProductRecordKind::QueryHistory && values["query_owner"] != owner)
+        || (kind == ProductRecordKind::Activity && values["activity_actor"] != owner)
     {
         return Err(RegistryError::Forbidden);
     }
@@ -418,6 +419,7 @@ fn record_kind(kind: &str) -> Result<ProductRecordKind, RegistryError> {
         "source" => Ok(ProductRecordKind::Source),
         "user_recent" => Ok(ProductRecordKind::UserRecent),
         "query_history" => Ok(ProductRecordKind::QueryHistory),
+        "activity" => Ok(ProductRecordKind::Activity),
         _ => Err(RegistryError::Invalid(
             "unsupported product record kind".into(),
         )),
@@ -438,7 +440,15 @@ fn product_document(
         ));
     }
     let mut derived_values = BTreeMap::new();
-    let references = if kind == ProductRecordKind::QueryHistory {
+    let references = if kind == ProductRecordKind::Activity {
+        let object=value.as_object().expect("object checked above");
+        const ALLOWED:[&str;8]=["id","action","object_type","object_id","object_name","timestamp","user_email","details"];
+        if object.keys().any(|key|!ALLOWED.contains(&key.as_str())) || object.get("id").and_then(serde_json::Value::as_str)!=Some(id) { return Err(RegistryError::Invalid("activity document schema is invalid".into())); }
+        let actor=object.get("user_email").and_then(serde_json::Value::as_str).filter(|v|!v.is_empty()).ok_or_else(||RegistryError::Invalid("activity actor is invalid".into()))?;
+        for field in ["action","object_type","object_id","object_name","timestamp"] { if object.get(field).and_then(serde_json::Value::as_str).is_none_or(|v|v.is_empty()) { return Err(RegistryError::Invalid("activity document is invalid".into())); } }
+        if object.get("details").is_some_and(|v|!v.is_null()&&!v.is_object()) { return Err(RegistryError::Invalid("activity details must be an object".into())); }
+        derived_values.insert("activity_actor".into(),actor.into());BTreeSet::new()
+    } else if kind == ProductRecordKind::QueryHistory {
         let object = value.as_object().expect("object checked above");
         const ALLOWED: [&str; 12] = [
             "id",
@@ -761,6 +771,7 @@ fn product_document(
         ProductRecordKind::Source => "source",
         ProductRecordKind::UserRecent => "user_recent",
         ProductRecordKind::QueryHistory => "query_history",
+        ProductRecordKind::Activity => "activity",
     };
     let path = format!("products/{kind_name}/{id}/{revision}-{sha256}.json");
     Ok((
@@ -1518,6 +1529,16 @@ mod tests {
         assert_eq!(references,BTreeSet::from([ProductRecordReference{kind:ProductRecordKind::Dataset,id:"ds".into()}]));
         assert!(validate_favorite_owner(ProductRecordKind::QueryHistory,"alice",&values).is_ok());
         assert_eq!(validate_favorite_owner(ProductRecordKind::QueryHistory,"bob",&values),Err(RegistryError::Forbidden));
+    }
+
+    #[test]
+    fn activity_is_actor_isolated_and_rejects_unstructured_details() {
+        let (_,_,references,values)=product_document(ProductRecordKind::Activity,"a1",1,
+            r#"{"id":"a1","action":"created","object_type":"catalog_source","object_id":"c1","object_name":"Lake","timestamp":"2026-01-01T00:00:00","user_email":"alice","details":{"storage_type":"adls_gen2"}}"#).unwrap();
+        assert!(references.is_empty());assert_eq!(values["activity_actor"],"alice");
+        assert!(validate_favorite_owner(ProductRecordKind::Activity,"alice",&values).is_ok());
+        assert_eq!(validate_favorite_owner(ProductRecordKind::Activity,"bob",&values),Err(RegistryError::Forbidden));
+        assert!(product_document(ProductRecordKind::Activity,"a1",1,r#"{"id":"a1","action":"created","object_type":"source","object_id":"c1","object_name":"Lake","timestamp":"now","user_email":"alice","details":"raw"}"#).is_err());
     }
 
     #[tokio::test]

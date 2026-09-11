@@ -12,7 +12,7 @@ import database.metadata as db
 
 Operation = Literal["create", "update", "delete"]
 SUPPORTED_FAMILIES = {
-    "datasets", "charts", "dashboards", "saved_queries", "user_themes", "user_recents", "favorites", "catalog_sources", "data_sources", "dlm_definitions",
+    "datasets", "charts", "dashboards", "saved_queries", "user_themes", "user_recents", "favorites", "catalog_sources", "data_sources", "activity", "dlm_definitions",
 }
 MAX_PAYLOAD_BYTES = 16 * 1024 * 1024
 
