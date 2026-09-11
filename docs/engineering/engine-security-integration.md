@@ -161,6 +161,15 @@ its entries and rejects late uploads; ongoing downloads retain their file leases
 until they finish or disconnect. Coordinator restart loses the in-memory index;
 this is worker-failure resilience, not coordinator HA or restart recovery.
 
+At initialization the coordinator reconciles only sibling directories whose
+names exactly match `kaveon-exchange-<UUID>` and whose directory or immutable
+chunk activity is older than the 15-minute exchange TTL. This removes abandoned
+chunks from a prior process without traversing `kaveon-result-*` retention data
+or unrelated files. Recently active directories are preserved for another
+coordinator using the same parent during local operation; an open directory
+that the operating system refuses to remove is left for a later retry. This is
+garbage collection, not recovery of an interrupted query.
+
 `KAVEON_COORDINATOR_EXCHANGE_SPOOL=false` restores worker-hosted memory exchange
 placement. Even in that mode, consumer retries retain the original exchange
 location instead of mistakenly fetching from the new execution worker.
