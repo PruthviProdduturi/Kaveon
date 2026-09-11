@@ -3330,8 +3330,10 @@ def _execute_dataset_query(sql: str, database: str,
     # identifiers come from registered metadata and are restricted to ordinary
     # identifier characters, so normalize those quotes for the native path.
     engine_sql = re.sub(r'"([A-Za-z_][A-Za-z0-9_]*)"', r'\1', sql)
+    # ANALYZE names its relation directly; every other build statement names
+    # it after FROM. Without a schema the Engine resolves against `default`.
     schema_match = re.search(
-        r'\bFROM\s+(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))\s*\.',
+        r'\b(?:FROM|ANALYZE)\s+(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))\s*\.',
         engine_sql,
         re.IGNORECASE,
     )

@@ -59,8 +59,10 @@ METRICS = [
     {"name": "Rows scanned", "expression": "SUM(rows_scanned)", "metric_type": "sum", "format": "#,##0"},
     {"name": "Cache hits", "expression": "SUM(cache_hits)", "metric_type": "sum", "format": "#,##0"},
     {"name": "Average latency (ms)", "expression": "AVG(latency_p75_ms)", "metric_type": "avg", "format": "#,##0"},
-    {"name": "Active users", "expression": "COUNT(DISTINCT user_id)", "metric_type": "distinct_count", "format": "#,##0"},
 ]
+# "Active users" = COUNT(DISTINCT user_id) is deliberately absent: exact distinct
+# over 504M rows OOM-kills the 6 GiB Engine workers today (HANDSHAKE 2026-09-11,
+# REQUEST @Codex). Re-add when that is fixed.
 
 QUESTIONS = [
     "What is current Kaveon usage?",

@@ -33,6 +33,14 @@ class ChartFreshnessTests(unittest.TestCase):
         )
         pool_execute.assert_not_called()
 
+    def test_native_analyze_carries_the_relation_schema(self):
+        with patch.object(engine.meta, "query_one", return_value={"engine_catalog": "OpenSource"}), \
+             patch("services.engine_bridge.execute", return_value={"columns": [], "data": []}) as execute:
+            engine._execute_dataset_query('ANALYZE "kaveon_product"."kaveon_events_enriched"', "OpenSource")
+        execute.assert_called_once_with(
+            "ANALYZE kaveon_product.kaveon_events_enriched", "OpenSource", "kaveon-system", "Admin", "kaveon_product",
+        )
+
     def test_external_catalog_build_queries_keep_database_pool(self):
         expected = {"rows": [[42]]}
         with patch.object(engine.meta, "query_one", return_value=None), \

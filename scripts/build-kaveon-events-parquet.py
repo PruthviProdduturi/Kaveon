@@ -157,7 +157,7 @@ def build_users(output: Path) -> pa.Table:
     users = pa.table(columns)
     dest = output / "kaveon_product" / "kaveon_events_users" / "combined-v1.parquet"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(users, dest, compression="zstd", row_group_size=N_USERS)
+    pq.write_table(users, dest, compression="zstd", row_group_size=N_USERS, store_schema=False)
     return users
 
 
@@ -181,8 +181,11 @@ def build(output: Path) -> None:
 
     dest = output / "kaveon_product" / "kaveon_events_enriched" / "combined-v1.parquet"
     dest.parent.mkdir(parents=True, exist_ok=True)
+    # store_schema=False keeps the Arrow dictionary typing out of the file's
+    # metadata: readers see plain Utf8 from the Parquet logical type, while
+    # the on-disk encoding stays dictionary-compressed.
     writer = pq.ParquetWriter(dest, schema, compression="zstd", use_dictionary=True,
-                              write_statistics=True)
+                              write_statistics=True, store_schema=False)
     total = 0
     t0 = time.time()
     surface_names = {sc: name for sc, name, *_ in SURFACES}
