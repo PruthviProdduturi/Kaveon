@@ -614,6 +614,8 @@ pub enum ProductRecordKind {
     UserRecent,
     QueryHistory,
     Activity,
+    ChatSession,
+    ChatMessage,
 }
 
 impl ProductRecordKind {
@@ -631,6 +633,8 @@ impl ProductRecordKind {
             Self::UserRecent => "user_recent",
             Self::QueryHistory => "query_history",
             Self::Activity => "activity",
+            Self::ChatSession => "chat_session",
+            Self::ChatMessage => "chat_message",
         }
     }
 
@@ -648,6 +652,8 @@ impl ProductRecordKind {
             "user_recent" => Some(Self::UserRecent),
             "query_history" => Some(Self::QueryHistory),
             "activity" => Some(Self::Activity),
+            "chat_session" => Some(Self::ChatSession),
+            "chat_message" => Some(Self::ChatMessage),
             _ => None,
         }
     }
@@ -756,6 +762,8 @@ fn validate_product_record(record: &ProductRecordRef) -> Result<(), ManifestErro
             | ProductRecordKind::UserTheme
             | ProductRecordKind::Source => false,
             ProductRecordKind::Activity => false,
+            ProductRecordKind::ChatSession => false,
+            ProductRecordKind::ChatMessage => reference.kind == ProductRecordKind::ChatSession,
             ProductRecordKind::QueryHistory => matches!(reference.kind, ProductRecordKind::Dataset),
             ProductRecordKind::DlmDefinition => reference.kind == ProductRecordKind::Dataset,
             ProductRecordKind::DlmRun => reference.kind == ProductRecordKind::DlmDefinition,

@@ -139,6 +139,8 @@ fn product_kind(table: &str) -> Result<String> {
         Some("user_recents") => Ok("user_recent".into()),
         Some("query_history") => Ok("query_history".into()),
         Some("activity") => Ok("activity".into()),
+        Some("chat_sessions") => Ok("chat_session".into()),
+        Some("chat_messages") => Ok("chat_message".into()),
         _ => Err(sql_error(
             "row DML is unsupported; target a supported kaveon.product table",
         )),

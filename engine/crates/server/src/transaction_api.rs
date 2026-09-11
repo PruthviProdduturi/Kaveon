@@ -387,6 +387,8 @@ fn validate_favorite_owner(
             && !values["recent_owner_item"].starts_with(&format!("{owner}:")))
         || (kind == ProductRecordKind::QueryHistory && values["query_owner"] != owner)
         || (kind == ProductRecordKind::Activity && values["activity_actor"] != owner)
+        || (kind == ProductRecordKind::ChatSession && values["chat_owner"] != owner)
+        || (kind == ProductRecordKind::ChatMessage && values["chat_owner"] != owner)
     {
         return Err(RegistryError::Forbidden);
     }
@@ -420,6 +422,8 @@ fn record_kind(kind: &str) -> Result<ProductRecordKind, RegistryError> {
         "user_recent" => Ok(ProductRecordKind::UserRecent),
         "query_history" => Ok(ProductRecordKind::QueryHistory),
         "activity" => Ok(ProductRecordKind::Activity),
+        "chat_session" => Ok(ProductRecordKind::ChatSession),
+        "chat_message" => Ok(ProductRecordKind::ChatMessage),
         _ => Err(RegistryError::Invalid(
             "unsupported product record kind".into(),
         )),
@@ -440,7 +444,20 @@ fn product_document(
         ));
     }
     let mut derived_values = BTreeMap::new();
-    let references = if kind == ProductRecordKind::Activity {
+    let references = if matches!(kind,ProductRecordKind::ChatSession|ProductRecordKind::ChatMessage) {
+        let object=value.as_object().expect("object checked above");
+        let owner=object.get("user_email").and_then(serde_json::Value::as_str).filter(|v|!v.is_empty()).ok_or_else(||RegistryError::Invalid("chat owner is invalid".into()))?;
+        if object.get("id").and_then(serde_json::Value::as_str)!=Some(id) { return Err(RegistryError::Invalid("chat record ID is invalid".into())); }
+        derived_values.insert("chat_owner".into(),owner.into());
+        if kind==ProductRecordKind::ChatSession {
+            const ALLOWED:[&str;5]=["id","user_email","title","created_at","updated_at"];
+            if object.keys().any(|k|!ALLOWED.contains(&k.as_str())) || object.get("title").and_then(serde_json::Value::as_str).is_none() { return Err(RegistryError::Invalid("chat session document is invalid".into())); } BTreeSet::new()
+        } else {
+            const ALLOWED:[&str;10]=["id","session_id","user_email","role","content","sql_query","chart_type","data","route","created_at"];
+            if object.keys().any(|k|!ALLOWED.contains(&k.as_str())) || !matches!(object.get("role").and_then(serde_json::Value::as_str),Some("user"|"assistant")) || object.get("content").and_then(serde_json::Value::as_str).is_none() { return Err(RegistryError::Invalid("chat message document is invalid".into())); }
+            let session=object.get("session_id").and_then(serde_json::Value::as_str).filter(|v|!v.is_empty()).ok_or_else(||RegistryError::Invalid("chat session reference is invalid".into()))?;BTreeSet::from([ProductRecordReference{kind:ProductRecordKind::ChatSession,id:session.into()}])
+        }
+    } else if kind == ProductRecordKind::Activity {
         let object=value.as_object().expect("object checked above");
         const ALLOWED:[&str;8]=["id","action","object_type","object_id","object_name","timestamp","user_email","details"];
         if object.keys().any(|key|!ALLOWED.contains(&key.as_str())) || object.get("id").and_then(serde_json::Value::as_str)!=Some(id) { return Err(RegistryError::Invalid("activity document schema is invalid".into())); }
@@ -772,6 +789,8 @@ fn product_document(
         ProductRecordKind::UserRecent => "user_recent",
         ProductRecordKind::QueryHistory => "query_history",
         ProductRecordKind::Activity => "activity",
+        ProductRecordKind::ChatSession => "chat_session",
+        ProductRecordKind::ChatMessage => "chat_message",
     };
     let path = format!("products/{kind_name}/{id}/{revision}-{sha256}.json");
     Ok((

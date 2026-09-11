@@ -21,7 +21,7 @@ family has migrated.
 | `activity` | Catalog-source audit paths | Typed immutable actor-isolated `activity` | Default-off atomic capture, bounded checkpoint/reconciliation and shadow exist; retention, workspace visibility and live evidence remain |
 | `context_snapshots`, `context_answer_cache` | `dlm/profiler.py`, context routes | Rebuilt derived state | Define generation publication and cache retention; rebuild after dataset cutover |
 | `dlm_artifact`, `dlm_value_index`, `dlm_router`, `dlm_answers`, `dlm_sketch` | `dlm/engine.py`, profiler/router and DLM routes | Typed `dlm_definition` for dataset/revision identity; generated state remains rebuilt | Backfill definitions, then publish a complete generated run atomically against that dataset revision; prevent stale routing |
-| `chat_sessions`, `chat_messages` | `routers/chat_history.py`, `routers/chat.py`; created by `data/migrations/chat_history.sql` | No destination | Owner-scoped ordered append, atomic message/session update, encryption and deletion policy |
+| `chat_sessions`, `chat_messages` | `routers/chat_history.py`, `routers/chat.py`; created by `data/migrations/chat_history.sql` | Typed owner-isolated session/message records | Bounded checkpointed backfill, default-off history-router writers/shadow exist; chat response writer, encryption/retention and live evidence remain |
 | `ai_providers`, `user_ai_keys` | `services/ai_service.py`; created at runtime | Key-managed secret boundary plus non-secret references | Keep encrypted keys outside ordinary product documents; define provider metadata authority and rotation references |
 
 The PostgreSQL schema now includes `product_migration_outbox`. It is migration

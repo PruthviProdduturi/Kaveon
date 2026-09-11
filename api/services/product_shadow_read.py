@@ -245,3 +245,15 @@ def observe_activity_list(sources:list[dict])->dict:
         elif target.get("document")==expected:counts["match"]+=1
         else:counts["mismatch"]+=1
     return {"family":"activity","enabled":True,"status":"match" if counts["match"]==len(sources) else "mismatch","source_count":len(sources),**counts}
+
+def observe_chat_session(session:dict,messages:list[dict],owner:str)->dict:
+    if os.getenv("KAVEON_CHAT_HISTORY_SHADOW_READ_ENABLED")!="true":return {"family":"chat_history","enabled":False,"status":"disabled"}
+    if len(messages)>100:return {"family":"chat_history","enabled":True,"status":"skipped_limit","message_count":len(messages)}
+    from services.chat_history_backfill import session_document,message_document
+    expected=[("chat_session",session_document({**session,"user_email":owner}))]+[("chat_message",message_document({**m,"user_email":owner})) for m in messages];counts={"match":0,"missing":0,"mismatch":0}
+    for kind,document in expected:
+        target=product_store.read(kind,document["id"],owner,"Viewer")
+        if target is None:counts["missing"]+=1
+        elif target.get("document")==document:counts["match"]+=1
+        else:counts["mismatch"]+=1
+    return {"family":"chat_history","enabled":True,"status":"match" if counts["match"]==len(expected) else "mismatch","record_count":len(expected),**counts}
