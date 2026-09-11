@@ -397,8 +397,8 @@ export function Sidebar({ children }: SidebarProps) {
       icon: <WorkspaceIcon />,
     },
     {
-      label: "SQL Lab",
-      href: "/lab",
+      label: "Catalog",
+      href: "/catalog",
       icon: <SqlLabIcon />,
     },
   ];
@@ -809,6 +809,7 @@ interface SearchResult {
 const PAGES: SearchResult[] = [
   { id: "p-chat",    label: "New Chat",     href: "/",                  type: "page", icon: "fa-plus" },
   { id: "p-library", label: "Library",      href: "/workspace",         type: "page", icon: "fa-grid-2" },
+  { id: "p-catalog", label: "Catalog",      href: "/catalog",           type: "page", icon: "fa-database" },
   { id: "p-sql",     label: "SQL Lab",      href: "/lab",               type: "page", icon: "fa-code" },
   { id: "p-lineage", label: "Lineage",      href: "/workspace?tab=lineage", type: "page", icon: "fa-project-diagram" },
   { id: "p-ds",      label: "Data Sources", href: "/data-sources",      type: "page", icon: "fa-database" },

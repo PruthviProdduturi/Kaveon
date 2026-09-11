@@ -212,7 +212,12 @@ def tables(catalog, schema, actor, role):
 
 
 def table_columns(catalog, schema, table, actor, role):
-    """Read one table definition through catalog metadata, never through SQL."""
+    """Columns of one table definition, read through catalog metadata, never through SQL."""
+    return table_definition(catalog, schema, table, actor, role)["columns"]
+
+
+def table_definition(catalog, schema, table, actor, role):
+    """One complete table definition: location, access pattern, format, revision, columns."""
     scoped_role = _read_role(role)
     catalogs = _request("GET", "/v1/catalog/definitions", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
                         role=scoped_role) or []
@@ -233,7 +238,6 @@ def table_columns(catalog, schema, table, actor, role):
     definition = next((item for item in definitions if item.get("name") == table), None)
     if not definition:
         raise HTTPException(404, "Engine table definition not found")
-    columns = definition.get("columns")
-    if not isinstance(columns, list):
+    if not isinstance(definition.get("columns"), list):
         raise HTTPException(502, "Engine table definition is invalid")
-    return columns
+    return definition
