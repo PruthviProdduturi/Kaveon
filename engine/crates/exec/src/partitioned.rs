@@ -387,28 +387,46 @@ fn partition_input(
         }
         drop(reservation);
         for runs in &mut partitions {
-            if runs.len() >= MAX_RUNS_PER_PARTITION {
-                // Sequential concatenation has fan-in one and bounded metadata.
-                // Old runs are released as consumed; the replacement is committed
-                // atomically and write errors roll its disk reservation back.
-                let mut source = RunSource::new(Arc::clone(&schema), std::mem::take(runs));
-                let mut batch_memory = None;
-                let batches = std::iter::from_fn(|| {
-                    batch_memory = None;
-                    source.next_batch().transpose().map(|batch| {
-                        let batch = batch?;
-                        batch_memory =
-                            Some(memory.reserve(
-                                (batch.get_array_memory_size() as u64).saturating_mul(2),
-                            )?);
-                        Ok(batch)
-                    })
-                });
-                runs.push(spill.write_run_stream(&schema, batches)?);
-            }
+            compact_spill_runs(runs, &schema, memory, spill)?;
         }
     }
     Ok(partitions)
+}
+
+/// Keeps reader fan-in bounded without repeatedly rewriting a partition's full
+/// history. Merging the two smallest runs gives leveled compaction: old, large
+/// runs are only rewritten after newer runs have grown to a comparable size.
+fn compact_spill_runs(
+    runs: &mut Vec<SpillRun>,
+    schema: &SchemaRef,
+    memory: &OperatorMemoryAccount,
+    spill: &SpillManager,
+) -> Result<()> {
+    while runs.len() >= MAX_RUNS_PER_PARTITION {
+        let mut by_size = runs
+            .iter()
+            .enumerate()
+            .map(|(index, run)| (run.bytes(), index))
+            .collect::<Vec<_>>();
+        by_size.sort_unstable();
+        let mut selected = [by_size[0].1, by_size[1].1];
+        selected.sort_unstable();
+        let right = runs.remove(selected[1]);
+        let left = runs.remove(selected[0]);
+        let mut source = RunSource::new(Arc::clone(schema), vec![left, right]);
+        let mut batch_memory = None;
+        let batches = std::iter::from_fn(|| {
+            batch_memory = None;
+            source.next_batch().transpose().map(|batch| {
+                let batch = batch?;
+                batch_memory =
+                    Some(memory.reserve((batch.get_array_memory_size() as u64).saturating_mul(2))?);
+                Ok(batch)
+            })
+        });
+        runs.push(spill.write_run_stream(schema, batches)?);
+    }
+    Ok(())
 }
 
 /// Spools canonical state batches into independently consumable partitions.
@@ -648,7 +666,6 @@ pub struct PartitionedHashJoin {
     partitions: VecDeque<(Vec<SpillRun>, Vec<SpillRun>)>,
     failed: bool,
     active: Option<HashJoin>,
-    active_prefix_guards: Vec<MemoryReservation>,
     adaptive_bytes: Option<u64>,
 }
 
@@ -706,7 +723,6 @@ impl PartitionedHashJoin {
             partitions: VecDeque::new(),
             failed: false,
             active: None,
-            active_prefix_guards: Vec::new(),
             adaptive_bytes: None,
         })
     }
@@ -717,48 +733,34 @@ impl PartitionedHashJoin {
                 return Ok(Some(batch));
             }
             self.active = None;
-            self.active_prefix_guards.clear();
         }
         if let Some(left) = self.left.take() {
             let limit = self.adaptive_bytes.unwrap_or(adaptive_limit(&self.memory)?) / 2;
-            let mut left_prefix = BufferedPrefix::collect(left, &self.memory, limit)?;
             let right = self
                 .right
                 .take()
                 .expect("right input exists before partitioning");
-            let mut right_prefix = BufferedPrefix::collect(
-                right,
-                &self.memory,
-                if left_prefix.complete { limit } else { 0 },
-            )?;
-            if left_prefix.complete && right_prefix.complete {
-                let trial = (|| {
-                    let mut operator = HashJoin::try_new_qualified_with_memory(
-                        left_prefix.trial(),
-                        right_prefix.trial(),
-                        self.join_type,
-                        self.keys.clone(),
-                        self.left_qualifier.as_deref(),
-                        self.right_qualifier.as_deref(),
-                        self.memory.clone(),
-                    )?;
-                    let batch = operator.next_batch()?;
-                    Ok::<_, KaveonError>((batch, operator))
-                })();
-                match trial {
-                    Ok((batch, operator)) => {
-                        self.active_prefix_guards.append(&mut left_prefix.guards);
-                        self.active_prefix_guards.append(&mut right_prefix.guards);
-                        self.active = Some(operator);
-                        return Ok(batch);
-                    }
-                    Err(KaveonError::MemoryLimit(_)) => {
-                        self.memory.check_cancelled()?;
-                    }
-                    Err(error) => return Err(error),
-                }
+            let right_prefix = BufferedPrefix::collect(right, &self.memory, limit)?;
+            // HashJoin retains only its build side and streams the probe. A
+            // large probe therefore must not force disk partitioning merely
+            // because it exceeds the small adaptive prefix. This was creating
+            // hundreds of Arrow runs for the 5M-row grouped join even though
+            // the 100k-row build side fit comfortably in memory.
+            if right_prefix.complete && streaming_build_fits(&right_prefix, &self.memory)? {
+                let mut operator = HashJoin::try_new_qualified_with_memory(
+                    left,
+                    right_prefix.replay(),
+                    self.join_type,
+                    self.keys.clone(),
+                    self.left_qualifier.as_deref(),
+                    self.right_qualifier.as_deref(),
+                    self.memory.clone(),
+                )?;
+                let batch = operator.next_batch()?;
+                self.active = Some(operator);
+                return Ok(batch);
             }
-            let mut left = left_prefix.replay();
+            let mut left = left;
             let mut right = right_prefix.replay();
             let left_keys = self
                 .keys
@@ -813,6 +815,31 @@ impl PartitionedHashJoin {
     }
 }
 
+fn streaming_build_fits(prefix: &BufferedPrefix, memory: &OperatorMemoryAccount) -> Result<bool> {
+    let (bytes, rows) =
+        prefix
+            .batches
+            .iter()
+            .try_fold((0_u64, 0_u64), |(bytes, rows), batch| {
+                Ok::<_, KaveonError>((
+                    bytes
+                        .checked_add(batch.get_array_memory_size() as u64)
+                        .ok_or_else(|| KaveonError::Execution("join build size overflow".into()))?,
+                    rows.checked_add(batch.num_rows() as u64).ok_or_else(|| {
+                        KaveonError::Execution("join build row count overflow".into())
+                    })?,
+                ))
+            })?;
+    // HashJoin reserves a concatenated build copy plus key/index storage. Keep
+    // half of currently available query memory for probe/output operators.
+    let required = bytes
+        .checked_mul(2)
+        .and_then(|value| value.checked_add(rows.saturating_mul(64)))
+        .ok_or_else(|| KaveonError::Execution("join build estimate overflow".into()))?;
+    let snapshot = memory.query().snapshot();
+    Ok(required <= snapshot.limit_bytes.saturating_sub(snapshot.current_bytes) / 2)
+}
+
 impl BatchOperator for PartitionedHashJoin {
     fn schema(&self) -> &SchemaRef {
         &self.schema
@@ -825,7 +852,6 @@ impl BatchOperator for PartitionedHashJoin {
         if result.is_err() {
             self.failed = true;
             self.active = None;
-            self.active_prefix_guards.clear();
             self.partitions.clear();
             self.left = None;
             self.right = None;
@@ -1064,6 +1090,41 @@ mod tests {
         )
         .unwrap()
     }
+
+    #[test]
+    fn spill_run_compaction_is_size_tiered() {
+        let pool = QueryMemoryPool::new("tiered-compaction", 4 * 1024 * 1024).unwrap();
+        let account = pool.operator("compact").unwrap();
+        let disk = spill();
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+        let mut runs = Vec::new();
+        for start in (0..16_384_i64).step_by(128) {
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int64Array::from_iter_values(start..start + 128))],
+            )
+            .unwrap();
+            runs.push(disk.write_run(&schema, &[batch]).unwrap());
+            compact_spill_runs(&mut runs, &schema, &account, &disk).unwrap();
+            assert!(runs.len() < MAX_RUNS_PER_PARTITION);
+        }
+
+        // Full-history compaction leaves one dominant run and rewrites it every
+        // time the cap is reached. Size-tiered compaction retains balanced levels.
+        let total_bytes = runs.iter().map(SpillRun::bytes).sum::<u64>();
+        let largest = runs.iter().map(SpillRun::bytes).max().unwrap();
+        assert!(largest < total_bytes / 2);
+
+        let mut source = RunSource::new(Arc::clone(&schema), runs);
+        let mut rows = 0;
+        while let Some(batch) = source.next_batch().unwrap() {
+            rows += batch.num_rows();
+        }
+        assert_eq!(rows, 16_384);
+        assert_eq!(disk.snapshot().current_bytes, 0);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
     fn join_rows(operator: &mut dyn BatchOperator) -> Vec<(Option<i64>, Option<i64>)> {
         let mut rows = Vec::new();
         while let Some(batch) = operator.next_batch().unwrap() {
@@ -1122,6 +1183,34 @@ mod tests {
             assert_eq!(spill.snapshot().current_bytes, 0);
             assert_eq!(spill.snapshot().peak_bytes > 0, adaptive_bytes == 0);
         }
+    }
+
+    #[test]
+    fn large_probe_with_small_build_streams_without_spill_run_explosion() {
+        let pool = QueryMemoryPool::new("stream-large-probe", 32 * 1024 * 1024).unwrap();
+        let spill = spill();
+        let mut join = PartitionedHashJoin::new(
+            input(
+                (0..200_000).map(|value| Some(value % 1_000)).collect(),
+                1_000,
+            ),
+            input((0..1_000).map(Some).collect(), 1_000),
+            JoinType::Inner,
+            vec![("id".into(), "id".into())],
+            None,
+            None,
+            pool.operator("join").unwrap(),
+            spill.clone(),
+            16,
+        )
+        .unwrap();
+        let mut rows = 0;
+        while let Some(batch) = join.next_batch().unwrap() {
+            rows += batch.num_rows();
+        }
+        assert_eq!(rows, 200_000);
+        assert_eq!(spill.snapshot().peak_bytes, 0);
+        assert_eq!(pool.snapshot().current_bytes, 0);
     }
 
     #[test]
