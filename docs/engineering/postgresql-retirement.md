@@ -135,6 +135,20 @@ family is unclassified. This is source-code coverage rather than proof that a
 deployment has no older or dynamically constructed authority path; preserve the
 separate live-schema and runtime qualification gates.
 
+Generate the separate exact live-schema artifact from the same deployed API
+image used for migration:
+
+```powershell
+python scripts/inventory-postgresql-authority.py `
+  --output tmp/postgresql-live-authority.json
+```
+
+This command runs in one repeatable-read, read-only transaction and fails on an
+unclassified public table. It contains table names, exact counts, presence,
+family mapping, source-snapshot identity and a report digest; it contains no
+rows or credentials. Archive it with the cutover evidence. A locally generated
+fixture report does not qualify the live AKS schema.
+
 The dataset shadow comparator is disabled by default and covers authenticated
 point reads plus list projections of at most 25 records. Larger lists skip all
 target access. Enabling it emits bounded hashes and aggregate parity status while
