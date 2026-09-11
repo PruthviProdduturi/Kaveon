@@ -416,6 +416,38 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_spill_admission_is_bounded_and_releases_capacity() {
+        // Exercise the same atomic reservation used by Arrow IPC writers. Two
+        // 32-byte writers may be admitted, but a racing third writer must be
+        // rejected until an admitted writer releases its reservation.
+        let root = test_root("concurrent-admission");
+        let manager = SpillManager::new(&root, 64).unwrap();
+        let mut workers = Vec::new();
+        for _ in 0..8 {
+            let manager = manager.clone();
+            workers.push(std::thread::spawn(move || {
+                if manager.inner.reserve(32).is_ok() {
+                    Some(manager)
+                } else {
+                    None
+                }
+            }));
+        }
+        let admitted = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(admitted.len(), 2);
+        assert_eq!(manager.snapshot().current_bytes, 64);
+        for admitted in admitted {
+            admitted.inner.release(32);
+        }
+        assert_eq!(manager.snapshot().current_bytes, 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn reports_corrupt_ipc_without_releasing_the_live_run() {
         let root = test_root("corrupt");
         let manager = SpillManager::new(&root, SPILL_LIMIT).unwrap();
