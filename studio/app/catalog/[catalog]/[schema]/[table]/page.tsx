@@ -73,7 +73,7 @@ export default function CatalogTablePage() {
             {def.format && <span className={s.chip}>{def.format}</span>}
             {def.access === "Shortcut" && <span className={`${s.chip} ${s.chipShortcut}`} title="Read in place from an external location">Shortcut</span>}
             {def.access === "Optimized" && <span className={s.chip} title="Stored in the catalog's own location">Optimized</span>}
-            {loc && <span className={s.chip}><span>on</span>{loc.host.replace(/^[a-z0-9+.-]+:\/\//i, "")}</span>}
+            {loc?.host && <span className={s.chip}><span>on</span>{loc.host.replace(/^[a-z0-9+.-]+:\/\//i, "")}</span>}
           </div>
         </div>
         <div className={s.actions}>
@@ -101,8 +101,8 @@ export default function CatalogTablePage() {
         <div className={s.panelHead}><h2 className={s.panelTitle}>Location</h2>{def.format && <span className={s.panelMeta}>{def.format}{def.access ? ` · ${def.access.toLowerCase()}` : ""}</span>}</div>
         {loc ? (
           <dl className={s.loc}>
-            {loc.host && <><dt>Account</dt><dd>{loc.host}</dd></>}
-            <dt>Path</dt><dd>{loc.path}</dd>
+            {loc.host ? <><dt>Account</dt><dd>{loc.host}</dd><dt>Path</dt><dd>{loc.path}</dd></>
+              : <><dt>Path</dt><dd>{loc.path}</dd><dt /><dd className={s.nullable}>relative to the catalog&rsquo;s storage container</dd></>}
           </dl>
         ) : <div className={s.note}>The definition does not carry a storage location.</div>}
       </section>

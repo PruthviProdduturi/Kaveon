@@ -118,6 +118,12 @@ export function userLabel(q: QueryRecord): string {
   return c.user || c.principal || "Unknown";
 }
 
+/** An address reads as its local part in a narrow column; the full value belongs in a title. */
+export function shortUser(v: string): string {
+  const at = v.indexOf("@");
+  return at > 0 ? v.slice(0, at) : v;
+}
+
 export function bytes(v?: number | null): string {
   if (v == null) return "—";
   if (v < 1024) return `${v} B`;

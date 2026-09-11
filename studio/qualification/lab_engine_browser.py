@@ -46,9 +46,10 @@ with sync_playwright() as p:
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.goto(BASE + "/lab", wait_until="domcontentloaded")
-    source = page.get_by_label("Source")
-    source.wait_for(state="visible", timeout=20_000)
-    source.select_option("kaveon")
+    # With no federated database registered, KaveonDB is the only source and the
+    # Source control is not rendered; the header names KaveonDB directly.
+    page.get_by_role("heading", name="KaveonDB").wait_for(state="visible", timeout=20_000)
+    assert page.get_by_label("Source").count() == 0
     catalog = page.get_by_label("Catalog")
     catalog.wait_for(state="visible", timeout=10_000)
     catalog.select_option("source-1")
@@ -72,4 +73,4 @@ with sync_playwright() as p:
     page.screenshot(path=str(SCREENSHOT), full_page=True)
     browser.close()
 
-print("PASS: Kaveon DB source -> OpenSource catalog -> schema -> table -> SQL Lab query result")
+print("PASS: KaveonDB -> OpenSource catalog -> schema -> table -> SQL Lab query result")

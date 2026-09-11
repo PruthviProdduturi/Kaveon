@@ -6,7 +6,7 @@ import s from "./engine.module.css";
 import {
   Cluster, EngineUnavailable, QueryRecord, QueryState,
   absoluteTime, bytes, clientLabel, errorExcerpt, fetchCluster, fetchQueries,
-  firstLine, ms, relativeTime, uptime, userLabel,
+  firstLine, ms, relativeTime, shortUser, uptime, userLabel,
 } from "./lib";
 
 const POLL_MS = 5000;
@@ -185,7 +185,7 @@ export default function EngineConsolePage() {
                       <span className={s.sql}>{firstLine(q.sql)}</span>
                       {failed && q.error && <span className={s.err}>{errorExcerpt(q.error)}</span>}
                     </span>
-                    <span className={s.who}>{clientLabel(q)} <span>· {userLabel(q)}</span></span>
+                    <span className={s.who} title={userLabel(q)}>{clientLabel(q)} <span>· {shortUser(userLabel(q))}</span></span>
                     <span className={s.dur}>
                       <span className={s.durVal}>{ms(q.elapsed_ms)}</span>
                       <span className={s.bar} aria-hidden="true"><span className={s.barFill} style={{ width: `${pct}%` }} /></span>
@@ -193,7 +193,7 @@ export default function EngineConsolePage() {
                     <span className={s.out}>
                       {running ? <span>running</span>
                         : failed ? <span>—</span>
-                        : <>{q.rows.length.toLocaleString()} <span>{q.rows.length === 1 ? "row" : "rows"}</span>{q.stages.length ? <> <span>· {q.stages.length} st</span></> : null}</>}
+                        : <>{q.rows.length.toLocaleString()} <span>{q.rows.length === 1 ? "row" : "rows"}</span>{q.stages.length ? <> <span>· {q.stages.length} {q.stages.length === 1 ? "stage" : "stages"}</span></> : null}</>}
                     </span>
                   </Link>
                 );
