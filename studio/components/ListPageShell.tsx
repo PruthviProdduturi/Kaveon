@@ -197,7 +197,7 @@ export function ListPageShell({
                 Configure one to get started — it takes about a minute.
               </p>
               <a
-                href="/settings/system"
+                href="/settings/connections"
                 style={{
                   marginTop: 24, display: "inline-flex", alignItems: "center", gap: 8,
                   padding: "0.6rem 1.1rem", borderRadius: 8, textDecoration: "none",

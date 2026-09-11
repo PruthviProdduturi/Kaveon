@@ -1,0 +1,63 @@
+/* Settings — one shell, one card shape. Facts read as facts; actions are buttons. */
+
+.root { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--text-primary); --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace }
+
+.head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 14px }
+.title { margin: 0; font-size: 1.15rem; font-weight: 700; letter-spacing: -.01em }
+.lead { margin: 3px 0 0; font-size: .85rem; color: var(--text-muted) }
+
+.nav { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 18px }
+.navLink { display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 14px; font: 500 13px Inter, sans-serif; color: var(--text-muted); text-decoration: none; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap }
+.navLink:hover { color: var(--text-secondary) }
+.navLink[aria-current="page"] { color: var(--text-primary); border-bottom-color: var(--accent) }
+.navLink i { font-size: 12px; color: var(--text-faint) }
+.navLink[aria-current="page"] i { color: var(--accent) }
+.navGap { flex: 1 }
+.navTag { align-self: center; flex-shrink: 0; margin-right: 4px; font: 500 10.5px Inter, sans-serif; color: var(--text-faint); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px }
+
+.stack { display: flex; flex-direction: column; gap: 14px }
+
+.card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-sm); padding: 18px 20px }
+.cardHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap }
+.cardId { display: flex; align-items: center; gap: 14px; min-width: 0 }
+.mark { width: 42px; height: 42px; border-radius: 11px; flex-shrink: 0; display: grid; place-items: center; background: var(--bg-primary); border: 1px solid var(--border); font-size: 17px; color: var(--text-secondary) }
+.cardTitle { margin: 0; font-size: 15px; font-weight: 700 }
+.cardSub { margin: 2px 0 0; font-size: 12.5px; color: var(--text-muted) }
+.cardSub code { font: 12px var(--mono); color: var(--text-secondary) }
+.status { display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 10px; border-radius: 999px; font: 600 12px Inter, sans-serif; border: 1px solid var(--border); color: var(--text-secondary); background: var(--bg-elevated); white-space: nowrap }
+.statusOn { color: var(--success); border-color: rgba(16, 185, 129, .35) }
+.statusOff { color: var(--text-muted) }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor }
+
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 14px }
+.fact { padding: 10px 12px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 8px; min-width: 0 }
+.factLabel { font-size: 11.5px; color: var(--text-muted); margin-bottom: 2px }
+.factValue { font: 600 13.5px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+
+.cardFoot { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-top: 14px }
+.note { font-size: 12.5px; color: var(--text-muted); line-height: 1.5; max-width: 620px }
+.note b { color: var(--text-primary) }
+
+.row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-top: 1px solid var(--border) }
+.row:first-of-type { border-top: 0; padding-top: 0 }
+.rowLabel { font-size: 13px; font-weight: 600 }
+.rowHelp { font-size: 12px; color: var(--text-muted); margin-top: 2px }
+
+.switch { width: 42px; height: 24px; border-radius: 12px; border: 0; cursor: pointer; position: relative; background: var(--border); transition: background .15s; flex-shrink: 0 }
+.switch[aria-checked="true"] { background: var(--accent) }
+.switch i { position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 9px; background: #fff; transition: left .15s }
+.switch[aria-checked="true"] i { left: 21px }
+
+.progress { height: 6px; background: var(--bg-hover); border: 1px solid var(--border); border-radius: 3px; overflow: hidden; margin-top: 10px }
+.progressFill { display: block; height: 100%; background: var(--accent); transition: width .3s }
+
+.locked { padding: 44px 24px; text-align: center; color: var(--text-muted); background: var(--bg-surface); border: 1px dashed var(--border); border-radius: 12px; font-size: 13px }
+.locked b { display: block; color: var(--text-primary); font-size: 14px; margin-bottom: 4px }
+
+@media (prefers-reduced-motion: reduce) { .root * { transition: none !important } }
+
+.ghost { display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 32px; padding: 0 12px; font: 600 12px Inter, sans-serif; color: var(--text-secondary); text-decoration: none; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px; cursor: pointer }
+.ghost:hover { color: var(--text-primary); border-color: var(--border-hover) }
+.ghost:disabled { opacity: .55; cursor: default }
+.primary { background: var(--accent); border-color: var(--accent); color: #fff }
+.primary:hover { color: #fff; background: var(--accent-dark) }
