@@ -2311,12 +2311,15 @@ async fn optimize_with_durable_statistics(
     plan: LogicalPlan,
     catalog: &crate::PublishedCatalog,
 ) -> LogicalPlan {
+    let mut tables = std::collections::BTreeSet::new();
+    collect_join_statistics_tables(&plan, &mut tables);
+    if tables.is_empty() {
+        return plan;
+    }
     let durable = match state.product_transactions.catalog() {
         Some(commit) => commit.read_current().await.ok(),
         None => None,
     };
-    let mut tables = std::collections::BTreeSet::new();
-    collect_join_statistics_tables(&plan, &mut tables);
     let mut loads = tokio::task::JoinSet::new();
     for table in tables {
         let Ok(resolved) = catalog.resolve_table(&kaveon_core::TableReference::parse(&table))
