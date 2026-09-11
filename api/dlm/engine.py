@@ -944,6 +944,14 @@ def _qid(x: str) -> str:
     return '"' + str(x).replace('"', '""') + '"'
 
 
+# Every build-time query is bounded: a build that cannot finish inside the
+# bound falls back (pg_stats sample, no value index, no precomputed answer)
+# instead of holding a connection for hours. Distinct scans get a tighter
+# bound because there is one per dimension.
+_BUILD_QUERY_TIMEOUT_SECONDS = 300
+_SCAN_TIMEOUT_SECONDS = 120
+
+
 def _scan_distinct(database: str, schema: str, table: str, column: str,
                    cap: int) -> Optional[List[tuple]]:
     """Bounded generate-time distinct scan for a column whose table has no
@@ -956,7 +964,7 @@ def _scan_distinct(database: str, schema: str, table: str, column: str,
     sql = (f"SELECT {qcol} AS v, COUNT(*) AS c FROM {tbl} "
            f"WHERE {qcol} IS NOT NULL GROUP BY {qcol} ORDER BY c DESC LIMIT {int(cap) + 1}")
     try:
-        res = _execute_dataset_query(sql, database)
+        res = _execute_dataset_query(sql, database, timeout_seconds=_SCAN_TIMEOUT_SECONDS)
     except Exception:
         return None
     rows = res.get("rows_objects", res.get("rows", []))
@@ -1644,10 +1652,12 @@ def _dataset_year_bounds(dataset_id: str) -> tuple:
 # freshness scoring + background auto-rebuild                                  #
 # --------------------------------------------------------------------------- #
 
-# Tracks in-flight rebuilds: dataset_id -> timestamp when the rebuild started.
-# Prevents concurrent rebuilds of the same dataset and acts as a cooldown so a
-# stale dataset doesn't spam rebuilds on every request.
-_REBUILD_IN_PROGRESS: Dict[str, float] = {}
+# Rebuild guard. A dataset in _REBUILD_ACTIVE has a build running right now
+# and never gets a second one stacked on top; _REBUILD_COMPLETED_AT starts the
+# cooldown from the moment the last build finished, so a slow build cannot be
+# re-triggered by the sweep while it is still scanning.
+_REBUILD_ACTIVE: set = set()
+_REBUILD_COMPLETED_AT: Dict[str, float] = {}
 _REBUILD_LOCK = threading.Lock()
 
 # Minimum seconds between rebuild attempts for the same dataset. Prevents
@@ -1726,15 +1736,19 @@ def check_freshness(dataset_id: str) -> Dict[str, Any]:
         except Exception:
             pass
 
+    # Age lowers confidence in the score; only a measured change in the data
+    # can make context stale. A table nobody has written to is answered from
+    # context however old the build is — rebuilding it on a timer is a full
+    # scan for nothing, and on a small server it is a full scan that never ends.
     score = round(t_factor * c_factor, 4)
-    fresh = score >= _STALE_THRESHOLD
+    fresh = (not data_modified) or score >= _STALE_THRESHOLD
 
-    if score >= 0.7:
-        recommendation = "use_context"
-    elif art.get("status") == "ready":
-        recommendation = "rebuild"
-    else:
+    if art.get("status") != "ready":
         recommendation = "no_context"
+    elif fresh:
+        recommendation = "use_context"
+    else:
+        recommendation = "rebuild"
 
     return {
         "fresh": fresh,
@@ -1751,10 +1765,12 @@ def _trigger_background_rebuild(dataset_id: str) -> bool:
     started, False if skipped (cooldown / already running)."""
     now = _time_mod.time()
     with _REBUILD_LOCK:
-        last = _REBUILD_IN_PROGRESS.get(dataset_id)
+        if dataset_id in _REBUILD_ACTIVE:
+            return False
+        last = _REBUILD_COMPLETED_AT.get(dataset_id)
         if last is not None and (now - last) < _REBUILD_COOLDOWN_SECONDS:
             return False
-        _REBUILD_IN_PROGRESS[dataset_id] = now
+        _REBUILD_ACTIVE.add(dataset_id)
 
     def _do_rebuild():
         try:
@@ -1764,9 +1780,9 @@ def _trigger_background_rebuild(dataset_id: str) -> bool:
         except Exception:
             logger.exception("Auto-rebuild failed for dataset %s", dataset_id)
         finally:
-            # Update timestamp so cooldown runs from completion, not start.
             with _REBUILD_LOCK:
-                _REBUILD_IN_PROGRESS[dataset_id] = _time_mod.time()
+                _REBUILD_COMPLETED_AT[dataset_id] = _time_mod.time()
+                _REBUILD_ACTIVE.discard(dataset_id)
 
     threading.Thread(target=_do_rebuild, daemon=True, name=f"dlm-rebuild-{dataset_id}").start()
     return True
@@ -3286,12 +3302,14 @@ def _metadata_database() -> str:
         return os.environ.get("METADATA_DATABASE", "")
 
 
-def _execute_dataset_query(sql: str, database: str) -> Dict[str, Any]:
+def _execute_dataset_query(sql: str, database: str,
+                           timeout_seconds: Optional[float] = None) -> Dict[str, Any]:
     """Execute DLM build SQL through the dataset's registered query plane.
 
     Native Kaveon catalogs are served by the Engine HTTP bridge and do not have
     a database.pool connection string. External SQL sources continue through
-    the existing connection pool.
+    the existing connection pool, bounded by `timeout_seconds` (default: the
+    build bound) so one table cannot monopolise a shared server.
     """
     source = meta.query_one(
         "SELECT engine_catalog FROM catalog_sources "
@@ -3299,7 +3317,8 @@ def _execute_dataset_query(sql: str, database: str) -> Dict[str, Any]:
         [database],
     )
     if not source:
-        return pool.execute_query(sql, database)
+        return pool.execute_query(sql, database,
+                                  timeout_seconds=timeout_seconds or _BUILD_QUERY_TIMEOUT_SECONDS)
 
     from services.engine_bridge import execute
     # Engine sessions require a schema even when the table reference itself is

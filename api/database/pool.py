@@ -16,6 +16,7 @@ import os
 import re
 import struct
 import json
+import math
 import time
 import pyodbc
 from datetime import datetime, date
@@ -957,20 +958,48 @@ def _resolve_endpoint(database: str) -> str:
             meta_pool.return_connection(conn)
 
 
-def execute_query(sql: str, database: str, params: Optional[list] = None) -> Dict[str, Any]:
+def _bound_statement(sql: str, db_type: str, timeout_seconds: float) -> str:
+    """Attach a per-statement execution bound in the dialect's own idiom.
+    PostgreSQL: SET LOCAL inside the implicit transaction of one multi-statement
+    message, so the pooled session's default is untouched. MySQL: the optimizer
+    hint on the leading SELECT. SQL Server has no statement idiom; the driver
+    timeout is set around the call instead (see execute_query)."""
+    ms = max(1, int(round(timeout_seconds * 1000)))
+    if db_type == "postgresql":
+        return f"SET LOCAL statement_timeout = {ms}; {sql}"
+    if db_type == "mysql":
+        return re.sub(r"^(\s*select\b)", rf"\1 /*+ MAX_EXECUTION_TIME({ms}) */", sql, count=1, flags=re.I)
+    return sql
+
+
+def execute_query(sql: str, database: str, params: Optional[list] = None,
+                  timeout_seconds: Optional[float] = None) -> Dict[str, Any]:
     """
     Execute *sql* against *database* using the connection pool.
     Retries up to 3 attempts on stale-connection errors (08S01 / 10054), with a
     small backoff between attempts. Non-connection errors (e.g. SQL syntax) fail fast.
+    `timeout_seconds` bounds the statement on the server (or the driver, for
+    SQL Server); a bounded statement that runs over raises like any other error.
     """
     pool = get_connection_pool(database)
     # Translate T-SQL idioms when the target is Postgres/MySQL (idempotent).
     sql = adapt_sql(sql, pool.db_type)
+    if timeout_seconds:
+        sql = _bound_statement(sql, pool.db_type, timeout_seconds)
+    driver_bound = bool(timeout_seconds) and pool.db_type in ("fabric_sql", "azure_sql")
     max_attempts = 3
     for attempt in range(max_attempts):
         conn = pool.get_connection()
         try:
-            result = conn.execute_query(sql, params)
+            driver = getattr(conn, "connection", None) if driver_bound else None
+            previous_timeout = getattr(driver, "timeout", None) if driver is not None else None
+            if driver is not None:
+                driver.timeout = int(math.ceil(timeout_seconds))
+            try:
+                result = conn.execute_query(sql, params)
+            finally:
+                if driver is not None:
+                    driver.timeout = previous_timeout
             pool.return_connection(conn)
             return result
         except Exception as e:
