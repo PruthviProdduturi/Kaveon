@@ -73,6 +73,14 @@ payload hashes at a recorded source sequence. Cutover additionally requires a
 write fence, zero outbox lag, role-filtered shadow-read parity, restart and
 backup/restore evidence, and a tested rollback window.
 
+`scripts/inventory-postgresql-authority.py` now produces that live-schema
+report from one repeatable-read, read-only PostgreSQL snapshot. It enumerates
+public base tables, fails before counting when any table is outside the 16-family
+manifest and migration-infrastructure allowlist, records exact counts for
+present authority tables, marks maintained but absent tables explicitly, and
+binds the content-free report to SHA-256. The command has not yet run from the
+deployed API image, so checked-in code is not live-schema evidence.
+
 The credential-free parity gate in
 `scripts/audit-postgresql-retirement.py` maps every table above into 16 explicit
 authority families. Its checked-in manifest is the minimum coverage set: an

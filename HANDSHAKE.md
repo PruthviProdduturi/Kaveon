@@ -1455,6 +1455,12 @@ let source = DeltaTableReader::new(table_directory)
 - Verified `deletionPolicy=Retain` and `incremental=true`; no database snapshot has been taken yet.
 - The restore-point snapshot must wait for a write fence and PostgreSQL checkpoint immediately before migration rehearsal.
 
+## 2026-09-11 — Live PostgreSQL authority discovery
+
+- Added a repeatable-read, read-only inventory command that rejects any unclassified public table before counting records.
+- The report includes all maintained authority tables, explicit absence, exact counts, source-snapshot identity and SHA-256, with no rows or credentials.
+- Focused inventory, dependency and retirement-gate validation passes 17 tests; live execution awaits the deployed migration image.
+
 # 2026-09-11 — Saved-query PostgreSQL migration boundary
 
 - Saved-query create/update/delete now commit their canonical migration outbox event in the same PostgreSQL transaction.
