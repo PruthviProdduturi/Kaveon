@@ -62,6 +62,27 @@ pub struct RuntimeTableSourceRef {
     pub source_identity_sha256: String,
 }
 
+/// Small typed row representation used by the catalog transaction prototype.
+/// Values are intentionally bounded scalar values; larger payloads belong in
+/// immutable table objects referenced by a future mutation writer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum TypedValue {
+    Null,
+    Boolean(bool),
+    Integer(i64),
+    String(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypedRow {
+    pub primary_key: String,
+    pub revision: u64,
+    pub columns: BTreeMap<String, TypedValue>,
+    #[serde(default)]
+    pub unique_keys: BTreeMap<String, String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogSnapshot {
     pub version: u32,
@@ -81,6 +102,9 @@ pub struct CatalogSnapshot {
     pub control_records: BTreeMap<String, ImmutableFileRef>,
     #[serde(default)]
     pub product_records: BTreeMap<String, ProductRecordRef>,
+    /// Revisioned typed rows owned by the same immutable catalog snapshot.
+    #[serde(default)]
+    pub typed_rows: BTreeMap<String, BTreeMap<String, TypedRow>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,6 +145,20 @@ pub enum CatalogChange {
     DeleteProduct {
         kind: ProductRecordKind,
         id: String,
+        expected_revision: u64,
+    },
+    InsertTypedRow {
+        table: String,
+        row: TypedRow,
+    },
+    UpdateTypedRow {
+        table: String,
+        expected_revision: u64,
+        row: TypedRow,
+    },
+    DeleteTypedRow {
+        table: String,
+        primary_key: String,
         expected_revision: u64,
     },
 }
@@ -164,6 +202,7 @@ impl CatalogSnapshot {
             table_statistics: BTreeMap::new(),
             control_records: BTreeMap::new(),
             product_records: BTreeMap::new(),
+            typed_rows: BTreeMap::new(),
         })
     }
 
@@ -267,6 +306,7 @@ impl CatalogSnapshot {
         let mut table_statistics = self.table_statistics.clone();
         let mut control_records = self.control_records.clone();
         let mut product_records = self.product_records.clone();
+        let mut typed_rows = self.typed_rows.clone();
         for change in request.changes {
             match change {
                 CatalogChange::Put { table, reference } => {
@@ -347,6 +387,54 @@ impl CatalogSnapshot {
                     }
                     product_records.remove(&key);
                 }
+                CatalogChange::InsertTypedRow { table, row } => {
+                    let rows = typed_rows.entry(table).or_default();
+                    if rows.contains_key(&row.primary_key) {
+                        return Err(error("typed row primary key already exists"));
+                    }
+                    if row.revision != 1 {
+                        return Err(error("new typed row revision must be one"));
+                    }
+                    rows.insert(row.primary_key.clone(), row);
+                }
+                CatalogChange::UpdateTypedRow {
+                    table,
+                    expected_revision,
+                    row,
+                } => {
+                    let rows = typed_rows
+                        .get_mut(&table)
+                        .ok_or_else(|| error("typed row table does not exist"))?;
+                    let current = rows
+                        .get(&row.primary_key)
+                        .ok_or_else(|| error("typed row primary key does not exist"))?;
+                    if current.revision != expected_revision {
+                        return Err(error("stale typed row revision"));
+                    }
+                    let next_revision = expected_revision
+                        .checked_add(1)
+                        .ok_or_else(|| error("typed row revision overflow"))?;
+                    if row.revision != next_revision {
+                        return Err(error("typed row revision must advance by one"));
+                    }
+                    rows.insert(row.primary_key.clone(), row);
+                }
+                CatalogChange::DeleteTypedRow {
+                    table,
+                    primary_key,
+                    expected_revision,
+                } => {
+                    let rows = typed_rows
+                        .get_mut(&table)
+                        .ok_or_else(|| error("typed row table does not exist"))?;
+                    let current = rows
+                        .get(&primary_key)
+                        .ok_or_else(|| error("typed row primary key does not exist"))?;
+                    if current.revision != expected_revision {
+                        return Err(error("stale typed row revision"));
+                    }
+                    rows.remove(&primary_key);
+                }
             }
         }
         if tables.len() > MAX_TABLES {
@@ -356,6 +444,7 @@ impl CatalogSnapshot {
             return Err(error("snapshot control-record limit exceeded"));
         }
         validate_product_records(&product_records)?;
+        validate_typed_rows(&typed_rows)?;
         let generation = self
             .generation
             .checked_add(1)
@@ -372,6 +461,7 @@ impl CatalogSnapshot {
             table_statistics,
             control_records,
             product_records,
+            typed_rows,
         };
         next.validate()?;
         Ok(next)
@@ -391,6 +481,7 @@ impl CatalogSnapshot {
             return Err(error("snapshot control-record limit exceeded"));
         }
         validate_product_records(&self.product_records)?;
+        validate_typed_rows(&self.typed_rows)?;
         for (table, reference) in &self.tables {
             validate_table_name(table)?;
             validate_table_reference(reference)?;
@@ -445,6 +536,7 @@ fn validate_request(request: &PrepareChange) -> Result<(), ManifestError> {
     let mut statistics_names = BTreeSet::new();
     let mut control_keys = BTreeSet::new();
     let mut product_keys = BTreeSet::new();
+    let mut typed_keys = BTreeSet::new();
     for change in &request.changes {
         match change {
             CatalogChange::Put { table, reference } => {
@@ -520,6 +612,28 @@ fn validate_request(request: &PrepareChange) -> Result<(), ManifestError> {
                 if !product_keys.insert(key.clone()) {
                     return Err(error(format!(
                         "product record '{key}' is changed more than once"
+                    )));
+                }
+            }
+            CatalogChange::InsertTypedRow { table, row }
+            | CatalogChange::UpdateTypedRow { table, row, .. } => {
+                validate_table_name(table)?;
+                validate_typed_row(row)?;
+                if !typed_keys.insert((table.as_str(), row.primary_key.as_str())) {
+                    return Err(error(format!(
+                        "typed row '{table}.{}' is changed more than once",
+                        row.primary_key
+                    )));
+                }
+            }
+            CatalogChange::DeleteTypedRow {
+                table, primary_key, ..
+            } => {
+                validate_table_name(table)?;
+                validate_identifier("typed row primary key", primary_key)?;
+                if !typed_keys.insert((table.as_str(), primary_key.as_str())) {
+                    return Err(error(format!(
+                        "typed row '{table}.{primary_key}' is changed more than once"
                     )));
                 }
             }
@@ -916,6 +1030,61 @@ fn validate_product_records(
     Ok(())
 }
 
+fn validate_typed_rows(
+    tables: &BTreeMap<String, BTreeMap<String, TypedRow>>,
+) -> Result<(), ManifestError> {
+    if tables.len() > MAX_TABLES {
+        return Err(error("typed row table limit exceeded"));
+    }
+    for (table, rows) in tables {
+        validate_table_name(table)?;
+        if rows.len() > MAX_PRODUCT_RECORDS {
+            return Err(error("typed row table limit exceeded"));
+        }
+        let mut unique = BTreeSet::new();
+        for (primary_key, row) in rows {
+            if primary_key != &row.primary_key {
+                return Err(error("typed row map key does not match its primary key"));
+            }
+            validate_typed_row(row)?;
+            for (index, value) in &row.unique_keys {
+                if !unique.insert((index.as_str(), value.as_str())) {
+                    return Err(error(format!(
+                        "duplicate typed row unique index '{index}' value"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_typed_row(row: &TypedRow) -> Result<(), ManifestError> {
+    validate_identifier("typed row primary key", &row.primary_key)?;
+    if row.revision == 0 {
+        return Err(error("typed row revision must be positive"));
+    }
+    if row.columns.len() > 256 {
+        return Err(error("typed row column limit exceeded"));
+    }
+    for (name, value) in &row.columns {
+        validate_identifier("typed row column", name)?;
+        if let TypedValue::String(value) = value {
+            if value.len() > 16 * 1024 * 1024 {
+                return Err(error("typed row string value exceeds limit"));
+            }
+        }
+    }
+    if row.unique_keys.len() > MAX_UNIQUE_VALUES_PER_PRODUCT_RECORD {
+        return Err(error("typed row unique-index limit exceeded"));
+    }
+    for (name, value) in &row.unique_keys {
+        validate_identifier("typed row unique index", name)?;
+        validate_identifier("typed row unique value", value)?;
+    }
+    Ok(())
+}
+
 fn validate_identifier(kind: &str, value: &str) -> Result<(), ManifestError> {
     if value.is_empty() || value.len() > 128 || value.chars().any(char::is_control) {
         return Err(error(format!("{kind} is invalid")));
@@ -996,6 +1165,17 @@ mod tests {
             id: id.into(),
         }
     }
+    fn typed_row(id: &str, revision: u64, email: &str) -> TypedRow {
+        TypedRow {
+            primary_key: id.into(),
+            revision,
+            columns: BTreeMap::from([
+                ("email".into(), TypedValue::String(email.into())),
+                ("active".into(), TypedValue::Boolean(true)),
+            ]),
+            unique_keys: BTreeMap::from([("email".into(), email.into())]),
+        }
+    }
     fn change(
         base: SnapshotRef,
         id: &str,
@@ -1034,6 +1214,72 @@ mod tests {
         assert_eq!(next.generation, 1);
         assert_eq!(next.parent, Some(base.reference()));
         assert_eq!(next.tables.len(), 2);
+    }
+
+    #[test]
+    fn typed_rows_insert_update_delete_atomically_enforce_keys_and_revisions() {
+        let base = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        let inserted = base
+            .prepare(change(
+                base.reference(),
+                "typed-insert",
+                DIGEST,
+                vec![CatalogChange::InsertTypedRow {
+                    table: "app.users".into(),
+                    row: typed_row("u-1", 1, "ada@example.com"),
+                }],
+            ))
+            .unwrap();
+        assert_eq!(inserted.typed_rows["app.users"]["u-1"].revision, 1);
+
+        let updated = inserted
+            .prepare(change(
+                inserted.reference(),
+                "typed-update",
+                DIGEST,
+                vec![CatalogChange::UpdateTypedRow {
+                    table: "app.users".into(),
+                    expected_revision: 1,
+                    row: typed_row("u-1", 2, "grace@example.com"),
+                }],
+            ))
+            .unwrap();
+        assert_eq!(
+            updated.typed_rows["app.users"]["u-1"].unique_keys["email"],
+            "grace@example.com"
+        );
+
+        let deleted = updated
+            .prepare(change(
+                updated.reference(),
+                "typed-delete",
+                DIGEST,
+                vec![CatalogChange::DeleteTypedRow {
+                    table: "app.users".into(),
+                    primary_key: "u-1".into(),
+                    expected_revision: 2,
+                }],
+            ))
+            .unwrap();
+        assert!(deleted.typed_rows["app.users"].is_empty());
+
+        let duplicate = base.prepare(change(
+            base.reference(),
+            "typed-duplicate",
+            DIGEST,
+            vec![
+                CatalogChange::InsertTypedRow {
+                    table: "app.users".into(),
+                    row: typed_row("u-1", 1, "same@example.com"),
+                },
+                CatalogChange::InsertTypedRow {
+                    table: "app.users".into(),
+                    row: typed_row("u-2", 1, "same@example.com"),
+                },
+            ],
+        ));
+        assert!(duplicate.is_err());
+        assert!(base.typed_rows.is_empty());
     }
 
     #[test]
