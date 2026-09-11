@@ -1445,6 +1445,7 @@ let source = DeltaTableReader::new(table_directory)
 
 - The AKS API Deployment now waits for the required non-null product-outbox owner column before starting.
 - This closes the race where an upgraded API could accept an atomic migration write before the schema Job created its outbox table.
+- The schema Job is an ordinary resource on initial install and a delete-after-success `pre-upgrade` hook thereafter, avoiding both fresh-install dependency deadlock and immutable Job upgrade failures.
 - Render-only validation passed with the AKS Helm binary; no cluster resources were applied.
 - The live outbox table remains absent, so PostgreSQL migration writers are not ready to deploy yet.
 
