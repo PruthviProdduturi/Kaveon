@@ -447,6 +447,34 @@ mod tests {
     }
 
     #[test]
+    fn accepts_semicolon_terminated_single_transaction_statements() {
+        for sql in [
+            "BEGIN;",
+            "COMMIT;",
+            "ROLLBACK;",
+            "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}');",
+            "UPDATE product.datasets SET document_json = '{}' WHERE id = 'ds-1' AND revision = 1;",
+            "DELETE FROM product.datasets WHERE id = 'ds-1' AND revision = 1;",
+        ] {
+            assert!(
+                parse_native_transactional(sql).is_ok(),
+                "expected supported single statement: {sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn product_adapter_rejects_unbound_parameter_values() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "INSERT INTO product.datasets (id, document_json) VALUES ($1, $2)",
+        )
+        .unwrap() else {
+            panic!("expected product DML")
+        };
+        assert!(adapt_product_dml(&dml).is_err());
+    }
+
+    #[test]
     fn adapts_only_exact_product_record_dml() {
         let parsed = parse_native_transactional(
             "INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('ds-1', '{\"name\":\"Orders\"}')",
