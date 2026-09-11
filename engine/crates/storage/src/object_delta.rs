@@ -5,9 +5,12 @@ use crate::{
     object_reader::error,
 };
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
+use futures::{StreamExt, stream};
 use kaveon_core::{BatchSource, Result, StoragePredicate};
 use object_store::{ObjectStore, path::Path};
 use std::sync::Arc;
+
+const METADATA_READ_CONCURRENCY: usize = 16;
 
 pub struct ObjectDeltaReader {
     location: ObjectLocation,
@@ -59,6 +62,17 @@ impl ObjectDeltaReader {
     }
     pub fn metadata(&self) -> Result<ParquetFileMetadata> {
         let snapshot = self.snapshot()?;
+        self.metadata_for_snapshot(snapshot)
+    }
+
+    /// Reads exact file statistics for an already resolved immutable snapshot.
+    /// Reusing the snapshot prevents a second transaction-log traversal and
+    /// bounded concurrency avoids one network round trip per active file in
+    /// series without allowing large tables to create unbounded requests.
+    pub(crate) fn metadata_for_snapshot(
+        &self,
+        snapshot: DeltaSnapshot,
+    ) -> Result<ParquetFileMetadata> {
         if snapshot.files.is_empty() {
             return Ok(ParquetFileMetadata {
                 schema: snapshot
@@ -68,34 +82,36 @@ impl ObjectDeltaReader {
                 row_group_count: 0,
             });
         }
-        let first = snapshot
-            .files
-            .first()
-            .cloned()
-            .ok_or_else(|| error("Delta snapshot has no active files"))?;
         let store = self.location.store.clone();
         blocking(async move {
-            let mut metadata = ObjectParquetReader::new(store.clone(), first)
-                .metadata()
-                .await?;
-            for path in snapshot.files.into_iter().skip(1) {
-                let next = ObjectParquetReader::new(store.clone(), path)
-                    .metadata()
-                    .await?;
-                if next.schema != metadata.schema {
+            let mut metadata = stream::iter(snapshot.files.into_iter().map(|path| {
+                let store = store.clone();
+                async move { ObjectParquetReader::new(store, path).metadata().await }
+            }))
+            .buffered(METADATA_READ_CONCURRENCY);
+            let mut combined = metadata
+                .next()
+                .await
+                .ok_or_else(|| error("Delta snapshot has no active files"))??;
+            while let Some(next) = metadata.next().await {
+                let next = next?;
+                if next.schema != combined.schema {
                     return Err(error("Delta snapshot has incompatible physical schemas"));
                 }
-                metadata.row_count = metadata
+                combined.row_count = combined
                     .row_count
                     .checked_add(next.row_count)
                     .ok_or_else(|| error("Delta row count overflow"))?;
-                metadata.row_group_count += next.row_group_count;
+                combined.row_group_count = combined
+                    .row_group_count
+                    .checked_add(next.row_group_count)
+                    .ok_or_else(|| error("Delta row-group count overflow"))?;
             }
             if let Some(schema) = snapshot.schema {
-                crate::delta_snapshot::validate_physical_schema(&schema, &metadata.schema)?;
-                metadata.schema = schema;
+                crate::delta_snapshot::validate_physical_schema(&schema, &combined.schema)?;
+                combined.schema = schema;
             }
-            Ok(metadata)
+            Ok(combined)
         })
     }
     pub fn read_blocking(self) -> Result<ObjectDeltaSource> {
@@ -261,7 +277,7 @@ mod tests {
         for (name, values) in [
             ("one", vec![1, 2]),
             ("two", vec![3, 4]),
-            ("three", vec![5, 6]),
+            ("three", vec![5, 6, 7]),
         ] {
             let batch =
                 RecordBatch::try_new(schema.clone(), vec![Arc::new(Int64Array::from(values))])
@@ -286,11 +302,24 @@ mod tests {
                 ),
             )
             .unwrap();
-        let version = ObjectDeltaReader::new(store.clone(), Path::from("table"))
-            .snapshot()
-            .unwrap()
-            .version;
+        let pinned_reader = ObjectDeltaReader::new(store.clone(), Path::from("table"));
+        let pinned_snapshot = pinned_reader.snapshot().unwrap();
+        let version = pinned_snapshot.version;
         runtime.block_on(store.put(&Path::from("table/_delta_log/00000000000000000001.json"), b"{\"remove\":{\"path\":\"one.parquet\"}}\n{\"add\":{\"path\":\"three.parquet\"}}".to_vec().into())).unwrap();
+        assert_eq!(
+            pinned_reader
+                .metadata_for_snapshot(pinned_snapshot)
+                .unwrap()
+                .row_count,
+            4
+        );
+        assert_eq!(
+            ObjectDeltaReader::new(store.clone(), Path::from("table"))
+                .metadata()
+                .unwrap()
+                .row_count,
+            5
+        );
         let mut values = Vec::new();
         for partition in 0..3 {
             let mut source = ObjectDeltaReader::new(store.clone(), Path::from("table"))
