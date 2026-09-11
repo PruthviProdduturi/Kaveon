@@ -87,6 +87,16 @@ latency from 0.994 s to 1.127 s, and regressed DISTINCT from 0.365 s to 0.691 s.
 The runtime path and AKS chart defaults were reverted. Accepted source `e56aece`
 and digest `sha256:270d39a...` remain the performance checkpoint.
 
+ADLS Parquet opens now revalidate the object path with `HEAD` every time and
+require an ETag or object version before any footer or decoded-batch reuse.
+Parquet footer metadata is cached under the exact account, container, path,
+size, timestamp, ETag and version identity, bounded to 256 entries, and cold
+loads for the same identity are single-flight. An in-place replacement selects
+a different footer and decoded-batch cache key; a replacement during a pinned
+read fails its conditional range request. Storage tests cover warm reuse,
+replacement invalidation, old-reader failure and rejection of unversioned
+objects. No AKS image or throughput measurement includes this change yet.
+
 ## Continuation point
 
 Complete the current round in this order:
