@@ -45,6 +45,28 @@ static DECODED_BATCH_CACHE: OnceLock<Mutex<HashMap<String, Arc<DecodedBatchEntry
 static OBJECT_METADATA_CACHE: OnceLock<Mutex<HashMap<String, object_store::ObjectMeta>>> =
     OnceLock::new();
 static OBJECT_STORE_CACHE: OnceLock<Mutex<HashMap<String, Arc<dyn ObjectStore>>>> = OnceLock::new();
+static METADATA_LOAD_LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    OnceLock::new();
+static METADATA_OVERFLOW_LOCK: OnceLock<Arc<tokio::sync::Mutex<()>>> = OnceLock::new();
+
+fn metadata_load_lock(key: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let mut locks = METADATA_LOAD_LOCKS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if locks.len() >= MAX_METADATA_CACHE_ENTRIES && !locks.contains_key(key) {
+        locks.retain(|_, lock| Arc::strong_count(lock) > 1);
+        if locks.len() >= MAX_METADATA_CACHE_ENTRIES {
+            return METADATA_OVERFLOW_LOCK
+                .get_or_init(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone();
+        }
+    }
+    locks
+        .entry(key.to_owned())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+}
 
 fn cached_object_store(key: &str) -> Option<Arc<dyn ObjectStore>> {
     OBJECT_STORE_CACHE
@@ -622,29 +644,50 @@ impl AdlsParquetReader {
             Path::parse(&self.object_path).map_err(|error| storage_error(error.to_string()))?;
         let footer_started = Instant::now();
         let cache_key = format!("{}/{}/{}", self.account, self.container, self.object_path);
-        let object_metadata = match cached_object_metadata(&cache_key) {
-            Some(metadata) => {
+        // A query can schedule several fragments for the same object at once.
+        // Single-flight the first HEAD + footer load so a cold process performs
+        // one remote initialization rather than one per fragment. Recheck both
+        // caches after acquiring the lock because another fragment may have
+        // populated them while this one was waiting.
+        let cached_pair = cached_object_metadata(&cache_key).and_then(|object_metadata| {
+            let identity = object_identity(&object_metadata);
+            cached_metadata(&cache_key, &identity)
+                .map(|metadata| (object_metadata, identity, metadata))
+        });
+        let (object_metadata, identity, metadata) = match cached_pair {
+            Some(pair) => {
                 metrics.object_metadata_cache_hit();
-                metadata
+                pair
             }
             None => {
-                let metadata = store.head(&path).await.map_err(object_store_error)?;
-                cache_object_metadata(cache_key.clone(), metadata.clone());
-                metadata
-            }
-        };
-        let identity = object_identity(&object_metadata);
-        let metadata = match cached_metadata(&cache_key, &identity) {
-            Some(metadata) => metadata,
-            None => {
-                let mut object_reader =
-                    AdlsObjectReader::new(store.clone(), object_metadata.clone(), None);
-                let metadata =
-                    ArrowReaderMetadata::load_async(&mut object_reader, Default::default())
-                        .await
-                        .map_err(parquet_error)?;
-                cache_metadata(cache_key.clone(), identity.clone(), metadata.clone());
-                metadata
+                let load_lock = metadata_load_lock(&cache_key);
+                let _load_guard = load_lock.lock().await;
+                let object_metadata = match cached_object_metadata(&cache_key) {
+                    Some(metadata) => {
+                        metrics.object_metadata_cache_hit();
+                        metadata
+                    }
+                    None => {
+                        let metadata = store.head(&path).await.map_err(object_store_error)?;
+                        cache_object_metadata(cache_key.clone(), metadata.clone());
+                        metadata
+                    }
+                };
+                let identity = object_identity(&object_metadata);
+                let metadata = match cached_metadata(&cache_key, &identity) {
+                    Some(metadata) => metadata,
+                    None => {
+                        let mut object_reader =
+                            AdlsObjectReader::new(store.clone(), object_metadata.clone(), None);
+                        let metadata =
+                            ArrowReaderMetadata::load_async(&mut object_reader, Default::default())
+                                .await
+                                .map_err(parquet_error)?;
+                        cache_metadata(cache_key.clone(), identity.clone(), metadata.clone());
+                        metadata
+                    }
+                };
+                (object_metadata, identity, metadata)
             }
         };
         let preload =
@@ -866,6 +909,17 @@ mod tests {
         let metrics = ScanMetrics::default();
         metrics.object_store_cache_hit();
         assert_eq!(metrics.snapshot().object_store_cache_hits, 1);
+    }
+
+    #[test]
+    fn cold_metadata_loads_share_an_exact_object_lock() {
+        let key = format!("metadata-load-lock-{}", std::process::id());
+        let first = metadata_load_lock(&key);
+        let competing = metadata_load_lock(&key);
+        let other = metadata_load_lock(&format!("{key}-other"));
+
+        assert!(Arc::ptr_eq(&first, &competing));
+        assert!(!Arc::ptr_eq(&first, &other));
     }
 
     #[test]
