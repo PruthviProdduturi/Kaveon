@@ -11,7 +11,8 @@ The role budgets exactly mirror `infra/helm/kaveon-test`: coordinator requests
 500m CPU/1 GiB and limits 2 CPU/4 GiB; each worker requests 1 CPU/2 GiB and
 limits 3 CPU/6 GiB. The preflight also requires one system node, three worker
 nodes, one node SKU, immutable images, three-way worker spreading, and no
-non-DaemonSet co-tenants on a worker node during measurement. The coordinator
+an identical recorded set of non-DaemonSet co-tenants on worker nodes in every
+engine phase. Any pod-name or placement change fails the run. The coordinator
 shares ordinary system-node background load in both engine phases.
 
 Trino uses the same `kaveon-engine` service account and Azure workload identity

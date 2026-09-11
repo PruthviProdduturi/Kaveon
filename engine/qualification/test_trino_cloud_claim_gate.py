@@ -22,6 +22,11 @@ def valid_report():
             "preflight": {"checks": {"one_system_three_worker_nodes": True, "coordinator_resources_matched": True,
                 "worker_resources_matched": True, "kaveon_image_pinned_and_expected": True, "trino_image_pinned": True}},
             "security_boundaries": {"kaveon": True, "trino": True},
+            "co_tenant_baseline": ["n1/kube-system/coredns-a"],
+            "co_tenant_observations": [
+                {"engine": engine, "co_tenants": ["n1/kube-system/coredns-a"]}
+                for _ in range(6) for engine in ("trino", "kaveon")
+            ],
             "verified_blobs": [dict(item, etag="e") for item in objects], "cases": cases,
             "policy": {"worker_count": 3, "warmups": 5, "repetitions_per_round": 5, "rounds": 6,
                 "throughput_repeats": 10, "concurrency": 4, "target_ratio": 1.9},
@@ -44,6 +49,11 @@ class CloudGateTests(unittest.TestCase):
         self.assertIn("same_verified_parquet_objects", failed)
         self.assertIn("exact_results", failed)
         self.assertIn("alternating_complete_rounds", failed)
+
+    def test_changed_co_tenant_topology_fails(self):
+        report = valid_report()
+        report["co_tenant_observations"][3]["co_tenants"] = []
+        self.assertIn("stable_recorded_co_tenants", evaluate(report)["failed_checks"])
 
 
 if __name__ == "__main__":

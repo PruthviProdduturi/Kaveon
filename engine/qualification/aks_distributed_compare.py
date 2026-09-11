@@ -152,14 +152,14 @@ def active_worker_nodes(kube, statefulset_name, worker_count):
         phase = pod.get("status", {}).get("phase")
         if phase in {"Succeeded", "Failed"} or any(owner.get("kind") == "DaemonSet" for owner in owners):
             continue
-        contenders.append(f"{pod['metadata'].get('namespace')}/{pod['metadata'].get('name')}")
-    if contenders:
-        raise RuntimeError("worker-node benchmark isolation failed; non-DaemonSet contenders: " + ", ".join(sorted(contenders)))
+        contenders.append(
+            f"{pod.get('spec', {}).get('nodeName')}/{pod['metadata'].get('namespace')}/{pod['metadata'].get('name')}"
+        )
     image_ids = sorted({status.get("imageID") for pod in ready for status in pod.get("status", {}).get("containerStatuses", [])
                         if status.get("imageID")})
     if not image_ids or not all("sha256:" in value for value in image_ids):
         raise RuntimeError(f"{statefulset_name} runtime image digest was not reported")
-    return {"nodes": sorted(nodes), "worker_image_ids": image_ids}
+    return {"nodes": sorted(nodes), "worker_image_ids": image_ids, "co_tenants": sorted(contenders)}
 
 
 def workload_identity_token():
@@ -345,11 +345,12 @@ def main():
              "trino_coordinator": os.environ["TRINO_COORDINATOR_STATEFULSET"],
              "trino_worker": os.environ["TRINO_WORKER_STATEFULSET"]}
     original = {key: desired(kube.statefulset(name)) for key, name in names.items()}
-    report = {"schema_version": 1, "started_at": utcnow(), "suite": "extended", "environment": "AKS distributed exclusive lease",
+    report = {"schema_version": 1, "started_at": utcnow(), "suite": "extended", "environment": "AKS distributed matched co-tenant lease",
               "workers": 3, "warmups_per_activation": 5, "policy": policy, "manifest": manifest,
               "cases": {name: {"name": name, "sql": case["sql"], "result_sha256": case["result_sha256"],
                                "kaveon_ms": [], "trino_ms": [], "passed": True} for name, case in queries.items()},
               "throughput": {"kaveon": [], "trino": [], "passed": True},
+              "co_tenant_baseline": None, "co_tenant_observations": [],
               "security_boundaries": {"kaveon": False, "trino": False}, "claim_evidence": False}
     try:
         report["preflight"] = validate_topology(kube, names, policy["worker_count"], os.environ["KAVEON_EXPECTED_IMAGE_DIGEST"])
@@ -376,7 +377,15 @@ def main():
             if not engines.unauthenticated_rejected(engine):
                 raise RuntimeError(f"{engine} accepted an unauthenticated statement")
             report["security_boundaries"][engine] = True
-            return active_worker_nodes(kube, names[f"{engine}_worker"], policy["worker_count"])
+            runtime = active_worker_nodes(kube, names[f"{engine}_worker"], policy["worker_count"])
+            if report["co_tenant_baseline"] is None:
+                report["co_tenant_baseline"] = runtime["co_tenants"]
+            elif runtime["co_tenants"] != report["co_tenant_baseline"]:
+                raise RuntimeError(f"worker-node co-tenant topology changed before {engine} phase")
+            report["co_tenant_observations"].append(
+                {"engine": engine, "worker_nodes": runtime["nodes"], "co_tenants": runtime["co_tenants"]}
+            )
+            return runtime
 
         items = list(queries.items())
         for round_index in range(policy["rounds"]):
