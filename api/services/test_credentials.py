@@ -63,6 +63,26 @@ class CredentialTests(unittest.TestCase):
             credentials.source_for_use({"id": 1, "connection_string": "stale-password"}, connection, "?")
         self.assertEqual(connection.db.execute("SELECT connection_string FROM data_sources").fetchone()[0], "new-password")
 
+    def test_key_vault_envelope_is_default_off_and_never_falls_back(self):
+        row={"id":1,"connection_string":credentials.KEY_VAULT_PREFIX+"https://unit.vault.azure.net/secrets/name/version"}
+        with patch.dict(os.environ,{"KAVEON_SOURCE_SECRET_READ_ENABLED":"false"}):
+            with self.assertRaisesRegex(credentials.CredentialError,"disabled"):
+                credentials.source_for_use(row,None,"?")
+
+    def test_key_vault_envelope_resolves_without_postgresql_rewrite(self):
+        reference="https://unit.vault.azure.net/secrets/name/version";row={"id":1,"connection_string":credentials.KEY_VAULT_PREFIX+reference}
+        resolver=unittest.mock.Mock();resolver.get.return_value="postgres://private"
+        with patch.dict(os.environ,{"KAVEON_SOURCE_SECRET_READ_ENABLED":"true"}),patch("services.source_secret_store.SourceSecretStore",return_value=resolver):
+            result=credentials.source_for_use(row,None,"?")
+        self.assertEqual(result["connection_string"],"postgres://private");resolver.get.assert_called_once_with(reference)
+
+    def test_key_vault_resolution_error_is_content_free(self):
+        sensitive="remote-secret-body";row={"id":1,"connection_string":credentials.KEY_VAULT_PREFIX+"https://unit.vault.azure.net/secrets/name"}
+        resolver=unittest.mock.Mock();resolver.get.side_effect=RuntimeError(sensitive)
+        with patch.dict(os.environ,{"KAVEON_SOURCE_SECRET_READ_ENABLED":"true"}),patch("services.source_secret_store.SourceSecretStore",return_value=resolver):
+            with self.assertRaises(credentials.CredentialError) as raised:credentials.source_for_use(row,None,"?")
+        self.assertNotIn(sensitive,str(raised.exception))
+
 
 class LegacyCiphertextTests(unittest.TestCase):
     def test_explicit_legacy_migration_and_no_runtime_fallback(self):

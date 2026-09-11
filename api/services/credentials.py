@@ -5,6 +5,7 @@ import re
 from cryptography.fernet import Fernet, InvalidToken
 
 PREFIX = "kaveon:fernet:v1:"
+KEY_VAULT_PREFIX = "kaveon:keyvault:v1:"
 
 
 class CredentialError(RuntimeError):
@@ -66,6 +67,16 @@ def source_for_use(row, connection, placeholder):
     if not row:
         return None
     value = row.get("connection_string") or ""
+    if value.startswith(KEY_VAULT_PREFIX):
+        if os.getenv("KAVEON_SOURCE_SECRET_READ_ENABLED") != "true":
+            raise CredentialError("Key Vault source credential resolution is disabled")
+        reference = value[len(KEY_VAULT_PREFIX):]
+        try:
+            from services.source_secret_store import SourceSecretStore
+            plaintext = SourceSecretStore().get(reference)
+        except Exception:
+            raise CredentialError("Key Vault source credential could not be resolved") from None
+        return {**row, "connection_string": plaintext}
     plaintext, replacement = upgrade(value)
     if replacement is not None:
         try:
