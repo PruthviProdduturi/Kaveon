@@ -87,6 +87,13 @@ latency from 0.994 s to 1.127 s, and regressed DISTINCT from 0.365 s to 0.691 s.
 The runtime path and AKS chart defaults were reverted. Accepted source `e56aece`
 and digest `sha256:270d39a...` remain the performance checkpoint.
 
+An exact-identity ADLS Parquet footer-cache experiment was also rejected. It
+revalidated every logical open with a network HEAD, preserving replacement
+correctness but regressing an exact 120-query probe to 2.765291 QPS from the
+2.834559-QPS accepted mean. Source `e9d4b76` was reverted. Reusable footer or
+decoded-batch state must consume an already-pinned identity rather than adding
+per-query network validation.
+
 ## Continuation point
 
 Complete the current round in this order:
