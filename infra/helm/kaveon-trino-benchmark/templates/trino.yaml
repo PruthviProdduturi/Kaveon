@@ -95,7 +95,7 @@ spec:
               cp /source/{{ ternary "jvm-coordinator.config" "jvm-worker.config" $isCoordinator }} /generated/jvm.config
               cp /source/lake.properties /generated/catalog/lake.properties
               cat > /generated/node.properties <<EOF
-              node.environment=kaveon-qualification
+              node.environment=kaveon_qualification
               node.id=${POD_NAME}
               node.data-dir=/data/trino
               EOF

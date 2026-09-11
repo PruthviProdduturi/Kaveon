@@ -4,6 +4,8 @@
 {{- if not (regexMatch "^sha256:[a-f0-9]{64}$" $digest) }}{{ fail "runner.image.digest must be an immutable sha256 digest" }}{{ end -}}
 {{- $runnerRepository := required "runner.image.repository is required when runner.enabled" .Values.runner.image.repository -}}
 {{- $runId := required "runner.runId is required when runner.enabled" .Values.runner.runId -}}
+{{- $kaveonDigest := required "runner.kaveon.expectedImageDigest is required when runner.enabled" .Values.runner.kaveon.expectedImageDigest -}}
+{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" $kaveonDigest) }}{{ fail "runner.kaveon.expectedImageDigest must be an immutable sha256 digest" }}{{ end -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -112,7 +114,7 @@ spec:
             - {name: KAVEON_COORDINATOR_STATEFULSET, value: {{ .Values.runner.kaveon.coordinatorStatefulSet | quote }}}
             - {name: KAVEON_WORKER_STATEFULSET, value: {{ .Values.runner.kaveon.workerStatefulSet | quote }}}
             - {name: KAVEON_URL, value: {{ printf "https://%s.%s.svc.cluster.local:8080" .Values.runner.kaveon.service .Release.Namespace | quote }}}
-            - {name: KAVEON_EXPECTED_IMAGE_DIGEST, value: {{ .Values.runner.kaveon.expectedImageDigest | quote }}}
+            - {name: KAVEON_EXPECTED_IMAGE_DIGEST, value: {{ $kaveonDigest | quote }}}
             - {name: KAVEON_WORKLOAD_IDENTITY_REFERENCE, value: {{ .Values.runner.kaveon.workloadIdentityReference | quote }}}
             - {name: TRINO_COORDINATOR_STATEFULSET, value: {{ printf "%s-trino-coordinator" $name | quote }}}
             - {name: TRINO_WORKER_STATEFULSET, value: {{ printf "%s-trino-worker" $name | quote }}}

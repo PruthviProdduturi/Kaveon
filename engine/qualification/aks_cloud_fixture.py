@@ -113,7 +113,7 @@ def main():
                                      "--query", "accessToken", "-o", "tsv"], text=True).strip()
     bundle = args.output / "bundle"
     bundle.mkdir()
-    commands = ["#!/bin/sh", "set -eu", "cd /tmp/kaveon-benchmark-upload"]
+    commands = ["#!/bin/sh", "set -eu", 'cd "$(dirname "$0")"']
     for index, item in enumerate(objects):
         source = data / Path(item["path"]).relative_to(args.prefix)
         target = bundle / "payload" / source.relative_to(data)

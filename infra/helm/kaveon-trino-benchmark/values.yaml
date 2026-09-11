@@ -39,7 +39,7 @@ runner:
     coordinatorStatefulSet: kaveon-coordinator
     workerStatefulSet: kaveon-worker
     service: kaveon-coordinator
-    expectedImageDigest: sha256:bd5a6ef6cdb00a121f215947c98a948f5e3fbd9d2c4b094a7d946d07a71d2bc6
+    expectedImageDigest: ""
     workloadIdentityReference: kaveon-test-reader
   policy:
     workerCount: 3
