@@ -42,6 +42,9 @@ run:
 ```powershell
 docker compose -f engine/qualification/compose.yml up -d --wait trino
 docker build -t kaveon-engine:qualification -f engine/Dockerfile engine
+& engine/qualification/venv/Scripts/python.exe engine/qualification/trino_benchmark_preflight.py `
+  --docker-image kaveon-engine:qualification `
+  --output tmp/qualification-trino-publication/preflight.json
 & engine/qualification/venv/Scripts/python.exe engine/qualification/same_files.py `
   --docker-image kaveon-engine:qualification --suite extended `
   --rows 5000000 --customers 100000 --warmups 5 --repetitions 30 `
@@ -51,6 +54,13 @@ docker build -t kaveon-engine:qualification -f engine/Dockerfile engine
   tmp/qualification-trino-publication/report.json `
   --output tmp/qualification-trino-publication/claim-gate.json
 ```
+
+The preflight writes a bounded JSON record even when Docker cannot start. It
+checks the Python dependencies, host CPU count, Docker engine, Kaveon image,
+running Trino container, exact 4 CPU/8 GiB Trino limits, and loopback binding.
+`ready=false` is prerequisite evidence only and cannot be used as performance
+evidence. Repair the reported host issue, rerun the preflight, and start the
+measurement only after it returns zero.
 
 The evaluator may report `technical_gate_passed=true`; it always records
 `claim_eligible=false` while the metric remains proposed. Even after metric

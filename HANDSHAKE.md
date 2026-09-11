@@ -210,8 +210,9 @@ successful native curation. The helper first verifies the dataset catalog is an
 active native Engine source and returns no count for external catalogs, so this
 path never scans PostgreSQL data or fabricates a value. Focused tests cover
 Engine routing, deterministic table de-duplication, legacy-artifact persistence,
-and the external-source no-scan boundary. Live AKS backfill of the nine showcase
-artifacts remains a deployment verification step.
+and the external-source no-scan boundary. Live AKS verification on September 10
+passed for all nine showcase artifacts before and after a coordinator restart;
+each remained `ready` with a positive `kaveon_engine_exact` row count.
 
 `scripts/verify-aks-dlm-coverage.py` makes that deployment check repeatable. It
 authenticates to `/api/v1/dlm/coverage` with an Entra bearer token (or the
@@ -240,8 +241,10 @@ rejected. Concurrent head changes conflict and interrupted publication leaves
 only non-authoritative orphan objects. The planner re-resolves both the catalog
 definition snapshot and live source identity and ignores stale statistics.
 Local files use size and high-resolution modification time for development;
-AKS uses object versions. Live ADLS execution and measured optimizer benefit
-remain deployment qualification steps.
+AKS uses object versions. Live ADLS execution now passes for the 34-row
+`OpenSource.ai_benchmarks.leaderboard` table, including durable-statistics
+recovery after a coordinator restart. Measured optimizer benefit remains a
+separate qualification step.
 Focused tests write and replace real Parquet files to prove exact row counts,
 schema capture, stable repeated identity, and changed replacement identity. A
 server test rejects a reader, publishes through an in-memory conditional
@@ -347,6 +350,16 @@ these fields: **baseline** (commit or deployed digest), **verified** (repeatable
 evidence), **boundary** (what the evidence does not prove), and **next gate**.
 Historical detail belongs in the log or the linked engineering document.
 
+The September 10 evidence audit scores the current declared Engine scope at
+**75/100 (7.5/10)**. This is not Trino feature parity or PostgreSQL replacement
+evidence. The score is capped below 8/10 by three release-critical gaps: no full
+current-image AKS failure/restart/pressure qualification, no general relational
+OLTP semantics, and no passing publication-scale comparison report. The best
+recorded resource-matched six-query diagnostic is 1.057× Trino throughput,
+below the required 1.90× and outside the publication workload. The weighted
+rubric, evidence boundaries, claim language and ordered gates are maintained in
+`docs/engineering/engine-readiness-qualification.md`.
+
 | Workstream | Baseline | Verified | Boundary | Next gate |
 |---|---|---|---|---|
 | Repository | `dev` at `96b131b` | Full Rust workspace tests/bench targets, strict workspace Clippy/formatting, 80 API tests plus four subtests, nine comparison-runner tests, two DLM verifier tests, both Bicep builds, and docs validation pass locally | This evidence is not deployed AKS evidence and no external PostgreSQL/Trino measurements were run | Require CI/Engine/Containers, deploy the isolated ADLS resources, then run live qualification |
@@ -400,6 +413,18 @@ there, so current AKS evidence cannot support a comparative performance result.
 The full proposal and executable commands are in
 `docs/engineering/trino-90-percent-benchmark.md`. No cloud resources or
 subscription policies were changed for this work.
+
+Local matched-run preflight on September 10, 2026 is fail-closed. The host has
+the required Python dependencies, CPU count, memory and Docker CLI, but neither
+Docker Desktop nor Ubuntu WSL can create a VM: the managed
+`DefenderforEndpointPlug-in` returns
+`Wsl/Service/CreateInstance/CreateVm/Plugin/E_ABORT`. No OCI alternative is
+installed, so no Kaveon/Trino measurement ran and no ratio exists. The bounded
+preflight now records this prerequisite failure in
+`tmp/qualification-trino-publication/preflight.json`; it must return
+`ready=true` before the publication workload starts. Repair the endpoint's
+Defender/WSL integration or run the same 4 CPU/8 GiB Docker protocol on another
+host. Do not change subscription or endpoint security policy for this gate.
 
 The combined comparison evaluator at
 `engine/qualification/comparison_gate.py` now makes that last row executable and
@@ -835,9 +860,9 @@ contains bronze `orders`/`customers`, silver `orders`/`customers`, and gold
 scope, quoted identifier, and literal handling; Helm lint/template cover chart
 rendering.
 
-Final Engine image: `sha256:c50c400207244c9a5af0553420e9f6ecbfe52df3cf4276f4b958d55fabf539fd`,
+Final Engine image: `sha256:afa2190daf26006864c640e87823268e048882eafe63425fac99c228e51e9ebe`,
 with all four Engine pods Ready. Studio is Ready on:
-`sha256:bb797095971d731b89f999388bfc9e9145c77392991138014588801c57c90f7f`.
+`sha256:51c0d0368ab463320e1898959c2e760cf8c692f8eef8b954c699a00b2dc60a4a`.
 The API digest and complete live validation are recorded in
 `docs/engineering/aks-test-deployment.md`. A real Microsoft Admin session and
 deployed SQL Lab returned the exact silver aggregate (10000 / 486727696).
@@ -1361,3 +1386,5 @@ let source = DeltaTableReader::new(table_directory)
 | 2026-09-10 | Codex | Added the two-phase credential-safe AKS native-statistics verifier (`0fe58a9`) for pre/post coordinator-restart durability evidence. |
 | 2026-09-10 | Codex | Corrected Helm worker readiness routing (`216a955`): coordinators use `/health`, workers use `/ready`, so a worker cannot enter service before installing the required catalog identity. |
 | 2026-09-10 | Codex | Deployed final committed Engine/API/Studio images to `kaveon-test-aks`. Coordinator and all three workers report identity `sha256:094c016d7dda2b16a10a48e9f543ec5e79368e44553b567ce20fd53094645cb2`; distributed smoke query `6d756497-9163-44b6-a3a5-5d840484c8da` returned the exact 34-row leaderboard count. Claude's later `7e99ff1` Catalog surface is not in this Studio digest yet. |
+| 2026-09-10 | Codex | Added and exercised a fail-closed matched-Trino preflight. The local host meets Python/CPU/memory/CLI prerequisites, but Docker and Ubuntu WSL are blocked by the managed Defender for Endpoint WSL plug-in (`Plugin/E_ABORT`), so no benchmark or ratio was produced. Three preflight tests plus the three claim-gate tests pass; the evidence JSON remains under ignored `tmp/qualification-trino-publication/`. |
+| 2026-09-10 | Codex | Qualified live AKS native statistics and Engine-backed DLM coverage. `ANALYZE OpenSource.ai_benchmarks.leaderboard` query `c456d1f2-a28d-41e5-9353-475a361fbea6` finished with an exact, current 34-row statistic. After deleting and recreating the coordinator, the statistic retained catalog digest prefix `df2b742a8246`, source digest prefix `621c2808d6ba`, and row count 34. All nine canonical DLMs passed before and after restart with positive `kaveon_engine_exact` counts. The recovered cluster reported three active and three compatible workers on catalog identity `sha256:094c016d7dda2b16a10a48e9f543ec5e79368e44553b567ce20fd53094645cb2`; fresh query `493532d7-cfb0-407d-adc5-2d935d42e34b` ran across all three workers and returned 34. Credential-free raw reports are under ignored `tmp/aks-native-analyze-{before,after}-restart.json` and `tmp/aks-dlm-row-count{-validation,-after-restart}.json`. The restart produced transient Azure Disk `fsck` exit-8 mount warnings before recovering Ready; storage restart reliability needs a repeated-restart gate. |

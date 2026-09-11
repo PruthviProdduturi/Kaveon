@@ -21,10 +21,10 @@ East US hosts `kaveon-test-aks`, a Kubernetes 1.35.7 test cluster with one syste
 The final Engine image is pinned as:
 
 ```text
-kvtestegmf6oweugsno.azurecr.io/kaveon-engine@sha256:c50c400207244c9a5af0553420e9f6ecbfe52df3cf4276f4b958d55fabf539fd
+kvtestegmf6oweugsno.azurecr.io/kaveon-engine@sha256:afa2190daf26006864c640e87823268e048882eafe63425fac99c228e51e9ebe
 ```
 
-Pods run as UID/GID 10001 with a read-only root filesystem, dropped capabilities, TLS and distinct principal/catalog/exchange credentials. Services are ClusterIP only; network policy restricts engine ingress to the namespace. Worker readiness checks process health because workers execute shipped fragments without loading the coordinator catalog; separate live queries must prove worker registration and execution.
+Pods run as UID/GID 10001 with a read-only root filesystem, dropped capabilities, TLS and distinct principal/catalog/exchange credentials. Services are ClusterIP only; network policy restricts engine ingress to the namespace. Worker readiness uses `/ready` and remains closed until the worker has recovered the coordinator-required catalog identity; separate live queries still prove registration and distributed execution.
 
 `scripts/aks-test-secrets.py` generates test PKI and secrets in a private ignored directory. Server certificates expire after 30 days; replace the TLS Secret and roll pods before expiry. This initial test uses Kubernetes Secrets, not a completed Key Vault rotation integration. Never commit the generated bundle or print credential files. Apply Secret JSON with `kubectl apply --server-side` to avoid copying the CA bundle into a size-limited last-applied annotation.
 
@@ -44,7 +44,7 @@ the live cluster with three registered workers. Checks covered order totals,
 NULL customers, customer count, a region join, silver daily aggregation and
 matching gold aggregates. Unauthenticated catalog access returned HTTP 401.
 These queries establish ADLS workload-identity reads and authenticated TLS
-worker execution; they do not establish production performance or the paused
+worker execution; they do not establish production performance or the pending
 Trino comparison target. Raw command output is in
 `tmp/aks-initial-validation.json`; `scripts/verify-aks-test-results.py` checks
 the output against fixture expectations.
@@ -71,7 +71,7 @@ backfill, authenticate to the API and run the repeatable coverage gate. Keep the
 port-forward process open in a separate terminal:
 
 ```powershell
-kubectl --context kaveon-test-aks -n kaveon port-forward service/kaveon-api 18000:8000 --address 127.0.0.1
+kubectl --context kaveon-test-aks -n kaveon port-forward service/kaveon-api 18000:8080 --address 127.0.0.1
 
 $env:KAVEON_API_ACCESS_TOKEN = (az account get-access-token `
   --resource api://d0ce7c35-cc10-4ae7-b6be-60d002f43059 `
@@ -112,14 +112,27 @@ record. Join-plan usage remains unqualified until a stable showcase join pair
 with independently known cardinalities is designated; the report marks that
 check as deferred instead of implying optimizer evidence.
 
+This gate passed on September 10. Native `ANALYZE` query
+`c456d1f2-a28d-41e5-9353-475a361fbea6` published a current 34-row statistic.
+After a normal coordinator pod deletion and recreation, the statistic retained
+catalog digest prefix `df2b742a8246`, source digest prefix `621c2808d6ba`, and
+row count 34. All nine canonical DLMs also remained `ready` with positive
+`kaveon_engine_exact` counts. Fresh query
+`493532d7-cfb0-407d-adc5-2d935d42e34b` then returned 34 through two stages and
+all three compatible workers on catalog identity
+`sha256:094c016d7dda2b16a10a48e9f543ec5e79368e44553b567ce20fd53094645cb2`.
+The Azure Disk CSI driver briefly retried the coordinator mount because
+`/dev/sdc` was still in use; the same pod became Ready three seconds later, so
+this was an observed detach/mount timing race rather than evidence of data loss.
+
 ## Stop and resume
 
 The final rollout has all four Engine pods Ready on
-`kvtestegmf6oweugsno.azurecr.io/kaveon-engine@sha256:c50c400207244c9a5af0553420e9f6ecbfe52df3cf4276f4b958d55fabf539fd`.
+`kvtestegmf6oweugsno.azurecr.io/kaveon-engine@sha256:afa2190daf26006864c640e87823268e048882eafe63425fac99c228e51e9ebe`.
 Studio is Ready on
-`kvtestegmf6oweugsno.azurecr.io/kaveon-studio@sha256:bb797095971d731b89f999388bfc9e9145c77392991138014588801c57c90f7f`;
+`kvtestegmf6oweugsno.azurecr.io/kaveon-studio@sha256:51c0d0368ab463320e1898959c2e760cf8c692f8eef8b954c699a00b2dc60a4a`;
 the API is Ready on
-`kvtestegmf6oweugsno.azurecr.io/kaveon-api@sha256:e413c4da91e666d220132721bc72ef6793de6c7399209cf5ad005d3e540b42a0`.
+`kvtestegmf6oweugsno.azurecr.io/kaveon-api@sha256:ead9e67ff3624a4b13697b739cb74674adbc0120fdff02ebf81c8ae06a8b4d6d`.
 The portal is authenticated with a public Entra client and server-verified
 session; no subscription policy changed for this rollout. The coordinator
 restart preserves catalog data but in-memory query history starts afresh, so

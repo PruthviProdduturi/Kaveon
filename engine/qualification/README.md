@@ -77,6 +77,7 @@ For a resource-matched single-node comparison, build the release image and run:
 
 ```powershell
 docker build -t kaveon-engine:qualification -f engine/Dockerfile engine
+& engine/qualification/venv/Scripts/python.exe engine/qualification/trino_benchmark_preflight.py --docker-image kaveon-engine:qualification --output tmp/qualification-matched/preflight.json
 & engine/qualification/venv/Scripts/python.exe engine/qualification/same_files.py --docker-image kaveon-engine:qualification --rows 1000000 --repetitions 5 --local-parallelism 4 --throughput-rounds 20 --concurrency 4 --output tmp/qualification-matched
 ```
 
