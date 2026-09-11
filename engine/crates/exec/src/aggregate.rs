@@ -994,6 +994,28 @@ pub fn merge_grouped_aggregate_states(
     Ok(groups.into_iter().map(|(_, group)| group).collect())
 }
 
+/// Canonicalizes groups that are already unique by key.
+///
+/// Incremental final aggregation owns a hash map keyed by `group_keys`, so
+/// rebuilding another hash map in `merge_grouped_aggregate_states` cannot
+/// combine anything. Keep the same layout validation and canonical ordering
+/// without paying a second hash/probe/allocation pass over every final group.
+pub(crate) fn canonicalize_unique_grouped_aggregate_states(
+    groups: impl IntoIterator<Item = GroupedAggregateState>,
+) -> Result<Vec<GroupedAggregateState>> {
+    let mut groups = groups.into_iter().collect::<Vec<_>>();
+    validate_group_layouts(&groups)?;
+    let mut keyed = groups
+        .drain(..)
+        .map(|group| Ok((encode_group_keys(&group.group_keys)?, group)))
+        .collect::<Result<Vec<_>>>()?;
+    keyed.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    if keyed.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err(exec_err("grouped aggregate state contains duplicate keys"));
+    }
+    Ok(keyed.into_iter().map(|(_, group)| group).collect())
+}
+
 fn validate_group_layouts(groups: &[GroupedAggregateState]) -> Result<()> {
     let mut expected = None;
     for group in groups {
