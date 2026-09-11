@@ -177,6 +177,21 @@ restart cleanup remains open until retained exchange chunks reach zero.
 These gates prevent a latency or throughput report from being interpreted as
 Trino-class fault-tolerant execution.
 
+To produce one fail-closed AKS qualification artifact after both runs complete:
+
+```powershell
+python scripts/merge-aks-distributed-qualification.py `
+  --comparison tmp/qualification-trino-publication/report.json `
+  --fault-pressure docs/engineering/engine-aks-fault-pressure-validation-2026-09-10.json `
+  --output tmp/qualification-trino-publication/distributed-qualification.json
+```
+
+The merged schema has independent gates for exact results, concurrency, worker
+retry, worker spill cleanup, coordinator restart cleanup, and pod memory. It
+also carries p50/p95/p99 latency and measured CPU, memory, exchange, spill, and
+admission counters. Exit code 2 means diagnostics were produced but at least
+one release gate remains open.
+
 `transaction_compare.py` now produces the transaction input for the product SQL
 facade. It executes point read, insert, update, delete, conflicting update, and a
 three-record commit against identical logical records. PostgreSQL stores the
@@ -213,3 +228,19 @@ clears its samples, and returns exit code 2. `comparison_gate.py` independently
 requires that flag. A complete correctness and publication-scale run returns
 zero, but only the combined gate may decide whether the measured PostgreSQL
 throughput and p95 targets were met.
+## Offline immutable table-publication rehearsal
+
+`table_publication_rehearsal.py` verifies a captured table-publication report
+without contacting Azure, AKS, ADLS, or PostgreSQL. It checks object and
+manifest digests, replay/conflict/head-preservation evidence, and restart
+journal recovery. Reports must explicitly set `mutations_enabled` to `false`.
+
+```powershell
+python engine/qualification/table_publication_rehearsal.py `
+  --report tmp/table-publication/rehearsal.json `
+  --output tmp/table-publication/verification.json
+```
+
+The command exits `0` only for a complete passing report and `2` for invalid
+or incomplete evidence. It is a verification gate, not a live deployment or
+mutation command.
