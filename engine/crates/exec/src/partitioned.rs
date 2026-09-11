@@ -338,6 +338,14 @@ fn partition_input(
         Some(HashPartitioner::try_new(&schema, keys, count)?)
     };
     let mut partitions: Vec<Vec<SpillRun>> = (0..count).map(|_| Vec::new()).collect();
+    let mut buffered: Vec<Vec<RecordBatch>> = (0..count).map(|_| Vec::new()).collect();
+    let mut buffered_memory = Vec::new();
+    let mut buffered_bytes = 0_u64;
+    // Batch several upstream partitions into each Arrow stream. The old path
+    // created one tiny run per non-empty partition and upstream batch, then
+    // paid to compact those files repeatedly. Retaining the existing
+    // conservative preflight reservations keeps this buffer query-bounded.
+    let flush_bytes = adaptive_limit(memory)?.max(1);
     while let Some(batch) = input.next_batch()? {
         if batch.num_rows() == 0 {
             continue;
@@ -383,14 +391,55 @@ fn partition_input(
             if batch.num_rows() == 0 {
                 continue;
             }
-            partitions[index].push(spill.write_run(&schema, &[batch])?);
+            buffered[index].push(batch);
         }
-        drop(reservation);
-        for runs in &mut partitions {
-            compact_spill_runs(runs, &schema, memory, spill)?;
+        buffered_bytes = buffered_bytes.saturating_add(reservation.bytes());
+        buffered_memory.push(reservation);
+        if buffered_bytes >= flush_bytes {
+            flush_partition_buffers(
+                &mut buffered,
+                &mut buffered_memory,
+                &mut buffered_bytes,
+                &mut partitions,
+                &schema,
+                memory,
+                spill,
+            )?;
         }
     }
+    flush_partition_buffers(
+        &mut buffered,
+        &mut buffered_memory,
+        &mut buffered_bytes,
+        &mut partitions,
+        &schema,
+        memory,
+        spill,
+    )?;
     Ok(partitions)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn flush_partition_buffers(
+    buffered: &mut [Vec<RecordBatch>],
+    buffered_memory: &mut Vec<MemoryReservation>,
+    buffered_bytes: &mut u64,
+    partitions: &mut [Vec<SpillRun>],
+    schema: &SchemaRef,
+    memory: &OperatorMemoryAccount,
+    spill: &SpillManager,
+) -> Result<()> {
+    for (batches, runs) in buffered.iter_mut().zip(partitions.iter_mut()) {
+        if batches.is_empty() {
+            continue;
+        }
+        runs.push(spill.write_run(schema, batches)?);
+        batches.clear();
+        compact_spill_runs(runs, schema, memory, spill)?;
+    }
+    buffered_memory.clear();
+    *buffered_bytes = 0;
+    Ok(())
 }
 
 /// Keeps reader fan-in bounded without repeatedly rewriting a partition's full
@@ -1183,6 +1232,30 @@ mod tests {
         assert_eq!(rows, 16_384);
         assert_eq!(disk.snapshot().current_bytes, 0);
         assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn partition_spill_coalesces_tiny_upstream_batches_with_bounded_memory() {
+        let pool = QueryMemoryPool::new("coalesced-partitions", 4 * 1024 * 1024).unwrap();
+        let account = pool.operator("partition").unwrap();
+        let disk = spill();
+        let values = (0..1_024).map(Some).collect::<Vec<_>>();
+        let mut sources =
+            partition_sources(input(values, 1), &["id".into()], 16, &account, &disk).unwrap();
+
+        let snapshot = disk.snapshot();
+        assert!(snapshot.runs_written < 512, "{snapshot:?}");
+        assert!(snapshot.compactions < 64, "{snapshot:?}");
+        assert_eq!(pool.snapshot().current_bytes, 0);
+
+        let mut rows = 0;
+        while let Some(mut source) = sources.pop_front() {
+            while let Some(batch) = source.next_batch().unwrap() {
+                rows += batch.num_rows();
+            }
+        }
+        assert_eq!(rows, 1_024);
+        assert_eq!(disk.snapshot().current_bytes, 0);
     }
 
     #[test]
