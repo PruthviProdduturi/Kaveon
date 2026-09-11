@@ -20,7 +20,7 @@ family has migrated.
 | `query_history` | `services/query_history.py`, DLM usage | No destination | Partitioned append path, stable cursor ordering, retention and payload policy |
 | `activity` | Catalog-source audit paths | No destination | Immutable audit schema, retention and actor identity |
 | `context_snapshots`, `context_answer_cache` | `dlm/profiler.py`, context routes | Rebuilt derived state | Define generation publication and cache retention; rebuild after dataset cutover |
-| `dlm_artifact`, `dlm_value_index`, `dlm_router`, `dlm_answers`, `dlm_sketch` | `dlm/engine.py`, profiler/router and DLM routes | Rebuilt derived state | Publish a complete generation against one dataset/source revision; prevent stale routing |
+| `dlm_artifact`, `dlm_value_index`, `dlm_router`, `dlm_answers`, `dlm_sketch` | `dlm/engine.py`, profiler/router and DLM routes | Typed `dlm_definition` for dataset/revision identity; generated state remains rebuilt | Backfill definitions, then publish a complete generated run atomically against that dataset revision; prevent stale routing |
 | `chat_sessions`, `chat_messages` | `routers/chat_history.py`, `routers/chat.py`; created by `data/migrations/chat_history.sql` | No destination | Owner-scoped ordered append, atomic message/session update, encryption and deletion policy |
 | `ai_providers`, `user_ai_keys` | `services/ai_service.py`; created at runtime | Key-managed secret boundary plus non-secret references | Keep encrypted keys outside ordinary product documents; define provider metadata authority and rotation references |
 
@@ -132,6 +132,7 @@ reads. It uses one owner-scoped KaveonDB read under the requesting actor/role an
 compares a fixed bounded projection, emitting hashes and status only while the
 PostgreSQL response remains unchanged. Lists and mutations remain uncovered;
 chart outbox, backfill and replay must precede any write observation or cutover.
-No typed DLM destination exists yet, so DLM shadowing remains blocked on its
-record and generation-publication design rather than being mapped onto an
-unrelated product kind.
+A typed DLM definition destination now exists with exact dataset ID/revision
+schema and a dataset reference. DLM shadowing remains blocked on a PostgreSQL
+definition writer/backfill and on the separate atomic publication design for
+generated runs; definitions do not absorb answer/value/sketch payloads.

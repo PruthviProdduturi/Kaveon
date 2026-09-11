@@ -132,8 +132,9 @@ fn product_kind(table: &str) -> Result<String> {
         Some("dashboards") => Ok("dashboard".into()),
         Some("saved_queries") => Ok("saved_query".into()),
         Some("user_themes") => Ok("user_theme".into()),
+        Some("dlm_definitions") => Ok("dlm_definition".into()),
         _ => Err(sql_error(
-            "row DML is unsupported; target kaveon.product.datasets, charts, dashboards, saved_queries, or user_themes",
+            "row DML is unsupported; target a supported kaveon.product table",
         )),
     }
 }

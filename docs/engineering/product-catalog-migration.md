@@ -33,7 +33,7 @@ inventory is:
 | Semantic objects | `datasets`, `dataset_dimensions`, `dataset_columns`, `dataset_metrics`, `charts`, `dashboards`, `favorites` | Cascading dataset children, chart/dataset links, JSON payloads, visibility and ownership |
 | User state and audit | `saved_queries`, `query_history`, `activity`, `user_themes`, `user_recents` | Per-user access, ordered/paginated reads, unique recent items and audit ordering |
 | Engine control plane | `catalog_sources` and Engine catalog/schema/table definitions | Lifecycle validation, unique names, revisions, audit, source-to-definition mapping |
-| Adaptive/DLM state | `context_snapshots`, `context_answer_cache`, `dlm_artifact`, `dlm_value_index`, `dlm_router` | Unique keys, bounded cache semantics, generated artifacts and value indexes |
+| Adaptive/DLM state | DLM definitions plus `context_snapshots`, `context_answer_cache`, `dlm_artifact`, `dlm_value_index`, `dlm_router` | Revision-pinned dataset definition; generated runs remain a separate atomic-publication design |
 | Legacy chat | `chat_sessions`, `chat_messages` | Owner checks, ordered messages, potentially sensitive payloads; separately provisioned today |
 
 The schema file is not the whole live inventory. `dlm_answers` and `dlm_sketch`
@@ -55,7 +55,7 @@ discover the deployed database as well as compare it with these definitions.
 | 6 | `favorites`, `saved_queries`, `user_themes`, `user_recents` | corresponding services | Owner-scoped uniqueness and authorization-filtered reads |
 | 7 | `query_history`, `activity` | query history and catalog-source audit | Append identity, trace/query ID, deterministic ordering and retention |
 | 8 | `chat_sessions`, `chat_messages` | chat-history/chat routers | Session owner check; message append and session timestamp update are atomic |
-| 9 | `context_snapshots`, `context_answer_cache`, `dlm_artifact`, `dlm_value_index`, `dlm_router`, `dlm_answers`, `dlm_sketch` | DLM profiler/router/engine | Existing dataset and one source revision; a complete generation publishes atomically |
+| 9 | DLM definition; then `context_snapshots`, `context_answer_cache`, `dlm_artifact`, `dlm_value_index`, `dlm_router`, `dlm_answers`, `dlm_sketch` | DLM profiler/router/engine | Definition is now a typed `dlm_definition` record referencing one dataset revision; generated runs still require atomic generation publication |
 
 `ai_providers`, `user_ai_keys`, `data_sources.connection_string`, and other
 encrypted credential envelopes stay in the key-managed secret boundary.
@@ -369,3 +369,21 @@ contains only record ID, match/missing/mismatch status, hashes, sizes and target
 generation, while PostgreSQL continues to supply the response. Chart lists and
 all chart writes remain outside this slice because charts do not yet have the
 source outbox/backfill foundation that datasets have.
+
+## DLM definition record
+
+KaveonDB now accepts `kaveon.product.dlm_definitions` as a typed transactional
+record kind. The record ID must equal its `dataset_id`, and the canonical JSON
+object must contain exactly `dataset_id` and a positive `dataset_revision`.
+KaveonDB derives a typed dataset reference, so the definition and dataset can be
+created atomically and dataset deletion uses existing reference restrictions.
+Owner isolation, compare-and-swap updates, immutable document storage and point
+reads use the same product transaction boundary as other kinds. The API typed
+client and replay family map recognize the kind, but no PostgreSQL DLM writer
+emits it and no cutover is enabled.
+
+Generated DLM manifests, answers, value indexes, routers and sketches are not
+stored inside this definition. Their current tables represent a multi-record
+derived generation with cache/retention semantics; moving them requires a
+separate bounded atomic publication contract. No `dlm_run` kind is claimed by
+this slice.

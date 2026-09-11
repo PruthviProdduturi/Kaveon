@@ -83,6 +83,10 @@ Three material boundaries prevent expanding this narrow 8/10 rating:
    Authenticated chart point reads now have the same default-off, bounded,
    response-preserving hash comparison. No chart migration pipeline or live
    evidence exists, so it earns no readiness score.
+   A typed durable DLM definition now pins a dataset ID and revision with owner
+   isolation and referential validation. No writer, backfill, shadow evidence or
+   generated-run publication exists, so this foundation earns no readiness
+   score by itself.
 3. The checked-in comparison gates fail closed because no publication-scale
    1.90× Trino result or completed PostgreSQL transaction report exists.
 
