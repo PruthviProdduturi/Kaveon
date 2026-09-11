@@ -229,3 +229,5 @@ product metadata authority and break Studio even though ADLS analytical queries
 remain available.
 
 Favorites now cover typed migrated targets with owner uniqueness, references, source/outbox atomicity, backfill/replay and shadow code. Data-source favorites remain explicitly PostgreSQL-only until a non-secret source destination exists; therefore the family cannot pass retirement.
+
+Source retirement now has a non-secret typed destination and deterministic coupled backfill, but encrypted connection material remains a separate secret authority. A workload-identity Key Vault resolver, writer/outbox atomicity, shared visibility semantics, shadow parity, rotation, backup/restore and rollback evidence are mandatory before retirement.

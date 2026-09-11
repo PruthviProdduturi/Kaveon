@@ -412,6 +412,7 @@ fn record_kind(kind: &str) -> Result<ProductRecordKind, RegistryError> {
         "dlm_definition" => Ok(ProductRecordKind::DlmDefinition),
         "dlm_run" => Ok(ProductRecordKind::DlmRun),
         "favorite" => Ok(ProductRecordKind::Favorite),
+        "source" => Ok(ProductRecordKind::Source),
         _ => Err(RegistryError::Invalid(
             "unsupported product record kind".into(),
         )),
@@ -432,7 +433,23 @@ fn product_document(
         ));
     }
     let mut derived_values = BTreeMap::new();
-    let references = if kind == ProductRecordKind::Favorite {
+    let references = if kind == ProductRecordKind::Source {
+        let object = value.as_object().expect("object checked above");
+        const ALLOWED: [&str; 12] = ["source_kind", "source_id", "name", "catalog_identity", "source_type", "database_name", "region", "description", "is_active", "lifecycle", "secret_ref", "adapter_type"];
+        if object.keys().any(|key| !ALLOWED.contains(&key.as_str()))
+            || object.get("source_id").and_then(serde_json::Value::as_str) != Some(id)
+            || !matches!(object.get("source_kind").and_then(serde_json::Value::as_str), Some("catalog" | "data"))
+        {
+            return Err(RegistryError::Invalid("source document schema is invalid".into()));
+        }
+        let secret_ref = object.get("secret_ref").and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty() && value.len() <= 512)
+            .ok_or_else(|| RegistryError::Invalid("source secret_ref is invalid".into()))?;
+        if secret_ref.chars().any(char::is_control) {
+            return Err(RegistryError::Invalid("source secret_ref is invalid".into()));
+        }
+        BTreeSet::new()
+    } else if kind == ProductRecordKind::Favorite {
         let object = value.as_object().expect("object checked above");
         let owner = object
             .get("user_email")
@@ -453,6 +470,7 @@ fn product_document(
             "chart" => ProductRecordKind::Chart,
             "dashboard" => ProductRecordKind::Dashboard,
             "saved_query" => ProductRecordKind::SavedQuery,
+            "source" => ProductRecordKind::Source,
             _ => {
                 return Err(RegistryError::Invalid(
                     "favorite object_type is unsupported".into(),
@@ -605,6 +623,7 @@ fn product_document(
         ProductRecordKind::DlmDefinition => "dlm_definition",
         ProductRecordKind::DlmRun => "dlm_run",
         ProductRecordKind::Favorite => "favorite",
+        ProductRecordKind::Source => "source",
     };
     let path = format!("products/{kind_name}/{id}/{revision}-{sha256}.json");
     Ok((
@@ -1318,6 +1337,20 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn source_accepts_only_non_secret_metadata_and_opaque_reference() {
+        let document = r#"{"source_kind":"catalog","source_id":"catalog:lake","name":"Lake","catalog_identity":"lake","source_type":"adls_gen2","database_name":null,"region":null,"description":null,"is_active":true,"lifecycle":"active","secret_ref":"https://example.vault.azure.net/secrets/lake"}"#;
+        let (_, _, references, _) = product_document(ProductRecordKind::Source, "catalog:lake", 1, document).unwrap();
+        assert!(references.is_empty());
+        for rejected in [
+            r#"{"source_kind":"data","source_id":"data:1","secret_ref":"ref","connection_string":"secret"}"#,
+            r#"{"source_kind":"data","source_id":"data:1"}"#,
+            r#"{"source_kind":"data","source_id":"data:2","secret_ref":"ref"}"#,
+        ] {
+            assert!(product_document(ProductRecordKind::Source, "data:1", 1, rejected).is_err());
+        }
     }
 
     #[tokio::test]

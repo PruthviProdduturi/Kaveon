@@ -8,7 +8,7 @@ from typing import List, Optional
 import database.metadata as db
 from services import product_outbox, product_shadow_read
 
-MIGRATABLE_TYPES = {"dataset", "chart", "dashboard", "saved_query"}
+MIGRATABLE_TYPES = {"dataset", "chart", "dashboard", "saved_query", "source"}
 
 def _record_id(owner, object_type, object_id):
     return hashlib.sha256(f"{owner}\0{object_type}\0{object_id}".encode()).hexdigest()

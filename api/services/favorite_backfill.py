@@ -31,14 +31,14 @@ def capture_snapshot():
  records=[]; sid=None
  for row in rows:
   kind=str(row.get("object_type") or "")
-  if kind=="data_source": raise RuntimeError("data-source favorites have no typed destination")
-  if kind not in favorites.MIGRATABLE_TYPES: raise RuntimeError("favorite object type is unsupported")
   owner=str(row.get("user_email") or "");oid=str(row.get("object_id") or "")
+  if kind=="data_source": kind,oid="source",f"data:{oid}"
+  if kind not in favorites.MIGRATABLE_TYPES: raise RuntimeError("favorite object type is unsupported")
   target=product_store.read(kind,oid,owner,"Admin")
   if target is None: raise RuntimeError(f"favorite target {kind}/{oid} is missing")
   current=str(target.get("snapshot_id") or "")
   if not current or (sid is not None and sid!=current): raise RuntimeError("favorite target snapshot is invalid")
-  sid=current;document=favorites._document(owner,row);rid=favorites._record_id(owner,kind,oid)
+  sid=current;document={"user_email":owner,"object_type":kind,"object_id":oid,"object_name":row.get("object_name")};rid=favorites._record_id(owner,kind,oid)
   records.append(FavoriteRecord(rid,owner,document,_canonical(document)[1]))
  records=tuple(sorted(records,key=lambda r:r.record_id));sid=sid or "empty"
  result=FavoriteSnapshot(int(watermark.get("watermark") or 0),sid,records,snapshot_digest(records,sid));validate_snapshot(result);return result

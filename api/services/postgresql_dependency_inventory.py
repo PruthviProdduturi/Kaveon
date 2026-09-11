@@ -41,6 +41,7 @@ DEPENDENCIES = {
     "services/saved_queries.py": {"saved_queries": "read-write", "favorites": "read"},
     "services/theme.py": {"user_themes": "read-write"},
     "services/user_theme_backfill.py": {"user_themes": "read"},
+    "services/source_backfill.py": {"catalog_sources": "read", "data_sources": "read"},
     "services/user_recents.py": {"user_recents": "read-write"},
 }
 

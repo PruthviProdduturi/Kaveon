@@ -35,13 +35,16 @@ class FavoriteMigrationTests(unittest.TestCase):
   enqueue.assert_not_called()
   with patch.object(favorites.db,"transaction",return_value=transaction(Tx())),patch.object(favorites.product_outbox,"enqueue",side_effect=RuntimeError("outbox failure")),self.assertRaisesRegex(RuntimeError,"outbox failure"):
    favorites.create_favorite({"object_type":"dataset","object_id":"7","object_name":"Orders"},"owner")
- def test_capture_binds_targets_and_rejects_data_sources(self):
+ def test_capture_binds_targets_and_maps_data_sources(self):
   row={"id":"f","user_email":"owner","object_type":"dataset","object_id":"7","object_name":"Orders"}
   with patch.object(backfill.db,"transaction",return_value=transaction(Tx(rows=[row]))),patch.object(backfill.product_store,"read",return_value={"snapshot_id":"snap"}) as read:
    self.assertEqual(backfill.capture_snapshot(),snap())
   read.assert_called_once_with("dataset","7","owner","Admin")
   row["object_type"]="data_source"
-  with patch.object(backfill.db,"transaction",return_value=transaction(Tx(rows=[row]))),self.assertRaisesRegex(RuntimeError,"no typed destination"):backfill.capture_snapshot()
+  with patch.object(backfill.db,"transaction",return_value=transaction(Tx(rows=[row]))),patch.object(backfill.product_store,"read",return_value={"snapshot_id":"snap"}) as read:
+   result=backfill.capture_snapshot()
+  self.assertEqual(result.records[0].document["object_type"],"source")
+  read.assert_called_once_with("source","data:7","owner","Admin")
  def test_apply_checkpoint_resume_and_shadow(self):
   s=snap();exact={"document":s.records[0].document}
   with patch.object(backfill.product_store,"read",side_effect=[None,exact]),patch.object(backfill.product_store,"transact") as tx:self.assertEqual(backfill.apply_and_reconcile(s)["created"],1)
