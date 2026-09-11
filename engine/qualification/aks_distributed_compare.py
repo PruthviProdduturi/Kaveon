@@ -270,10 +270,14 @@ class Engines:
                        "x-kaveon-actor": "aks-benchmark-runner", "If-Match": "1"}
             http("PUT", self.kaveon_url + item, headers, active, self.kaveon_ssl)
         except RuntimeError as error:
-            if "HTTP 409" not in str(error):
+            duplicate = "HTTP 409" in str(error) or (
+                "HTTP 400" in str(error) and "UNIQUE constraint failed" in str(error)
+            )
+            if not duplicate:
                 raise
             existing = self.krequest("GET", item)
-            if existing.get("name") != value.get("name") or existing.get("lifecycle") != "Active":
+            expected = dict(value, revision=2, lifecycle="Active")
+            if existing != expected:
                 raise RuntimeError(f"existing Kaveon catalog object disagrees at {item}") from error
 
     def bootstrap_trino(self):

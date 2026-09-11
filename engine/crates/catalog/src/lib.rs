@@ -703,6 +703,13 @@ fn now_ms() -> Result<u64> {
         .map_err(|_| catalog_error("timestamp overflow"))
 }
 fn db_error(error: rusqlite::Error) -> KaveonError {
+    if matches!(
+        &error,
+        rusqlite::Error::SqliteFailure(_, Some(message))
+            if message.starts_with("UNIQUE constraint failed")
+    ) {
+        return catalog_error("object already exists");
+    }
     catalog_error(format!("database: {error}"))
 }
 fn json_error(error: serde_json::Error) -> KaveonError {
@@ -767,6 +774,17 @@ mod tests {
         assert_eq!(store.audit_events(None, 10).unwrap().len(), 3);
         drop(store);
         fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn duplicate_catalog_is_reported_as_conflict_semantics() {
+        let store = CatalogStore::open_in_memory().unwrap();
+        let (catalog, _, _) = values();
+        store.create_catalog("test", &catalog).unwrap();
+        assert!(store
+            .create_catalog("test", &catalog)
+            .unwrap_err()
+            .to_string()
+            .contains("already exists"));
     }
     #[test]
     fn stale_revision_rolls_back() {
