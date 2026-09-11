@@ -24,6 +24,7 @@ DEPENDENCIES = {
     "routers/sql.py": {"catalog_sources": "read"},
     "services/ai_service.py": {"ai_configuration": "read-write", "data_sources": "read", "datasets": "read", "dataset_semantics": "read"},
     "services/charts.py": {"charts": "read-write", "datasets": "read", "favorites": "read"},
+    "services/chart_backfill.py": {"charts": "read"},
     "services/credentials.py": {"data_sources": "write"},
     "services/dashboards.py": {"dashboards": "read-write", "charts": "read", "favorites": "read"},
     "services/datasets.py": {"datasets": "read-write", "dataset_semantics": "read-write", "charts": "read", "favorites": "read"},

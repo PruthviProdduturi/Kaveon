@@ -163,3 +163,9 @@ The offline DLM rehearsal verifier can bind both completed checkpoints, source
 watermarks, artifact receipts, exact definition revisions, KaveonDB
 snapshot/generations and reconciliation results into one freshness-limited
 bundle. It has only fixture evidence and does not change authority.
+
+Charts now have a default-off deterministic snapshot/backfill boundary for both
+supported PostgreSQL layouts. It binds owner-scoped chart records to exact
+KaveonDB dataset revisions and has checkpoint/resume plus exact reconciliation.
+No live snapshot, ongoing writer/outbox, fencing or cutover exists, so charts
+remain PostgreSQL-authoritative.

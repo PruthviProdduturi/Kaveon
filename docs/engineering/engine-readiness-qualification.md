@@ -258,6 +258,8 @@ release evidence after combined validation.
   ambiguous-outcome tests alone do not grant readiness credit.
 - A fresh verified DLM rehearsal bundle from live source, ADLS and KaveonDB
   observations. Locally constructed fixtures do not grant readiness credit.
+- Live chart backfill/reconciliation evidence across both supported source
+  layouts and exact dataset revisions; local fixtures grant no readiness credit.
 
 ### Engine-backed virtual chart datasets
 
