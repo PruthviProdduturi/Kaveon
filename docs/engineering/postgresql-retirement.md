@@ -213,3 +213,5 @@ fencing, rollback and backup/restore qualification.
 Deleting the StatefulSet or PVC before these gates would remove the current
 product metadata authority and break Studio even though ADLS analytical queries
 remain available.
+
+Favorites now cover typed migrated targets with owner uniqueness, references, source/outbox atomicity, backfill/replay and shadow code. Data-source favorites remain explicitly PostgreSQL-only until a non-secret source destination exists; therefore the family cannot pass retirement.

@@ -293,6 +293,7 @@ fn product_change(
             let kind = record_kind(&kind)?;
             let (document, bytes, references, derived_values) =
                 product_document(kind, &id, 1, &document_json)?;
+            validate_favorite_owner(kind, owner, &derived_values)?;
             validate_product_binding(snapshot, kind, &id, None, &references, &derived_values)?;
             let mut unique_values = BTreeMap::from([("owner_principal".into(), owner.into())]);
             unique_values.extend(derived_values);
@@ -327,6 +328,7 @@ fn product_change(
                 .ok_or_else(|| RegistryError::Invalid("product revision overflow".into()))?;
             let (document, bytes, references, derived_values) =
                 product_document(kind, &id, revision, &document_json)?;
+            validate_favorite_owner(kind, owner, &derived_values)?;
             validate_product_binding(
                 snapshot,
                 kind,
@@ -374,6 +376,19 @@ fn product_change(
     }
 }
 
+fn validate_favorite_owner(
+    kind: ProductRecordKind,
+    owner: &str,
+    values: &BTreeMap<String, String>,
+) -> Result<(), RegistryError> {
+    if kind == ProductRecordKind::Favorite
+        && !values["favorite_owner_target"].starts_with(&format!("{owner}:"))
+    {
+        return Err(RegistryError::Forbidden);
+    }
+    Ok(())
+}
+
 fn require_product_owner(record: &ProductRecordRef, owner: &str) -> Result<(), RegistryError> {
     if record
         .unique_values
@@ -396,6 +411,7 @@ fn record_kind(kind: &str) -> Result<ProductRecordKind, RegistryError> {
         "user_theme" => Ok(ProductRecordKind::UserTheme),
         "dlm_definition" => Ok(ProductRecordKind::DlmDefinition),
         "dlm_run" => Ok(ProductRecordKind::DlmRun),
+        "favorite" => Ok(ProductRecordKind::Favorite),
         _ => Err(RegistryError::Invalid(
             "unsupported product record kind".into(),
         )),
@@ -416,9 +432,42 @@ fn product_document(
         ));
     }
     let mut derived_values = BTreeMap::new();
-    let references = if kind == ProductRecordKind::Dashboard
-        && value.get("chart_revisions").is_some()
-    {
+    let references = if kind == ProductRecordKind::Favorite {
+        let object = value.as_object().expect("object checked above");
+        let owner = object
+            .get("user_email")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| RegistryError::Invalid("favorite owner is invalid".into()))?;
+        let object_id = object
+            .get("object_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| RegistryError::Invalid("favorite object_id is invalid".into()))?;
+        let target_name = object
+            .get("object_type")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| RegistryError::Invalid("favorite object_type is unsupported".into()))?;
+        let target = match target_name {
+            "dataset" => ProductRecordKind::Dataset,
+            "chart" => ProductRecordKind::Chart,
+            "dashboard" => ProductRecordKind::Dashboard,
+            "saved_query" => ProductRecordKind::SavedQuery,
+            _ => {
+                return Err(RegistryError::Invalid(
+                    "favorite object_type is unsupported".into(),
+                ));
+            }
+        };
+        derived_values.insert(
+            "favorite_owner_target".into(),
+            format!("{owner}:{target_name}:{object_id}"),
+        );
+        BTreeSet::from([ProductRecordReference {
+            kind: target,
+            id: object_id.into(),
+        }])
+    } else if kind == ProductRecordKind::Dashboard && value.get("chart_revisions").is_some() {
         let revisions = value["chart_revisions"]
             .as_object()
             .ok_or_else(|| RegistryError::Invalid("dashboard chart_revisions is invalid".into()))?;
@@ -555,6 +604,7 @@ fn product_document(
         ProductRecordKind::UserTheme => "user_theme",
         ProductRecordKind::DlmDefinition => "dlm_definition",
         ProductRecordKind::DlmRun => "dlm_run",
+        ProductRecordKind::Favorite => "favorite",
     };
     let path = format!("products/{kind_name}/{id}/{revision}-{sha256}.json");
     Ok((
@@ -1240,6 +1290,34 @@ mod tests {
                 "unexpectedly accepted {document}"
             );
         }
+    }
+
+    #[test]
+    fn favorite_is_owner_unique_and_references_supported_target() {
+        let (_, _, references, values) = product_document(ProductRecordKind::Favorite, "fav", 1,
+            r#"{"user_email":"alice","object_type":"dataset","object_id":"orders","object_name":"Orders"}"#).unwrap();
+        assert_eq!(
+            references,
+            BTreeSet::from([ProductRecordReference {
+                kind: ProductRecordKind::Dataset,
+                id: "orders".into()
+            }])
+        );
+        assert_eq!(values["favorite_owner_target"], "alice:dataset:orders");
+        assert!(validate_favorite_owner(ProductRecordKind::Favorite, "alice", &values).is_ok());
+        assert_eq!(
+            validate_favorite_owner(ProductRecordKind::Favorite, "bob", &values),
+            Err(RegistryError::Forbidden)
+        );
+        assert!(
+            product_document(
+                ProductRecordKind::Favorite,
+                "fav",
+                1,
+                r#"{"user_email":"alice","object_type":"data_source","object_id":"source"}"#
+            )
+            .is_err()
+        );
     }
 
     #[tokio::test]

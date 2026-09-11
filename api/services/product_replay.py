@@ -14,6 +14,7 @@ _KINDS = {
     "dashboards": "dashboard",
     "saved_queries": "saved_query",
     "user_themes": "user_theme",
+    "favorites": "favorite",
     "dlm_definitions": "dlm_definition",
 }
 

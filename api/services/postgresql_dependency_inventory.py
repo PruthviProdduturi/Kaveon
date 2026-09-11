@@ -33,6 +33,7 @@ DEPENDENCIES = {
     "services/dlm_definition_backfill.py": {"datasets": "read", "dlm_generation": "read"},
     "services/dlm_run_backfill.py": {"datasets": "read", "dlm_generation": "read"},
     "services/favorites.py": {"favorites": "read-write", "charts": "read", "dashboards": "read", "datasets": "read"},
+    "services/favorite_backfill.py": {"favorites": "read"},
     "services/migrate_credentials.py": {"ai_configuration": "write"},
     "services/product_backfill.py": {"datasets": "read", "dataset_semantics": "read"},
     "services/query_history.py": {"query_history": "read-write"},
