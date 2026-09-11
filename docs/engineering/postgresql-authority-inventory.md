@@ -92,3 +92,20 @@ KaveonDB snapshot provenance. Its exact schema rejects row samples and arbitrary
 fields. The collector is deliberately credential-free and performs no database
 or Engine requests; the family reconcilers remain responsible for producing the
 fresh read-only source/target facts.
+
+The application dependency side of this inventory is machine checked with:
+
+```powershell
+python scripts/check-postgresql-dependencies.py `
+  --output tmp/postgresql-cutover-dependencies.json
+```
+
+The scanner parses production Python database calls and matches their SQL table
+references to the same 16-family manifest. Every observed family at a call site
+must have an explicit `read`, `write` or conservative `read-write`
+classification. It also rejects missing classified files, invalid access modes
+and any family with no application call site. The emitted artifact contains
+paths, access modes, families and table names only. A new database call that
+mentions a maintained authority table fails until its cutover dependency is
+classified. Dynamic SQL must still receive code review because static parsing
+cannot infer a table name constructed entirely at runtime.

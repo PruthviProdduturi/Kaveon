@@ -119,6 +119,14 @@ Passing the parity audit supplies evidence only for item 2. Items 1 and 3-7
 remain independent mandatory gates, including live-schema discovery, shadow
 reads, write fencing, restart, backup/restore and rollback qualification.
 
+The checked-in cutover dependency inventory (`python
+scripts/check-postgresql-dependencies.py`) must also pass before item 1 can be
+reviewed. It maps production PostgreSQL query/execute call sites to all 16
+authority families and their read/write role, failing when an observed table
+family is unclassified. This is source-code coverage rather than proof that a
+deployment has no older or dynamically constructed authority path; preserve the
+separate live-schema and runtime qualification gates.
+
 Deleting the StatefulSet or PVC before these gates would remove the current
 product metadata authority and break Studio even though ADLS analytical queries
 remain available.
