@@ -260,6 +260,31 @@ $productContainer = $productOutputs.productTransactionContainer.value
 $productPrefix = $productOutputs.productCatalogPrefix.value
 ```
 
+For an existing AKS environment, do not redeploy the complete cluster template
+to add API secret storage. Discover every stable AKS outbound public IP, then use
+the additive entry point whose dependencies are declared `existing`:
+
+```powershell
+$outboundIds = az aks show --resource-group $group --name $cluster `
+  --query "networkProfile.loadBalancerProfile.effectiveOutboundIPs[].id" -o tsv
+$apiEgressCidrs = @($outboundIds | ForEach-Object {
+  "$(az network public-ip show --ids $_ --query ipAddress -o tsv)/32"
+})
+$apiEgressJson = $apiEgressCidrs | ConvertTo-Json -Compress
+
+az deployment group what-if --resource-group $group `
+  --template-file infra/bicep/environments/aks-api-secrets.bicep `
+  --parameters clusterName=$cluster apiEgressIpCidrs=$apiEgressJson `
+  --result-format FullResourcePayloads
+az deployment group create --name kaveon-api-secrets --resource-group $group `
+  --template-file infra/bicep/environments/aks-api-secrets.bicep `
+  --parameters clusterName=$cluster apiEgressIpCidrs=$apiEgressJson
+```
+
+Stop if what-if contains any modification or deletion: the additive deployment
+must create only the API identity, federation, vault and vault-scoped role.
+Changing subscription policy is neither required nor permitted by this flow.
+
 This creates one system node plus three worker nodes, ACR, ADLS Gen2
 bronze/silver/gold containers, an RBAC-enabled Key Vault, network and scoped
 identities/RBAC. The API identity has Secrets Officer only on that vault and
