@@ -142,6 +142,12 @@ the PostgreSQL mutation result. This closes a telemetry boundary only; replay,
 zero-lag fencing, live mutation coverage and durable report aggregation remain
 required before dataset cutover.
 
+Authenticated chart point reads also have a default-off bounded shadow
+comparator. This establishes only hash telemetry for one read path. Chart list
+coverage, source capture, backfill, replay, write verification and live parity
+evidence remain mandatory, and the comparator cannot satisfy the chart family
+retirement gate by itself.
+
 Deleting the StatefulSet or PVC before these gates would remove the current
 product metadata authority and break Studio even though ADLS analytical queries
 remain available.
