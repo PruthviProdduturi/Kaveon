@@ -19,7 +19,7 @@ use kaveon_exec::sort::SortExpr;
 use kaveon_exec::union::UnionOperator;
 use kaveon_exec::window::WindowOperator;
 use kaveon_optim::rules::to_storage_predicate;
-use kaveon_sql::logical_plan::{AggregateExpr, JoinType, LogicalPlan};
+use kaveon_sql::logical_plan::{AggregateExpr, JoinDistribution, JoinType, LogicalPlan};
 const AGGREGATE_FUNCTIONS: &[&str] = &["COUNT", "SUM", "AVG", "MIN", "MAX"];
 use kaveon_storage::{
     AdlsParquetReader, DeltaTableReader, ObjectDeltaReader, ObjectParquetReader, ParquetReader,
@@ -526,7 +526,14 @@ impl ExecutableFragmentBuilder<'_> {
                 right,
                 join_type,
                 condition,
-            } => self.build_join(left, right, *join_type, condition.as_ref()),
+                distribution,
+            } => self.build_join(
+                left,
+                right,
+                *join_type,
+                condition.as_ref(),
+                *distribution,
+            ),
             LogicalPlan::SemiJoin { .. } | LogicalPlan::AntiJoin { .. } => Err(
                 KaveonError::Execution("distributed semi/anti joins are not implemented".into()),
             ),
@@ -567,9 +574,49 @@ impl ExecutableFragmentBuilder<'_> {
         right: &LogicalPlan,
         join_type: JoinType,
         condition: Option<&Expr>,
+        distribution: JoinDistribution,
     ) -> Result<StageId> {
         let left_stage = self.build(left)?;
         let right_stage = self.build(right)?;
+        if distribution == JoinDistribution::BroadcastRight {
+            let right_exchange = self.exchange(right_stage, left_stage)?.clone();
+            let right_root = self.draft_mut(right_stage)?.root;
+            self.draft_mut(right_stage)?.push(
+                FragmentOperator::ExchangeOutput(ExchangeOutput {
+                    exchange_id: right_exchange.id.clone(),
+                    partitioning: Partitioning::Broadcast,
+                }),
+                vec![right_root],
+            );
+            let right_input;
+            {
+                let mut draft = self.draft_mut(left_stage)?;
+                right_input = FragmentNodeId(draft.nodes.len() as u32);
+                draft.nodes.push(FragmentNode {
+                    id: right_input,
+                    inputs: Vec::new(),
+                    operator: FragmentOperator::ExchangeInput(ExchangeInput {
+                        exchange_id: right_exchange.id,
+                    }),
+                });
+            }
+            let keys = join_keys(condition)?;
+            let (left_keys, right_keys): (Vec<_>, Vec<_>) = keys.into_iter().unzip();
+            let mut draft = self.draft_mut(left_stage)?;
+            draft.push(
+                FragmentOperator::HashJoin(JoinSpec {
+                    join_type: fragment_join_type(join_type),
+                    left_qualifier: relation_qualifier(left),
+                    right_qualifier: relation_qualifier(right),
+                    left_keys: left_keys.into_iter().map(Expr::Column).collect(),
+                    right_keys: right_keys.into_iter().map(Expr::Column).collect(),
+                    residual: None,
+                    broadcast: true,
+                }),
+                vec![draft.root, right_input],
+            );
+            return Ok(left_stage);
+        }
         let target = StageId(self.next_stage);
         let left_exchange = self.exchange(left_stage, target)?.clone();
         let right_exchange = self.exchange(right_stage, target)?.clone();
@@ -863,10 +910,16 @@ impl StageGraphBuilder {
                 right,
                 join_type,
                 condition,
+                distribution,
             } => {
                 let left_stage = self.build(left)?;
                 let right_stage = self.build(right)?;
                 let join = physical_plan_tree(plan);
+                if *distribution == JoinDistribution::BroadcastRight {
+                    self.wrap_stage(left_stage, "BroadcastHashJoin", join.attributes);
+                    self.add_exchange(right_stage, left_stage, Partitioning::Broadcast);
+                    return Ok(left_stage);
+                }
                 let target = self.add_exchange_stage(
                     "PartitionedHashJoin",
                     join.attributes,
@@ -1294,6 +1347,7 @@ fn plan_query_with_predicate(
             right,
             join_type,
             condition,
+            distribution: _,
         } => {
             let left_qualifier = relation_qualifier(left);
             let right_qualifier = relation_qualifier(right);
@@ -2202,6 +2256,51 @@ mod tests {
                 ));
             }
         }
+    }
+
+    #[test]
+    fn proven_small_build_is_broadcast_into_probe_scan_stage() {
+        let fixture = fixture();
+        let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT * FROM items i JOIN customers c ON i.id = c.id",
+        )
+        .unwrap();
+        qualify_tables(&mut plan, "test", "default");
+        let plan = kaveon_optim::statistics::optimize_with_statistics(
+            plan,
+            &mut |table| {
+                Some(kaveon_optim::statistics::RelationStatistics {
+                    rows: if table.ends_with("customers") { 10 } else { 10_000 },
+                    columns: vec!["id".into(), "name".into()],
+                })
+            },
+        );
+
+        let graph = build_stage_graph("broadcast-query", &plan, 4).unwrap();
+        assert_eq!(graph.stages.len(), 2);
+        assert_eq!(graph.root_stage, StageId(0));
+        assert_eq!(graph.exchanges.len(), 1);
+        assert_eq!(graph.exchanges[0].source_stage, StageId(1));
+        assert_eq!(graph.exchanges[0].target_stage, StageId(0));
+        assert_eq!(graph.exchanges[0].partitioning, Partitioning::Broadcast);
+        assert_eq!(graph.stages[0].plan.operator, "BroadcastHashJoin");
+
+        let fragments =
+            build_executable_fragments("broadcast-query", &plan, &fixture.catalog, 4).unwrap();
+        assert_eq!(fragments.len(), 2);
+        let probe = &fragments[&StageId(0)];
+        let join = probe.nodes.last().unwrap();
+        assert!(matches!(
+            &join.operator,
+            FragmentOperator::HashJoin(spec) if spec.broadcast
+        ));
+        assert!(matches!(
+            fragments[&StageId(1)].nodes.last().unwrap().operator,
+            FragmentOperator::ExchangeOutput(ExchangeOutput {
+                partitioning: Partitioning::Broadcast,
+                ..
+            })
+        ));
     }
 
     #[test]

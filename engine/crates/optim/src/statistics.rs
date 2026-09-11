@@ -1,9 +1,12 @@
 //! Conservative build-side selection using exact local scan row counts.
 //! Unsupported shapes and unavailable statistics retain their existing plans.
 use kaveon_core::{BinaryOp, CatalogManager, DataFormat, Expr, StorageType, TableReference};
-use kaveon_sql::logical_plan::{JoinType, LogicalPlan};
+use kaveon_sql::logical_plan::{JoinDistribution, JoinType, LogicalPlan};
 use kaveon_storage::{DeltaTableReader, ParquetReader};
 use std::collections::HashMap;
+
+const BROADCAST_BUILD_MAX_ROWS: u64 = 1_000_000;
+const BROADCAST_MIN_PROBE_TO_BUILD_RATIO: u64 = 4;
 
 #[derive(Clone, Debug)]
 pub struct RelationStatistics {
@@ -54,12 +57,16 @@ pub fn optimize_with_statistics(
             right,
             join_type,
             condition,
+            distribution: _,
         } => {
             let left = Box::new(optimize_with_statistics(*left, statistics));
             let right = Box::new(optimize_with_statistics(*right, statistics));
+            let left_relation = relation(&left, statistics);
+            let right_relation = relation(&right, statistics);
             let swap = if join_type == JoinType::Inner {
-                relation(&left, statistics)
-                    .zip(relation(&right, statistics))
+                left_relation
+                    .clone()
+                    .zip(right_relation.clone())
                     .and_then(
                         |(
                             (left_rows, left_alias, left_columns),
@@ -90,21 +97,33 @@ pub fn optimize_with_statistics(
                 None
             };
             if let Some((condition, columns)) = swap {
+                let distribution = join_distribution(
+                    join_type,
+                    right_relation.as_ref().map(|value| value.0),
+                    left_relation.as_ref().map(|value| value.0),
+                );
                 LogicalPlan::Project {
                     input: Box::new(LogicalPlan::Join {
                         left: right,
                         right: left,
                         join_type,
                         condition: Some(condition),
+                        distribution,
                     }),
                     columns,
                 }
             } else {
+                let distribution = join_distribution(
+                    join_type,
+                    left_relation.as_ref().map(|value| value.0),
+                    right_relation.as_ref().map(|value| value.0),
+                );
                 LogicalPlan::Join {
                     left,
                     right,
                     join_type,
                     condition,
+                    distribution,
                 }
             }
         }
@@ -188,6 +207,24 @@ pub fn optimize_with_statistics(
     }
 }
 
+fn join_distribution(
+    join_type: JoinType,
+    probe_rows: Option<u64>,
+    build_rows: Option<u64>,
+) -> JoinDistribution {
+    let Some((probe_rows, build_rows)) = probe_rows.zip(build_rows) else {
+        return JoinDistribution::Partitioned;
+    };
+    if join_type == JoinType::Inner
+        && build_rows <= BROADCAST_BUILD_MAX_ROWS
+        && probe_rows >= build_rows.saturating_mul(BROADCAST_MIN_PROBE_TO_BUILD_RATIO)
+    {
+        JoinDistribution::BroadcastRight
+    } else {
+        JoinDistribution::Partitioned
+    }
+}
+
 fn relation(
     plan: &LogicalPlan,
     stats: &mut impl FnMut(&str) -> Option<RelationStatistics>,
@@ -268,13 +305,36 @@ mod tests {
             vec!["s.id", "s.value", "b.id", "b.value"]
         );
         let LogicalPlan::Join {
-            right, condition, ..
+            right,
+            condition,
+            distribution,
+            ..
         } = *input
         else {
             panic!("join missing")
         };
         assert!(matches!(*right,LogicalPlan::Scan {table,..} if table=="small"));
         assert!(format!("{condition:?}").contains("left: Column(\"b.id\")"));
+        assert_eq!(distribution, JoinDistribution::BroadcastRight);
+    }
+
+    #[test]
+    fn broadcasts_only_a_proven_small_materially_smaller_inner_build() {
+        assert_eq!(
+            join_distribution(JoinType::Inner, Some(4_000_000), Some(1_000_000)),
+            JoinDistribution::BroadcastRight
+        );
+        for (join_type, probe, build) in [
+            (JoinType::Left, Some(4_000_000), Some(1_000_000)),
+            (JoinType::Inner, Some(3_999_999), Some(1_000_000)),
+            (JoinType::Inner, Some(8_000_000), Some(1_000_001)),
+            (JoinType::Inner, None, Some(10)),
+        ] {
+            assert_eq!(
+                join_distribution(join_type, probe, build),
+                JoinDistribution::Partitioned
+            );
+        }
     }
     #[test]
     fn leaves_outer_unknown_and_unqualified_joins_unchanged() {

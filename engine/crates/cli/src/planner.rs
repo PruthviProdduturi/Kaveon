@@ -107,6 +107,7 @@ fn plan_with_predicate(
             right,
             join_type,
             condition,
+            ..
         } => {
             let left_qualifier = relation_qualifier(left);
             let right_qualifier = relation_qualifier(right);

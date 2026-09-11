@@ -61,11 +61,13 @@ pub fn push_filter_down(plan: LogicalPlan) -> LogicalPlan {
             right,
             join_type,
             condition,
+            distribution,
         } => LogicalPlan::Join {
             left: Box::new(push_filter_down(*left)),
             right: Box::new(push_filter_down(*right)),
             join_type,
             condition,
+            distribution,
         },
         LogicalPlan::SemiJoin {
             left,
@@ -219,6 +221,7 @@ fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> Logica
             right,
             join_type,
             condition,
+            distribution,
         } => {
             let mut columns = required.unwrap_or_default();
             if let Some(condition) = &condition {
@@ -252,6 +255,7 @@ fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> Logica
                 right: Box::new(prune_columns(*right, right_required)),
                 join_type,
                 condition,
+                distribution,
             }
         }
         LogicalPlan::SemiJoin {
