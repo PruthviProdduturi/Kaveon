@@ -20,6 +20,8 @@ _KINDS = {
     "user_recents": "user_recent",
     "query_history": "query_history",
     "activity": "activity",
+    "chat_sessions": "chat_session",
+    "chat_messages": "chat_message",
     "dlm_definitions": "dlm_definition",
 }
 
