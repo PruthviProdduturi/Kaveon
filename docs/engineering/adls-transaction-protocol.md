@@ -117,6 +117,13 @@ the indexes on the next typed-row commit. This foundation does not yet provide
 Parquet/Delta mutation files, secondary index maintenance for arbitrary SQL
 tables, schema migration locking, or a public general-purpose row-DML API.
 
+The storage crate also provides `ImmutableParquetWriter`, a create-only
+preparation primitive. It checks the `.parquet` suffix, Parquet magic bytes,
+maximum object size, and SHA-256, and accepts an existing object only when its
+bytes match exactly. It returns a reference for a later catalog commit; it
+does not publish a table head, replace data, compact files, or make a failed
+upload part of a committed table.
+
 The head serializes commits for a tenant/catalog. Independent heads/shards are a
 future protocol change requiring a separate atomicity proof; one transaction may
 not update multiple heads.
