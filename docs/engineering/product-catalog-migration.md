@@ -443,6 +443,25 @@ command is not scheduled or deployed. No concrete credential provider is built
 into the repository, and no live publication has run; qualification still
 requires a deployment-owned ADLS client and durable evidence.
 
+## DLM migration rehearsal evidence
+
+`scripts/collect-dlm-migration-evidence.py` builds a credential-free, canonical
+evidence bundle from completed definition and run checkpoints, artifact
+publication receipts, reconciliation reports, and owner-scoped target
+observations. Collection is disabled unless
+`KAVEON_DLM_REHEARSAL_EVIDENCE_ENABLED=true`. The bundle binds both PostgreSQL
+watermarks and snapshot hashes, checkpoint file hashes, the dataset/definition
+capture snapshots, every run's exact definition revision and artifact hash, and
+the final KaveonDB snapshot plus per-record generations.
+
+The verifier requires complete ID coverage, positive generations, verified
+artifact receipts, matching counts and reconciliation hashes, a valid canonical
+bundle SHA-256 and a caller-selected freshness window. Missing, stale, duplicate,
+tampered or mismatched evidence fails closed. Sensitive field names are rejected,
+and each input and the bundle are bounded at 4 MiB. This is rehearsal evidence;
+it does not itself satisfy the broader DLM retirement gate or prove a deployed
+writer, fencing, rollback, retention, backup/restore or production cutover.
+
 The first deterministic definition backfill selects ready `dlm_artifact`
 dataset IDs and owners inside one PostgreSQL `REPEATABLE READ, READ ONLY`
 transaction at the product-outbox watermark. Because PostgreSQL has no KaveonDB

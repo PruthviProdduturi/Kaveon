@@ -256,6 +256,8 @@ release evidence after combined validation.
 - Live qualification of the default-off DLM run backfill against durably
   published ADLS manifests. The injected create-only client contract and local
   ambiguous-outcome tests alone do not grant readiness credit.
+- A fresh verified DLM rehearsal bundle from live source, ADLS and KaveonDB
+  observations. Locally constructed fixtures do not grant readiness credit.
 
 ### Engine-backed virtual chart datasets
 

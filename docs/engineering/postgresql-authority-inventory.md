@@ -158,3 +158,8 @@ target state. A create-only injected-client publisher now verifies staged hashes
 conditional creation and exact remote bytes before metadata apply. It has no
 credential provider, scheduled execution or live evidence; PostgreSQL remains
 authoritative.
+
+The offline DLM rehearsal verifier can bind both completed checkpoints, source
+watermarks, artifact receipts, exact definition revisions, KaveonDB
+snapshot/generations and reconciliation results into one freshness-limited
+bundle. It has only fixture evidence and does not change authority.
