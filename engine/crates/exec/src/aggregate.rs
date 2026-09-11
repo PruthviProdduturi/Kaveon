@@ -7,10 +7,46 @@ use arrow::datatypes::{DataType, Field, Float64Type, Int32Type, Int64Type, Schem
 use arrow::ipc::reader::StreamReader;
 use arrow::ipc::writer::StreamWriter;
 use arrow::record_batch::RecordBatch;
-use kaveon_core::{BatchOperator, KaveonError, MemoryReservation, OperatorMemoryAccount, Result};
+use kaveon_core::{
+    BatchOperator, KaveonError, MemoryReservation, OperatorMemoryAccount, QueryMemoryPool, Result,
+};
 use std::collections::{HashMap, HashSet, hash_map::Entry};
 use std::io::Cursor;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
+
+const AGGREGATE_METRICS_RESOURCE: &str = "kaveon.exec.aggregate-metrics.v1";
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AggregateMetricsSnapshot {
+    pub input_rows: u64,
+    pub groups_created: u64,
+    pub distinct_values_admitted: u64,
+}
+
+#[derive(Default)]
+pub struct AggregateMetrics {
+    input_rows: AtomicU64,
+    groups_created: AtomicU64,
+    distinct_values_admitted: AtomicU64,
+}
+
+impl AggregateMetrics {
+    #[must_use]
+    pub fn snapshot(&self) -> AggregateMetricsSnapshot {
+        AggregateMetricsSnapshot {
+            input_rows: self.input_rows.load(Ordering::Acquire),
+            groups_created: self.groups_created.load(Ordering::Acquire),
+            distinct_values_admitted: self.distinct_values_admitted.load(Ordering::Acquire),
+        }
+    }
+}
+
+pub fn aggregate_metrics(memory: &QueryMemoryPool) -> Result<Arc<AggregateMetrics>> {
+    memory.shared_resource(AGGREGATE_METRICS_RESOURCE, || Ok(AggregateMetrics::default()))
+}
 
 const AGGREGATE_STATE_VERSION_KEY: &str = "kaveon.aggregate_state.version";
 const AGGREGATE_STATE_VERSION: &str = "2";
@@ -1819,7 +1855,17 @@ impl HashAggregate {
         // seeds while materially reducing the hot-path cost of large GROUP BYs.
         let mut groups: AHashMap<InlineGroupKey, Vec<Accumulator>> = AHashMap::new();
         let mut reservations = Vec::new();
+        let metrics = self
+            .memory
+            .as_ref()
+            .map(|memory| aggregate_metrics(memory.query()))
+            .transpose()?;
         while let Some(batch) = self.source.next_batch()? {
+            if let Some(metrics) = &metrics {
+                metrics
+                    .input_rows
+                    .fetch_add(batch.num_rows() as u64, Ordering::Relaxed);
+            }
             let _input_memory = if self.input_already_reserved {
                 None
             } else {
@@ -1849,6 +1895,11 @@ impl HashAggregate {
                     reservations
                         .push(memory.reserve(estimated_group_bytes(&[], self.aggregates.len()))?);
                 }
+                if groups.is_empty()
+                    && let Some(metrics) = &metrics
+                {
+                    metrics.groups_created.fetch_add(1, Ordering::Relaxed);
+                }
                 let states = groups
                     .entry(InlineGroupKey::Empty)
                     .or_insert_with(|| self.new_states());
@@ -1875,11 +1926,20 @@ impl HashAggregate {
                         }
                         if aggregate.distinct {
                             let value: AggregateValue = extract_key(array, row).into();
-                            if distinct_value_is_new(state, &value)
+                            let admitted = distinct_value_is_new(state, &value)
+                                && !matches!(value, AggregateValue::Null);
+                            if admitted
                                 && let Some(memory) = &self.memory
                             {
                                 reservations
                                     .push(memory.reserve(estimated_distinct_value_bytes(&value))?);
+                            }
+                            if admitted
+                                && let Some(metrics) = &metrics
+                            {
+                                metrics
+                                    .distinct_values_admitted
+                                    .fetch_add(1, Ordering::Relaxed);
                             }
                             state.update_distinct(value)?;
                         } else if matches!(state, AggregateState::Exact { .. }) {
@@ -1937,6 +1997,9 @@ impl HashAggregate {
                                 self.aggregates.len(),
                             ))?);
                         }
+                        if let Some(metrics) = &metrics {
+                            metrics.groups_created.fetch_add(1, Ordering::Relaxed);
+                        }
                         entry.insert(self.new_states())
                     }
                 };
@@ -1948,11 +2011,20 @@ impl HashAggregate {
                     {
                         if aggregate.distinct {
                             let value: AggregateValue = extract_key(array, row).into();
-                            if distinct_value_is_new(&accumulators[index], &value)
+                            let admitted = distinct_value_is_new(&accumulators[index], &value)
+                                && !matches!(value, AggregateValue::Null);
+                            if admitted
                                 && let Some(memory) = &self.memory
                             {
                                 reservations
                                     .push(memory.reserve(estimated_distinct_value_bytes(&value))?);
+                            }
+                            if admitted
+                                && let Some(metrics) = &metrics
+                            {
+                                metrics
+                                    .distinct_values_admitted
+                                    .fetch_add(1, Ordering::Relaxed);
                             }
                             accumulators[index].update_distinct(value)?;
                         } else if matches!(aggregate.func, AggFunc::Count) {
@@ -2838,6 +2910,37 @@ mod tests {
                 .value(0),
             2
         );
+    }
+
+    #[test]
+    fn aggregate_metrics_count_rows_groups_and_admitted_distinct_values() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("group_key", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(vec!["a", "a", "b", "b"])),
+                Arc::new(StringArray::from(vec![Some("x"), Some("x"), Some("y"), None])),
+            ],
+        )
+        .unwrap();
+        let pool = QueryMemoryPool::new("aggregate-metrics", 1024 * 1024).unwrap();
+        let mut aggregate = HashAggregate::new_with_memory(
+            Box::new(Input::new(batch)),
+            vec!["group_key".into()],
+            vec![AggExpr::new(AggFunc::Count, "value").distinct()],
+            pool.operator("aggregate").unwrap(),
+        )
+        .unwrap();
+        assert!(aggregate.next_batch().unwrap().is_some());
+        let snapshot = aggregate_metrics(&pool).unwrap().snapshot();
+        assert_eq!(snapshot.input_rows, 4);
+        assert_eq!(snapshot.groups_created, 2);
+        assert_eq!(snapshot.distinct_values_admitted, 2);
+        assert!(pool.snapshot().reservation_calls >= 4);
+        assert!(pool.snapshot().reservation_bytes > 0);
     }
 
     #[test]

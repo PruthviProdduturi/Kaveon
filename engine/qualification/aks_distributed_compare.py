@@ -31,6 +31,8 @@ EXECUTION_SUM_FIELDS = (
     "exchange_decode_us", "exchange_output_copies", "exchange_output_bytes",
     "exchange_encode_us", "exchange_upload_us", "spill_bytes_written",
     "spill_runs_written", "spill_compactions", "spill_compaction_input_bytes",
+    "memory_reservation_calls", "memory_reservation_bytes", "aggregate_input_rows",
+    "aggregate_groups_created", "aggregate_distinct_values_admitted",
 )
 EXECUTION_MAX_FIELDS = ("memory_peak_bytes", "spill_peak_bytes")
 SCAN_SUM_FIELDS = ("object_metadata_cache_hits",)

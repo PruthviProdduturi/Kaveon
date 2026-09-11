@@ -11,6 +11,8 @@ pub struct MemorySnapshot {
     pub current_bytes: u64,
     pub peak_bytes: u64,
     pub limit_bytes: u64,
+    pub reservation_calls: u64,
+    pub reservation_bytes: u64,
 }
 
 #[derive(Debug)]
@@ -19,6 +21,8 @@ struct QueryMemoryInner {
     limit_bytes: u64,
     current_bytes: AtomicU64,
     peak_bytes: AtomicU64,
+    reservation_calls: AtomicU64,
+    reservation_bytes: AtomicU64,
     _admission: Option<AdmissionLease>,
     resources: QueryResources,
     cancellation: CancellationProbe,
@@ -131,6 +135,8 @@ impl MemoryAdmissionController {
             current_bytes: self.inner.admitted_bytes.load(Ordering::Acquire),
             peak_bytes: self.inner.peak_admitted_bytes.load(Ordering::Acquire),
             limit_bytes: self.inner.limit_bytes,
+            reservation_calls: 0,
+            reservation_bytes: 0,
         }
     }
 
@@ -195,6 +201,8 @@ impl QueryMemoryPool {
                 limit_bytes,
                 current_bytes: AtomicU64::new(0),
                 peak_bytes: AtomicU64::new(0),
+                reservation_calls: AtomicU64::new(0),
+                reservation_bytes: AtomicU64::new(0),
                 _admission: None,
                 resources: QueryResources::default(),
                 cancellation: CancellationProbe::default(),
@@ -231,6 +239,8 @@ impl QueryMemoryPool {
             current_bytes: self.inner.current_bytes.load(Ordering::Acquire),
             peak_bytes: self.inner.peak_bytes.load(Ordering::Acquire),
             limit_bytes: self.inner.limit_bytes,
+            reservation_calls: self.inner.reservation_calls.load(Ordering::Acquire),
+            reservation_bytes: self.inner.reservation_bytes.load(Ordering::Acquire),
         }
     }
 
@@ -342,11 +352,21 @@ impl OperatorMemoryAccount {
             current_bytes: self.current_bytes.load(Ordering::Acquire),
             peak_bytes: self.peak_bytes.load(Ordering::Acquire),
             limit_bytes: self.query.inner.limit_bytes,
+            reservation_calls: self.query.inner.reservation_calls.load(Ordering::Acquire),
+            reservation_bytes: self.query.inner.reservation_bytes.load(Ordering::Acquire),
         }
     }
 
     pub fn reserve(&self, bytes: u64) -> Result<MemoryReservation> {
         self.query.try_reserve(bytes, self.operator_id())?;
+        self.query
+            .inner
+            .reservation_calls
+            .fetch_add(1, Ordering::Relaxed);
+        self.query
+            .inner
+            .reservation_bytes
+            .fetch_add(bytes, Ordering::Relaxed);
         let current = self.current_bytes.fetch_add(bytes, Ordering::AcqRel) + bytes;
         self.peak_bytes.fetch_max(current, Ordering::AcqRel);
 
@@ -468,6 +488,8 @@ mod tests {
             let _second = account.reserve(256).unwrap();
             assert_eq!(account.snapshot().current_bytes, 384);
             assert_eq!(pool.snapshot().peak_bytes, 384);
+            assert_eq!(pool.snapshot().reservation_calls, 2);
+            assert_eq!(pool.snapshot().reservation_bytes, 384);
         }
         assert_eq!(account.snapshot().current_bytes, 128);
         first.release();

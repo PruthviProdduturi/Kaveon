@@ -109,6 +109,11 @@ struct TaskExecutionMetrics {
     exchange_encode_us: u64,
     exchange_upload_us: u64,
     memory_peak_bytes: u64,
+    memory_reservation_calls: u64,
+    memory_reservation_bytes: u64,
+    aggregate_input_rows: u64,
+    aggregate_groups_created: u64,
+    aggregate_distinct_values_admitted: u64,
     spill_peak_bytes: u64,
     spill_bytes_written: u64,
     spill_runs_written: u64,
@@ -1067,7 +1072,16 @@ async fn execute_fragment_task(
     let scan = execution
         .scan_metrics_complete
         .then(|| merge_task_scan_metrics(execution.scan_metrics.iter()));
-    metrics.memory_peak_bytes = memory.snapshot().peak_bytes;
+    let memory_snapshot = memory.snapshot();
+    metrics.memory_peak_bytes = memory_snapshot.peak_bytes;
+    metrics.memory_reservation_calls = memory_snapshot.reservation_calls;
+    metrics.memory_reservation_bytes = memory_snapshot.reservation_bytes;
+    let aggregate_metrics = kaveon_exec::aggregate::aggregate_metrics(memory)
+        .map_err(|error| error.to_string())?
+        .snapshot();
+    metrics.aggregate_input_rows = aggregate_metrics.input_rows;
+    metrics.aggregate_groups_created = aggregate_metrics.groups_created;
+    metrics.aggregate_distinct_values_admitted = aggregate_metrics.distinct_values_admitted;
     if let (Some(before), Some(after)) = (spill_before, spill.map(|spill| spill.snapshot())) {
         metrics.spill_peak_bytes = after.peak_bytes;
         metrics.spill_bytes_written = after.bytes_written.saturating_sub(before.bytes_written);
