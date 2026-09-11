@@ -8,6 +8,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Extension, Json, Router};
+use futures::StreamExt;
 use kaveon_catalog::{
     CascadePolicy,
     product_commit::{CommitOutcome, ProductDocuments},
@@ -708,6 +709,21 @@ struct PrefetchedExchangeInputs {
     memory: kaveon_core::OperatorMemoryAccount,
 }
 
+async fn buffered_ordered<T, U, E, F, Fut>(
+    items: Vec<T>,
+    concurrency: usize,
+    operation: F,
+) -> Vec<Result<U, E>>
+where
+    F: Fn(T) -> Fut,
+    Fut: std::future::Future<Output = Result<U, E>>,
+{
+    futures::stream::iter(items.into_iter().map(operation))
+        .buffered(concurrency.max(1))
+        .collect()
+        .await
+}
+
 struct DiskExchangeInput {
     schema: arrow::datatypes::SchemaRef,
     payloads: std::collections::VecDeque<crate::transport::ArrowPayload>,
@@ -803,21 +819,33 @@ async fn execute_fragment_task(
     let input_account = memory
         .operator("prefetched-exchanges")
         .map_err(|error| error.to_string())?;
-    for location in &req.exchange_inputs {
-        let identity = crate::exchange::ExchangeIdentity {
-            exchange_id: location.exchange_id.clone(),
-            task_id: location.producer.clone(),
-            output_partition: location.output_partition,
-        };
-        let payload =
-            crate::exchange::fetch_payload(&client, &location.worker_uri, token, &identity)
-                .await
-                .map_err(|error| {
-                    format!(
-                        "cannot fetch exchange '{}': {error}",
-                        location.exchange_id.0
-                    )
-                })?;
+    // A repartitioned join has one input per producer for both sides. Fetching
+    // those spools serially put every network round trip and disk read on the
+    // task's critical path. Keep a small fixed fan-out and `buffered` ordering:
+    // latency overlaps without making producer order or memory use unbounded.
+    let fetched = buffered_ordered(req.exchange_inputs.clone(), 8, |location| {
+        let client = client.clone();
+        async move {
+            let identity = crate::exchange::ExchangeIdentity {
+                exchange_id: location.exchange_id.clone(),
+                task_id: location.producer.clone(),
+                output_partition: location.output_partition,
+            };
+            let payload =
+                crate::exchange::fetch_payload(&client, &location.worker_uri, token, &identity)
+                    .await
+                    .map_err(|error| {
+                        format!(
+                            "cannot fetch exchange '{}': {error}",
+                            location.exchange_id.0
+                        )
+                    })?;
+            Ok::<_, String>((location, payload))
+        }
+    })
+    .await;
+    for fetched in fetched {
+        let (location, payload) = fetched?;
         let schema = payload.schema();
         let entry = inputs.entry(location.exchange_id.clone()).or_default();
         if let Some(first) = entry.first()
@@ -4865,6 +4893,36 @@ mod tests {
                 .workers
                 .contains_key("worker-sync-test")
         );
+    }
+
+    #[tokio::test]
+    async fn exchange_prefetch_overlaps_work_with_bounded_deterministic_order() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let results = super::buffered_ordered((0..20).collect(), 4, {
+            let active = active.clone();
+            let peak = peak.clone();
+            move |value| {
+                let active = active.clone();
+                let peak = peak.clone();
+                async move {
+                    let now = active.fetch_add(1, Ordering::AcqRel) + 1;
+                    peak.fetch_max(now, Ordering::AcqRel);
+                    tokio::time::sleep(std::time::Duration::from_millis((5 - value % 5) as u64))
+                        .await;
+                    active.fetch_sub(1, Ordering::AcqRel);
+                    Ok::<_, ()>(value)
+                }
+            }
+        })
+        .await;
+        assert_eq!(
+            results.into_iter().collect::<Result<Vec<_>, _>>(),
+            Ok((0..20).collect())
+        );
+        assert_eq!(peak.load(Ordering::Acquire), 4);
+        assert_eq!(active.load(Ordering::Acquire), 0);
     }
 
     #[test]
