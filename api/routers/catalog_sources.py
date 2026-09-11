@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from middleware.auth import UserContext
 from middleware.permissions import require_min_role
 import database.metadata as db
-from services import source_mutations
+from services import source_mutations, source_secret_store
 
 router = APIRouter()
 
@@ -137,6 +137,9 @@ def create_catalog_source(data: dict, ctx: UserContext = Depends(require_min_rol
         raise HTTPException(400, f"credential_kind must be one of: {', '.join(sorted(_VALID_CREDENTIAL))}")
     if credential_kind == "secret_store" and not credential_ref:
         raise HTTPException(400, "secret_store credential requires a Key Vault URI in credential_ref")
+    if credential_ref:
+        try: source_secret_store.validate_reference(credential_ref)
+        except source_secret_store.SourceSecretError as error: raise HTTPException(400, str(error)) from None
 
     adapter_config_raw = data.get("adapter_config") or "{}"
     if isinstance(adapter_config_raw, dict):
@@ -222,8 +225,12 @@ def update_catalog_source(cs_id: str, data: dict, ctx: UserContext = Depends(req
         i += 1
 
     if "credential_ref" in data:
+        credential_ref = (data["credential_ref"] or "").strip() or None
+        if credential_ref:
+            try: source_secret_store.validate_reference(credential_ref)
+            except source_secret_store.SourceSecretError as error: raise HTTPException(400, str(error)) from None
         updates.append(f"credential_ref = @param{i}")
-        params.append((data["credential_ref"] or "").strip() or None)
+        params.append(credential_ref)
         i += 1
 
     if "adapter_type" in data:
