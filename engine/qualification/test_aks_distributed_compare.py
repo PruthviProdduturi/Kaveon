@@ -1,6 +1,6 @@
 import unittest
 
-from aks_distributed_compare import merge_stage_execution
+from aks_distributed_compare import merge_stage_execution, summarize_successful_latencies
 
 
 class ExecutionSummaryTests(unittest.TestCase):
@@ -51,6 +51,34 @@ class ExecutionSummaryTests(unittest.TestCase):
         self.assertEqual(summary["tasks_with_metrics"], 0)
         self.assertEqual(summary["tasks_with_cpu"], 0)
         self.assertEqual(summary["object_metadata_cache_hits"], 0)
+
+
+class LatencySummaryTests(unittest.TestCase):
+    def test_retains_successful_samples_counts_statistics_and_declared_order(self):
+        results = [
+            {"name": "join", "passed": True, "ms": 9.0},
+            {"name": "count", "passed": True, "ms": 2.0},
+            {"name": "join", "passed": False, "ms": 11.0},
+            {"name": "count", "passed": True, "ms": 4.0},
+        ]
+        summary = summarize_successful_latencies(results, ["count", "join"])
+
+        self.assertEqual([item["name"] for item in summary], ["count", "join"])
+        self.assertEqual(summary[0]["successful_ms"], [2.0, 4.0])
+        self.assertEqual(summary[0]["executions"], 2)
+        self.assertEqual(summary[0]["successful"], 2)
+        self.assertEqual(summary[0]["failed"], 0)
+        self.assertEqual(summary[0]["statistics"]["median_ms"], 3.0)
+        self.assertEqual(summary[0]["statistics"]["p95_ms"], 4.0)
+        self.assertEqual(summary[1]["successful_ms"], [9.0])
+        self.assertEqual(summary[1]["failed"], 1)
+
+    def test_rejects_undeclared_result_names(self):
+        with self.assertRaisesRegex(ValueError, "outside the declared workload"):
+            summarize_successful_latencies(
+                [{"name": "unexpected", "passed": True, "ms": 1.0}],
+                ["count"],
+            )
 
 
 if __name__ == "__main__":

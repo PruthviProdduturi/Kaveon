@@ -387,6 +387,37 @@ def percentile(samples, fraction):
     return ordered[math.ceil(len(ordered) * fraction) - 1]
 
 
+def summarize_successful_latencies(results, case_order):
+    """Retain ordered, exact-result latency samples and per-case outcome counts."""
+    expected_names = list(case_order)
+    expected_set = set(expected_names)
+    if len(expected_set) != len(expected_names):
+        raise ValueError("case order contains duplicate names")
+    if any(item.get("name") not in expected_set for item in results):
+        raise ValueError("result contains a case outside the declared workload")
+
+    summary = []
+    for name in expected_names:
+        matching = [item for item in results if item.get("name") == name]
+        samples = [item["ms"] for item in matching if item.get("passed") is True]
+        entry = {
+            "name": name,
+            "executions": len(matching),
+            "successful": len(samples),
+            "failed": len(matching) - len(samples),
+            "successful_ms": samples,
+        }
+        if samples:
+            entry["statistics"] = {
+                "min_ms": min(samples),
+                "median_ms": statistics.median(samples),
+                "p95_ms": percentile(samples, 0.95),
+                "max_ms": max(samples),
+            }
+        summary.append(entry)
+    return summary
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
@@ -465,7 +496,7 @@ def main():
                 for name, case in items:
                     for _ in range(policy["repetitions_per_round"]):
                         started = time.perf_counter()
-                        actual = engines.query(engine, case["sql"])
+                        actual, stages = engines.query_with_evidence(engine, case["sql"])
                         elapsed = (time.perf_counter() - started) * 1000
                         if len(actual) != case["result_rows"] or canonical_hash(actual) != case["result_sha256"]:
                             report["cases"][name]["passed"] = False
@@ -495,6 +526,8 @@ def main():
                     results = list(executor.map(checked, workload))
                 seconds = time.perf_counter() - started
                 passed = all(item["passed"] for item in results)
+                round_case_order = [name for name, _ in rotated]
+                latency_by_case = summarize_successful_latencies(results, round_case_order)
                 execution_by_stage = {}
                 if engine == "kaveon":
                     for item in results:
@@ -506,6 +539,8 @@ def main():
                 report["throughput"][engine].append({"round": round_index + 1, "order": order, "seconds": seconds,
                                                        "successful_qps": sum(item["passed"] for item in results) / seconds,
                                                        "worker_nodes": runtime["nodes"], "worker_image_ids": runtime["worker_image_ids"],
+                                                       "workload_order": [item["name"] for item in results],
+                                                       "latency_by_case": latency_by_case,
                                                        "execution_by_stage": execution_by_stage if engine == "kaveon" else None,
                                                        "results": results})
                 if not passed:
@@ -528,6 +563,13 @@ def main():
             candidate["successful_qps"] / reference["successful_qps"] if reference["successful_qps"] else None
             for candidate, reference in zip(throughput["kaveon"], throughput["trino"], strict=True)
         ]
+        throughput["latency_by_case"] = {
+            engine: summarize_successful_latencies(
+                [result for sample in throughput[engine] for result in sample["results"]],
+                queries.keys(),
+            )
+            for engine in ("kaveon", "trino")
+        }
         throughput["target_met"] = throughput["passed"] and throughput["kaveon_over_trino"] >= policy["target_ratio"]
         report["passed"] = all(case["passed"] for case in report["cases"]) and throughput["passed"]
     except Exception as error:
