@@ -90,6 +90,14 @@ python scripts/collect-postgresql-retirement-evidence.py `
   --output tmp/postgresql-reconciliation-evidence.json
 ```
 
+The reports directory must also contain `retirement-gates.json`. The gate file
+must contain fresh, machine-readable evidence for the source watermark and
+zero pending outbox events, an active PostgreSQL write fence, complete shadow
+parity, restart recovery, rollback, and a backup identity whose restore has
+been verified. The retirement verifier fails closed when any gate is missing,
+stale, false, malformed, or unverifiable; a family reconciliation report by
+itself cannot authorize retirement.
+
 Collection is disabled unless the environment variable is exactly `true` and
 fails when any maintained family report is absent, oversized, malformed,
 misnamed, tampered with or contains extra fields. Reports identify their

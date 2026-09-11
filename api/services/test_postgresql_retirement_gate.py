@@ -28,7 +28,45 @@ def evidence():
             },
             "report_sha256": hashlib.sha256(family.encode()).hexdigest(),
         })
-    return {"schema_version": 1, "families": families}
+    return {
+        "schema_version": gate.SCHEMA_VERSION,
+        "families": families,
+        "gates": {
+            "source_watermark": {
+                "status": "passed", "checked_at": "2026-09-10T19:00:00Z",
+                "evidence_id": "watermark-1", "details": {"watermark": 21},
+            },
+            "outbox_drain": {
+                "status": "passed", "checked_at": "2026-09-10T19:00:00Z",
+                "evidence_id": "outbox-1", "details": {"pending_events": 0},
+            },
+            "write_fence": {
+                "status": "passed", "checked_at": "2026-09-10T19:00:00Z",
+                "evidence_id": "fence-1", "details": {"enabled": True},
+            },
+            "shadow_parity": {
+                "status": "passed", "checked_at": "2026-09-10T19:00:00Z",
+                "evidence_id": "shadow-1", "details": {"matched": True},
+            },
+            "restart_recovery": {
+                "status": "passed", "checked_at": "2026-09-10T19:00:00Z",
+                "evidence_id": "restart-1", "details": {"verified": True},
+            },
+            "rollback": {
+                "status": "passed", "checked_at": "2026-09-10T19:00:00Z",
+                "evidence_id": "rollback-1", "details": {"verified": True},
+            },
+            "backup_identity": {
+                "status": "passed", "checked_at": "2026-09-10T19:00:00Z",
+                "evidence_id": "backup-1",
+                "details": {
+                    "backup_id": "snapshot-1",
+                    "backup_sha256": "a" * 64,
+                    "restore_verified": True,
+                },
+            },
+        },
+    }
 
 
 class RetirementGateTests(unittest.TestCase):
@@ -45,6 +83,31 @@ class RetirementGateTests(unittest.TestCase):
         value["families"].pop()
         with self.assertRaisesRegex(RuntimeError, "missing PostgreSQL authority evidence"):
             gate.evaluate(value, now=NOW, max_age_hours=24)
+
+    def test_each_global_retirement_gate_is_mandatory(self):
+        for gate_name in gate.GLOBAL_GATE_NAMES:
+            with self.subTest(gate_name=gate_name):
+                value = evidence()
+                value["gates"].pop(gate_name)
+                with self.assertRaisesRegex(RuntimeError, "missing PostgreSQL retirement gates"):
+                    gate.evaluate(value, now=NOW, max_age_hours=24)
+
+    def test_global_gate_failures_are_not_sufficiently_proven(self):
+        mutations = (
+            ("source_watermark", {"watermark": -1}, "watermark is invalid"),
+            ("outbox_drain", {"pending_events": 1}, "not drained"),
+            ("write_fence", {"enabled": False}, "verification failed"),
+            ("shadow_parity", {"matched": False}, "verification failed"),
+            ("restart_recovery", {"verified": False}, "verification failed"),
+            ("rollback", {"verified": False}, "verification failed"),
+            ("backup_identity", {"backup_id": "snapshot-1", "backup_sha256": "bad", "restore_verified": True}, "digest is invalid"),
+        )
+        for gate_name, details, message in mutations:
+            with self.subTest(gate_name=gate_name):
+                value = evidence()
+                value["gates"][gate_name]["details"] = details
+                with self.assertRaisesRegex(RuntimeError, message):
+                    gate.evaluate(value, now=NOW, max_age_hours=24)
 
     def test_unknown_and_duplicate_families_fail_closed(self):
         value = evidence()

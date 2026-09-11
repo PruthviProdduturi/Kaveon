@@ -5,10 +5,29 @@ import json
 from datetime import datetime, timezone
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MAX_EVIDENCE_BYTES = 4 * 1024 * 1024
 REQUIRED_CHECKS = ("counts", "stable_ids", "ownership", "references", "content_hashes")
-EVIDENCE_KEYS = frozenset(("schema_version", "families"))
+EVIDENCE_KEYS = frozenset(("schema_version", "families", "gates"))
+GLOBAL_GATE_NAMES = (
+    "source_watermark",
+    "outbox_drain",
+    "write_fence",
+    "shadow_parity",
+    "restart_recovery",
+    "rollback",
+    "backup_identity",
+)
+GATE_KEYS = frozenset(("status", "checked_at", "evidence_id", "details"))
+GATE_DETAIL_KEYS = {
+    "source_watermark": frozenset(("watermark",)),
+    "outbox_drain": frozenset(("pending_events",)),
+    "write_fence": frozenset(("enabled",)),
+    "shadow_parity": frozenset(("matched",)),
+    "restart_recovery": frozenset(("verified",)),
+    "rollback": frozenset(("verified",)),
+    "backup_identity": frozenset(("backup_id", "backup_sha256", "restore_verified")),
+}
 FAMILY_KEYS = frozenset((
     "family", "tables", "status", "reconciled_at", "source_watermark",
     "source_count", "target_count", "checks", "provenance", "report_sha256",
@@ -95,6 +114,48 @@ def evaluate(evidence: dict, *, now: datetime, max_age_hours: int) -> dict:
     if unknown := sorted(actual - expected):
         raise RuntimeError("unknown PostgreSQL authority evidence: " + ", ".join(unknown))
 
+    gates = evidence.get("gates")
+    if not isinstance(gates, dict) or set(gates) != set(GLOBAL_GATE_NAMES):
+        missing = sorted(set(GLOBAL_GATE_NAMES) - set(gates or {})) if isinstance(gates, dict) else list(GLOBAL_GATE_NAMES)
+        unknown_gates = sorted(set(gates or {}) - set(GLOBAL_GATE_NAMES)) if isinstance(gates, dict) else []
+        if missing:
+            raise RuntimeError("missing PostgreSQL retirement gates: " + ", ".join(missing))
+        raise RuntimeError("unknown PostgreSQL retirement gates: " + ", ".join(unknown_gates))
+    normalized_gates = {}
+    for gate_name in GLOBAL_GATE_NAMES:
+        gate_entry = gates[gate_name]
+        if not isinstance(gate_entry, dict) or set(gate_entry) != GATE_KEYS:
+            raise RuntimeError(f"{gate_name} retirement gate evidence is incomplete")
+        checked_at = _parse_utc(gate_entry.get("checked_at"))
+        age_seconds = (now.astimezone(timezone.utc) - checked_at.astimezone(timezone.utc)).total_seconds()
+        if age_seconds < 0 or age_seconds > max_age_hours * 3600:
+            raise RuntimeError(f"{gate_name} retirement gate evidence is not fresh")
+        if gate_entry.get("status") != "passed":
+            raise RuntimeError(f"{gate_name} retirement gate did not pass")
+        evidence_id = gate_entry.get("evidence_id")
+        if not isinstance(evidence_id, str) or not 1 <= len(evidence_id) <= 256:
+            raise RuntimeError(f"{gate_name} retirement gate evidence ID is invalid")
+        details = gate_entry.get("details")
+        if not isinstance(details, dict) or set(details) != GATE_DETAIL_KEYS[gate_name]:
+            raise RuntimeError(f"{gate_name} retirement gate details are incomplete")
+        if gate_name == "source_watermark" and (type(details["watermark"]) is not int or details["watermark"] < 0):
+            raise RuntimeError("source_watermark retirement gate watermark is invalid")
+        if gate_name == "outbox_drain" and (type(details["pending_events"]) is not int or details["pending_events"] != 0):
+            raise RuntimeError("outbox_drain retirement gate is not drained")
+        if gate_name in {"write_fence", "shadow_parity", "restart_recovery", "rollback"}:
+            detail_key = {"write_fence": "enabled", "shadow_parity": "matched", "restart_recovery": "verified", "rollback": "verified"}[gate_name]
+            if details[detail_key] is not True:
+                raise RuntimeError(f"{gate_name} retirement gate verification failed")
+        if gate_name == "backup_identity":
+            if not isinstance(details["backup_id"], str) or not details["backup_id"]:
+                raise RuntimeError("backup_identity retirement gate backup ID is invalid")
+            backup_sha = details["backup_sha256"]
+            if not isinstance(backup_sha, str) or len(backup_sha) != 64 or any(c not in "0123456789abcdef" for c in backup_sha):
+                raise RuntimeError("backup_identity retirement gate digest is invalid")
+            if details["restore_verified"] is not True:
+                raise RuntimeError("backup_identity retirement gate restore is unverified")
+        normalized_gates[gate_name] = gate_entry
+
     checked_at = now.astimezone(timezone.utc)
     normalized = []
     for family in sorted(AUTHORITY_FAMILIES):
@@ -136,6 +197,7 @@ def evaluate(evidence: dict, *, now: datetime, max_age_hours: int) -> dict:
         "max_age_hours": max_age_hours,
         "authority_family_count": len(AUTHORITY_FAMILIES),
         "families": normalized,
+        "gates": normalized_gates,
         "evidence_sha256": hashlib.sha256(encoded).hexdigest(),
     }
     audit["audit_sha256"] = hashlib.sha256(_canonical(audit)).hexdigest()
