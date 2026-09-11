@@ -27,10 +27,6 @@ const MAX_ADAPTIVE_BATCHES: usize = 64;
 // hash table is discarded on rejection, so processing a large prefix repeats
 // the most expensive work without changing the exact result.
 const MAX_PARTIAL_PROBE_BATCHES: usize = 8;
-// Once a bounded probe has been emitted, combine wider windows while they cut
-// exchange rows by at least 4x. This avoids repartitioning repeated
-// high-cardinality groups while rejecting genuinely unique, unbounded streams.
-const MIN_STREAMING_PARTIAL_REDUCTION: usize = 4;
 
 /// A bounded prefix can be replayed from memory without reopening its source.
 struct BufferedPrefix {
@@ -731,17 +727,12 @@ impl PartitionedHashAggregate {
                 match self.aggregate_batch(prefix.trial(), true) {
                     Ok((batch, guard))
                         if batch.as_ref().is_some_and(|batch| {
-                            !self.partial_probe_complete
-                                || prefix.complete
-                                || batch
-                                    .num_rows()
-                                    .saturating_mul(MIN_STREAMING_PARTIAL_REDUCTION)
-                                    <= input_rows
+                            batch.num_rows().saturating_mul(8) <= input_rows
                         }) =>
                     {
-                        // Partial states are mergeable across windows. Emit the
-                        // small initial probe, then retain the streaming path only
-                        // for useful reduction or a complete, successful tail.
+                        // Partial states are mergeable across batches. Stream them
+                        // only while aggregation reduces exchange rows by at least
+                        // 8x; otherwise retain the bounded partition/spill path.
                         self.input = prefix.take_tail();
                         self.output_memory = guard;
                         self.partial_probe_complete = true;
@@ -1502,7 +1493,7 @@ mod tests {
         assert!(grouped.next_batch().unwrap().is_none());
         assert_eq!(grouped_pool.snapshot().current_bytes, 0);
 
-        let bounded_pool = QueryMemoryPool::new("bounded-partial", 512 * 1024 * 1024).unwrap();
+        let bounded_pool = QueryMemoryPool::new("bounded-partial", 64 * 1024 * 1024).unwrap();
         let bounded_spill = spill();
         let mut high_cardinality = PartitionedHashAggregate::new_partial(
             input((0..100_000).map(Some).collect(), 8_192),
@@ -1520,38 +1511,18 @@ mod tests {
         let states = grouped_aggregate_states_from_batches(&high_cardinality_batches).unwrap();
         let merged = merge_grouped_aggregate_states(states).unwrap();
         assert_eq!(merged.len(), 100_000);
-        // A successful bounded probe can be emitted even when its rows are
-        // unique; the complete tail is also exact and needs no disk replay.
+        // The rejected adaptive trial processes only a small sample before the
+        // exact partitioned fallback consumes all rows. A 64-batch trial used
+        // to repeat most of this high-cardinality workload.
         assert_eq!(
             aggregate_metrics(&bounded_pool)
                 .unwrap()
                 .snapshot()
                 .input_rows,
-            100_000
+            200_000 + (MAX_PARTIAL_PROBE_BATCHES * 8_192) as u64
         );
-        assert_eq!(bounded_spill.snapshot().peak_bytes, 0);
+        assert!(bounded_spill.snapshot().peak_bytes > 0);
         assert_eq!(bounded_pool.snapshot().current_bytes, 0);
-
-        // A continuing unique stream fails the wider-window reduction gate and
-        // replays only its unread tail through the bounded spill path.
-        let unique_pool = QueryMemoryPool::new("unique-partial", 64 * 1024 * 1024).unwrap();
-        let unique_spill = spill();
-        let mut unique = PartitionedHashAggregate::new_partial(
-            input((0..10_000).map(Some).collect(), 128),
-            vec!["id".into()],
-            vec![AggExpr::new(AggFunc::Count, "*")],
-            unique_pool.operator("unique").unwrap(),
-            unique_spill.clone(),
-            16,
-        )
-        .unwrap();
-        let mut unique_rows = 0;
-        while let Some(batch) = unique.next_batch().unwrap() {
-            unique_rows += batch.num_rows();
-        }
-        assert_eq!(unique_rows, 10_000);
-        assert!(unique_spill.snapshot().peak_bytes > 0);
-        assert_eq!(unique_pool.snapshot().current_bytes, 0);
     }
 
     fn join_rows(operator: &mut dyn BatchOperator) -> Vec<(Option<i64>, Option<i64>)> {
