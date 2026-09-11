@@ -83,6 +83,14 @@ pub struct TypedRow {
     pub unique_keys: BTreeMap<String, String>,
 }
 
+/// Rebuildable manifest indexes for typed rows. The index values identify the
+/// row revision, allowing validation to detect stale or mismatched index data.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct TypedRowIndexes {
+    pub primary_keys: BTreeMap<String, u64>,
+    pub unique_keys: BTreeMap<String, BTreeMap<String, String>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogSnapshot {
     pub version: u32,
@@ -105,6 +113,10 @@ pub struct CatalogSnapshot {
     /// Revisioned typed rows owned by the same immutable catalog snapshot.
     #[serde(default)]
     pub typed_rows: BTreeMap<String, BTreeMap<String, TypedRow>>,
+    /// Persistent, rebuildable typed-row primary and unique indexes.
+    /// Older snapshots may omit this field and are accepted as legacy.
+    #[serde(default)]
+    pub typed_row_indexes: BTreeMap<String, TypedRowIndexes>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -203,6 +215,7 @@ impl CatalogSnapshot {
             control_records: BTreeMap::new(),
             product_records: BTreeMap::new(),
             typed_rows: BTreeMap::new(),
+            typed_row_indexes: BTreeMap::new(),
         })
     }
 
@@ -445,6 +458,7 @@ impl CatalogSnapshot {
         }
         validate_product_records(&product_records)?;
         validate_typed_rows(&typed_rows)?;
+        let typed_row_indexes = build_typed_row_indexes(&typed_rows)?;
         let generation = self
             .generation
             .checked_add(1)
@@ -462,6 +476,7 @@ impl CatalogSnapshot {
             control_records,
             product_records,
             typed_rows,
+            typed_row_indexes,
         };
         next.validate()?;
         Ok(next)
@@ -482,6 +497,7 @@ impl CatalogSnapshot {
         }
         validate_product_records(&self.product_records)?;
         validate_typed_rows(&self.typed_rows)?;
+        validate_typed_row_indexes(&self.typed_rows, &self.typed_row_indexes)?;
         for (table, reference) in &self.tables {
             validate_table_name(table)?;
             validate_table_reference(reference)?;
@@ -1059,6 +1075,45 @@ fn validate_typed_rows(
     Ok(())
 }
 
+fn build_typed_row_indexes(
+    tables: &BTreeMap<String, BTreeMap<String, TypedRow>>,
+) -> Result<BTreeMap<String, TypedRowIndexes>, ManifestError> {
+    validate_typed_rows(tables)?;
+    let mut indexes = BTreeMap::new();
+    for (table, rows) in tables {
+        let mut index = TypedRowIndexes::default();
+        for (primary_key, row) in rows {
+            index.primary_keys.insert(primary_key.clone(), row.revision);
+            for (name, value) in &row.unique_keys {
+                let values = index.unique_keys.entry(name.clone()).or_default();
+                if values.insert(value.clone(), primary_key.clone()).is_some() {
+                    return Err(error(format!(
+                        "duplicate typed row unique index '{name}' value"
+                    )));
+                }
+            }
+        }
+        indexes.insert(table.clone(), index);
+    }
+    Ok(indexes)
+}
+
+fn validate_typed_row_indexes(
+    tables: &BTreeMap<String, BTreeMap<String, TypedRow>>,
+    indexes: &BTreeMap<String, TypedRowIndexes>,
+) -> Result<(), ManifestError> {
+    // Snapshots written before typed-row indexes existed remain readable. A
+    // subsequent prepare rebuilds the indexes from the immutable row map.
+    if indexes.is_empty() && !tables.is_empty() {
+        return Ok(());
+    }
+    let expected = build_typed_row_indexes(tables)?;
+    if &expected != indexes {
+        return Err(error("typed row indexes do not match row data"));
+    }
+    Ok(())
+}
+
 fn validate_typed_row(row: &TypedRow) -> Result<(), ManifestError> {
     validate_identifier("typed row primary key", &row.primary_key)?;
     if row.revision == 0 {
@@ -1231,6 +1286,14 @@ mod tests {
             ))
             .unwrap();
         assert_eq!(inserted.typed_rows["app.users"]["u-1"].revision, 1);
+        assert_eq!(
+            inserted.typed_row_indexes["app.users"].primary_keys["u-1"],
+            1
+        );
+        assert_eq!(
+            inserted.typed_row_indexes["app.users"].unique_keys["email"]["ada@example.com"],
+            "u-1"
+        );
 
         let updated = inserted
             .prepare(change(
@@ -1280,6 +1343,35 @@ mod tests {
         ));
         assert!(duplicate.is_err());
         assert!(base.typed_rows.is_empty());
+    }
+
+    #[test]
+    fn typed_row_indexes_round_trip_and_tampering_is_rejected() {
+        let base = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        let snapshot = base
+            .prepare(change(
+                base.reference(),
+                "typed-index",
+                DIGEST,
+                vec![CatalogChange::InsertTypedRow {
+                    table: "app.users".into(),
+                    row: typed_row("u-1", 1, "ada@example.com"),
+                }],
+            ))
+            .unwrap();
+        let bytes = serde_json::to_vec(&snapshot).unwrap();
+        let decoded: CatalogSnapshot = serde_json::from_slice(&bytes).unwrap();
+        decoded.validate().unwrap();
+
+        let mut tampered = decoded.clone();
+        *tampered
+            .typed_row_indexes
+            .get_mut("app.users")
+            .unwrap()
+            .primary_keys
+            .get_mut("u-1")
+            .unwrap() = 99;
+        assert!(tampered.validate().is_err());
     }
 
     #[test]
