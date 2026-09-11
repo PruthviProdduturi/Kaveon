@@ -6,7 +6,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 const QUERY_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
@@ -68,6 +68,7 @@ impl DiskExchangeStore {
             return Err("exchange disk limit must be positive".into());
         }
         fs::create_dir_all(root).map_err(|error| error.to_string())?;
+        reconcile_stale_directories(root, SystemTime::now() - TTL)?;
         let directory = root.join(format!("kaveon-exchange-{}", uuid::Uuid::new_v4()));
         let builder = fs::DirBuilder::new();
         #[cfg(unix)]
@@ -221,6 +222,54 @@ impl DiskExchangeStore {
     }
 }
 
+/// Remove only exchange directories from a previous process that have been
+/// untouched for a complete exchange TTL. The age guard avoids deleting a
+/// live coordinator's spool when tests or operators intentionally share a
+/// parent directory. Result spools and unrelated files use different names and
+/// are never traversed.
+fn reconcile_stale_directories(root: &Path, stale_before: SystemTime) -> Result<(), String> {
+    for item in fs::read_dir(root).map_err(|error| error.to_string())? {
+        let item = item.map_err(|error| error.to_string())?;
+        let file_type = item.file_type().map_err(|error| error.to_string())?;
+        if !file_type.is_dir() {
+            continue;
+        }
+        let name = item.file_name();
+        let Some(identifier) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("kaveon-exchange-"))
+        else {
+            continue;
+        };
+        if uuid::Uuid::parse_str(identifier).is_err() {
+            continue;
+        }
+        let mut modified = item
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .map_err(|error| error.to_string())?;
+        // Directory mtime behavior differs across supported filesystems. Chunk
+        // files are immutable, so their newest mtime is the authoritative last
+        // write without decoding or trusting their contents.
+        for child in fs::read_dir(item.path()).map_err(|error| error.to_string())? {
+            let child = child.map_err(|error| error.to_string())?;
+            let child_modified = child
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .map_err(|error| error.to_string())?;
+            modified = modified.max(child_modified);
+        }
+        if modified <= stale_before {
+            // A second coordinator may intentionally share the parent in local
+            // development, and Windows denies removal while it owns an open
+            // chunk. Treat that as evidence the directory is still live; a
+            // later startup can retry it.
+            let _ = fs::remove_dir_all(item.path());
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,5 +318,37 @@ mod tests {
         assert!(store.insert(chunk()).is_err());
         assert_eq!(store.quota.state.lock().unwrap().total, 0);
         assert_eq!(fs::read_dir(&store.directory.0).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn restart_removes_only_stale_exchange_directories() {
+        let root = std::env::temp_dir().join(format!("kaveon-reconcile-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let stale = root.join(format!("kaveon-exchange-{}", uuid::Uuid::new_v4()));
+        let live = root.join(format!("kaveon-exchange-{}", uuid::Uuid::new_v4()));
+        let retained_result = root.join(format!("kaveon-result-{}", uuid::Uuid::new_v4()));
+        let unrelated = root.join("operator-owned");
+        let malformed = root.join("kaveon-exchange-not-a-uuid");
+        for directory in [&stale, &live, &retained_result, &unrelated, &malformed] {
+            fs::create_dir(directory).unwrap();
+            fs::write(directory.join("payload"), b"retained").unwrap();
+        }
+
+        let between = SystemTime::now();
+        // Some supported filesystems expose directory mtimes at one-second
+        // precision, so cross a full tick before making the live directory new.
+        std::thread::sleep(Duration::from_millis(1_100));
+        fs::write(live.join("new-chunk"), b"live").unwrap();
+        reconcile_stale_directories(&root, between).unwrap();
+
+        assert!(!stale.exists());
+        assert!(live.exists());
+        assert_eq!(
+            fs::read(retained_result.join("payload")).unwrap(),
+            b"retained"
+        );
+        assert_eq!(fs::read(unrelated.join("payload")).unwrap(), b"retained");
+        assert_eq!(fs::read(malformed.join("payload")).unwrap(), b"retained");
+        fs::remove_dir_all(root).unwrap();
     }
 }
