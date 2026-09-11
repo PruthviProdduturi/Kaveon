@@ -589,6 +589,35 @@ impl PartitionedHashAggregate {
 
     fn execute_next(&mut self) -> Result<Option<RecordBatch>> {
         self.output_memory = None;
+        if self.partial && self.partitions.is_empty() {
+            let Some(input) = self.input.as_mut() else {
+                return Ok(None);
+            };
+            if let Some(batch) = input.next_batch()? {
+                // Partial states are mergeable across batches. Emit one bounded
+                // partial per upstream batch instead of spilling and rereading
+                // the full probe merely because it contains many batches.
+                let source = Box::new(ReplayInput {
+                    schema: Arc::clone(&self.input_schema),
+                    batches: VecDeque::from([batch]),
+                    tail: None,
+                    _guards: Vec::new(),
+                });
+                let (batch, guard) = self.aggregate_batch(source, self.input_reserved)?;
+                self.output_memory = guard;
+                return Ok(batch);
+            }
+            self.input = None;
+            let (batch, guard) = self.aggregate_batch(
+                Box::new(RunSource::new(Arc::clone(&self.input_schema), Vec::new())),
+                false,
+            )?;
+            if batch.as_ref().is_some_and(|batch| batch.num_rows() > 0) {
+                self.output_memory = guard;
+                return Ok(batch);
+            }
+            return Ok(None);
+        }
         if let Some(input) = self.input.take() {
             let prefix = BufferedPrefix::collect(
                 input,
@@ -882,7 +911,10 @@ fn resolve_key(schema: &SchemaRef, name: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aggregate::AggFunc;
+    use crate::aggregate::{
+        AggFunc, finalize_grouped_aggregate_states, grouped_aggregate_states_from_batches,
+        merge_grouped_aggregate_states,
+    };
     use arrow::{
         array::{Array, Int64Array, UInt64Array},
         datatypes::{DataType, Field, Schema},
@@ -1129,6 +1161,93 @@ mod tests {
         assert_eq!(rows, 16_384);
         assert_eq!(disk.snapshot().current_bytes, 0);
         assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn partial_aggregate_streams_many_low_cardinality_batches_without_spill() {
+        let pool = QueryMemoryPool::new("stream-partial", 32 * 1024 * 1024).unwrap();
+        let disk = spill();
+        let values = (0..1_700_000).map(|value| Some(value % 17)).collect();
+        let mut aggregate = PartitionedHashAggregate::new_partial(
+            input(values, 8_192),
+            vec!["id".into()],
+            vec![AggExpr::new(AggFunc::Count, "*")],
+            pool.operator("partial").unwrap(),
+            disk.clone(),
+            16,
+        )
+        .unwrap();
+        let mut batches = Vec::new();
+        while let Some(batch) = aggregate.next_batch().unwrap() {
+            batches.push(batch);
+        }
+        assert!(batches.len() > MAX_ADAPTIVE_BATCHES);
+        let states = grouped_aggregate_states_from_batches(&batches).unwrap();
+        let merged = merge_grouped_aggregate_states(states).unwrap();
+        let finalized = finalize_grouped_aggregate_states(&merged).unwrap();
+        assert_eq!(finalized.len(), 17);
+        assert_eq!(
+            finalized
+                .iter()
+                .map(|group| match group.values[0] {
+                    crate::aggregate::FinalAggregateValue::Count(value) => value,
+                    _ => panic!("expected count state"),
+                })
+                .sum::<u64>(),
+            1_700_000
+        );
+        assert_eq!(disk.snapshot().peak_bytes, 0);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn streaming_partial_aggregate_preserves_empty_and_memory_bound_semantics() {
+        let global_pool = QueryMemoryPool::new("empty-partial", 64 * 1024).unwrap();
+        let mut global = PartitionedHashAggregate::new_partial(
+            input(vec![], 10),
+            vec![],
+            vec![AggExpr::new(AggFunc::Count, "*")],
+            global_pool.operator("global").unwrap(),
+            spill(),
+            16,
+        )
+        .unwrap();
+        let batch = global.next_batch().unwrap().unwrap();
+        let states = grouped_aggregate_states_from_batches(&[batch]).unwrap();
+        let finalized = finalize_grouped_aggregate_states(&states).unwrap();
+        assert_eq!(finalized.len(), 1);
+        assert!(matches!(
+            finalized[0].values[0],
+            crate::aggregate::FinalAggregateValue::Count(0)
+        ));
+        assert!(global.next_batch().unwrap().is_none());
+        assert_eq!(global_pool.snapshot().current_bytes, 0);
+
+        let grouped_pool = QueryMemoryPool::new("empty-grouped-partial", 64 * 1024).unwrap();
+        let mut grouped = PartitionedHashAggregate::new_partial(
+            input(vec![], 10),
+            vec!["id".into()],
+            vec![AggExpr::new(AggFunc::Count, "*")],
+            grouped_pool.operator("grouped").unwrap(),
+            spill(),
+            16,
+        )
+        .unwrap();
+        assert!(grouped.next_batch().unwrap().is_none());
+        assert_eq!(grouped_pool.snapshot().current_bytes, 0);
+
+        let bounded_pool = QueryMemoryPool::new("bounded-partial", 64 * 1024).unwrap();
+        let mut high_cardinality = PartitionedHashAggregate::new_partial(
+            input((0..10_000).map(Some).collect(), 10_000),
+            vec!["id".into()],
+            vec![AggExpr::new(AggFunc::Count, "*")],
+            bounded_pool.operator("high-cardinality").unwrap(),
+            spill(),
+            16,
+        )
+        .unwrap();
+        assert!(high_cardinality.next_batch().is_err());
+        assert_eq!(bounded_pool.snapshot().current_bytes, 0);
     }
 
     fn join_rows(operator: &mut dyn BatchOperator) -> Vec<(Option<i64>, Option<i64>)> {
