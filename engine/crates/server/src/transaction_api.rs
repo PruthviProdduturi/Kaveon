@@ -2181,7 +2181,10 @@ mod tests {
                         kind: "typed_row".into(),
                         id: "u-1".into(),
                         expected_revision: 1,
-                        document_json: create.replace("ada@example.com", "bob@example.com"),
+                        document_json: create
+                            .replace("\"revision\":1", "\"revision\":2")
+                            .replace("\"owner_principal\":\"alice\"", "\"owner_principal\":\"bob\"")
+                            .replace("ada@example.com", "bob@example.com"),
                     },
                 )
                 .await,
