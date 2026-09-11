@@ -3,7 +3,15 @@
 use crate::{IcebergReader, ObjectDeltaReader, ObjectLocation, ObjectParquetReader, ParquetReader};
 use kaveon_core::{DataFormat, KaveonError, Result};
 use sha2::{Digest, Sha256};
-use std::{fs, time::UNIX_EPOCH};
+use std::{
+    collections::HashMap,
+    fs,
+    sync::{Mutex, OnceLock},
+    time::UNIX_EPOCH,
+};
+
+const MAX_EXACT_STATISTICS_CACHE_ENTRIES: usize = 256;
+static EXACT_STATISTICS_CACHE: OnceLock<Mutex<HashMap<String, SourceStatistics>>> = OnceLock::new();
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceStatistics {
@@ -25,8 +33,21 @@ pub fn analyze_source(location: &str, format: DataFormat) -> Result<SourceStatis
                 identity.push_str(file.as_ref());
                 identity.push('\n');
             }
+            let identity_sha256 = digest(identity);
+            if let Some(cached) = cached_statistics(&identity_sha256) {
+                return Ok(cached);
+            }
             let metadata = reader.metadata_for_snapshot(snapshot)?;
-            Ok(stats(identity, metadata.row_count, &metadata.schema))
+            Ok(cache_statistics(SourceStatistics {
+                identity_sha256,
+                row_count: metadata.row_count,
+                columns: metadata
+                    .schema
+                    .fields()
+                    .iter()
+                    .map(|field| field.name().clone())
+                    .collect(),
+            }))
         }
         (true, DataFormat::Iceberg) => {
             let snapshot = IcebergReader::new(location).snapshot()?;
@@ -66,16 +87,20 @@ pub fn analyze_source(location: &str, format: DataFormat) -> Result<SourceStatis
                     "object store did not provide an ETag or version for stable ANALYZE".into(),
                 )
             })?;
+            let identity_sha256 = digest(format!("parquet\n{location}\n{version}\n{}", meta.size));
+            if let Some(cached) = cached_statistics(&identity_sha256) {
+                return Ok(cached);
+            }
             let parquet = crate::delta_snapshot::blocking(async move {
                 ObjectParquetReader::new(object.store, object.path)
                     .metadata()
                     .await
             })?;
-            Ok(stats(
-                format!("parquet\n{location}\n{version}\n{}", meta.size),
+            Ok(cache_statistics(stats_from_digest(
+                identity_sha256,
                 parquet.row_count,
                 &parquet.schema,
-            ))
+            )))
         }
         (false, DataFormat::Parquet) => {
             let file = fs::metadata(location)?;
@@ -84,20 +109,34 @@ pub fn analyze_source(location: &str, format: DataFormat) -> Result<SourceStatis
                 .duration_since(UNIX_EPOCH)
                 .map_err(|_| KaveonError::Storage("file modification time precedes epoch".into()))?
                 .as_nanos();
+            let identity_sha256 = digest(format!(
+                "parquet-local\n{location}\n{}\n{modified}",
+                file.len()
+            ));
+            if let Some(cached) = cached_statistics(&identity_sha256) {
+                return Ok(cached);
+            }
             let parquet = ParquetReader::new(location).metadata()?;
-            Ok(stats(
-                format!("parquet-local\n{location}\n{}\n{modified}", file.len()),
+            Ok(cache_statistics(stats_from_digest(
+                identity_sha256,
                 parquet.row_count,
                 &parquet.schema,
-            ))
+            )))
         }
         (false, DataFormat::Delta) => {
             let version = crate::DeltaTableReader::new(location).snapshot_version()?;
+            let identity_sha256 = digest(format!("delta-local\n{location}\n{version}"));
+            if let Some(cached) = cached_statistics(&identity_sha256) {
+                return Ok(cached);
+            }
             let metadata = crate::DeltaTableReader::new(location)
                 .with_version(version)
                 .metadata()?;
-            let identity = format!("delta-local\n{location}\n{version}");
-            Ok(stats(identity, metadata.row_count, &metadata.schema))
+            Ok(cache_statistics(stats_from_digest(
+                identity_sha256,
+                metadata.row_count,
+                &metadata.schema,
+            )))
         }
         (false, DataFormat::Iceberg) => {
             let snapshot = IcebergReader::new(location).snapshot()?;
@@ -118,16 +157,40 @@ pub fn analyze_source(location: &str, format: DataFormat) -> Result<SourceStatis
     }
 }
 
-fn stats(
-    identity: String,
+fn stats_from_digest(
+    identity_sha256: String,
     row_count: u64,
     schema: &arrow::datatypes::SchemaRef,
 ) -> SourceStatistics {
     SourceStatistics {
-        identity_sha256: digest(identity),
+        identity_sha256,
         row_count,
         columns: schema.fields().iter().map(|f| f.name().clone()).collect(),
     }
+}
+
+fn cached_statistics(identity_sha256: &str) -> Option<SourceStatistics> {
+    EXACT_STATISTICS_CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .ok()?
+        .get(identity_sha256)
+        .cloned()
+}
+
+fn cache_statistics(statistics: SourceStatistics) -> SourceStatistics {
+    let Ok(mut cache) = EXACT_STATISTICS_CACHE.get_or_init(Default::default).lock() else {
+        return statistics;
+    };
+    if cache.len() >= MAX_EXACT_STATISTICS_CACHE_ENTRIES
+        && !cache.contains_key(&statistics.identity_sha256)
+    {
+        // Statistics are an optimization only. Clearing at the fixed bound is
+        // deterministic, keeps memory bounded, and cannot affect correctness.
+        cache.clear();
+    }
+    cache.insert(statistics.identity_sha256.clone(), statistics.clone());
+    statistics
 }
 fn digest(value: String) -> String {
     format!("{:x}", Sha256::digest(value.as_bytes()))
