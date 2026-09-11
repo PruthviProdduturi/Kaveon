@@ -141,6 +141,13 @@ During transition PostgreSQL is source-authoritative with a durable outbox;
 there is no claim of cross-system atomic commit. After cutover the ADLS service
 is the family’s sole writer. A reverse mirror needs its own protocol and proof.
 
+Catch-up implementation status: the API has a bounded sequence-ordered replay
+library for typed product families. It validates source hashes, uses target
+revision compare-and-swap, resolves lost target responses by exact document
+comparison, locks before source acknowledgment, and stops at the first failure.
+It is not scheduled or deployed, and it has no initial backfill watermark;
+live catch-up and reconciliation remain unproven.
+
 ## Staged KaveonDB delivery
 
 KaveonDB is the logical transactional product database. Its durable tables and

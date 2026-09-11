@@ -34,7 +34,11 @@ class AtomicWriter:
         if normalized.startswith("INSERT INTO datasets"):
             return {"id": self.dataset_id}
         if "FROM datasets" in normalized and "FOR UPDATE" in normalized:
-            return {"id": self.dataset_id, "modified_at": self.modified_at}
+            return {
+                "id": self.dataset_id,
+                "modified_at": self.modified_at,
+                "created_by": "alice@example.com",
+            }
         if "FROM datasets WHERE id" in normalized:
             return {
                 "id": self.dataset_id, "dataset_name": "Orders", "description": None,
@@ -53,6 +57,8 @@ class AtomicWriter:
                 "operation": params[2],
                 "record_id": params[3],
                 "payload_sha256": params[5],
+                "actor_principal": params[6],
+                "owner_principal": params[7],
             }
         return None
 
@@ -128,6 +134,7 @@ class DatasetTransactionTests(unittest.TestCase):
     def test_update_is_atomic_at_every_parent_child_and_outbox_statement(self):
         existing = {
             "id": "7", "name": "Orders", "visibility": "internal",
+            "created_by": "alice@example.com",
             "tables_used": '{"filters":[]}', "modified_at": "2026-09-10T10:00:00",
             "dimensions": [], "columns": [], "metrics": [], "filters": [],
         }
@@ -147,6 +154,7 @@ class DatasetTransactionTests(unittest.TestCase):
     def test_update_commits_exactly_one_outbox_event_after_all_children(self):
         existing = {
             "id": "7", "name": "Orders", "visibility": "internal",
+            "created_by": "alice@example.com",
             "tables_used": "{}", "modified_at": "2026-09-10T10:00:00",
             "dimensions": [], "columns": [], "metrics": [], "filters": [],
         }
@@ -167,6 +175,7 @@ class DatasetTransactionTests(unittest.TestCase):
     def test_virtual_sql_and_unrelated_metadata_survive_filter_refresh(self):
         existing = {
             "id": "7", "name": "Leaderboard", "visibility": "internal",
+            "created_by": "alice@example.com",
             "modified_at": "2026-09-10T10:00:00", "dimensions": [], "columns": [],
             "metrics": [], "filters": [],
             "tables_used": json.dumps({
@@ -190,7 +199,7 @@ class DatasetTransactionTests(unittest.TestCase):
         })
 
     def test_concurrent_update_is_rejected_before_write_or_outbox(self):
-        existing = {"id": "7", "name": "Orders", "visibility": "internal", "tables_used": "{}", "modified_at": "old"}
+        existing = {"id": "7", "name": "Orders", "visibility": "internal", "created_by": "alice@example.com", "tables_used": "{}", "modified_at": "old"}
         writer = AtomicWriter(modified_at="new")
         with patch.object(datasets, "get_dataset_by_id", return_value=existing), \
              patch.object(datasets.db, "transaction", return_value=atomic_transaction(writer)):

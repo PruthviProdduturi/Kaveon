@@ -52,8 +52,9 @@ Three material boundaries prevent expanding this narrow 8/10 rating:
    multi-table SQL transactions and a qualified isolation level remain absent.
    The API now also has a PostgreSQL connection-pinned unit of work and durable
    source-outbox schema; dataset parent/child writes use it atomically in code.
-   There is no deployed-schema, replay, backfill, reconciliation, restore or
-   cutover evidence, so it earns no PostgreSQL-replacement readiness credit yet.
+   There is no deployed schema, replay execution, backfill, reconciliation,
+   restore or cutover evidence, so it earns no PostgreSQL-replacement readiness
+   credit yet.
 3. The checked-in comparison gates fail closed because no publication-scale
    1.90× Trino result or completed PostgreSQL transaction report exists.
 
