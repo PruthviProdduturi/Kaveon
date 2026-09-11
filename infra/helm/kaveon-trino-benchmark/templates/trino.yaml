@@ -1,0 +1,188 @@
+{{- $name := include "kaveon-trino-benchmark.name" . -}}
+{{- $digest := required "trino.image.digest is required" .Values.trino.image.digest -}}
+{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" $digest) }}{{ fail "trino.image.digest must be an immutable sha256 digest" }}{{ end -}}
+{{- $storageAccount := required "trino.storage.account is required" .Values.trino.storage.account -}}
+{{- $storageContainer := required "trino.storage.container is required" .Values.trino.storage.container -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-trino
+  namespace: {{ .Release.Namespace }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ $name }}
+    app.kubernetes.io/component: trino-coordinator
+  ports:
+    - {name: https, port: 8443, targetPort: https}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-trino-config
+  namespace: {{ .Release.Namespace }}
+data:
+  jvm-coordinator.config: |-
+    -server
+    -Xmx3G
+    -XX:+ExitOnOutOfMemoryError
+    -Djava.io.tmpdir=/data/trino/tmp
+  jvm-worker.config: |-
+    -server
+    -Xmx4G
+    -XX:+ExitOnOutOfMemoryError
+    -Djava.io.tmpdir=/data/trino/tmp
+  lake.properties: |-
+    connector.name=delta_lake
+    hive.metastore=file
+    hive.metastore.catalog.dir=file:///data/trino/metastore
+    fs.azure.enabled=true
+    azure.auth-type=DEFAULT
+    azure.application-id=KaveonQualification
+---
+{{- range $role := list "coordinator" "worker" }}
+{{- $isCoordinator := eq $role "coordinator" }}
+{{- $settings := ternary $.Values.trino.coordinator $.Values.trino.worker $isCoordinator }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}-trino-{{ $role }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  serviceName: {{ $name }}-trino
+  replicas: 0
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $name }}
+      app.kubernetes.io/component: trino-{{ $role }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ $name }}
+        app.kubernetes.io/component: trino-{{ $role }}
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: {{ $.Values.trino.serviceAccountName }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      nodeSelector:
+        {{- toYaml $settings.nodeSelector | nindent 8 }}
+      {{- if not $isCoordinator }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/instance: {{ $name }}
+                  app.kubernetes.io/component: trino-worker
+      {{- end }}
+      initContainers:
+        - name: configure
+          image: {{ printf "%s@%s" $.Values.trino.image.repository $digest | quote }}
+          imagePullPolicy: IfNotPresent
+          command: [/bin/bash, -ceu]
+          args:
+            - |
+              mkdir -p /generated/catalog /data/trino/tmp /data/trino/metastore
+              cp /source/{{ ternary "jvm-coordinator.config" "jvm-worker.config" $isCoordinator }} /generated/jvm.config
+              cp /source/lake.properties /generated/catalog/lake.properties
+              cat > /generated/node.properties <<EOF
+              node.environment=kaveon-qualification
+              node.id=${POD_NAME}
+              node.data-dir=/data/trino
+              EOF
+              cat > /generated/config.properties <<EOF
+              coordinator={{ $isCoordinator }}
+              node-scheduler.include-coordinator=false
+              http-server.http.enabled=false
+              http-server.https.enabled=true
+              http-server.https.port=8443
+              http-server.https.keystore.path=/trino-tls/server.pem
+              discovery.uri=https://{{ $name }}-trino.{{ $.Release.Namespace }}.svc.cluster.local:8443
+              internal-communication.shared-secret=${INTERNAL_SHARED_SECRET}
+              internal-communication.https.required=true
+              query.max-memory=2GB
+              query.max-total-memory=2GB
+              query.max-memory-per-node=512MB
+              memory.heap-headroom-per-node=1GB
+              EOF
+              {{- if $isCoordinator }}
+              cat >> /generated/config.properties <<EOF
+              http-server.authentication.type=PASSWORD
+              EOF
+              cat > /generated/password-authenticator.properties <<EOF
+              password-authenticator.name=file
+              file.password-file=/trino-auth/password.db
+              EOF
+              {{- end }}
+          env:
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: INTERNAL_SHARED_SECRET
+              valueFrom:
+                secretKeyRef: {name: {{ $.Values.trino.internalSharedSecretName }}, key: internal-shared-secret}
+          volumeMounts:
+            - {name: source-config, mountPath: /source, readOnly: true}
+            - {name: generated-config, mountPath: /generated}
+            - {name: data, mountPath: /data/trino}
+            - {name: trino-tls, mountPath: /trino-tls, readOnly: true}
+            - {name: trino-auth, mountPath: /trino-auth, readOnly: true}
+      containers:
+        - name: trino
+          image: {{ printf "%s@%s" $.Values.trino.image.repository $digest | quote }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          ports:
+            - {name: https, containerPort: 8443}
+          resources:
+            {{- toYaml $settings.resources | nindent 12 }}
+          readinessProbe:
+            tcpSocket: {port: https}
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            tcpSocket: {port: https}
+            periodSeconds: 15
+            failureThreshold: 3
+          volumeMounts:
+            - {name: generated-config, mountPath: /etc/trino}
+            - {name: data, mountPath: /data/trino}
+            - {name: trino-tls, mountPath: /trino-tls, readOnly: true}
+            - {name: trino-auth, mountPath: /trino-auth, readOnly: true}
+      volumes:
+        - name: source-config
+          configMap: {name: {{ $name }}-trino-config}
+        - {name: generated-config, emptyDir: {}}
+        - {name: data, emptyDir: {sizeLimit: 20Gi}}
+        - name: trino-tls
+          secret: {secretName: {{ $.Values.trino.tlsSecretName }}}
+        - name: trino-auth
+          secret: {secretName: {{ $.Values.trino.internalSharedSecretName }}}
+---
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}-trino
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $name }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - {protocol: TCP, port: 8443}

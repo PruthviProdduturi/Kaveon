@@ -70,10 +70,12 @@ acceptance, the result applies only to the recorded workload and environment.
 
 The current Kaveon AKS chart requests one coordinator with limits of 2 CPU/4 GiB
 and three workers with limits of 3 CPU/6 GiB each. Requests are lower: 500m/1 GiB
-for the coordinator and 1 CPU/2 GiB per worker. There is no matched Trino AKS
-deployment in this repository. The existing AKS cluster can establish Kaveon
-correctness, worker use, recovery and pressure behavior, but it cannot establish
-a Kaveon/Trino speed ratio.
+for the coordinator and 1 CPU/2 GiB per worker. A reviewable matched Trino 483
+chart, create-only ADLS fixture builder, in-cluster exclusive-lease runner,
+read-only Azure preflight, and separate fail-closed evaluator now live under
+`infra/helm/kaveon-trino-benchmark` and `engine/qualification`. They have not
+been deployed or executed, so the existing AKS evidence still establishes only
+Kaveon correctness, worker use, recovery and pressure behavior.
 
 A distributed publication run requires an isolated Trino coordinator and three
 workers with the same per-role requests and limits, the same node SKU and count,
@@ -82,3 +84,11 @@ TLS/authentication boundaries, and recorded pod/node image digests. Run warm and
 cold policies separately and retain correctness hashes, per-query p50/p95,
 throughput rounds, CPU, memory, network, storage I/O and cost. No subscription
 policy changes are needed or permitted.
+
+The three-node test cluster satisfies isolation by alternating exclusive leases:
+only Kaveon or Trino has nonzero Engine replicas during a measured phase. Every
+activation warms its engine before sampling; engine order alternates across six
+rounds. The runner rejects non-DaemonSet co-tenants on worker nodes and restores
+the original Kaveon replica counts after success or failure. See the chart
+README for the exact runbook. This procedure temporarily interrupts the AKS test
+portal's Engine and must be scheduled around other live qualification work.

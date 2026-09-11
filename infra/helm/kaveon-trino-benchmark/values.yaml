@@ -1,0 +1,51 @@
+trino:
+  image:
+    repository: trinodb/trino
+    digest: sha256:db58cc93e593a2706553745f276bb119c9810e69918be56ecde088ba7ccb0534
+  workers: 3
+  serviceAccountName: kaveon-engine
+  coordinator:
+    nodeSelector:
+      kubernetes.azure.com/agentpool: system
+    resources:
+      requests: {cpu: "500m", memory: 1Gi, ephemeral-storage: 2Gi}
+      limits: {cpu: "2", memory: 4Gi, ephemeral-storage: 8Gi}
+  worker:
+    nodeSelector:
+      workload: kaveon-worker
+    resources:
+      requests: {cpu: "1", memory: 2Gi, ephemeral-storage: 4Gi}
+      limits: {cpu: "3", memory: 6Gi, ephemeral-storage: 20Gi}
+  storage:
+    account: ""
+    container: silver
+  internalSharedSecretName: kaveon-trino-benchmark-auth
+  tlsSecretName: kaveon-trino-benchmark-tls
+
+runner:
+  enabled: false
+  serviceAccountName: kaveon-engine
+  image:
+    repository: ""
+    digest: ""
+  runId: ""
+  manifestConfigMap: kaveon-trino-benchmark-manifest
+  resultsClaim: kaveon-trino-benchmark-results
+  credentialsSecret: kaveon-engine-auth
+  tlsSecret: kaveon-engine-tls
+  trinoTlsSecret: kaveon-trino-benchmark-tls
+  trinoAuthSecret: kaveon-trino-benchmark-auth
+  kaveon:
+    coordinatorStatefulSet: kaveon-coordinator
+    workerStatefulSet: kaveon-worker
+    service: kaveon-coordinator
+    expectedImageDigest: sha256:bd5a6ef6cdb00a121f215947c98a948f5e3fbd9d2c4b094a7d946d07a71d2bc6
+    workloadIdentityReference: kaveon-test-reader
+  policy:
+    workerCount: 3
+    warmups: 5
+    repetitionsPerRound: 5
+    rounds: 6
+    throughputRepeats: 10
+    concurrency: 4
+    targetRatio: "1.90"

@@ -125,14 +125,68 @@ The Azure Disk CSI driver briefly retried the coordinator mount because
 `/dev/sdc` was still in use; the same pod became Ready three seconds later, so
 this was an observed detach/mount timing race rather than evidence of data loss.
 
+## Worker-loss and bounded-pressure qualification
+
+Run the credential-safe live reliability gate only when no rollout or other
+cluster mutation is active. The verifier reads the static Engine principal and
+CA from the existing Kubernetes Secrets into memory, validates the cluster DNS
+name over a loopback-only port-forward, and never writes a token,
+certificate, or storage credential to the report:
+
+```powershell
+python scripts/qualify-aks-fault-pressure.py `
+  --context kaveon-test-aks --namespace kaveon `
+  --concurrency 4 --concurrent-rounds 3 --pressure-rounds 3 `
+  --output tmp/aks-fault-pressure/report.json
+```
+
+The gate first executes 12 concurrent exact-result queries against independently
+recorded OpenSource row totals. It then establishes a distributed yellow-taxi
+join baseline, force-terminates the StatefulSet worker that owned the baseline's
+longest task while the repeated join is `RUNNING`, requires an incremented task
+attempt and the exact baseline result, and waits for a replacement pod with the
+same required catalog identity. Finally, it runs 12 grouped pressure queries at
+concurrency four while sampling pod CPU and memory. Every result hash must match,
+unrelated restart counts must remain unchanged, sampled Engine memory must stay
+within pod limits, and retained spill/exchange file counts must not grow.
+
+The report keeps pre-existing retained-file hygiene as a separate fail-closed
+check. A stable nonzero count proves that this workload added no files, but it
+does not prove restart cleanup or leak-free operation. Do not delete old exchange
+files merely to make the check pass; identify and correct their lifecycle first.
+
+On September 10, Engine digest
+`sha256:bd5a6ef6cdb00a121f215947c98a948f5e3fbd9d2c4b094a7d946d07a71d2bc6`
+passed the workload-specific gates. All 12 concurrent known-result queries and
+all 12 pressure queries returned exact HTTP 200 results. While the repeated
+four-stage taxi join was running, `kaveon-worker-2` was force-terminated; stage
+2 partition 2 retried as attempt 1 on `kaveon-worker-0` and returned the exact
+baseline `[[3412043, 6077935]]`. The replacement worker restored three active
+and compatible workers with the same catalog identity. No unrelated container
+restart or retained-file growth occurred, and sampled Engine memory stayed
+within pod limits; peak coordinator/worker memory was 70/92/135/9 MiB.
+
+The overall fail-closed report remains unsuccessful because eight coordinator
+exchange chunks from September 9 and early September 10 survived the prior
+coordinator restarts. This run left that count unchanged at eight and left zero
+worker spill files. The current workload therefore closes the worker retry,
+concurrent exact-result, and bounded-pressure execution gaps, while coordinator
+restart cleanup remains open. The credential-free machine-readable report is
+retained in `docs/engineering/engine-aks-fault-pressure-validation-2026-09-10.json`;
+its SHA-256 is `90d74c9eff118804942c881fdff4de931dcdd164f2730c25de00284d8596184c`.
+
 ## Stop and resume
 
-The final rollout has all four Engine pods Ready on
-`kvtestegmf6oweugsno.azurecr.io/kaveon-engine@sha256:afa2190daf26006864c640e87823268e048882eafe63425fac99c228e51e9ebe`.
+PostgreSQL is still the authoritative Studio metadata store. Follow
+`docs/engineering/postgresql-retirement.md`; do not remove its StatefulSet or
+PVC until every migration, cutover, restart, and rollback gate there passes.
+
+The latest qualified rollout has all four Engine pods Ready on
+`kvtestegmf6oweugsno.azurecr.io/kaveon-engine@sha256:bd5a6ef6cdb00a121f215947c98a948f5e3fbd9d2c4b094a7d946d07a71d2bc6`.
 Studio is Ready on
-`kvtestegmf6oweugsno.azurecr.io/kaveon-studio@sha256:51c0d0368ab463320e1898959c2e760cf8c692f8eef8b954c699a00b2dc60a4a`;
+`kvtestegmf6oweugsno.azurecr.io/kaveon-studio@sha256:7a6b11b3859506cee65cffbfe234523101fabf53c1c5f7d7b9a065f018fc51b7`;
 the API is Ready on
-`kvtestegmf6oweugsno.azurecr.io/kaveon-api@sha256:ead9e67ff3624a4b13697b739cb74674adbc0120fdff02ebf81c8ae06a8b4d6d`.
+`kvtestegmf6oweugsno.azurecr.io/kaveon-api@sha256:4dc35a7b61f905f7debbf93f45da68c5560a2a17d6ca33e485d1956f54e526f6`.
 The portal is authenticated with a public Entra client and server-verified
 session; no subscription policy changed for this rollout. The coordinator
 restart preserves catalog data but in-memory query history starts afresh, so

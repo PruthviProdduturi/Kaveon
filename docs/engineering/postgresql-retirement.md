@@ -1,0 +1,54 @@
+# PostgreSQL retirement gate
+
+Status on September 10, 2026: **do not delete or scale down PostgreSQL**.
+
+Kaveon's analytical payloads are in ADLS Gen2 and are queried through the
+Engine catalog. Native table statistics and the product-record transaction
+snapshot are also published to the dedicated `product-transactions` ADLS
+container. The AKS storage account is HTTPS-only, hierarchical-namespace
+enabled, denies anonymous access and shared-key authorization, defaults its
+network firewall to deny, and grants the Engine workload identity scoped RBAC.
+
+That does not mean every product record has moved. The API still treats the AKS
+PostgreSQL database as the authority for Studio metadata. A read-only inventory
+on September 10 found these 21 live tables:
+
+| Table | Rows | Table | Rows |
+|---|---:|---|---:|
+| activity | 1 | catalog_sources | 2 |
+| charts | 70 | context_answer_cache | 0 |
+| context_snapshots | 0 | dashboards | 8 |
+| data_sources | 0 | dataset_columns | 119 |
+| dataset_dimensions | 0 | dataset_metrics | 35 |
+| datasets | 9 | dlm_answers | 3,659 |
+| dlm_artifact | 9 | dlm_router | 9 |
+| dlm_sketch | 0 | dlm_value_index | 0 |
+| favorites | 0 | query_history | 660 |
+| saved_queries | 0 | user_recents | 15 |
+| user_themes | 0 |  |  |
+
+The ADLS product-record layer currently has typed records for datasets, charts,
+dashboards, saved queries and user themes. This is protocol and storage
+foundation; the repository adapters, migration, write fencing, and API cutover
+are incomplete. It does not yet cover all 21 PostgreSQL tables.
+
+PostgreSQL may be retired only after one repeatable migration command proves all
+of the following against a preserved backup:
+
+1. Every authoritative table has an ADLS/KaveonDB destination or an explicit,
+   reviewed retirement decision.
+2. Counts, stable identifiers, ownership, references and content hashes
+   reconcile between PostgreSQL and the committed KaveonDB snapshot.
+3. API reads run against KaveonDB in shadow mode and match PostgreSQL.
+4. A write fence stops PostgreSQL drift; create, update, delete and read paths
+   then run only through KaveonDB.
+5. API and Studio restart successfully with PostgreSQL unavailable, and the
+   eight dashboards, 70 charts, nine datasets and nine DLMs still work.
+6. Conflict, rollback, backup/restore and coordinator-restart tests pass, with
+   credential-free machine-readable reports.
+7. PostgreSQL is first scaled to zero while its PVC is retained. Permanent
+   deletion happens only after the rollback window passes.
+
+Deleting the StatefulSet or PVC before these gates would remove the current
+product metadata authority and break Studio even though ADLS analytical queries
+remain available.
