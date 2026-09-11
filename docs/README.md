@@ -20,6 +20,7 @@ are planned rather than executable.
 - [Engineer 2 continuation brief](engineering/codex-continuation.md)
 - [Use the Engine CLI](guides/engine-cli.md)
 - [Deploy and connect to the Engine on AKS](engineering/azure-deployment-guide.md)
+- [Build cached Engine images in ACR](engineering/engine-acr-build-cache.md)
 - [CLI compatibility and remaining gaps](engineering/cli-compatibility.md)
 - [Engine UI access and query attribution](engineering/engine-ui-access.md)
 - [Connect data sources](guides/data-sources.md)

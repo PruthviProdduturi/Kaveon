@@ -1,0 +1,20 @@
+ARG CHEF_IMAGE
+FROM ${CHEF_IMAGE} AS planner
+
+WORKDIR /build
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json \
+    && sha256sum recipe.json | cut -d ' ' -f 1 > recipe.sha256
+
+FROM ${CHEF_IMAGE}
+
+ARG RECIPE_INPUT_SHA256
+LABEL io.kaveon.cargo-recipe-input-sha256=${RECIPE_INPUT_SHA256}
+
+WORKDIR /build
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=planner /build/recipe.json /build/recipe.json
+COPY --from=planner /build/recipe.sha256 /opt/kaveon-cache/recipe.sha256
+RUN cargo chef cook --release --locked --recipe-path recipe.json
