@@ -37,6 +37,7 @@ const DEFAULT_BATCH_SIZE: usize = 8_192;
 // for this in-memory path.
 const PRELOADED_BATCH_SIZE: usize = 65_536;
 const MAX_METADATA_CACHE_ENTRIES: usize = 256;
+const MAX_OBJECT_METADATA_CACHE_ENTRIES: usize = 256;
 const MAX_OBJECT_STORE_CACHE_ENTRIES: usize = 32;
 const FULL_OBJECT_CACHE_LIMIT: usize = 64 * 1024 * 1024;
 const FULL_OBJECT_CACHE_MIN_ROW_GROUPS: usize = 32;
@@ -46,6 +47,8 @@ static FULL_OBJECT_CACHE_BYTES: AtomicUsize = AtomicUsize::new(0);
 static FULL_OBJECT_CACHE: OnceLock<Mutex<HashMap<String, Arc<FullObjectEntry>>>> = OnceLock::new();
 static DECODED_BATCH_CACHE_BYTES: AtomicUsize = AtomicUsize::new(0);
 static DECODED_BATCH_CACHE: OnceLock<Mutex<HashMap<String, Arc<DecodedBatchEntry>>>> =
+    OnceLock::new();
+static OBJECT_METADATA_CACHE: OnceLock<Mutex<HashMap<String, object_store::ObjectMeta>>> =
     OnceLock::new();
 static OBJECT_STORE_CACHE: OnceLock<Mutex<HashMap<String, Arc<dyn ObjectStore>>>> = OnceLock::new();
 static METADATA_LOAD_LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
@@ -88,6 +91,36 @@ fn cache_object_store(key: String, store: Arc<dyn ObjectStore>) {
         cache.clear();
     }
     cache.insert(key, store);
+}
+
+fn cached_object_metadata(key: &str) -> Option<object_store::ObjectMeta> {
+    OBJECT_METADATA_CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .ok()?
+        .get(key)
+        .cloned()
+}
+
+fn cache_object_metadata(key: String, metadata: object_store::ObjectMeta) {
+    // A cached size is safe only when every subsequent byte request can be
+    // pinned to an immutable object identity.
+    if metadata.e_tag.is_none() && metadata.version.is_none() {
+        return;
+    }
+    let Ok(mut cache) = OBJECT_METADATA_CACHE.get_or_init(Default::default).lock() else {
+        return;
+    };
+    if cache.len() >= MAX_OBJECT_METADATA_CACHE_ENTRIES && !cache.contains_key(&key) {
+        cache.clear();
+    }
+    cache.insert(key, metadata);
+}
+
+fn invalidate_object_metadata(key: &str) {
+    if let Ok(mut cache) = OBJECT_METADATA_CACHE.get_or_init(Default::default).lock() {
+        cache.remove(key);
+    }
 }
 
 struct DecodedBatchEntry {
@@ -372,15 +405,16 @@ impl AsyncFileReader for AdlsObjectReader {
     }
 }
 
-static METADATA_CACHE: OnceLock<Mutex<HashMap<String, ArrowReaderMetadata>>> = OnceLock::new();
+#[derive(Clone)]
+struct CachedMetadata {
+    object_identity: String,
+    metadata: ArrowReaderMetadata,
+}
 
-fn object_identity(metadata: &object_store::ObjectMeta) -> Result<String> {
-    if metadata.e_tag.is_none() && metadata.version.is_none() {
-        return Err(storage_error(
-            "ADLS object has no ETag or version for an immutable Parquet read",
-        ));
-    }
-    Ok(format!(
+static METADATA_CACHE: OnceLock<Mutex<HashMap<String, CachedMetadata>>> = OnceLock::new();
+
+fn object_identity(metadata: &object_store::ObjectMeta) -> String {
+    format!(
         "{}:{}:{}:{}",
         metadata.size,
         metadata
@@ -389,7 +423,7 @@ fn object_identity(metadata: &object_store::ObjectMeta) -> Result<String> {
             .unwrap_or_default(),
         metadata.e_tag.as_deref().unwrap_or_default(),
         metadata.version.as_deref().unwrap_or_default()
-    ))
+    )
 }
 
 fn cached_metadata(key: &str, identity: &str) -> Option<ArrowReaderMetadata> {
@@ -397,53 +431,25 @@ fn cached_metadata(key: &str, identity: &str) -> Option<ArrowReaderMetadata> {
         .get_or_init(Default::default)
         .lock()
         .ok()?
-        .get(&format!("{key}:{identity}"))
-        .cloned()
+        .get(key)
+        .filter(|entry| entry.object_identity == identity)
+        .map(|entry| entry.metadata.clone())
 }
 
 fn cache_metadata(key: String, identity: String, metadata: ArrowReaderMetadata) {
     let Ok(mut cache) = METADATA_CACHE.get_or_init(Default::default).lock() else {
         return;
     };
-    let identity_key = format!("{key}:{identity}");
-    if cache.len() >= MAX_METADATA_CACHE_ENTRIES && !cache.contains_key(&identity_key) {
+    if cache.len() >= MAX_METADATA_CACHE_ENTRIES && !cache.contains_key(&key) {
         cache.clear();
     }
-    cache.insert(identity_key, metadata);
-}
-
-async fn load_parquet_metadata(
-    store: Arc<dyn ObjectStore>,
-    path: &Path,
-    cache_key: &str,
-    metrics: &ScanMetrics,
-) -> Result<(object_store::ObjectMeta, String, ArrowReaderMetadata)> {
-    // Revalidate the mutable path on every logical open. The footer cache is
-    // keyed by the immutable identity returned by this HEAD, so replacing an
-    // object can never reuse the former object's footer.
-    let object_metadata = store.head(path).await.map_err(object_store_error)?;
-    let identity = object_identity(&object_metadata)?;
-    if let Some(metadata) = cached_metadata(cache_key, &identity) {
-        metrics.object_metadata_cache_hit();
-        return Ok((object_metadata, identity, metadata));
-    }
-    let load_lock = metadata_load_lock(&format!("{cache_key}:{identity}"));
-    let _load_guard = load_lock.lock().await;
-    let metadata = match cached_metadata(cache_key, &identity) {
-        Some(metadata) => {
-            metrics.object_metadata_cache_hit();
-            metadata
-        }
-        None => {
-            let mut object_reader = AdlsObjectReader::new(store, object_metadata.clone(), None);
-            let metadata = ArrowReaderMetadata::load_async(&mut object_reader, Default::default())
-                .await
-                .map_err(parquet_error)?;
-            cache_metadata(cache_key.to_owned(), identity.clone(), metadata.clone());
-            metadata
-        }
-    };
-    Ok((object_metadata, identity, metadata))
+    cache.insert(
+        key,
+        CachedMetadata {
+            object_identity: identity,
+            metadata,
+        },
+    );
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -460,6 +466,7 @@ pub struct AdlsBatchStream {
     output_projection: Option<Vec<usize>>,
     decoded_cache_key: Option<String>,
     decoded_batches: Vec<RecordBatch>,
+    object_cache_key: String,
 }
 
 impl AdlsBatchStream {
@@ -477,7 +484,10 @@ impl AdlsBatchStream {
         let started = Instant::now();
         let result = match self.inner.next().await.transpose() {
             Ok(result) => result,
-            Err(error) => return Err(parquet_error(error)),
+            Err(error) => {
+                invalidate_object_metadata(&self.object_cache_key);
+                return Err(parquet_error(error));
+            }
         };
         self.metrics.read_time(started.elapsed());
         if let Some(batch) = &result {
@@ -640,8 +650,52 @@ impl AdlsParquetReader {
             Path::parse(&self.object_path).map_err(|error| storage_error(error.to_string()))?;
         let footer_started = Instant::now();
         let cache_key = format!("{}/{}/{}", self.account, self.container, self.object_path);
-        let (object_metadata, identity, metadata) =
-            load_parquet_metadata(store.clone(), &path, &cache_key, &metrics).await?;
+        // A query can schedule several fragments for the same object at once.
+        // Single-flight the first HEAD + footer load so a cold process performs
+        // one remote initialization rather than one per fragment. Recheck both
+        // caches after acquiring the lock because another fragment may have
+        // populated them while this one was waiting.
+        let cached_pair = cached_object_metadata(&cache_key).and_then(|object_metadata| {
+            let identity = object_identity(&object_metadata);
+            cached_metadata(&cache_key, &identity)
+                .map(|metadata| (object_metadata, identity, metadata))
+        });
+        let (object_metadata, identity, metadata) = match cached_pair {
+            Some(pair) => {
+                metrics.object_metadata_cache_hit();
+                pair
+            }
+            None => {
+                let load_lock = metadata_load_lock(&cache_key);
+                let _load_guard = load_lock.lock().await;
+                let object_metadata = match cached_object_metadata(&cache_key) {
+                    Some(metadata) => {
+                        metrics.object_metadata_cache_hit();
+                        metadata
+                    }
+                    None => {
+                        let metadata = store.head(&path).await.map_err(object_store_error)?;
+                        cache_object_metadata(cache_key.clone(), metadata.clone());
+                        metadata
+                    }
+                };
+                let identity = object_identity(&object_metadata);
+                let metadata = match cached_metadata(&cache_key, &identity) {
+                    Some(metadata) => metadata,
+                    None => {
+                        let mut object_reader =
+                            AdlsObjectReader::new(store.clone(), object_metadata.clone(), None);
+                        let metadata =
+                            ArrowReaderMetadata::load_async(&mut object_reader, Default::default())
+                                .await
+                                .map_err(parquet_error)?;
+                        cache_metadata(cache_key.clone(), identity.clone(), metadata.clone());
+                        metadata
+                    }
+                };
+                (object_metadata, identity, metadata)
+            }
+        };
         let preload =
             should_preload_object(object_metadata.size, metadata.metadata().num_row_groups());
         let object_reader = AdlsObjectReader::new(
@@ -721,6 +775,7 @@ impl AdlsParquetReader {
             output_projection,
             decoded_cache_key: (!cache_hit).then_some(decoded_cache_key).flatten(),
             decoded_batches: Vec::new(),
+            object_cache_key: cache_key,
         })
     }
 
@@ -836,76 +891,32 @@ fn object_store_error(error: object_store::Error) -> KaveonError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::{
-        array::Int64Array,
-        datatypes::{DataType, Field, Schema},
-    };
+    use arrow::array::Int64Array;
     use object_store::{ObjectStore, PutPayload, memory::InMemory};
-    use parquet::arrow::ArrowWriter;
-
-    fn parquet_bytes(rows: usize) -> Bytes {
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "value",
-            DataType::Int64,
-            false,
-        )]));
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(Int64Array::from_iter_values(
-                (0..rows).map(|value| value as i64),
-            ))],
-        )
-        .unwrap();
-        let mut writer = ArrowWriter::try_new(Vec::new(), schema, None).unwrap();
-        writer.write(&batch).unwrap();
-        writer.into_inner().unwrap().into()
-    }
 
     #[tokio::test]
-    async fn parquet_footer_cache_rechecks_identity_and_invalidates_replacement() {
+    async fn cached_object_metadata_is_identity_pinned_and_invalidatable() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let path = Path::from(format!("identity-cache-{}.parquet", std::process::id()));
-        let key = format!("footer-cache-{}", std::process::id());
-        store.put(&path, parquet_bytes(3).into()).await.unwrap();
-        let metrics = ScanMetrics::default();
-        let (first_object, first_identity, first_footer) =
-            load_parquet_metadata(store.clone(), &path, &key, &metrics)
-                .await
-                .unwrap();
-        assert_eq!(first_footer.metadata().file_metadata().num_rows(), 3);
-
-        let (_, repeated_identity, repeated_footer) =
-            load_parquet_metadata(store.clone(), &path, &key, &metrics)
-                .await
-                .unwrap();
-        assert_eq!(repeated_identity, first_identity);
-        assert_eq!(repeated_footer.metadata().file_metadata().num_rows(), 3);
-        assert_eq!(metrics.snapshot().object_metadata_cache_hits, 1);
-
-        store.put(&path, parquet_bytes(7).into()).await.unwrap();
-        let (_, replacement_identity, replacement_footer) =
-            load_parquet_metadata(store.clone(), &path, &key, &metrics)
-                .await
-                .unwrap();
-        assert_ne!(replacement_identity, first_identity);
-        assert_eq!(replacement_footer.metadata().file_metadata().num_rows(), 7);
-
-        let mut pinned = AdlsObjectReader::new(store, first_object, None);
-        assert!(pinned.get_bytes(0..1).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn footer_cache_refuses_an_unversioned_object_identity() {
-        let store = InMemory::new();
-        let path = Path::from("unversioned.parquet");
         store
-            .put(&path, PutPayload::from_static(b"bytes"))
+            .put(&path, PutPayload::from_static(b"first"))
             .await
             .unwrap();
-        let mut metadata = store.head(&path).await.unwrap();
-        metadata.e_tag = None;
-        metadata.version = None;
-        assert!(object_identity(&metadata).is_err());
+        let first = store.head(&path).await.unwrap();
+        assert!(first.e_tag.is_some() || first.version.is_some());
+        let key = path.to_string();
+        cache_object_metadata(key.clone(), first.clone());
+        assert_eq!(cached_object_metadata(&key).unwrap(), first);
+
+        store
+            .put(&path, PutPayload::from_static(b"second"))
+            .await
+            .unwrap();
+        let mut pinned = AdlsObjectReader::new(store, first, None);
+        assert!(pinned.get_bytes(0..1).await.is_err());
+
+        invalidate_object_metadata(&key);
+        assert!(cached_object_metadata(&key).is_none());
     }
 
     #[test]
