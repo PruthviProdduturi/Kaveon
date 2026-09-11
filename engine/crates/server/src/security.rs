@@ -17,6 +17,8 @@ use std::{
 #[serde(deny_unknown_fields)]
 pub struct SecurityConfig {
     pub entra: Option<crate::entra::EntraConfig>,
+    /// Absolute HTTPS origin for the Studio front door. Never includes a path.
+    pub studio_url: Option<String>,
     #[serde(default)]
     pub insecure_development: bool,
     #[serde(default)]
@@ -88,6 +90,20 @@ impl SecurityConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
         if let Some(entra) = &self.entra {
             entra.validate()?;
+        }
+        if let Some(studio_url) = &self.studio_url {
+            let parsed = reqwest::Url::parse(studio_url)
+                .map_err(|_| anyhow::anyhow!("studio_url must be an absolute HTTPS origin"))?;
+            anyhow::ensure!(
+                parsed.scheme() == "https"
+                    && parsed.host_str().is_some()
+                    && parsed.username().is_empty()
+                    && parsed.password().is_none()
+                    && parsed.path() == "/"
+                    && parsed.query().is_none()
+                    && parsed.fragment().is_none(),
+                "studio_url must be an absolute HTTPS origin with no path, query, fragment, or credentials"
+            );
         }
         let mut group_names = std::collections::HashSet::new();
         let mut grouped_principals = std::collections::HashSet::new();
@@ -366,6 +382,7 @@ mod tests {
                     }))
                     .unwrap(),
                 ),
+                studio_url: Some("https://studio.kaveon.example".into()),
                 principals: vec![
                     PrincipalCredential {
                         token: "a".repeat(32),
@@ -444,6 +461,7 @@ mod tests {
             "api://22222222-2222-2222-2222-222222222222/access_as_user"
         );
         assert_eq!(auth["entra"].as_object().unwrap().len(), 3);
+        assert_eq!(auth["studio_url"], "https://studio.kaveon.example");
         assert_eq!(
             client
                 .get(format!("http://{address}/ui/msal-browser.min.js"))
@@ -666,5 +684,34 @@ mod tests {
             ..Default::default()
         };
         assert!(whitespace.validate().is_err());
+    }
+
+    #[test]
+    fn studio_url_accepts_only_an_https_origin() {
+        for accepted in ["https://studio.kaveon.example", "https://localhost:3000"] {
+            SecurityConfig {
+                studio_url: Some(accepted.into()),
+                ..Default::default()
+            }
+            .validate()
+            .unwrap();
+        }
+        for rejected in [
+            "http://studio.kaveon.example",
+            "https://user@studio.kaveon.example",
+            "https://studio.kaveon.example/engine",
+            "https://studio.kaveon.example?next=/engine",
+            "not-a-url",
+        ] {
+            assert!(
+                SecurityConfig {
+                    studio_url: Some(rejected.into()),
+                    ..Default::default()
+                }
+                .validate()
+                .is_err(),
+                "unexpectedly accepted {rejected}"
+            );
+        }
     }
 }

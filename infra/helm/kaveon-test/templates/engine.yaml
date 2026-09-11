@@ -147,6 +147,10 @@ spec:
               {{- end }}
             - name: KAVEON_SECURITY_JSON
               valueFrom: {secretKeyRef: {name: {{ $credentials }}, key: security.json}}
+            {{- if and $isCoordinator $.Values.studioUrl }}
+            - name: KAVEON_STUDIO_URL
+              value: {{ $.Values.studioUrl | quote }}
+            {{- end }}
             - name: KAVEON_EXCHANGE_TOKEN
               valueFrom: {secretKeyRef: {name: {{ $credentials }}, key: exchange-token}}
             - name: KAVEON_CATALOG_ADMIN_TOKEN

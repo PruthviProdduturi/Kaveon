@@ -3,6 +3,7 @@ image:
   digest: ""
 workloadIdentity:
   clientId: ""
+studioUrl: ""
 productTransactions:
   enabled: false
   account: ""

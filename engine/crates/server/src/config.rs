@@ -286,6 +286,9 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     if let Ok(value) = std::env::var("KAVEON_SECURITY_JSON") {
         config.security = serde_json::from_str(&value)?;
     }
+    if let Ok(value) = std::env::var("KAVEON_STUDIO_URL") {
+        config.security.studio_url = Some(value);
+    }
     if let Ok(value) = std::env::var("KAVEON_INSECURE_DEVELOPMENT") {
         anyhow::ensure!(
             matches!(value.as_str(), "true" | "false"),
