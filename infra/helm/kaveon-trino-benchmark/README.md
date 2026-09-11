@@ -38,7 +38,7 @@ $namespace = "kaveon"
 $release = "kaveon-benchmark"
 $runId = "run-20260910-a1" # lowercase DNS label; choose a new value every run
 $prefix = "benchmarks/$runId"
-$kaveonDigest = "sha256:bd5a6ef6cdb00a121f215947c98a948f5e3fbd9d2c4b094a7d946d07a71d2bc6"
+$kaveonDigest = "sha256:1b41e38c56cb4fff74f17aa3c67ea599d6c3a6adfa4df55dede984ebc1d8d50a"
 $apiDigest = "sha256:4dc35a7b61f905f7debbf93f45da68c5560a2a17d6ca33e485d1956f54e526f6"
 ```
 
@@ -93,13 +93,27 @@ $runnerDigest = az acr repository show --name $registry `
 if ($runnerDigest -notmatch '^sha256:[a-f0-9]{64}$') { throw "Runner digest was not resolved" }
 ```
 
-Install the chart with Trino parked at zero replicas. `az aks command invoke`
-includes Helm and avoids the workstation route that currently times out:
+Import the pinned upstream Trino manifest into the existing ACR when the cluster
+enforces an allowed-registry policy. Import preserves the digest and does not
+change subscription policy:
 
 ```powershell
+$trinoDigest = "sha256:db58cc93e593a2706553745f276bb119c9810e69918be56ecde088ba7ccb0534"
+az acr import --subscription $subscription --name $registry `
+  --source "docker.io/trinodb/trino@$trinoDigest" `
+  --image "trino:483"
+```
+
+Install the chart with Trino parked at zero replicas. The Azure CLI accepts one
+file attachment, so package the chart as an uncompressed tar; the AKS command
+environment does not guarantee that `gzip` is installed:
+
+```powershell
+tar -cf "tmp/$runId/kaveon-trino-benchmark-chart.tar" `
+  -C infra/helm kaveon-trino-benchmark
 az aks command invoke --subscription $subscription --resource-group $resourceGroup `
-  --name $cluster --file infra/helm/kaveon-trino-benchmark `
-  --command "helm upgrade --install $release ./kaveon-trino-benchmark --namespace $namespace --set trino.storage.account=$account --wait --timeout 10m" -o json
+  --name $cluster --file "tmp/$runId/kaveon-trino-benchmark-chart.tar" `
+  --command "tar -xf kaveon-trino-benchmark-chart.tar && helm upgrade --install $release ./kaveon-trino-benchmark --namespace $namespace --set-string trino.image.repository=$registry.azurecr.io/trino --set-string trino.image.digest=$trinoDigest --set-string trino.storage.account=$account --set-string runner.kaveon.expectedImageDigest=$kaveonDigest --wait --timeout 10m" -o json
 ```
 
 Run the read-only preflight. It addresses Azure by subscription, resource group,
@@ -119,8 +133,8 @@ test portal's Engine while it leases the existing Kaveon StatefulSets.
 
 ```powershell
 az aks command invoke --subscription $subscription --resource-group $resourceGroup `
-  --name $cluster --file infra/helm/kaveon-trino-benchmark `
-  --command "helm upgrade --install $release ./kaveon-trino-benchmark --namespace $namespace --set trino.storage.account=$account --set runner.enabled=true --set runner.runId=$runId --set runner.image.repository=$registry.azurecr.io/kaveon-benchmark-runner --set runner.image.digest=$runnerDigest --wait=false" -o json
+  --name $cluster --file "tmp/$runId/kaveon-trino-benchmark-chart.tar" `
+  --command "tar -xf kaveon-trino-benchmark-chart.tar && helm upgrade --install $release ./kaveon-trino-benchmark --namespace $namespace --set-string trino.image.repository=$registry.azurecr.io/trino --set-string trino.image.digest=$trinoDigest --set-string trino.storage.account=$account --set runner.enabled=true --set-string runner.runId=$runId --set-string runner.image.repository=$registry.azurecr.io/kaveon-benchmark-runner --set-string runner.image.digest=$runnerDigest --set-string runner.kaveon.expectedImageDigest=$kaveonDigest --wait=false" -o json
 ```
 
 Poll without holding an ARM command open:
