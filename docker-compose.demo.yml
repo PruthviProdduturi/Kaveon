@@ -1,0 +1,76 @@
+# Public demo host. Layer over the root stack:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.demo.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d --no-build
+#
+# Images come from GHCR (multi-architecture, built by .github/workflows/demo-images.yml),
+# so the same file serves an Oracle A1 (arm64) host and an amd64 host. Studio runs
+# on Vercel and is opted out here; Caddy is the only public door (443, plus 80 for
+# the certificate challenge) and forwards to the API. The development identity is
+# disabled: every request must carry the proxy secret. The lake is on the host's
+# disk at KAVEON_DATA_PATH; object storage follows the Engine's S3 work.
+# Secrets come from the host's .env, never from this file.
+
+services:
+  caddy:
+    image: caddy:2.9-alpine
+    container_name: kaveon-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      KAVEON_API_HOST: ${KAVEON_API_HOST:?set the public API hostname}
+    volumes:
+      - ./infra/demo/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+
+  api:
+    image: ${KAVEON_IMAGE_API:-ghcr.io/pruthviprodduturi/kaveon-api:demo}
+    environment:
+      NODE_ENV: production
+      WEB_URL: ${KAVEON_WEB_URL:-https://kaveon.vercel.app}
+      KAVEON_DEV_USER_EMAIL: ""
+      KAVEON_DEV_USER_NAME: ""
+      KAVEON_DEV_USER_ROLE: ""
+      KAVEON_PROXY_SECRET: ${KAVEON_PROXY_SECRET:?set the proxy secret shared with Vercel}
+      METADATA_PASSWORD: ${KAVEON_POSTGRES_PASSWORD:?set the metadata database password}
+      KAVEON_ENGINE_BRIDGE_TOKEN: ${KAVEON_ENGINE_BRIDGE_TOKEN:?set the Engine bridge token}
+      KAVEON_ENGINE_CATALOG_TOKEN: ${KAVEON_CATALOG_ADMIN_TOKEN:?set the Engine catalog admin token}
+      KAVEON_CREDENTIAL_KEYS: ${KAVEON_CREDENTIAL_KEYS:?set the credential keyring}
+      KAVEON_CREDENTIAL_ACTIVE_KEY: ${KAVEON_CREDENTIAL_ACTIVE_KEY:?set the active credential key}
+
+  postgres:
+    environment:
+      POSTGRES_PASSWORD: ${KAVEON_POSTGRES_PASSWORD:?set the metadata database password}
+
+  engine-coordinator:
+    image: ${KAVEON_IMAGE_ENGINE:-ghcr.io/pruthviprodduturi/kaveon-engine:demo}
+    environment:
+      KAVEON_ENVIRONMENT: demo
+      KAVEON_EXCHANGE_TOKEN: ${KAVEON_EXCHANGE_TOKEN:?set the exchange token}
+      KAVEON_CATALOG_ADMIN_TOKEN: ${KAVEON_CATALOG_ADMIN_TOKEN:?set the Engine catalog admin token}
+      KAVEON_SECURITY_JSON: ${KAVEON_SECURITY_JSON:?set the Engine principals and bridge token}
+
+  engine-worker-1:
+    image: ${KAVEON_IMAGE_ENGINE:-ghcr.io/pruthviprodduturi/kaveon-engine:demo}
+    environment:
+      KAVEON_ENVIRONMENT: demo
+      KAVEON_EXCHANGE_TOKEN: ${KAVEON_EXCHANGE_TOKEN:?set the exchange token}
+
+  engine-worker-2:
+    image: ${KAVEON_IMAGE_ENGINE:-ghcr.io/pruthviprodduturi/kaveon-engine:demo}
+    environment:
+      KAVEON_ENVIRONMENT: demo
+      KAVEON_EXCHANGE_TOKEN: ${KAVEON_EXCHANGE_TOKEN:?set the exchange token}
+
+  studio:
+    profiles: ["local-studio"]
+
+volumes:
+  caddy-data:
+  caddy-config:

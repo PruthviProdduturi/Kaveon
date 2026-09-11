@@ -152,3 +152,8 @@ data/**/*.parquet
 .tmp-*.png
 .tmp-edge-*/
 .tmp-docs-*/
+
+# Oracle Cloud demo host — tenancy identifiers and state stay local
+infra/oci/*.tfvars
+infra/oci/.terraform/
+infra/oci/*.tfstate*
