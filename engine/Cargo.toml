@@ -19,6 +19,7 @@ license = "MIT"
 repository = "https://github.com/PruthviProdduturi/Kaveon"
 
 [workspace.dependencies]
+ahash = "0.8"
 bytes = "1"
 arrow = { version = "54", features = ["ffi"] }
 arrow-schema = { version = "54", features = ["serde"] }

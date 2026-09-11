@@ -3491,7 +3491,7 @@ async fn execute_distributed_fragments(
     plan: &LogicalPlan,
     catalog_snapshot: &kaveon_core::CatalogManager,
 ) -> Option<Result<(TaskResponse, Vec<StageTelemetry>, u64), String>> {
-    if !general_distributed_eligible(plan) {
+    if exact_metadata_count_plan(plan) || !general_distributed_eligible(plan) {
         return None;
     }
     let worker_selection = {
@@ -4000,6 +4000,9 @@ async fn execute_distributed_aggregate(
     plan: &LogicalPlan,
     memory: &kaveon_core::QueryMemoryPool,
 ) -> Option<Result<(TaskResponse, StageTelemetry), String>> {
+    if exact_metadata_count_plan(plan) {
+        return None;
+    }
     let (group_count, operations) = aggregate_merge_contract(plan)?;
     let worker_selection = {
         let mut cluster = state.cluster.write().await;
@@ -4130,6 +4133,33 @@ async fn execute_distributed_aggregate(
             },
         )
     }))
+}
+
+/// Exact, unfiltered COUNT(*) can be answered from the immutable source
+/// snapshot. Keeping it out of distributed execution avoids decoding and
+/// exchanging every row merely to add per-partition counters.
+fn exact_metadata_count_plan(plan: &LogicalPlan) -> bool {
+    let aggregate = match plan {
+        LogicalPlan::Project { input, .. } => input.as_ref(),
+        _ => plan,
+    };
+    matches!(
+        aggregate,
+        LogicalPlan::Aggregate {
+            input,
+            group_by,
+            aggregates,
+        } if group_by.is_empty()
+            && !aggregates.is_empty()
+            && aggregates.iter().all(|aggregate| matches!(
+                aggregate,
+                AggregateExpr::Count {
+                    expr: kaveon_core::Expr::Star,
+                    distinct: false,
+                }
+            ))
+            && matches!(input.as_ref(), LogicalPlan::Scan { .. })
+    )
 }
 
 fn aggregate_merge_contract(plan: &LogicalPlan) -> Option<(usize, Vec<MergeOperation>)> {
@@ -4603,9 +4633,10 @@ mod tests {
     use super::{
         ColumnInfo, MergeOperation, TaskRequest, TaskResponse, aggregate_merge_contract,
         await_task_memory, capabilities, decode_arrow_stream, durable_relation_statistics,
-        encode_arrow_stream, execute_analyze, general_distributed_eligible,
-        merge_partial_aggregates, mutation_actor, parse_analyze_table, statistics_diagnostics,
-        task_request_from_dispatch, top_n_merge_contract, validate_replacement,
+        encode_arrow_stream, exact_metadata_count_plan, execute_analyze,
+        general_distributed_eligible, merge_partial_aggregates, mutation_actor,
+        parse_analyze_table, statistics_diagnostics, task_request_from_dispatch,
+        top_n_merge_contract, validate_replacement,
     };
     use crate::security::Role;
     use arrow::array::{Int64Array, StringArray};
@@ -5390,6 +5421,26 @@ mod tests {
         assert!(general_distributed_eligible(&scan));
         assert!(general_distributed_eligible(&aggregate));
         assert!(general_distributed_eligible(&join));
+    }
+
+    #[test]
+    fn exact_unfiltered_counts_bypass_row_decoding_distributed_paths() {
+        for sql in [
+            "SELECT COUNT(*) FROM events",
+            "SELECT COUNT(*) AS rows FROM events",
+            "SELECT COUNT(*), COUNT(*) FROM events",
+        ] {
+            let plan = kaveon_sql::logical_plan::sql_to_logical_plan(sql).unwrap();
+            assert!(exact_metadata_count_plan(&plan), "{sql}");
+        }
+        for sql in [
+            "SELECT COUNT(*) FROM events WHERE id > 10",
+            "SELECT COUNT(id) FROM events",
+            "SELECT id, COUNT(*) FROM events GROUP BY id",
+        ] {
+            let plan = kaveon_sql::logical_plan::sql_to_logical_plan(sql).unwrap();
+            assert!(!exact_metadata_count_plan(&plan), "{sql}");
+        }
     }
 
     #[test]

@@ -1,9 +1,9 @@
+use ahash::AHashMap;
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, UInt64Array};
 use arrow::compute::{concat_batches, take};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use kaveon_core::{BatchOperator, KaveonError, MemoryReservation, OperatorMemoryAccount, Result};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 const HASH_ROW_OVERHEAD_BYTES: u64 = 64;
@@ -538,8 +538,8 @@ enum Key {
 /// Common integer joins avoid allocating a Vec<Key> for every probe row.
 /// Other key layouts use the existing exact typed composite representation.
 enum JoinIndex {
-    Int64(HashMap<i64, Vec<usize>>),
-    Composite(HashMap<Vec<Key>, Vec<usize>>),
+    Int64(AHashMap<i64, Vec<usize>>),
+    Composite(AHashMap<Vec<Key>, Vec<usize>>),
 }
 
 impl JoinIndex {
@@ -554,7 +554,7 @@ impl JoinIndex {
             let values = right
                 .column(*index)
                 .as_primitive::<arrow::datatypes::Int64Type>();
-            let mut map: HashMap<i64, Vec<usize>> = HashMap::new();
+            let mut map: AHashMap<i64, Vec<usize>> = AHashMap::new();
             for row in 0..values.len() {
                 if row.is_multiple_of(1024) {
                     check_cancelled(memory)?;
@@ -565,7 +565,7 @@ impl JoinIndex {
             }
             return Ok(Self::Int64(map));
         }
-        let mut map: HashMap<Vec<Key>, Vec<usize>> = HashMap::new();
+        let mut map: AHashMap<Vec<Key>, Vec<usize>> = AHashMap::new();
         for row in 0..right.num_rows() {
             if row.is_multiple_of(1024) {
                 check_cancelled(memory)?;

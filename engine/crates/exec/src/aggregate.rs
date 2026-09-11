@@ -1,3 +1,4 @@
+use ahash::AHashMap;
 use arrow::array::{
     Array, ArrayRef, AsArray, BinaryArray, BooleanArray, Float64Array, Int32Array, Int64Array,
     StringArray, UInt8Array, UInt64Array,
@@ -7,7 +8,7 @@ use arrow::ipc::reader::StreamReader;
 use arrow::ipc::writer::StreamWriter;
 use arrow::record_batch::RecordBatch;
 use kaveon_core::{BatchOperator, KaveonError, MemoryReservation, OperatorMemoryAccount, Result};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, hash_map::Entry};
 use std::io::Cursor;
 use std::sync::Arc;
 
@@ -1813,7 +1814,10 @@ impl HashAggregate {
     }
 
     fn collect_states(&mut self) -> Result<(GroupStateMap, Vec<MemoryReservation>)> {
-        let mut groups: HashMap<InlineGroupKey, Vec<Accumulator>> = HashMap::new();
+        // Group keys are query-local and do not need the standard library's
+        // comparatively expensive SipHash. AHash retains per-map randomized
+        // seeds while materially reducing the hot-path cost of large GROUP BYs.
+        let mut groups: AHashMap<InlineGroupKey, Vec<Accumulator>> = AHashMap::new();
         let mut reservations = Vec::new();
         while let Some(batch) = self.source.next_batch()? {
             let _input_memory = if self.input_already_reserved {
@@ -1921,17 +1925,21 @@ impl HashAggregate {
                             .collect(),
                     )
                 };
-                if !groups.contains_key(&key)
-                    && let Some(memory) = &self.memory
-                {
-                    reservations.push(
-                        memory.reserve(estimated_group_bytes(
-                            key.as_slice(),
-                            self.aggregates.len(),
-                        ))?,
-                    );
-                }
-                let accumulators = groups.entry(key).or_insert_with(|| self.new_states());
+                // Use the entry probe for both admission and lookup. The old
+                // contains_key + entry sequence hashed and probed every group
+                // key twice, including every row of high-cardinality scans.
+                let accumulators = match groups.entry(key) {
+                    Entry::Occupied(entry) => entry.into_mut(),
+                    Entry::Vacant(entry) => {
+                        if let Some(memory) = &self.memory {
+                            reservations.push(memory.reserve(estimated_group_bytes(
+                                entry.key().as_slice(),
+                                self.aggregates.len(),
+                            ))?);
+                        }
+                        entry.insert(self.new_states())
+                    }
+                };
                 for (index, aggregate) in self.aggregates.iter().enumerate() {
                     if matches!(aggregate.func, AggFunc::Count) && aggregate.column == "*" {
                         accumulators[index].update_count()?;
@@ -2861,6 +2869,61 @@ mod tests {
         drop(aggregate);
         assert_eq!(pool.snapshot().current_bytes, 0);
         assert!(pool.snapshot().peak_bytes <= pool.snapshot().limit_bytes);
+    }
+
+    #[test]
+    fn high_cardinality_integer_groups_are_exact_and_memory_bounded() {
+        let rows = 250_000_i64;
+        let groups = 4_096_i64;
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "group_key",
+                Arc::new(Int64Array::from_iter_values(
+                    (0..rows).map(|row| row % groups),
+                )) as ArrayRef,
+            ),
+            (
+                "value",
+                Arc::new(Int64Array::from_iter_values(0..rows)) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let pool = kaveon_core::QueryMemoryPool::new("high-cardinality", 32 * 1024 * 1024).unwrap();
+        let mut aggregate = HashAggregate::new_with_memory(
+            Box::new(Input::new(batch)),
+            vec!["group_key".into()],
+            vec![
+                AggExpr::new(AggFunc::Count, "*"),
+                AggExpr::new(AggFunc::Sum, "value"),
+            ],
+            pool.operator("hash-aggregate").unwrap(),
+        )
+        .unwrap();
+        let output = aggregate.next_batch().unwrap().unwrap();
+        assert_eq!(output.num_rows(), groups as usize);
+        let keys = output.column(0).as_primitive::<Int64Type>();
+        let counts = output
+            .column(1)
+            .as_primitive::<arrow::datatypes::UInt64Type>();
+        let sums = output.column(2).as_primitive::<Int64Type>();
+        let actual = (0..output.num_rows())
+            .map(|row| (keys.value(row), (counts.value(row), sums.value(row))))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        for key in 0..groups {
+            let expected_values = (key..rows).step_by(groups as usize).collect::<Vec<_>>();
+            assert_eq!(
+                actual[&key],
+                (
+                    expected_values.len() as u64,
+                    expected_values.iter().sum::<i64>()
+                )
+            );
+        }
+        drop(output);
+        drop(aggregate);
+        let snapshot = pool.snapshot();
+        assert_eq!(snapshot.current_bytes, 0);
+        assert!(snapshot.peak_bytes <= snapshot.limit_bytes);
     }
 
     #[test]
