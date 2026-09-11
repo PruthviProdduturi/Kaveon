@@ -78,6 +78,9 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(events.metadata.num_row_groups, 12)
         names = events.schema_arrow.names
         self.assertEqual(names[:3], ["event_date", "user_id", "surface"])
+        # No stored Arrow schema: readers get Utf8, not the writer's dictionary type.
+        self.assertEqual(str(events.schema_arrow.field("event_date").type), "string")
+        self.assertEqual(str(events.schema_arrow.field("country").type), "string")
         self.assertEqual(names[3:12], list(mod.METRICS))
         self.assertEqual(names[12:], list(mod.USER_DIMS))
 
