@@ -97,6 +97,8 @@ struct TaskTelemetry {
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct TaskExecutionMetrics {
     compute_cpu_us: Option<u64>,
+    compute_wall_us: u64,
+    compute_queue_us: u64,
     admission_wait_us: u64,
     exchange_input_payloads: u64,
     exchange_input_bytes: u64,
@@ -106,6 +108,10 @@ struct TaskExecutionMetrics {
     exchange_decode_us: u64,
     exchange_output_copies: u64,
     exchange_output_bytes: u64,
+    exchange_hash_us: u64,
+    exchange_copy_us: u64,
+    exchange_copy_allocations: u64,
+    exchange_copied_bytes: u64,
     exchange_encode_us: u64,
     exchange_upload_us: u64,
     memory_peak_bytes: u64,
@@ -119,6 +125,8 @@ struct TaskExecutionMetrics {
     spill_runs_written: u64,
     spill_compactions: u64,
     spill_compaction_input_bytes: u64,
+    spill_write_us: u64,
+    spill_read_us: u64,
 }
 
 #[derive(Default)]
@@ -982,7 +990,10 @@ async fn execute_fragment_task(
     let execution_fragment = fragment.clone();
     let execution_memory = memory.clone();
     let worker_decode_metrics = Arc::clone(&decode_metrics);
+    let compute_started = Instant::now();
     let execution = tokio::task::spawn_blocking(move || {
+        let queue_us = elapsed_us(compute_started);
+        let wall_started = Instant::now();
         let cpu_started = thread_cpu_us();
         let catalog = execution_state.catalog.blocking_read();
         let result = crate::fragment_exec::execute_fragment_with_memory(
@@ -999,16 +1010,22 @@ async fn execute_fragment_task(
         .map_err(|error| error.to_string());
         let cpu_us =
             cpu_started.and_then(|started| thread_cpu_us().map(|end| end.saturating_sub(started)));
-        (result, cpu_us)
+        (result, cpu_us, queue_us, elapsed_us(wall_started))
     })
     .await
     .map_err(|error| format!("fragment execution task failed: {error}"))?;
-    let (execution, compute_cpu_us) = execution;
+    let (execution, compute_cpu_us, compute_queue_us, compute_wall_us) = execution;
     let execution = execution?;
     metrics.compute_cpu_us = compute_cpu_us;
+    metrics.compute_queue_us = compute_queue_us;
+    metrics.compute_wall_us = compute_wall_us;
     metrics.exchange_decode_batches = decode_metrics.batches.load(Ordering::Acquire);
     metrics.exchange_decode_bytes = decode_metrics.bytes.load(Ordering::Acquire);
     metrics.exchange_decode_us = decode_metrics.elapsed_us.load(Ordering::Acquire);
+    metrics.exchange_hash_us = execution.hash_partition_metrics.hash_us;
+    metrics.exchange_copy_us = execution.hash_partition_metrics.copy_us;
+    metrics.exchange_copy_allocations = execution.hash_partition_metrics.copy_allocations;
+    metrics.exchange_copied_bytes = execution.hash_partition_metrics.copied_bytes;
     for (exchange_id, output) in execution.exchange_outputs {
         for (output_partition, batches) in output.partitions.iter().enumerate() {
             let destinations = req.exchange_outputs.iter().filter(|location| {
@@ -1093,6 +1110,8 @@ async fn execute_fragment_task(
         metrics.spill_compaction_input_bytes = after
             .compaction_input_bytes
             .saturating_sub(before.compaction_input_bytes);
+        metrics.spill_write_us = after.write_us.saturating_sub(before.write_us);
+        metrics.spill_read_us = after.read_us.saturating_sub(before.read_us);
     }
     Ok((
         execution.result_schema,

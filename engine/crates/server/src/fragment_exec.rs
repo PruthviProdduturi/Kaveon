@@ -19,7 +19,7 @@ use kaveon_exec::aggregate::{
     grouped_aggregate_states_to_batch, grouped_aggregate_states_to_typed_batch,
 };
 use kaveon_exec::distinct::DistinctOperator;
-use kaveon_exec::exchange::HashPartitioner;
+use kaveon_exec::exchange::{HashPartitionMetrics, HashPartitioner};
 use kaveon_exec::filter::FilterOperator;
 use kaveon_exec::join::JoinType;
 use kaveon_exec::limit::LimitOperator;
@@ -58,6 +58,7 @@ pub struct FragmentExecution {
     pub exchange_outputs: BTreeMap<ExchangeId, ExchangeOutputBatches>,
     pub scan_metrics: Vec<kaveon_storage::ScanMetrics>,
     pub scan_metrics_complete: bool,
+    pub hash_partition_metrics: HashPartitionMetrics,
 }
 
 pub struct ExchangeOutputBatches {
@@ -106,7 +107,8 @@ pub fn execute_fragment_with_memory(
         )?;
         let schema = Arc::clone(operator.schema());
         let batches = collect(&mut *operator)?;
-        let partitions = partition_batches(&batches, &schema, &output.partitioning)?;
+        let (partitions, hash_partition_metrics) =
+            partition_batches(&batches, &schema, &output.partitioning)?;
         let scan_metrics_complete = has_complete_scan_metrics(scan_count, scan_metrics.len());
         return Ok(FragmentExecution {
             result_schema: Arc::clone(&schema),
@@ -117,6 +119,7 @@ pub fn execute_fragment_with_memory(
             )]),
             scan_metrics,
             scan_metrics_complete,
+            hash_partition_metrics,
         });
     }
     let mut operator = compile_node(
@@ -136,6 +139,7 @@ pub fn execute_fragment_with_memory(
         exchange_outputs: BTreeMap::new(),
         scan_metrics,
         scan_metrics_complete,
+        hash_partition_metrics: HashPartitionMetrics::default(),
     })
 }
 
@@ -1044,15 +1048,17 @@ fn partition_batches(
     batches: &[RecordBatch],
     schema: &SchemaRef,
     partitioning: &Partitioning,
-) -> Result<Vec<Vec<RecordBatch>>> {
+) -> Result<(Vec<Vec<RecordBatch>>, HashPartitionMetrics)> {
     match partitioning {
-        Partitioning::Single | Partitioning::Broadcast => Ok(vec![batches.to_vec()]),
+        Partitioning::Single | Partitioning::Broadcast => {
+            Ok((vec![batches.to_vec()], HashPartitionMetrics::default()))
+        }
         Partitioning::RoundRobin { partition_count } => {
             let mut partitions = vec![Vec::new(); *partition_count];
             for (index, batch) in batches.iter().enumerate() {
                 partitions[index % partition_count].push(batch.clone());
             }
-            Ok(partitions)
+            Ok((partitions, HashPartitionMetrics::default()))
         }
         Partitioning::Hash {
             columns,
@@ -1060,14 +1066,24 @@ fn partition_batches(
         } => {
             let partitioner = HashPartitioner::try_new(schema, columns, *partition_count)?;
             let mut partitions = vec![Vec::new(); *partition_count];
+            let mut metrics = HashPartitionMetrics::default();
             for batch in batches {
-                for (partition, batch) in partitioner.partition(batch)?.into_iter().enumerate() {
+                let (partitioned, batch_metrics) = partitioner.partition_profiled(batch)?;
+                metrics.hash_us = metrics.hash_us.saturating_add(batch_metrics.hash_us);
+                metrics.copy_us = metrics.copy_us.saturating_add(batch_metrics.copy_us);
+                metrics.copy_allocations = metrics
+                    .copy_allocations
+                    .saturating_add(batch_metrics.copy_allocations);
+                metrics.copied_bytes = metrics
+                    .copied_bytes
+                    .saturating_add(batch_metrics.copied_bytes);
+                for (partition, batch) in partitioned.into_iter().enumerate() {
                     if batch.num_rows() > 0 {
                         partitions[partition].push(batch);
                     }
                 }
             }
-            Ok(partitions)
+            Ok((partitions, metrics))
         }
     }
 }
