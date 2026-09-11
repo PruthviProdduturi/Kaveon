@@ -28,9 +28,11 @@ on September 10 found these 21 live tables:
 | user_themes | 0 |  |  |
 
 The ADLS product-record layer currently has typed records for datasets, charts,
-dashboards, saved queries and user themes. This is protocol and storage
-foundation; the repository adapters, migration, write fencing, and API cutover
-are incomplete. It does not yet cover all 21 PostgreSQL tables.
+dashboards, saved queries and user themes. The API now has a typed, bounded
+client for atomic create/update/delete groups and owner-scoped point reads. It
+is an application migration boundary, not an enabled repository adapter:
+backfill, PostgreSQL outbox/units of work, shadow-read wiring, write fencing and
+API cutover remain incomplete. It does not yet cover all 21 PostgreSQL tables.
 
 PostgreSQL may be retired only after one repeatable migration command proves all
 of the following against a preserved backup:

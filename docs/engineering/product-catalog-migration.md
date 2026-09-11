@@ -3,13 +3,16 @@
 Kaveon will move durable product and Engine-definition state to an ADLS-backed
 catalog. PostgreSQL remains the production authority until the protocol,
 backfill, reconciliation, fencing, and rollback gates in this document have
-passed. This is a design, not an implemented migration and not evidence that a
-read-only Delta snapshot can accept product CRUD.
+passed. The manifest/CAS transaction substrate, authenticated product CRUD
+endpoint, and typed API client now exist. PostgreSQL repository integration,
+backfill, outbox, reconciliation, fencing and cutover do not; this document is
+therefore not evidence that PostgreSQL can be retired.
 
-The documented ADLS primitives are target requirements, not current Kaveon
-guarantees. Current Engine code has read paths and a local definition store; it
-does not yet provide the ADLS transaction writer, app-level head history, or
-verified head recovery required below.
+The Engine implements immutable documents and manifests with an ADLS head CAS,
+bounded typed product records, optimistic revisions, owner-scoped reads and
+writes, and application-level head history/recovery. The remaining statements
+distinguish those implemented primitives from migration and deployment gates
+that still require qualification.
 
 The durable state model is defined in
 [ADLS transaction protocol](adls-transaction-protocol.md). It uses immutable

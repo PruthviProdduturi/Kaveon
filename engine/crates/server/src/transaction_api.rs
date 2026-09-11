@@ -310,6 +310,7 @@ fn product_change(
                 .product_record(kind, &id)
                 .map_err(|error| RegistryError::Invalid(error.to_string()))?
                 .ok_or_else(|| RegistryError::Invalid("product record does not exist".into()))?;
+            require_product_owner(current, owner)?;
             let revision = expected_revision
                 .checked_add(1)
                 .ok_or_else(|| RegistryError::Invalid("product revision overflow".into()))?;
@@ -330,14 +331,35 @@ fn product_change(
             kind,
             id,
             expected_revision,
-        } => Ok((
-            CatalogChange::DeleteProduct {
-                kind: record_kind(&kind)?,
-                id,
-                expected_revision,
-            },
-            None,
-        )),
+        } => {
+            let kind = record_kind(&kind)?;
+            let current = snapshot
+                .product_record(kind, &id)
+                .map_err(|error| RegistryError::Invalid(error.to_string()))?
+                .ok_or_else(|| RegistryError::Invalid("product record does not exist".into()))?;
+            require_product_owner(current, owner)?;
+            Ok((
+                CatalogChange::DeleteProduct {
+                    kind,
+                    id,
+                    expected_revision,
+                },
+                None,
+            ))
+        }
+    }
+}
+
+fn require_product_owner(record: &ProductRecordRef, owner: &str) -> Result<(), RegistryError> {
+    if record
+        .unique_values
+        .get("owner_principal")
+        .map(String::as_str)
+        == Some(owner)
+    {
+        Ok(())
+    } else {
+        Err(RegistryError::Forbidden)
     }
 }
 
@@ -922,6 +944,58 @@ mod tests {
         assert!(matches!(error, RegistryError::Invalid(_)));
         let transaction = registry.take("alice", &begun.transaction_id).await.unwrap();
         assert_eq!(transaction.staged_change_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn product_updates_and_deletes_are_record_owner_isolated() {
+        let (registry, _) = registry().await;
+        let begun = registry.begin("alice").await.unwrap();
+        registry
+            .stage_product_command(
+                "alice",
+                &begun.transaction_id,
+                ProductDmlCommand::Create {
+                    kind: "dashboard".into(),
+                    id: "private-dashboard".into(),
+                    document_json: r#"{"name":"Private"}"#.into(),
+                },
+            )
+            .await
+            .unwrap();
+        let mut transaction = registry.take("alice", &begun.transaction_id).await.unwrap();
+        transaction.bind_request_digest(b"alice").unwrap();
+        transaction.commit().await.unwrap();
+
+        for command in [
+            ProductDmlCommand::Update {
+                kind: "dashboard".into(),
+                id: "private-dashboard".into(),
+                expected_revision: 1,
+                document_json: r#"{"name":"Stolen"}"#.into(),
+            },
+            ProductDmlCommand::Delete {
+                kind: "dashboard".into(),
+                id: "private-dashboard".into(),
+                expected_revision: 1,
+            },
+        ] {
+            let begun = registry.begin("bob").await.unwrap();
+            assert_eq!(
+                registry
+                    .stage_product_command("bob", &begun.transaction_id, command)
+                    .await
+                    .unwrap_err(),
+                RegistryError::Forbidden
+            );
+            assert_eq!(
+                registry
+                    .take("bob", &begun.transaction_id)
+                    .await
+                    .unwrap()
+                    .staged_change_count(),
+                0
+            );
+        }
     }
 
     #[tokio::test]
