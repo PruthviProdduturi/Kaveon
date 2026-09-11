@@ -15,6 +15,7 @@ DEPENDENCIES = {
     "dlm/engine.py": {"catalog_sources": "read", "charts": "read", "dashboards": "read", "dlm_generation": "read-write"},
     "dlm/profiler.py": {"query_history": "read", "context_cache": "read-write"},
     "dlm/router.py": {"context_cache": "read-write"},
+    "routers/catalog.py": {"datasets": "read", "charts": "read", "dashboards": "read", "dlm_generation": "read"},
     "routers/catalog_sources.py": {"catalog_sources": "read-write", "activity": "write"},
     "routers/chat.py": {"datasets": "read", "dataset_semantics": "read", "chat_history": "write"},
     "routers/chat_history.py": {"chat_history": "read-write"},
