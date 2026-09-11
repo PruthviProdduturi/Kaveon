@@ -1,19 +1,26 @@
 use std::{
     collections::HashMap,
     pin::Pin,
-    sync::{Arc, Mutex, OnceLock, mpsc},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
     time::Instant,
 };
 
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
+use bytes::Bytes;
+use futures::future::{BoxFuture, FutureExt};
 use futures::{Stream, StreamExt};
 use kaveon_core::{BatchSource, KaveonError, Result, StoragePredicate};
-use object_store::{ObjectStore, azure::MicrosoftAzureBuilder, path::Path};
+use object_store::{GetOptions, ObjectStore, azure::MicrosoftAzureBuilder, path::Path};
 use parquet::arrow::{
     ParquetRecordBatchStreamBuilder, ProjectionMask,
     arrow_reader::ArrowReaderMetadata,
-    async_reader::{ParquetObjectReader, ParquetRecordBatchStream},
+    async_reader::{AsyncFileReader, ParquetObjectReader, ParquetRecordBatchStream},
 };
+use parquet::{errors::ParquetError, file::metadata::ParquetMetaData};
 
 use crate::{
     ScanMetrics, ScanPartition,
@@ -24,6 +31,175 @@ use crate::{
 
 const DEFAULT_BATCH_SIZE: usize = 8_192;
 const MAX_METADATA_CACHE_ENTRIES: usize = 256;
+const FULL_OBJECT_CACHE_LIMIT: usize = 64 * 1024 * 1024;
+const FULL_OBJECT_CACHE_MIN_ROW_GROUPS: usize = 32;
+const PROCESS_FULL_OBJECT_CACHE_LIMIT: usize = 256 * 1024 * 1024;
+static FULL_OBJECT_CACHE_BYTES: AtomicUsize = AtomicUsize::new(0);
+static FULL_OBJECT_CACHE: OnceLock<Mutex<HashMap<String, Arc<FullObjectEntry>>>> = OnceLock::new();
+
+struct CacheReservation(usize);
+
+impl CacheReservation {
+    fn try_new(bytes: usize) -> Option<Self> {
+        FULL_OBJECT_CACHE_BYTES
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current
+                    .checked_add(bytes)
+                    .filter(|&next| next <= PROCESS_FULL_OBJECT_CACHE_LIMIT)
+            })
+            .ok()
+            .map(|_| Self(bytes))
+    }
+}
+
+struct FullObjectEntry {
+    bytes: tokio::sync::OnceCell<Bytes>,
+    fetches: AtomicUsize,
+    _reservation: CacheReservation,
+}
+
+fn full_object_entry(key: String, size: usize) -> Option<Arc<FullObjectEntry>> {
+    let mut cache = FULL_OBJECT_CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .ok()?;
+    if let Some(entry) = cache.get(&key) {
+        return Some(entry.clone());
+    }
+    let reservation = match CacheReservation::try_new(size) {
+        Some(reservation) => reservation,
+        None => {
+            cache.clear();
+            CacheReservation::try_new(size)?
+        }
+    };
+    let entry = Arc::new(FullObjectEntry {
+        bytes: tokio::sync::OnceCell::new(),
+        fetches: AtomicUsize::new(0),
+        _reservation: reservation,
+    });
+    cache.insert(key, entry.clone());
+    Some(entry)
+}
+
+impl Drop for CacheReservation {
+    fn drop(&mut self) {
+        FULL_OBJECT_CACHE_BYTES.fetch_sub(self.0, Ordering::AcqRel);
+    }
+}
+
+/// Parquet's async decoder fetches projected column ranges one row group at a
+/// time. For small files with many row groups this turns a single scan into
+/// hundreds of sequential cloud requests. Preloading the immutable object once
+/// bounds that amplification while retaining range reads for larger files.
+struct AdlsObjectReader {
+    inner: ParquetObjectReader,
+    store: Arc<dyn ObjectStore>,
+    path: Path,
+    size: usize,
+    e_tag: Option<String>,
+    version: Option<String>,
+    shared: Option<Arc<FullObjectEntry>>,
+}
+
+impl AdlsObjectReader {
+    fn new(
+        store: Arc<dyn ObjectStore>,
+        metadata: object_store::ObjectMeta,
+        cache_key: Option<String>,
+    ) -> Self {
+        let shared = cache_key.and_then(|key| full_object_entry(key, metadata.size));
+        Self {
+            inner: ParquetObjectReader::new(store.clone(), metadata.clone()),
+            store,
+            path: metadata.location,
+            size: metadata.size,
+            e_tag: metadata.e_tag,
+            version: metadata.version,
+            shared,
+        }
+    }
+
+    async fn cached_bytes(&self) -> parquet::errors::Result<Bytes> {
+        let entry = self.shared.as_ref().expect("cache entry is present");
+        let store = self.store.clone();
+        let path = self.path.clone();
+        let size = self.size;
+        let e_tag = self.e_tag.clone();
+        let version = self.version.clone();
+        entry
+            .bytes
+            .get_or_try_init(|| async move {
+                entry.fetches.fetch_add(1, Ordering::AcqRel);
+                store
+                    .get_opts(
+                        &path,
+                        GetOptions {
+                            if_match: e_tag,
+                            version,
+                            range: Some((0..size).into()),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .map_err(|error| ParquetError::External(Box::new(error)))?
+                    .bytes()
+                    .await
+                    .map_err(|error| ParquetError::External(Box::new(error)))
+            })
+            .await
+            .cloned()
+    }
+}
+
+impl AsyncFileReader for AdlsObjectReader {
+    fn get_bytes(
+        &mut self,
+        range: std::ops::Range<usize>,
+    ) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+        if self.shared.is_none() {
+            return self.inner.get_bytes(range);
+        }
+        async move {
+            let cached = self.cached_bytes().await?;
+            if cached.get(range.clone()).is_none() {
+                return Err(ParquetError::General(
+                    "Parquet range exceeds object size".into(),
+                ));
+            }
+            Ok(cached.slice(range))
+        }
+        .boxed()
+    }
+
+    fn get_byte_ranges(
+        &mut self,
+        ranges: Vec<std::ops::Range<usize>>,
+    ) -> BoxFuture<'_, parquet::errors::Result<Vec<Bytes>>> {
+        if self.shared.is_none() {
+            return self.inner.get_byte_ranges(ranges);
+        }
+        async move {
+            let cached = self.cached_bytes().await?;
+            ranges
+                .into_iter()
+                .map(|range| {
+                    if cached.get(range.clone()).is_none() {
+                        return Err(ParquetError::General(
+                            "Parquet range exceeds object size".into(),
+                        ));
+                    }
+                    Ok(cached.slice(range))
+                })
+                .collect()
+        }
+        .boxed()
+    }
+
+    fn get_metadata(&mut self) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
+        self.inner.get_metadata()
+    }
+}
 
 #[derive(Clone)]
 struct CachedMetadata {
@@ -244,24 +420,32 @@ impl AdlsParquetReader {
         let path =
             Path::parse(&self.object_path).map_err(|error| storage_error(error.to_string()))?;
         let footer_started = Instant::now();
-        let metadata = store.head(&path).await.map_err(object_store_error)?;
+        let object_metadata = store.head(&path).await.map_err(object_store_error)?;
         let cache_key = format!("{}/{}/{}", self.account, self.container, self.object_path);
-        let identity = object_identity(&metadata);
-        let mut object_reader = ParquetObjectReader::new(store, metadata);
-        let mut builder = match cached_metadata(&cache_key, &identity) {
-            Some(metadata) => {
-                ParquetRecordBatchStreamBuilder::new_with_metadata(object_reader, metadata)
-            }
+        let identity = object_identity(&object_metadata);
+        let metadata = match cached_metadata(&cache_key, &identity) {
+            Some(metadata) => metadata,
             None => {
+                let mut object_reader =
+                    ParquetObjectReader::new(store.clone(), object_metadata.clone());
                 let metadata =
                     ArrowReaderMetadata::load_async(&mut object_reader, Default::default())
                         .await
                         .map_err(parquet_error)?;
-                cache_metadata(cache_key, identity, metadata.clone());
-                ParquetRecordBatchStreamBuilder::new_with_metadata(object_reader, metadata)
+                cache_metadata(cache_key.clone(), identity.clone(), metadata.clone());
+                metadata
             }
-        }
-        .with_batch_size(self.batch_size);
+        };
+        let preload =
+            should_preload_object(object_metadata.size, metadata.metadata().num_row_groups());
+        let object_reader = AdlsObjectReader::new(
+            store,
+            object_metadata,
+            preload.then(|| format!("{cache_key}:{identity}")),
+        );
+        let mut builder =
+            ParquetRecordBatchStreamBuilder::new_with_metadata(object_reader, metadata)
+                .with_batch_size(self.batch_size);
         metrics.footer_time(footer_started.elapsed());
         metrics.file_opened();
 
@@ -292,7 +476,7 @@ impl AdlsParquetReader {
             &metrics,
         );
         builder = builder.with_row_groups(row_groups);
-        let stream: ParquetRecordBatchStream<ParquetObjectReader> =
+        let stream: ParquetRecordBatchStream<AdlsObjectReader> =
             builder.build().map_err(parquet_error)?;
         let (schema, output_projection) = crate::parquet_reader::ordered_projection(
             Arc::clone(stream.schema()),
@@ -391,6 +575,10 @@ impl AdlsParquetReader {
     }
 }
 
+fn should_preload_object(size: usize, row_groups: usize) -> bool {
+    size <= FULL_OBJECT_CACHE_LIMIT && row_groups >= FULL_OBJECT_CACHE_MIN_ROW_GROUPS
+}
+
 fn storage_error(message: impl Into<String>) -> KaveonError {
     KaveonError::Storage(message.into())
 }
@@ -406,6 +594,7 @@ fn object_store_error(error: object_store::Error) -> KaveonError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use object_store::{ObjectStore, PutPayload, memory::InMemory};
 
     #[test]
     fn validates_identity_path_and_batch_size_without_network_access() {
@@ -463,5 +652,64 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn many_ranges_share_one_bounded_full_object_fetch() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let path = Path::from("many-groups.parquet");
+        store
+            .put(&path, PutPayload::from_static(b"0123456789abcdef"))
+            .await
+            .unwrap();
+        let metadata = store.head(&path).await.unwrap();
+        let before = FULL_OBJECT_CACHE_BYTES.load(Ordering::Acquire);
+        let key = "test-many-ranges-shared-cache".to_owned();
+        let mut reader = AdlsObjectReader::new(store.clone(), metadata.clone(), Some(key.clone()));
+        let mut concurrent = AdlsObjectReader::new(store, metadata, Some(key));
+        let (first, competing) = tokio::join!(
+            reader.get_byte_ranges(vec![0..2, 4..8, 12..16]),
+            concurrent.get_bytes(2..4)
+        );
+        assert_eq!(first.unwrap()[0], Bytes::from_static(b"01"));
+        assert_eq!(competing.unwrap(), Bytes::from_static(b"23"));
+        // The failed 306-row-group AKS file assigned about 102 sequential
+        // decoder fetch cycles to each of three workers.
+        for _ in 1..102 {
+            assert_eq!(
+                reader
+                    .get_byte_ranges(vec![0..2, 4..8, 12..16])
+                    .await
+                    .unwrap(),
+                vec![
+                    Bytes::from_static(b"01"),
+                    Bytes::from_static(b"4567"),
+                    Bytes::from_static(b"cdef")
+                ]
+            );
+        }
+        assert_eq!(
+            reader.get_bytes(8..12).await.unwrap(),
+            Bytes::from_static(b"89ab")
+        );
+        assert_eq!(
+            reader
+                .shared
+                .as_ref()
+                .unwrap()
+                .fetches
+                .load(Ordering::Acquire),
+            1
+        );
+        assert_eq!(FULL_OBJECT_CACHE_BYTES.load(Ordering::Acquire), before + 16);
+        drop(reader);
+        drop(concurrent);
+    }
+
+    #[test]
+    fn preload_is_limited_to_small_many_group_objects() {
+        assert!(should_preload_object(60 * 1024 * 1024, 306));
+        assert!(!should_preload_object(65 * 1024 * 1024, 306));
+        assert!(!should_preload_object(60 * 1024 * 1024, 31));
     }
 }
