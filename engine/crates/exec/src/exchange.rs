@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::time::Instant;
 
 use arrow::array::{ArrayRef, AsArray, Float32Array, Float64Array, UInt32Builder};
 use arrow::compute::take;
@@ -12,6 +13,14 @@ const FNV_PRIME: u64 = 1_099_511_628_211;
 pub struct HashPartitioner {
     key_indices: Vec<usize>,
     partition_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HashPartitionMetrics {
+    pub hash_us: u64,
+    pub copy_us: u64,
+    pub copy_allocations: u64,
+    pub copied_bytes: u64,
 }
 
 impl HashPartitioner {
@@ -47,6 +56,14 @@ impl HashPartitioner {
     }
 
     pub fn partition(&self, batch: &RecordBatch) -> Result<Vec<RecordBatch>> {
+        self.partition_profiled(batch).map(|(batches, _)| batches)
+    }
+
+    pub fn partition_profiled(
+        &self,
+        batch: &RecordBatch,
+    ) -> Result<(Vec<RecordBatch>, HashPartitionMetrics)> {
+        let hash_started = Instant::now();
         let key_columns = self
             .key_indices
             .iter()
@@ -112,19 +129,41 @@ impl HashPartitioner {
                 KaveonError::Execution("record batch exceeds Arrow UInt32 row capacity".into())
             })?);
         }
-        indices
+        let hash_us = elapsed_us(hash_started);
+        let copy_started = Instant::now();
+        let mut copy_allocations = 0_u64;
+        let batches = indices
             .into_iter()
             .map(|mut indices| {
                 let indices = indices.finish();
                 let columns = batch
                     .columns()
                     .iter()
-                    .map(|column| take(column.as_ref(), &indices, None))
+                    .map(|column| {
+                        copy_allocations = copy_allocations.saturating_add(1);
+                        take(column.as_ref(), &indices, None)
+                    })
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 Ok(RecordBatch::try_new(batch.schema(), columns)?)
             })
-            .collect()
+            .collect::<Result<Vec<_>>>()?;
+        let copied_bytes = batches.iter().fold(0_u64, |total, batch| {
+            total.saturating_add(batch.get_array_memory_size() as u64)
+        });
+        Ok((
+            batches,
+            HashPartitionMetrics {
+                hash_us,
+                copy_us: elapsed_us(copy_started),
+                copy_allocations,
+                copied_bytes,
+            },
+        ))
     }
+}
+
+fn elapsed_us(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
 }
 
 fn stable_hash(bytes: &[u8]) -> u64 {
@@ -248,10 +287,12 @@ mod tests {
     fn hash_partitioning_is_deterministic_and_lossless() {
         let input = batch();
         let partitioner = HashPartitioner::try_new(&input.schema(), &["key".into()], 3).unwrap();
-        let first = partitioner.partition(&input).unwrap();
+        let (first, metrics) = partitioner.partition_profiled(&input).unwrap();
         let second = partitioner.partition(&input).unwrap();
         assert_eq!(first, second);
         assert_eq!(first.iter().map(RecordBatch::num_rows).sum::<usize>(), 5);
+        assert_eq!(metrics.copy_allocations, 6);
+        assert!(metrics.copied_bytes > 0);
 
         let east_partitions = first
             .iter()

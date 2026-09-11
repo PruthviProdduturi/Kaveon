@@ -6,6 +6,7 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
+    time::Instant,
 };
 
 use arrow::{
@@ -27,6 +28,8 @@ pub struct SpillSnapshot {
     pub runs_written: u64,
     pub compactions: u64,
     pub compaction_input_bytes: u64,
+    pub write_us: u64,
+    pub read_us: u64,
 }
 
 #[derive(Debug)]
@@ -39,6 +42,8 @@ struct SpillInner {
     runs_written: AtomicU64,
     compactions: AtomicU64,
     compaction_input_bytes: AtomicU64,
+    write_us: AtomicU64,
+    read_us: AtomicU64,
 }
 
 impl SpillInner {
@@ -123,6 +128,8 @@ impl SpillManager {
                 runs_written: AtomicU64::new(0),
                 compactions: AtomicU64::new(0),
                 compaction_input_bytes: AtomicU64::new(0),
+                write_us: AtomicU64::new(0),
+                read_us: AtomicU64::new(0),
             }),
         })
     }
@@ -137,6 +144,8 @@ impl SpillManager {
             runs_written: self.inner.runs_written.load(Ordering::Acquire),
             compactions: self.inner.compactions.load(Ordering::Acquire),
             compaction_input_bytes: self.inner.compaction_input_bytes.load(Ordering::Acquire),
+            write_us: self.inner.write_us.load(Ordering::Acquire),
+            read_us: self.inner.read_us.load(Ordering::Acquire),
         }
     }
 
@@ -155,6 +164,7 @@ impl SpillManager {
     where
         I: IntoIterator<Item = Result<RecordBatch>>,
     {
+        let started = Instant::now();
         let run_id = NEXT_RUN.fetch_add(1, Ordering::Relaxed);
         let path = self.inner.directory.join(format!("run-{run_id}.arrow"));
         let file = OpenOptions::new()
@@ -189,6 +199,9 @@ impl SpillManager {
         let bytes = output.commit();
         self.inner.bytes_written.fetch_add(bytes, Ordering::AcqRel);
         self.inner.runs_written.fetch_add(1, Ordering::AcqRel);
+        self.inner
+            .write_us
+            .fetch_add(elapsed_us(started), Ordering::AcqRel);
         Ok(SpillRun {
             inner: Arc::clone(&self.inner),
             path,
@@ -217,32 +230,49 @@ impl SpillRun {
     }
 
     pub fn read(&self) -> Result<Vec<RecordBatch>> {
+        let started = Instant::now();
         let file = File::open(&self.path)?;
-        StreamReader::try_new(file, None)?
+        let batches = StreamReader::try_new(file, None)?
             .map(|batch| batch.map_err(KaveonError::from))
-            .collect()
+            .collect();
+        self.inner
+            .read_us
+            .fetch_add(elapsed_us(started), Ordering::AcqRel);
+        batches
     }
 
     pub fn reader(&self) -> Result<SpillRunReader> {
         let file = File::open(&self.path)?;
         Ok(SpillRunReader {
             reader: StreamReader::try_new(file, None)?,
+            inner: Arc::clone(&self.inner),
         })
     }
 }
 
 pub struct SpillRunReader {
     reader: StreamReader<File>,
+    inner: Arc<SpillInner>,
 }
 
 impl Iterator for SpillRunReader {
     type Item = Result<RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.reader
+        let started = Instant::now();
+        let batch = self
+            .reader
             .next()
-            .map(|batch| batch.map_err(KaveonError::from))
+            .map(|batch| batch.map_err(KaveonError::from));
+        self.inner
+            .read_us
+            .fetch_add(elapsed_us(started), Ordering::AcqRel);
+        batch
     }
+}
+
+fn elapsed_us(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
 }
 
 impl Drop for SpillRun {
@@ -356,6 +386,9 @@ mod tests {
         assert_eq!(snapshot.runs_written, 1);
         assert_eq!(snapshot.compactions, 0);
         assert_eq!(run.read().unwrap(), vec![input]);
+        let after_read = manager.snapshot();
+        assert!(after_read.write_us >= snapshot.write_us);
+        assert!(after_read.read_us >= snapshot.read_us);
         let path = run.path().to_owned();
         drop(run);
 
