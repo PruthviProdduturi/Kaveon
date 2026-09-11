@@ -913,7 +913,10 @@ async fn execute_fragment_task(
         ..Default::default()
     };
     let fetch_started = Instant::now();
-    let client = reqwest::Client::new();
+    // A client owns its connection pool. Constructing one for every fragment
+    // discarded reusable coordinator/exchange connections and put setup on the
+    // critical path even for source stages with no exchange inputs.
+    let client = state.internal_http_client.clone();
     let token = state
         .config
         .exchange_token
@@ -5260,6 +5263,7 @@ mod tests {
             })),
             catalog_store,
             exchange_store: crate::exchange::ExchangeStore::default(),
+            internal_http_client: reqwest::Client::new(),
             lifecycle: crate::lifecycle::WorkerLifecycle::default(),
             memory_admission: kaveon_core::MemoryAdmissionController::new(
                 config.memory_admission_limit_bytes,

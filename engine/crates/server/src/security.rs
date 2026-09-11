@@ -412,6 +412,7 @@ mod tests {
             })),
             catalog_store,
             exchange_store: crate::exchange::ExchangeStore::default(),
+            internal_http_client: reqwest::Client::new(),
             lifecycle: crate::lifecycle::WorkerLifecycle::default(),
             memory_admission: kaveon_core::MemoryAdmissionController::new(
                 config.memory_admission_limit_bytes,
