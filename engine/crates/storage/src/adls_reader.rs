@@ -34,8 +34,79 @@ const MAX_METADATA_CACHE_ENTRIES: usize = 256;
 const FULL_OBJECT_CACHE_LIMIT: usize = 64 * 1024 * 1024;
 const FULL_OBJECT_CACHE_MIN_ROW_GROUPS: usize = 32;
 const PROCESS_FULL_OBJECT_CACHE_LIMIT: usize = 256 * 1024 * 1024;
+const PROCESS_DECODED_BATCH_CACHE_LIMIT: usize = 256 * 1024 * 1024;
 static FULL_OBJECT_CACHE_BYTES: AtomicUsize = AtomicUsize::new(0);
 static FULL_OBJECT_CACHE: OnceLock<Mutex<HashMap<String, Arc<FullObjectEntry>>>> = OnceLock::new();
+static DECODED_BATCH_CACHE_BYTES: AtomicUsize = AtomicUsize::new(0);
+static DECODED_BATCH_CACHE: OnceLock<Mutex<HashMap<String, Arc<DecodedBatchEntry>>>> =
+    OnceLock::new();
+
+struct DecodedBatchEntry {
+    batches: Arc<Vec<RecordBatch>>,
+    _reservation: DecodedCacheReservation,
+}
+
+struct DecodedCacheReservation(usize);
+
+impl Drop for DecodedCacheReservation {
+    fn drop(&mut self) {
+        DECODED_BATCH_CACHE_BYTES.fetch_sub(self.0, Ordering::AcqRel);
+    }
+}
+
+fn cached_decoded_batches(key: &str) -> Option<Arc<Vec<RecordBatch>>> {
+    DECODED_BATCH_CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .ok()?
+        .get(key)
+        .map(|entry| Arc::clone(&entry.batches))
+}
+
+fn cache_decoded_batches(key: String, batches: Vec<RecordBatch>) {
+    if batches.is_empty() {
+        return;
+    }
+    let bytes = batches
+        .iter()
+        .map(RecordBatch::get_array_memory_size)
+        .sum::<usize>();
+    if bytes == 0 || bytes > PROCESS_DECODED_BATCH_CACHE_LIMIT {
+        return;
+    }
+    let Ok(mut cache) = DECODED_BATCH_CACHE.get_or_init(Default::default).lock() else {
+        return;
+    };
+    if cache.contains_key(&key) {
+        return;
+    }
+    let reserved =
+        DECODED_BATCH_CACHE_BYTES.fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            current
+                .checked_add(bytes)
+                .filter(|&next| next <= PROCESS_DECODED_BATCH_CACHE_LIMIT)
+        });
+    if reserved.is_err() {
+        cache.clear();
+        if DECODED_BATCH_CACHE_BYTES
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current
+                    .checked_add(bytes)
+                    .filter(|&next| next <= PROCESS_DECODED_BATCH_CACHE_LIMIT)
+            })
+            .is_err()
+        {
+            return;
+        }
+    }
+    cache.insert(
+        key,
+        Arc::new(DecodedBatchEntry {
+            batches: Arc::new(batches),
+            _reservation: DecodedCacheReservation(bytes),
+        }),
+    );
+}
 
 struct CacheReservation(usize);
 
@@ -260,6 +331,8 @@ pub struct AdlsBatchStream {
     inner: Pin<Box<dyn Stream<Item = parquet::errors::Result<RecordBatch>> + Send>>,
     metrics: ScanMetrics,
     output_projection: Option<Vec<usize>>,
+    decoded_cache_key: Option<String>,
+    decoded_batches: Vec<RecordBatch>,
 }
 
 impl AdlsBatchStream {
@@ -279,6 +352,11 @@ impl AdlsBatchStream {
         self.metrics.read_time(started.elapsed());
         if let Some(batch) = &result {
             self.metrics.emitted(batch.num_rows());
+            if self.decoded_cache_key.is_some() {
+                self.decoded_batches.push(batch.clone());
+            }
+        } else if let Some(key) = self.decoded_cache_key.take() {
+            cache_decoded_batches(key, std::mem::take(&mut self.decoded_batches));
         }
         result
             .map(|batch| match &self.output_projection {
@@ -475,6 +553,12 @@ impl AdlsParquetReader {
             projection.as_deref(),
             &metrics,
         );
+        let decoded_cache_key = preload.then(|| {
+            format!(
+                "{cache_key}:{identity}:batch={}:projection={projection:?}:row_groups={row_groups:?}",
+                self.batch_size
+            )
+        });
         builder = builder.with_row_groups(row_groups);
         let stream: ParquetRecordBatchStream<AdlsObjectReader> =
             builder.build().map_err(parquet_error)?;
@@ -482,11 +566,24 @@ impl AdlsParquetReader {
             Arc::clone(stream.schema()),
             self.columns.as_deref(),
         )?;
+        let cached = decoded_cache_key
+            .as_deref()
+            .and_then(cached_decoded_batches);
+        let cache_hit = cached.is_some();
+        let inner: Pin<Box<dyn Stream<Item = parquet::errors::Result<RecordBatch>> + Send>> =
+            match cached {
+                Some(batches) => Box::pin(futures::stream::iter(
+                    batches.iter().cloned().map(Ok).collect::<Vec<_>>(),
+                )),
+                None => Box::pin(stream),
+            };
         Ok(AdlsBatchStream {
             schema,
-            inner: Box::pin(stream),
+            inner,
             metrics,
             output_projection,
+            decoded_cache_key: (!cache_hit).then_some(decoded_cache_key).flatten(),
+            decoded_batches: Vec::new(),
         })
     }
 
@@ -594,7 +691,25 @@ fn object_store_error(error: object_store::Error) -> KaveonError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::Int64Array;
     use object_store::{ObjectStore, PutPayload, memory::InMemory};
+
+    #[test]
+    fn decoded_batches_are_reused_by_exact_snapshot_key() {
+        let key = format!("decoded-cache-test-{}", std::process::id());
+        let batch = RecordBatch::try_from_iter(vec![(
+            "value",
+            Arc::new(Int64Array::from(vec![1, 2, 3])) as _,
+        )])
+        .unwrap();
+
+        cache_decoded_batches(key.clone(), vec![batch]);
+
+        let cached = cached_decoded_batches(&key).expect("exact cache key must resolve");
+        assert_eq!(cached.len(), 1);
+        assert_eq!(cached[0].num_rows(), 3);
+        assert!(cached_decoded_batches(&format!("{key}:different-etag")).is_none());
+    }
 
     #[test]
     fn validates_identity_path_and_batch_size_without_network_access() {
