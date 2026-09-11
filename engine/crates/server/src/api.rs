@@ -2556,7 +2556,7 @@ async fn cancel_query(
         cluster.remove_stale_workers();
         cluster.workers.values().cloned().collect::<Vec<_>>()
     };
-    let client = reqwest::Client::new();
+    let client = state.internal_http_client.clone();
     for worker in workers {
         let url = format!(
             "{}/v1/query/{query_id}",
@@ -3643,7 +3643,7 @@ async fn cleanup_distributed_query(state: &Arc<AppState>, query_id: &str) {
         cluster.workers.values().cloned().collect::<Vec<_>>()
     };
     if let Some(token) = state.config.exchange_token.as_deref() {
-        let client = reqwest::Client::new();
+        let client = state.internal_http_client.clone();
         let mut cleanups = tokio::task::JoinSet::new();
         for worker in workers {
             let client = client.clone();
@@ -3727,7 +3727,7 @@ async fn execute_distributed_fragments(
         Ok(cancellation) => cancellation,
         Err(error) => return Some(Err(error.to_string())),
     };
-    let client = reqwest::Client::new();
+    let client = state.internal_http_client.clone();
     let execution_start = Instant::now();
     let mut stage_started = BTreeMap::<StageId, Instant>::new();
     let mut stage_tasks = BTreeMap::<StageId, Vec<TaskTelemetry>>::new();
@@ -4085,7 +4085,7 @@ async fn execute_distributed_top_n(
 
     let started = Instant::now();
     let partition_count = workers.len();
-    let client = reqwest::Client::new();
+    let client = state.internal_http_client.clone();
     let exchange_token = state.config.exchange_token.clone();
     let mut tasks = tokio::task::JoinSet::new();
     for partition_index in 0..partition_count {
@@ -4259,7 +4259,7 @@ async fn execute_distributed_aggregate(
 
     let started = Instant::now();
     let partition_count = workers.len();
-    let client = reqwest::Client::new();
+    let client = state.internal_http_client.clone();
     let exchange_token = state.config.exchange_token.clone();
     let mut tasks = tokio::task::JoinSet::new();
     for partition_index in 0..partition_count {
