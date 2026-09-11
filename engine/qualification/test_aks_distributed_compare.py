@@ -12,12 +12,18 @@ class ExecutionSummaryTests(unittest.TestCase):
                            "exchange_decode_bytes": 150, "memory_peak_bytes": 80,
                            "spill_peak_bytes": 20, "spill_bytes_written": 40,
                            "spill_runs_written": 2, "spill_compactions": 1,
-                           "spill_compaction_input_bytes": 30}},
+                           "spill_compaction_input_bytes": 30,
+                           "memory_reservation_calls": 5, "memory_reservation_bytes": 500,
+                           "aggregate_input_rows": 80, "aggregate_groups_created": 8,
+                           "aggregate_distinct_values_admitted": 4}},
             {"execution": {"compute_cpu_us": 11, "exchange_input_bytes": 200,
                            "exchange_decode_bytes": 250, "memory_peak_bytes": 60,
                            "spill_peak_bytes": 50, "spill_bytes_written": 70,
                            "spill_runs_written": 3, "spill_compactions": 2,
-                           "spill_compaction_input_bytes": 90}},
+                           "spill_compaction_input_bytes": 90,
+                           "memory_reservation_calls": 7, "memory_reservation_bytes": 700,
+                           "aggregate_input_rows": 120, "aggregate_groups_created": 12,
+                           "aggregate_distinct_values_admitted": 6}},
         ]}]
         merge_stage_execution(target, stages)
         merge_stage_execution(target, stages)
@@ -33,6 +39,11 @@ class ExecutionSummaryTests(unittest.TestCase):
         self.assertEqual(summary["memory_peak_bytes"], 80)
         self.assertEqual(summary["spill_peak_bytes"], 50)
         self.assertEqual(summary["object_metadata_cache_hits"], 6)
+        self.assertEqual(summary["memory_reservation_calls"], 24)
+        self.assertEqual(summary["memory_reservation_bytes"], 2400)
+        self.assertEqual(summary["aggregate_input_rows"], 400)
+        self.assertEqual(summary["aggregate_groups_created"], 40)
+        self.assertEqual(summary["aggregate_distinct_values_admitted"], 20)
 
     def test_missing_metrics_remain_visible_as_coverage_gap(self):
         summary = merge_stage_execution({}, [{"stage_id": 4, "tasks": [{}, {"execution": None}]}])["4"]
