@@ -6,8 +6,9 @@ use arrow::record_batch::RecordBatch;
 use kaveon_core::{KaveonError, MemoryReservation, OperatorMemoryAccount, Result};
 
 use crate::aggregate::{
-    AggregateState, AggregateValue, GroupedAggregateState, grouped_aggregate_key_types,
-    grouped_aggregate_state_row, merge_grouped_aggregate_states,
+    AggregateState, AggregateValue, GroupedAggregateState,
+    canonicalize_unique_grouped_aggregate_states, grouped_aggregate_key_types,
+    grouped_aggregate_state_row,
 };
 
 pub struct IncrementalAggregateMerger {
@@ -142,7 +143,7 @@ impl IncrementalAggregateMerger {
 
     /// Guards include headroom for canonical sorting and final output construction.
     pub fn finish(self) -> Result<(Vec<GroupedAggregateState>, Vec<MemoryReservation>)> {
-        let groups = merge_grouped_aggregate_states(
+        let groups = canonicalize_unique_grouped_aggregate_states(
             self.groups
                 .into_iter()
                 .map(|(group_keys, states)| GroupedAggregateState { group_keys, states }),
@@ -176,7 +177,9 @@ fn error(message: &str) -> KaveonError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aggregate::grouped_aggregate_states_to_typed_batch;
+    use crate::aggregate::{
+        grouped_aggregate_states_to_typed_batch, merge_grouped_aggregate_states,
+    };
     use arrow::datatypes::DataType;
     use kaveon_core::QueryMemoryPool;
 
@@ -275,5 +278,36 @@ mod tests {
         assert!(pool.snapshot().peak_bytes <= 16 * 1024 * 1024);
         drop(guards);
         assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn finish_matches_general_merge_without_rehashing_unique_groups() {
+        let source = vec![
+            GroupedAggregateState {
+                group_keys: vec![AggregateValue::Int64(9)],
+                states: vec![AggregateState::Count(2)],
+            },
+            GroupedAggregateState {
+                group_keys: vec![AggregateValue::Int64(-4)],
+                states: vec![AggregateState::Count(3)],
+            },
+            GroupedAggregateState {
+                group_keys: vec![AggregateValue::Int64(9)],
+                states: vec![AggregateState::Count(5)],
+            },
+        ];
+        let expected = merge_grouped_aggregate_states(source.clone()).unwrap();
+        let first =
+            grouped_aggregate_states_to_typed_batch(&source[..2], &[DataType::Int64]).unwrap();
+        let second =
+            grouped_aggregate_states_to_typed_batch(&source[2..], &[DataType::Int64]).unwrap();
+        let mut merger = IncrementalAggregateMerger::new(None);
+
+        merger.push_batch(&first).unwrap();
+        merger.push_batch(&second).unwrap();
+        let (actual, guards) = merger.finish().unwrap();
+
+        assert_eq!(actual, expected);
+        assert!(guards.is_empty());
     }
 }
