@@ -157,3 +157,6 @@ data/**/*.parquet
 infra/oci/*.tfvars
 infra/oci/.terraform/
 infra/oci/*.tfstate*
+
+# Playwright MCP output
+.playwright-mcp/

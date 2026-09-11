@@ -27,6 +27,10 @@ router = APIRouter()
 class AskBody(BaseModel):
     question: str
     limit: int = 50
+    # A slot the user resolved after a clarification, e.g. {"metric": "Net revenue"}.
+    choices: Optional[Dict[str, str]] = None
+    # The previous answer's frame; a follow-up inherits every slot it does not name.
+    frame: Optional[Dict[str, Any]] = None
 
 
 class CurationBody(BaseModel):
@@ -132,7 +136,7 @@ def ask(body: AskBody, ctx: UserContext = Depends(require_user_context)):
     """Deterministic NL -> SQL via the DLM (no LLM). Returns the routed dataset,
     assembled SQL, and chart hints — or ok=false if nothing matched.
     Triggers a background rebuild when the serving dataset's context is stale."""
-    result = dlm.ask(body.question, limit=body.limit)
+    result = dlm.ask(body.question, limit=body.limit, choices=body.choices, frame=body.frame)
     dataset_id = result.get("dataset_id")
     if dataset_id and result.get("ok"):
         rebuilt = dlm.maybe_auto_rebuild(dataset_id)

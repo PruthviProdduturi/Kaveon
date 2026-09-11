@@ -1094,14 +1094,168 @@ def _date_range(database: str, schema: str, columns: List[dict], snapshots: Dict
     return None
 
 
-def ask(question: str, limit: int = 50) -> Dict[str, Any]:
-    """Deterministic NL -> SQL via the DLM — no LLM."""
+# ── conversation ────────────────────────────────────────────────────────────
+# A follow-up ("what about last year?", "filter that by …") carries no metric
+# or dimension of its own. The client sends back the previous answer's frame and
+# the merge below fills only the slots the new question leaves empty.
+_FOLLOW_UP_RE = re.compile(
+    r"^\s*(?:and|also|now|what about|how about|instead|same|only|just|but)\b"
+    r"|\b(?:that|those|these|it|them|the same)\b", re.I)
+_FUZZY_CUTOFF = 0.85
+
+
+def _dataset_names() -> List[str]:
+    """Names of the datasets the DLM can answer for — the compiled artifacts, which
+    is exactly the set routing considers."""
+    arts = meta.query("SELECT manifest FROM dlm_artifact", [])
+    names = []
+    for a in arts.get("rows_objects", arts.get("rows", [])):
+        name = (_loads(a.get("manifest")) or {}).get("name")
+        if name:
+            names.append(name)
+    return sorted(names)
+
+
+def _vocabulary_hit(question: str) -> bool:
+    """True when any question token touches any dataset's vocabulary — metric,
+    column, dataset name or indexed value. Zero hits means the question is about
+    something Kaveon has no data for, which is a different answer from a near miss."""
+    q_tokens = set(_tokenize(question))
+    if not q_tokens:
+        return False
+    q_stems = _stem_set(q_tokens)
+    if _value_dataset_hits(q_tokens):
+        return True
+    arts = meta.query("SELECT manifest FROM dlm_artifact", [])
+    for a in arts.get("rows_objects", arts.get("rows", [])):
+        manifest = _loads(a.get("manifest")) or {}
+        toks: set = set(_tokenize(manifest.get("name")))
+        for m in manifest.get("metrics", []) or []:
+            toks |= set(_tokenize(m.get("name"))) | set(_tokenize(m.get("expression"))) | set(m.get("synonyms") or [])
+        for c in manifest.get("columns", []) or []:
+            toks |= set(_tokenize(c.get("name"))) | set(c.get("synonyms") or [])
+        toks -= _ROUTE_NOISE
+        if q_tokens & toks or q_stems & _stem_set(toks):
+            return True
+    return False
+
+
+def _dataset_vocabulary(metrics: List[dict], dims: List[dict], m_alias, d_alias) -> set:
+    vocab: set = set()
+    for m in metrics:
+        name = m.get("name") or m.get("metric_name") or ""
+        vocab |= set(_tokenize(name)) | set(_tokenize(m.get("expression") or "")) | set(_tokenize(" ".join(_syn(name, m_alias))))
+    for d in dims:
+        col = d.get("column_name") or d.get("name") or ""
+        vocab |= set(_tokenize(col)) | set(_tokenize(" ".join(_syn(col, d_alias))))
+    return {t for t in vocab if len(t) >= 3}
+
+
+def _osa_distance(a: str, b: str, cap: int) -> int:
+    """Optimal string alignment distance (insert, delete, substitute, adjacent
+    transposition), abandoned early once every path exceeds `cap`."""
+    if abs(len(a) - len(b)) > cap:
+        return cap + 1
+    prev2, prev = None, list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i] + [0] * len(b)
+        for j, cb in enumerate(b, 1):
+            cost = 0 if ca == cb else 1
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+            if i > 1 and j > 1 and ca == b[j - 2] and a[i - 2] == cb:
+                cur[j] = min(cur[j], prev2[j - 2] + 1)
+        if min(cur) > cap:
+            return cap + 1
+        prev2, prev = prev, cur
+    return prev[-1]
+
+
+def _fuzzy_question(question: str, vocab: set) -> str:
+    """Rewrite near-miss words to the closest vocabulary token by bounded edit
+    distance: one edit (including a transposition) for words of four to seven
+    letters, two for longer ones. Exact hits, short words, numbers and stopwords
+    are left alone, so the rewrite can only turn a miss into a match."""
+    if not vocab:
+        return question
+    known = _expand_tokens(vocab) | vocab
+    ordered = sorted(vocab)
+    def fix(m):
+        word = m.group(0)
+        low = word.lower()
+        if len(low) < 4 or low.isdigit() or low in known or _stem(low) in known or low in _STOPWORDS:
+            return word
+        cap = 1 if len(low) < 8 else 2
+        best, best_d = None, cap + 1
+        for cand in ordered:
+            d = _osa_distance(low, cand, cap)
+            if d < best_d:
+                best, best_d = cand, d
+        return best if best is not None and best_d <= cap else word
+    return re.sub(r"[A-Za-z][A-Za-z_]+", fix, question)
+
+
+def _rank_metrics(qset: set, metrics: List[dict], extra: Optional[Dict[str, List[str]]] = None) -> List[tuple]:
+    """Every metric with its overlap score, best first, stable in dataset order."""
+    q = _expand_tokens(qset) - _GENERIC_METRIC_TOKENS
+    ranked = []
+    for m in metrics:
+        name = m.get("name") or m.get("metric_name") or ""
+        toks = _expand_tokens(set(_tokenize(name)) | set(_tokenize(m.get("expression") or "")) | set(_syn(name, extra))) - _GENERIC_METRIC_TOKENS
+        ranked.append((m, len(q & toks)))
+    ranked.sort(key=lambda t: -t[1])
+    return ranked
+
+
+def _group_by_candidates(question: str, dims: List[dict],
+                         extra: Optional[Dict[str, List[str]]] = None) -> List[str]:
+    """All dimensions a 'by <x>' phrase could mean, in dataset order."""
+    m = re.search(r"\b(?:by|per|across|for each)\s+([A-Za-z][A-Za-z ]*)", question, re.I)
+    if not m:
+        return []
+    target = _expand_tokens(set(_tokenize(m.group(1))))
+    out = []
+    for d in dims:
+        col = d.get("column_name") or d.get("name") or ""
+        ctoks = _expand_tokens(set(_tokenize(col)) | set(_syn(col, extra)))
+        if target & ctoks:
+            out.append(col)
+    return out
+
+
+def _clarify(kind: str, prompt: str, options: List[Dict[str, str]], question: str,
+             choices: Dict[str, str], dataset_id: str, ds: dict, t0: float) -> Dict[str, Any]:
+    return {
+        "ok": False,
+        "reason": "clarify",
+        "dataset_id": dataset_id,
+        "dataset_name": ds.get("dataset_name") or ds.get("name"),
+        "clarification": {"kind": kind, "prompt": prompt, "options": options},
+        "resume": {"question": question, "choices": dict(choices)},
+        "duration_ms": round((_time_mod.monotonic() - t0) * 1000, 1),
+    }
+
+
+def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None,
+        frame: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Deterministic NL -> SQL via the DLM — no LLM.
+
+    `choices` pins an ambiguous slot the user resolved ({"metric": name} or
+    {"dimension": column}); `frame` is the previous answer's frame, inherited by
+    a follow-up for every slot the new question does not mention."""
     t0 = _time_mod.monotonic()
     ensure_tables()
+    choices = dict(choices or {})
+    original_question = question
     routed = route(question, limit=1)
-    if not routed:
+    follow_up = bool(frame and frame.get("dataset_id")) and (
+        not routed or str(routed[0]["dataset_id"]) == str(frame["dataset_id"]) or bool(_FOLLOW_UP_RE.search(question)))
+    if not routed and not follow_up:
+        if not _vocabulary_hit(question):
+            return {"ok": False, "reason": "out_of_scope", "datasets": _dataset_names(),
+                    "duration_ms": round((_time_mod.monotonic() - t0) * 1000, 1)}
         return {"ok": False, "reason": "no_dataset"}
-    dataset_id = str(routed[0]["dataset_id"])
+    dataset_id = str(frame["dataset_id"]) if (follow_up and (not routed or bool(_FOLLOW_UP_RE.search(question)))) else str(routed[0]["dataset_id"])
+    routed_entry = routed[0] if routed and str(routed[0]["dataset_id"]) == dataset_id else {"dataset_id": dataset_id, "score": 1.0}
     ds = datasets_svc.get_dataset_by_id(dataset_id)
     if not ds:
         return {"ok": False, "reason": "dataset_not_found"}
@@ -1126,10 +1280,15 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
     dims = [d for d in dims
             if not _dspec.get(d.get("column_name") or d.get("name"), {}).get("hidden")]
 
+    question = _fuzzy_question(question, _dataset_vocabulary(metrics, dims, m_alias, d_alias))
     qset = set(_tokenize(question))
 
     # 1) entity filters from the value index (e.g. "india" -> country='India')
     filters = _resolve_entity_filters(dataset_id, question)
+    if follow_up and frame and frame.get("filters"):
+        carried = [f for f in frame["filters"] if isinstance(f, dict) and f.get("column")
+                   and not any(n.get("column") == f.get("column") for n in filters)]
+        filters = carried + filters
 
     # 1b) detect unresolved entity phrases — if the question says "in <X>" or
     #     "for <X>" but <X> didn't match any value, warn the user instead of
@@ -1142,11 +1301,37 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
             if candidate.lower() not in _STOPWORDS and len(candidate) >= 3:
                 unresolved_entity = candidate
 
-    # 2) metric — curated aliases + default metric; generic quantifier words ignored
-    metric = _match_metric(qset, metrics, m_alias, spec.get("default_metric"))
+    # 2) metric — curated aliases + default metric; generic quantifier words ignored.
+    #    A tie between named metrics is a question for the user, not a coin flip.
+    ranked = _rank_metrics(qset, metrics, m_alias)
+    top_score = ranked[0][1] if ranked else 0
+    pinned = choices.get("metric")
+    metric = None
+    if pinned:
+        metric = next((m for m in metrics if (m.get("name") or m.get("metric_name")) == pinned), None)
+    if metric is None and top_score > 0:
+        tied = [m for m, sc in ranked if sc == top_score]
+        if len(tied) > 1:
+            return _clarify("metric", "Which measure did you mean?",
+                            [{"id": m.get("name") or m.get("metric_name"), "label": m.get("name") or m.get("metric_name"),
+                              "description": m.get("expression") or ""} for m in tied],
+                            original_question, choices, dataset_id, ds, t0)
+        metric = tied[0]
+    if metric is None and follow_up and frame and frame.get("metric"):
+        metric = next((m for m in metrics if (m.get("name") or m.get("metric_name")) == frame["metric"]), None)
+    if metric is None:
+        metric = _match_metric(qset, metrics, m_alias, spec.get("default_metric"))
 
-    # 3) group-by dimension ("... by country")
-    group_col = _match_group_by(question, dims, d_alias)
+    # 3) group-by dimension ("... by country") — several matches is a question too
+    candidates = _group_by_candidates(question, dims, d_alias)
+    if choices.get("dimension") and choices["dimension"] in candidates:
+        group_col = choices["dimension"]
+    elif len(candidates) > 1:
+        return _clarify("dimension", "Break it down by which one?",
+                        [{"id": c, "label": c, "description": ""} for c in candidates],
+                        original_question, choices, dataset_id, ds, t0)
+    else:
+        group_col = candidates[0] if candidates else None
 
     # 3b) top-N ("top 10 countries by consumption") — sets the row limit and, if
     #     no explicit "by <dim>", groups by the dimension named in the question.
@@ -1167,8 +1352,13 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
     wanted_groupby = bool(re.search(r"\b(?:by|per|across|for each)\b", question, re.I))
     if not group_col and wanted_groupby:
         group_col = _match_any_dim(question, dims, d_alias)
+    if not group_col and follow_up and frame and frame.get("group_col") and not wanted_groupby:
+        group_col = frame["group_col"] if any((d.get("column_name") or d.get("name")) == frame["group_col"] for d in dims) else None
+    if not top_n and follow_up and frame and frame.get("top_n"):
+        top_n = frame["top_n"]
     limit_n = top_n or limit
-    sort_asc = bool(re.search(r"\b(lowest|least|fewest|smallest|bottom)\b", question, re.I))
+    sort_asc = bool(re.search(r"\b(lowest|least|fewest|smallest|bottom)\b", question, re.I)) or bool(
+        follow_up and frame and frame.get("sort_asc") and not re.search(r"\b(highest|most|largest|top)\b", question, re.I))
 
     note = None
     if unresolved_entity:
@@ -1188,6 +1378,9 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
     relative_time = _extract_relative_time(question) if not year else None
     if relative_time and not date_column:
         relative_time = None  # dataset has no date column — can't filter by time
+    if not year and not relative_time and follow_up and frame:
+        year = frame.get("year") or None
+        relative_time = None if year else (frame.get("relative_time") or None)
 
     # 4a) if the requested year spans the dataset's ENTIRE date range, the filter
     #     is a no-op — e.g. a single-year dataset (2026-only) asked "... in 2026".
@@ -1224,10 +1417,11 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
     # fall through to a live query below (which we then cache).
     if not time_group and not year and not relative_time:
         served = _serve_from_context(dataset_id, ds, metric_name, group_col, top_n,
-                                     filters, routed[0], sort_asc=sort_asc)
+                                     filters, routed_entry, sort_asc=sort_asc)
         if served is not None:
             if note:
                 served["note"] = note
+            served["frame"] = _frame(dataset_id, metric_name, group_col, filters, year, relative_time, top_n, sort_asc)
             served["duration_ms"] = round((_time_mod.monotonic() - t0) * 1000, 1)
             return served
 
@@ -1236,8 +1430,9 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
         # before falling to a live query.
         if metric and _distinct_col((metric or {}).get("expression") or ""):
             sketched = _serve_sketch(dataset_id, ds, metric_name, group_col, top_n,
-                                     filters, routed[0])
+                                     filters, routed_entry)
             if sketched is not None:
+                sketched["frame"] = _frame(dataset_id, metric_name, group_col, filters, year, relative_time, top_n, sort_asc)
                 sketched["duration_ms"] = round((_time_mod.monotonic() - t0) * 1000, 1)
                 return sketched
 
@@ -1309,9 +1504,19 @@ def ask(question: str, limit: int = 50) -> Dict[str, Any]:
         # what we already know from context — shown instantly while the live
         # query fetches the exact (multi-filter / combo) figure.
         "context_hints": _context_hints(dataset_id, metric_name, filters),
-        "confidence": round(routed[0].get("score", 0.0), 3),
+        "confidence": round(routed_entry.get("score", 0.0), 3),
+        "frame": _frame(dataset_id, metric_name, group_col, filters, year, relative_time, top_n, sort_asc),
         "duration_ms": round((_time_mod.monotonic() - t0) * 1000, 1),
     }
+
+
+def _frame(dataset_id: str, metric: str, group_col: Optional[str], filters: List[Dict[str, Any]],
+           year: Optional[int], relative_time: Optional[str], top_n: Optional[int], sort_asc: bool) -> Dict[str, Any]:
+    """What the answer was about, compact enough for the client to hand back with
+    the next question. No SQL, no rows — only the resolved slots."""
+    return {"dataset_id": dataset_id, "metric": metric, "group_col": group_col,
+            "filters": [{"column": f.get("column"), "value": f.get("value")} for f in filters or []],
+            "year": year, "relative_time": relative_time, "top_n": top_n, "sort_asc": bool(sort_asc)}
 
 
 def _context_hints(dataset_id: str, metric_name: str,

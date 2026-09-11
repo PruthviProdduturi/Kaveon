@@ -35,6 +35,16 @@ interface RouteMeta {
 
 interface ContextHint { label: string; value: number | string | null }
 
+// The DLM found two equally good readings of one slot and asks before
+// guessing. Picking an option re-posts the original question with the slot
+// pinned; the DLM does not pick silently.
+interface Clarification {
+  kind: "metric" | "dimension";
+  prompt: string;
+  options: { id: string; label: string; description?: string }[];
+  resume: { question: string; choices: Record<string, string> };
+}
+
 interface Message {
   role: "user" | "assistant";
   content: string;
@@ -43,6 +53,8 @@ interface Message {
   contextHints?: ContextHint[];   // relevant precomputed slices shown while live runs
   chart?: ChartData;
   routeMeta?: RouteMeta;
+  clarification?: Clarification;
+  chosen?: string;      // option id the user picked, once the clarification is answered
 }
 
 /** Compact number format for context hints (3.9M / 12.4K / 1,234). */
@@ -262,6 +274,9 @@ export default function Home() {
   const [datasetSchema, setDatasetSchema] = useState<DatasetSchema | null>(null);
   const [schemasReady, setSchemasReady] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  // The previous DLM answer's frame (dataset, metric, grouping, filters, time).
+  // Sent with every question so a follow-up inherits what it does not restate.
+  const lastFrame = useRef<Record<string, unknown> | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const { addRecent } = useRecents();
 
@@ -332,6 +347,7 @@ export default function Home() {
   // Load messages from a past session
   const loadSession = useCallback(async (sessionId: number) => {
     setLoadingSession(true);
+    lastFrame.current = null;
     try {
       const res = await msalFetch(`/api/v1/chat/history/${sessionId}`);
       if (!res.ok) return;
@@ -377,6 +393,7 @@ export default function Home() {
       if (activeSessionId === sessionId) {
         setActiveSessionId(null);
         setMessages([]);
+        lastFrame.current = null;
       }
     } catch {
       // Best-effort
@@ -388,6 +405,7 @@ export default function Home() {
     // so just reset the view here.
     setMessages([]);
     setActiveSessionId(null);
+    lastFrame.current = null;
   }, []);
 
   // Listen for "new-chat" event from sidebar nav
@@ -674,8 +692,11 @@ export default function Home() {
     return vals.some(v => v !== null && v !== undefined && v !== "");
   }
 
-  async function sendMessage(text: string) {
+  // `resume` re-posts an earlier question with one ambiguous slot pinned; the
+  // bubble then shows the option the user picked rather than the question.
+  async function sendMessage(text: string, resume?: Clarification["resume"]) {
     if (!text.trim() || !canSend) return;
+    const question = resume?.question ?? text.trim();
     const userMsg: Message = { role: "user", content: text.trim() };
     const loadingMsg: Message = { role: "assistant", content: "", loading: true };
     setMessages(prev => [...prev, userMsg, loadingMsg]);
@@ -737,11 +758,37 @@ export default function Home() {
         const dlmRes = await msalFetch("/api/v1/dlm/ask", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question: queryText }),
+          body: JSON.stringify({ question, choices: resume?.choices, frame: lastFrame.current }),
         });
         if (dlmRes.ok) {
           const dlm = await dlmRes.json();
+          if (!dlm?.ok && dlm?.reason === "clarify" && dlm.clarification) {
+            const prompt: string = dlm.clarification.prompt;
+            if (sid) {
+              void saveMessage(sid, "user", text.trim());
+              void saveMessage(sid, "assistant", prompt, { route: "clarify" });
+            }
+            setMessages(prev => [...prev.slice(0, -1), {
+              role: "assistant",
+              content: prompt,
+              clarification: { ...dlm.clarification, resume: dlm.resume },
+            }]);
+            return;
+          }
+          if (!dlm?.ok && dlm?.reason === "out_of_scope") {
+            const names: string[] = dlm.datasets || [];
+            const scopeMsg = names.length === 0
+              ? "No datasets are registered yet. Create a dataset in the Library, then return here to ask questions about it."
+              : `That question is outside the data Kaveon holds. Ask about one of these datasets: ${names.map(n => `**${n}**`).join(", ")}.`;
+            if (sid) {
+              void saveMessage(sid, "user", text.trim());
+              void saveMessage(sid, "assistant", scopeMsg, { route: "out_of_scope" });
+            }
+            setMessages(prev => [...prev.slice(0, -1), { role: "assistant", content: scopeMsg }]);
+            return;
+          }
           if (dlm?.ok && (dlm.from_context || dlm.sql)) {
+            if (dlm.frame) lastFrame.current = dlm.frame;
             // Answered from precomputed context (no DB trip) vs a live query.
             let rows: (string | number | null)[][] = [];
             let columns: string[] = [];
@@ -775,7 +822,7 @@ export default function Home() {
             if (got && (resultHasData(rows) || dlm.note)) {
               const route = dlm.from_context ? "context" : "dlm";
               const parsedLike = { sql: dlm.sql, chartType: dlm.chartType, xAxis: dlm.xAxis, yAxis: dlm.yAxis, title: dlm.title, confidence: dlm.confidence ?? 0.5 };
-              const insight = generateInsight(rows, columns, parsedLike, queryText);
+              const insight = generateInsight(rows, columns, parsedLike, question);
               const summary = dlm.note ? `${dlm.note}\n\n${insight}` : insight;
               if (sid) {
                 void saveMessage(sid, "user", text.trim());
@@ -1176,6 +1223,36 @@ export default function Home() {
                           <div style={{ padding: m.chart ? "0 0 8px" : 0, whiteSpace: "pre-wrap", lineHeight: 1.6 }}
                             dangerouslySetInnerHTML={{ __html: m.content.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>") }}
                           />
+                        )}
+                        {m.clarification && (
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+                            {m.clarification.options.map(opt => {
+                              const picked = m.chosen === opt.id;
+                              const settled = m.chosen != null;
+                              return (
+                                <button
+                                  key={opt.id}
+                                  type="button"
+                                  disabled={settled || sending}
+                                  title={opt.description || undefined}
+                                  onClick={() => {
+                                    const c = m.clarification!;
+                                    setMessages(prev => prev.map((x, j) => (j === i ? { ...x, chosen: opt.id } : x)));
+                                    void sendMessage(opt.label, { question: c.resume.question, choices: { ...c.resume.choices, [c.kind]: opt.id } });
+                                  }}
+                                  style={{
+                                    padding: "6px 12px", borderRadius: 8, fontSize: 12.5, fontWeight: 500,
+                                    cursor: settled ? "default" : "pointer",
+                                    border: `1px solid ${picked ? "var(--accent)" : "var(--border)"}`,
+                                    background: picked ? "rgba(var(--accent-rgb), 0.12)" : "var(--bg-surface)",
+                                    color: picked ? "var(--accent)" : settled ? "var(--text-faint)" : "var(--text-primary)",
+                                  }}
+                                >
+                                  {opt.label}
+                                </button>
+                              );
+                            })}
+                          </div>
                         )}
                         {m.chart && (
                           <InlineChart
