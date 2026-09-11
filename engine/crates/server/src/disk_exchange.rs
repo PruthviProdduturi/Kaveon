@@ -351,4 +351,25 @@ mod tests {
         assert_eq!(fs::read(malformed.join("payload")).unwrap(), b"retained");
         fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn coordinator_teardown_removes_owned_exchange_spool() {
+        let root = std::env::temp_dir().join(format!("kaveon-teardown-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let directory;
+        {
+            let store = DiskExchangeStore::new(&root, 1024).unwrap();
+            directory = store.directory.0.clone();
+            let payload = chunk();
+            let encoded_bytes = payload.encode(ExchangeLimits::default()).unwrap().len() as u64;
+            store.insert(payload).unwrap();
+            assert!(fs::read_dir(&directory).unwrap().next().is_some());
+            assert_eq!(store.quota.state.lock().unwrap().total, encoded_bytes);
+        }
+        // A coordinator restart/teardown must not leave its private spool or
+        // quota reservation behind for a later process.
+        assert!(!directory.exists());
+        assert!(fs::read_dir(&root).unwrap().next().is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
 }
