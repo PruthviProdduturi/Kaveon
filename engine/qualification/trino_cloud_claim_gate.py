@@ -22,14 +22,20 @@ def evaluate(report):
     expected_hash = hashlib.sha256(json.dumps(EXTENDED_QUERIES, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     expected_names = set(EXTENDED_QUERIES)
     verified = report.get("verified_blobs") or []
+    observations = report.get("co_tenant_observations") or []
+    co_tenant_baseline = report.get("co_tenant_baseline")
     data_objects = [item for item in dataset.get("objects") or [] if item.get("parquet_data")]
     expected_objects = {(item.get("path"), item.get("sha256"), item.get("content_md5"), item.get("bytes")) for item in dataset.get("objects") or []}
     verified_objects = {(item.get("path"), item.get("sha256"), item.get("content_md5"), item.get("bytes")) for item in verified}
     checks = {
-        "three_worker_exclusive_topology": report.get("workers") == 3
+        "three_worker_matched_topology": report.get("workers") == 3
             and preflight.get("checks", {}).get("one_system_three_worker_nodes") is True
             and all(len(set(sample.get("worker_nodes") or [])) == 3
                     for engine in ("kaveon", "trino") for sample in throughput.get(engine) or []),
+        "stable_recorded_co_tenants": isinstance(co_tenant_baseline, list) and len(observations) == 12
+            and sum(item.get("engine") == "kaveon" for item in observations) == 6
+            and sum(item.get("engine") == "trino" for item in observations) == 6
+            and all(item.get("co_tenants") == co_tenant_baseline for item in observations),
         "matched_role_resources": preflight.get("checks", {}).get("coordinator_resources_matched") is True
             and preflight.get("checks", {}).get("worker_resources_matched") is True,
         "immutable_images": preflight.get("checks", {}).get("kaveon_image_pinned_and_expected") is True
@@ -66,7 +72,7 @@ def evaluate(report):
             "technical_gate_passed": passed, "claim_eligible": False,
             "claim_blocker": "The primary metric remains proposed; this gate cannot publish a broad Trino superiority claim.",
             "checks": checks, "failed_checks": [name for name, value in checks.items() if not value],
-            "scope": "Three-worker, same-AKS-node-SKU, exclusive warm-cache leases over the declared immutable ADLS fixture."}
+            "scope": "Three-worker, same-AKS-node-SKU, matched co-tenant warm-cache leases over the declared immutable ADLS fixture."}
 
 
 def main():
