@@ -649,12 +649,20 @@ pub(crate) fn compile_final_aggregate(
     aggregates: Vec<AggExpr>,
     memory: Option<&QueryMemoryPool>,
 ) -> Result<Box<dyn BatchOperator>> {
-    if let Some(memory) = memory
+    // Hash partitioning cannot divide a global aggregate: every partial has the
+    // same empty key and is routed to one partition. Stream those partials into
+    // the final merger instead of materializing and spilling an identical spool.
+    if should_partition_final_aggregate(&group_by)
+        && let Some(memory) = memory
         && let Some((spill, count)) = kaveon_exec::partitioned::spill_from_environment(memory)?
     {
         return partitioned_final_aggregate(input, group_by, aggregates, memory, &spill, count);
     }
     compile_final_aggregate_in_memory(input, group_by, aggregates, memory)
+}
+
+fn should_partition_final_aggregate(group_by: &[String]) -> bool {
+    !group_by.is_empty()
 }
 
 fn partitioned_final_aggregate(
@@ -1762,6 +1770,50 @@ mod tests {
         assert!(operator.next_batch().unwrap().is_none());
         assert_eq!(pool.snapshot().current_bytes, 0);
         assert_eq!(spill.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn global_final_aggregate_streams_without_hash_partition_spill() {
+        assert!(!should_partition_final_aggregate(&[]));
+        assert!(should_partition_final_aggregate(&["key".into()]));
+
+        let batches = (0..4)
+            .map(|value| {
+                grouped_aggregate_states_to_typed_batch(
+                    &[GroupedAggregateState {
+                        group_keys: vec![],
+                        states: vec![AggregateState::CountDistinct(
+                            std::collections::HashSet::from([AggregateValue::Int64(value)]),
+                        )],
+                    }],
+                    &[],
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let schema = batches[0].schema();
+        let pool = QueryMemoryPool::new("global-final", 1024 * 1024).unwrap();
+        let mut output = compile_final_aggregate(
+            Box::new(BatchInput::new(schema, batches)),
+            vec![],
+            vec![AggExpr::new(AggFunc::Count, "value").distinct()],
+            Some(&pool),
+        )
+        .unwrap();
+
+        let batch = output.next_batch().unwrap().unwrap();
+        assert_eq!(
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap()
+                .value(0),
+            4
+        );
+        assert!(output.next_batch().unwrap().is_none());
+        drop(output);
+        assert_eq!(pool.snapshot().current_bytes, 0);
     }
 
     #[test]
