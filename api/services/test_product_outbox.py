@@ -34,6 +34,19 @@ class FakeTransaction:
 
 
 class ProductOutboxTests(unittest.TestCase):
+    def test_status_reads_one_normalized_event_id(self):
+        event_id = "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"
+        with patch.object(product_outbox.db, "query_one", return_value={"applied_at": None}) as query:
+            self.assertEqual(product_outbox.status(event_id), {"applied_at": None})
+        self.assertIn("WHERE event_id = @param0", query.call_args.args[0])
+        self.assertEqual(query.call_args.args[1], [event_id.lower()])
+
+    def test_status_rejects_invalid_id_before_database_read(self):
+        with patch.object(product_outbox.db, "query_one") as query:
+            with self.assertRaisesRegex(ValueError, "must be a UUID"):
+                product_outbox.status("not-an-event")
+        query.assert_not_called()
+
     def test_canonical_payload_and_stable_event_are_persisted(self):
         transaction = FakeTransaction()
         event_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"

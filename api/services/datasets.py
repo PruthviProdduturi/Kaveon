@@ -7,11 +7,20 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import HTTPException
 import database.metadata as db
-from services import product_outbox, product_shadow_read
+from services import product_outbox, product_post_write_observer, product_shadow_read
 
 logger = logging.getLogger(__name__)
 
 VALID_VISIBILITY = {"private", "internal", "published"}
+
+
+def _observe_post_write(event) -> None:
+    try:
+        report = product_post_write_observer.observe_dataset(event)
+        if report.get("enabled"):
+            logger.info("dataset_post_write_verification %s", json.dumps(report, sort_keys=True))
+    except Exception as error:
+        logger.warning("dataset_post_write_verification_error type=%s", type(error).__name__)
 
 
 def _expand_columns_from_dimensions(columns: list, dimensions: list) -> list:
@@ -260,7 +269,7 @@ def create_dataset(data: dict, user_id: str) -> dict:
         _replace_dimensions(transaction, dataset_id, data.get("dimensions") or [], delete_first=False)
         _replace_columns(transaction, dataset_id, data.get("columns") or [], delete_first=False)
         _replace_metrics(transaction, dataset_id, data.get("metrics") or [], delete_first=False)
-        product_outbox.enqueue(
+        event = product_outbox.enqueue(
             transaction,
             family="datasets",
             operation="create",
@@ -270,6 +279,7 @@ def create_dataset(data: dict, user_id: str) -> dict:
             owner=user_id,
         )
 
+    _observe_post_write(event)
     created = get_dataset_by_id(str(dataset_id))
     if not created:
         raise RuntimeError("Failed to retrieve created dataset")
@@ -415,7 +425,7 @@ def update_dataset(dataset_id: str, data: dict, user_id: str) -> Optional[dict]:
         if "metrics" in data and isinstance(data["metrics"], list):
             _replace_metrics(transaction, did, data["metrics"], delete_first=True)
 
-        product_outbox.enqueue(
+        event = product_outbox.enqueue(
             transaction,
             family="datasets",
             operation="update",
@@ -425,6 +435,7 @@ def update_dataset(dataset_id: str, data: dict, user_id: str) -> Optional[dict]:
             owner=existing["created_by"],
         )
 
+    _observe_post_write(event)
     return get_dataset_by_id(dataset_id)
 
 
@@ -445,7 +456,7 @@ def delete_dataset(dataset_id: str, user_id: str) -> bool:
                 "Delete dependent charts before deleting this dataset",
             )
         deleted = transaction.execute("DELETE FROM datasets WHERE id = @param0", [did]) > 0
-        product_outbox.enqueue(
+        event = product_outbox.enqueue(
             transaction,
             family="datasets",
             operation="delete",
@@ -454,7 +465,8 @@ def delete_dataset(dataset_id: str, user_id: str) -> bool:
             actor=user_id,
             owner=existing["created_by"],
         )
-        return deleted
+    _observe_post_write(event)
+    return deleted
 
 
 def count_datasets() -> int:
