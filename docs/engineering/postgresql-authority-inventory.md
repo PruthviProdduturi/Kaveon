@@ -16,7 +16,7 @@ family has migrated.
 | `favorites` | `services/favorites.py`, dashboard and data-source routes | Typed owner-unique favorite for migrated product targets | Data-source destination, direct-route unification, live evidence and cutover remain |
 | `saved_queries` | `services/saved_queries.py` | `saved_query` product record | Source mutations and outbox are atomic; deterministic backfill exists; shadow parity, live reconciliation and cutover remain |
 | `user_themes` | `services/theme.py` | `user_theme` product record | Atomic source/outbox, bounded backfill and owner shadow code exist; outbox schema deployment, live replay/parity, fencing and cutover remain |
-| `user_recents` | `services/user_recents.py`, dashboard cleanup | No destination | Define bounded ordered personal-state record and retention |
+| `user_recents` | `services/user_recents.py`, dashboard cleanup | Typed owner-isolated `user_recent` with target reference | Deterministic bounded backfill/reconciliation exists; atomic writers, checkpoint command, shadow parity and live evidence remain |
 | `query_history` | `services/query_history.py`, DLM usage | No destination | Partitioned append path, stable cursor ordering, retention and payload policy |
 | `activity` | Catalog-source audit paths | No destination | Immutable audit schema, retention and actor identity |
 | `context_snapshots`, `context_answer_cache` | `dlm/profiler.py`, context routes | Rebuilt derived state | Define generation publication and cache retention; rebuild after dataset cutover |
