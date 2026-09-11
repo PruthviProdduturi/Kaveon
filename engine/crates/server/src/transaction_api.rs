@@ -1157,13 +1157,7 @@ async fn commit_transaction(registry: &TransactionRegistry, owner: &str, id: &st
     if let Err(error) = transaction.bind_request_digest(owner.as_bytes()) {
         return error_response(RegistryError::Invalid(error.to_string()));
     }
-    match transaction.commit().await {
-        Ok(CommitOutcome::Committed(snapshot) | CommitOutcome::Replayed(snapshot)) => Json(snapshot).into_response(),
-        Ok(CommitOutcome::Conflict) => error_response(RegistryError::Conflict),
-        Ok(CommitOutcome::Rejected) => error_response(RegistryError::Invalid("transaction rejected".into())),
-        Ok(CommitOutcome::Indeterminate) => (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error":"transaction outcome is indeterminate; resolve the operation before retrying"}))).into_response(),
-        Err(error) => error_response(RegistryError::Invalid(error.to_string())),
-    }
+    commit_outcome_response(transaction.commit().await, id)
 }
 
 async fn rollback_transaction(registry: &TransactionRegistry, owner: &str, id: &str) -> Response {
@@ -1218,11 +1212,32 @@ async fn commit(
     if let Err(error) = transaction.bind_request_digest(identity.principal.as_bytes()) {
         return error_response(RegistryError::Invalid(error.to_string()));
     }
-    match transaction.commit().await {
-        Ok(CommitOutcome::Committed(snapshot) | CommitOutcome::Replayed(snapshot)) => Json(snapshot).into_response(),
+    commit_outcome_response(transaction.commit().await, &id)
+}
+
+fn commit_outcome_response(
+    outcome: Result<CommitOutcome, kaveon_catalog::product_transaction::TransactionError>,
+    transaction_id: &str,
+) -> Response {
+    match outcome {
+        Ok(CommitOutcome::Committed(snapshot) | CommitOutcome::Replayed(snapshot)) => {
+            Json(snapshot).into_response()
+        }
         Ok(CommitOutcome::Conflict) => error_response(RegistryError::Conflict),
-        Ok(CommitOutcome::Rejected) => error_response(RegistryError::Invalid("transaction rejected".into())),
-        Ok(CommitOutcome::Indeterminate) => (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error":"transaction outcome is indeterminate; resolve the operation before retrying"}))).into_response(),
+        Ok(CommitOutcome::Rejected) => {
+            error_response(RegistryError::Invalid("transaction rejected".into()))
+        }
+        Ok(CommitOutcome::Indeterminate) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "transaction outcome is indeterminate; the operation is neither confirmed committed nor confirmed rolled back",
+                "code": "TRANSACTION_OUTCOME_INDETERMINATE",
+                "transaction_id": transaction_id,
+                "recovery_required": true,
+                "recovery_action": "inspect the durable catalog head and operation history before retrying"
+            })),
+        )
+            .into_response(),
         Err(error) => error_response(RegistryError::Invalid(error.to_string())),
     }
 }
@@ -1306,6 +1321,35 @@ mod tests {
             .await;
         (TransactionRegistry::enabled(catalog.clone()), catalog)
     }
+
+    #[tokio::test]
+    async fn indeterminate_commit_response_requires_durable_recovery() {
+        let response = commit_outcome_response(Ok(CommitOutcome::Indeterminate), "transaction-1");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["code"], "TRANSACTION_OUTCOME_INDETERMINATE");
+        assert_eq!(value["transaction_id"], "transaction-1");
+        assert_eq!(value["recovery_required"], true);
+        assert!(value["error"]
+            .as_str()
+            .unwrap()
+            .contains("neither confirmed committed nor confirmed rolled back"));
+    }
+
+    #[tokio::test]
+    async fn transaction_sessions_do_not_survive_registry_restart() {
+        let (registry, catalog) = registry().await;
+        let begun = registry.begin("alice").await.unwrap();
+        let restarted = TransactionRegistry::enabled(catalog);
+        assert!(matches!(
+            restarted.take("alice", &begun.transaction_id).await,
+            Err(RegistryError::Missing)
+        ));
+    }
+
     fn stage_request(name: &str) -> StageRequest {
         StageRequest {
             change: CatalogChange::Put {
