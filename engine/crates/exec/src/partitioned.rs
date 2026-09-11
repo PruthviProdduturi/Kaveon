@@ -1049,6 +1049,7 @@ fn resolve_key(schema: &SchemaRef, name: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use super::*;
     use crate::aggregate::{
         AggFunc, aggregate_metrics, finalize_grouped_aggregate_states,
@@ -1705,6 +1706,39 @@ mod tests {
         assert!(spill.snapshot().runs_written > 0);
         assert!(spill.snapshot().bytes_written > 0);
         assert_eq!(spill.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn multi_run_grouped_spill_preserves_exact_counts_and_cleans_runs() {
+        let pool = QueryMemoryPool::new("multi-run-aggregate", 64 * 1024).unwrap();
+        let spill = spill();
+        let values = (0..16_384)
+            .map(|value| Some((value % 256) as i64))
+            .collect::<Vec<_>>();
+        let mut aggregate = PartitionedHashAggregate::new(
+            input(values, 64),
+            vec!["id".into()],
+            vec![AggExpr::new(AggFunc::Count, "*")],
+            pool.operator("aggregate").unwrap(),
+            spill.clone(),
+            16,
+        )
+        .unwrap();
+        let mut counts = HashMap::new();
+        while let Some(batch) = aggregate.next_batch().unwrap() {
+            let keys = batch.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
+            let values = batch.column(1).as_any().downcast_ref::<UInt64Array>().unwrap();
+            for row in 0..batch.num_rows() {
+                counts.insert(keys.value(row), values.value(row));
+            }
+        }
+        assert_eq!(counts.len(), 256);
+        assert!(counts.values().all(|count| *count == 64));
+        let snapshot = spill.snapshot();
+        assert!(snapshot.runs_written > 16, "{snapshot:?}");
+        assert!(snapshot.compactions > 0, "{snapshot:?}");
+        assert_eq!(snapshot.current_bytes, 0);
+        assert_eq!(pool.snapshot().current_bytes, 0);
     }
 
     #[test]
