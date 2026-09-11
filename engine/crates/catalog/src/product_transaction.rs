@@ -10,8 +10,26 @@ use std::fmt;
 
 use crate::{
     product_commit::{CommitOutcome, ProductCatalogCommit, ProductDocuments},
-    product_manifest::{CatalogChange, CatalogSnapshot, PrepareChange},
+    product_manifest::{CatalogChange, CatalogSnapshot, PrepareChange, SnapshotRef},
 };
+
+/// Isolation currently provided by a product transaction.
+///
+/// `Snapshot` means the transaction reads one pinned catalog snapshot and
+/// publishes only if that snapshot is still the current head. This is an
+/// optimistic catalog-level guarantee, not general row-level MVCC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionIsolation {
+    Snapshot,
+}
+
+/// Stable metadata for observability and conflict diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransactionMetadata {
+    pub operation_id: String,
+    pub base_snapshot: SnapshotRef,
+    pub isolation: TransactionIsolation,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransactionError {
@@ -89,6 +107,19 @@ impl ProductTransaction {
     #[must_use]
     pub fn base_snapshot(&self) -> &CatalogSnapshot {
         &self.base
+    }
+
+    /// Returns the identity and pinned snapshot used by this session.
+    ///
+    /// The operation ID is also the durable idempotency identity at commit;
+    /// callers must not reuse it for a different request digest.
+    #[must_use]
+    pub fn metadata(&self) -> TransactionMetadata {
+        TransactionMetadata {
+            operation_id: self.request.operation_id.clone(),
+            base_snapshot: self.request.base.clone(),
+            isolation: TransactionIsolation::Snapshot,
+        }
     }
 
     /// Returns the transaction-local snapshot, including all staged writes.
@@ -213,6 +244,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn metadata_pins_identity_and_base_snapshot() {
+        let catalog = catalog().await;
+        let transaction = ProductTransaction::begin(catalog, "snapshot-1", "operation-1", DIGEST)
+            .await
+            .unwrap();
+        assert_eq!(
+            transaction.metadata(),
+            TransactionMetadata {
+                operation_id: "operation-1".into(),
+                base_snapshot: SnapshotRef {
+                    generation: 0,
+                    snapshot_id: "snapshot-genesis".into(),
+                },
+                isolation: TransactionIsolation::Snapshot,
+            }
+        );
+    }
+
+    #[tokio::test]
     async fn rollback_does_not_publish_staged_writes() {
         let catalog = catalog().await;
         let mut transaction =
@@ -269,6 +319,12 @@ mod tests {
                 reference: table("right"),
             })
             .unwrap();
+
+        let left_metadata = left.metadata();
+        let right_metadata = right.metadata();
+        assert_eq!(left_metadata.base_snapshot, right_metadata.base_snapshot);
+        assert_ne!(left_metadata.operation_id, right_metadata.operation_id);
+        assert_eq!(left_metadata.isolation, TransactionIsolation::Snapshot);
 
         let (left, right) = tokio::join!(left.commit(), right.commit());
         let outcomes = [left.unwrap(), right.unwrap()];
