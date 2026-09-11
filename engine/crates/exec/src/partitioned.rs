@@ -413,6 +413,7 @@ fn compact_spill_runs(
         selected.sort_unstable();
         let right = runs.remove(selected[1]);
         let left = runs.remove(selected[0]);
+        spill.record_compaction(left.bytes().saturating_add(right.bytes()));
         let mut source = RunSource::new(Arc::clone(schema), vec![left, right]);
         let mut batch_memory = None;
         let batches = std::iter::from_fn(|| {
@@ -1114,6 +1115,11 @@ mod tests {
         let total_bytes = runs.iter().map(SpillRun::bytes).sum::<u64>();
         let largest = runs.iter().map(SpillRun::bytes).max().unwrap();
         assert!(largest < total_bytes / 2);
+        let snapshot = disk.snapshot();
+        assert!(snapshot.compactions > 0);
+        assert!(snapshot.compaction_input_bytes > 0);
+        assert!(snapshot.bytes_written > snapshot.current_bytes);
+        assert!(snapshot.runs_written > runs.len() as u64);
 
         let mut source = RunSource::new(Arc::clone(&schema), runs);
         let mut rows = 0;
