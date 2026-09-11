@@ -109,6 +109,14 @@ indeterminate history/index failures. They do not provide general MVCC row
 visibility, WAL replay, savepoints, arbitrary-table DML, or PostgreSQL-level
 recovery guarantees. Those remain qualification gates below.
 
+The catalog crate also contains a bounded typed-row foundation. A snapshot may
+carry typed table schemas, revisioned rows, primary-key indexes, and unique-key
+indexes; a multi-row change list validates and publishes them atomically. Older
+snapshots without these optional metadata fields remain readable and rebuild
+the indexes on the next typed-row commit. This foundation does not yet provide
+Parquet/Delta mutation files, secondary index maintenance for arbitrary SQL
+tables, schema migration locking, or a public general-purpose row-DML API.
+
 The head serializes commits for a tenant/catalog. Independent heads/shards are a
 future protocol change requiring a separate atomicity proof; one transaction may
 not update multiple heads.
