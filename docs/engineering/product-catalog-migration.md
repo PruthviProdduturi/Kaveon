@@ -423,16 +423,25 @@ python scripts/backfill-dlm-runs.py `
   --artifact-root tmp/staged-dlm-artifacts
 
 $env:KAVEON_DLM_RUN_MIGRATION_ENABLED = "true"
+$env:KAVEON_DLM_ARTIFACT_PUBLISH_ENABLED = "true"
 python scripts/backfill-dlm-runs.py `
   --checkpoint tmp/dlm-run-backfill.json `
-  --artifact-root tmp/staged-dlm-artifacts --resume --apply
+  --artifact-root tmp/staged-dlm-artifacts --resume --apply `
+  --client-factory deployment_adls:create_immutable_client
 ```
 
-Dry-run is the default. The integrity-checked 4 MiB checkpoint holds at most
+Dry-run is the default. Apply requires both enable variables and an explicitly
+injected client factory. The client contract exposes conditional create and a
+bounded point read; it must never overwrite. Before target metadata is written,
+the publisher rehashes the staged bytes, conditionally creates the remote path,
+and reads it back exactly. A create error is treated as an ambiguous outcome and
+accepted only when the remote bytes match; mismatch preserves the error.
+
+The integrity-checked 4 MiB checkpoint holds at most
 10,000 records and advances by atomic replacement after reconciliation. The
-command is not scheduled or deployed. Local staging does not upload to ADLS, so
-production apply remains blocked until a durable publisher verifies the same
-paths and hashes.
+command is not scheduled or deployed. No concrete credential provider is built
+into the repository, and no live publication has run; qualification still
+requires a deployment-owned ADLS client and durable evidence.
 
 The first deterministic definition backfill selects ready `dlm_artifact`
 dataset IDs and owners inside one PostgreSQL `REPEATABLE READ, READ ONLY`

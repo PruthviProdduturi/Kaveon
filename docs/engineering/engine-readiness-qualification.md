@@ -254,8 +254,8 @@ release evidence after combined validation.
 - Compact grouped-state transport and opt-in local parallel aggregation.
 - Sustained mixed-workload soak and complete local Compose integration.
 - Live qualification of the default-off DLM run backfill against durably
-  published ADLS manifests. Local staged-file and reconciliation tests alone do
-  not grant readiness credit.
+  published ADLS manifests. The injected create-only client contract and local
+  ambiguous-outcome tests alone do not grant readiness credit.
 
 ### Engine-backed virtual chart datasets
 

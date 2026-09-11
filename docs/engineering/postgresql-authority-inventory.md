@@ -154,5 +154,7 @@ destination contract rather than migration evidence.
 A default-off run backfill now deterministically captures ready legacy artifact
 versions, requires exact locally staged canonical manifests, binds exact
 owner-scoped definition revisions, checkpoints progress and reconciles exact
-target state. It has no ADLS publisher, scheduled execution or live evidence;
-PostgreSQL remains authoritative.
+target state. A create-only injected-client publisher now verifies staged hashes,
+conditional creation and exact remote bytes before metadata apply. It has no
+credential provider, scheduled execution or live evidence; PostgreSQL remains
+authoritative.

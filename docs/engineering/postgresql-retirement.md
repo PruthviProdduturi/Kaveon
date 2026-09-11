@@ -169,8 +169,10 @@ artifacts still lack a manifest publisher, backfill, reconciliation and cleanup
 policy, so the new metadata contract does not advance the DLM retirement gate.
 
 The credential-free legacy-run command supplies deterministic snapshot,
-checkpoint/resume and exact reconciliation behavior, but production use remains
-blocked on immutable ADLS publication and provenance for every sealed path/hash.
+checkpoint/resume and exact reconciliation behavior. Its injected create-only
+publisher reconciles ambiguous writes from exact remote bytes, but production
+use remains blocked on a deployed ADLS client and provenance for every sealed
+path/hash.
 
 Deleting the StatefulSet or PVC before these gates would remove the current
 product metadata authority and break Studio even though ADLS analytical queries
