@@ -238,7 +238,13 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
             savepoint: None,
         } => Ok(NativeTransactionalStatement::Rollback),
         Statement::Rollback { .. } => Err(sql_error(
-            "ROLLBACK savepoints and AND CHAIN are not supported",
+            "ROLLBACK TO SAVEPOINT and ROLLBACK AND CHAIN are not supported",
+        )),
+        Statement::Savepoint { .. } | Statement::ReleaseSavepoint { .. } => Err(sql_error(
+            "SAVEPOINT and RELEASE SAVEPOINT are not supported",
+        )),
+        Statement::SetTransaction { .. } => Err(sql_error(
+            "SET TRANSACTION isolation and access modes are not supported",
         )),
         Statement::Insert(insert) => {
             if insert.columns.is_empty() {
@@ -423,11 +429,45 @@ mod tests {
             "DELETE FROM users USING old_users WHERE users.id = old_users.id",
             "ROLLBACK TO SAVEPOINT before_write",
             "COMMIT AND CHAIN",
+            "SAVEPOINT before_write",
+            "RELEASE SAVEPOINT before_write",
+            "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
         ];
         for sql in cases {
             assert!(
                 parse_native_transactional(sql).is_err(),
                 "unexpectedly accepted {sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn transaction_control_rejections_explain_the_unsupported_feature() {
+        let cases = [
+            (
+                "SAVEPOINT checkpoint",
+                "SAVEPOINT and RELEASE SAVEPOINT are not supported",
+            ),
+            (
+                "RELEASE SAVEPOINT checkpoint",
+                "SAVEPOINT and RELEASE SAVEPOINT are not supported",
+            ),
+            (
+                "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+                "SET TRANSACTION isolation and access modes are not supported",
+            ),
+            (
+                "BEGIN ISOLATION LEVEL REPEATABLE READ",
+                "BEGIN isolation, access-mode, and dialect modifiers are not supported",
+            ),
+        ];
+        for (sql, expected) in cases {
+            assert!(
+                parse_native_transactional(sql)
+                    .unwrap_err()
+                    .to_string()
+                    .contains(expected),
+                "{sql} did not report {expected}"
             );
         }
     }
