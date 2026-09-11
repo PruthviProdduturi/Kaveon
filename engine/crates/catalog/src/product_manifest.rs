@@ -775,8 +775,12 @@ fn validate_product_record(record: &ProductRecordRef) -> Result<(), ManifestErro
                     | ProductRecordKind::SavedQuery
                     | ProductRecordKind::Source
             ),
-            ProductRecordKind::UserRecent => matches!(reference.kind,
-                ProductRecordKind::Dataset | ProductRecordKind::Chart | ProductRecordKind::Dashboard),
+            ProductRecordKind::UserRecent => matches!(
+                reference.kind,
+                ProductRecordKind::Dataset
+                    | ProductRecordKind::Chart
+                    | ProductRecordKind::Dashboard
+            ),
         };
         if !allowed {
             return Err(error(format!(
@@ -878,6 +882,11 @@ fn validate_product_records(
             return Err(error("product record map key does not match its identity"));
         }
         for (index, value) in &record.unique_values {
+            // Ownership is metadata used for access control, not a uniqueness
+            // constraint. A principal may own many datasets, charts, or runs.
+            if index == "owner_principal" {
+                continue;
+            }
             if !unique.insert((record.kind, index.as_str(), value.as_str())) {
                 return Err(error(format!(
                     "duplicate {} unique index '{index}' value",
@@ -1181,6 +1190,29 @@ mod tests {
             ))
             .unwrap();
         assert_eq!(same_value_different_kind.product_records.len(), 2);
+    }
+
+    #[test]
+    fn owner_principal_is_not_a_global_unique_index() {
+        let base = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        let mut first = product(ProductRecordKind::Dataset, "dataset-1", 1, "alice/data-1");
+        let mut second = product(ProductRecordKind::Dataset, "dataset-2", 1, "alice/data-2");
+        first.unique_values =
+            BTreeMap::from([(String::from("owner_principal"), String::from("alice"))]);
+        second.unique_values =
+            BTreeMap::from([(String::from("owner_principal"), String::from("alice"))]);
+        let snapshot = base
+            .prepare(change(
+                base.reference(),
+                "multiple-owned-datasets",
+                DIGEST,
+                vec![
+                    CatalogChange::CreateProduct { record: first },
+                    CatalogChange::CreateProduct { record: second },
+                ],
+            ))
+            .unwrap();
+        assert_eq!(snapshot.product_records.len(), 2);
     }
 
     #[test]
