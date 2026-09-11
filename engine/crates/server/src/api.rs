@@ -18,8 +18,9 @@ use kaveon_catalog::{
 };
 use kaveon_core::collect_batches;
 use kaveon_core::{
-    CatalogDefinition, CatalogId, CatalogLifecycle, CatalogRevision, ColumnDefinition, ExchangeId,
-    ExecutableFragment, SchemaDefinition, SchemaId, StageId, TableDefinition, TableId, TaskId,
+    AdmittedQueryMemory, CatalogDefinition, CatalogId, CatalogLifecycle, CatalogRevision,
+    ColumnDefinition, ExchangeId, ExecutableFragment, MemoryAdmissionController, SchemaDefinition,
+    SchemaId, StageId, TableDefinition, TableId, TaskId,
 };
 use kaveon_exec::sort::SortExpr;
 use kaveon_exec::topn::merge_top_n;
@@ -447,18 +448,26 @@ async fn execute_owned_task(
             return task_failure_response(StatusCode::BAD_REQUEST, &message);
         }
     };
-    let admitted = match state.memory_admission.admit(
+    let admitted = match await_task_memory(
+        &state.memory_admission,
         format!(
             "{}:{}:{}:{}",
             req.query_id, req.stage_id, req.partition_index, req.attempt
         ),
         state.config.query_memory_limit_bytes,
-    ) {
+        &cancellation,
+    )
+    .await
+    {
         Ok(admitted) => admitted,
         Err(error) => {
-            let message = error.to_string();
+            let message = error;
             let _ = owner.complete(TaskOutcome::Failed(Arc::from(message.clone())));
-            return task_failure_response(StatusCode::TOO_MANY_REQUESTS, &message);
+            return if cancellation.is_cancelled() {
+                canceled_task_response()
+            } else {
+                task_failure_response(StatusCode::SERVICE_UNAVAILABLE, &message)
+            };
         }
     };
     let memory_cancellation = cancellation.clone();
@@ -558,6 +567,34 @@ async fn execute_owned_task(
             let message = error.to_string();
             let _ = owner.complete(TaskOutcome::Failed(Arc::from(message.clone())));
             task_failure_response(StatusCode::INTERNAL_SERVER_ERROR, &message)
+        }
+    }
+}
+
+/// Admission pressure is backpressure, not a task failure. A worker can have all
+/// of its memory budget in use while another stage of the same distributed query
+/// becomes ready. Returning 429 made the coordinator burn through its bounded
+/// fault retries before any running task released memory. Keep the request queued
+/// at the worker and remain cancellation-responsive instead.
+async fn await_task_memory(
+    admission: &MemoryAdmissionController,
+    task_id: String,
+    limit_bytes: u64,
+    cancellation: &CancellationToken,
+) -> Result<AdmittedQueryMemory, String> {
+    const RETRY_INTERVAL: Duration = Duration::from_millis(10);
+    loop {
+        match admission.admit(task_id.clone(), limit_bytes) {
+            Ok(admitted) => return Ok(admitted),
+            Err(error) if cancellation.is_cancelled() => return Err(error.to_string()),
+            Err(_) => {
+                tokio::select! {
+                    () = cancellation.cancelled() => {
+                        return Err("query canceled while waiting for memory admission".into());
+                    }
+                    () = tokio::time::sleep(RETRY_INTERVAL) => {}
+                }
+            }
         }
     }
 }
@@ -4565,10 +4602,10 @@ mod tests {
 
     use super::{
         ColumnInfo, MergeOperation, TaskRequest, TaskResponse, aggregate_merge_contract,
-        capabilities, decode_arrow_stream, durable_relation_statistics, encode_arrow_stream,
-        execute_analyze, general_distributed_eligible, merge_partial_aggregates, mutation_actor,
-        parse_analyze_table, statistics_diagnostics, task_request_from_dispatch,
-        top_n_merge_contract, validate_replacement,
+        await_task_memory, capabilities, decode_arrow_stream, durable_relation_statistics,
+        encode_arrow_stream, execute_analyze, general_distributed_eligible,
+        merge_partial_aggregates, mutation_actor, parse_analyze_table, statistics_diagnostics,
+        task_request_from_dispatch, top_n_merge_contract, validate_replacement,
     };
     use crate::security::Role;
     use arrow::array::{Int64Array, StringArray};
@@ -4589,6 +4626,54 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn memory_pressure_queues_tasks_without_consuming_fault_retries() {
+        let admission = kaveon_core::MemoryAdmissionController::new(1_024).unwrap();
+        let occupied = admission.admit("running", 1_024).unwrap();
+        let lifecycle = crate::lifecycle::WorkerLifecycle::<()>::default();
+        let cancellation = lifecycle.cancellations.token("waiting-query").unwrap();
+        let controller = admission.clone();
+        let mut waiter = tokio::spawn(async move {
+            await_task_memory(&controller, "waiting-task".into(), 1_024, &cancellation).await
+        });
+
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(30), &mut waiter)
+                .await
+                .is_err()
+        );
+        drop(occupied);
+        let admitted = tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(admission.snapshot().current_bytes, 1_024);
+        drop(admitted);
+        assert_eq!(admission.snapshot().current_bytes, 0);
+    }
+
+    #[tokio::test]
+    async fn memory_admission_wait_stops_when_query_is_canceled() {
+        let admission = kaveon_core::MemoryAdmissionController::new(1_024).unwrap();
+        let _occupied = admission.admit("running", 1_024).unwrap();
+        let lifecycle = std::sync::Arc::new(crate::lifecycle::WorkerLifecycle::<()>::default());
+        let cancellation = lifecycle.cancellations.token("waiting-query").unwrap();
+        let controller = admission.clone();
+        let waiter = tokio::spawn(async move {
+            await_task_memory(&controller, "waiting-task".into(), 1_024, &cancellation).await
+        });
+
+        tokio::task::yield_now().await;
+        assert!(lifecycle.cancellations.cancel("waiting-query").unwrap());
+        let error = tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(error.contains("canceled"));
+    }
 
     async fn analyze_test_state() -> (
         Arc<crate::AppState>,
