@@ -128,6 +128,10 @@ impl BufferedPrefix {
     fn take_tail(&mut self) -> Option<Box<dyn BatchOperator>> {
         self.tail.take()
     }
+
+    fn row_count(&self) -> usize {
+        self.batches.iter().map(RecordBatch::num_rows).sum()
+    }
 }
 
 struct ReplayInput {
@@ -676,9 +680,9 @@ impl PartitionedHashAggregate {
             let Some(mut input) = self.input.take() else {
                 return Ok(None);
             };
-            if self.group_by.is_empty()
-                && self.aggregates.iter().any(|aggregate| aggregate.distinct)
-            {
+            let global_distinct = self.group_by.is_empty()
+                && self.aggregates.iter().any(|aggregate| aggregate.distinct);
+            if global_distinct {
                 let mut prefix = BufferedPrefix::collect_partial_distinct(
                     input,
                     &self.memory,
@@ -691,26 +695,27 @@ impl PartitionedHashAggregate {
                         return Ok(batch);
                     }
                     Err(KaveonError::MemoryLimit(_)) => {
-                        // Preserve the old one-batch streaming fallback when a
-                        // high-cardinality DISTINCT cannot fit the bounded
-                        // coalescing window. Replaying the prefix avoids losing
-                        // input consumed during the speculative combine.
+                        // Preserve the one-batch streaming fallback when the
+                        // encoded DISTINCT state cannot fit beside the prefix.
                         self.memory.check_cancelled()?;
                         input = prefix.replay();
                     }
                     Err(error) => return Err(error),
                 }
             }
-            if let Some(input_batch) = input.next_batch()? {
-                let input_rows = input_batch.num_rows();
-                let source = Box::new(ReplayInput {
-                    schema: Arc::clone(&self.input_schema),
-                    batches: VecDeque::from([input_batch.clone()]),
-                    tail: None,
-                    guards: VecDeque::new(),
-                    active_guard: None,
-                });
-                match self.aggregate_batch(source, self.input_reserved) {
+            let mut prefix = BufferedPrefix::collect_with_batch_limit(
+                input,
+                &self.memory,
+                self.adaptive_bytes.unwrap_or(adaptive_limit(&self.memory)?),
+                if global_distinct {
+                    1
+                } else {
+                    MAX_ADAPTIVE_BATCHES
+                },
+            )?;
+            let input_rows = prefix.row_count();
+            if input_rows != 0 {
+                match self.aggregate_batch(prefix.trial(), true) {
                     Ok((batch, guard))
                         if batch.as_ref().is_some_and(|batch| {
                             batch.num_rows().saturating_mul(8) <= input_rows
@@ -719,20 +724,14 @@ impl PartitionedHashAggregate {
                         // Partial states are mergeable across batches. Stream them
                         // only while aggregation reduces exchange rows by at least
                         // 8x; otherwise retain the bounded partition/spill path.
-                        self.input = Some(input);
+                        self.input = prefix.take_tail();
                         self.output_memory = guard;
                         return Ok(batch);
                     }
                     Ok(_) | Err(KaveonError::MemoryLimit(_)) => {
                         self.memory.check_cancelled()?;
                         self.streaming_partial = false;
-                        self.input = Some(Box::new(ReplayInput {
-                            schema: Arc::clone(&self.input_schema),
-                            batches: VecDeque::from([input_batch]),
-                            tail: Some(input),
-                            guards: VecDeque::new(),
-                            active_guard: None,
-                        }));
+                        self.input = Some(prefix.replay());
                     }
                     Err(error) => return Err(error),
                 }
@@ -1318,7 +1317,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_aggregate_streams_many_low_cardinality_batches_without_spill() {
+    fn partial_aggregate_combines_low_cardinality_batches_without_spill() {
         let pool = QueryMemoryPool::new("stream-partial", 32 * 1024 * 1024).unwrap();
         let disk = spill();
         let values = (0..1_700_000).map(|value| Some(value % 17)).collect();
@@ -1335,7 +1334,9 @@ mod tests {
         while let Some(batch) = aggregate.next_batch().unwrap() {
             batches.push(batch);
         }
-        assert!(batches.len() > MAX_ADAPTIVE_BATCHES);
+        // 208 source batches are combined in byte- and count-bounded windows,
+        // avoiding one encoded partial-state batch per source batch.
+        assert!(batches.len() <= 8, "{} output batches", batches.len());
         let states = grouped_aggregate_states_from_batches(&batches).unwrap();
         let merged = merge_grouped_aggregate_states(states).unwrap();
         let finalized = finalize_grouped_aggregate_states(&merged).unwrap();
