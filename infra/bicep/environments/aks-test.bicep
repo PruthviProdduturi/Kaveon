@@ -61,7 +61,10 @@ resource subnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' = {
   name: 'aks'
   properties: {
     addressPrefix: '10.224.0.0/20'
-    serviceEndpoints: [{ service: 'Microsoft.Storage' }]
+    serviceEndpoints: [
+      { service: 'Microsoft.Storage' }
+      { service: 'Microsoft.KeyVault' }
+    ]
   }
 }
 resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
@@ -182,7 +185,56 @@ resource readerRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')
   }
 }
+
+resource apiIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'kaveon-test-api'
+  location: location
+  tags: tags
+}
+
+resource apiFederation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
+  parent: apiIdentity
+  name: 'kaveon-api'
+  properties: {
+    issuer: cluster.properties.oidcIssuerProfile.issuerURL
+    subject: 'system:serviceaccount:kaveon:kaveon-api'
+    audiences: ['api://AzureADTokenExchange']
+  }
+}
+
+resource productSecrets 'Microsoft.KeyVault/vaults@2023-07-01' = {
+  name: 'kvsec${suffix}'
+  location: location
+  tags: tags
+  properties: {
+    tenantId: tenant().tenantId
+    sku: { family: 'A', name: 'standard' }
+    enableRbacAuthorization: true
+    enableSoftDelete: true
+    softDeleteRetentionInDays: 7
+    publicNetworkAccess: 'Enabled'
+    networkAcls: {
+      bypass: 'AzureServices'
+      defaultAction: 'Deny'
+      ipRules: []
+      virtualNetworkRules: [{ id: subnet.id }]
+    }
+  }
+}
+
+resource apiSecretsRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: productSecrets
+  name: guid(productSecrets.id, apiIdentity.id, 'secrets-officer')
+  properties: {
+    principalId: apiIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7')
+  }
+}
 output clusterName string = cluster.name
 output registryName string = registry.name
 output storageAccountName string = storage.name
 output readerClientId string = readerIdentity.properties.clientId
+output apiClientId string = apiIdentity.properties.clientId
+output productSecretsVaultName string = productSecrets.name
+output productSecretsVaultUri string = productSecrets.properties.vaultUri
