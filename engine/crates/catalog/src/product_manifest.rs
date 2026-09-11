@@ -74,6 +74,34 @@ pub enum TypedValue {
     String(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TypedColumnType {
+    Null,
+    Boolean,
+    Integer,
+    String,
+}
+
+impl TypedValue {
+    fn column_type(&self) -> TypedColumnType {
+        match self {
+            Self::Null => TypedColumnType::Null,
+            Self::Boolean(_) => TypedColumnType::Boolean,
+            Self::Integer(_) => TypedColumnType::Integer,
+            Self::String(_) => TypedColumnType::String,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypedTableSchema {
+    pub columns: BTreeMap<String, TypedColumnType>,
+    pub primary_key: String,
+    #[serde(default)]
+    pub unique_keys: BTreeSet<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TypedRow {
     pub primary_key: String,
@@ -117,6 +145,10 @@ pub struct CatalogSnapshot {
     /// Older snapshots may omit this field and are accepted as legacy.
     #[serde(default)]
     pub typed_row_indexes: BTreeMap<String, TypedRowIndexes>,
+    /// Typed-table schema metadata. Legacy typed-row snapshots may omit this
+    /// field; the next typed-row change infers a bounded schema.
+    #[serde(default)]
+    pub typed_schemas: BTreeMap<String, TypedTableSchema>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,6 +205,10 @@ pub enum CatalogChange {
         primary_key: String,
         expected_revision: u64,
     },
+    DefineTypedSchema {
+        table: String,
+        schema: TypedTableSchema,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -216,6 +252,7 @@ impl CatalogSnapshot {
             product_records: BTreeMap::new(),
             typed_rows: BTreeMap::new(),
             typed_row_indexes: BTreeMap::new(),
+            typed_schemas: BTreeMap::new(),
         })
     }
 
@@ -320,6 +357,7 @@ impl CatalogSnapshot {
         let mut control_records = self.control_records.clone();
         let mut product_records = self.product_records.clone();
         let mut typed_rows = self.typed_rows.clone();
+        let mut typed_schemas = self.typed_schemas.clone();
         for change in request.changes {
             match change {
                 CatalogChange::Put { table, reference } => {
@@ -401,6 +439,8 @@ impl CatalogSnapshot {
                     product_records.remove(&key);
                 }
                 CatalogChange::InsertTypedRow { table, row } => {
+                    ensure_typed_schema(&mut typed_schemas, &table, &row)?;
+                    validate_row_against_schema(&typed_schemas[&table], &row)?;
                     let rows = typed_rows.entry(table).or_default();
                     if rows.contains_key(&row.primary_key) {
                         return Err(error("typed row primary key already exists"));
@@ -415,6 +455,8 @@ impl CatalogSnapshot {
                     expected_revision,
                     row,
                 } => {
+                    ensure_typed_schema(&mut typed_schemas, &table, &row)?;
+                    validate_row_against_schema(&typed_schemas[&table], &row)?;
                     let rows = typed_rows
                         .get_mut(&table)
                         .ok_or_else(|| error("typed row table does not exist"))?;
@@ -448,6 +490,20 @@ impl CatalogSnapshot {
                     }
                     rows.remove(&primary_key);
                 }
+                CatalogChange::DefineTypedSchema { table, schema } => {
+                    validate_typed_schema(&schema)?;
+                    if let Some(rows) = typed_rows.get(&table) {
+                        for row in rows.values() {
+                            validate_row_against_schema(&schema, row)?;
+                        }
+                    }
+                    if let Some(previous) = typed_schemas.get(&table) {
+                        if previous != &schema {
+                            return Err(error("typed table schema cannot change in place"));
+                        }
+                    }
+                    typed_schemas.insert(table, schema);
+                }
             }
         }
         if tables.len() > MAX_TABLES {
@@ -458,6 +514,7 @@ impl CatalogSnapshot {
         }
         validate_product_records(&product_records)?;
         validate_typed_rows(&typed_rows)?;
+        validate_typed_schema_bindings(&typed_rows, &typed_schemas)?;
         let typed_row_indexes = build_typed_row_indexes(&typed_rows)?;
         let generation = self
             .generation
@@ -477,6 +534,7 @@ impl CatalogSnapshot {
             product_records,
             typed_rows,
             typed_row_indexes,
+            typed_schemas,
         };
         next.validate()?;
         Ok(next)
@@ -497,6 +555,7 @@ impl CatalogSnapshot {
         }
         validate_product_records(&self.product_records)?;
         validate_typed_rows(&self.typed_rows)?;
+        validate_typed_schema_bindings(&self.typed_rows, &self.typed_schemas)?;
         validate_typed_row_indexes(&self.typed_rows, &self.typed_row_indexes)?;
         for (table, reference) in &self.tables {
             validate_table_name(table)?;
@@ -650,6 +709,15 @@ fn validate_request(request: &PrepareChange) -> Result<(), ManifestError> {
                 if !typed_keys.insert((table.as_str(), primary_key.as_str())) {
                     return Err(error(format!(
                         "typed row '{table}.{primary_key}' is changed more than once"
+                    )));
+                }
+            }
+            CatalogChange::DefineTypedSchema { table, schema } => {
+                validate_table_name(table)?;
+                validate_typed_schema(schema)?;
+                if !typed_keys.insert((table.as_str(), "__schema__")) {
+                    return Err(error(format!(
+                        "typed schema '{table}' is changed more than once"
                     )));
                 }
             }
@@ -1075,6 +1143,82 @@ fn validate_typed_rows(
     Ok(())
 }
 
+fn validate_typed_schema(schema: &TypedTableSchema) -> Result<(), ManifestError> {
+    validate_identifier("typed schema primary key", &schema.primary_key)?;
+    if schema.columns.len() > 256 {
+        return Err(error("typed schema column limit exceeded"));
+    }
+    for name in schema.columns.keys() {
+        validate_identifier("typed schema column", name)?;
+    }
+    if schema.unique_keys.len() > MAX_UNIQUE_VALUES_PER_PRODUCT_RECORD {
+        return Err(error("typed schema unique-index limit exceeded"));
+    }
+    for name in &schema.unique_keys {
+        validate_identifier("typed schema unique index", name)?;
+        if !schema.columns.contains_key(name) {
+            return Err(error("typed schema unique column is not declared"));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_typed_schema(
+    schemas: &mut BTreeMap<String, TypedTableSchema>,
+    table: &str,
+    row: &TypedRow,
+) -> Result<(), ManifestError> {
+    if schemas.contains_key(table) {
+        return Ok(());
+    }
+    let schema = TypedTableSchema {
+        columns: row
+            .columns
+            .iter()
+            .map(|(name, value)| (name.clone(), value.column_type()))
+            .collect(),
+        primary_key: "primary_key".into(),
+        unique_keys: row.unique_keys.keys().cloned().collect(),
+    };
+    validate_typed_schema(&schema)?;
+    schemas.insert(table.into(), schema);
+    Ok(())
+}
+
+fn validate_row_against_schema(
+    schema: &TypedTableSchema,
+    row: &TypedRow,
+) -> Result<(), ManifestError> {
+    if row
+        .columns
+        .iter()
+        .any(|(name, value)| schema.columns.get(name) != Some(&value.column_type()))
+        || row.columns.len() != schema.columns.len()
+    {
+        return Err(error("typed row columns do not match table schema"));
+    }
+    let unique_keys = row.unique_keys.keys().collect::<BTreeSet<_>>();
+    if unique_keys != schema.unique_keys.iter().collect::<BTreeSet<_>>() {
+        return Err(error("typed row unique keys do not match table schema"));
+    }
+    Ok(())
+}
+
+fn validate_typed_schema_bindings(
+    rows: &BTreeMap<String, BTreeMap<String, TypedRow>>,
+    schemas: &BTreeMap<String, TypedTableSchema>,
+) -> Result<(), ManifestError> {
+    for (table, table_rows) in rows {
+        if let Some(schema) = schemas.get(table) {
+            validate_typed_schema(schema)?;
+            for row in table_rows.values() {
+                validate_row_against_schema(schema, row)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn build_typed_row_indexes(
     tables: &BTreeMap<String, BTreeMap<String, TypedRow>>,
 ) -> Result<BTreeMap<String, TypedRowIndexes>, ManifestError> {
@@ -1372,6 +1516,61 @@ mod tests {
             .get_mut("u-1")
             .unwrap() = 99;
         assert!(tampered.validate().is_err());
+    }
+
+    #[test]
+    fn explicit_typed_schema_accepts_multi_row_atomic_batch_and_rejects_type_drift() {
+        let base = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        let schema = TypedTableSchema {
+            columns: BTreeMap::from([
+                ("email".into(), TypedColumnType::String),
+                ("active".into(), TypedColumnType::Boolean),
+            ]),
+            primary_key: "primary_key".into(),
+            unique_keys: BTreeSet::from(["email".into()]),
+        };
+        let batch = base
+            .prepare(change(
+                base.reference(),
+                "typed-batch",
+                DIGEST,
+                vec![
+                    CatalogChange::DefineTypedSchema {
+                        table: "app.users".into(),
+                        schema: schema.clone(),
+                    },
+                    CatalogChange::InsertTypedRow {
+                        table: "app.users".into(),
+                        row: typed_row("u-1", 1, "ada@example.com"),
+                    },
+                    CatalogChange::InsertTypedRow {
+                        table: "app.users".into(),
+                        row: typed_row("u-2", 1, "grace@example.com"),
+                    },
+                ],
+            ))
+            .unwrap();
+        assert_eq!(batch.typed_schemas["app.users"], schema);
+        assert_eq!(batch.typed_rows["app.users"].len(), 2);
+
+        let mut invalid = typed_row("u-3", 1, "linus@example.com");
+        invalid
+            .columns
+            .insert("active".into(), TypedValue::Integer(1));
+        assert!(
+            batch
+                .prepare(change(
+                    batch.reference(),
+                    "typed-invalid",
+                    DIGEST,
+                    vec![CatalogChange::InsertTypedRow {
+                        table: "app.users".into(),
+                        row: invalid,
+                    }],
+                ))
+                .is_err()
+        );
+        assert_eq!(batch.typed_rows["app.users"].len(), 2);
     }
 
     #[test]
