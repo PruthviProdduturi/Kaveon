@@ -351,7 +351,7 @@ evidence), **boundary** (what the evidence does not prove), and **next gate**.
 Historical detail belongs in the log or the linked engineering document.
 
 The September 10 evidence audit scores the current declared Engine scope at
-**75/100 (7.5/10)**. This is not Trino feature parity or PostgreSQL replacement
+**77/100 (7.7/10)**. This is not Trino feature parity or PostgreSQL replacement
 evidence. The score is capped below 8/10 by three release-critical gaps: no full
 current-image AKS failure/restart/pressure qualification, no general relational
 OLTP semantics, and no passing publication-scale comparison report. The best
@@ -359,6 +359,16 @@ recorded resource-matched six-query diagnostic is 1.057× Trino throughput,
 below the required 1.90× and outside the publication workload. The weighted
 rubric, evidence boundaries, claim language and ordered gates are maintained in
 `docs/engineering/engine-readiness-qualification.md`.
+
+A clean release build of `819f977` passed all 11 two-worker pressure cases and
+the deterministic million-row exchange-consumer-loss recovery using one binary
+(`sha256:626ace17d3c36c4a75c8f32598fddab482d333fb965ca1e4bf1ec280b072336b`).
+The pressure run observed grouped spill and verified cleanup, quota rejection
+and active cancellation; the fault run returned the exact expected result after
+eight producer chunks and retained zero exchange files. Reviewed JSON evidence
+is checked into `docs/engineering`. The current-image Trino differential run
+could not start because Docker Desktop's Linux daemon was unavailable, so it
+adds no SQL-correctness credit and the 8/10 cap remains.
 
 | Workstream | Baseline | Verified | Boundary | Next gate |
 |---|---|---|---|---|

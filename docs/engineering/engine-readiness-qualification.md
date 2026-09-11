@@ -27,16 +27,16 @@ visible when reporting a rating.
 
 ### Current assessment — September 10
 
-The evidence-backed score for the current integrated direction is **75/100
-(7.5/10)**. This is a readiness estimate for the declared Engine scope, not a
+The evidence-backed score for the current integrated direction is **77/100
+(7.7/10)**. This is a readiness estimate for the declared Engine scope, not a
 feature-parity score against Trino or PostgreSQL. It remains below 8/10 because
 release-critical gaps cannot be averaged away.
 
 | Area | Points | Evidence credited | Evidence still withheld |
 |---|---:|---|---|
 | SQL correctness and types | 22/25 | 37-case differential suite, 12-query extended same-file suite, typed aggregates/windows/subqueries/set operations, explicit unsupported errors, native `ANALYZE` | Re-run the complete differential corpus on the integrated release image; broaden decimal, timestamp, nested-type, DML and randomized coverage |
-| Memory and spill | 11/15 | Admission, bounded result/history/exchange paths, aggregate spill and pressure/cancellation fixtures, bounded coordinator aggregate merge | Complete retained-result/worker-response accounting, join spill under skew, disk exhaustion and current-image pressure evidence |
-| Distributed execution and recovery | 11/15 | Multi-worker operators, immutable query catalog pinning, authenticated worker recovery, compatible-worker scheduling, prior worker-loss fixture | Current-image AKS worker loss/node drain, coordinator restart, catalog mutation during query, retry/exchange-loss and sustained concurrency |
+| Memory and spill | 12/15 | Admission, bounded result/history/exchange paths, aggregate spill and a clean-current-image two-worker pressure run covering 11 spill, rejection and cancellation cases | Complete retained-result/worker-response accounting, successful join spill under skew, current-image AKS disk exhaustion and sustained pressure |
+| Distributed execution and recovery | 12/15 | Multi-worker operators, immutable query catalog pinning, authenticated worker recovery, compatible-worker scheduling, and a clean-current-image million-row consumer-loss recovery with exact results and zero retained exchange files | Current-image AKS worker loss/node drain, coordinator restart, catalog mutation during query and sustained concurrency |
 | Authentication and platform integration | 13/15 | Entra/TLS, owner-bound results and transactions, role checks, exchange authentication, fail-closed secrets/configuration | Live rotation/revocation, tenant isolation and adversarial authorization qualification on the release deployment |
 | Storage correctness | 8/10 | Parquet/Delta/Iceberg readers, pinned source identities, authenticated ADLS reads, CAS-backed immutable product/statistics documents | Live ADLS conflict/fault/restart evidence, broader schema evolution and corruption/recovery qualification |
 | Operability | 7/10 | Reproducible CLI/images, Helm/Bicep, health/readiness/metrics/history, checked-in AKS verifiers | Deploy and qualify the current digests, backup/restore, upgrade/rollback, alerting and a sustained current-image soak |
@@ -72,6 +72,27 @@ next gates are: (1) run the current AKS SQL, worker-loss, coordinator-restart,
 pressure and soak suite while retaining machine-readable reports; (2) run the
 extended matched Trino publication gate; (3) qualify the declared product-record
 transaction scope separately. Re-score only from those artifacts.
+
+#### Current-image local fault evidence — September 10
+
+Commit `819f9777c22131c2727ed33621f00d6757df7ff9` was built in release mode
+from a clean Engine tree. Both runs used binary SHA-256
+`626ace17d3c36c4a75c8f32598fddab482d333fb965ca1e4bf1ec280b072336b`:
+
+- The two-worker 256 MiB pressure gate passed all 11 cases: grouped spill,
+  join, sort spill, TopN, set operation, bounded window, skew/window/repeat/disk
+  quota rejection, and active-window cancellation. The grouped case observed
+  91 spill files at peak and cleaned them all.
+- The deterministic exchange-loss gate killed the consumer after eight
+  producer chunks, then returned the exact million-row result
+  `(1000000, 499500000)` and left zero exchange files.
+
+The reviewed machine-readable reports are checked in as
+`engine-pressure-validation-2026-09-10.json` and
+`engine-exchange-loss-validation-2026-09-10.json`. The attempted current-image
+Trino differential run did not start because the pinned reference service was
+offline and Docker Desktop's Linux Engine pipe was unavailable. It produced no
+SQL result and earns no correctness credit.
 
 ### Provisional assessment — September 8
 

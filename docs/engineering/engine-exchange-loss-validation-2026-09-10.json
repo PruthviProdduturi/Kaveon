@@ -1,0 +1,21 @@
+{
+  "rows": 1000000,
+  "binary_sha256": "626ace17d3c36c4a75c8f32598fddab482d333fb965ca1e4bf1ec280b072336b",
+  "passed": true,
+  "producer_chunks_before_failure": 8,
+  "status": 200,
+  "data": [
+    [
+      1000000,
+      499500000
+    ]
+  ],
+  "error": null,
+  "expected": [
+    [
+      1000000,
+      499500000
+    ]
+  ],
+  "exchange_files_after_completion": 0
+}
