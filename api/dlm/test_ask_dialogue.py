@@ -1,0 +1,127 @@
+"""The DLM in a conversation: ambiguity becomes a question, out-of-scope is
+refused fast, follow-ups inherit the previous frame, and near-miss tokens
+resolve by bounded edit distance. Everything deterministic; no model."""
+import unittest
+from contextlib import ExitStack
+from unittest.mock import patch
+
+from dlm import engine
+
+DATASET = {
+    "id": "7", "dataset_name": "Sales", "database_name": "OpenSource", "schema_name": "sales",
+    "fact_table": "orders", "date_column": "order_date",
+    "columns": [
+        {"column_name": "region", "is_dimension": True},
+        {"column_name": "customer", "is_dimension": True},
+        {"column_name": "order_date", "is_dimension": False},
+    ],
+    "metrics": [
+        {"name": "Gross revenue", "expression": "SUM(gross_revenue)"},
+        {"name": "Net revenue", "expression": "SUM(net_revenue)"},
+        {"name": "Orders", "expression": "COUNT(*)"},
+    ],
+}
+
+
+class Harness(ExitStack):
+    """Pins every collaborator ask() reaches for, so the tests exercise only its dialogue logic."""
+    def __init__(self, routed=None, filters=None):
+        super().__init__()
+        self.routed = [{"dataset_id": "7", "score": 9.0}] if routed is None else routed
+        self.filters = filters or []
+
+    def __enter__(self):
+        super().__enter__()
+        self.enter_context(patch.object(engine, "ensure_tables", lambda: None))
+        self.enter_context(patch.object(engine, "route", lambda q, limit=1: self.routed))
+        self.enter_context(patch.object(engine.datasets_svc, "get_dataset_by_id", lambda i: DATASET if str(i) == "7" else None))
+        self.enter_context(patch.object(engine, "_effective_spec", lambda i: {}))
+        self.enter_context(patch.object(engine, "_resolve_entity_filters", lambda i, q: list(self.filters)))
+        self.enter_context(patch.object(engine, "_serve_from_context", lambda *a, **k: None))
+        self.enter_context(patch.object(engine, "_dataset_year_bounds", lambda i: (2023, 2026)))
+        self.enter_context(patch.object(engine, "_metric_year_bounds", lambda *a, **k: (2023, 2026)))
+        self.enter_context(patch.object(engine, "_context_hints", lambda *a, **k: []))
+        self.enter_context(patch.object(engine, "_vocabulary_hit", lambda q: True))
+        return self
+
+
+class ClarificationTests(unittest.TestCase):
+    def test_tied_metrics_ask_instead_of_picking_the_first(self):
+        with Harness():
+            result = engine.ask("revenue by region")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], "clarify")
+        c = result["clarification"]
+        self.assertEqual(c["kind"], "metric")
+        self.assertEqual([o["id"] for o in c["options"]], ["Gross revenue", "Net revenue"])
+        self.assertEqual(result["resume"]["question"], "revenue by region")
+
+    def test_a_pinned_choice_completes_the_question(self):
+        with Harness():
+            result = engine.ask("revenue by region", choices={"metric": "Net revenue"})
+        self.assertTrue(result["ok"])
+        self.assertIn('SUM(net_revenue) AS "Net revenue"', result["sql"])
+        self.assertIn('GROUP BY "region"', result["sql"])
+        self.assertEqual(result["frame"]["metric"], "Net revenue")
+
+    def test_a_distinctive_word_needs_no_question(self):
+        with Harness():
+            result = engine.ask("net revenue by region")
+        self.assertTrue(result["ok"])
+        self.assertIn("net_revenue", result["sql"])
+
+
+class ScopeTests(unittest.TestCase):
+    def test_nothing_in_any_vocabulary_is_refused_as_out_of_scope(self):
+        with Harness(routed=[]), patch.object(engine, "_vocabulary_hit", lambda q: False), \
+             patch.object(engine, "_dataset_names", lambda: ["Sales", "Taxi"]):
+            result = engine.ask("write an email to my team about tomorrow's weather")
+        self.assertEqual(result["reason"], "out_of_scope")
+        self.assertEqual(result["datasets"], ["Sales", "Taxi"])
+
+    def test_a_near_miss_stays_no_dataset_not_out_of_scope(self):
+        with Harness(routed=[]):
+            result = engine.ask("revenue")
+        self.assertEqual(result["reason"], "no_dataset")
+
+
+class FrameTests(unittest.TestCase):
+    def test_follow_up_inherits_metric_and_grouping_and_changes_only_time(self):
+        frame = {"dataset_id": "7", "metric": "Net revenue", "group_col": "region", "filters": [], "year": None, "relative_time": None}
+        with Harness(routed=[]):
+            result = engine.ask("what about 2024?", frame=frame)
+        self.assertTrue(result["ok"], result)
+        self.assertIn("net_revenue", result["sql"])
+        self.assertIn('GROUP BY "region"', result["sql"])
+        self.assertIn("2024", result["sql"])
+        self.assertEqual(result["frame"]["year"], 2024)
+
+    def test_follow_up_adds_a_filter_and_keeps_the_rest(self):
+        frame = {"dataset_id": "7", "metric": "Net revenue", "group_col": "region", "filters": [], "year": 2024, "relative_time": None}
+        with Harness(routed=[], filters=[{"column": "customer", "value": "Contoso"}]):
+            result = engine.ask("filter that by customer Contoso", frame=frame)
+        self.assertTrue(result["ok"], result)
+        self.assertIn("\"customer\" = 'Contoso'", result["sql"])
+        self.assertIn("2024", result["sql"])
+        self.assertEqual(result["frame"]["filters"], [{"column": "customer", "value": "Contoso"}])
+
+    def test_a_fresh_question_that_routes_elsewhere_ignores_the_frame(self):
+        frame = {"dataset_id": "9", "metric": "Trips", "group_col": "borough", "filters": [], "year": None, "relative_time": None}
+        with Harness():
+            result = engine.ask("orders by region", frame=frame)
+        self.assertEqual(result["dataset_id"], "7")
+        self.assertIn("COUNT(*)", result["sql"])
+
+
+class EditDistanceTests(unittest.TestCase):
+    def test_a_typo_resolves_to_the_nearest_vocabulary_token(self):
+        with Harness():
+            result = engine.ask("net revnue by regoin")
+        self.assertTrue(result["ok"], result)
+        self.assertIn("net_revenue", result["sql"])
+        self.assertIn('GROUP BY "region"', result["sql"])
+        self.assertEqual(result["frame"]["group_col"], "region")
+
+
+if __name__ == "__main__":
+    unittest.main()
