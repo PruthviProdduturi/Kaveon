@@ -11,8 +11,9 @@ REQUIRED_CHECKS = ("counts", "stable_ids", "ownership", "references", "content_h
 EVIDENCE_KEYS = frozenset(("schema_version", "families"))
 FAMILY_KEYS = frozenset((
     "family", "tables", "status", "reconciled_at", "source_watermark",
-    "source_count", "target_count", "checks", "report_sha256",
+    "source_count", "target_count", "checks", "provenance", "report_sha256",
 ))
+PROVENANCE_KEYS = frozenset(("producer", "source_snapshot", "target_snapshot"))
 AUTHORITY_FAMILIES = {
     "catalog_sources": ("catalog_sources",),
     "data_sources": ("data_sources",),
@@ -112,6 +113,12 @@ def evaluate(evidence: dict, *, now: datetime, max_age_hours: int) -> dict:
             raise RuntimeError(f"{family} reconciliation check coverage is incomplete")
         if any(checks[name] is not True for name in REQUIRED_CHECKS):
             raise RuntimeError(f"{family} reconciliation contains a failed check")
+        provenance = entry.get("provenance")
+        if not isinstance(provenance, dict) or set(provenance) != PROVENANCE_KEYS:
+            raise RuntimeError(f"{family} reconciliation provenance is incomplete")
+        if any(not isinstance(provenance[name], str) or not 1 <= len(provenance[name]) <= 256
+               for name in PROVENANCE_KEYS):
+            raise RuntimeError(f"{family} reconciliation provenance is invalid")
         for field in ("source_watermark", "source_count", "target_count"):
             if type(entry.get(field)) is not int or entry[field] < 0:
                 raise RuntimeError(f"{family} {field} is invalid")

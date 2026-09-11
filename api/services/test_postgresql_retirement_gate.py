@@ -21,6 +21,11 @@ def evidence():
             "source_count": index,
             "target_count": index,
             "checks": {name: True for name in gate.REQUIRED_CHECKS},
+            "provenance": {
+                "producer": "test-reconciler@abc123",
+                "source_snapshot": f"postgresql:{index}",
+                "target_snapshot": f"kaveondb:{index}",
+            },
             "report_sha256": hashlib.sha256(family.encode()).hexdigest(),
         })
     return {"schema_version": 1, "families": families}
@@ -66,6 +71,7 @@ class RetirementGateTests(unittest.TestCase):
             lambda item: item.update(target_count=item["source_count"] + 1),
             lambda item: item.update(status="pending"),
             lambda item: item.update(tables=[]),
+            lambda item: item.update(provenance={}),
         )
         for mutate in mutations:
             with self.subTest(mutate=mutate):

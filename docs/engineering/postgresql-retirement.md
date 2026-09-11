@@ -79,6 +79,25 @@ nonzero exit code. This credential-free checker does not create reconciliation
 evidence, discover live tables, enable reads or writes, fence PostgreSQL, or
 authorize retirement.
 
+Reconciliation jobs produce one strict, content-free JSON report per family.
+The local collector verifies each report's canonical SHA-256 and exact family
+identity before assembling the gate input:
+
+```powershell
+$env:KAVEON_RETIREMENT_EVIDENCE_COLLECTION_ENABLED = "true"
+python scripts/collect-postgresql-retirement-evidence.py `
+  --reports tmp/reconciliation-reports `
+  --output tmp/postgresql-reconciliation-evidence.json
+```
+
+Collection is disabled unless the environment variable is exactly `true` and
+fails when any maintained family report is absent, oversized, malformed,
+misnamed, tampered with or contains extra fields. Reports identify their
+producer plus PostgreSQL and KaveonDB snapshot identities, but contain no rows,
+credentials or connection details. The collector reads files only: it does not
+connect to either system or turn an unexecuted reconciliation into evidence.
+Run the parity audit separately to enforce freshness and all parity assertions.
+
 PostgreSQL may be retired only after one repeatable migration command proves all
 of the following against a preserved backup:
 
