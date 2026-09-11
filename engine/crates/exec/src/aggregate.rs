@@ -1903,6 +1903,16 @@ impl HashAggregate {
                         .then(|| batch.column(schema.index_of(&aggregate.column).unwrap()))
                 })
                 .collect::<Vec<_>>();
+            let count_sum_i64 = (self.aggregates.len() == 2
+                && matches!(self.aggregates[0].func, AggFunc::Count)
+                && self.aggregates[0].column == "*"
+                && !self.aggregates[0].distinct
+                && matches!(self.aggregates[1].func, AggFunc::Sum)
+                && !self.aggregates[1].distinct)
+                .then(|| aggregate_arrays[1])
+                .flatten()
+                .filter(|array| array.data_type() == &DataType::Int64)
+                .map(|array| array.as_primitive::<Int64Type>());
             if self.group_by.is_empty() {
                 if groups.is_empty()
                     && let Some(memory) = &self.memory
@@ -2020,6 +2030,25 @@ impl HashAggregate {
                         entry.insert(self.new_states())
                     }
                 };
+                if let Some(values) = count_sum_i64 {
+                    let [AggregateState::Count(count), AggregateState::IntegerSum {
+                        sum,
+                        count: sum_count,
+                    }] = accumulators.as_mut_slice()
+                    else {
+                        return Err(exec_err("COUNT/SUM aggregate state layout mismatch"));
+                    };
+                    *count += 1;
+                    if !values.is_null(row) {
+                        *sum = sum
+                            .checked_add(values.value(row) as i128)
+                            .ok_or_else(|| exec_err("integer SUM overflow"))?;
+                        *sum_count = sum_count
+                            .checked_add(1)
+                            .ok_or_else(|| exec_err("integer SUM count overflow"))?;
+                    }
+                    continue;
+                }
                 for (index, aggregate) in self.aggregates.iter().enumerate() {
                     if matches!(aggregate.func, AggFunc::Count) && aggregate.column == "*" {
                         accumulators[index].update_count()?;
@@ -3156,6 +3185,57 @@ mod tests {
         assert_eq!(snapshot.current_bytes, 0);
         assert!(snapshot.peak_bytes <= snapshot.limit_bytes);
         assert!(snapshot.reservation_calls < 100);
+    }
+
+    #[test]
+    fn grouped_count_and_int64_sum_batch_path_preserves_nulls_and_exactness() {
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "group_key",
+                Arc::new(StringArray::from(vec!["a", "a", "b", "b"])) as ArrayRef,
+            ),
+            (
+                "value",
+                Arc::new(Int64Array::from(vec![
+                    Some(9_007_199_254_740_993),
+                    Some(1),
+                    None,
+                    Some(-7),
+                ]))
+                    as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let pool = QueryMemoryPool::new("count-sum-batch", 1024 * 1024).unwrap();
+        let mut aggregate = HashAggregate::new_with_memory(
+            Box::new(Input::new(batch)),
+            vec!["group_key".into()],
+            vec![
+                AggExpr::new(AggFunc::Count, "*"),
+                AggExpr::new(AggFunc::Sum, "value"),
+            ],
+            pool.operator("aggregate").unwrap(),
+        )
+        .unwrap();
+        let output = aggregate.next_batch().unwrap().unwrap();
+        let keys = output.column(0).as_string::<i32>();
+        let counts = output
+            .column(1)
+            .as_primitive::<arrow::datatypes::UInt64Type>();
+        let sums = output.column(2).as_primitive::<Int64Type>();
+        let actual = (0..output.num_rows())
+            .map(|row| {
+                (
+                    keys.value(row).to_owned(),
+                    (counts.value(row), sums.value(row)),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(actual["a"], (2, 9_007_199_254_740_994));
+        assert_eq!(actual["b"], (2, -7));
+        drop(output);
+        drop(aggregate);
+        assert_eq!(pool.snapshot().current_bytes, 0);
     }
 
     #[test]
