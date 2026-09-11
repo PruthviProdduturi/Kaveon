@@ -1,4 +1,5 @@
 import contextlib
+import os
 import sys
 import unittest
 from types import SimpleNamespace
@@ -33,6 +34,9 @@ class Transaction:
 
 
 class SavedQueryMutationTests(unittest.TestCase):
+    def setUp(self):
+        self.outbox_env=patch.dict(os.environ,{"KAVEON_SAVED_QUERY_OUTBOX_ENABLED":"true"});self.outbox_env.start();self.addCleanup(self.outbox_env.stop)
+
     def test_create_mutation_and_event_share_transaction(self):
         transaction = Transaction([source_row()])
         with patch.object(saved_queries.db, "transaction",
@@ -87,6 +91,12 @@ class SavedQueryMutationTests(unittest.TestCase):
             self.assertTrue(saved_queries.delete_saved_query("query-1", "owner@example.test"))
         self.assertIn("FOR UPDATE", transaction.calls[0][1])
         self.assertEqual(enqueue.call_args.kwargs["payload"], {"id": "query-1", "deleted": True})
+
+    def test_outbox_is_default_off(self):
+        transaction=Transaction([source_row()])
+        with patch.dict(os.environ,{},clear=True),patch.object(saved_queries.db,"transaction",return_value=contextlib.nullcontext(transaction)),patch.object(saved_queries.product_outbox,"enqueue") as enqueue:
+            saved_queries.create_saved_query({"name":"Trips","sql":"SELECT 1"},"owner@example.test")
+        enqueue.assert_not_called()
 
 
 if __name__ == "__main__":
