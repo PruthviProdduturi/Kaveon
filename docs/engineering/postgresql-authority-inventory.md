@@ -14,7 +14,7 @@ family has migrated.
 | `charts` | `services/charts.py`, dashboard rendering | `chart` product record | Deterministic backfill and exact dataset revision binding exist; outbox, live reconciliation, write parity and cutover remain |
 | `dashboards` | `services/dashboards.py`, DLM/dashboard routes | `dashboard` product record | Deterministic backfill, exact chart revision binding and point-read shadowing exist; filter-dataset references, outbox, live parity and cutover remain |
 | `favorites` | `services/favorites.py`, dashboard and data-source routes | No typed favorite record yet | Add owner-unique favorite type and atomic dashboard/favorite behavior |
-| `saved_queries` | `services/saved_queries.py` | `saved_query` product record | Outbox, backfill, owner/role parity and cutover |
+| `saved_queries` | `services/saved_queries.py` | `saved_query` product record | Source mutations and outbox are atomic; deterministic backfill exists; shadow parity, live reconciliation and cutover remain |
 | `user_themes` | `services/theme.py` | `user_theme` product record | Outbox, backfill and owner-key reconciliation |
 | `user_recents` | `services/user_recents.py`, dashboard cleanup | No destination | Define bounded ordered personal-state record and retention |
 | `query_history` | `services/query_history.py`, DLM usage | No destination | Partitioned append path, stable cursor ordering, retention and payload policy |
@@ -169,6 +169,14 @@ supported PostgreSQL layouts. It binds owner-scoped chart records to exact
 KaveonDB dataset revisions and has checkpoint/resume plus exact reconciliation.
 No live snapshot, ongoing writer/outbox, fencing or cutover exists, so charts
 remain PostgreSQL-authoritative.
+
+Saved-query create, update and delete now append one canonical outbox event in
+the same PostgreSQL transaction. Updates and deletes lock the owner-scoped row;
+delete emits a tombstone. A deterministic repeatable-read backfill supports the
+two maintained timestamp layouts, bounds records and documents, checkpoints
+each applied record, and reconciles exact owner-scoped KaveonDB documents. It is
+default-dry and has no live checkpoint, replay-lag, shadow-read, fencing or
+rollback evidence, so saved queries remain PostgreSQL-authoritative.
 
 Dashboards now have deterministic repeatable-read snapshot capture, exact
 owner-scoped chart revision binding, bounded checkpoint/resume, exact target

@@ -185,6 +185,12 @@ checkpoint/resume and target reconciliation code. Retirement remains blocked on
 live backfill evidence, continuous mutation capture, read parity, fencing,
 rollback and backup/restore qualification.
 
+The saved-query family now has atomic source mutation/outbox capture plus a
+bounded deterministic backfill with exact owner-scoped reconciliation and
+tamper-evident checkpoint/resume. The command is disabled for apply by default.
+No live backfill, post-watermark replay, shadow-read, fence, restart or rollback
+evidence exists, so this family does not yet satisfy a retirement gate.
+
 Dashboards now have snapshot/backfill/reconciliation and point-read shadow code,
 including exact referenced chart revisions. Retirement remains blocked on typed
 filter dataset references, continuous writer capture, live parity evidence,
