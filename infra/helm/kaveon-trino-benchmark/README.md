@@ -6,6 +6,8 @@ runner Job holds the benchmark lease. The runner alternates Kaveon and Trino by
 round, runs only one engine at a time on the three existing worker nodes, warms
 the newly activated engine, and restores the original Kaveon replica counts in
 all exit paths. It never creates or resizes an AKS node pool.
+Kaveon activation waits for all workers to advertise the coordinator's current
+catalog snapshot, in addition to ordinary worker readiness.
 
 The role budgets exactly mirror `infra/helm/kaveon-test`: coordinator requests
 500m CPU/1 GiB and limits 2 CPU/4 GiB; each worker requests 1 CPU/2 GiB and

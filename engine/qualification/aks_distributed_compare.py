@@ -292,7 +292,8 @@ class Engines:
         while time.monotonic() < deadline:
             try:
                 if engine == "kaveon":
-                    if self.krequest("GET", "/v1/cluster").get("active_workers") == count:
+                    cluster = self.krequest("GET", "/v1/cluster")
+                    if cluster.get("active_workers") == count and cluster.get("compatible_workers") == count:
                         return
                 elif self.trino_query("SELECT COUNT(*) FROM system.runtime.nodes WHERE state = 'active'") == [[count + 1]]:
                     return
