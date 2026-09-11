@@ -1,13 +1,16 @@
 //! Opt-in local aggregate workers. Operators are constructed inside their owning threads.
 use crate::{
     aggregate::{
-        AggExpr, HashAggregate, aggregate_output_types, grouped_aggregate_states_to_schema_batch,
+        AggExpr, HashAggregate, aggregate_metrics, aggregate_output_types,
+        grouped_aggregate_states_to_schema_batch,
     },
+    exchange::HashPartitioner,
     partitioned::{PartitionedHashAggregate, spill_from_environment},
 };
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use kaveon_core::{BatchOperator, KaveonError, MemoryReservation, QueryMemoryPool, Result};
 use std::{
+    collections::HashSet,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -18,6 +21,10 @@ use std::{
 };
 
 const MAX_WORKERS: usize = 16;
+const AFFINITY_SAMPLE_BATCHES: usize = 8;
+const AFFINITY_SAMPLE_ROWS: usize = 64 * 1024;
+const AFFINITY_DISTINCT_THRESHOLD: usize = 4 * 1024;
+const MAX_AFFINITY_SKEW: usize = 2;
 pub fn configured_parallelism() -> Result<usize> {
     let value = match std::env::var("KAVEON_LOCAL_PARALLELISM") {
         Ok(value) => value
@@ -36,6 +43,27 @@ pub fn configured_parallelism() -> Result<usize> {
 struct QueuedBatch {
     batch: RecordBatch,
     _memory: Arc<MemoryReservation>,
+}
+
+struct DispatchSample {
+    batches: Vec<QueuedBatch>,
+    rows: usize,
+    distinct_hashes: usize,
+    partition_rows: Vec<usize>,
+}
+
+impl DispatchSample {
+    fn use_affinity(&self, workers: usize, grouped: bool) -> bool {
+        if !grouped
+            || workers <= 1
+            || self.rows == 0
+            || self.distinct_hashes < AFFINITY_DISTINCT_THRESHOLD
+        {
+            return false;
+        }
+        let largest = self.partition_rows.iter().copied().max().unwrap_or(0);
+        largest.saturating_mul(workers) <= self.rows.saturating_mul(MAX_AFFINITY_SKEW)
+    }
 }
 struct ChannelInput {
     schema: SchemaRef,
@@ -128,6 +156,22 @@ impl ParallelPartials {
             .source
             .take()
             .ok_or_else(|| error("parallel source already consumed"))?;
+        let account = self.pool.operator("parallel-input-queue")?;
+        let partitioner = (!self.groups.is_empty() && self.workers > 1)
+            .then(|| HashPartitioner::try_new(source.schema(), &self.groups, self.workers))
+            .transpose()?;
+        let sample = collect_dispatch_sample(
+            source.as_mut(),
+            partitioner.as_ref(),
+            self.workers,
+            &account,
+        )?;
+        let affinity = sample.use_affinity(self.workers, partitioner.is_some());
+        aggregate_metrics(&self.pool)?.record_local_dispatch(
+            affinity,
+            sample.rows as u64,
+            sample.distinct_hashes as u64,
+        );
         let (output_tx, output_rx) = mpsc::sync_channel(self.workers * 2);
         self.output = Some(output_rx);
         let mut senders = Vec::with_capacity(self.workers);
@@ -162,8 +206,18 @@ impl ParallelPartials {
             );
         }
         drop(output_tx);
-        let account = self.pool.operator("parallel-input-queue")?;
         let mut index = 0;
+        for queued in sample.batches {
+            dispatch_batch(
+                queued,
+                affinity.then_some(partitioner.as_ref()).flatten(),
+                &senders,
+                &mut index,
+                &account,
+                &self.stopped,
+                &self.pool,
+            )?;
+        }
         while let Some(batch) = source.next_batch()? {
             if batch.schema() != *source.schema() {
                 return Err(error(
@@ -172,19 +226,18 @@ impl ParallelPartials {
             }
             account.check_cancelled()?;
             let memory = Arc::new(account.reserve(batch.get_array_memory_size() as u64)?);
-            for offset in (0..batch.num_rows()).step_by(8192) {
-                let slice = batch.slice(offset, 8192.min(batch.num_rows() - offset));
-                send_bounded(
-                    &senders[index % self.workers],
-                    QueuedBatch {
-                        batch: slice,
-                        _memory: memory.clone(),
-                    },
-                    &self.stopped,
-                    &self.pool,
-                )?;
-                index += 1;
-            }
+            dispatch_batch(
+                QueuedBatch {
+                    batch,
+                    _memory: memory,
+                },
+                affinity.then_some(partitioner.as_ref()).flatten(),
+                &senders,
+                &mut index,
+                &account,
+                &self.stopped,
+                &self.pool,
+            )?;
         }
         drop(senders);
         Ok(())
@@ -197,6 +250,129 @@ impl ParallelPartials {
         }
         self.current = None;
     }
+}
+
+fn collect_dispatch_sample(
+    source: &mut dyn BatchOperator,
+    partitioner: Option<&HashPartitioner>,
+    workers: usize,
+    memory: &kaveon_core::OperatorMemoryAccount,
+) -> Result<DispatchSample> {
+    let mut batches = Vec::new();
+    let mut rows = 0usize;
+    let mut distinct = HashSet::with_capacity(AFFINITY_DISTINCT_THRESHOLD);
+    let mut partition_rows = vec![0usize; workers];
+    let _sample_state_memory = partitioner
+        .map(|_| {
+            memory.reserve(
+                (AFFINITY_DISTINCT_THRESHOLD as u64)
+                    .saturating_mul(32)
+                    .saturating_add((workers as u64).saturating_mul(64)),
+            )
+        })
+        .transpose()?;
+    while batches.len() < AFFINITY_SAMPLE_BATCHES && rows < AFFINITY_SAMPLE_ROWS {
+        let Some(batch) = source.next_batch()? else {
+            break;
+        };
+        if batch.schema() != *source.schema() {
+            return Err(error(
+                "parallel source batch does not match declared schema",
+            ));
+        }
+        memory.check_cancelled()?;
+        let guard = Arc::new(memory.reserve(batch.get_array_memory_size() as u64)?);
+        if let Some(partitioner) = partitioner {
+            let _hash_memory = memory.reserve(
+                (batch.num_rows() as u64)
+                    .saturating_mul(64)
+                    .saturating_add(4096),
+            )?;
+            for hash in partitioner.hashes(&batch)? {
+                let partition = (hash % workers as u64) as usize;
+                partition_rows[partition] = partition_rows[partition].saturating_add(1);
+                if distinct.len() < AFFINITY_DISTINCT_THRESHOLD {
+                    distinct.insert(hash);
+                }
+            }
+        }
+        rows = rows.saturating_add(batch.num_rows());
+        batches.push(QueuedBatch {
+            batch,
+            _memory: guard,
+        });
+    }
+    Ok(DispatchSample {
+        batches,
+        rows,
+        distinct_hashes: distinct.len(),
+        partition_rows,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dispatch_batch(
+    queued: QueuedBatch,
+    partitioner: Option<&HashPartitioner>,
+    senders: &[SyncSender<QueuedBatch>],
+    round_robin_index: &mut usize,
+    memory: &kaveon_core::OperatorMemoryAccount,
+    stopped: &AtomicBool,
+    pool: &QueryMemoryPool,
+) -> Result<()> {
+    if queued.batch.num_rows() == 0 {
+        return Ok(());
+    }
+    if let Some(partitioner) = partitioner {
+        let batch_bytes = queued.batch.get_array_memory_size() as u64;
+        let estimate = batch_bytes
+            .checked_mul(3)
+            .and_then(|bytes| {
+                bytes.checked_add((queued.batch.num_rows() as u64).saturating_mul(32))
+            })
+            .and_then(|bytes| {
+                bytes.checked_add(
+                    (senders.len() as u64)
+                        .saturating_mul(queued.batch.num_columns() as u64)
+                        .saturating_mul(256),
+                )
+            })
+            .ok_or_else(|| error("local aggregate partition memory estimate overflow"))?;
+        let routing_memory = Arc::new(memory.reserve(estimate)?);
+        let (partitions, metrics) = partitioner.partition_profiled(&queued.batch)?;
+        aggregate_metrics(pool)?
+            .record_local_affinity_routing(queued.batch.num_rows() as u64, metrics.copied_bytes);
+        drop(queued);
+        for (worker, batch) in partitions.into_iter().enumerate() {
+            for offset in (0..batch.num_rows()).step_by(8192) {
+                send_bounded(
+                    &senders[worker],
+                    QueuedBatch {
+                        batch: batch.slice(offset, 8192.min(batch.num_rows() - offset)),
+                        _memory: routing_memory.clone(),
+                    },
+                    stopped,
+                    pool,
+                )?;
+            }
+        }
+    } else {
+        for offset in (0..queued.batch.num_rows()).step_by(8192) {
+            send_bounded(
+                &senders[*round_robin_index % senders.len()],
+                QueuedBatch {
+                    batch: queued
+                        .batch
+                        .slice(offset, 8192.min(queued.batch.num_rows() - offset)),
+                    _memory: queued._memory.clone(),
+                },
+                stopped,
+                pool,
+            )?;
+            *round_robin_index = (*round_robin_index).saturating_add(1);
+        }
+    }
+    Ok(())
 }
 impl BatchOperator for ParallelPartials {
     fn schema(&self) -> &SchemaRef {
@@ -424,7 +600,7 @@ fn error(message: &str) -> KaveonError {
 mod tests {
     use super::*;
     use crate::aggregate::{
-        AggFunc, FinalAggregateValue, finalize_grouped_aggregate_states,
+        AggFunc, AggregateValue, FinalAggregateValue, finalize_grouped_aggregate_states,
         grouped_aggregate_states_from_batches, merge_grouped_aggregate_states,
     };
     use arrow::{
@@ -451,6 +627,89 @@ mod tests {
         fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
             Ok(self.batches.pop_front())
         }
+    }
+    #[test]
+    fn affinity_gate_requires_high_cardinality_balanced_grouping() {
+        let high = DispatchSample {
+            batches: vec![],
+            rows: 16_384,
+            distinct_hashes: AFFINITY_DISTINCT_THRESHOLD,
+            partition_rows: vec![4096; 4],
+        };
+        assert!(high.use_affinity(4, true));
+        assert!(!high.use_affinity(4, false));
+        assert!(!high.use_affinity(1, true));
+
+        let low = DispatchSample {
+            distinct_hashes: 17,
+            ..high
+        };
+        assert!(!low.use_affinity(4, true));
+
+        let skewed = DispatchSample {
+            batches: vec![],
+            rows: 16_384,
+            distinct_hashes: AFFINITY_DISTINCT_THRESHOLD,
+            partition_rows: vec![13_000, 1128, 1128, 1128],
+        };
+        assert!(!skewed.use_affinity(4, true));
+    }
+
+    #[test]
+    fn high_cardinality_groups_are_key_affine_and_exact() {
+        let rows = 20_000i64;
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "k",
+                Arc::new(Int64Array::from_iter_values(0..rows)) as ArrayRef,
+            ),
+            (
+                "v",
+                Arc::new(Int64Array::from_iter_values(
+                    (0..rows).map(|value| value.saturating_mul(-3)),
+                )) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let pool = QueryMemoryPool::new("key-affine", 256 * 1024 * 1024).unwrap();
+        let mut operator = ParallelPartials::new(
+            Box::new(Input::one(batch)),
+            vec!["k".into()],
+            vec![
+                AggExpr::new(AggFunc::Count, "*"),
+                AggExpr::new(AggFunc::Sum, "v"),
+            ],
+            pool.clone(),
+            4,
+        )
+        .unwrap();
+        let mut partials = Vec::new();
+        while let Some(batch) = operator.next_batch().unwrap() {
+            partials.extend(grouped_aggregate_states_from_batches(&[batch]).unwrap());
+        }
+        let actual =
+            finalize_grouped_aggregate_states(&merge_grouped_aggregate_states(partials).unwrap())
+                .unwrap();
+        assert_eq!(actual.len(), rows as usize);
+        assert!(actual.iter().all(|group| {
+            let AggregateValue::Int64(key) = group.group_keys[0] else {
+                return false;
+            };
+            group.values
+                == vec![
+                    FinalAggregateValue::Count(1),
+                    FinalAggregateValue::Integer(Some(key.saturating_mul(-3) as i128)),
+                ]
+        }));
+        let metrics = aggregate_metrics(&pool).unwrap().snapshot();
+        assert_eq!(metrics.local_affinity_dispatches, 1);
+        assert_eq!(metrics.local_round_robin_dispatches, 0);
+        assert_eq!(metrics.local_affinity_sample_rows, rows as u64);
+        assert_eq!(metrics.local_affinity_sample_distinct_hashes, 4096);
+        assert_eq!(metrics.local_affinity_routed_rows, rows as u64);
+        assert!(metrics.local_affinity_routed_bytes > 0);
+        drop(operator);
+        assert_eq!(pool.snapshot().current_bytes, 0);
     }
     #[test]
     fn parallel_partials_match_serial_typed_aggregates_and_empty_inputs() {

@@ -67,6 +67,18 @@ The September 11 AKS profiling follow-up added bounded cumulative task counters 
 
 Delta join planning now carries the exact analyzed transaction-log version into executable fragment construction. The pin is keyed by the resolved source URI from the query's immutable catalog publication, so a later add/remove commit cannot make the physical scan diverge from the snapshot whose exact cardinality selected the join distribution, and a catalog source replacement cannot consume the old source's pin. This also avoids resolving the Delta head a second time during fragment construction. Parquet behavior is unchanged. All 151 server tests and the focused storage statistics tests pass; no deployment or performance measurement was performed.
 
+Local partial aggregation now samples at most eight batches and 65,536 rows
+under the query memory pool before choosing its worker dispatch. A balanced
+sample with at least 4,096 distinct canonical group hashes uses key-affine
+dispatch, so one local worker owns each group key; low-cardinality, skewed,
+global and single-worker aggregates retain round-robin dispatch. Partition
+copies and the sample are conservatively reserved, channels remain bounded,
+and the existing partition/spill operator remains the hard fallback. Per-task
+telemetry reports the selected mode, sample rows/distinct hashes, and affinity
+rows/bytes. Local exactness, gating, cancellation and memory-release tests plus
+all 120 execution and 151 server tests pass. AKS performance remains unproven
+until an immutable image completes the exact profile and throughput guard.
+
 ## Continuation point
 
 Complete the current round in this order:
