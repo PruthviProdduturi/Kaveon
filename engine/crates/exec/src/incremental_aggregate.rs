@@ -13,7 +13,43 @@ use crate::aggregate::{
 pub struct IncrementalAggregateMerger {
     groups: HashMap<Vec<AggregateValue>, Vec<AggregateState>>,
     memory: Option<OperatorMemoryAccount>,
-    reservations: Vec<MemoryReservation>,
+    reservations: ReservationSlab,
+}
+
+const MERGE_RESERVATION_SLAB_BYTES: u64 = 64 * 1024;
+
+#[derive(Default)]
+struct ReservationSlab {
+    guards: Vec<MemoryReservation>,
+    available: u64,
+}
+
+impl ReservationSlab {
+    fn reserve(&mut self, memory: &OperatorMemoryAccount, bytes: u64) -> Result<()> {
+        if bytes > self.available {
+            // Keep the common singleton-group case exact. Once a second group
+            // proves that the merge is growing, amortize subsequent accounting.
+            let slab_bytes = if self.guards.is_empty() {
+                bytes
+            } else {
+                MERGE_RESERVATION_SLAB_BYTES.max(bytes)
+            };
+            let guard = match memory.reserve(slab_bytes) {
+                Ok(guard) => guard,
+                Err(KaveonError::MemoryLimit(_)) if slab_bytes != bytes => memory.reserve(bytes)?,
+                Err(error) => return Err(error),
+            };
+            self.available = self.available.saturating_add(guard.bytes());
+            self.guards.push(guard);
+        }
+        debug_assert!(bytes <= self.available);
+        self.available -= bytes;
+        Ok(())
+    }
+
+    fn into_guards(self) -> Vec<MemoryReservation> {
+        self.guards
+    }
 }
 
 impl IncrementalAggregateMerger {
@@ -21,7 +57,7 @@ impl IncrementalAggregateMerger {
         Self {
             groups: HashMap::new(),
             memory,
-            reservations: Vec::new(),
+            reservations: ReservationSlab::default(),
         }
     }
 
@@ -43,20 +79,27 @@ impl IncrementalAggregateMerger {
             .as_any()
             .downcast_ref::<BinaryArray>()
             .ok_or_else(|| error("invalid aggregate state column"))?;
-        for row in 0..batch.num_rows() {
-            if let Some(memory) = &self.memory {
-                memory.check_cancelled()?;
-            }
-            let scratch = (keys.value_length(row) as u64)
+        // Only one row is decoded at a time, so a single reservation for the
+        // largest encoded row covers the whole batch without changing the
+        // decoder's conservative memory bound.
+        let scratch = (0..batch.num_rows()).try_fold(0_u64, |maximum, row| {
+            let bytes = (keys.value_length(row) as u64)
                 .saturating_add(states.value_length(row) as u64)
                 .checked_mul(32)
                 .and_then(|n| n.checked_add(4096))
                 .ok_or_else(|| error("aggregate scratch estimate overflow"))?;
-            let _scratch_guard = self
-                .memory
-                .as_ref()
-                .map(|m| m.reserve(scratch))
-                .transpose()?;
+            Ok::<_, KaveonError>(maximum.max(bytes))
+        })?;
+        let _scratch_guard = self
+            .memory
+            .as_ref()
+            .filter(|_| scratch != 0)
+            .map(|memory| memory.reserve(scratch))
+            .transpose()?;
+        for row in 0..batch.num_rows() {
+            if let Some(memory) = &self.memory {
+                memory.check_cancelled()?;
+            }
             let partial = grouped_aggregate_state_row(keys, states, row, &types)?;
             let existing = self.groups.get(&partial.group_keys);
             let mut growth = if existing.is_none() {
@@ -81,7 +124,7 @@ impl IncrementalAggregateMerger {
             if growth != 0
                 && let Some(memory) = &self.memory
             {
-                self.reservations.push(memory.reserve(growth)?);
+                self.reservations.reserve(memory, growth)?;
             }
             if let Some(existing) = self.groups.get_mut(&partial.group_keys) {
                 if existing.len() != partial.states.len() {
@@ -104,7 +147,7 @@ impl IncrementalAggregateMerger {
                 .into_iter()
                 .map(|(group_keys, states)| GroupedAggregateState { group_keys, states }),
         )?;
-        Ok((groups, self.reservations))
+        Ok((groups, self.reservations.into_guards()))
     }
 }
 
@@ -194,6 +237,43 @@ mod tests {
         assert!(rejected);
         assert!(pool.snapshot().peak_bytes <= 256 * 1024);
         drop(merger);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn dense_group_batch_amortizes_scratch_and_growth_reservations() {
+        let pool = QueryMemoryPool::new("dense-group-merge", 16 * 1024 * 1024).unwrap();
+        let groups = (0..2_000)
+            .map(|value| GroupedAggregateState {
+                group_keys: vec![AggregateValue::Int64(value)],
+                states: vec![AggregateState::Count(1)],
+            })
+            .collect::<Vec<_>>();
+        let batch = grouped_aggregate_states_to_typed_batch(&groups, &[DataType::Int64]).unwrap();
+        let mut merger = IncrementalAggregateMerger::new(Some(pool.operator("final").unwrap()));
+
+        merger.push_batch(&batch).unwrap();
+        let (merged, guards) = merger.finish().unwrap();
+
+        assert_eq!(merged.len(), groups.len());
+        assert!(
+            merged
+                .iter()
+                .all(|group| group.states == vec![AggregateState::Count(1)])
+        );
+        assert!(
+            merged
+                .iter()
+                .any(|group| { group.group_keys == vec![AggregateValue::Int64(0)] })
+        );
+        assert!(
+            merged
+                .iter()
+                .any(|group| { group.group_keys == vec![AggregateValue::Int64(1_999)] })
+        );
+        assert!(pool.snapshot().reservation_calls < 200);
+        assert!(pool.snapshot().peak_bytes <= 16 * 1024 * 1024);
+        drop(guards);
         assert_eq!(pool.snapshot().current_bytes, 0);
     }
 }
