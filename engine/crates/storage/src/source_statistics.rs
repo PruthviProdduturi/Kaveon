@@ -12,6 +12,8 @@ use std::{
 
 const MAX_EXACT_STATISTICS_CACHE_ENTRIES: usize = 256;
 static EXACT_STATISTICS_CACHE: OnceLock<Mutex<HashMap<String, SourceStatistics>>> = OnceLock::new();
+static LATEST_DELTA_STATISTICS: OnceLock<Mutex<HashMap<String, (u64, SourceStatistics)>>> =
+    OnceLock::new();
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceStatistics {
@@ -27,27 +29,7 @@ pub fn analyze_source(location: &str, format: DataFormat) -> Result<SourceStatis
     match (is_object(location), format) {
         (true, DataFormat::Delta) => {
             let reader = ObjectDeltaReader::from_uri(location)?;
-            let snapshot = reader.snapshot()?;
-            let mut identity = format!("delta\n{}\n{}\n", location, snapshot.version);
-            for file in &snapshot.files {
-                identity.push_str(file.as_ref());
-                identity.push('\n');
-            }
-            let identity_sha256 = digest(identity);
-            if let Some(cached) = cached_statistics(&identity_sha256) {
-                return Ok(cached);
-            }
-            let metadata = reader.metadata_for_snapshot(snapshot)?;
-            Ok(cache_statistics(SourceStatistics {
-                identity_sha256,
-                row_count: metadata.row_count,
-                columns: metadata
-                    .schema
-                    .fields()
-                    .iter()
-                    .map(|field| field.name().clone())
-                    .collect(),
-            }))
+            analyze_object_delta(location, &reader)
         }
         (true, DataFormat::Iceberg) => {
             let snapshot = IcebergReader::new(location).snapshot()?;
@@ -157,6 +139,39 @@ pub fn analyze_source(location: &str, format: DataFormat) -> Result<SourceStatis
     }
 }
 
+fn analyze_object_delta(location: &str, reader: &ObjectDeltaReader) -> Result<SourceStatistics> {
+    if let Some((version, statistics)) = cached_delta_statistics(location)
+        && reader.is_latest_version(version)?
+    {
+        return Ok(statistics);
+    }
+    let snapshot = reader.snapshot()?;
+    let version = snapshot.version;
+    let mut identity = format!("delta\n{}\n{}\n", location, snapshot.version);
+    for file in &snapshot.files {
+        identity.push_str(file.as_ref());
+        identity.push('\n');
+    }
+    let identity_sha256 = digest(identity);
+    if let Some(cached) = cached_statistics(&identity_sha256) {
+        cache_delta_statistics(location, version, cached.clone());
+        return Ok(cached);
+    }
+    let metadata = reader.metadata_for_snapshot(snapshot)?;
+    let statistics = cache_statistics(SourceStatistics {
+        identity_sha256,
+        row_count: metadata.row_count,
+        columns: metadata
+            .schema
+            .fields()
+            .iter()
+            .map(|field| field.name().clone())
+            .collect(),
+    });
+    cache_delta_statistics(location, version, statistics.clone());
+    Ok(statistics)
+}
+
 fn stats_from_digest(
     identity_sha256: String,
     row_count: u64,
@@ -192,6 +207,32 @@ fn cache_statistics(statistics: SourceStatistics) -> SourceStatistics {
     cache.insert(statistics.identity_sha256.clone(), statistics.clone());
     statistics
 }
+
+fn cached_delta_statistics(location: &str) -> Option<(u64, SourceStatistics)> {
+    LATEST_DELTA_STATISTICS
+        .get_or_init(Default::default)
+        .lock()
+        .ok()?
+        .get(location)
+        .cloned()
+}
+
+fn cache_delta_statistics(location: &str, version: u64, statistics: SourceStatistics) {
+    let Ok(mut cache) = LATEST_DELTA_STATISTICS.get_or_init(Default::default).lock() else {
+        return;
+    };
+    if cache.len() >= MAX_EXACT_STATISTICS_CACHE_ENTRIES && !cache.contains_key(location) {
+        cache.clear();
+    }
+    // Concurrent analyses may finish out of order. Never let an older snapshot
+    // replace a newer cache entry.
+    if cache
+        .get(location)
+        .is_none_or(|(cached, _)| version >= *cached)
+    {
+        cache.insert(location.to_owned(), (version, statistics));
+    }
+}
 fn digest(value: String) -> String {
     format!("{:x}", Sha256::digest(value.as_bytes()))
 }
@@ -207,6 +248,7 @@ mod tests {
         datatypes::{DataType, Field, Schema},
         record_batch::RecordBatch,
     };
+    use object_store::{ObjectStore, memory::InMemory, path::Path};
     use parquet::arrow::ArrowWriter;
     use std::{fs::File, sync::Arc};
 
@@ -228,6 +270,26 @@ mod tests {
         let mut writer = ArrowWriter::try_new(File::create(path).unwrap(), schema, None).unwrap();
         writer.write(&batch).unwrap();
         writer.close().unwrap();
+    }
+
+    fn parquet_bytes(rows: usize) -> Vec<u8> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from_iter_values((0..rows).map(|v| v as i64))) as ArrayRef,
+                Arc::new(StringArray::from_iter_values(
+                    (0..rows).map(|v| format!("r{v}")),
+                )) as ArrayRef,
+            ],
+        )
+        .unwrap();
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.into_inner().unwrap()
     }
 
     #[test]
@@ -276,5 +338,45 @@ mod tests {
         assert_ne!(first.identity_sha256, second.identity_sha256);
 
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn object_delta_cached_statistics_invalidate_on_next_commit() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        for (name, rows) in [("first.parquet", 3), ("second.parquet", 7)] {
+            runtime
+                .block_on(store.put(
+                    &Path::from(format!("table/{name}")),
+                    parquet_bytes(rows).into(),
+                ))
+                .unwrap();
+        }
+        runtime
+            .block_on(store.put(
+                &Path::from("table/_delta_log/00000000000000000000.json"),
+                br#"{"add":{"path":"first.parquet"}}"#.to_vec().into(),
+            ))
+            .unwrap();
+        let reader = ObjectDeltaReader::new(store.clone(), Path::from("table"));
+        let location = format!("memory://delta-cache-{}", std::process::id());
+        let first = analyze_object_delta(&location, &reader).unwrap();
+        assert_eq!(first.row_count, 3);
+        assert_eq!(analyze_object_delta(&location, &reader).unwrap(), first);
+
+        runtime
+            .block_on(
+                store.put(
+                    &Path::from("table/_delta_log/00000000000000000001.json"),
+                    br#"{"remove":{"path":"first.parquet"}}
+{"add":{"path":"second.parquet"}}"#
+                        .to_vec()
+                        .into(),
+                ),
+            )
+            .unwrap();
+        let second = analyze_object_delta(&location, &reader).unwrap();
+        assert_eq!(second.row_count, 7);
+        assert_ne!(second.identity_sha256, first.identity_sha256);
     }
 }
