@@ -1449,6 +1449,12 @@ let source = DeltaTableReader::new(table_directory)
 - Render-only validation passed with the AKS Helm binary; no cluster resources were applied.
 - The live outbox table remains absent, so PostgreSQL migration writers are not ready to deploy yet.
 
+## 2026-09-11 — PostgreSQL retained snapshot prerequisite
+
+- Added and applied `kaveon-azuredisk-retain`, backed by the enabled Azure Disk CSI driver and AKS snapshot controller.
+- Verified `deletionPolicy=Retain` and `incremental=true`; no database snapshot has been taken yet.
+- The restore-point snapshot must wait for a write fence and PostgreSQL checkpoint immediately before migration rehearsal.
+
 # 2026-09-11 — Saved-query PostgreSQL migration boundary
 
 - Saved-query create/update/delete now commit their canonical migration outbox event in the same PostgreSQL transaction.

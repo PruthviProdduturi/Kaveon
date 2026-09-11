@@ -1,0 +1,11 @@
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: kaveon-azuredisk-retain
+  labels:
+    app.kubernetes.io/name: kaveon
+    app.kubernetes.io/component: postgresql-backup
+driver: disk.csi.azure.com
+deletionPolicy: Retain
+parameters:
+  incremental: "true"

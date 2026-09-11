@@ -115,6 +115,14 @@ of the following against a preserved backup:
 7. PostgreSQL is first scaled to zero while its PVC is retained. Permanent
    deletion happens only after the rollback window passes.
 
+The AKS cluster has the repository-owned `kaveon-azuredisk-retain`
+`VolumeSnapshotClass` (`disk.csi.azure.com`, incremental, `Retain`). Before the
+schema/cutover rehearsal, fence application writes, force a PostgreSQL
+checkpoint, create a `VolumeSnapshot` of `data-kaveon-postgres-0`, and wait for
+`readyToUse=true`. Record its bound content and Azure snapshot identity in the
+rehearsal evidence. Do not treat a snapshot taken during active writes as the
+preserved retirement backup.
+
 Passing the parity audit supplies evidence only for item 2. Items 1 and 3-7
 remain independent mandatory gates, including live-schema discovery, shadow
 reads, write fencing, restart, backup/restore and rollback qualification.
