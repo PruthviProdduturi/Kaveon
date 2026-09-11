@@ -59,6 +59,26 @@ and resume support. Its existence is not a retirement gate result; only an
 archived successful command report followed by post-watermark replay and final
 reconciliation can supply that evidence.
 
+The local parity audit fails closed over the complete checked-in authority
+manifest:
+
+```powershell
+python scripts/audit-postgresql-retirement.py `
+  --evidence tmp/postgresql-reconciliation-evidence.json `
+  --output tmp/postgresql-retirement-audit.json `
+  --max-age-hours 24
+```
+
+It requires all 16 authority families and exact table membership. Every family
+must have fresh `passed` evidence for counts, stable IDs, ownership, references
+and content hashes, matching source and target counts, a watermark, and a
+lowercase SHA-256 report identity. The output binds the full input and audit to
+SHA-256 digests without embedding credentials or row contents. Missing, stale,
+future-dated, failed, duplicate, unknown or secret-shaped evidence returns a
+nonzero exit code. This credential-free checker does not create reconciliation
+evidence, discover live tables, enable reads or writes, fence PostgreSQL, or
+authorize retirement.
+
 PostgreSQL may be retired only after one repeatable migration command proves all
 of the following against a preserved backup:
 
@@ -75,6 +95,10 @@ of the following against a preserved backup:
    credential-free machine-readable reports.
 7. PostgreSQL is first scaled to zero while its PVC is retained. Permanent
    deletion happens only after the rollback window passes.
+
+Passing the parity audit supplies evidence only for item 2. Items 1 and 3-7
+remain independent mandatory gates, including live-schema discovery, shadow
+reads, write fencing, restart, backup/restore and rollback qualification.
 
 Deleting the StatefulSet or PVC before these gates would remove the current
 product metadata authority and break Studio even though ADLS analytical queries

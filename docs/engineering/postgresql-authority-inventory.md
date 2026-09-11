@@ -72,3 +72,15 @@ Backfill/replay must reconcile IDs, owners, visibility, references and canonical
 payload hashes at a recorded source sequence. Cutover additionally requires a
 write fence, zero outbox lag, role-filtered shadow-read parity, restart and
 backup/restore evidence, and a tested rollback window.
+
+The credential-free parity gate in
+`scripts/audit-postgresql-retirement.py` maps every table above into 16 explicit
+authority families. Its checked-in manifest is the minimum coverage set: an
+evidence file cannot omit a family, add an unknown family, change its table
+membership or duplicate it. Each family must carry fresh successful checks for
+counts, stable IDs, ownership, references and canonical content hashes, plus
+matching source/target counts, a source watermark and the SHA-256 of its
+underlying reconciliation report. Sensitive-shaped fields are rejected. The
+gate reads local JSON only and does not discover schemas or access credentials,
+so a separate read-only live-schema inventory must also prove that no
+authoritative runtime table is absent from this maintained manifest.
