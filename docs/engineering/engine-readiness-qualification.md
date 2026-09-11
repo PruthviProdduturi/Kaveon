@@ -253,6 +253,9 @@ release evidence after combined validation.
 - Statistics-based inner-join build-side selection with output-order preservation.
 - Compact grouped-state transport and opt-in local parallel aggregation.
 - Sustained mixed-workload soak and complete local Compose integration.
+- Live qualification of the default-off DLM run backfill against durably
+  published ADLS manifests. Local staged-file and reconciliation tests alone do
+  not grant readiness credit.
 
 ### Engine-backed virtual chart datasets
 

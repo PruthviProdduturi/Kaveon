@@ -401,8 +401,38 @@ immutable document persistence and delete restriction.
 This record points to a committed manifest; it does not embed generated answers,
 value indexes, sketches, cached results or error text. The manifest's own future
 schema must reference immutable generated objects and be published before the
-run becomes `ready`. No PostgreSQL writer, artifact uploader, backfill, reader or
-cleanup process uses `dlm_run` yet.
+run becomes `ready`. No PostgreSQL writer, reader or cleanup process uses
+`dlm_run` yet.
+
+The bounded legacy-run backfill treats each ready PostgreSQL `dlm_artifact`
+version as one historical run named `<dataset-id>-v<version>`. Capture uses one
+`REPEATABLE READ, READ ONLY` source transaction, then reads every corresponding
+owner-scoped KaveonDB definition at one target snapshot and binds its exact
+record revision. Only `ready` rows with positive versions and valid JSON are
+supported; every other status fails the whole capture.
+
+Before capture, an operator must stage the canonical manifest JSON bytes at
+`dlm/<dataset-id>/v<version>/manifest.json` under a local artifact root. Missing
+or byte-divergent files fail before a checkpoint is created. The sealed run
+contains that relative path and SHA-256; apply publishes `building` followed by
+`ready` in one KaveonDB transaction.
+
+```powershell
+python scripts/backfill-dlm-runs.py `
+  --checkpoint tmp/dlm-run-backfill.json `
+  --artifact-root tmp/staged-dlm-artifacts
+
+$env:KAVEON_DLM_RUN_MIGRATION_ENABLED = "true"
+python scripts/backfill-dlm-runs.py `
+  --checkpoint tmp/dlm-run-backfill.json `
+  --artifact-root tmp/staged-dlm-artifacts --resume --apply
+```
+
+Dry-run is the default. The integrity-checked 4 MiB checkpoint holds at most
+10,000 records and advances by atomic replacement after reconciliation. The
+command is not scheduled or deployed. Local staging does not upload to ADLS, so
+production apply remains blocked until a durable publisher verifies the same
+paths and hashes.
 
 The first deterministic definition backfill selects ready `dlm_artifact`
 dataset IDs and owners inside one PostgreSQL `REPEATABLE READ, READ ONLY`
