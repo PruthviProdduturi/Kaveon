@@ -2,6 +2,9 @@
 
 Status on September 10, 2026: **do not delete or scale down PostgreSQL**.
 
+The complete code-path and runtime-table audit is maintained in
+[PostgreSQL authority inventory](postgresql-authority-inventory.md).
+
 Kaveon's analytical payloads are in ADLS Gen2 and are queried through the
 Engine catalog. Native table statistics and the product-record transaction
 snapshot are also published to the dedicated `product-transactions` ADLS
@@ -33,6 +36,11 @@ client for atomic create/update/delete groups and owner-scoped point reads. It
 is an application migration boundary, not an enabled repository adapter:
 backfill, PostgreSQL outbox/units of work, shadow-read wiring, write fencing and
 API cutover remain incomplete. It does not yet cover all 21 PostgreSQL tables.
+
+The PostgreSQL schema and API now contain the source-side unit-of-work and
+idempotent migration-outbox primitives. No repository writer is wired to them
+yet, so they add no migration coverage until a whole family writes its source
+mutation and outbox event in the same transaction.
 
 PostgreSQL may be retired only after one repeatable migration command proves all
 of the following against a preserved backup:

@@ -50,6 +50,9 @@ Three material boundaries prevent expanding this narrow 8/10 rating:
 2. Kaveon's transactional surface is a durable, typed product-record protocol.
    Arbitrary relational row DML, parameter binding, constraints/indexes,
    multi-table SQL transactions and a qualified isolation level remain absent.
+   The API now also has a PostgreSQL connection-pinned unit of work and durable
+   source-outbox schema for migration. No repository family uses that outbox,
+   so it earns no cutover, durability, or PostgreSQL-replacement evidence yet.
 3. The checked-in comparison gates fail closed because no publication-scale
    1.90× Trino result or completed PostgreSQL transaction report exists.
 

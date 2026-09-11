@@ -8,8 +8,9 @@ rather than string interpolation. The driver handles escaping.
 """
 
 import re
+from contextlib import contextmanager
 from typing import Any, List, Optional, TypeVar
-from database.pool import execute_query
+from database.pool import _safe, execute_query, get_connection_pool, is_connection_error
 from config import settings
 
 T = TypeVar("T")
@@ -136,3 +137,84 @@ def execute(sql: str, params: Optional[List[Any]] = None) -> int:
     """Execute a DML statement; returns affected row count."""
     result = query(sql, params)
     return result["row_count"]
+
+
+class MetadataTransaction:
+    """One checked-out PostgreSQL metadata connection with an explicit commit boundary."""
+
+    def __init__(self, connection, db_type: str):
+        self._connection = connection
+        self._db_type = db_type
+
+    def query(self, sql: str, params: Optional[List[Any]] = None) -> dict:
+        adapted = _adapt_sql(sql, self._db_type)
+        native_sql, native_params = _to_native_params(adapted, params, self._db_type)
+        cursor = self._connection.connection.cursor()
+        try:
+            if native_params:
+                cursor.execute(native_sql, native_params)
+            else:
+                cursor.execute(native_sql)
+            if cursor.description:
+                columns = [column[0] for column in cursor.description]
+                rows = [
+                    {columns[index]: _safe(value) for index, value in enumerate(row)}
+                    for row in cursor.fetchall()
+                ]
+                return {"rows": rows, "row_count": len(rows)}
+            return {"rows": [], "row_count": cursor.rowcount}
+        finally:
+            cursor.close()
+
+    def query_one(self, sql: str, params: Optional[List[Any]] = None) -> Optional[dict]:
+        result = self.query(sql, params)
+        return result["rows"][0] if result["rows"] else None
+
+    def execute(self, sql: str, params: Optional[List[Any]] = None) -> int:
+        return self.query(sql, params)["row_count"]
+
+
+@contextmanager
+def transaction():
+    """Yield an all-or-nothing metadata unit of work.
+
+    Migration outbox guarantees currently target PostgreSQL only. Other legacy
+    metadata backends keep using the existing per-statement adapter until they
+    have an equivalent, qualified transaction implementation.
+    """
+    import os as _os
+    from fastapi import HTTPException
+
+    database = _os.environ.get("METADATA_DATABASE") or settings.METADATA_DATABASE
+    if not database:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "setup_required", "message": "Metadata database is not configured. Please complete setup."},
+        )
+    pool = get_connection_pool(database)
+    if pool.db_type != "postgresql":
+        raise RuntimeError("Metadata transactions for product migration require PostgreSQL")
+    connection = pool.get_connection()
+    discard = False
+    try:
+        connection.connect()
+        raw = connection.connection
+        if not raw.autocommit:
+            raise RuntimeError("Pooled metadata connection already has an open transaction")
+        raw.autocommit = False
+        try:
+            yield MetadataTransaction(connection, pool.db_type)
+            raw.commit()
+        except Exception:
+            raw.rollback()
+            raise
+        finally:
+            raw.autocommit = True
+    except Exception as error:
+        discard = is_connection_error(error)
+        raise
+    finally:
+        if discard:
+            pool.discard_connection(connection)
+        else:
+            pool.return_connection(connection)

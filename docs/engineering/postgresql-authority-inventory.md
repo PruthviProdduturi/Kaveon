@@ -1,0 +1,46 @@
+# PostgreSQL authority inventory
+
+Status on September 10, 2026: PostgreSQL is the product metadata authority.
+This inventory covers checked-in schema, runtime-created tables, and direct API
+read/write paths. A KaveonDB protocol type is not evidence that its repository
+family has migrated.
+
+| PostgreSQL state | Current API readers/writers | KaveonDB destination | Blocking work |
+| --- | --- | --- | --- |
+| `catalog_sources` | `routers/catalog_sources.py`, Engine bridge, Lab and SQL routing | Native Engine catalog definitions plus future non-secret product source record | Unify source lifecycle at one pinned KaveonDB revision; retain only secret references; backfill and reconcile |
+| `data_sources` | `routers/data_sources.py`, connection pool resolution, credentials service | Future non-secret source record | Separate encrypted connection envelope from public metadata; migrate favorites tied to sources |
+| `datasets` | `services/datasets.py`; chat, AI, SQL and Lab readers | `dataset` product record | Put parent and semantic children in one canonical document; add source outbox to every mutation; backfill and shadow reads |
+| `dataset_dimensions`, `dataset_columns`, `dataset_metrics` | Dataset service; chat, query generator, AI and DLM readers | Children inside the revisioned `dataset` document | Replace delete/reinsert autocommit flows with one source unit of work; preserve uniqueness and parent constraints |
+| `charts` | `services/charts.py`, dashboard rendering | `chart` product record | Define dataset reference extraction, stable legacy-ID mapping, outbox, backfill and visibility parity |
+| `dashboards` | `services/dashboards.py`, DLM/dashboard routes | `dashboard` product record | Define chart/filter-dataset references at one revision; outbox, backfill and shadow rendering |
+| `favorites` | `services/favorites.py`, dashboard and data-source routes | No typed favorite record yet | Add owner-unique favorite type and atomic dashboard/favorite behavior |
+| `saved_queries` | `services/saved_queries.py` | `saved_query` product record | Outbox, backfill, owner/role parity and cutover |
+| `user_themes` | `services/theme.py` | `user_theme` product record | Outbox, backfill and owner-key reconciliation |
+| `user_recents` | `services/user_recents.py`, dashboard cleanup | No destination | Define bounded ordered personal-state record and retention |
+| `query_history` | `services/query_history.py`, DLM usage | No destination | Partitioned append path, stable cursor ordering, retention and payload policy |
+| `activity` | Catalog-source audit paths | No destination | Immutable audit schema, retention and actor identity |
+| `context_snapshots`, `context_answer_cache` | `dlm/profiler.py`, context routes | Rebuilt derived state | Define generation publication and cache retention; rebuild after dataset cutover |
+| `dlm_artifact`, `dlm_value_index`, `dlm_router`, `dlm_answers`, `dlm_sketch` | `dlm/engine.py`, profiler/router and DLM routes | Rebuilt derived state | Publish a complete generation against one dataset/source revision; prevent stale routing |
+| `chat_sessions`, `chat_messages` | `routers/chat_history.py`, `routers/chat.py`; created by `data/migrations/chat_history.sql` | No destination | Owner-scoped ordered append, atomic message/session update, encryption and deletion policy |
+| `ai_providers`, `user_ai_keys` | `services/ai_service.py`; created at runtime | Key-managed secret boundary plus non-secret references | Keep encrypted keys outside ordinary product documents; define provider metadata authority and rotation references |
+
+The PostgreSQL schema now includes `product_migration_outbox`. It is migration
+infrastructure rather than a KaveonDB destination. `database.metadata.transaction`
+pins one PostgreSQL connection and commits or rolls back all statements together.
+`services.product_outbox.enqueue` writes a canonical, content-hashed event inside
+that same transaction, assigns a monotonic source sequence, bounds payloads, and
+rejects reuse of an event UUID with different content.
+
+No production writer uses the unit of work yet. That is deliberate: enabling an
+outbox before the schema migration is applied would break writes, while adding
+it after a mutation would lose atomicity. The next implementation slice must
+apply the schema, then move one complete repository family—datasets and semantic
+children are the strongest first candidate—into the unit of work with failure
+injection after every statement.
+
+PostgreSQL retirement still requires a discovered live-schema report because
+runtime and older deployments may contain tables absent from current source.
+Backfill/replay must reconcile IDs, owners, visibility, references and canonical
+payload hashes at a recorded source sequence. Cutover additionally requires a
+write fence, zero outbox lag, role-filtered shadow-read parity, restart and
+backup/restore evidence, and a tested rollback window.

@@ -149,6 +149,11 @@ and transactions instead of arbitrary metadata SQL.
 
 ### Stage 0 — contract and PostgreSQL transaction repair
 
+Status: **foundation implemented, repository conversion pending.** PostgreSQL
+has a connection-pinned unit-of-work API and a bounded, sequenced, canonical
+product migration outbox with event-ID/digest replay validation. No repository
+family uses it yet, and therefore the Stage 0 exit gate has not passed.
+
 Define typed schemas, canonical JSON/timestamp encodings, immutable
 tenant/subject identity, foreign and unique constraints, revision tokens,
 idempotency keys and retention classes. Add a PostgreSQL unit-of-work API and
