@@ -7,7 +7,7 @@ import { useAuth } from "../../../auth/useAuth";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useRole } from "../../../hooks/useRole";
 import { Button } from "../../../components/Button";
-import { ListPageShell } from "../../../components/ListPageShell";
+import { SettingsSection } from "../SettingsSection";
 
 interface AIProvider {
   id: number;
@@ -148,10 +148,10 @@ export default function AISettingsPage() {
   };
 
   return (
-    <ListPageShell
-      icon="fa-magic"
-      title="AI Providers"
-      subtitle="Configure AI API keys to power the Kaveon AI Assistant."
+    <SettingsSection
+      icon="fa-key"
+      title="AI providers"
+      subtitle="API keys for the Kaveon assistant. Global keys apply to everyone; a personal key is yours alone."
       pills={!loading && !error ? [
         { label: `${providers.length} Global Key${providers.length !== 1 ? "s" : ""}`, icon: "fa-shield-alt" },
         { label: `${userKeys.length} Personal Key${userKeys.length !== 1 ? "s" : ""}`, icon: "fa-user", bg: "#f5f3ff", border: "#c4b5fd", color: "#7c3aed" },
@@ -331,7 +331,7 @@ export default function AISettingsPage() {
           onSuccess={() => { setShowPersonalModal(false); void load(); }}
         />
       )}
-    </ListPageShell>
+    </SettingsSection>
   );
 }
 
