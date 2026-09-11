@@ -48,6 +48,9 @@ pub struct AppState {
     pub catalog: RwLock<Arc<PublishedCatalog>>,
     pub catalog_store: kaveon_catalog::CatalogStore,
     pub exchange_store: exchange::ExchangeStore,
+    /// Shared transport for worker and exchange traffic. Reusing it preserves
+    /// DNS resolution and idle connections across tasks in the same process.
+    pub internal_http_client: reqwest::Client,
     pub lifecycle: lifecycle::WorkerLifecycle<transport::CachedTaskResult>,
     pub memory_admission: kaveon_core::MemoryAdmissionController,
     pub product_transactions: transaction_api::TransactionRegistry,
@@ -167,6 +170,7 @@ async fn main() {
         })),
         catalog_store,
         exchange_store: exchange::ExchangeStore::default(),
+        internal_http_client: reqwest::Client::new(),
         lifecycle: lifecycle::WorkerLifecycle::default(),
         memory_admission,
         // Product transactions fail closed until an ADLS-backed product store
