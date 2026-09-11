@@ -16,6 +16,7 @@ from services.query_history_backfill import document as migration_document
 import os
 import logging
 MAX_DELETE_FANOUT=100
+MAX_HISTORY_PER_OWNER=1_000
 
 
 _BASE_COLS = (
@@ -169,8 +170,14 @@ def create_history(data: dict, user_id: str) -> dict:
     }
     if os.getenv("KAVEON_QUERY_HISTORY_OUTBOX_ENABLED")=="true":
         with db.transaction() as transaction:
+            transaction.execute("SELECT pg_advisory_xact_lock(hashtext(@param0))",[user_id])
             transaction.execute(sql,params)
             product_outbox.enqueue(transaction,family="query_history",operation="create",record_id=new_id,payload=migration_document(result),actor=user_id,owner=user_id)
+            evicted=transaction.query("SELECT id FROM query_history WHERE user_email=@param0 ORDER BY executed_at DESC,id DESC OFFSET @param1 LIMIT 2 FOR UPDATE",[user_id,MAX_HISTORY_PER_OWNER])["rows"]
+            if len(evicted)>1:raise RuntimeError("query history retention requires bounded cleanup")
+            if evicted:
+                transaction.execute("DELETE FROM query_history WHERE id=@param0",[evicted[0]["id"]])
+                product_outbox.enqueue(transaction,family="query_history",operation="delete",record_id=str(evicted[0]["id"]),payload={},actor=user_id,owner=user_id)
     else: db.query(sql,params)
 
     return {
