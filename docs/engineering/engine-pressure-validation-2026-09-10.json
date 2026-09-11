@@ -1,0 +1,327 @@
+{
+  "benchmark": false,
+  "workers": 2,
+  "rows": 100000,
+  "timestamp_utc": "2026-09-11T00:28:48.956999+00:00",
+  "platform": "Windows-10-10.0.26200-SP0",
+  "configured_query_pool_bytes": 268435456,
+  "rss_is_logical_pool_limit": false,
+  "rss_note": "25ms sampled native process RSS includes allocator/Arrow/storage/transport/runtime memory outside logical operator estimates; peaks between samples may be missed.",
+  "binary_sha256": "626ace17d3c36c4a75c8f32598fddab482d333fb965ca1e4bf1ec280b072336b",
+  "source_binary": "D:\\Repos\\PruthviProdduturi\\Kaveon\\engine\\target\\release\\kaveon-server.exe",
+  "commit": "819f9777c22131c2727ed33621f00d6757df7ff9",
+  "working_tree": [],
+  "versions": {
+    "duckdb": "1.5.5",
+    "pyarrow": "25.0.1",
+    "psutil": "7.0.0"
+  },
+  "cases": [
+    {
+      "name": "grouped_spill",
+      "sql": "SELECT id, COUNT(*) FROM facts GROUP BY id",
+      "expect_budget_rejection": false,
+      "passed": true,
+      "configured_query_pool_bytes": 268435456,
+      "configured_spill_pool_bytes": 268435456,
+      "requires_observed_spill": true,
+      "status": 200,
+      "query_id": "09fd36e7-c4d4-4adb-aca5-0504e678e04e",
+      "state": "FINISHED",
+      "rows": 100000,
+      "result_sha256": "9d5d95379a5e16790d46424251743eea5d9d5ff2ab1dac25e6098bd01500a8b6",
+      "spill_files_cleaned": true,
+      "elapsed_ms": 3968.0,
+      "observed": {
+        "samples": 119,
+        "peak_rss_bytes_by_pid": {
+          "19924": 33251328,
+          "16104": 40615936,
+          "12440": 52211712
+        },
+        "peak_spill_bytes": 4814184,
+        "peak_spill_files": 91
+      },
+      "spill_observed": true
+    },
+    {
+      "name": "join",
+      "sql": "SELECT COUNT(*) FROM facts f JOIN dimensions d ON f.id = d.id",
+      "expect_budget_rejection": false,
+      "passed": true,
+      "configured_query_pool_bytes": 268435456,
+      "configured_spill_pool_bytes": 268435456,
+      "requires_observed_spill": false,
+      "status": 200,
+      "query_id": "7315aa7c-1a7c-4cf5-a434-200fedc6e28a",
+      "state": "FINISHED",
+      "rows": 1,
+      "result_sha256": "fd522a3224b734c66278ebd3d306cb41b97181469959eaf5ccaead2eb7c36659",
+      "spill_files_cleaned": true,
+      "elapsed_ms": 204.0,
+      "observed": {
+        "samples": 8,
+        "peak_rss_bytes_by_pid": {
+          "19924": 31141888,
+          "16104": 31334400,
+          "12440": 31510528
+        },
+        "peak_spill_bytes": 0,
+        "peak_spill_files": 0
+      }
+    },
+    {
+      "name": "sort_spill",
+      "sql": "SELECT id FROM facts ORDER BY id DESC",
+      "expect_budget_rejection": false,
+      "passed": true,
+      "configured_query_pool_bytes": 268435456,
+      "configured_spill_pool_bytes": 268435456,
+      "requires_observed_spill": false,
+      "status": 200,
+      "query_id": "b2e3308d-a2bd-4312-b562-4fb5012e5d10",
+      "state": "FINISHED",
+      "rows": 100000,
+      "result_sha256": "acce100406906a71a9948731fe1e373b0819d932ecde16f7fc12d8b581b61cbc",
+      "spill_files_cleaned": true,
+      "elapsed_ms": 3578.0,
+      "observed": {
+        "samples": 108,
+        "peak_rss_bytes_by_pid": {
+          "19924": 31956992,
+          "16104": 31830016,
+          "12440": 30560256
+        },
+        "peak_spill_bytes": 0,
+        "peak_spill_files": 0
+      }
+    },
+    {
+      "name": "topn",
+      "sql": "SELECT id FROM facts ORDER BY id DESC LIMIT 20",
+      "expect_budget_rejection": false,
+      "passed": true,
+      "configured_query_pool_bytes": 268435456,
+      "configured_spill_pool_bytes": 268435456,
+      "requires_observed_spill": false,
+      "status": 200,
+      "query_id": "89e3d895-04d6-469f-9dec-0eccb83ce0b7",
+      "state": "FINISHED",
+      "rows": 20,
+      "result_sha256": "6031cba8bba5f4a3688e3843e7857260b3da357a071a6a5d381e783aac25ef82",
+      "spill_files_cleaned": true,
+      "elapsed_ms": 78.0,
+      "observed": {
+        "samples": 4,
+        "peak_rss_bytes_by_pid": {
+          "19924": 31465472,
+          "16104": 31830016,
+          "12440": 30617600
+        },
+        "peak_spill_bytes": 0,
+        "peak_spill_files": 0
+      }
+    },
+    {
+      "name": "set_operation",
+      "sql": "SELECT id FROM tiny INTERSECT SELECT id FROM dimensions",
+      "expect_budget_rejection": false,
+      "passed": true,
+      "configured_query_pool_bytes": 268435456,
+      "configured_spill_pool_bytes": 268435456,
+      "requires_observed_spill": false,
+      "status": 200,
+      "query_id": "ccb350cf-3a69-4afc-a100-7222c238e4a4",
+      "state": "FINISHED",
+      "rows": 100,
+      "result_sha256": "a8fb90a0acdf9c2690c1437f2846c1dc86e140e75fde2ebcc732d16aa960cd80",
+      "spill_files_cleaned": true,
+      "elapsed_ms": 62.0,
+      "observed": {
+        "samples": 3,
+        "peak_rss_bytes_by_pid": {
+          "19924": 31789056,
+          "16104": 31150080,
+          "12440": 30617600
+        },
+        "peak_spill_bytes": 0,
+        "peak_spill_files": 0
+      }
+    },
+    {
+      "name": "bounded_window",
+      "sql": "SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS n FROM tiny",
+      "expect_budget_rejection": false,
+      "passed": true,
+      "configured_query_pool_bytes": 268435456,
+      "configured_spill_pool_bytes": 268435456,
+      "requires_observed_spill": false,
+      "status": 200,
+      "query_id": "2def90fe-4cce-433f-aa66-46cae0e7add9",
+      "state": "FINISHED",
+      "rows": 1000,
+      "result_sha256": "ed4d5beba73495595acf0f1d6f23a598dab9da358e3207a8177b9f8de4dbb9b1",
+      "spill_files_cleaned": true,
+      "elapsed_ms": 110.0,
+      "observed": {
+        "samples": 4,
+        "peak_rss_bytes_by_pid": {
+          "19924": 32088064,
+          "16104": 31203328,
+          "12440": 30621696
+        },
+        "peak_spill_bytes": 0,
+        "peak_spill_files": 0
+      }
+    },
+    {
+      "name": "skew_join_rejection",
+      "sql": "SELECT COUNT(*) FROM skew l JOIN skew r ON l.k = r.k",
+      "expect_budget_rejection": true,
+      "passed": true,
+      "configured_query_pool_bytes": 268435456,
+      "configured_spill_pool_bytes": 268435456,
+      "requires_observed_spill": false,
+      "status": 500,
+      "query_id": null,
+      "state": null,
+      "error": "worker 'pressure-mixed-2' failed task with 429 Too Many Requests: {\"error\":\"execution: memory admission rejected query budget of 268435456 bytes: 268435456 of 268435456 bytes already admitted\"}; worker 'pressure-mixed-1' failed task with 429 Too Many Requests: {\"error\":\"execution: memory admission rejected query budget of 268435456 bytes: 268435456 of 268435456 bytes already admitted\"}; worker 'pressure-mixed-2' failed task with 500 Internal Server Error: {\"error\":\"arrow: Io error: execution: spill limit exceeded: cannot write 133120 bytes with 268360640 of 268435456 bytes already used\"}; worker 'pressure-mixed-1' failed task with 500 Internal Server Error: {\"error\":\"arrow: Io error: execution: spill limit exceeded: cannot write 133120 bytes with 268360640 of 268435456 bytes already used\"}; worker 'pressure-mixed-2' failed task with 500 Internal Server Error: {\"error\":\"arrow: Io error: execution: spill limit exceeded: cannot write 133120 bytes with 268360640 of 268435456 bytes already used\"}",
+      "spill_files_cleaned": true,
+      "elapsed_ms": 18109.0,
+      "observed": {
+        "samples": 567,
+        "peak_rss_bytes_by_pid": {
+          "19924": 32411648,
+          "16104": 38080512,
+          "12440": 37756928
+        },
+        "peak_spill_bytes": 259161920,
+        "peak_spill_files": 17
+      }
+    },
+    {
+      "name": "window_rejection",
+      "sql": "SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS n FROM window_pressure",
+      "expect_budget_rejection": true,
+      "passed": true,
+      "configured_query_pool_bytes": 268435456,
+      "configured_spill_pool_bytes": 268435456,
+      "requires_observed_spill": false,
+      "status": 500,
+      "query_id": null,
+      "state": null,
+      "error": "worker 'pressure-mixed-1' failed task with 500 Internal Server Error: {\"error\":\"execution: query 'df2ac5d8-0803-4d9a-a125-221edcef1573:1:0:0' operator 'fragment-window' cannot reserve 562323456 bytes: 2132992 of 268435456 bytes already reserved\"}; worker 'pressure-mixed-2' failed task with 500 Internal Server Error: {\"error\":\"execution: query 'df2ac5d8-0803-4d9a-a125-221edcef1573:1:0:1' operator 'fragment-window' cannot reserve 562323456 bytes: 2132992 of 268435456 bytes already reserved\"}; worker 'pressure-mixed-1' failed task with 500 Internal Server Error: {\"error\":\"execution: query 'df2ac5d8-0803-4d9a-a125-221edcef1573:1:0:2' operator 'fragment-window' cannot reserve 562323456 bytes: 2132992 of 268435456 bytes already reserved\"}",
+      "spill_files_cleaned": true,
+      "elapsed_ms": 172.0,
+      "observed": {
+        "samples": 7,
+        "peak_rss_bytes_by_pid": {
+          "19924": 32178176,
+          "16104": 34590720,
+          "12440": 32403456
+        },
+        "peak_spill_bytes": 0,
+        "peak_spill_files": 0
+      }
+    },
+    {
+      "name": "repeat_rejection",
+      "sql": "SELECT REPEAT('x', 1000000000) FROM tiny LIMIT 1",
+      "expect_budget_rejection": true,
+      "passed": true,
+      "configured_query_pool_bytes": 268435456,
+      "configured_spill_pool_bytes": 268435456,
+      "requires_observed_spill": false,
+      "status": 500,
+      "query_id": null,
+      "state": null,
+      "error": "worker 'pressure-mixed-1' failed task with 500 Internal Server Error: {\"error\":\"execution: string expression output exceeds 67108864 bytes per batch\"}; worker 'pressure-mixed-2' failed task with 500 Internal Server Error: {\"error\":\"execution: string expression output exceeds 67108864 bytes per batch\"}; worker 'pressure-mixed-1' failed task with 500 Internal Server Error: {\"error\":\"execution: string expression output exceeds 67108864 bytes per batch\"}",
+      "spill_files_cleaned": true,
+      "elapsed_ms": 47.0,
+      "observed": {
+        "samples": 2,
+        "peak_rss_bytes_by_pid": {
+          "19924": 32190464,
+          "16104": 31387648,
+          "12440": 30953472
+        },
+        "peak_spill_bytes": 0,
+        "peak_spill_files": 0
+      }
+    },
+    {
+      "name": "diskquota_rejection",
+      "sql": "SELECT id, COUNT(*) FROM facts GROUP BY id",
+      "expect_budget_rejection": true,
+      "passed": true,
+      "configured_query_pool_bytes": 33554432,
+      "configured_spill_pool_bytes": 1024,
+      "requires_observed_spill": false,
+      "status": 500,
+      "query_id": null,
+      "state": null,
+      "error": "execution error: arrow: Io error: execution: spill limit exceeded: cannot write 4160 bytes with 320 of 1024 bytes already used",
+      "spill_files_cleaned": true,
+      "elapsed_ms": 94.0,
+      "observed": {
+        "samples": 4,
+        "peak_rss_bytes_by_pid": {
+          "30796": 37777408
+        },
+        "peak_spill_bytes": 0,
+        "peak_spill_files": 0
+      }
+    },
+    {
+      "name": "cancel_running_window",
+      "sql": "SELECT SUM(id) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running FROM cancel_values",
+      "passed": true,
+      "configured_query_pool_bytes": 268435456,
+      "configured_spill_pool_bytes": 268435456,
+      "running_before_cancel_ms": 296.0,
+      "query_id": "435bbfed-546e-4fdd-ad7b-4928e5843776",
+      "cancel_status": 204,
+      "statement_status": 409,
+      "terminal_state": null,
+      "error": "query canceled",
+      "spill_files_cleaned": true,
+      "cancel_to_admission_recovery_ms": 63.0,
+      "elapsed_ms": 359.0,
+      "observed": {
+        "samples": 12,
+        "peak_rss_bytes_by_pid": {
+          "9304": 19718144
+        },
+        "peak_spill_bytes": 0,
+        "peak_spill_files": 0
+      }
+    }
+  ],
+  "fixtures": {
+    "facts": {
+      "rows": 100000,
+      "sha256": "b9163e77bd6712715c563ab3f284077c37a3794bfada4e3e023a29986c4f7010"
+    },
+    "dimensions": {
+      "rows": 10000,
+      "sha256": "764ff869e7187ebdbb0f3ae7af6a34951162fc4ae3e2094cfdfc72373cbde53f"
+    },
+    "skew": {
+      "rows": 5000,
+      "sha256": "113e955b96052da6162fc8c0108b9e64dd2b86424ea64a1c40ff51495283129c"
+    },
+    "tiny": {
+      "rows": 1000,
+      "sha256": "cb097ea4fd43c0d6ef4c763f5d6089b3e5428aebc985a2b1c6cc02c0d4fd2600"
+    },
+    "cancel_values": {
+      "rows": 30000,
+      "sha256": "d834414dc66b0c9538325d4c445dee243d1150238142e462e61da7d1341cdf27"
+    },
+    "window_pressure": {
+      "rows": 262144,
+      "sha256": "9b32f625f27384164171fcacb823f1fc9024f3448aa9bf476914ab936c9af9ab"
+    }
+  },
+  "passed": true
+}
