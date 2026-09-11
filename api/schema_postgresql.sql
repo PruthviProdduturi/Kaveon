@@ -272,12 +272,18 @@ CREATE TABLE IF NOT EXISTS product_migration_outbox (
                     (OCTET_LENGTH(payload_json) <= 16777216),
     payload_sha256  CHAR(64)     NOT NULL,
     actor_principal VARCHAR(255) NOT NULL,
+    owner_principal VARCHAR(255) NOT NULL,
     created_at      TIMESTAMP    NOT NULL DEFAULT NOW(),
     applied_at      TIMESTAMP    NULL,
     target_generation BIGINT     NULL,
     apply_attempts  INTEGER      NOT NULL DEFAULT 0,
     last_error_code VARCHAR(100) NULL
 );
+ALTER TABLE product_migration_outbox ADD COLUMN IF NOT EXISTS owner_principal VARCHAR(255);
+UPDATE product_migration_outbox
+SET owner_principal = actor_principal
+WHERE owner_principal IS NULL;
+ALTER TABLE product_migration_outbox ALTER COLUMN owner_principal SET NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_product_outbox_unapplied
     ON product_migration_outbox(source_sequence) WHERE applied_at IS NULL;
 

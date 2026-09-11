@@ -35,8 +35,19 @@ Dataset create/update/delete now use the unit of work and append exactly one
 canonical event after all parent/child statements. Update locks the parent and
 rejects a stale pre-lock revision; child or outbox failures roll the source
 mutation back. Dataset deletion rejects dependent charts so PostgreSQL cannot
-perform a cascade that the dataset event failed to capture. This code must not be deployed before the outbox schema is
-applied. No replay consumer or KaveonDB write is enabled yet.
+perform a cascade that the dataset event failed to capture. This code must not
+be deployed before the outbox schema is applied. No replay process or KaveonDB
+write is enabled yet.
+
+The API contains a bounded ordered replay service, but no scheduler or operator
+command invokes it. It validates each stored payload hash, applies as the
+original record owner through the typed KaveonDB transaction client, and
+acknowledges the locked PostgreSQL event only after target success. If the
+target response is lost, replay accepts only an exact committed document; a
+differing record fails closed. Deletes likewise resolve an already-absent
+target. Failures record a bounded code and stop the batch before later source
+sequences. This closes the application algorithm boundary, not its live
+durability qualification.
 
 PostgreSQL retirement still requires a discovered live-schema report because
 runtime and older deployments may contain tables absent from current source.

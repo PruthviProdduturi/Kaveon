@@ -1,7 +1,9 @@
 import hashlib
+import contextlib
 import sys
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 if "pyodbc" not in sys.modules:
     sys.modules["pyodbc"] = SimpleNamespace(Error=Exception)
@@ -22,7 +24,13 @@ class FakeTransaction:
             "operation": params[2],
             "record_id": params[3],
             "payload_sha256": params[5],
+            "actor_principal": params[6],
+            "owner_principal": params[7],
         }
+
+    def execute(self, sql, params):
+        self.calls.append((sql, params))
+        return 1
 
 
 class ProductOutboxTests(unittest.TestCase):
@@ -51,6 +59,8 @@ class ProductOutboxTests(unittest.TestCase):
             "operation": "update",
             "record_id": "42",
             "payload_sha256": "0" * 64,
+            "actor_principal": "alice@example.com",
+            "owner_principal": "alice@example.com",
         })
         with self.assertRaisesRegex(ValueError, "different request"):
             product_outbox.enqueue(
@@ -88,6 +98,38 @@ class ProductOutboxTests(unittest.TestCase):
                 actor="alice@example.com",
             )
         self.assertEqual(transaction.calls, [])
+
+    def test_acknowledgment_locks_and_hash_checks_before_update(self):
+        transaction = FakeTransaction({"payload_sha256": "a" * 64, "applied_at": None})
+        with patch.object(
+            product_outbox.db, "transaction",
+            return_value=contextlib.nullcontext(transaction),
+        ):
+            self.assertTrue(product_outbox.mark_applied("event", "a" * 64, 9))
+        self.assertEqual(len(transaction.calls), 2)
+        self.assertIn("FOR UPDATE", transaction.calls[0][0])
+        self.assertIn("applied_at = NOW()", transaction.calls[1][0])
+
+    def test_acknowledgment_rejects_changed_source_event_without_update(self):
+        transaction = FakeTransaction({"payload_sha256": "b" * 64, "applied_at": None})
+        with patch.object(
+            product_outbox.db, "transaction",
+            return_value=contextlib.nullcontext(transaction),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "changed"):
+                product_outbox.mark_applied("event", "a" * 64, 9)
+        self.assertEqual(len(transaction.calls), 1)
+
+    def test_failure_recording_is_classified_and_does_not_apply_event(self):
+        transaction = FakeTransaction({"payload_sha256": "a" * 64, "applied_at": None})
+        with patch.object(
+            product_outbox.db, "transaction",
+            return_value=contextlib.nullcontext(transaction),
+        ):
+            product_outbox.record_failure("event", "a" * 64, "engine_http_502")
+        self.assertEqual(len(transaction.calls), 2)
+        self.assertIn("apply_attempts = apply_attempts + 1", transaction.calls[1][0])
+        self.assertNotIn("applied_at = NOW()", transaction.calls[1][0])
 
 
 if __name__ == "__main__":

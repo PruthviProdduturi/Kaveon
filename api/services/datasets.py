@@ -246,6 +246,7 @@ def create_dataset(data: dict, user_id: str) -> dict:
             record_id=str(dataset_id),
             payload=_dataset_product_document_from_source(transaction, dataset_id),
             actor=user_id,
+            owner=user_id,
         )
 
     created = get_dataset_by_id(str(dataset_id))
@@ -400,6 +401,7 @@ def update_dataset(dataset_id: str, data: dict, user_id: str) -> Optional[dict]:
             record_id=str(did),
             payload=_dataset_product_document_from_source(transaction, did),
             actor=user_id,
+            owner=existing["created_by"],
         )
 
     return get_dataset_by_id(dataset_id)
@@ -409,7 +411,7 @@ def delete_dataset(dataset_id: str, user_id: str) -> bool:
     did = int(dataset_id)
     with db.transaction() as transaction:
         existing = transaction.query_one(
-            "SELECT id FROM datasets WHERE id = @param0 FOR UPDATE", [did]
+            "SELECT id, created_by FROM datasets WHERE id = @param0 FOR UPDATE", [did]
         )
         if not existing:
             return False
@@ -429,6 +431,7 @@ def delete_dataset(dataset_id: str, user_id: str) -> bool:
             record_id=str(did),
             payload={"id": str(did), "deleted": True},
             actor=user_id,
+            owner=existing["created_by"],
         )
         return deleted
 

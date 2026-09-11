@@ -43,6 +43,11 @@ writes now append exactly one event in that transaction. This is source capture,
 not migration completion: the schema is not deployed and no replay, backfill,
 reconciliation, shadow read or cutover is enabled.
 
+A bounded replay library now processes source sequence order and resolves an
+ambiguous target response only from exact committed KaveonDB content. It is not
+wired to a scheduler or deployment, and no backfill watermark exists. Therefore
+it provides no evidence that current PostgreSQL rows are present in KaveonDB.
+
 PostgreSQL may be retired only after one repeatable migration command proves all
 of the following against a preserved backup:
 
