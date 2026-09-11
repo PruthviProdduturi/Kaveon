@@ -1,9 +1,10 @@
-import contextlib,sys,unittest
+import contextlib,sys,tempfile,unittest
+from pathlib import Path
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 if "pyodbc" not in sys.modules:sys.modules["pyodbc"]=SimpleNamespace(Error=Exception)
-from services import query_history_backfill as b,query_history,product_shadow_read
+from services import query_history_backfill as b,query_history_backfill_operation as operation,query_history,product_shadow_read
 def row(id="q1",owner="a"):
  return {"id":id,"sql_text":"SELECT 1","database_name":"db","executed_at":datetime(2026,1,1),"execution_time":1,"row_count":1,"status":"success","error_message":None,"user_email":owner,"trigger_source":"lab","dataset_id":None,"tables_used":"[]"}
 class Tx:
@@ -18,6 +19,7 @@ class Tests(unittest.TestCase):
   tx=Tx(rows=[[row("q2"),row("q1")]])
   with patch.object(b.db,"transaction",return_value=transaction(tx)):snapshot=b.capture_snapshot()
   self.assertEqual([r.record_id for r in snapshot.records],["q1","q2"]);b.validate(snapshot)
+  self.assertIn("ROW_NUMBER() OVER",tx.calls[2][1]);self.assertEqual(tx.calls[2][2][0],b.MAX_PER_OWNER)
   targets=[None,None,*({"document":r.document} for r in snapshot.records)]
   with patch.object(b.product_store,"read",side_effect=targets),patch.object(b.product_store,"transact") as transact:self.assertEqual(b.apply_and_reconcile(snapshot)["created"],2)
   self.assertEqual(transact.call_count,2)
@@ -36,4 +38,16 @@ class Tests(unittest.TestCase):
   with patch.dict("os.environ",{"KAVEON_QUERY_HISTORY_SHADOW_READ_ENABLED":"true"}),patch.object(product_shadow_read.product_store,"read",return_value={"document":b.document(source)}) as read:
    self.assertEqual(product_shadow_read.observe_query_history_list([source],"a")["status"],"match")
   self.assertEqual(read.call_args.args[2],"a")
+ def test_checkpoint_resume_tamper_and_apply_gate(self):
+  tx=Tx(rows=[[row()]])
+  with patch.object(b.db,"transaction",return_value=transaction(tx)):snapshot=b.capture_snapshot()
+  with tempfile.TemporaryDirectory() as directory:
+   path=Path(directory)/"query-history.json"
+   with patch.object(operation.backfill,"capture_snapshot",return_value=snapshot):operation.run(path,apply=False,resume=False)
+   original=path.read_text();path.write_text(original.replace('"next_index":0','"next_index":1'))
+   with self.assertRaisesRegex(RuntimeError,"identity"):operation.load(path)
+   path.write_text(original)
+   with self.assertRaisesRegex(RuntimeError,"KAVEON_QUERY_HISTORY_MIGRATION_ENABLED"):operation.run(path,apply=True,resume=True)
+   with patch.dict("os.environ",{"KAVEON_QUERY_HISTORY_MIGRATION_ENABLED":"true"}),patch.object(operation.backfill,"apply_and_reconcile",return_value={"family":"query_history"}):report=operation.run(path,apply=True,resume=True)
+   self.assertTrue(report["checkpoint_complete"]);self.assertTrue(operation.load(path)[2])
 if __name__=="__main__":unittest.main()
