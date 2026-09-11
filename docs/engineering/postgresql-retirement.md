@@ -174,6 +174,12 @@ publisher reconciles ambiguous writes from exact remote bytes, but production
 use remains blocked on a deployed ADLS client and provenance for every sealed
 path/hash.
 
+A credential-free rehearsal bundle can now bind completed definition/run
+checkpoints, artifact receipts, source watermarks, exact revision bindings,
+KaveonDB snapshot/generations and reconciliation results. Its verifier rejects
+stale or incomplete evidence. It is scoped DLM migration evidence and does not
+replace the complete authority-family retirement gate.
+
 Deleting the StatefulSet or PVC before these gates would remove the current
 product metadata authority and break Studio even though ADLS analytical queries
 remain available.
