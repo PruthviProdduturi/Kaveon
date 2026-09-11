@@ -33,6 +33,45 @@ spec:
         runAsGroup: 10001
         fsGroup: 10001
         seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: require-product-migration-schema
+          image: {{ include "portal.image" (list .Values.images.api "api") }}
+          command: [python, -c]
+          args:
+            - |
+              import os, time
+              import psycopg2
+              options = dict(host="kaveon-postgres", port="5432", dbname="kaveonmeta",
+                             user="kaveon", password=os.environ["METADATA_PASSWORD"])
+              for attempt in range(60):
+                  try:
+                      with psycopg2.connect(**options) as connection:
+                          with connection.cursor() as cursor:
+                              cursor.execute("""
+                                  SELECT EXISTS (
+                                    SELECT 1 FROM information_schema.columns
+                                    WHERE table_schema = 'public'
+                                      AND table_name = 'product_migration_outbox'
+                                      AND column_name = 'owner_principal'
+                                      AND is_nullable = 'NO'
+                                  )
+                              """)
+                              if cursor.fetchone()[0]:
+                                  break
+                  except psycopg2.OperationalError:
+                      pass
+                  if attempt == 59:
+                      raise RuntimeError("required product migration schema is unavailable")
+                  time.sleep(2)
+          env:
+            - {name: METADATA_PASSWORD, valueFrom: {secretKeyRef: {name: {{ required "secrets.portalAuth is required" .Values.secrets.portalAuth }}, key: METADATA_PASSWORD}}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 25m, memory: 64Mi}
+            limits: {cpu: 250m, memory: 256Mi}
       containers:
         - name: api
           image: {{ include "portal.image" (list .Values.images.api "api") }}
