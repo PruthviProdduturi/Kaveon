@@ -3289,8 +3289,18 @@ fn encode_arrow_stream(
     let mut bytes =
         crate::transport::BoundedBuffer::new(crate::transport::MAX_PAYLOAD_BYTES as usize);
     {
-        let mut writer = arrow::ipc::writer::StreamWriter::try_new(&mut bytes, schema)
-            .map_err(|error| format!("cannot create Arrow stream: {error}"))?;
+        // Exchange and result payloads are commonly dominated by repeated
+        // integer and string values. LZ4 keeps decoding inexpensive while
+        // reducing network transfer and the private receive spool. Arrow IPC
+        // readers negotiate the codec from each message, so this remains wire
+        // compatible with existing clients.
+        let options = arrow::ipc::writer::IpcWriteOptions::default()
+            .try_with_compression(Some(arrow::ipc::CompressionType::LZ4_FRAME))
+            .map_err(|error| format!("cannot configure Arrow stream: {error}"))?;
+        let mut writer = arrow::ipc::writer::StreamWriter::try_new_with_options(
+            &mut bytes, schema, options,
+        )
+        .map_err(|error| format!("cannot create Arrow stream: {error}"))?;
         for batch in batches {
             writer
                 .write(batch)
@@ -5626,6 +5636,26 @@ mod tests {
         let (decoded_schema, decoded_batches) = decode_arrow_stream(&bytes).unwrap();
         assert_eq!(decoded_schema, schema);
         assert_eq!(decoded_batches, vec![batch]);
+    }
+
+    #[test]
+    fn arrow_task_stream_compresses_repeated_exchange_values() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "region",
+            DataType::Utf8,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(StringArray::from(vec!["east"; 100_000]))],
+        )
+        .unwrap();
+
+        let bytes = encode_arrow_stream(&schema, std::slice::from_ref(&batch)).unwrap();
+
+        assert!(bytes.len() < batch.get_array_memory_size());
+        let (_, decoded) = decode_arrow_stream(&bytes).unwrap();
+        assert_eq!(decoded, vec![batch]);
     }
 
     #[test]
