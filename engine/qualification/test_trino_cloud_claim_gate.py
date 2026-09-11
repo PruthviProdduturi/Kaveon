@@ -8,13 +8,20 @@ from trino_cloud_claim_gate import evaluate
 
 
 def valid_report():
+    execution = {"0": {"samples": 1, "tasks_observed": 3, "tasks_with_metrics": 3,
+        "tasks_with_cpu": 3, "compute_cpu_us": 10, "exchange_input_bytes": 20,
+        "exchange_decode_bytes": 30, "exchange_decode_us": 4, "memory_peak_bytes": 40,
+        "spill_bytes_written": 0, "spill_runs_written": 0, "spill_compactions": 0,
+        "spill_compaction_input_bytes": 0}}
     objects = [{"path": name, "sha256": "a" * 64, "content_md5": "bWQ1", "bytes": 1, "parquet_data": name.endswith("parquet")}
                for name in ("events/data.parquet", "events/log", "customers/data.parquet", "customers/log")]
     cases = [{"name": name, "sql": sql, "passed": True, "result_sha256": "b" * 64,
               "kaveon_ms": [1] * 30, "trino_ms": [2] * 30,
+              "kaveon_execution_by_stage": copy.deepcopy(execution),
               "statistics": {engine: {key: 1 for key in ("min_ms", "median_ms", "p95_ms", "max_ms")}
                              for engine in ("kaveon", "trino")}} for name, sql in EXTENDED_QUERIES.items()]
     rounds = [{"round": index + 1, "order": ["trino", "kaveon"] if index % 2 == 0 else ["kaveon", "trino"],
+               "execution_by_stage": copy.deepcopy(execution),
                "worker_nodes": ["n1", "n2", "n3"], "worker_image_ids": ["image@sha256:" + "d" * 64]} for index in range(6)]
     return {"workers": 3, "manifest": {"dataset": {"rows": 5_000_000, "customers": 100_000, "objects": objects},
             "query_corpus": {"sha256": hashlib.sha256(json.dumps(EXTENDED_QUERIES, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
@@ -54,6 +61,14 @@ class CloudGateTests(unittest.TestCase):
         report = valid_report()
         report["co_tenant_observations"][3]["co_tenants"] = []
         self.assertIn("stable_recorded_co_tenants", evaluate(report)["failed_checks"])
+
+    def test_missing_or_partial_execution_metrics_fail(self):
+        report = valid_report()
+        del report["cases"][0]["kaveon_execution_by_stage"]
+        self.assertIn("kaveon_execution_metrics_retained", evaluate(report)["failed_checks"])
+        report = valid_report()
+        report["throughput"]["kaveon"][0]["execution_by_stage"]["0"]["tasks_with_cpu"] = 2
+        self.assertIn("kaveon_execution_metrics_retained", evaluate(report)["failed_checks"])
 
 
 if __name__ == "__main__":
