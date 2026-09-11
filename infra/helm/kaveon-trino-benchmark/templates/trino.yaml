@@ -49,6 +49,7 @@ data:
     connector.name=delta_lake
     hive.metastore=file
     hive.metastore.catalog.dir=file:///data/trino/metastore
+    fs.native-local.enabled=true
     fs.azure.enabled=true
     azure.auth-type=DEFAULT
     azure.application-id=KaveonQualification
