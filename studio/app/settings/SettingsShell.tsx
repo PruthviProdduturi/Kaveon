@@ -6,12 +6,11 @@ import { useRole } from "../../hooks/useRole";
 import s from "./settings.module.css";
 
 // Sections are either administration (connections, storage, maintenance) or
-// personal (AI keys, preferences). Everyone sees the shell; administration
+// personal (preferences). Everyone sees the shell; administration
 // sections explain themselves to non-administrators instead of bouncing them.
 const SECTIONS = [
   { href: "/settings/connections", label: "Connections", icon: "fa-plug", admin: true },
   { href: "/settings/storage", label: "Storage", icon: "fa-hard-drive", admin: true },
-  { href: "/settings/ai", label: "AI providers", icon: "fa-key", admin: false },
   { href: "/settings/maintenance", label: "Maintenance", icon: "fa-screwdriver-wrench", admin: true },
   { href: "/settings/preferences", label: "Preferences", icon: "fa-user-gear", admin: false },
 ] as const;

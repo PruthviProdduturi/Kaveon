@@ -40,7 +40,7 @@ export default function AuthDocs() {
           <tr><td><strong>Viewer</strong></td><td>Read published dashboards and charts</td></tr>
           <tr><td><strong>Analyst</strong></td><td>+ Run SQL, build charts and datasets</td></tr>
           <tr><td><strong>Editor</strong></td><td>+ Publish content, delete</td></tr>
-          <tr><td><strong>Admin</strong></td><td>+ Manage users, data sources, metadata server, AI keys</td></tr>
+          <tr><td><strong>Admin</strong></td><td>+ Manage users, data sources, metadata server</td></tr>
         </tbody>
       </table>
       <p>

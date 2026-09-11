@@ -210,23 +210,19 @@ and [Google's ID-token guidance](https://developers.google.com/identity/gsi/web/
 The API still identifies users by email; immutable provider-subject identity mapping
 and issuer-specific authorization scopes need further work.
 
-AI provider/user keys and Google OAuth client secrets now use the same explicit
-versioned keyring as data source credentials. New writes have no derived/default
+Google OAuth client secrets now use the same explicit versioned keyring as data
+source credentials. New writes have no derived/default
 key fallback. Legacy unversioned ciphertext is deliberately rejected at runtime;
 migrate it before rollout. From `api`, configure the new keyring and explicitly
 supply the exact original secret in `KAVEON_LEGACY_AI_ENCRYPTION_SECRET`, then run:
 
 ```powershell
-./venv/Scripts/python.exe -m services.migrate_credentials --scope ai-db
-./venv/Scripts/python.exe -m services.migrate_credentials --scope ai-db --write
 ./venv/Scripts/python.exe -m services.migrate_credentials --scope auth-env --auth-env-path PATH
 ./venv/Scripts/python.exe -m services.migrate_credentials --scope auth-env --auth-env-path PATH --write
 ```
 
-The first command for each scope validates decryption without writes. Database
-writes compare the original ciphertext before replacing each row; rerunning
-handles already-versioned rows. Quiesce auth configuration writes during file
-migration. Remove the legacy secret after migration and retain required prior
+The first command validates decryption without writes. Quiesce auth
+configuration writes during file migration. Remove the legacy secret after migration and retain required prior
 keyring entries through rotation. The migration never guesses a historical
 fallback and prints counts or sanitized errors only. No environment or database
 migration has been executed as part of this change.

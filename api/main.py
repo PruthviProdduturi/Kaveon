@@ -18,7 +18,6 @@ from database.warmup import start_warmup_and_heartbeat
 
 # Routers
 from routers import (
-    ai,
     auth,
     auth_config,
     catalog,
@@ -159,7 +158,6 @@ app.include_router(catalog.router,          prefix="/api/v1")
 app.include_router(setup.router,            prefix="/api/v1")
 app.include_router(users.router,            prefix="/api/v1")
 app.include_router(user_recents.router,     prefix="/api/v1")
-app.include_router(ai.router,               prefix="/api/v1")
 app.include_router(context.router,          prefix="/api/v1")
 app.include_router(dlm.router,              prefix="/api/v1")
 app.include_router(chat.router,             prefix="/api/v1")

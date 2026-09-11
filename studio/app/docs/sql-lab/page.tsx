@@ -8,7 +8,7 @@ export default function SqlLabDocs() {
       <PageHeader
         eyebrow="Studio"
         title="SQL Lab"
-        lead="A full query editor for exploring your data sources directly — Monaco-powered, multi-tab, with a live schema browser, cancellable execution, and inline AI. Open it from Lab in the sidebar."
+        lead="A full query editor for exploring your data sources directly — Monaco-powered, multi-tab, with a live schema browser and cancellable execution. Open it as the query mode of the Catalog."
       />
 
       <h2>Editor</h2>
@@ -100,11 +100,10 @@ export default function SqlLabDocs() {
         promote into a saved query. Both live under <code>/lab/queries</code>.
       </p>
 
-      <h2>Inline AI</h2>
+      <h2>Asking in plain language</h2>
       <p>
-        Press the <strong>✦ wand</strong> in the toolbar, describe what you want in plain English, and the generated
-        SQL is injected straight into the active tab — ready to review and run. For the full natural-language flow
-        (dataset detection, pattern matching, automatic charts) see{" "}
+        SQL Lab is for SQL. To ask a question in plain language, use Chat: the DLM resolves it deterministically
+        against the compiled dataset context, and the generated SQL is shown with the answer. See{" "}
         <a href="/docs/nl-to-sql">DLM · NL→SQL</a>.
       </p>
 
