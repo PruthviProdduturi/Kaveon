@@ -127,6 +127,13 @@ family is unclassified. This is source-code coverage rather than proof that a
 deployment has no older or dynamically constructed authority path; preserve the
 separate live-schema and runtime qualification gates.
 
+The first dataset shadow comparator is disabled by default and limited to
+authenticated point reads. Enabling it emits bounded content hashes and parity
+status while PostgreSQL still supplies the response. Retirement requires fresh
+aggregate evidence across representative roles, visibility states and changes;
+the existence of this comparator does not satisfy the shadow-read gate for
+datasets or any other family.
+
 Deleting the StatefulSet or PVC before these gates would remove the current
 product metadata authority and break Studio even though ADLS analytical queries
 remain available.

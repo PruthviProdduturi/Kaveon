@@ -13,6 +13,30 @@ if "pyodbc" not in sys.modules:
 from services import datasets
 
 
+class DatasetShadowIntegrationTests(unittest.TestCase):
+    def test_user_read_reports_shadow_without_changing_postgresql_response(self):
+        parent = {
+            "id": 7, "dataset_name": "Orders", "description": None,
+            "fact_table": "orders", "schema_name": "sales", "database_name": "lake",
+            "created_at": "created", "modified_at": "updated", "date_column": None,
+            "tables_used": '{"filters":[]}', "created_by": "alice@example.com",
+            "modified_by": "alice@example.com", "visibility": "private", "favorite": 1,
+        }
+        dimension = {"dimension_table": "region", "table_name": "region", "join_condition": "x.[Name]", "fact_key": "RegionKey", "join_key": "id", "dim_name": "region", "display_name": "Region"}
+        column = {"table_name": "region", "column_name": "Name", "data_type": "text", "is_dimension": True, "is_metric": False, "semantic_type": None}
+        metric = {"name": "Revenue", "expression": "SUM(revenue)", "metric_type": "sum", "format": None}
+        with patch.object(datasets.db, "query_one", return_value=parent), \
+             patch.object(datasets.db, "query", side_effect=[{"rows": [dimension]}, {"rows": [column]}, {"rows": [metric]}]), \
+             patch.object(datasets.product_shadow_read, "compare_dataset", return_value={"enabled": True, "status": "match"}) as compare:
+            result = datasets.get_dataset_by_id("7", "alice@example.com", "Viewer")
+        shadow_document, actor, role = compare.call_args.args
+        self.assertNotIn("favorite", shadow_document)
+        self.assertEqual(shadow_document["columns"], [column])
+        self.assertTrue(result["favorite"])
+        self.assertEqual(result["columns"][0]["fact_key"], "RegionKey")
+        self.assertEqual((actor, role), ("alice@example.com", "Viewer"))
+
+
 class AtomicWriter:
     def __init__(self, fail_at=None, dataset_id=7, modified_at="2026-09-10T10:00:00"):
         self.fail_at = fail_at

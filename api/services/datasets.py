@@ -1,12 +1,15 @@
 """Datasets service — port of datasets.service.ts."""
 
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import HTTPException
 import database.metadata as db
-from services import product_outbox
+from services import product_outbox, product_shadow_read
+
+logger = logging.getLogger(__name__)
 
 VALID_VISIBILITY = {"private", "internal", "published"}
 
@@ -166,7 +169,7 @@ def get_dataset_by_id(
         dims_result = db.query("""
             SELECT dimension_table, table_name, join_condition,
                    fact_key, join_key, dim_name, display_name
-            FROM dbo.dataset_dimensions WHERE dataset_id = @param0
+            FROM dbo.dataset_dimensions WHERE dataset_id = @param0 ORDER BY id
         """, [did])
         dataset["dimensions"] = dims_result["rows"]
     except Exception:
@@ -175,18 +178,18 @@ def get_dataset_by_id(
     try:
         cols_result = db.query("""
             SELECT table_name, column_name, data_type, is_dimension, is_metric, semantic_type
-            FROM dbo.dataset_columns WHERE dataset_id = @param0
+            FROM dbo.dataset_columns WHERE dataset_id = @param0 ORDER BY id
         """, [did])
         raw_cols = cols_result["rows"]
     except Exception:
         raw_cols = []
 
-    dataset["columns"] = _expand_columns_from_dimensions(raw_cols, dataset["dimensions"])
+    dataset["columns"] = raw_cols
 
     try:
         metrics_result = db.query("""
             SELECT metric_name as name, expression, metric_type, format
-            FROM dbo.dataset_metrics WHERE dataset_id = @param0
+            FROM dbo.dataset_metrics WHERE dataset_id = @param0 ORDER BY id
         """, [did])
         dataset["metrics"] = metrics_result["rows"]
     except Exception:
@@ -201,6 +204,17 @@ def get_dataset_by_id(
         except Exception:
             pass
     dataset["filters"] = filters
+
+    if user_email:
+        shadow_source = {key: value for key, value in dataset.items() if key != "favorite"}
+        try:
+            report = product_shadow_read.compare_dataset(shadow_source, user_email, role)
+            if report.get("enabled"):
+                logger.info("dataset_shadow_read %s", json.dumps(report, sort_keys=True))
+        except Exception as error:
+            logger.warning("dataset_shadow_read_error type=%s", type(error).__name__)
+
+    dataset["columns"] = _expand_columns_from_dimensions(raw_cols, dataset["dimensions"])
 
     return dataset
 

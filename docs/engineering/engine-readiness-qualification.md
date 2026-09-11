@@ -71,6 +71,10 @@ Three material boundaries prevent expanding this narrow 8/10 rating:
    sites against all 16 authority families. It catches new unclassified direct
    references but does not prove deployed runtime or dynamic-SQL coverage, so it
    is review evidence and adds no replacement readiness score by itself.
+   Dataset authenticated point reads now have a disabled bounded shadow
+   comparator that preserves the PostgreSQL response and emits hash-only parity
+   telemetry. It has not run in a live environment, covers no list/internal
+   read or write path, and earns no readiness score yet.
 3. The checked-in comparison gates fail closed because no publication-scale
    1.90× Trino result or completed PostgreSQL transaction report exists.
 

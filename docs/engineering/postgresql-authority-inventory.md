@@ -109,3 +109,10 @@ paths, access modes, families and table names only. A new database call that
 mentions a maintained authority table fails until its cutover dependency is
 classified. Dynamic SQL must still receive code review because static parsing
 cannot infer a table name constructed entirely at runtime.
+
+Datasets now have a first disabled shadow-read call site on authenticated point
+reads. When explicitly enabled, it compares the canonical PostgreSQL dataset
+document with one KaveonDB owner-scoped read under the requesting actor and role,
+then emits hash/size/generation telemetry only. It never changes the returned
+PostgreSQL object and does not cover lists, internal reads or writes. This is a
+parity observation boundary, not a read switch or cutover gate result.
