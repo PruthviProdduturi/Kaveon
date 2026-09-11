@@ -323,3 +323,15 @@ revision, CAS conflicts/retries, validation failures, idempotency replays,
 orphan bytes/age, garbage collection, source/target watermark lag, mismatches,
 fencing duration, and rollback state. Use IDs and classified error codes rather
 than query text, chat content, credentials, or cached result payloads.
+
+## Dataset shadow point reads
+
+Set `KAVEON_DATASET_SHADOW_READ_ENABLED=true` to compare authenticated
+single-dataset reads. The control defaults off. The comparator removes the
+requester's PostgreSQL-only favorite decoration, retains canonical raw semantic
+children, and performs one owner-scoped KaveonDB point read using the same actor
+and role. Each canonical document is capped at 1 MiB. Logs contain only record
+ID, status, byte counts, SHA-256 identities and target generation; errors are
+reduced to exception type. PostgreSQL still supplies the unchanged response.
+List reads, internal service reads and every write path remain outside this
+first slice.
