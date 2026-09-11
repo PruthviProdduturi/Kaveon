@@ -610,6 +610,7 @@ pub enum ProductRecordKind {
     DlmDefinition,
     DlmRun,
     Favorite,
+    Source,
 }
 
 impl ProductRecordKind {
@@ -623,6 +624,7 @@ impl ProductRecordKind {
             Self::DlmDefinition => "dlm_definition",
             Self::DlmRun => "dlm_run",
             Self::Favorite => "favorite",
+            Self::Source => "source",
         }
     }
 
@@ -636,6 +638,7 @@ impl ProductRecordKind {
             "dlm_definition" => Some(Self::DlmDefinition),
             "dlm_run" => Some(Self::DlmRun),
             "favorite" => Some(Self::Favorite),
+            "source" => Some(Self::Source),
             _ => None,
         }
     }
@@ -741,7 +744,8 @@ fn validate_product_record(record: &ProductRecordRef) -> Result<(), ManifestErro
             ),
             ProductRecordKind::Dataset
             | ProductRecordKind::SavedQuery
-            | ProductRecordKind::UserTheme => false,
+            | ProductRecordKind::UserTheme
+            | ProductRecordKind::Source => false,
             ProductRecordKind::DlmDefinition => reference.kind == ProductRecordKind::Dataset,
             ProductRecordKind::DlmRun => reference.kind == ProductRecordKind::DlmDefinition,
             ProductRecordKind::Favorite => matches!(
@@ -750,6 +754,7 @@ fn validate_product_record(record: &ProductRecordRef) -> Result<(), ManifestErro
                     | ProductRecordKind::Chart
                     | ProductRecordKind::Dashboard
                     | ProductRecordKind::SavedQuery
+                    | ProductRecordKind::Source
             ),
         };
         if !allowed {

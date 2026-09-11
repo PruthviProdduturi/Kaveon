@@ -15,6 +15,8 @@ _KINDS = {
     "saved_queries": "saved_query",
     "user_themes": "user_theme",
     "favorites": "favorite",
+    "catalog_sources": "source",
+    "data_sources": "source",
     "dlm_definitions": "dlm_definition",
 }
 

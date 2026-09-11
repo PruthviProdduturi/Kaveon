@@ -135,6 +135,7 @@ fn product_kind(table: &str) -> Result<String> {
         Some("dlm_definitions") => Ok("dlm_definition".into()),
         Some("dlm_runs") => Ok("dlm_run".into()),
         Some("favorites") => Ok("favorite".into()),
+        Some("sources") => Ok("source".into()),
         _ => Err(sql_error(
             "row DML is unsupported; target a supported kaveon.product table",
         )),

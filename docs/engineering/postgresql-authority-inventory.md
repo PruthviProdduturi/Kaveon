@@ -7,8 +7,8 @@ family has migrated.
 
 | PostgreSQL state | Current API readers/writers | KaveonDB destination | Blocking work |
 | --- | --- | --- | --- |
-| `catalog_sources` | `routers/catalog_sources.py`, Engine bridge, Lab and SQL routing | Native Engine catalog definitions plus future non-secret product source record | Unify source lifecycle at one pinned KaveonDB revision; retain only secret references; backfill and reconcile |
-| `data_sources` | `routers/data_sources.py`, connection pool resolution, credentials service | Future non-secret source record | Separate encrypted connection envelope from public metadata; migrate favorites tied to sources |
+| `catalog_sources` | `routers/catalog_sources.py`, Engine bridge, Lab and SQL routing | Typed non-secret `source` plus native Engine catalog definitions | Writer/outbox atomicity, visibility parity, secret resolver and live evidence remain |
+| `data_sources` | `routers/data_sources.py`, connection pool resolution, credentials service | Typed non-secret `source`; encrypted connection remains separate authority | Key Vault/workload identity resolver, writer/outbox atomicity, rotation and live evidence remain |
 | `datasets` | `services/datasets.py`; chat, AI, SQL and Lab readers | `dataset` product record | Source create/update/delete and one canonical outbox event now commit together; schema deployment, backfill, replay consumer and shadow reads remain |
 | `dataset_dimensions`, `dataset_columns`, `dataset_metrics` | Dataset service; chat, query generator, AI and DLM readers | Children inside the revisioned `dataset` document | Source replacement is now atomic with its parent/outbox; target uniqueness/reference validation, backfill and reconciliation remain |
 | `charts` | `services/charts.py`, dashboard rendering | `chart` product record | Deterministic backfill and exact dataset revision binding exist; outbox, live reconciliation, write parity and cutover remain |
@@ -207,3 +207,5 @@ must not be enabled or deployed as migration-ready. No live backfill, replay,
 parity, fencing or rollback evidence exists.
 
 Favorites now have a typed owner-target unique record with validated references, atomic service mutations/outbox, deterministic checkpointed backfill, replay mapping and bounded list shadow parity. Data-source favorites remain PostgreSQL-only and fail migration capture because no typed source destination exists. The undeployed outbox schema, direct-route unification, live reconciliation, fencing and rollback remain blockers.
+
+Catalog and data sources now have a typed non-secret destination plus a coupled deterministic backfill. Namespaced IDs prevent accidental row collision and catalog_identity exposes overlap; ambiguous identities fail closed. Data-source favorites map to the new source kind. Encrypted connection material remains PostgreSQL/key-management authority, and writer atomicity, shared visibility shadowing, secret resolver/rotation, live evidence, fencing and cutover remain open.
