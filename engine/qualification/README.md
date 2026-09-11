@@ -157,6 +157,26 @@ The combined report claims only the declared workloads. It cannot establish
 general PostgreSQL or Trino superiority. Kaveon's product SQL surface now exposes
 the write operations, while its bounded point-read operation remains pending.
 
+### Distributed execution evidence
+
+`aks_distributed_compare.py` is the reproducible three-worker publication
+harness. Each successful query retains p50/median, p95 and p99 latency, and
+the report includes aggregate throughput plus Kaveon task evidence by stage.
+The task evidence records CPU time and compute wall/queue time, peak query and
+spill memory, exchange input/output bytes, payload counts, Arrow decode/encode
+time, hash/copy time, copy allocations/bytes, and spill bytes/runs/compactions.
+Missing task metrics remain visible through `tasks_with_metrics` and
+`tasks_with_cpu`; they are not inferred.
+
+This harness does not itself kill a worker. Before publishing a distributed
+result, attach the report from `scripts/qualify-aks-fault-pressure.py` to prove
+worker retry and exact-result recovery. The comparison report records these
+gates explicitly as `verification_gates`: hash aggregate/join spill remains
+open because those operators fail closed at the memory limit, and coordinator
+restart cleanup remains open until retained exchange chunks reach zero.
+These gates prevent a latency or throughput report from being interpreted as
+Trino-class fault-tolerant execution.
+
 `transaction_compare.py` now produces the transaction input for the product SQL
 facade. It executes point read, insert, update, delete, conflicting update, and a
 three-record commit against identical logical records. PostgreSQL stores the
