@@ -56,17 +56,40 @@ impl ImmutableParquetWriter {
     ) -> Result<ImmutableDataReference, DataWriteError> {
         if !path.ends_with(".parquet") {
             return Err(DataWriteError::Invalid(
-                "immutable data path must end in .parquet".into(),
-            ));
-        }
-        if bytes.len() > self.max_bytes {
-            return Err(DataWriteError::Invalid(
-                "immutable data exceeds size limit".into(),
+                "data path must end in .parquet".into(),
             ));
         }
         if bytes.len() < 8 || &bytes[..4] != b"PAR1" || &bytes[bytes.len() - 4..] != b"PAR1" {
             return Err(DataWriteError::Invalid(
                 "object is not a Parquet byte stream".into(),
+            ));
+        }
+        self.write_immutable(path, bytes).await
+    }
+
+    /// Creates or verifies a bounded immutable manifest object. The catalog
+    /// validates its JSON/reference shape before publication.
+    pub async fn write_manifest(
+        &self,
+        path: &str,
+        bytes: Vec<u8>,
+    ) -> Result<ImmutableDataReference, DataWriteError> {
+        if !path.ends_with(".json") {
+            return Err(DataWriteError::Invalid(
+                "manifest path must end in .json".into(),
+            ));
+        }
+        self.write_immutable(path, bytes).await
+    }
+
+    async fn write_immutable(
+        &self,
+        path: &str,
+        bytes: Vec<u8>,
+    ) -> Result<ImmutableDataReference, DataWriteError> {
+        if bytes.len() > self.max_bytes {
+            return Err(DataWriteError::Invalid(
+                "immutable data exceeds size limit".into(),
             ));
         }
         let sha256 = digest(&bytes);
