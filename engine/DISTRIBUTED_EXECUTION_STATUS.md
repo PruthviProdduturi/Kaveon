@@ -79,14 +79,13 @@ rows/bytes. Local exactness, gating, cancellation and memory-release tests plus
 all 120 execution and 151 server tests pass. AKS performance remains unproven
 until an immutable image completes the exact profile and throughput guard.
 
-The executable-fragment compiler now uses that same `ParallelPartials` path for
-distributed partial-aggregate stages whenever configured local parallelism is
-greater than one. Previously it constructed `PartitionedHashAggregate`
-directly, which made every affinity and round-robin decision counter remain
-zero in the AKS profile. A subprocess integration test sets parallelism to four,
-executes a real partial fragment over 20,000 unique keys, verifies nonzero
-affinity routing telemetry, and checks exact integer COUNT/SUM states. This is a
-local wiring correction; AKS activation and performance remain unproven.
+The key-affine `ParallelPartials` experiment and its distributed-fragment wiring
+were rejected after an exact AKS profile. Enabling three local workers activated
+affinity, but copied 80.18 MB during routing, retained 428,832 created groups,
+increased stage-0 spill from 82.24 MB to 85.41 MB, regressed high-cardinality
+latency from 0.994 s to 1.127 s, and regressed DISTINCT from 0.365 s to 0.691 s.
+The runtime path and AKS chart defaults were reverted. Accepted source `e56aece`
+and digest `sha256:270d39a...` remain the performance checkpoint.
 
 ## Continuation point
 
