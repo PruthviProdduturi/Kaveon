@@ -1712,6 +1712,14 @@ pub struct HashAggregate {
     input_already_reserved: bool,
 }
 
+#[derive(Clone, Copy, Default)]
+struct DenseCountSumState {
+    count: u64,
+    sum: i128,
+    sum_count: u64,
+    occupied: bool,
+}
+
 impl HashAggregate {
     fn new_states(&self) -> Vec<AggregateState> {
         self.aggregates
@@ -1865,6 +1873,28 @@ impl HashAggregate {
     }
 
     fn collect_states(&mut self) -> Result<(GroupStateMap, Vec<MemoryReservation>)> {
+        if self.group_by.len() == 1
+            && self.aggregates.len() == 2
+            && matches!(self.aggregates[0].func, AggFunc::Count)
+            && self.aggregates[0].column == "*"
+            && !self.aggregates[0].distinct
+            && matches!(self.aggregates[1].func, AggFunc::Sum)
+            && !self.aggregates[1].distinct
+            && self
+                .source
+                .schema()
+                .field_with_name(&self.group_by[0])?
+                .data_type()
+                == &DataType::Int64
+            && self
+                .source
+                .schema()
+                .field_with_name(&self.aggregates[1].column)?
+                .data_type()
+                == &DataType::Int64
+        {
+            return self.collect_dense_i64_count_sum_states();
+        }
         // Group keys are query-local and do not need the standard library's
         // comparatively expensive SipHash. AHash retains per-map randomized
         // seeds while materially reducing the hot-path cost of large GROUP BYs.
@@ -2106,6 +2136,154 @@ impl HashAggregate {
                 .collect(),
             reservations.into_guards(),
         ))
+    }
+
+    /// Updates dense integer groups by indexing directly into a contiguous
+    /// state vector. Keys outside the density bound retain the hash fallback.
+    fn collect_dense_i64_count_sum_states(
+        &mut self,
+    ) -> Result<(GroupStateMap, Vec<MemoryReservation>)> {
+        const MAX_DENSE_SLOTS: usize = 1 << 20;
+        const MAX_SLOTS_PER_ROW: usize = 8;
+        let mut dense = Vec::<DenseCountSumState>::new();
+        let mut sparse = AHashMap::<i64, DenseCountSumState>::new();
+        let mut null = None::<DenseCountSumState>;
+        let mut rows_seen = 0usize;
+        let mut reservations = ReservationSlab::default();
+        let metrics = self
+            .memory
+            .as_ref()
+            .map(|memory| aggregate_metrics(memory.query()))
+            .transpose()?;
+
+        while let Some(batch) = self.source.next_batch()? {
+            if let Some(metrics) = &metrics {
+                metrics
+                    .input_rows
+                    .fetch_add(batch.num_rows() as u64, Ordering::Relaxed);
+            }
+            let _input_memory = if self.input_already_reserved {
+                None
+            } else {
+                self.memory
+                    .as_ref()
+                    .map(|account| account.reserve(batch.get_array_memory_size() as u64))
+                    .transpose()?
+            };
+            let schema = batch.schema();
+            let keys = batch
+                .column(
+                    schema
+                        .index_of(&self.group_by[0])
+                        .expect("validated group key"),
+                )
+                .as_primitive::<Int64Type>();
+            let values = batch
+                .column(
+                    schema
+                        .index_of(&self.aggregates[1].column)
+                        .expect("validated aggregate input"),
+                )
+                .as_primitive::<Int64Type>();
+            rows_seen = rows_seen.saturating_add(batch.num_rows());
+
+            for row in 0..batch.num_rows() {
+                if row % 1024 == 0
+                    && let Some(memory) = &self.memory
+                {
+                    memory.check_cancelled()?;
+                }
+                let mut hash_backed = false;
+                let state = if keys.is_null(row) {
+                    hash_backed = true;
+                    null.get_or_insert_with(DenseCountSumState::default)
+                } else {
+                    let key = keys.value(row);
+                    let dense_index = (!sparse.contains_key(&key))
+                        .then(|| usize::try_from(key).ok())
+                        .flatten()
+                        .filter(|index| {
+                            *index < MAX_DENSE_SLOTS
+                                && *index < rows_seen.saturating_mul(MAX_SLOTS_PER_ROW)
+                        });
+                    if let Some(index) = dense_index {
+                        if index >= dense.len() {
+                            let new_len = index
+                                .saturating_add(1)
+                                .next_power_of_two()
+                                .min(MAX_DENSE_SLOTS);
+                            let additional = new_len - dense.len();
+                            if let Some(memory) = &self.memory {
+                                reservations.reserve(
+                                    memory,
+                                    (additional * size_of::<DenseCountSumState>()) as u64,
+                                )?;
+                            }
+                            dense.resize(new_len, DenseCountSumState::default());
+                        }
+                        &mut dense[index]
+                    } else {
+                        hash_backed = true;
+                        sparse.entry(key).or_default()
+                    }
+                };
+                if !state.occupied {
+                    state.occupied = true;
+                    if hash_backed && let Some(memory) = &self.memory {
+                        reservations
+                            .reserve(memory, estimated_group_bytes(&[GroupKey::Int64(0)], 2))?;
+                    }
+                    if let Some(metrics) = &metrics {
+                        metrics.groups_created.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                state.count = state
+                    .count
+                    .checked_add(1)
+                    .ok_or_else(|| exec_err("COUNT overflow"))?;
+                if !values.is_null(row) {
+                    state.sum = state
+                        .sum
+                        .checked_add(values.value(row) as i128)
+                        .ok_or_else(|| exec_err("integer SUM overflow"))?;
+                    state.sum_count = state
+                        .sum_count
+                        .checked_add(1)
+                        .ok_or_else(|| exec_err("integer SUM count overflow"))?;
+                }
+            }
+        }
+
+        let states = |state: DenseCountSumState| {
+            vec![
+                AggregateState::Count(state.count),
+                AggregateState::IntegerSum {
+                    sum: state.sum,
+                    count: state.sum_count,
+                },
+            ]
+        };
+        let mut groups = Vec::with_capacity(
+            dense.iter().filter(|state| state.occupied).count()
+                + sparse.len()
+                + usize::from(null.is_some()),
+        );
+        groups.extend(
+            dense
+                .into_iter()
+                .enumerate()
+                .filter(|(_, state)| state.occupied)
+                .map(|(key, state)| (vec![GroupKey::Int64(key as i64)], states(state))),
+        );
+        groups.extend(
+            sparse
+                .into_iter()
+                .map(|(key, state)| (vec![GroupKey::Int64(key)], states(state))),
+        );
+        if let Some(state) = null {
+            groups.push((vec![GroupKey::Null], states(state)));
+        }
+        Ok((groups, reservations.into_guards()))
     }
 }
 
@@ -3185,6 +3363,70 @@ mod tests {
         assert_eq!(snapshot.current_bytes, 0);
         assert!(snapshot.peak_bytes <= snapshot.limit_bytes);
         assert!(snapshot.reservation_calls < 100);
+    }
+
+    #[test]
+    fn dense_integer_groups_preserve_null_negative_sparse_and_nullable_sum() {
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "group_key",
+                Arc::new(Int64Array::from(vec![
+                    Some(2),
+                    Some(2),
+                    None,
+                    Some(-9),
+                    Some(2_000_000),
+                    Some(2_000_000),
+                ])) as ArrayRef,
+            ),
+            (
+                "value",
+                Arc::new(Int64Array::from(vec![
+                    Some(i64::MAX),
+                    Some(-i64::MAX),
+                    None,
+                    Some(-7),
+                    Some(5),
+                    None,
+                ])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let pool = QueryMemoryPool::new("dense-groups", 1024 * 1024).unwrap();
+        let mut aggregate = HashAggregate::new_with_memory(
+            Box::new(Input::new(batch)),
+            vec!["group_key".into()],
+            vec![
+                AggExpr::new(AggFunc::Count, "*"),
+                AggExpr::new(AggFunc::Sum, "value"),
+            ],
+            pool.operator("aggregate").unwrap(),
+        )
+        .unwrap();
+        let output = aggregate.next_batch().unwrap().unwrap();
+        let keys = output.column(0).as_primitive::<Int64Type>();
+        let counts = output
+            .column(1)
+            .as_primitive::<arrow::datatypes::UInt64Type>();
+        let sums = output.column(2).as_primitive::<Int64Type>();
+        let actual = (0..output.num_rows())
+            .map(|row| {
+                (
+                    (!keys.is_null(row)).then(|| keys.value(row)),
+                    (
+                        counts.value(row),
+                        (!sums.is_null(row)).then(|| sums.value(row)),
+                    ),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(actual[&Some(2)], (2, Some(0)));
+        assert_eq!(actual[&None], (1, None));
+        assert_eq!(actual[&Some(-9)], (1, Some(-7)));
+        assert_eq!(actual[&Some(2_000_000)], (2, Some(5)));
+        drop(output);
+        drop(aggregate);
+        assert_eq!(pool.snapshot().current_bytes, 0);
     }
 
     #[test]
