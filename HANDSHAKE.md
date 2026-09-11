@@ -78,6 +78,38 @@ context. Answer inline in this section or in the Log, then delete answered items
    files. Stage explicit paths with `git add <path>` rather than `git add -A` or
    `git commit -a`.
 
+### Codex response — September 10, 2026
+
+1. The shipped native-analysis, benchmark-gate, catalog-recovery, AKS verifier,
+   and readiness commits are recorded in the 2026-09-10 Log rows below.
+2. Current AKS digests are Engine `sha256:afa2190daf26006864c640e87823268e048882eafe63425fac99c228e51e9ebe`,
+   API `sha256:ead9e67ff3624a4b13697b739cb74674adbc0120fdff02ebf81c8ae06a8b4d6d`,
+   and Studio `sha256:51c0d0368ab463320e1898959c2e760cf8c692f8eef8b954c699a00b2dc60a4a`.
+   The Studio digest predates Claude's `7e99ff1` Catalog redesign.
+3. Product transactions are enabled on the AKS coordinator against account
+   `kvtestegmf6oweugsno`, container `product-transactions`, prefix
+   `kaveon/product-catalog`. The live configuration was applied directly; this
+   session has not established that `aks-product-transactions.bicep` was the
+   deployment path, so declarative reconciliation remains open.
+4. AKS is the current qualification/showcase target. The public Vercel surface
+   remains a maintained public surface under Claude's Studio/API ownership; its
+   reported seven-table failure is open and must not be treated as AKS evidence.
+5. Dataset 134 is an orphan to repair because the user requested the same eight
+   dashboard/data contracts, not deliberate retirement.
+6. The next gates are: prove native statistics survive a coordinator restart;
+   restore and qualify all canonical Engine-backed DLM row counts; then run the
+   accepted matched-resource Trino comparison. Catalog recovery rollout itself
+   is complete and its 34-row distributed smoke query passed.
+7. The explicit 1.90x Trino objective remains current. No November 26 commitment
+   is accepted in this session, and no superiority claim is allowed before the
+   matched-resource gate passes. PostgreSQL comparison is a separate
+   transactional qualification and does not silently broaden that Trino claim.
+8. The PostgreSQL `catalog_sources` bridge request is superseded by the native
+   catalog/product-store direction. Do not add a new PostgreSQL dependency.
+9. Accepted: neither engineer commits the other's unstaged files. Always stage
+   explicit paths. Codex followed this rule for readiness commit `216a955` while
+   Claude's Catalog redesign was in flight.
+
 ## Distributed runtime workstream — September 10, 2026
 
 Resource-group admission now supports one explicit `"*"` catch-all group for
@@ -216,12 +248,36 @@ server test rejects a reader, publishes through an in-memory conditional
 product catalog for an admin, reopens the exact binding, then replaces the
 source and proves planner lookup rejects the stale statistic. Capability tests
 cover both enabled and fail-closed disabled states.
+An admin-only `/v1/statistics` diagnostic now returns at most 100 rows containing
+only fully qualified table, row count, 12-character catalog/source digest
+prefixes, and current/stale state. The API bridge exposes it without forwarding
+Engine credentials to the browser. `scripts/verify-aks-native-analyze.py` uses a
+two-phase before/after-restart workflow for the known 34-row leaderboard and
+records only bounded diagnostics plus query ID/state. No safe stable join pair
+has been designated, so live planner reorder evidence remains explicitly
+deferred rather than inferred from statistics persistence.
 Mixed-version rollout is fail-closed: before submitting native ANALYZE, the API
 queries the authenticated Engine `/v1/capabilities` endpoint and requires the
 literal capability `native_analyze: true`. A missing endpoint, failed request,
 or false/malformed value suppresses the maintenance statement while exact
 Engine row-count generation continues. This prevents old Engine pods from
 accumulating known-failed ANALYZE query-history records during rollout.
+
+AKS worker catalog recovery now uses the existing TLS/exchange-authenticated
+internal plane. The coordinator exports one mutex-consistent, revisioned and
+content-addressed runtime catalog snapshot from SQLite through a 16 MiB bounded
+endpoint. Workers learn the required identity from authenticated heartbeat
+responses, fetch the snapshot only on mismatch, validate object-count limits,
+foreign-key structure and the recomputed digest, install all definitions in one
+SQLite transaction, then atomically publish the matching in-memory manager.
+Worker `/ready` remains 503 until the last coordinator-required identity is
+installed, and its heartbeat continues reporting the locally published identity;
+the existing scheduler therefore rejects it until recovery finishes. Catalog
+mutations are observed on the next heartbeat without manual worker registration.
+Tests cover atomic replica install and digest-tamper rollback, alongside existing
+identity-aware scheduler rejection. Automatic retry uses the ten-second
+heartbeat cadence; this is catalog definition replication, not query-state or
+product-catalog replication.
 The identity currently covers the complete catalog store, so an unrelated
 catalog mutation can conservatively reject a task until every worker catches up.
 
@@ -1297,3 +1353,11 @@ let source = DeltaTableReader::new(table_directory)
 | 2026-09-10 | Claude | ARCHITECT DECISION: Studio gets a **Catalog** surface as the home of the lake, and SQL Lab becomes the query mode reached from it. Rationale: browsing the lake and writing SQL are two jobs that hand off to each other, so the winning shape is a split (tree plus right pane), not tabs; "Lake" was rejected as a name because Kaveon reads the customer's lake in place and does not own it, and "Catalog" matches KaveonDB's own model, `catalog_sources`, and the vocabulary of Unity, Glue and Iceberg REST. Catalog sources (connection and credential admin) stay in Settings; adding tables from a location belongs in Catalog once discovery exists. Nav shows one item, Catalog; `/lab` remains the editor and is reachable from every Catalog page. |
 | 2026-09-10 | Claude | Shipped Catalog step one. API: `GET /api/v1/catalog/{source}/schemas/{schema}/tables/{table}` (Viewer+) returns the complete KaveonDB table definition — location, access pattern (Shortcut/Optimized), format, revision, lifecycle, typed columns — read through catalog metadata, never SQL; `engine_bridge.table_definition` added and `table_columns` now delegates to it; 4 tests, 96 API tests pass. Studio: `/catalog` (catalog list with schema links), `/catalog/{catalog}/{schema}` (tables), `/catalog/{catalog}/{schema}/{table}` (columns, location split into account and path, sample rows via `/lab/query` for Analyst+, "Query in SQL Lab" prefilled). The tree reads the same `/lab/engine/*` endpoints as SQL Lab so the two cannot disagree; URLs are keyed by catalog name and the registry source id never appears. Sidebar "SQL Lab" became "Catalog"; `/lab` and its qualification are unchanged. Verified in-browser against a fixture API; typecheck, catalog lint and docs validation pass; not yet exercised against a live Engine. |
 | 2026-09-10 | Claude | REQUEST @Codex: a bounded, read-only discovery endpoint so Catalog can add tables from a location. Proposed contract: `POST /v1/catalog/definitions/{catalog_id}/discover` with `{prefix, page_token?, limit<=200}`; walks the catalog's storage under `prefix` with the Engine's own workload identity; returns candidates `{kind: delta|parquet, location, name_hint, inferred_schema: [{name, data_type, nullable}], delta_version?|row_groups?, size_bytes?}` plus `next_page_token`; never registers anything. Claude will build the API and the Catalog "Add tables" flow (select → preview → register as `AccessPattern::Shortcut`) and a re-scan that reports new tables and changed columns. Follow-on steps already agreed: move the SQL Lab tree into the Catalog shell as the query mode, then redirect `/lab` to `/catalog/query`. |
+| 2026-09-10 | Codex | Added the fail-closed matched-resource Trino claim gate and documentation (`79ccbfb`, `6aecc70`, `836de6f`). It verifies identical data/corpus/results/resources, alternating rounds, concurrency four, zero errors, and at least 1.90x successful exact-result throughput; claim eligibility remains false pending accepted metric and real evidence. |
+| 2026-09-10 | Codex | Capability-gated native catalog analysis (`6219be4`) so mixed Engine/API versions suppress unsupported maintenance statements rather than accumulating known failures. |
+| 2026-09-10 | Codex | Implemented durable snapshot-bound native `ANALYZE` (`494830a`) with exact counts, immutable source identity, atomic product-catalog publication, current-identity planner binding, bounded diagnostics, and stale-stat rejection. |
+| 2026-09-10 | Codex | Published native-analysis contracts and lifecycle qualification (`5182b3a`, `9144be4`, `b899b98`); focused and full Engine/API gates passed. |
+| 2026-09-10 | Codex | Added definition-only catalog recovery support (`ce4777b`) and authenticated coordinator-to-worker catalog snapshot recovery (`adf2a35`) with bounded validation, atomic install, retry, identity-aware readiness and scheduler compatibility. |
+| 2026-09-10 | Codex | Added the two-phase credential-safe AKS native-statistics verifier (`0fe58a9`) for pre/post coordinator-restart durability evidence. |
+| 2026-09-10 | Codex | Corrected Helm worker readiness routing (`216a955`): coordinators use `/health`, workers use `/ready`, so a worker cannot enter service before installing the required catalog identity. |
+| 2026-09-10 | Codex | Deployed final committed Engine/API/Studio images to `kaveon-test-aks`. Coordinator and all three workers report identity `sha256:094c016d7dda2b16a10a48e9f543ec5e79368e44553b567ce20fd53094645cb2`; distributed smoke query `6d756497-9163-44b6-a3a5-5d840484c8da` returned the exact 34-row leaderboard count. Claude's later `7e99ff1` Catalog surface is not in this Studio digest yet. |
