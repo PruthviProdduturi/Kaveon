@@ -6,9 +6,13 @@ on:
   pull_request:
     branches: [dev]
 
+# Runs queue instead of cancelling each other: with two engineers pushing
+# minutes apart, cancel-in-progress kept killing the Vercel deploy before it
+# finished, so production sat on a stale commit. GitHub keeps only the newest
+# pending run per group, so the latest push still deploys.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   web:
