@@ -1,0 +1,35 @@
+ARG DEPENDENCY_IMAGE
+ARG RUNTIME_IMAGE
+
+FROM ${DEPENDENCY_IMAGE} AS builder
+
+ARG RECIPE_INPUT_SHA256
+ARG SOURCE_REVISION
+LABEL io.kaveon.cargo-recipe-input-sha256=${RECIPE_INPUT_SHA256} \
+      org.opencontainers.image.revision=${SOURCE_REVISION}
+
+WORKDIR /build
+# cargo-chef leaves placeholder workspace files behind. Remove them while
+# preserving the cooked target and Cargo registry before copying real sources.
+RUN find /build -mindepth 1 -maxdepth 1 ! -name target -exec rm -rf {} +
+COPY . .
+RUN cargo chef prepare --recipe-path /tmp/current-recipe.json \
+    && test "$(sha256sum /tmp/current-recipe.json | cut -d ' ' -f 1)" = "$(cat /opt/kaveon-cache/recipe.sha256)" \
+    && cargo build --release --locked --bin kaveon-server --bin kaveon
+
+FROM ${RUNTIME_IMAGE}
+
+ARG RECIPE_INPUT_SHA256
+ARG SOURCE_REVISION
+LABEL io.kaveon.cargo-recipe-input-sha256=${RECIPE_INPUT_SHA256} \
+      org.opencontainers.image.revision=${SOURCE_REVISION}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /build/target/release/kaveon-server /usr/local/bin/kaveon-server
+COPY --from=builder /build/target/release/kaveon /usr/local/bin/kaveon
+RUN mkdir -p /etc/kaveon /etc/kaveon/catalogs /data
+EXPOSE 8080
+ENTRYPOINT ["kaveon-server"]
+CMD ["/etc/kaveon/config.toml"]
