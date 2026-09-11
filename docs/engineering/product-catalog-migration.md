@@ -355,3 +355,17 @@ statuses. Telemetry contains IDs, source sequence, operation, hashes, sizes,
 generation, attempt count and bounded error code only. It never contains the
 document, actor or owner. Observer failures are reduced to exception type and
 cannot change the PostgreSQL mutation response.
+
+## Chart shadow point reads
+
+Charts are the next typed family after datasets. Set
+`KAVEON_CHART_SHADOW_READ_ENABLED=true` to compare authenticated chart point
+reads; the control defaults off and returns before target access. The comparison
+uses the same requesting actor and role and a fixed canonical projection of
+identity, dataset reference, query/viz configuration, visibility, ownership and
+timestamps. PostgreSQL-only favorite, joined dataset name, thumbnail preview and
+compatibility aliases are excluded. Each side is bounded at 1 MiB. Telemetry
+contains only record ID, match/missing/mismatch status, hashes, sizes and target
+generation, while PostgreSQL continues to supply the response. Chart lists and
+all chart writes remain outside this slice because charts do not yet have the
+source outbox/backfill foundation that datasets have.

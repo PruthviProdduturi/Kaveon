@@ -9,6 +9,10 @@ from services import product_store
 
 MAX_SHADOW_DOCUMENT_BYTES = 1024 * 1024
 MAX_SHADOW_LIST_RECORDS = 25
+CHART_SHADOW_FIELDS = (
+    "id", "name", "description", "dataset_id", "chart_type", "query_config",
+    "viz_config", "visibility", "created_at", "updated_at", "created_by", "modified_by",
+)
 
 
 def _identity(document: dict) -> tuple[str, int]:
@@ -86,4 +90,32 @@ def compare_dataset_list(source_documents: list[dict], actor: str, role: str) ->
         "status": "match" if counts["match"] == len(source_documents) else "mismatch",
         "source_count": len(source_documents), "compared": len(source_documents),
         **counts, "source_sha256": batch_source_sha, "target_sha256": batch_target_sha,
+    }
+
+
+def compare_chart(source_document: dict, actor: str, role: str) -> dict:
+    """Compare a bounded chart projection as the requesting principal."""
+    if os.getenv("KAVEON_CHART_SHADOW_READ_ENABLED") != "true":
+        return {"family": "charts", "enabled": False, "status": "disabled"}
+    record_id = str(source_document.get("id") or "")
+    if not record_id or not actor:
+        raise RuntimeError("chart shadow comparison requires record and actor identity")
+    source_projection = {field: source_document.get(field) for field in CHART_SHADOW_FIELDS}
+    source_sha, source_bytes = _identity(source_projection)
+    target = product_store.read("chart", record_id, actor, role)
+    base = {
+        "family": "charts", "enabled": True, "record_id": record_id,
+        "source_sha256": source_sha, "source_bytes": source_bytes,
+    }
+    if target is None:
+        return {**base, "status": "missing", "target_sha256": None}
+    document = target.get("document")
+    if not isinstance(document, dict):
+        raise RuntimeError("KaveonDB chart shadow response is invalid")
+    target_projection = {field: document.get(field) for field in CHART_SHADOW_FIELDS}
+    target_sha, target_bytes = _identity(target_projection)
+    return {
+        **base, "status": "match" if source_sha == target_sha else "mismatch",
+        "target_sha256": target_sha, "target_bytes": target_bytes,
+        "target_generation": int(target.get("generation") or 0),
     }

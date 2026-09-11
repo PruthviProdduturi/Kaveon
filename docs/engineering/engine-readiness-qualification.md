@@ -80,6 +80,9 @@ Three material boundaries prevent expanding this narrow 8/10 rating:
    pending outbox replay from applied target divergence without changing source
    responses. It has no live observations and does not execute replay or fence
    writes, so it earns no readiness score.
+   Authenticated chart point reads now have the same default-off, bounded,
+   response-preserving hash comparison. No chart migration pipeline or live
+   evidence exists, so it earns no readiness score.
 3. The checked-in comparison gates fail closed because no publication-scale
    1.90× Trino result or completed PostgreSQL transaction report exists.
 

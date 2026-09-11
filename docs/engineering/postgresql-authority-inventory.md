@@ -126,3 +126,12 @@ pending replay without reading KaveonDB, and compares only applied events under
 the stored owner. The observer emits content-free telemetry and cannot change
 the successful PostgreSQL response. It neither drives replay nor supplies live
 evidence until explicitly enabled and observed in qualification.
+
+Charts now have a separate default-off shadow comparator on authenticated point
+reads. It uses one owner-scoped KaveonDB read under the requesting actor/role and
+compares a fixed bounded projection, emitting hashes and status only while the
+PostgreSQL response remains unchanged. Lists and mutations remain uncovered;
+chart outbox, backfill and replay must precede any write observation or cutover.
+No typed DLM destination exists yet, so DLM shadowing remains blocked on its
+record and generation-publication design rather than being mapped onto an
+unrelated product kind.

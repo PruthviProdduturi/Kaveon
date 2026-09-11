@@ -80,6 +80,37 @@ class ProductShadowReadTests(unittest.TestCase):
         self.assertEqual(report["status"], "disabled")
         read.assert_not_called()
 
+    def test_chart_comparison_is_owner_scoped_and_excludes_decorations(self):
+        source = {"id": "c1", "name": "Revenue", "dataset_id": "7", "chart_type": "bar", "query_config": {}, "viz_config": {}, "visibility": "private", "favorite": True, "thumbnail": "large-sensitive-preview"}
+        target_document = {field: source.get(field) for field in product_shadow_read.CHART_SHADOW_FIELDS}
+        target_document["unrelated"] = "ignored"
+        with patch.dict(os.environ, {"KAVEON_CHART_SHADOW_READ_ENABLED": "true"}), \
+             patch.object(product_shadow_read.product_store, "read", return_value={"document": target_document, "generation": 5}) as read:
+            report = product_shadow_read.compare_chart(source, "owner@example.test", "Viewer")
+        read.assert_called_once_with("chart", "c1", "owner@example.test", "Viewer")
+        self.assertEqual(report["status"], "match")
+        self.assertNotIn("thumbnail", str(report))
+
+    def test_chart_missing_mismatch_and_disabled_are_distinct(self):
+        source = {"id": "c1", "name": "Revenue"}
+        with patch.dict(os.environ, {}, clear=True), patch.object(product_shadow_read.product_store, "read") as read:
+            self.assertEqual(product_shadow_read.compare_chart(source, "a", "Admin")["status"], "disabled")
+            read.assert_not_called()
+        with patch.dict(os.environ, {"KAVEON_CHART_SHADOW_READ_ENABLED": "true"}):
+            with patch.object(product_shadow_read.product_store, "read", return_value=None):
+                self.assertEqual(product_shadow_read.compare_chart(source, "a", "Admin")["status"], "missing")
+            with patch.object(product_shadow_read.product_store, "read", return_value={"document": {"id": "c1", "name": "Other"}, "generation": 1}):
+                self.assertEqual(product_shadow_read.compare_chart(source, "a", "Admin")["status"], "mismatch")
+
+    def test_chart_bounds_and_invalid_target_fail_closed(self):
+        source = {"id": "c1", "query_config": {"value": "x" * product_shadow_read.MAX_SHADOW_DOCUMENT_BYTES}}
+        with patch.dict(os.environ, {"KAVEON_CHART_SHADOW_READ_ENABLED": "true"}):
+            with self.assertRaisesRegex(RuntimeError, "byte bound"):
+                product_shadow_read.compare_chart(source, "a", "Admin")
+            with patch.object(product_shadow_read.product_store, "read", return_value={"document": []}):
+                with self.assertRaisesRegex(RuntimeError, "response is invalid"):
+                    product_shadow_read.compare_chart({"id": "c1"}, "a", "Admin")
+
 
 if __name__ == "__main__":
     unittest.main()

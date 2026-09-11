@@ -1,12 +1,16 @@
 """Charts service — port of charts.service.ts."""
 
 import json
+import logging
 import threading
 import time
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 import database.metadata as db
+from services import product_shadow_read
+
+logger = logging.getLogger(__name__)
 
 VALID_VISIBILITY = {"private", "internal", "published"}
 _SCHEMA_CACHE_TTL_SECONDS = 60.0
@@ -144,7 +148,15 @@ def get_chart_by_id(chart_id: str, user_email: Optional[str] = None, role: str =
                    created_by, modified_by, created_at, modified_at, visibility
             FROM dbo.charts WHERE id = @param0 AND id IS NOT NULL
         """, [chart_id])
-    return _adapt(row, layout) if row else None
+    chart = _adapt(row, layout) if row else None
+    if chart is not None and user_email:
+        try:
+            report = product_shadow_read.compare_chart(chart, user_email, role)
+            if report.get("enabled"):
+                logger.info("chart_shadow_read %s", json.dumps(report, sort_keys=True))
+        except Exception as error:
+            logger.warning("chart_shadow_read_error type=%s", type(error).__name__)
+    return chart
 
 
 def create_chart(data: dict, user_id: str) -> dict:

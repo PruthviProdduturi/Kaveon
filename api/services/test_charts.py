@@ -34,6 +34,17 @@ class ChartPostgresSchemaTests(unittest.TestCase):
         self.assertEqual(items[0]["dataset_id"], "7")
         self.assertEqual(items[0]["query_config"]["groupby"], ["borough"])
 
+    def test_authenticated_point_read_observes_shadow_without_changing_response(self):
+        row = {
+            "id": "chart-1", "name": "Trips", "dataset_id": 7, "chart_type": "bar",
+            "config": "{}", "visibility": "private", "created_by": "owner@example.test",
+        }
+        with patch.object(charts.db, "query_one", return_value=row), \
+             patch.object(charts.product_shadow_read, "compare_chart", return_value={"enabled": True, "status": "mismatch"}) as compare:
+            result = charts.get_chart_by_id("chart-1", "owner@example.test", "Viewer")
+        compare.assert_called_once_with(result, "owner@example.test", "Viewer")
+        self.assertEqual(result["name"], "Trips")
+
     def test_create_writes_uuid_direct_dataset_and_config_envelope(self):
         created = {"id": "chart-uuid"}
         with patch.object(charts.uuid, "uuid4", return_value="chart-uuid"), \
