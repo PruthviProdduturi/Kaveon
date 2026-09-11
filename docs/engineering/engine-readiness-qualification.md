@@ -60,6 +60,10 @@ Three material boundaries prevent expanding this narrow 8/10 rating:
    evidence assessment.
    The operator command defaults to dry-run and requires a separate enable
    variable for target writes; it has not been executed for readiness evidence.
+   The credential-free retirement parity audit likewise only validates supplied
+   evidence. It fails closed over all 16 maintained authority families but does
+   not produce live reconciliation, schema-discovery, shadow-read, fencing,
+   restart, backup/restore or rollback evidence, so it earns no score by itself.
 3. The checked-in comparison gates fail closed because no publication-scale
    1.90× Trino result or completed PostgreSQL transaction report exists.
 
