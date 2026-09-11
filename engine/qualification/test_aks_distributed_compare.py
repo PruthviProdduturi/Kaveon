@@ -8,7 +8,9 @@ class ExecutionSummaryTests(unittest.TestCase):
         target = {}
         stages = [{"stage_id": 2, "tasks": [
             {"scan": {"object_metadata_cache_hits": 3},
-             "execution": {"compute_cpu_us": 7, "exchange_input_bytes": 100,
+                           "execution": {"compute_cpu_us": 7, "exchange_input_bytes": 100,
+                           "exchange_hash_us": 2, "exchange_copy_allocations": 3,
+                           "exchange_copied_bytes": 400, "compute_wall_us": 12,
                            "exchange_decode_bytes": 150, "memory_peak_bytes": 80,
                            "spill_peak_bytes": 20, "spill_bytes_written": 40,
                            "spill_runs_written": 2, "spill_compactions": 1,
@@ -33,6 +35,10 @@ class ExecutionSummaryTests(unittest.TestCase):
         self.assertEqual(summary["tasks_with_metrics"], 4)
         self.assertEqual(summary["tasks_with_cpu"], 4)
         self.assertEqual(summary["compute_cpu_us"], 36)
+        self.assertEqual(summary["exchange_hash_us"], 4)
+        self.assertEqual(summary["exchange_copy_allocations"], 6)
+        self.assertEqual(summary["exchange_copied_bytes"], 800)
+        self.assertEqual(summary["compute_wall_us"], 24)
         self.assertEqual(summary["exchange_input_bytes"], 600)
         self.assertEqual(summary["spill_bytes_written"], 220)
         self.assertEqual(summary["spill_compactions"], 6)
@@ -69,7 +75,9 @@ class LatencySummaryTests(unittest.TestCase):
         self.assertEqual(summary[0]["successful"], 2)
         self.assertEqual(summary[0]["failed"], 0)
         self.assertEqual(summary[0]["statistics"]["median_ms"], 3.0)
+        self.assertEqual(summary[0]["statistics"]["p50_ms"], 3.0)
         self.assertEqual(summary[0]["statistics"]["p95_ms"], 4.0)
+        self.assertEqual(summary[0]["statistics"]["p99_ms"], 4.0)
         self.assertEqual(summary[1]["successful_ms"], [9.0])
         self.assertEqual(summary[1]["failed"], 1)
 

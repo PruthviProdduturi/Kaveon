@@ -29,7 +29,9 @@ EXECUTION_SUM_FIELDS = (
     "admission_wait_us", "exchange_input_payloads", "exchange_input_bytes",
     "exchange_fetch_us", "exchange_decode_batches", "exchange_decode_bytes",
     "exchange_decode_us", "exchange_output_copies", "exchange_output_bytes",
-    "exchange_encode_us", "exchange_upload_us", "spill_bytes_written",
+    "exchange_encode_us", "exchange_upload_us", "exchange_hash_us",
+    "exchange_copy_us", "exchange_copy_allocations", "exchange_copied_bytes",
+    "compute_queue_us", "compute_wall_us", "spill_bytes_written",
     "spill_runs_written", "spill_compactions", "spill_compaction_input_bytes",
     "memory_reservation_calls", "memory_reservation_bytes", "aggregate_input_rows",
     "aggregate_groups_created", "aggregate_distinct_values_admitted",
@@ -410,8 +412,10 @@ def summarize_successful_latencies(results, case_order):
         if samples:
             entry["statistics"] = {
                 "min_ms": min(samples),
+                "p50_ms": statistics.median(samples),
                 "median_ms": statistics.median(samples),
                 "p95_ms": percentile(samples, 0.95),
+                "p99_ms": percentile(samples, 0.99),
                 "max_ms": max(samples),
             }
         summary.append(entry)
@@ -550,8 +554,14 @@ def main():
         for case in report["cases"]:
             for engine in ("kaveon", "trino"):
                 samples = case[engine + "_ms"]
-                case.setdefault("statistics", {})[engine] = {"min_ms": min(samples), "median_ms": statistics.median(samples),
-                                                              "p95_ms": percentile(samples, 0.95), "max_ms": max(samples)}
+                case.setdefault("statistics", {})[engine] = {
+                    "min_ms": min(samples),
+                    "p50_ms": statistics.median(samples),
+                    "median_ms": statistics.median(samples),
+                    "p95_ms": percentile(samples, 0.95),
+                    "p99_ms": percentile(samples, 0.99),
+                    "max_ms": max(samples),
+                }
         throughput = report["throughput"]
         throughput["aggregate_qps"] = {
             engine: sum(sum(result["passed"] for result in sample["results"]) for sample in throughput[engine])
@@ -569,6 +579,21 @@ def main():
                 queries.keys(),
             )
             for engine in ("kaveon", "trino")
+        }
+        report["verification_gates"] = {
+            "worker_retry": {
+                "status": "evidence_required",
+                "command": "python scripts/qualify-aks-fault-pressure.py --context <context> --namespace <namespace> --concurrency 4 --concurrent-rounds 3 --pressure-rounds 3 --output <report>",
+                "note": "This comparison does not terminate workers; attach the separate fault-pressure report before publication.",
+            },
+            "aggregate_join_spill": {
+                "status": "open",
+                "note": "Hash aggregate and hash join fail closed at the query memory limit and do not yet spill.",
+            },
+            "coordinator_restart_cleanup": {
+                "status": "open",
+                "note": "Coordinator restart cleanup must show zero retained exchange chunks.",
+            },
         }
         throughput["target_met"] = throughput["passed"] and throughput["kaveon_over_trino"] >= policy["target_ratio"]
         report["passed"] = all(case["passed"] for case in report["cases"]) and throughput["passed"]
