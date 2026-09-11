@@ -143,3 +143,10 @@ It rejects mixed KaveonDB dataset snapshots, missing owner-scoped datasets,
 divergent definitions and checkpoint corruption. No live snapshot exists, no
 writer emits definition outbox events, and generated DLM tables remain outside
 this record, so PostgreSQL authority and readiness are unchanged.
+
+Generated DLM state now has a minimal durable `dlm_run` metadata destination:
+one definition-revision binding, lifecycle status and immutable manifest
+path/hash. The Engine enforces `building` to one terminal state and owner-scoped
+mutation/read access. Large answer/index/sketch payloads remain external and no
+current PostgreSQL DLM writer publishes a run or its manifest, so this is a
+destination contract rather than migration evidence.

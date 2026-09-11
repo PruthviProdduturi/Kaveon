@@ -39,6 +39,7 @@ type ProductDocument = (
     ImmutableFileRef,
     StagedDocument,
     BTreeSet<ProductRecordReference>,
+    BTreeMap<String, String>,
 );
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -290,7 +291,11 @@ fn product_change(
             document_json,
         } => {
             let kind = record_kind(&kind)?;
-            let (document, bytes, references) = product_document(kind, &id, 1, &document_json)?;
+            let (document, bytes, references, derived_values) =
+                product_document(kind, &id, 1, &document_json)?;
+            validate_product_binding(snapshot, kind, &id, None, &references, &derived_values)?;
+            let mut unique_values = BTreeMap::from([("owner_principal".into(), owner.into())]);
+            unique_values.extend(derived_values);
             Ok((
                 CatalogChange::CreateProduct {
                     record: ProductRecordRef {
@@ -298,7 +303,7 @@ fn product_change(
                         id,
                         revision: 1,
                         document,
-                        unique_values: BTreeMap::from([("owner_principal".into(), owner.into())]),
+                        unique_values,
                         references,
                     },
                 },
@@ -320,8 +325,18 @@ fn product_change(
             let revision = expected_revision
                 .checked_add(1)
                 .ok_or_else(|| RegistryError::Invalid("product revision overflow".into()))?;
-            let (document, bytes, references) =
+            let (document, bytes, references, derived_values) =
                 product_document(kind, &id, revision, &document_json)?;
+            validate_product_binding(
+                snapshot,
+                kind,
+                &id,
+                Some(current),
+                &references,
+                &derived_values,
+            )?;
+            let mut unique_values = BTreeMap::from([("owner_principal".into(), owner.into())]);
+            unique_values.extend(derived_values);
             Ok((
                 CatalogChange::UpdateProduct {
                     expected_revision,
@@ -329,6 +344,7 @@ fn product_change(
                         document,
                         revision,
                         references,
+                        unique_values,
                         ..current.clone()
                     },
                 },
@@ -379,6 +395,7 @@ fn record_kind(kind: &str) -> Result<ProductRecordKind, RegistryError> {
         "saved_query" => Ok(ProductRecordKind::SavedQuery),
         "user_theme" => Ok(ProductRecordKind::UserTheme),
         "dlm_definition" => Ok(ProductRecordKind::DlmDefinition),
+        "dlm_run" => Ok(ProductRecordKind::DlmRun),
         _ => Err(RegistryError::Invalid(
             "unsupported product record kind".into(),
         )),
@@ -398,6 +415,7 @@ fn product_document(
             "document_json must be a JSON object".into(),
         ));
     }
+    let mut derived_values = BTreeMap::new();
     let references = if kind == ProductRecordKind::DlmDefinition {
         let object = value.as_object().expect("object checked above");
         if object.len() != 2
@@ -427,6 +445,55 @@ fn product_document(
             kind: ProductRecordKind::Dataset,
             id: dataset_id.into(),
         }])
+    } else if kind == ProductRecordKind::DlmRun {
+        let object = value.as_object().expect("object checked above");
+        if object.len() != 4
+            || !object.contains_key("definition_id")
+            || !object.contains_key("definition_revision")
+            || !object.contains_key("status")
+            || !object.contains_key("artifact")
+        {
+            return Err(RegistryError::Invalid(
+                "DLM run requires definition_id, definition_revision, status, and artifact".into(),
+            ));
+        }
+        let definition_id = object["definition_id"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| RegistryError::Invalid("DLM run definition_id is invalid".into()))?;
+        let definition_revision = object["definition_revision"]
+            .as_u64()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| {
+                RegistryError::Invalid("DLM run definition_revision is invalid".into())
+            })?;
+        let status = object["status"]
+            .as_str()
+            .filter(|value| matches!(*value, "building" | "ready" | "failed"))
+            .ok_or_else(|| RegistryError::Invalid("DLM run status is invalid".into()))?;
+        match (status, &object["artifact"]) {
+            ("ready", serde_json::Value::Object(artifact))
+                if artifact.len() == 2
+                    && artifact["path"].as_str().is_some_and(valid_artifact_path)
+                    && artifact["sha256"]
+                        .as_str()
+                        .is_some_and(valid_artifact_sha256) => {}
+            ("building" | "failed", serde_json::Value::Null) => {}
+            _ => {
+                return Err(RegistryError::Invalid(
+                    "DLM run artifact must be immutable for ready and null otherwise".into(),
+                ));
+            }
+        }
+        derived_values.insert("dlm_run_state".into(), format!("{id}:{status}"));
+        derived_values.insert(
+            "dlm_definition_revision".into(),
+            format!("{definition_id}:{definition_revision}"),
+        );
+        BTreeSet::from([ProductRecordReference {
+            kind: ProductRecordKind::DlmDefinition,
+            id: definition_id.into(),
+        }])
     } else {
         BTreeSet::new()
     };
@@ -440,6 +507,7 @@ fn product_document(
         ProductRecordKind::SavedQuery => "saved_query",
         ProductRecordKind::UserTheme => "user_theme",
         ProductRecordKind::DlmDefinition => "dlm_definition",
+        ProductRecordKind::DlmRun => "dlm_run",
     };
     let path = format!("products/{kind_name}/{id}/{revision}-{sha256}.json");
     Ok((
@@ -449,7 +517,70 @@ fn product_document(
         },
         (path, bytes),
         references,
+        derived_values,
     ))
+}
+
+fn valid_artifact_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= 1_024
+        && !path.starts_with('/')
+        && !path.contains(['\\', ':'])
+        && path
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+}
+
+fn valid_artifact_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn validate_product_binding(
+    snapshot: &CatalogSnapshot,
+    kind: ProductRecordKind,
+    id: &str,
+    current: Option<&ProductRecordRef>,
+    references: &BTreeSet<ProductRecordReference>,
+    values: &BTreeMap<String, String>,
+) -> Result<(), RegistryError> {
+    if kind != ProductRecordKind::DlmRun {
+        return Ok(());
+    }
+    let reference = references
+        .iter()
+        .next()
+        .ok_or_else(|| RegistryError::Invalid("DLM run definition reference is missing".into()))?;
+    let definition = snapshot
+        .product_record(ProductRecordKind::DlmDefinition, &reference.id)
+        .map_err(|error| RegistryError::Invalid(error.to_string()))?
+        .ok_or_else(|| RegistryError::Invalid("DLM run definition does not exist".into()))?;
+    let expected = values["dlm_definition_revision"]
+        .rsplit(':')
+        .next()
+        .and_then(|value| value.parse::<u64>().ok());
+    if expected != Some(definition.revision) {
+        return Err(RegistryError::Invalid(
+            "DLM run definition revision is stale".into(),
+        ));
+    }
+    let next = values["dlm_run_state"]
+        .strip_prefix(&format!("{id}:"))
+        .unwrap_or("");
+    match current {
+        None if next == "building" => Ok(()),
+        Some(record)
+            if record.unique_values["dlm_run_state"].ends_with(":building")
+                && matches!(next, "ready" | "failed") =>
+        {
+            Ok(())
+        }
+        _ => Err(RegistryError::Invalid(
+            "DLM run status transition is invalid".into(),
+        )),
+    }
 }
 
 fn expire(sessions: &mut HashMap<String, Session>) {
@@ -985,13 +1116,14 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(error, RegistryError::Invalid(_)));
+
         let transaction = registry.take("alice", &begun.transaction_id).await.unwrap();
         assert_eq!(transaction.staged_change_count(), 0);
     }
 
     #[test]
     fn dlm_definition_schema_is_canonical_and_references_its_dataset() {
-        let (_, (path, bytes), references) = product_document(
+        let (_, (path, bytes), references, _) = product_document(
             ProductRecordKind::DlmDefinition,
             "orders",
             1,
@@ -1071,6 +1203,124 @@ mod tests {
                 .await,
             Err(RegistryError::Forbidden)
         ));
+    }
+
+    #[tokio::test]
+    async fn dlm_run_binds_definition_and_enforces_terminal_lifecycle() {
+        let (registry, _) = registry().await;
+        let begun = registry.begin("alice").await.unwrap();
+        for command in [
+            ProductDmlCommand::Create {
+                kind: "dataset".into(), id: "orders".into(),
+                document_json: r#"{"name":"Orders"}"#.into(),
+            },
+            ProductDmlCommand::Create {
+                kind: "dlm_definition".into(), id: "orders".into(),
+                document_json: r#"{"dataset_id":"orders","dataset_revision":1}"#.into(),
+            },
+            ProductDmlCommand::Create {
+                kind: "dlm_run".into(), id: "run-1".into(),
+                document_json: r#"{"definition_id":"orders","definition_revision":1,"status":"building","artifact":null}"#.into(),
+            },
+        ] {
+            registry.stage_product_command("alice", &begun.transaction_id, command).await.unwrap();
+        }
+        let mut transaction = registry.take("alice", &begun.transaction_id).await.unwrap();
+        transaction.bind_request_digest(b"dlm-run-create").unwrap();
+        transaction.commit().await.unwrap();
+
+        let bob_session = registry.begin("bob").await.unwrap();
+        assert!(matches!(
+            registry
+                .stage_product_command(
+                    "bob",
+                    &bob_session.transaction_id,
+                    ProductDmlCommand::Update {
+                        kind: "dlm_run".into(),
+                        id: "run-1".into(),
+                        expected_revision: 1,
+                        document_json: r#"{"definition_id":"orders","definition_revision":1,"status":"failed","artifact":null}"#.into(),
+                    },
+                )
+                .await,
+            Err(RegistryError::Forbidden)
+        ));
+
+        for (id, document) in [
+            (
+                "run-failed",
+                r#"{"definition_id":"orders","definition_revision":1,"status":"failed","artifact":null}"#,
+            ),
+            (
+                "run-stale",
+                r#"{"definition_id":"orders","definition_revision":2,"status":"building","artifact":null}"#,
+            ),
+        ] {
+            let invalid = registry.begin("alice").await.unwrap();
+            assert!(matches!(
+                registry
+                    .stage_product_command(
+                        "alice",
+                        &invalid.transaction_id,
+                        ProductDmlCommand::Create {
+                            kind: "dlm_run".into(),
+                            id: id.into(),
+                            document_json: document.into(),
+                        },
+                    )
+                    .await,
+                Err(RegistryError::Invalid(_))
+            ));
+        }
+
+        let begun = registry.begin("alice").await.unwrap();
+        registry.stage_product_command("alice", &begun.transaction_id, ProductDmlCommand::Update {
+            kind: "dlm_run".into(), id: "run-1".into(), expected_revision: 1,
+            document_json: format!(r#"{{"definition_id":"orders","definition_revision":1,"status":"ready","artifact":{{"path":"dlm/orders/run-1/manifest.json","sha256":"{}"}}}}"#, "a".repeat(64)),
+        }).await.unwrap();
+        let mut transaction = registry.take("alice", &begun.transaction_id).await.unwrap();
+        transaction.bind_request_digest(b"dlm-run-ready").unwrap();
+        transaction.commit().await.unwrap();
+
+        let begun = registry.begin("alice").await.unwrap();
+        let error = registry.stage_product_command("alice", &begun.transaction_id, ProductDmlCommand::Update {
+            kind: "dlm_run".into(), id: "run-1".into(), expected_revision: 2,
+            document_json: r#"{"definition_id":"orders","definition_revision":1,"status":"failed","artifact":null}"#.into(),
+        }).await.unwrap_err();
+        assert!(matches!(error, RegistryError::Invalid(_)));
+
+        let alice = Identity {
+            principal: "alice".into(),
+            display_identity: None,
+            role: crate::security::Role::Analyst,
+        };
+        let bob = Identity {
+            principal: "bob".into(),
+            ..alice.clone()
+        };
+        let run = registry
+            .read_product(&alice, ProductRecordKind::DlmRun, "run-1")
+            .await
+            .unwrap();
+        assert_eq!(run.document["status"], "ready");
+        assert!(matches!(
+            registry
+                .read_product(&bob, ProductRecordKind::DlmRun, "run-1")
+                .await,
+            Err(RegistryError::Forbidden)
+        ));
+    }
+
+    #[test]
+    fn dlm_run_rejects_invalid_artifacts_and_initial_states() {
+        for document in [
+            r#"{"definition_id":"d","definition_revision":1,"status":"ready","artifact":null}"#,
+            r#"{"definition_id":"d","definition_revision":1,"status":"building","artifact":{"path":"x","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#,
+            r#"{"definition_id":"d","definition_revision":1,"status":"ready","artifact":{"path":"../x","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#,
+            r#"{"definition_id":"d","definition_revision":1,"status":"ready","artifact":{"path":"x","sha256":"UPPER"}}"#,
+        ] {
+            assert!(product_document(ProductRecordKind::DlmRun, "run", 1, document).is_err());
+        }
     }
 
     #[tokio::test]

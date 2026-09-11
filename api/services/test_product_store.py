@@ -15,6 +15,15 @@ class ProductStoreTests(unittest.TestCase):
         self.assertIn("kaveon.product.dlm_definitions", statement)
         self.assertIn('dataset_revision', statement)
 
+    def test_dlm_run_uses_typed_plural_table_and_canonical_document(self):
+        mutation = product_store.ProductMutation(
+            "create", "dlm_run", "run-1",
+            {"status": "building", "artifact": None, "definition_revision": 2, "definition_id": "7"},
+        )
+        statement = product_store._statement(mutation)
+        self.assertIn("kaveon.product.dlm_runs", statement)
+        self.assertIn('{"artifact":null,"definition_id":"7","definition_revision":2,"status":"building"}', statement)
+
     def test_multi_record_transaction_uses_one_session_and_canonical_documents(self):
         mutations = [
             product_store.ProductMutation("create", "chart", "chart-1", {"z": 2, "name": "O'Reilly"}),
