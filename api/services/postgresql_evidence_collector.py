@@ -36,6 +36,18 @@ def _load_report(path: Path, family: str) -> dict:
     return {key: value for key, value in report.items() if key != "schema_version"}
 
 
+def _load_gates(path: Path) -> dict:
+    if not path.is_file() or path.stat().st_size > MAX_REPORT_BYTES:
+        raise RuntimeError("missing or oversized retirement-gates.json")
+    try:
+        gates = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise RuntimeError("invalid retirement-gates.json") from error
+    if not isinstance(gates, dict):
+        raise RuntimeError("retirement-gates.json must contain an object")
+    return gates
+
+
 def collect(report_directory: Path) -> dict:
     """Read one integrity-bound report per maintained authority family."""
     if os.getenv("KAVEON_RETIREMENT_EVIDENCE_COLLECTION_ENABLED") != "true":
@@ -44,7 +56,11 @@ def collect(report_directory: Path) -> dict:
         _load_report(report_directory / f"{family}.json", family)
         for family in sorted(gate.AUTHORITY_FAMILIES)
     ]
-    evidence = {"schema_version": gate.SCHEMA_VERSION, "families": reports}
+    evidence = {
+        "schema_version": gate.SCHEMA_VERSION,
+        "families": reports,
+        "gates": _load_gates(report_directory / "retirement-gates.json"),
+    }
     if len(_canonical(evidence)) > gate.MAX_EVIDENCE_BYTES:
         raise RuntimeError("collected retirement evidence exceeds its byte bound")
     return evidence

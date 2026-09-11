@@ -31,6 +31,18 @@ def report(family, tables, index=0):
     return value
 
 
+def gates():
+    return {
+        "source_watermark": {"status": "passed", "checked_at": "2026-09-10T19:00:00Z", "evidence_id": "watermark-1", "details": {"watermark": 21}},
+        "outbox_drain": {"status": "passed", "checked_at": "2026-09-10T19:00:00Z", "evidence_id": "outbox-1", "details": {"pending_events": 0}},
+        "write_fence": {"status": "passed", "checked_at": "2026-09-10T19:00:00Z", "evidence_id": "fence-1", "details": {"enabled": True}},
+        "shadow_parity": {"status": "passed", "checked_at": "2026-09-10T19:00:00Z", "evidence_id": "shadow-1", "details": {"matched": True}},
+        "restart_recovery": {"status": "passed", "checked_at": "2026-09-10T19:00:00Z", "evidence_id": "restart-1", "details": {"verified": True}},
+        "rollback": {"status": "passed", "checked_at": "2026-09-10T19:00:00Z", "evidence_id": "rollback-1", "details": {"verified": True}},
+        "backup_identity": {"status": "passed", "checked_at": "2026-09-10T19:00:00Z", "evidence_id": "backup-1", "details": {"backup_id": "snapshot-1", "backup_sha256": "a" * 64, "restore_verified": True}},
+    }
+
+
 class EvidenceCollectorTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -39,6 +51,9 @@ class EvidenceCollectorTests(unittest.TestCase):
             (self.directory / f"{family}.json").write_text(
                 json.dumps(report(family, tables, index)), encoding="utf-8"
             )
+        (self.directory / "retirement-gates.json").write_text(
+            json.dumps(gates()), encoding="utf-8"
+        )
 
     def tearDown(self):
         self.temporary.cleanup()
