@@ -136,3 +136,10 @@ A typed DLM definition destination now exists with exact dataset ID/revision
 schema and a dataset reference. DLM shadowing remains blocked on a PostgreSQL
 definition writer/backfill and on the separate atomic publication design for
 generated runs; definitions do not absorb answer/value/sketch payloads.
+
+A default-dry checkpointed DLM-definition backfill boundary now maps every ready
+PostgreSQL `dlm_artifact` to the exact revision of its already-migrated dataset.
+It rejects mixed KaveonDB dataset snapshots, missing owner-scoped datasets,
+divergent definitions and checkpoint corruption. No live snapshot exists, no
+writer emits definition outbox events, and generated DLM tables remain outside
+this record, so PostgreSQL authority and readiness are unchanged.

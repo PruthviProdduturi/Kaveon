@@ -387,3 +387,28 @@ stored inside this definition. Their current tables represent a multi-record
 derived generation with cache/retention semantics; moving them requires a
 separate bounded atomic publication contract. No `dlm_run` kind is claimed by
 this slice.
+
+The first deterministic definition backfill selects ready `dlm_artifact`
+dataset IDs and owners inside one PostgreSQL `REPEATABLE READ, READ ONLY`
+transaction at the product-outbox watermark. Because PostgreSQL has no KaveonDB
+dataset revision, it then owner-reads every corresponding dataset and requires
+all results to carry one KaveonDB snapshot ID before sealing definition hashes.
+Missing datasets, invalid revisions or a changing target snapshot fail capture.
+
+The operator command is dry-run by default:
+
+```powershell
+python scripts/backfill-dlm-definitions.py `
+  --checkpoint tmp/dlm-definition-backfill.json
+
+$env:KAVEON_DLM_DEFINITION_MIGRATION_ENABLED = "true"
+python scripts/backfill-dlm-definitions.py `
+  --checkpoint tmp/dlm-definition-backfill.json --resume --apply
+```
+
+The 4 MiB integrity-checked checkpoint stores at most 10,000 exact definitions,
+the source watermark, target dataset snapshot ID and per-record/whole-snapshot
+hashes. Progress advances through atomic replacement only after exact
+owner-scoped reconciliation; a crash after target commit retries safely through
+exact comparison. Apply requires both `--apply` and the enable variable. The
+command is not scheduled or invoked by the API.

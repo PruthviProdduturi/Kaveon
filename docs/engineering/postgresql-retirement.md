@@ -155,6 +155,13 @@ answers, indexes, router and sketches still lack a bounded atomic generation
 contract, so the DLM family remains PostgreSQL-authoritative/rebuilt state and
 cannot pass retirement.
 
+A deterministic, default-dry definition backfill command now exists with exact
+checkpoint/resume and owner-scoped reconciliation. It depends on datasets having
+already reached a stable KaveonDB snapshot and rejects mixed target generations.
+It has not run against a live environment, does not capture ongoing definition
+writes, and does not migrate generated runs; it supplies no DLM retirement
+evidence by itself.
+
 Deleting the StatefulSet or PVC before these gates would remove the current
 product metadata authority and break Studio even though ADLS analytical queries
 remain available.

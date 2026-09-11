@@ -27,6 +27,7 @@ DEPENDENCIES = {
     "services/credentials.py": {"data_sources": "write"},
     "services/dashboards.py": {"dashboards": "read-write", "charts": "read", "favorites": "read"},
     "services/datasets.py": {"datasets": "read-write", "dataset_semantics": "read-write", "charts": "read", "favorites": "read"},
+    "services/dlm_definition_backfill.py": {"datasets": "read", "dlm_generation": "read"},
     "services/favorites.py": {"favorites": "read-write", "charts": "read", "dashboards": "read", "datasets": "read"},
     "services/migrate_credentials.py": {"ai_configuration": "write"},
     "services/product_backfill.py": {"datasets": "read", "dataset_semantics": "read"},
