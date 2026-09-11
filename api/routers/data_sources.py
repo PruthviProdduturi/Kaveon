@@ -6,6 +6,7 @@ from middleware.permissions import require_min_role
 import database.metadata as db
 import database.pool as pool
 from services.credentials import encrypt, CredentialError
+from services import source_mutations
 
 router = APIRouter()
 NO_CACHE = {
@@ -130,16 +131,16 @@ def create_data_source(data: dict, ctx=Depends(require_min_role("Admin"))):
 
     try:
         # Use OUTPUT INSERTED but only return public fields (not connection_string)
-        db.execute("""
+        with db.transaction() as transaction:
+            inserted = transaction.query_one("""
             INSERT INTO data_sources (name, type, connection_string, database_name,
                                       region, description, created_by, is_active)
             VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6, @param7)
+            RETURNING id, name, type, database_name, region, description, created_by, created_at, updated_at, is_active
         """, [name, ds_type, connection_string, data.get("database_name"), region,
               data.get("description"), user, True])
-        inserted = db.query_one(
-            f"SELECT TOP 1 {_PUBLIC_FIELDS} FROM data_sources ds WHERE ds.name = @param0 AND ds.created_by = @param1 ORDER BY ds.id DESC",
-            [name, user]
-        )
+            if not inserted: raise RuntimeError("data source insert returned no row")
+            source_mutations.enqueue(transaction,"data_sources","create",inserted,user)
         return {"success": True, "dataSource": inserted, "message": "Data source created successfully"}
     except Exception as e:
         msg = str(e).lower()
@@ -180,13 +181,15 @@ def update_data_source(ds_id: str, data: dict, ctx=Depends(require_min_role("Adm
     params.append(int(ds_id))
 
     try:
-        count = db.execute(
-            f"UPDATE data_sources SET {', '.join(updates)} WHERE id = @param{i}",
-            params
-        )
-        if not count:
-            raise HTTPException(status_code=404, detail="Data source not found")
-        updated = db.query_one(f"SELECT {_PUBLIC_FIELDS} FROM data_sources ds WHERE ds.id = @param0", [int(ds_id)])
+        with db.transaction() as transaction:
+            existing = transaction.query_one("SELECT id FROM data_sources WHERE id=@param0 FOR UPDATE",[int(ds_id)])
+            if not existing: raise HTTPException(status_code=404, detail="Data source not found")
+            updated = transaction.query_one(
+            f"UPDATE data_sources SET {', '.join(updates)} WHERE id = @param{i} RETURNING id,name,type,database_name,region,description,created_by,is_active",
+            params + []
+            )
+            if updated is None: raise RuntimeError("data source update lost its row lock")
+            source_mutations.enqueue(transaction,"data_sources","update",updated,user)
         return {"success": True, "dataSource": updated, "message": "Data source updated successfully"}
     except HTTPException:
         raise
@@ -199,9 +202,14 @@ def update_data_source(ds_id: str, data: dict, ctx=Depends(require_min_role("Adm
 
 @router.delete("/data-sources/{ds_id}")
 def delete_data_source(ds_id: str, ctx=Depends(require_min_role("Admin"))):
-    count = db.execute("DELETE FROM data_sources WHERE id = @param0", [int(ds_id)])
-    if not count:
-        raise HTTPException(status_code=404, detail="Data source not found")
+    with db.transaction() as transaction:
+        row=transaction.query_one("SELECT id,name,type,database_name,region,description,created_by,is_active FROM data_sources WHERE id=@param0 FOR UPDATE",[int(ds_id)])
+        if not row: raise HTTPException(status_code=404, detail="Data source not found")
+        dependent=transaction.query_one("SELECT COUNT(*) AS count FROM favorites WHERE object_type='data_source' AND object_id=@param0",[str(ds_id)]) or {}
+        if dependent.get("count"): raise HTTPException(409,"Remove data-source favorites before deletion")
+        count=transaction.execute("DELETE FROM data_sources WHERE id=@param0",[int(ds_id)])
+        if count != 1: raise RuntimeError("data source delete lost its row lock")
+        source_mutations.enqueue(transaction,"data_sources","delete",row,ctx.email)
     return {"success": True, "message": "Data source deleted successfully"}
 
 

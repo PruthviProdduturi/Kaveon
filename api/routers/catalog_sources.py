@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from middleware.auth import UserContext
 from middleware.permissions import require_min_role
 import database.metadata as db
+from services import source_mutations
 
 router = APIRouter()
 
@@ -35,8 +36,8 @@ _TRANSITIONS = {
 }
 
 
-def _audit(action: str, obj_id: str, obj_name: str, user: str, details: str = None):
-    db.execute(
+def _audit(action: str, obj_id: str, obj_name: str, user: str, details: str = None, transaction=None):
+    (transaction or db).execute(
         "INSERT INTO activity (action, object_type, object_id, object_name, user_email, details) "
         "VALUES (@param0, 'catalog_source', @param1, @param2, @param3, @param4)",
         [action, obj_id, obj_name, user, details],
@@ -145,31 +146,27 @@ def create_catalog_source(data: dict, ctx: UserContext = Depends(require_min_rol
     description = (data.get("description") or "").strip() or None
 
     try:
-        db.execute(
+        with db.transaction() as transaction:
+            row = transaction.query_one(
             "INSERT INTO catalog_sources "
             "(name, engine_catalog, storage_type, storage_config, data_format, "
             " credential_kind, credential_ref, adapter_type, adapter_config, "
             " description, created_by) "
             "VALUES (@param0, @param1, @param2, @param3, @param4, "
-            "        @param5, @param6, @param7, @param8, @param9, @param10)",
+            "        @param5, @param6, @param7, @param8, @param9, @param10) RETURNING " + _FIELDS,
             [name, engine_catalog, storage_type, storage_config_raw, data_format,
              credential_kind, credential_ref, adapter_type, adapter_config_raw,
              description, ctx.email],
-        )
+            )
+            if not row: raise RuntimeError("catalog source insert returned no row")
+            _audit("created", row["id"], name, ctx.email, json.dumps({"storage_type": storage_type, "data_format": data_format, "adapter_type": adapter_type}),transaction)
+            source_mutations.enqueue(transaction,"catalog_sources","create",row,ctx.email)
     except Exception as e:
         msg = str(e).lower()
         if "unique" in msg or "duplicate" in msg:
             raise HTTPException(409, "A catalog source with this name or engine_catalog already exists")
         raise HTTPException(500, "Failed to create catalog source")
 
-    row = db.query_one(
-        f"SELECT {_FIELDS} FROM catalog_sources WHERE name = @param0 AND created_by = @param1 "
-        "ORDER BY created_at DESC LIMIT 1",
-        [name, ctx.email],
-    )
-    _audit("created", row["id"], name, ctx.email, json.dumps({
-        "storage_type": storage_type, "data_format": data_format, "adapter_type": adapter_type,
-    }))
     return {"success": True, "catalogSource": row}
 
 
@@ -256,12 +253,13 @@ def update_catalog_source(cs_id: str, data: dict, ctx: UserContext = Depends(req
     params.append(cs_id)
 
     try:
-        count = db.execute(
-            f"UPDATE catalog_sources SET {', '.join(updates)} WHERE id = @param{i}",
-            params,
-        )
-        if not count:
-            raise HTTPException(404, {"code": "NOT_FOUND", "message": "Catalog source not found"})
+        with db.transaction() as transaction:
+            locked=transaction.query_one("SELECT id FROM catalog_sources WHERE id=@param0 FOR UPDATE",[cs_id])
+            if not locked: raise HTTPException(404, {"code": "NOT_FOUND", "message": "Catalog source not found"})
+            updated=transaction.query_one(f"UPDATE catalog_sources SET {', '.join(updates)} WHERE id = @param{i} RETURNING " + _FIELDS,params)
+            if not updated: raise RuntimeError("catalog source update lost its row lock")
+            _audit("updated",cs_id,updated["name"],ctx.email,transaction=transaction)
+            source_mutations.enqueue(transaction,"catalog_sources","update",updated,ctx.email)
     except HTTPException:
         raise
     except Exception as e:
@@ -270,8 +268,6 @@ def update_catalog_source(cs_id: str, data: dict, ctx: UserContext = Depends(req
             raise HTTPException(409, "A catalog source with this name or engine_catalog already exists")
         raise HTTPException(500, "Failed to update catalog source")
 
-    updated = db.query_one(f"SELECT {_FIELDS} FROM catalog_sources WHERE id = @param0", [cs_id])
-    _audit("updated", cs_id, updated["name"], ctx.email)
     return {"success": True, "catalogSource": updated}
 
 
@@ -294,15 +290,13 @@ def transition_lifecycle(cs_id: str, data: dict, ctx: UserContext = Depends(requ
             f"Allowed transitions: {', '.join(sorted(allowed)) or 'none'}",
         )
 
-    db.execute(
-        "UPDATE catalog_sources SET lifecycle = @param0, modified_by = @param1, modified_at = NOW() "
-        "WHERE id = @param2",
-        [target, ctx.email, cs_id],
-    )
-    _audit("lifecycle_transition", cs_id, existing["name"], ctx.email,
-           json.dumps({"from": current, "to": target}))
-
-    updated = db.query_one(f"SELECT {_FIELDS} FROM catalog_sources WHERE id = @param0", [cs_id])
+    with db.transaction() as transaction:
+        locked=transaction.query_one("SELECT id,name,lifecycle FROM catalog_sources WHERE id=@param0 FOR UPDATE",[cs_id])
+        if not locked or locked["lifecycle"] != current: raise HTTPException(409,"Catalog source changed concurrently")
+        updated=transaction.query_one("UPDATE catalog_sources SET lifecycle=@param0,modified_by=@param1,modified_at=NOW() WHERE id=@param2 RETURNING " + _FIELDS,[target,ctx.email,cs_id])
+        if not updated: raise RuntimeError("catalog transition lost its row lock")
+        _audit("lifecycle_transition",cs_id,updated["name"],ctx.email,json.dumps({"from":current,"to":target}),transaction)
+        source_mutations.enqueue(transaction,"catalog_sources","update",updated,ctx.email)
     return {"success": True, "catalogSource": updated}
 
 
@@ -319,8 +313,14 @@ def delete_catalog_source(cs_id: str, ctx: UserContext = Depends(require_min_rol
             "Transition to 'deleting' first for active/suspended sources.",
         )
 
-    db.execute("DELETE FROM catalog_sources WHERE id = @param0", [cs_id])
-    _audit("deleted", cs_id, existing["name"], ctx.email)
+    with db.transaction() as transaction:
+        locked=transaction.query_one("SELECT id,name,engine_catalog,lifecycle,created_by FROM catalog_sources WHERE id=@param0 FOR UPDATE",[cs_id])
+        if not locked or locked["lifecycle"] != existing["lifecycle"]: raise HTTPException(409,"Catalog source changed concurrently")
+        if transaction.query_one("SELECT id FROM data_sources WHERE database_name=@param0 LIMIT 1",[locked["engine_catalog"]]):
+            raise HTTPException(409,"Catalog source is referenced by a data source")
+        if transaction.execute("DELETE FROM catalog_sources WHERE id=@param0",[cs_id]) != 1: raise RuntimeError("catalog delete lost its row lock")
+        _audit("deleted",cs_id,existing["name"],ctx.email,transaction=transaction)
+        source_mutations.enqueue(transaction,"catalog_sources","delete",locked,ctx.email)
     return {"success": True, "message": "Catalog source deleted"}
 
 
