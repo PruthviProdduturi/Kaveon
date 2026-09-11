@@ -433,18 +433,32 @@ impl AggregateState {
     }
 
     pub fn update_distinct(&mut self, value: AggregateValue) -> Result<()> {
-        if matches!(self, Self::Exact { .. }) {
-            return self.update_exact(value);
-        }
+        self.insert_distinct(value).map(|_| ())
+    }
+
+    fn insert_distinct(&mut self, value: AggregateValue) -> Result<bool> {
         match self {
+            Self::Exact {
+                scale,
+                distinct: Some(values),
+                ..
+            } => {
+                match (&value, *scale) {
+                    (AggregateValue::UInt64(_), None) => {}
+                    (AggregateValue::Decimal128(_, actual), Some(expected))
+                        if *actual == expected => {}
+                    _ => return Err(exec_err("exact numeric input type mismatch")),
+                }
+                Ok(values.insert(value))
+            }
             Self::CountDistinct(values)
             | Self::SumDistinct(values)
             | Self::AvgDistinct(values)
             | Self::IntegerSumDistinct(values) => {
-                if !matches!(value, AggregateValue::Null) {
-                    values.insert(value);
+                if matches!(value, AggregateValue::Null) {
+                    return Ok(false);
                 }
-                Ok(())
+                Ok(values.insert(value))
             }
             _ => Err(exec_err(
                 "distinct update applied to a non-distinct aggregate state",
@@ -1929,16 +1943,12 @@ impl HashAggregate {
                         }
                         if aggregate.distinct {
                             let value: AggregateValue = extract_key(array, row).into();
-                            let admitted = distinct_value_is_new(state, &value)
-                                && !matches!(value, AggregateValue::Null);
-                            if admitted
-                                && let Some(memory) = &self.memory
-                            {
-                                reservations.reserve(
-                                    memory,
-                                    estimated_distinct_value_bytes(&value),
-                                )?;
-                            }
+                            let admitted = admit_distinct_value(
+                                state,
+                                value,
+                                self.memory.as_ref(),
+                                &mut reservations,
+                            )?;
                             if admitted
                                 && let Some(metrics) = &metrics
                             {
@@ -1946,7 +1956,6 @@ impl HashAggregate {
                                     .distinct_values_admitted
                                     .fetch_add(1, Ordering::Relaxed);
                             }
-                            state.update_distinct(value)?;
                         } else if matches!(state, AggregateState::Exact { .. }) {
                             state.update_exact(extract_key(array, row).into())?;
                         } else if matches!(state, AggregateState::DecimalSum { .. }) {
@@ -2019,16 +2028,12 @@ impl HashAggregate {
                     {
                         if aggregate.distinct {
                             let value: AggregateValue = extract_key(array, row).into();
-                            let admitted = distinct_value_is_new(&accumulators[index], &value)
-                                && !matches!(value, AggregateValue::Null);
-                            if admitted
-                                && let Some(memory) = &self.memory
-                            {
-                                reservations.reserve(
-                                    memory,
-                                    estimated_distinct_value_bytes(&value),
-                                )?;
-                            }
+                            let admitted = admit_distinct_value(
+                                &mut accumulators[index],
+                                value,
+                                self.memory.as_ref(),
+                                &mut reservations,
+                            )?;
                             if admitted
                                 && let Some(metrics) = &metrics
                             {
@@ -2036,7 +2041,6 @@ impl HashAggregate {
                                     .distinct_values_admitted
                                     .fetch_add(1, Ordering::Relaxed);
                             }
-                            accumulators[index].update_distinct(value)?;
                         } else if matches!(aggregate.func, AggFunc::Count) {
                             accumulators[index].update_count()?;
                         } else if matches!(accumulators[index], AggregateState::Exact { .. }) {
@@ -2219,24 +2223,67 @@ struct ReservationSlab {
 }
 
 impl ReservationSlab {
-    fn reserve(&mut self, memory: &OperatorMemoryAccount, bytes: u64) -> Result<()> {
-        if bytes > self.available {
-            let slab_bytes = AGGREGATE_RESERVATION_SLAB_BYTES.max(bytes);
-            let guard = match memory.reserve(slab_bytes) {
-                Ok(guard) => guard,
-                Err(KaveonError::MemoryLimit(_)) if slab_bytes != bytes => memory.reserve(bytes)?,
-                Err(error) => return Err(error),
-            };
-            self.available = self.available.saturating_add(guard.bytes());
-            self.guards.push(guard);
+    fn can_cover(&self, bytes: u64) -> bool {
+        bytes <= self.available
+    }
+
+    fn ensure(&mut self, memory: &OperatorMemoryAccount, bytes: u64) -> Result<()> {
+        if self.can_cover(bytes) {
+            return Ok(());
         }
-        self.available -= bytes;
+        let slab_bytes = AGGREGATE_RESERVATION_SLAB_BYTES.max(bytes);
+        let guard = match memory.reserve(slab_bytes) {
+            Ok(guard) => guard,
+            Err(KaveonError::MemoryLimit(_)) if slab_bytes != bytes => memory.reserve(bytes)?,
+            Err(error) => return Err(error),
+        };
+        self.available = self.available.saturating_add(guard.bytes());
+        self.guards.push(guard);
         Ok(())
+    }
+
+    fn reserve(&mut self, memory: &OperatorMemoryAccount, bytes: u64) -> Result<()> {
+        self.ensure(memory, bytes)?;
+        self.consume(bytes);
+        Ok(())
+    }
+
+    fn consume(&mut self, bytes: u64) {
+        debug_assert!(bytes <= self.available);
+        self.available -= bytes;
     }
 
     fn into_guards(self) -> Vec<MemoryReservation> {
         self.guards
     }
+}
+
+fn admit_distinct_value(
+    state: &mut AggregateState,
+    value: AggregateValue,
+    memory: Option<&OperatorMemoryAccount>,
+    reservations: &mut ReservationSlab,
+) -> Result<bool> {
+    if matches!(value, AggregateValue::Null) {
+        return state.insert_distinct(value);
+    }
+    let bytes = estimated_distinct_value_bytes(&value);
+    if let Some(memory) = memory {
+        // The common path inserts with one set probe against already prepaid
+        // memory. At slab boundaries, check membership before reserving so a
+        // duplicate can never fail solely because no additional memory exists.
+        if !reservations.can_cover(bytes) {
+            if !distinct_value_is_new(state, &value) {
+                return Ok(false);
+            }
+            reservations.ensure(memory, bytes)?;
+        }
+    }
+    let inserted = state.insert_distinct(value)?;
+    if inserted && memory.is_some() {
+        reservations.consume(bytes);
+    }
+    Ok(inserted)
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -2947,6 +2994,50 @@ mod tests {
                 .value(0),
             2
         );
+    }
+
+    #[test]
+    fn distinct_admission_handles_hash_neighbors_and_duplicates_at_a_full_budget() {
+        let pool = QueryMemoryPool::new("distinct-probe", AGGREGATE_RESERVATION_SLAB_BYTES).unwrap();
+        let account = pool.operator("distinct").unwrap();
+        let mut reservations = ReservationSlab::default();
+        let mut state = AggregateState::CountDistinct(HashSet::new());
+        assert!(
+            admit_distinct_value(
+                &mut state,
+                AggregateValue::Int64(1),
+                Some(&account),
+                &mut reservations,
+            )
+            .unwrap()
+        );
+        // Consume the rest of the slab to exercise the membership check used at
+        // reservation boundaries. A duplicate must not request more memory.
+        reservations.available = 0;
+        let calls = pool.snapshot().reservation_calls;
+        assert!(
+            !admit_distinct_value(
+                &mut state,
+                AggregateValue::Int64(1),
+                Some(&account),
+                &mut reservations,
+            )
+            .unwrap()
+        );
+        assert_eq!(pool.snapshot().reservation_calls, calls);
+        // Similar hash inputs with different typed identities remain distinct.
+        assert!(
+            admit_distinct_value(
+                &mut state,
+                AggregateValue::UInt64(1),
+                None,
+                &mut reservations,
+            )
+            .unwrap()
+        );
+        assert_eq!(state.count_result().unwrap(), 2);
+        drop(reservations);
+        assert_eq!(pool.snapshot().current_bytes, 0);
     }
 
     #[test]
