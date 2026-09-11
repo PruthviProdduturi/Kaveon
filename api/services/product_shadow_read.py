@@ -174,3 +174,21 @@ def observe_user_theme(source_document: dict, owner: str) -> dict:
     return {**base, "status": "match" if source_sha == target_sha else "mismatch",
             "target_sha256": target_sha, "target_bytes": target_bytes,
             "target_generation": int(target.get("generation") or 0)}
+
+
+def observe_favorite_list(source_records: list[dict], owner: str) -> dict:
+    if os.getenv("KAVEON_FAVORITE_SHADOW_READ_ENABLED") != "true":
+        return {"family":"favorites","enabled":False,"status":"disabled"}
+    if len(source_records)>MAX_SHADOW_LIST_RECORDS:
+        return {"family":"favorites","enabled":True,"status":"skipped_limit","source_count":len(source_records)}
+    counts={"match":0,"missing":0,"mismatch":0}
+    for source in source_records:
+        kind=str(source.get("kind") or "");oid=str(source.get("id") or "")
+        record_id=hashlib.sha256(f"{owner}\0{kind}\0{oid}".encode()).hexdigest()
+        document={"user_email":owner,"object_type":kind,"object_id":oid,"object_name":source.get("name")}
+        target=product_store.read("favorite",record_id,owner,"Viewer")
+        if target is None:counts["missing"]+=1
+        elif target.get("document")==document:counts["match"]+=1
+        else:counts["mismatch"]+=1
+    status="match" if counts["match"]==len(source_records) else "mismatch"
+    return {"family":"favorites","enabled":True,"status":status,"source_count":len(source_records),**counts}

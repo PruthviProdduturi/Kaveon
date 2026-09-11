@@ -294,3 +294,5 @@ policy. Publish failures and per-query measurements as well as aggregate results
 
 See [qualification commands](../../engine/qualification/README.md) and the
 [benchmark protocol](../../engine/benches/README.md).
+
+- Favorite retirement additionally requires a typed non-secret data-source destination, unified direct-route writers, and live backfill/replay/shadow evidence.

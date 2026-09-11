@@ -548,3 +548,9 @@ hashes. Progress advances through atomic replacement only after exact
 owner-scoped reconciliation; a crash after target commit retries safely through
 exact comparison. Apply requires both `--apply` and the enable variable. The
 command is not scheduled or invoked by the API.
+
+## Favorite migration
+
+KaveonDB now accepts owner-isolated `favorite` records with a deterministic SHA-256 ID over owner, target kind and target ID. Dataset, chart, dashboard and saved-query favorites derive typed references and one owner-target unique value. `data_source` is deliberately unsupported because no typed non-secret source destination exists.
+
+Favorite create/delete locks the owner-target PostgreSQL row and appends one canonical outbox event in the same transaction for supported targets. The default-dry backfill captures at most 100,000 records under repeatable read, requires all targets at one KaveonDB snapshot, and fails if any data-source favorite is present. Apply requires `KAVEON_FAVORITE_MIGRATION_ENABLED=true`; replay maps the family and `KAVEON_FAVORITE_SHADOW_READ_ENABLED=true` enables a 25-record owner-list comparison. PostgreSQL remains authoritative and the live outbox table remains absent.

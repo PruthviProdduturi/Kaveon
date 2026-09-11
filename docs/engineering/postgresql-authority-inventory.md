@@ -13,7 +13,7 @@ family has migrated.
 | `dataset_dimensions`, `dataset_columns`, `dataset_metrics` | Dataset service; chat, query generator, AI and DLM readers | Children inside the revisioned `dataset` document | Source replacement is now atomic with its parent/outbox; target uniqueness/reference validation, backfill and reconciliation remain |
 | `charts` | `services/charts.py`, dashboard rendering | `chart` product record | Deterministic backfill and exact dataset revision binding exist; outbox, live reconciliation, write parity and cutover remain |
 | `dashboards` | `services/dashboards.py`, DLM/dashboard routes | `dashboard` product record | Deterministic backfill, exact chart revision binding and point-read shadowing exist; filter-dataset references, outbox, live parity and cutover remain |
-| `favorites` | `services/favorites.py`, dashboard and data-source routes | No typed favorite record yet | Add owner-unique favorite type and atomic dashboard/favorite behavior |
+| `favorites` | `services/favorites.py`, dashboard and data-source routes | Typed owner-unique favorite for migrated product targets | Data-source destination, direct-route unification, live evidence and cutover remain |
 | `saved_queries` | `services/saved_queries.py` | `saved_query` product record | Source mutations and outbox are atomic; deterministic backfill exists; shadow parity, live reconciliation and cutover remain |
 | `user_themes` | `services/theme.py` | `user_theme` product record | Atomic source/outbox, bounded backfill and owner shadow code exist; outbox schema deployment, live replay/parity, fencing and cutover remain |
 | `user_recents` | `services/user_recents.py`, dashboard cleanup | No destination | Define bounded ordered personal-state record and retention |
@@ -197,3 +197,5 @@ reconciliation and default-off shadow reads. A September 11 live AKS read-only
 probe confirmed `public.product_migration_outbox` is absent, so these writers
 must not be enabled or deployed as migration-ready. No live backfill, replay,
 parity, fencing or rollback evidence exists.
+
+Favorites now have a typed owner-target unique record with validated references, atomic service mutations/outbox, deterministic checkpointed backfill, replay mapping and bounded list shadow parity. Data-source favorites remain PostgreSQL-only and fail migration capture because no typed source destination exists. The undeployed outbox schema, direct-route unification, live reconciliation, fencing and rollback remain blockers.
