@@ -17,7 +17,7 @@ use kaveon_catalog::{
     product_commit::{CommitOutcome, ProductCatalogCommit},
     product_manifest::{
         CatalogChange, CatalogSnapshot, ImmutableFileRef, ProductRecordKind, ProductRecordRef,
-        ProductRecordReference,
+        ProductRecordReference, TypedRow, TypedValue,
     },
     product_transaction::ProductTransaction,
 };
@@ -290,6 +290,13 @@ fn product_change(
             id,
             document_json,
         } => {
+            if kind == "typed_row" {
+                let (table, row) = typed_row_document(&id, &document_json, owner, 1)?;
+                return Ok((
+                    CatalogChange::InsertTypedRow { table, row },
+                    None,
+                ));
+            }
             let kind = record_kind(&kind)?;
             let (document, bytes, references, derived_values) =
                 product_document(kind, &id, 1, &document_json)?;
@@ -317,6 +324,26 @@ fn product_change(
             expected_revision,
             document_json,
         } => {
+            if kind == "typed_row" {
+                let revision = expected_revision
+                    .checked_add(1)
+                    .ok_or_else(|| RegistryError::Invalid("typed row revision overflow".into()))?;
+                let (table, row) = typed_row_document(&id, &document_json, owner, revision)?;
+                let current = snapshot
+                    .typed_rows
+                    .get(&table)
+                    .and_then(|rows| rows.get(&id))
+                    .ok_or_else(|| RegistryError::Invalid("typed row does not exist".into()))?;
+                require_typed_row_owner(current, owner)?;
+                return Ok((
+                    CatalogChange::UpdateTypedRow {
+                        table,
+                        expected_revision,
+                        row,
+                    },
+                    None,
+                ));
+            }
             let kind = record_kind(&kind)?;
             let current = snapshot
                 .product_record(kind, &id)
@@ -358,6 +385,20 @@ fn product_change(
             id,
             expected_revision,
         } => {
+            if kind == "typed_row" {
+                let (table, current) = find_typed_row(snapshot, &id, owner)?;
+                if current.revision != expected_revision {
+                    return Err(RegistryError::Invalid("stale typed row revision".into()));
+                }
+                return Ok((
+                    CatalogChange::DeleteTypedRow {
+                        table,
+                        primary_key: id,
+                        expected_revision,
+                    },
+                    None,
+                ));
+            }
             let kind = record_kind(&kind)?;
             let current = snapshot
                 .product_record(kind, &id)
@@ -374,6 +415,76 @@ fn product_change(
             ))
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct TypedRowDocument {
+    table: String,
+    primary_key: String,
+    revision: u64,
+    columns: BTreeMap<String, TypedValue>,
+    #[serde(default)]
+    unique_keys: BTreeMap<String, String>,
+    owner_principal: String,
+}
+
+fn typed_row_document(
+    id: &str,
+    document_json: &str,
+    owner: &str,
+    expected_revision: u64,
+) -> Result<(String, TypedRow), RegistryError> {
+    let document: TypedRowDocument = serde_json::from_str(document_json)
+        .map_err(|_| RegistryError::Invalid("typed row document is invalid JSON".into()))?;
+    if document.primary_key != id || document.revision != expected_revision {
+        return Err(RegistryError::Invalid(
+            "typed row identity or revision does not match the SQL mutation".into(),
+        ));
+    }
+    if document.owner_principal != owner {
+        return Err(RegistryError::Forbidden);
+    }
+    let mut columns = document.columns;
+    columns.insert(
+        "owner_principal".into(),
+        TypedValue::String(document.owner_principal),
+    );
+    Ok((
+        document.table,
+        TypedRow {
+            primary_key: document.primary_key,
+            revision: document.revision,
+            columns,
+            unique_keys: document.unique_keys,
+        },
+    ))
+}
+
+fn require_typed_row_owner(row: &TypedRow, owner: &str) -> Result<(), RegistryError> {
+    match row.columns.get("owner_principal") {
+        Some(TypedValue::String(value)) if value == owner => Ok(()),
+        _ => Err(RegistryError::Forbidden),
+    }
+}
+
+fn find_typed_row<'a>(
+    snapshot: &'a CatalogSnapshot,
+    id: &str,
+    owner: &str,
+) -> Result<(String, &'a TypedRow), RegistryError> {
+    let mut found = None;
+    for (table, rows) in &snapshot.typed_rows {
+        if let Some(row) = rows.get(id) {
+            require_typed_row_owner(row, owner)?;
+            if found.is_some() {
+                return Err(RegistryError::Invalid(
+                    "typed row primary key is ambiguous across tables".into(),
+                ));
+            }
+            found = Some((table.clone(), row));
+        }
+    }
+    found.ok_or_else(|| RegistryError::Invalid("typed row does not exist".into()))
 }
 
 fn validate_favorite_owner(
@@ -2032,6 +2143,87 @@ mod tests {
                 .err()
                 .unwrap(),
             RegistryError::Corrupt
+        );
+    }
+
+    #[tokio::test]
+    async fn typed_row_transactions_are_owner_isolated_and_rollback_is_invisible() {
+        let (registry, catalog) = registry().await;
+        let create = r#"{"table":"app.users","primary_key":"u-1","revision":1,"owner_principal":"alice","columns":{"email":{"type":"string","value":"ada@example.com"}},"unique_keys":{"email":"ada@example.com"}}"#;
+        let begun = registry.begin("alice").await.unwrap();
+        registry
+            .stage_product_command(
+                "alice",
+                &begun.transaction_id,
+                ProductDmlCommand::Create {
+                    kind: "typed_row".into(),
+                    id: "u-1".into(),
+                    document_json: create.into(),
+                },
+            )
+            .await
+            .unwrap();
+        let mut transaction = registry.take("alice", &begun.transaction_id).await.unwrap();
+        transaction.bind_request_digest(b"typed-create").unwrap();
+        transaction.commit().await.unwrap();
+        assert_eq!(
+            catalog.read_current().await.unwrap().typed_rows["app.users"]["u-1"].revision,
+            1
+        );
+
+        let bob = registry.begin("bob").await.unwrap();
+        assert!(matches!(
+            registry
+                .stage_product_command(
+                    "bob",
+                    &bob.transaction_id,
+                    ProductDmlCommand::Update {
+                        kind: "typed_row".into(),
+                        id: "u-1".into(),
+                        expected_revision: 1,
+                        document_json: create.replace("ada@example.com", "bob@example.com"),
+                    },
+                )
+                .await,
+            Err(RegistryError::Forbidden)
+        ));
+
+        let update = registry.begin("alice").await.unwrap();
+        registry
+            .stage_product_command(
+                "alice",
+                &update.transaction_id,
+                ProductDmlCommand::Update {
+                    kind: "typed_row".into(),
+                    id: "u-1".into(),
+                    expected_revision: 1,
+                    document_json: create.replace("ada@example.com", "grace@example.com").replace("\"revision\":1", "\"revision\":2"),
+                },
+            )
+            .await
+            .unwrap();
+        let mut transaction = registry.take("alice", &update.transaction_id).await.unwrap();
+        transaction.bind_request_digest(b"typed-update").unwrap();
+        transaction.commit().await.unwrap();
+
+        let rollback = registry.begin("alice").await.unwrap();
+        registry
+            .stage_product_command(
+                "alice",
+                &rollback.transaction_id,
+                ProductDmlCommand::Delete {
+                    kind: "typed_row".into(),
+                    id: "u-1".into(),
+                    expected_revision: 2,
+                },
+            )
+            .await
+            .unwrap();
+        let transaction = registry.take("alice", &rollback.transaction_id).await.unwrap();
+        assert_eq!(transaction.rollback().typed_rows["app.users"]["u-1"].revision, 2);
+        assert_eq!(
+            catalog.read_current().await.unwrap().typed_rows["app.users"]["u-1"].revision,
+            2
         );
     }
 }
