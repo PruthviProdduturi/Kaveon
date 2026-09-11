@@ -24,12 +24,6 @@ pub struct AggregateMetricsSnapshot {
     pub input_rows: u64,
     pub groups_created: u64,
     pub distinct_values_admitted: u64,
-    pub local_affinity_dispatches: u64,
-    pub local_round_robin_dispatches: u64,
-    pub local_affinity_sample_rows: u64,
-    pub local_affinity_sample_distinct_hashes: u64,
-    pub local_affinity_routed_rows: u64,
-    pub local_affinity_routed_bytes: u64,
 }
 
 #[derive(Default)]
@@ -37,12 +31,6 @@ pub struct AggregateMetrics {
     input_rows: AtomicU64,
     groups_created: AtomicU64,
     distinct_values_admitted: AtomicU64,
-    local_affinity_dispatches: AtomicU64,
-    local_round_robin_dispatches: AtomicU64,
-    local_affinity_sample_rows: AtomicU64,
-    local_affinity_sample_distinct_hashes: AtomicU64,
-    local_affinity_routed_rows: AtomicU64,
-    local_affinity_routed_bytes: AtomicU64,
 }
 
 impl AggregateMetrics {
@@ -52,40 +40,7 @@ impl AggregateMetrics {
             input_rows: self.input_rows.load(Ordering::Acquire),
             groups_created: self.groups_created.load(Ordering::Acquire),
             distinct_values_admitted: self.distinct_values_admitted.load(Ordering::Acquire),
-            local_affinity_dispatches: self.local_affinity_dispatches.load(Ordering::Acquire),
-            local_round_robin_dispatches: self.local_round_robin_dispatches.load(Ordering::Acquire),
-            local_affinity_sample_rows: self.local_affinity_sample_rows.load(Ordering::Acquire),
-            local_affinity_sample_distinct_hashes: self
-                .local_affinity_sample_distinct_hashes
-                .load(Ordering::Acquire),
-            local_affinity_routed_rows: self.local_affinity_routed_rows.load(Ordering::Acquire),
-            local_affinity_routed_bytes: self.local_affinity_routed_bytes.load(Ordering::Acquire),
         }
-    }
-
-    pub(crate) fn record_local_dispatch(
-        &self,
-        affinity: bool,
-        sample_rows: u64,
-        distinct_hashes: u64,
-    ) {
-        let dispatches = if affinity {
-            &self.local_affinity_dispatches
-        } else {
-            &self.local_round_robin_dispatches
-        };
-        dispatches.fetch_add(1, Ordering::Relaxed);
-        self.local_affinity_sample_rows
-            .fetch_add(sample_rows, Ordering::Relaxed);
-        self.local_affinity_sample_distinct_hashes
-            .fetch_add(distinct_hashes, Ordering::Relaxed);
-    }
-
-    pub(crate) fn record_local_affinity_routing(&self, rows: u64, bytes: u64) {
-        self.local_affinity_routed_rows
-            .fetch_add(rows, Ordering::Relaxed);
-        self.local_affinity_routed_bytes
-            .fetch_add(bytes, Ordering::Relaxed);
     }
 }
 

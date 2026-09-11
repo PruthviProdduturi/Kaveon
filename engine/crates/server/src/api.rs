@@ -120,12 +120,6 @@ struct TaskExecutionMetrics {
     aggregate_input_rows: u64,
     aggregate_groups_created: u64,
     aggregate_distinct_values_admitted: u64,
-    aggregate_local_affinity_dispatches: u64,
-    aggregate_local_round_robin_dispatches: u64,
-    aggregate_local_affinity_sample_rows: u64,
-    aggregate_local_affinity_sample_distinct_hashes: u64,
-    aggregate_local_affinity_routed_rows: u64,
-    aggregate_local_affinity_routed_bytes: u64,
     spill_peak_bytes: u64,
     spill_bytes_written: u64,
     spill_runs_written: u64,
@@ -1108,13 +1102,6 @@ async fn execute_fragment_task(
     metrics.aggregate_input_rows = aggregate_metrics.input_rows;
     metrics.aggregate_groups_created = aggregate_metrics.groups_created;
     metrics.aggregate_distinct_values_admitted = aggregate_metrics.distinct_values_admitted;
-    metrics.aggregate_local_affinity_dispatches = aggregate_metrics.local_affinity_dispatches;
-    metrics.aggregate_local_round_robin_dispatches = aggregate_metrics.local_round_robin_dispatches;
-    metrics.aggregate_local_affinity_sample_rows = aggregate_metrics.local_affinity_sample_rows;
-    metrics.aggregate_local_affinity_sample_distinct_hashes =
-        aggregate_metrics.local_affinity_sample_distinct_hashes;
-    metrics.aggregate_local_affinity_routed_rows = aggregate_metrics.local_affinity_routed_rows;
-    metrics.aggregate_local_affinity_routed_bytes = aggregate_metrics.local_affinity_routed_bytes;
     if let (Some(before), Some(after)) = (spill_before, spill.map(|spill| spill.snapshot())) {
         metrics.spill_peak_bytes = after.peak_bytes;
         metrics.spill_bytes_written = after.bytes_written.saturating_sub(before.bytes_written);
