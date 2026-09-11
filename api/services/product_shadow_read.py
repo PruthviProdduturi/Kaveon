@@ -205,3 +205,15 @@ def observe_user_recent_list(source_records:list[dict],owner:str)->dict:
         elif target.get("document")==document:counts["match"]+=1
         else:counts["mismatch"]+=1
     return {"family":"user_recents","enabled":True,"status":"match" if counts["match"]==len(source_records) else "mismatch","source_count":len(source_records),**counts}
+
+def observe_query_history_list(source_records:list[dict],owner:str)->dict:
+    if os.getenv("KAVEON_QUERY_HISTORY_SHADOW_READ_ENABLED")!="true":return {"family":"query_history","enabled":False,"status":"disabled"}
+    if len(source_records)>50:return {"family":"query_history","enabled":True,"status":"skipped_limit","source_count":len(source_records)}
+    from services.query_history_backfill import document
+    counts={"match":0,"missing":0,"mismatch":0}
+    for source in source_records:
+        expected=document(source);target=product_store.read("query_history",expected["id"],owner,"Viewer")
+        if target is None:counts["missing"]+=1
+        elif target.get("document")==expected:counts["match"]+=1
+        else:counts["mismatch"]+=1
+    return {"family":"query_history","enabled":True,"status":"match" if counts["match"]==len(source_records) else "mismatch","source_count":len(source_records),**counts}
