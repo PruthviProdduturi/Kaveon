@@ -142,18 +142,38 @@ class DlmRunBackfillTests(unittest.TestCase):
                  patch.object(backfill, "apply_and_reconcile", return_value={"family": "dlm_runs"}) as apply, \
                  patch.object(operation, "save", side_effect=RuntimeError("checkpoint failure")):
                 with self.assertRaisesRegex(RuntimeError, "checkpoint failure"):
-                    operation.run(path, root, apply=True, resume=True)
+                    with patch.dict(os.environ, {"KAVEON_DLM_ARTIFACT_PUBLISH_ENABLED": "true"}):
+                        operation.run(path, root, apply=True, resume=True,
+                                      publisher=SimpleNamespace(publish=lambda *_: None))
             self.assertEqual(operation.load(path)[1], 0)
             full_report = {"family": "dlm_runs", "reconciled": 1, "created": 0,
                            "already_present": 1, "source_count": 1, "source_watermark": 17,
                            "definition_snapshot_id": "snap-2", "snapshot_sha256": value.snapshot_sha256}
-            with patch.dict(os.environ, {"KAVEON_DLM_RUN_MIGRATION_ENABLED": "true"}), \
+            with patch.dict(os.environ, {"KAVEON_DLM_RUN_MIGRATION_ENABLED": "true",
+                                         "KAVEON_DLM_ARTIFACT_PUBLISH_ENABLED": "true"}), \
                  patch.object(backfill, "apply_and_reconcile",
                               side_effect=[{"family": "dlm_runs"}, full_report]) as retry, \
                  patch.object(operation, "save", wraps=original_save):
-                report = operation.run(path, root, apply=True, resume=True)
+                report = operation.run(path, root, apply=True, resume=True,
+                                       publisher=SimpleNamespace(publish=lambda *_: None))
             self.assertEqual(retry.call_count, 2)
             self.assertTrue(report["checkpoint_complete"])
+
+    def test_apply_requires_publisher_and_publication_failure_prevents_metadata(self):
+        value = snapshot()
+        with tempfile.TemporaryDirectory() as temporary:
+            path, root = Path(temporary) / "checkpoint.json", Path(temporary)
+            operation.save(path, value, 0)
+            enabled = {"KAVEON_DLM_RUN_MIGRATION_ENABLED": "true",
+                       "KAVEON_DLM_ARTIFACT_PUBLISH_ENABLED": "true"}
+            with patch.dict(os.environ, enabled), self.assertRaisesRegex(RuntimeError, "publication"):
+                operation.run(path, root, apply=True, resume=True)
+            failing = SimpleNamespace(publish=lambda *_: (_ for _ in ()).throw(RuntimeError("publish failed")))
+            with patch.dict(os.environ, enabled), \
+                 patch.object(backfill, "apply_and_reconcile") as apply, \
+                 self.assertRaisesRegex(RuntimeError, "publish failed"):
+                operation.run(path, root, apply=True, resume=True, publisher=failing)
+            apply.assert_not_called()
 
 
 if __name__ == "__main__": unittest.main()

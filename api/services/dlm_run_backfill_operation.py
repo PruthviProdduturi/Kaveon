@@ -70,9 +70,11 @@ def load(path: Path):
         raise RuntimeError("DLM run checkpoint is invalid") from error
 
 
-def run(checkpoint: Path, artifact_root: Path, *, apply: bool, resume: bool):
+def run(checkpoint: Path, artifact_root: Path, *, apply: bool, resume: bool, publisher=None):
     if apply and os.getenv("KAVEON_DLM_RUN_MIGRATION_ENABLED") != "true":
         raise RuntimeError("Apply requires KAVEON_DLM_RUN_MIGRATION_ENABLED=true")
+    if apply and (os.getenv("KAVEON_DLM_ARTIFACT_PUBLISH_ENABLED") != "true" or publisher is None):
+        raise RuntimeError("Apply requires explicitly enabled immutable artifact publication")
     if resume:
         if not checkpoint.exists():
             raise RuntimeError("Resume requires an existing checkpoint")
@@ -87,6 +89,8 @@ def run(checkpoint: Path, artifact_root: Path, *, apply: bool, resume: bool):
                 "complete": complete, "snapshot_sha256": snapshot.snapshot_sha256}
     for index in range(position, len(snapshot.records)):
         record = snapshot.records[index]
+        artifact = record.document["artifact"]
+        publisher.publish(artifact["path"], artifact["sha256"])
         single = backfill.RunSnapshot(snapshot.source_watermark, snapshot.definition_snapshot_id,
                                       (record,), backfill.snapshot_digest((record,), snapshot.definition_snapshot_id))
         backfill.apply_and_reconcile(single)
