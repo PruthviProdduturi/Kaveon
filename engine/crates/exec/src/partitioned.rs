@@ -470,6 +470,7 @@ pub struct PartitionedHashAggregate {
     input_reserved: bool,
     output_memory: Option<MemoryReservation>,
     adaptive_bytes: Option<u64>,
+    streaming_partial: bool,
 }
 
 impl PartitionedHashAggregate {
@@ -508,6 +509,7 @@ impl PartitionedHashAggregate {
             input_reserved: false,
             output_memory: None,
             adaptive_bytes: None,
+            streaming_partial: true,
         })
     }
 
@@ -589,34 +591,54 @@ impl PartitionedHashAggregate {
 
     fn execute_next(&mut self) -> Result<Option<RecordBatch>> {
         self.output_memory = None;
-        if self.partial && self.partitions.is_empty() {
-            let Some(input) = self.input.as_mut() else {
+        if self.partial && self.streaming_partial && self.partitions.is_empty() {
+            let Some(mut input) = self.input.take() else {
                 return Ok(None);
             };
-            if let Some(batch) = input.next_batch()? {
-                // Partial states are mergeable across batches. Emit one bounded
-                // partial per upstream batch instead of spilling and rereading
-                // the full probe merely because it contains many batches.
+            if let Some(input_batch) = input.next_batch()? {
+                let input_rows = input_batch.num_rows();
                 let source = Box::new(ReplayInput {
                     schema: Arc::clone(&self.input_schema),
-                    batches: VecDeque::from([batch]),
+                    batches: VecDeque::from([input_batch.clone()]),
                     tail: None,
                     _guards: Vec::new(),
                 });
-                let (batch, guard) = self.aggregate_batch(source, self.input_reserved)?;
-                self.output_memory = guard;
-                return Ok(batch);
+                match self.aggregate_batch(source, self.input_reserved) {
+                    Ok((batch, guard))
+                        if batch.as_ref().is_some_and(|batch| {
+                            batch.num_rows().saturating_mul(8) <= input_rows
+                        }) =>
+                    {
+                        // Partial states are mergeable across batches. Stream them
+                        // only while aggregation reduces exchange rows by at least
+                        // 8x; otherwise retain the bounded partition/spill path.
+                        self.input = Some(input);
+                        self.output_memory = guard;
+                        return Ok(batch);
+                    }
+                    Ok(_) | Err(KaveonError::MemoryLimit(_)) => {
+                        self.memory.check_cancelled()?;
+                        self.streaming_partial = false;
+                        self.input = Some(Box::new(ReplayInput {
+                            schema: Arc::clone(&self.input_schema),
+                            batches: VecDeque::from([input_batch]),
+                            tail: Some(input),
+                            _guards: Vec::new(),
+                        }));
+                    }
+                    Err(error) => return Err(error),
+                }
+            } else {
+                let (batch, guard) = self.aggregate_batch(
+                    Box::new(RunSource::new(Arc::clone(&self.input_schema), Vec::new())),
+                    false,
+                )?;
+                if batch.as_ref().is_some_and(|batch| batch.num_rows() > 0) {
+                    self.output_memory = guard;
+                    return Ok(batch);
+                }
+                return Ok(None);
             }
-            self.input = None;
-            let (batch, guard) = self.aggregate_batch(
-                Box::new(RunSource::new(Arc::clone(&self.input_schema), Vec::new())),
-                false,
-            )?;
-            if batch.as_ref().is_some_and(|batch| batch.num_rows() > 0) {
-                self.output_memory = guard;
-                return Ok(batch);
-            }
-            return Ok(None);
         }
         if let Some(input) = self.input.take() {
             let prefix = BufferedPrefix::collect(
@@ -1236,17 +1258,25 @@ mod tests {
         assert!(grouped.next_batch().unwrap().is_none());
         assert_eq!(grouped_pool.snapshot().current_bytes, 0);
 
-        let bounded_pool = QueryMemoryPool::new("bounded-partial", 64 * 1024).unwrap();
+        let bounded_pool = QueryMemoryPool::new("bounded-partial", 64 * 1024 * 1024).unwrap();
+        let bounded_spill = spill();
         let mut high_cardinality = PartitionedHashAggregate::new_partial(
-            input((0..10_000).map(Some).collect(), 10_000),
+            input((0..100_000).map(Some).collect(), 8_192),
             vec!["id".into()],
             vec![AggExpr::new(AggFunc::Count, "*")],
             bounded_pool.operator("high-cardinality").unwrap(),
-            spill(),
+            bounded_spill.clone(),
             16,
         )
         .unwrap();
-        assert!(high_cardinality.next_batch().is_err());
+        let mut high_cardinality_batches = Vec::new();
+        while let Some(batch) = high_cardinality.next_batch().unwrap() {
+            high_cardinality_batches.push(batch);
+        }
+        let states = grouped_aggregate_states_from_batches(&high_cardinality_batches).unwrap();
+        let merged = merge_grouped_aggregate_states(states).unwrap();
+        assert_eq!(merged.len(), 100_000);
+        assert!(bounded_spill.snapshot().peak_bytes > 0);
         assert_eq!(bounded_pool.snapshot().current_bytes, 0);
     }
 
