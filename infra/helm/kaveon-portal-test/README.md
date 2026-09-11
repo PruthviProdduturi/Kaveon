@@ -19,7 +19,11 @@ The deployment assumes these existing same-namespace resources:
 | ConfigMap `kaveon-engine-ca` | `ca.crt`, the CA used to verify `https://kaveon:8080` |
 
 The Auth.js public-client flow uses `KAVEON_ENTRA_PUBLIC_CLIENT=true`; the chart
-does not use an Entra client secret, federation, or workload-identity annotation.
+does not use an Entra client secret. The API uses its dedicated `kaveon-api`
+service account, annotated with `api.workloadIdentity.clientId`, and the pod is
+fail-closed with `azure.workload.identity/use=true`. `api.keyVaultUrl` supplies
+the RBAC-enabled vault URI for opaque source-secret references; never place a
+vault credential or connection string in Helm values.
 `NODE_ENV=production` is fixed, and no local-mode or developer-user variables
 are supplied.
 
@@ -42,7 +46,9 @@ helm lint infra/helm/kaveon-portal-test --namespace kaveon `
   --set images.studio.digest=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb `
   --set images.postgres.repository=registry.example/postgres `
   --set images.postgres.digest=sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc `
-  --set seed.adls.account=storageaccount
+  --set seed.adls.account=storageaccount `
+  --set api.workloadIdentity.clientId=00000000-0000-0000-0000-000000000000 `
+  --set api.keyVaultUrl=https://example.vault.azure.net/
 
 helm template kaveon-portal-test infra/helm/kaveon-portal-test --namespace kaveon `
   --set images.api.repository=registry.example/kaveon-api `
@@ -51,7 +57,9 @@ helm template kaveon-portal-test infra/helm/kaveon-portal-test --namespace kaveo
   --set images.studio.digest=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb `
   --set images.postgres.repository=registry.example/postgres `
   --set images.postgres.digest=sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc `
-  --set seed.adls.account=storageaccount
+  --set seed.adls.account=storageaccount `
+  --set api.workloadIdentity.clientId=00000000-0000-0000-0000-000000000000 `
+  --set api.keyVaultUrl=https://example.vault.azure.net/
 ```
 
 Deploy only after the referenced Secret, CA ConfigMap, and Engine TLS service

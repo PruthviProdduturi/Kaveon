@@ -242,6 +242,9 @@ $cluster = $outputs.clusterName.value
 $registry = $outputs.registryName.value
 $storage = $outputs.storageAccountName.value
 $readerClientId = $outputs.readerClientId.value
+$apiClientId = $outputs.apiClientId.value
+$productSecretsVault = $outputs.productSecretsVaultName.value
+$productSecretsVaultUri = $outputs.productSecretsVaultUri.value
 ```
 
 Preview and deploy the isolated product transaction storage entrypoint only
@@ -258,7 +261,10 @@ $productPrefix = $productOutputs.productCatalogPrefix.value
 ```
 
 This creates one system node plus three worker nodes, ACR, ADLS Gen2
-bronze/silver/gold containers, network and scoped identities/RBAC. The isolated
+bronze/silver/gold containers, an RBAC-enabled Key Vault, network and scoped
+identities/RBAC. The API identity has Secrets Officer only on that vault and
+federates only `system:serviceaccount:kaveon:kaveon-api`; the Engine identity
+cannot read product source secrets. The isolated
 product template adds the dedicated transaction container. The Engine identity is Storage Blob Data
 Reader at the account and Storage Blob Data Contributor only at the product
 container. It cannot write to bronze, silver, or gold. Defaults are
