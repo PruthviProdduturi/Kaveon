@@ -25,6 +25,47 @@ def canonical_hash(rows):
     return hashlib.sha256(json.dumps(rows, separators=(",", ":")).encode()).hexdigest()
 
 
+EXECUTION_SUM_FIELDS = (
+    "admission_wait_us", "exchange_input_payloads", "exchange_input_bytes",
+    "exchange_fetch_us", "exchange_decode_batches", "exchange_decode_bytes",
+    "exchange_decode_us", "exchange_output_copies", "exchange_output_bytes",
+    "exchange_encode_us", "exchange_upload_us", "spill_bytes_written",
+    "spill_runs_written", "spill_compactions", "spill_compaction_input_bytes",
+)
+EXECUTION_MAX_FIELDS = ("memory_peak_bytes", "spill_peak_bytes")
+
+
+def merge_stage_execution(target, stages):
+    """Retain bounded, additive task evidence keyed by stable stage ID."""
+    for stage in stages or []:
+        stage_id = str(stage.get("stage_id"))
+        summary = target.setdefault(stage_id, {
+            "samples": 0, "tasks_observed": 0, "tasks_with_metrics": 0,
+            "tasks_with_cpu": 0, "compute_cpu_us": 0,
+            **{field: 0 for field in EXECUTION_SUM_FIELDS + EXECUTION_MAX_FIELDS},
+        })
+        summary["samples"] += 1
+        for task in stage.get("tasks") or []:
+            summary["tasks_observed"] += 1
+            metrics = task.get("execution")
+            if not isinstance(metrics, dict):
+                continue
+            summary["tasks_with_metrics"] += 1
+            cpu = metrics.get("compute_cpu_us")
+            if isinstance(cpu, int) and not isinstance(cpu, bool) and cpu >= 0:
+                summary["tasks_with_cpu"] += 1
+                summary["compute_cpu_us"] += cpu
+            for field in EXECUTION_SUM_FIELDS:
+                value = metrics.get(field)
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                    summary[field] += value
+            for field in EXECUTION_MAX_FIELDS:
+                value = metrics.get(field)
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                    summary[field] = max(summary[field], value)
+    return target
+
+
 def http(method, url, headers=None, body=None, context=None, timeout=180):
     payload = None if body is None else (body if isinstance(body, bytes) else json.dumps(body).encode())
     request = Request(url, data=payload, headers=headers or {}, method=method)
@@ -214,7 +255,7 @@ class Engines:
         url = path if path.startswith("http://") or path.startswith("https://") else self.kaveon_url + path
         return http(method, url, headers, body, self.kaveon_ssl)[2]
 
-    def kaveon_query(self, sql):
+    def kaveon_query(self, sql, evidence=False):
         result = self.krequest("POST", "/v1/statement", {"query": sql, "catalog": self.catalog,
                                "schema": self.schema, "result_delivery": "paged"})
         if result.get("error") or result.get("state") != "FINISHED":
@@ -225,8 +266,12 @@ class Engines:
             page = self.krequest("GET", next_uri)
             rows.extend(page.get("data") or [])
             next_uri = page.get("next_uri")
+        stages = None
+        if evidence:
+            history = self.krequest("GET", "/v1/query/" + result["id"])
+            stages = history.get("stages") or []
         self.krequest("DELETE", "/v1/query/" + result["id"])
-        return rows
+        return (rows, stages) if evidence else rows
 
     def trino_query(self, sql):
         headers = {"X-Trino-User": "qualification", "X-Trino-Catalog": "lake", "X-Trino-Schema": self.catalog,
@@ -308,6 +353,11 @@ class Engines:
 
     def query(self, engine, sql):
         return self.kaveon_query(sql) if engine == "kaveon" else self.trino_query(sql)
+
+    def query_with_evidence(self, engine, sql):
+        if engine == "kaveon":
+            return self.kaveon_query(sql, evidence=True)
+        return self.trino_query(sql), None
 
     def unauthenticated_rejected(self, engine):
         try:
@@ -399,7 +449,7 @@ def main():
                 runtime = activate(engine)
                 for _ in range(policy["warmups"]):
                     for name, case in items:
-                        actual = engines.query(engine, case["sql"])
+                        actual, stages = engines.query_with_evidence(engine, case["sql"])
                         if len(actual) != case["result_rows"] or canonical_hash(actual) != case["result_sha256"]:
                             raise RuntimeError(f"{engine} warmup result mismatch for {name}")
                 for name, case in items:
@@ -411,6 +461,11 @@ def main():
                             report["cases"][name]["passed"] = False
                             raise RuntimeError(f"{engine} exact result mismatch for {name}")
                         report["cases"][name][engine + "_ms"].append(elapsed)
+                        if engine == "kaveon":
+                            merge_stage_execution(
+                                report["cases"][name].setdefault("kaveon_execution_by_stage", {}),
+                                stages,
+                            )
                 rotated = items[round_index % len(items):] + items[:round_index % len(items)]
                 workload = rotated * policy["throughput_repeats"]
 
@@ -418,9 +473,10 @@ def main():
                     name, case = item
                     started = time.perf_counter()
                     try:
-                        actual = engines.query(engine, case["sql"])
+                        actual, stages = engines.query_with_evidence(engine, case["sql"])
                         passed = len(actual) == case["result_rows"] and canonical_hash(actual) == case["result_sha256"]
-                        return {"name": name, "passed": passed, "ms": (time.perf_counter() - started) * 1000}
+                        return {"name": name, "passed": passed, "ms": (time.perf_counter() - started) * 1000,
+                                "_stages": stages}
                     except Exception as error:
                         return {"name": name, "passed": False, "ms": (time.perf_counter() - started) * 1000, "error": str(error)}
 
@@ -429,10 +485,18 @@ def main():
                     results = list(executor.map(checked, workload))
                 seconds = time.perf_counter() - started
                 passed = all(item["passed"] for item in results)
+                execution_by_stage = {}
+                if engine == "kaveon":
+                    for item in results:
+                        merge_stage_execution(execution_by_stage, item.pop("_stages", None))
+                else:
+                    for item in results:
+                        item.pop("_stages", None)
                 report["throughput"]["passed"] &= passed
                 report["throughput"][engine].append({"round": round_index + 1, "order": order, "seconds": seconds,
                                                        "successful_qps": sum(item["passed"] for item in results) / seconds,
                                                        "worker_nodes": runtime["nodes"], "worker_image_ids": runtime["worker_image_ids"],
+                                                       "execution_by_stage": execution_by_stage if engine == "kaveon" else None,
                                                        "results": results})
                 if not passed:
                     raise RuntimeError(f"{engine} throughput result mismatch in round {round_index + 1}")

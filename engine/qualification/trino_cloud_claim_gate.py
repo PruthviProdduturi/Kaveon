@@ -11,6 +11,27 @@ from same_files import EXTENDED_QUERIES
 TARGET = 1.90
 
 
+def valid_execution_summary(summary):
+    if not isinstance(summary, dict) or not summary:
+        return False
+    required = {
+        "samples", "tasks_observed", "tasks_with_metrics", "tasks_with_cpu",
+        "compute_cpu_us", "exchange_input_bytes", "exchange_decode_bytes",
+        "exchange_decode_us", "memory_peak_bytes", "spill_bytes_written",
+        "spill_runs_written", "spill_compactions", "spill_compaction_input_bytes",
+    }
+    return all(
+        required <= set(stage)
+        and stage.get("samples", 0) > 0
+        and stage.get("tasks_observed", 0) > 0
+        and stage.get("tasks_with_metrics") == stage.get("tasks_observed")
+        and stage.get("tasks_with_cpu") == stage.get("tasks_observed")
+        and all(isinstance(stage.get(field), int) and not isinstance(stage.get(field), bool)
+                and stage[field] >= 0 for field in required)
+        for stage in summary.values()
+    )
+
+
 def evaluate(report):
     manifest = report.get("manifest") or {}
     dataset = manifest.get("dataset") or {}
@@ -61,6 +82,10 @@ def evaluate(report):
             and all(sample.get("order") == (["trino", "kaveon"] if (sample.get("round", 0) - 1) % 2 == 0 else ["kaveon", "trino"])
                     for engine in ("kaveon", "trino") for sample in throughput.get(engine) or []),
         "throughput_correct": throughput.get("passed") is True,
+        "kaveon_execution_metrics_retained": bool(cases)
+            and all(valid_execution_summary(case.get("kaveon_execution_by_stage")) for case in cases)
+            and all(valid_execution_summary(sample.get("execution_by_stage"))
+                    for sample in throughput.get("kaveon") or []),
         "ratio_at_least_1_90": isinstance(throughput.get("kaveon_over_trino"), (int, float))
             and not isinstance(throughput.get("kaveon_over_trino"), bool) and throughput["kaveon_over_trino"] >= TARGET,
         "kaveon_restored": not (report.get("restoration") or {}).get("errors"),
