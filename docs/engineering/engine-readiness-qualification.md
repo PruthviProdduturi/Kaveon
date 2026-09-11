@@ -91,6 +91,9 @@ Three material boundaries prevent expanding this narrow 8/10 rating:
    against one KaveonDB dataset snapshot and resumes from an integrity-checked
    checkpoint. It has no live artifact and excludes generated runs, so it earns
    no readiness score.
+   Durable DLM-run metadata now has exact definition-revision binding, immutable
+   manifest identity and terminal lifecycle enforcement. No producer, live
+   artifact or payload migration exists, so it earns no readiness score.
 3. The checked-in comparison gates fail closed because no publication-scale
    1.90× Trino result or completed PostgreSQL transaction report exists.
 

@@ -133,6 +133,7 @@ fn product_kind(table: &str) -> Result<String> {
         Some("saved_queries") => Ok("saved_query".into()),
         Some("user_themes") => Ok("user_theme".into()),
         Some("dlm_definitions") => Ok("dlm_definition".into()),
+        Some("dlm_runs") => Ok("dlm_run".into()),
         _ => Err(sql_error(
             "row DML is unsupported; target a supported kaveon.product table",
         )),
@@ -457,6 +458,8 @@ mod tests {
         for sql in [
             "UPDATE product.charts SET document_json = '{}' WHERE id = 'c-1' AND revision = 2",
             "DELETE FROM product.dashboards WHERE id = 'd-1' AND revision = 3",
+            "INSERT INTO product.dlm_definitions (id, document_json) VALUES ('ds-1', '{}')",
+            "INSERT INTO product.dlm_runs (id, document_json) VALUES ('run-1', '{}')",
         ] {
             let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(sql).unwrap()
             else {

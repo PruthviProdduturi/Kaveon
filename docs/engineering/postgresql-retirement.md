@@ -162,6 +162,12 @@ It has not run against a live environment, does not capture ongoing definition
 writes, and does not migrate generated runs; it supplies no DLM retirement
 evidence by itself.
 
+The durable `dlm_run` record now binds a generated run to one exact definition
+revision and immutable manifest identity, with a one-way building/ready/failed
+lifecycle. It stores no answer payloads or error text. PostgreSQL-generated
+artifacts still lack a manifest publisher, backfill, reconciliation and cleanup
+policy, so the new metadata contract does not advance the DLM retirement gate.
+
 Deleting the StatefulSet or PVC before these gates would remove the current
 product metadata authority and break Studio even though ADLS analytical queries
 remain available.

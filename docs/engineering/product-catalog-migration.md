@@ -386,7 +386,23 @@ Generated DLM manifests, answers, value indexes, routers and sketches are not
 stored inside this definition. Their current tables represent a multi-record
 derived generation with cache/retention semantics; moving them requires a
 separate bounded atomic publication contract. No `dlm_run` kind is claimed by
-this slice.
+the definition backfill.
+
+KaveonDB now also has the small `dlm_run` metadata kind. A run document contains
+exactly `definition_id`, positive `definition_revision`, `status` and `artifact`.
+Creation is allowed only in `building` with a null artifact and only while the
+referenced DLM definition exists at that exact revision. The sole update is
+`building` to `ready` or `failed`: `ready` requires one normalized relative
+manifest path and lowercase SHA-256, while `failed` retains a null artifact.
+Both terminal states reject further updates. KaveonDB derives the typed
+definition reference and applies existing owner isolation, CAS revisions,
+immutable document persistence and delete restriction.
+
+This record points to a committed manifest; it does not embed generated answers,
+value indexes, sketches, cached results or error text. The manifest's own future
+schema must reference immutable generated objects and be published before the
+run becomes `ready`. No PostgreSQL writer, artifact uploader, backfill, reader or
+cleanup process uses `dlm_run` yet.
 
 The first deterministic definition backfill selects ready `dlm_artifact`
 dataset IDs and owners inside one PostgreSQL `REPEATABLE READ, READ ONLY`
