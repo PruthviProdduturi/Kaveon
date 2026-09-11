@@ -3873,7 +3873,7 @@ main.main-wide {
 
 .table-stats {
   font-size: 0.85rem;
-  color: var(--lens-dark, #6c757d);
+  color: var(--text-secondary);
   background: color-mix(in srgb, var(--lens-primary, #0078D4) 8%, transparent);
   padding: 0.3rem 0.8rem;
   border-radius: 12px;

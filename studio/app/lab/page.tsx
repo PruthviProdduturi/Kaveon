@@ -1815,7 +1815,7 @@ return;
               </div>
               <div className="sidebar-header-main-row">
                 <h3>
-                  <i className="fas fa-table" /> {usingEngine ? "Kaveon DB" : "Database Tables"}
+                  <i className="fas fa-table" /> {usingEngine ? "KaveonDB" : "Database Tables"}
                   <span className="table-stats" style={{ marginLeft: '0.75rem' }}>
                     {isLoadingTables ? "Loading tables..." : `${filteredTables.length} tables`}
                   </span>
@@ -1852,6 +1852,8 @@ return;
             </div>
 
             <div className="sidebar-controls">
+              {/* The Source choice only exists when a federated database is registered alongside KaveonDB. */}
+              {(dataSources.length > 0 || isLoadingDatabases || isLoadingEngineSources || engineSources.length === 0) && (
               <div className="sidebar-db-wrap" style={{ marginTop: "0.75rem" }}>
                 <i className="fas fa-database sidebar-db-icon" />
                 <label htmlFor="lab-source-select" style={{ position: "absolute", top: "-0.85rem", left: 0, fontSize: "0.7rem", color: "var(--text-muted)" }}>Source</label>
@@ -1866,7 +1868,7 @@ return;
                     if (value === "kaveon") {
                       const id = currentEngineSourceId || lastEngineSourceIdRef.current || engineSources[0]?.id;
                       if (!id) {
-                        setLoadError("No Kaveon DB catalogs are available");
+                        setLoadError("No KaveonDB catalogs are available");
                         return;
                       }
                       setCurrentEngineSourceId(id);
@@ -1895,9 +1897,10 @@ return;
                   {dataSources.map((ds) => (
                     <option key={ds.id} value={ds.id}>{ds.name}</option>
                   ))}
-                  {engineSources.length > 0 && <option value="kaveon">Kaveon DB</option>}
+                  {engineSources.length > 0 && <option value="kaveon">KaveonDB</option>}
                 </select>
               </div>
+              )}
 
               {usingEngine && (
                 <>
