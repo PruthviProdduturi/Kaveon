@@ -12,7 +12,9 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use kaveon_storage::{AdlsConditionalCommit, CommitErrorKind, ObjectVersion};
+use kaveon_storage::{
+    AdlsConditionalCommit, CommitErrorKind, ImmutableParquetWriter, ObjectVersion,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -29,6 +31,13 @@ const MAX_INDEX_SHARD_ENTRIES: usize = 1_024;
 const MAX_PRODUCT_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
 
 pub type ProductDocuments = BTreeMap<String, Vec<u8>>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImmutableTableObjects {
+    pub manifest_path: String,
+    pub manifest_bytes: Vec<u8>,
+    pub parquet_objects: BTreeMap<String, Vec<u8>>,
+}
 
 #[derive(Clone)]
 pub struct ProductCatalogCommit {
@@ -192,6 +201,68 @@ impl ProductCatalogCommit {
     /// Publishes the prepared immutable snapshot, then conditionally advances the head.
     pub async fn commit(&self, request: PrepareChange) -> CommitOutcome {
         self.commit_with_documents(request, BTreeMap::new()).await
+    }
+
+    /// Writes one complete immutable table object set, verifies that the
+    /// staged table reference names those exact bytes, then publishes the
+    /// catalog head through the normal conditional commit. Object writes are
+    /// preparatory: a failed head CAS leaves them unreachable and harmless.
+    pub async fn commit_table_objects(
+        &self,
+        request: PrepareChange,
+        objects: ImmutableTableObjects,
+    ) -> CommitOutcome {
+        let writer = ImmutableParquetWriter::with_default_limit(self.storage.clone());
+        let manifest = match writer
+            .write_manifest(
+                &format!("{}/{}", self.prefix, objects.manifest_path),
+                objects.manifest_bytes,
+            )
+            .await
+        {
+            Ok(reference) => reference,
+            Err(error) => return map_data_write_error(error),
+        };
+        let mut parquet_files = Vec::with_capacity(objects.parquet_objects.len());
+        for (path, bytes) in objects.parquet_objects {
+            let reference = match writer
+                .write(&format!("{}/{}", self.prefix, path), bytes)
+                .await
+            {
+                Ok(reference) => reference,
+                Err(error) => return map_data_write_error(error),
+            };
+            parquet_files.push(ImmutableFileRef {
+                path,
+                sha256: reference.sha256,
+            });
+        }
+        parquet_files.sort_by(|left, right| left.path.cmp(&right.path));
+        let reference = match crate::product_manifest::TableManifestRef::validated(
+            ImmutableFileRef {
+                path: objects.manifest_path,
+                sha256: manifest.sha256,
+            },
+            parquet_files,
+        ) {
+            Ok(reference) => reference,
+            Err(_) => return CommitOutcome::Rejected,
+        };
+        let Some(CatalogChange::Put {
+            reference: staged, ..
+        }) = (request.changes.len() == 1)
+            .then(|| request.changes.first())
+            .flatten()
+        else {
+            return CommitOutcome::Rejected;
+        };
+        if staged != &reference {
+            return CommitOutcome::Rejected;
+        }
+        // The request already carries the validated exact reference. Keeping
+        // this method explicit prevents callers from accidentally publishing
+        // a manifest that was not prepared by the immutable writer.
+        self.commit(request).await
     }
 
     /// Publishes create-only product documents before advancing the snapshot head.
@@ -701,6 +772,20 @@ fn finish_indeterminate(attempt: crate::product_metrics::TransactionAttempt<'_>)
     CommitOutcome::Indeterminate
 }
 
+fn map_data_write_error(error: kaveon_storage::DataWriteError) -> CommitOutcome {
+    match error {
+        kaveon_storage::DataWriteError::Conflict => CommitOutcome::Conflict,
+        kaveon_storage::DataWriteError::Invalid(_) => CommitOutcome::Rejected,
+        kaveon_storage::DataWriteError::Storage(kind) => match kind {
+            CommitErrorKind::Conflict => CommitOutcome::Conflict,
+            CommitErrorKind::Invalid
+            | CommitErrorKind::LimitExceeded
+            | CommitErrorKind::Unsupported => CommitOutcome::Rejected,
+            _ => CommitOutcome::Indeterminate,
+        },
+    }
+}
+
 fn finish_storage(
     attempt: crate::product_metrics::TransactionAttempt<'_>,
     kind: CommitErrorKind,
@@ -763,6 +848,52 @@ mod tests {
         }
     }
 
+    fn parquet_bytes(payload: &[u8]) -> Vec<u8> {
+        let mut bytes = b"PAR1".to_vec();
+        bytes.extend_from_slice(payload);
+        bytes.extend_from_slice(b"PAR1");
+        bytes
+    }
+
+    fn table_request_with_objects(
+        base: SnapshotRef,
+        id: &str,
+        table_name: &str,
+        manifest_path: &str,
+        parquet_path: &str,
+        manifest_bytes: &[u8],
+        parquet_bytes: &[u8],
+    ) -> (PrepareChange, ImmutableTableObjects) {
+        let reference = TableManifestRef::validated(
+            ImmutableFileRef {
+                path: manifest_path.into(),
+                sha256: digest(manifest_bytes),
+            },
+            vec![ImmutableFileRef {
+                path: parquet_path.into(),
+                sha256: digest(parquet_bytes),
+            }],
+        )
+        .unwrap();
+        (
+            PrepareChange {
+                base,
+                snapshot_id: format!("snapshot-{id}"),
+                operation_id: id.into(),
+                request_digest: DIGEST.into(),
+                changes: vec![CatalogChange::Put {
+                    table: table_name.into(),
+                    reference,
+                }],
+            },
+            ImmutableTableObjects {
+                manifest_path: manifest_path.into(),
+                manifest_bytes: manifest_bytes.to_vec(),
+                parquet_objects: BTreeMap::from([(parquet_path.into(), parquet_bytes.to_vec())]),
+            },
+        )
+    }
+
     fn control(path: &str) -> ImmutableFileRef {
         let object_path = format!("control/{path}.json");
         ImmutableFileRef {
@@ -772,6 +903,108 @@ mod tests {
     }
     fn document_bytes(path: &str) -> Vec<u8> {
         format!("payload:{path}").into_bytes()
+    }
+
+    #[tokio::test]
+    async fn table_objects_publish_atomically_and_replay_after_retry() {
+        let catalog = catalog();
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        catalog.initialize(genesis.clone()).await;
+        let parquet = parquet_bytes(b"orders");
+        let (request, objects) = table_request_with_objects(
+            genesis.reference(),
+            "table-1",
+            "bronze.orders",
+            "tables/orders/manifest.json",
+            "tables/orders/part.parquet",
+            br#"{"schema":"orders"}"#,
+            &parquet,
+        );
+        let committed = catalog
+            .commit_table_objects(request.clone(), objects.clone())
+            .await;
+        assert!(matches!(committed, CommitOutcome::Committed(_)));
+        let current = catalog.read_current().await.unwrap();
+        assert_eq!(current.tables["bronze.orders"].parquet_files.len(), 1);
+        assert!(matches!(
+            catalog.commit_table_objects(request, objects).await,
+            CommitOutcome::Replayed(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn divergent_object_rejection_leaves_table_head_unchanged() {
+        let catalog = catalog();
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        catalog.initialize(genesis.clone()).await;
+        let parquet = parquet_bytes(b"orders");
+        let (request, objects) = table_request_with_objects(
+            genesis.reference(),
+            "table-1",
+            "bronze.orders",
+            "tables/orders/manifest.json",
+            "tables/orders/part.parquet",
+            br#"{"schema":"orders"}"#,
+            &parquet,
+        );
+        assert!(matches!(
+            catalog.commit_table_objects(request, objects).await,
+            CommitOutcome::Committed(_)
+        ));
+        let before = catalog.read_current().await.unwrap();
+        let (request, objects) = table_request_with_objects(
+            before.reference(),
+            "table-2",
+            "bronze.orders",
+            "tables/orders/manifest.json",
+            "tables/orders/part.parquet",
+            br#"{"schema":"orders"}"#,
+            &parquet_bytes(b"different"),
+        );
+        assert_eq!(
+            catalog.commit_table_objects(request, objects).await,
+            CommitOutcome::Conflict
+        );
+        assert_eq!(catalog.read_current().await.unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn stale_table_publication_leaves_prepared_objects_unreachable() {
+        let catalog = catalog();
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        catalog.initialize(genesis.clone()).await;
+        let parquet = parquet_bytes(b"orders");
+        let (request, _objects) = table_request_with_objects(
+            genesis.reference(),
+            "table-1",
+            "bronze.orders",
+            "tables/orders/manifest.json",
+            "tables/orders/part.parquet",
+            br#"{"schema":"orders"}"#,
+            &parquet,
+        );
+        let prepared_base = request.base.clone();
+        assert!(matches!(
+            catalog.commit(request).await,
+            CommitOutcome::Committed(_)
+        ));
+        let before_stale = catalog.read_current().await.unwrap();
+        let (stale_request, stale_objects) = table_request_with_objects(
+            prepared_base,
+            "table-stale",
+            "bronze.stale",
+            "tables/stale/manifest.json",
+            "tables/stale/part.parquet",
+            br#"{"schema":"stale"}"#,
+            &parquet_bytes(b"stale"),
+        );
+        assert_eq!(
+            catalog
+                .commit_table_objects(stale_request, stale_objects)
+                .await,
+            CommitOutcome::Conflict
+        );
+        assert_eq!(catalog.read_current().await.unwrap(), before_stale);
     }
     fn documents_for(request: &PrepareChange) -> ProductDocuments {
         required_documents(request)
