@@ -2315,25 +2315,102 @@ async fn optimize_with_durable_statistics(
         Some(commit) => commit.read_current().await.ok(),
         None => None,
     };
-    let mut cache: HashMap<String, Option<kaveon_optim::statistics::RelationStatistics>> =
-        HashMap::new();
+    let mut tables = std::collections::BTreeSet::new();
+    collect_join_statistics_tables(&plan, &mut tables);
+    let mut loads = tokio::task::JoinSet::new();
+    for table in tables {
+        let Ok(resolved) = catalog.resolve_table(&kaveon_core::TableReference::parse(&table))
+        else {
+            continue;
+        };
+        let location = resolved.full_path();
+        let format = resolved.table.format;
+        let qualified = format!(
+            "{}.{}.{}",
+            resolved.catalog, resolved.schema, resolved.table.name
+        );
+        loads.spawn_blocking(move || {
+            (
+                table,
+                qualified,
+                kaveon_storage::analyze_source(&location, format).ok(),
+            )
+        });
+    }
+    let catalog_digest = format!("{:x}", Sha256::digest(catalog.snapshot_id.as_bytes()));
+    let mut cache = HashMap::new();
+    while let Some(loaded) = loads.join_next().await {
+        let Ok((table, qualified, current)) = loaded else {
+            continue;
+        };
+        let value = current.map(|current| {
+            let rows = durable
+                .as_ref()
+                .and_then(|snapshot| snapshot.table_statistics.get(&qualified))
+                .filter(|stored| {
+                    stored.catalog_snapshot_sha256 == catalog_digest
+                        && stored.source_identity_sha256 == current.identity_sha256
+                })
+                .map_or(current.row_count, |stored| stored.row_count);
+            kaveon_optim::statistics::RelationStatistics {
+                rows,
+                columns: current.columns,
+            }
+        });
+        cache.insert(table, value);
+    }
     kaveon_optim::statistics::optimize_with_statistics(plan, &mut |table| {
-        if let Some(found) = cache.get(table) {
-            return found.clone();
-        }
-        let value = durable
-            .as_ref()
-            .and_then(|snapshot| durable_relation_statistics(catalog, snapshot, table))
-            .or_else(|| exact_source_statistics(catalog, table));
-        cache.insert(table.to_owned(), value.clone());
-        value
+        cache.get(table).cloned().flatten()
     })
+}
+
+/// Collects only relations for which the statistics optimizer will request
+/// exact cardinality. Metadata reads are independent and can safely overlap;
+/// every result remains bound to its own immutable source identity.
+fn collect_join_statistics_tables(
+    plan: &LogicalPlan,
+    tables: &mut std::collections::BTreeSet<String>,
+) {
+    match plan {
+        LogicalPlan::Join { left, right, .. } => {
+            if let LogicalPlan::Scan { table, .. } = left.as_ref() {
+                tables.insert(table.clone());
+            }
+            if let LogicalPlan::Scan { table, .. } = right.as_ref() {
+                tables.insert(table.clone());
+            }
+            collect_join_statistics_tables(left, tables);
+            collect_join_statistics_tables(right, tables);
+        }
+        LogicalPlan::Project { input, .. }
+        | LogicalPlan::Filter { input, .. }
+        | LogicalPlan::Aggregate { input, .. }
+        | LogicalPlan::Sort { input, .. }
+        | LogicalPlan::Limit { input, .. }
+        | LogicalPlan::Offset { input, .. }
+        | LogicalPlan::Distinct { input }
+        | LogicalPlan::Window { input, .. } => collect_join_statistics_tables(input, tables),
+        LogicalPlan::Union { inputs, .. } => {
+            for input in inputs {
+                collect_join_statistics_tables(input, tables);
+            }
+        }
+        LogicalPlan::Intersect { left, right }
+        | LogicalPlan::Except { left, right }
+        | LogicalPlan::SemiJoin { left, right, .. }
+        | LogicalPlan::AntiJoin { left, right, .. } => {
+            collect_join_statistics_tables(left, tables);
+            collect_join_statistics_tables(right, tables);
+        }
+        LogicalPlan::Scan { .. } => {}
+    }
 }
 
 /// Derives exact planning statistics directly from the immutable source
 /// metadata when no current ANALYZE publication exists. The caller caches the
 /// result for the planning pass, so repeated references to one relation do not
 /// reopen its metadata. Failures stay conservative and retain partitioned joins.
+#[cfg(test)]
 fn exact_source_statistics(
     catalog: &crate::PublishedCatalog,
     table: &str,
@@ -4921,11 +4998,11 @@ mod tests {
 
     use super::{
         ColumnInfo, MergeOperation, TaskRequest, TaskResponse, aggregate_merge_contract,
-        await_task_memory, capabilities, decode_arrow_stream, durable_relation_statistics,
-        encode_arrow_stream, exact_metadata_count_plan, exact_source_statistics, execute_analyze,
-        general_distributed_eligible, merge_partial_aggregates, mutation_actor,
-        parse_analyze_table, statistics_diagnostics, task_request_from_dispatch,
-        top_n_merge_contract, validate_replacement,
+        await_task_memory, capabilities, collect_join_statistics_tables, decode_arrow_stream,
+        durable_relation_statistics, encode_arrow_stream, exact_metadata_count_plan,
+        exact_source_statistics, execute_analyze, general_distributed_eligible,
+        merge_partial_aggregates, mutation_actor, parse_analyze_table, statistics_diagnostics,
+        task_request_from_dispatch, top_n_merge_contract, validate_replacement,
     };
     use crate::security::Role;
     use arrow::array::{Int64Array, StringArray};
@@ -4942,6 +5019,21 @@ mod tests {
         );
         assert_eq!(parse_analyze_table("ANALYZE orders WHERE true"), None);
         assert_eq!(parse_analyze_table("ANALYZE a.b.c.d"), None);
+    }
+
+    #[test]
+    fn statistics_loader_collects_unique_direct_join_relations() {
+        let plan = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT * FROM events e JOIN customers c ON e.customer_id = c.id \
+             JOIN customers c2 ON e.customer_id = c2.id",
+        )
+        .unwrap();
+        let mut tables = std::collections::BTreeSet::new();
+        collect_join_statistics_tables(&plan, &mut tables);
+        assert_eq!(
+            tables.into_iter().collect::<Vec<_>>(),
+            ["customers".to_owned(), "events".to_owned()]
+        );
     }
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
