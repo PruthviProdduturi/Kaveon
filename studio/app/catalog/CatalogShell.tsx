@@ -148,7 +148,7 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
                 })}
               </div>
               <div className={s.treeFoot}>
-                <Link href="/lab" className={s.ghost}><i className="fas fa-code" aria-hidden="true" /> Open SQL Lab</Link>
+                <Link href={current.catalog ? `/catalog/query?catalog=${enc(current.catalog)}${current.schema ? `&schema=${enc(current.schema)}` : ""}` : "/catalog/query"} className={s.ghost} aria-current={pathname.startsWith("/catalog/query") ? "page" : undefined}><i className="fas fa-code" aria-hidden="true" /> SQL Lab</Link>
               </div>
             </>
           )}

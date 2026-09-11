@@ -76,7 +76,7 @@ export function sampleSql(schema: string, table: string, limit: number) {
 }
 export function labHref(catalog: string, schema: string, table: string) {
   const sql = `SELECT *\nFROM ${quoteIdent(catalog)}.${quoteIdent(schema)}.${quoteIdent(table)}\nLIMIT 100`;
-  return `/lab?query=${encodeURIComponent(sql)}`;
+  return `/catalog/query?catalog=${enc(catalog)}&schema=${enc(schema)}&name=${enc(table)}&query=${encodeURIComponent(sql)}`;
 }
 export function shortLocation(location: string): { host: string; path: string } {
   const m = location.match(/^([a-z0-9+.-]+:\/\/[^/]+)(\/.*)?$/i);
