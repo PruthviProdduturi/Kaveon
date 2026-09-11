@@ -187,12 +187,25 @@ impl EntraConfig {
     }
 }
 pub async fn public_config(State(state): State<Arc<crate::AppState>>) -> Json<serde_json::Value> {
-    Json(
-        serde_json::json!({"entra": state.config.security.entra.as_ref().map(|config| serde_json::json!({
-            "tenant_id": config.tenant_id, "client_id": config.client_id,
-            "scope": format!("api://{}/{}", config.client_id, config.required_scope)
-        }))}),
-    )
+    let mut public = serde_json::Map::from_iter([(
+        "entra".to_owned(),
+        state
+            .config
+            .security
+            .entra
+            .as_ref()
+            .map(|config| {
+                serde_json::json!({
+                    "tenant_id": config.tenant_id, "client_id": config.client_id,
+                    "scope": format!("api://{}/{}", config.client_id, config.required_scope)
+                })
+            })
+            .unwrap_or(serde_json::Value::Null),
+    )]);
+    if let Some(studio_url) = &state.config.security.studio_url {
+        public.insert("studio_url".to_owned(), studio_url.clone().into());
+    }
+    Json(public.into())
 }
 
 #[cfg(test)]
