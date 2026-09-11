@@ -48,6 +48,12 @@ ambiguous target response only from exact committed KaveonDB content. It is not
 wired to a scheduler or deployment, and no backfill watermark exists. Therefore
 it provides no evidence that current PostgreSQL rows are present in KaveonDB.
 
+A deterministic dataset snapshot/backfill library now records a repeatable-read
+source watermark, canonical record and snapshot hashes, bounded counts, and
+exact post-create target reconciliation. It is disabled operationally and has
+not run against a real environment, so the required backfill and reconciliation
+evidence remains absent.
+
 PostgreSQL may be retired only after one repeatable migration command proves all
 of the following against a preserved backup:
 

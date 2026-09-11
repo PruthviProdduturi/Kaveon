@@ -49,6 +49,17 @@ target. Failures record a bounded code and stop the batch before later source
 sequences. This closes the application algorithm boundary, not its live
 durability qualification.
 
+Dataset backfill now has a deterministic implementation boundary. One
+PostgreSQL `REPEATABLE READ, READ ONLY` transaction captures the outbox
+watermark, parent rows and all semantic children in stable ID order. The
+snapshot is bounded at 10,000 datasets, 1,000,000 rows per child family and 256
+MiB of canonical JSON. Each record and the whole snapshot receive deterministic
+SHA-256 identities. Applying a snapshot creates only missing KaveonDB records,
+accepts an ambiguous response only after exact owner-scoped comparison, and
+performs a second exact read of every record before returning a credential-free
+reconciliation report. No command or scheduler invokes this code yet, and no
+real PostgreSQL/KaveonDB report has been produced.
+
 PostgreSQL retirement still requires a discovered live-schema report because
 runtime and older deployments may contain tables absent from current source.
 Backfill/replay must reconcile IDs, owners, visibility, references and canonical

@@ -55,6 +55,9 @@ Three material boundaries prevent expanding this narrow 8/10 rating:
    There is no deployed schema, replay execution, backfill, reconciliation,
    restore or cutover evidence, so it earns no PostgreSQL-replacement readiness
    credit yet.
+   A bounded deterministic dataset snapshot/reconciliation implementation now
+   exists, but it has no real-environment artifact and does not change this
+   evidence assessment.
 3. The checked-in comparison gates fail closed because no publication-scale
    1.90× Trino result or completed PostgreSQL transaction report exists.
 
