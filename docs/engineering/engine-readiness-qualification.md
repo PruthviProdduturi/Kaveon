@@ -260,6 +260,8 @@ release evidence after combined validation.
   observations. Locally constructed fixtures do not grant readiness credit.
 - Live chart backfill/reconciliation evidence across both supported source
   layouts and exact dataset revisions; local fixtures grant no readiness credit.
+- Live dashboard backfill and role-filtered shadow evidence with exact chart
+  revisions; filter dataset bindings and mutation replay remain pending.
 
 ### Engine-backed virtual chart datasets
 

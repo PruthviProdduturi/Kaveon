@@ -111,6 +111,29 @@ class ProductShadowReadTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "response is invalid"):
                     product_shadow_read.compare_chart({"id": "c1"}, "a", "Admin")
 
+    def test_dashboard_shadow_is_owner_scoped_canonical_and_default_off(self):
+        source = {"id":"d1","name":"Ops","layout":"[]","charts":"[\"c1\"]","filters":"[]",
+                  "visibility":"private","favorite":True,"thumbnail":"preview"}
+        target = {field: source.get(field) for field in product_shadow_read.DASHBOARD_SHADOW_FIELDS}
+        target.update({"layout":[],"charts":["c1"],"filters":[],"chart_revisions":{"c1":2}})
+        with patch.dict(os.environ, {}, clear=True), patch.object(product_shadow_read.product_store,"read") as read:
+            self.assertEqual(product_shadow_read.compare_dashboard(source,"owner","Admin")["status"],"disabled")
+            read.assert_not_called()
+        with patch.dict(os.environ,{"KAVEON_DASHBOARD_SHADOW_READ_ENABLED":"true"}),\
+             patch.object(product_shadow_read.product_store,"read",return_value={"document":target,"generation":4}) as read:
+            report=product_shadow_read.compare_dashboard(source,"owner","Viewer")
+        self.assertEqual(report["status"],"match"); read.assert_called_once_with("dashboard","d1","owner","Viewer")
+        self.assertNotIn("preview",str(report))
+
+    def test_dashboard_shadow_distinguishes_missing_mismatch_and_invalid_source(self):
+        with patch.dict(os.environ,{"KAVEON_DASHBOARD_SHADOW_READ_ENABLED":"true"}):
+            with patch.object(product_shadow_read.product_store,"read",return_value=None):
+                self.assertEqual(product_shadow_read.compare_dashboard({"id":"d1","layout":"[]","charts":"[]","filters":"[]"},"a","Admin")["status"],"missing")
+            with patch.object(product_shadow_read.product_store,"read",return_value={"document":{"id":"d1"},"generation":1}):
+                self.assertEqual(product_shadow_read.compare_dashboard({"id":"d1","layout":"[]","charts":"[]","filters":"[]"},"a","Admin")["status"],"mismatch")
+            with self.assertRaisesRegex(RuntimeError,"layout is invalid"):
+                product_shadow_read.compare_dashboard({"id":"d1","layout":"bad","charts":"[]","filters":"[]"},"a","Admin")
+
 
 if __name__ == "__main__":
     unittest.main()

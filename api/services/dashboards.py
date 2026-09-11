@@ -6,6 +6,7 @@ import re
 from datetime import datetime, timezone
 from typing import List, Optional
 import database.metadata as db
+from services import product_shadow_read
 
 VALID_VISIBILITY = {"private", "internal", "published"}
 
@@ -104,7 +105,17 @@ def get_dashboard_by_id(
                    created_by, modified_by, created_at, modified_at
             FROM dbo.dashboards WHERE id = @param0 AND id IS NOT NULL
         """, [dashboard_id])
-    return _adapt(row) if row else None
+    dashboard = _adapt(row) if row else None
+    if dashboard is not None and user_email:
+        try:
+            report = product_shadow_read.compare_dashboard(dashboard, user_email, role)
+            if report.get("enabled"):
+                import logging
+                logging.getLogger(__name__).info("dashboard_shadow_read %s", json.dumps(report, sort_keys=True))
+        except Exception as error:
+            import logging
+            logging.getLogger(__name__).warning("dashboard_shadow_read_error type=%s", type(error).__name__)
+    return dashboard
 
 
 def create_dashboard(data: dict, user_id: str) -> dict:

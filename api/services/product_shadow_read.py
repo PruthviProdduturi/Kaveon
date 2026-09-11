@@ -13,6 +13,10 @@ CHART_SHADOW_FIELDS = (
     "id", "name", "description", "dataset_id", "chart_type", "query_config",
     "viz_config", "visibility", "created_at", "updated_at", "created_by", "modified_by",
 )
+DASHBOARD_SHADOW_FIELDS = (
+    "id", "name", "description", "layout", "charts", "filters", "theme", "visibility",
+    "is_published", "is_archived", "created_at", "updated_at", "created_by", "modified_by",
+)
 
 
 def _identity(document: dict) -> tuple[str, int]:
@@ -119,3 +123,33 @@ def compare_chart(source_document: dict, actor: str, role: str) -> dict:
         "target_sha256": target_sha, "target_bytes": target_bytes,
         "target_generation": int(target.get("generation") or 0),
     }
+
+
+def compare_dashboard(source_document: dict, actor: str, role: str) -> dict:
+    """Compare canonical dashboard content without changing its PostgreSQL response."""
+    if os.getenv("KAVEON_DASHBOARD_SHADOW_READ_ENABLED") != "true":
+        return {"family": "dashboards", "enabled": False, "status": "disabled"}
+    record_id = str(source_document.get("id") or "")
+    if not record_id or not actor:
+        raise RuntimeError("dashboard shadow comparison requires record and actor identity")
+    source_projection = {field: source_document.get(field) for field in DASHBOARD_SHADOW_FIELDS}
+    for field in ("layout", "charts", "filters"):
+        value = source_projection[field]
+        try:
+            source_projection[field] = json.loads(value) if isinstance(value, str) else value
+        except json.JSONDecodeError as error:
+            raise RuntimeError(f"dashboard shadow {field} is invalid") from error
+    source_sha, source_bytes = _identity(source_projection)
+    target = product_store.read("dashboard", record_id, actor, role)
+    base = {"family": "dashboards", "enabled": True, "record_id": record_id,
+            "source_sha256": source_sha, "source_bytes": source_bytes}
+    if target is None:
+        return {**base, "status": "missing", "target_sha256": None}
+    document = target.get("document")
+    if not isinstance(document, dict):
+        raise RuntimeError("KaveonDB dashboard shadow response is invalid")
+    target_projection = {field: document.get(field) for field in DASHBOARD_SHADOW_FIELDS}
+    target_sha, target_bytes = _identity(target_projection)
+    return {**base, "status": "match" if source_sha == target_sha else "mismatch",
+            "target_sha256": target_sha, "target_bytes": target_bytes,
+            "target_generation": int(target.get("generation") or 0)}
