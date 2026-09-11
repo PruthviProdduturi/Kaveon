@@ -19,6 +19,8 @@ import os
 from middleware.auth import require_user_context, UserContext
 import database.metadata as db
 import database.pool as pool
+from services import product_outbox
+from services.chat_history_backfill import message_document, session_document
 
 router = APIRouter()
 
@@ -321,13 +323,48 @@ def _generate_answer(rows, columns, chart_type, title, question) -> str:
 
 # ── Persistence helper ────────────────────────────────────────────────────────
 
-def _save_message(session_id: int, role: str, content: str,
+def _save_message(session_id: int, owner_email: str, role: str, content: str,
                   sql_query: Optional[str] = None, chart_type: Optional[str] = None,
                   data: Optional[dict] = None, route: Optional[str] = None):
-    """Best-effort save — failures don't block the chat response."""
+    """Persist a message, atomically appending migration events when enabled."""
+    import json as _json
+    data_json = _json.dumps(data) if data else None
+
+    if os.getenv("KAVEON_CHAT_HISTORY_OUTBOX_ENABLED") == "true":
+        with db.transaction() as transaction:
+            session = transaction.query_one(
+                "SELECT id, user_email, title, created_at, updated_at "
+                "FROM dbo.chat_sessions WHERE id = @param0 AND user_email = @param1 FOR UPDATE",
+                [session_id, owner_email],
+            )
+            if not session:
+                raise RuntimeError("Chat session is missing or belongs to another user")
+            message = transaction.query_one(
+                "INSERT INTO dbo.chat_messages "
+                "(session_id, role, content, sql_query, chart_type, data, route) "
+                "VALUES (@param0, @param1, @param2, @param3, @param4, @param5::jsonb, @param6) "
+                "RETURNING id, session_id, role, content, sql_query, chart_type, data, route, created_at",
+                [session_id, role, content, sql_query, chart_type, data_json, route],
+            )
+            message = {**message, "user_email": owner_email}
+            updated_session = transaction.query_one(
+                "UPDATE dbo.chat_sessions SET updated_at = NOW() WHERE id = @param0 "
+                "RETURNING id, user_email, title, created_at, updated_at",
+                [session_id],
+            )
+            product_outbox.enqueue(
+                transaction, family="chat_messages", operation="create",
+                record_id=str(message["id"]), payload=message_document(message),
+                actor=owner_email, owner=owner_email,
+            )
+            product_outbox.enqueue(
+                transaction, family="chat_sessions", operation="update",
+                record_id=str(session_id), payload=session_document(updated_session),
+                actor=owner_email, owner=owner_email,
+            )
+        return
+
     try:
-        import json as _json
-        data_json = _json.dumps(data) if data else None
         db.execute(
             "INSERT INTO dbo.chat_messages (session_id, role, content, sql_query, chart_type, data, route) "
             "VALUES (@param0, @param1, @param2, @param3, @param4, @param5::jsonb, @param6)",
@@ -355,7 +392,7 @@ def chat(req: ChatRequest, ctx: UserContext = Depends(require_user_context)):
 
     # Save the user's question
     if sid:
-        _save_message(sid, "user", req.question.strip())
+        _save_message(sid, ctx.email, "user", req.question.strip())
 
     # Find matching dataset
     ds_info, columns, metrics = _find_dataset(question, req.dataset_id)
@@ -365,7 +402,7 @@ def chat(req: ChatRequest, ctx: UserContext = Depends(require_user_context)):
         names = [r.get("dataset_name") for r in all_ds.get("rows", [])]
         answer = f"I couldn't match that to your data. Available datasets: **{', '.join(names)}**"
         if sid:
-            _save_message(sid, "assistant", answer, route="no_match")
+            _save_message(sid, ctx.email, "assistant", answer, route="no_match")
         return ChatResponse(question=req.question, answer=answer, route="no_match")
 
     database = req.database or ds_info.get("database_name") or "kaveon"
@@ -375,7 +412,7 @@ def chat(req: ChatRequest, ctx: UserContext = Depends(require_user_context)):
     if not sql:
         answer = "I couldn't generate a query for that question. Try: 'Show [metric] by [column]' or 'Top 10 [column] by [metric]'."
         if sid:
-            _save_message(sid, "assistant", answer, route="parse_error")
+            _save_message(sid, ctx.email, "assistant", answer, route="parse_error")
         return ChatResponse(
             question=req.question, answer=answer, route="parse_error",
             dataset_name=ds_info.get("dataset_name"),
@@ -391,7 +428,7 @@ def chat(req: ChatRequest, ctx: UserContext = Depends(require_user_context)):
         answer = _generate_answer(rows, cols, chart_type, title or "", question)
 
         if sid:
-            _save_message(sid, "assistant", answer, sql_query=sql,
+            _save_message(sid, ctx.email, "assistant", answer, sql_query=sql,
                           chart_type=chart_type, route="direct",
                           data={"columns": cols, "rows": rows[:100], "row_count": len(rows)})
 
@@ -409,7 +446,7 @@ def chat(req: ChatRequest, ctx: UserContext = Depends(require_user_context)):
         duration_ms = int((time.time() - t0) * 1000)
         answer = f"Query failed: {str(e)[:200]}"
         if sid:
-            _save_message(sid, "assistant", answer, sql_query=sql, route="error")
+            _save_message(sid, ctx.email, "assistant", answer, sql_query=sql, route="error")
         return ChatResponse(
             question=req.question,
             answer=answer,

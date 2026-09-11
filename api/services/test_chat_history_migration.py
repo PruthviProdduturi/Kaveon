@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 if "pyodbc" not in sys.modules:sys.modules["pyodbc"]=SimpleNamespace(Error=Exception)
 from services import chat_history_backfill as b,chat_history_backfill_operation as operation,product_shadow_read
-from routers import chat_history
+from routers import chat,chat_history
 def session():return {"id":1,"user_email":"owner","title":"Chat","created_at":datetime(2026,1,1),"updated_at":datetime(2026,1,2)}
 def message():return {"id":2,"session_id":1,"user_email":"owner","role":"user","content":"hello","sql_query":None,"chart_type":None,"data":None,"route":None,"created_at":datetime(2026,1,1)}
 class Tx:
@@ -32,6 +32,15 @@ class Tests(unittest.TestCase):
   enqueue.assert_not_called();tx=Tx(ones=[session()])
   with patch.dict("os.environ",{"KAVEON_CHAT_HISTORY_OUTBOX_ENABLED":"true"}),patch.object(chat_history.db,"transaction",return_value=transaction(tx)),patch.object(chat_history.product_outbox,"enqueue",side_effect=RuntimeError("outbox failed")):
    with self.assertRaisesRegex(RuntimeError,"outbox failed"):chat_history.create_session(body,ctx)
+ def test_chat_writer_is_default_off_and_enabled_failure_is_atomic(self):
+  with patch.dict("os.environ",{},clear=True),patch.object(chat.db,"execute",side_effect=RuntimeError("source failed")),patch.object(chat.product_outbox,"enqueue") as enqueue:
+   chat._save_message(1,"owner","user","hello")
+  enqueue.assert_not_called()
+  tx=Tx(ones=[session(),message(),session()])
+  with patch.dict("os.environ",{"KAVEON_CHAT_HISTORY_OUTBOX_ENABLED":"true"}),patch.object(chat.db,"transaction",return_value=transaction(tx)),patch.object(chat.product_outbox,"enqueue",side_effect=RuntimeError("outbox failed")) as enqueue:
+   with self.assertRaisesRegex(RuntimeError,"outbox failed"):chat._save_message(1,"owner","user","hello")
+  self.assertEqual(enqueue.call_args.kwargs["family"],"chat_messages")
+  self.assertTrue(any("FOR UPDATE" in sql for kind,sql,_ in tx.calls if kind=="one"))
  def test_shadow_is_default_off_bounded_and_owner_scoped(self):
   self.assertFalse(product_shadow_read.observe_chat_session(session(),[message()],"owner")["enabled"])
   docs=[b.message_document(message()),b.session_document(session())]
