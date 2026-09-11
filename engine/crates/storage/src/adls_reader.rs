@@ -30,6 +30,11 @@ use crate::{
 };
 
 const DEFAULT_BATCH_SIZE: usize = 8_192;
+// Once a bounded immutable object is resident, small decoder batches add
+// channel, filter, and aggregate dispatch overhead without providing I/O
+// backpressure. Keep caller-selected sizes exact, but coalesce the default
+// for this in-memory path.
+const PRELOADED_BATCH_SIZE: usize = 65_536;
 const MAX_METADATA_CACHE_ENTRIES: usize = 256;
 const MAX_OBJECT_METADATA_CACHE_ENTRIES: usize = 256;
 const MAX_OBJECT_STORE_CACHE_ENTRIES: usize = 32;
@@ -697,9 +702,10 @@ impl AdlsParquetReader {
             object_metadata,
             preload.then(|| format!("{cache_key}:{identity}")),
         );
+        let batch_size = effective_batch_size(self.batch_size, preload);
         let mut builder =
             ParquetRecordBatchStreamBuilder::new_with_metadata(object_reader, metadata)
-                .with_batch_size(self.batch_size);
+                .with_batch_size(batch_size);
         metrics.footer_time(footer_started.elapsed());
         metrics.file_opened();
 
@@ -732,7 +738,7 @@ impl AdlsParquetReader {
         let decoded_cache_key = preload.then(|| {
             format!(
                 "{cache_key}:{identity}:batch={}:projection={projection:?}:row_groups={row_groups:?}",
-                self.batch_size
+                batch_size
             )
         });
         builder = builder.with_row_groups(row_groups);
@@ -851,6 +857,14 @@ impl AdlsParquetReader {
 
 fn should_preload_object(size: usize, row_groups: usize) -> bool {
     size <= FULL_OBJECT_CACHE_LIMIT && row_groups >= FULL_OBJECT_CACHE_MIN_ROW_GROUPS
+}
+
+fn effective_batch_size(configured: usize, preloaded: bool) -> usize {
+    if preloaded && configured == DEFAULT_BATCH_SIZE {
+        PRELOADED_BATCH_SIZE
+    } else {
+        configured
+    }
 }
 
 fn storage_error(message: impl Into<String>) -> KaveonError {
@@ -1054,5 +1068,18 @@ mod tests {
         assert!(should_preload_object(60 * 1024 * 1024, 306));
         assert!(!should_preload_object(65 * 1024 * 1024, 306));
         assert!(!should_preload_object(60 * 1024 * 1024, 31));
+    }
+
+    #[test]
+    fn preloaded_objects_coalesce_only_the_default_batch_size() {
+        assert_eq!(
+            effective_batch_size(DEFAULT_BATCH_SIZE, true),
+            PRELOADED_BATCH_SIZE
+        );
+        assert_eq!(
+            effective_batch_size(DEFAULT_BATCH_SIZE, false),
+            DEFAULT_BATCH_SIZE
+        );
+        assert_eq!(effective_batch_size(1_024, true), 1_024);
     }
 }
