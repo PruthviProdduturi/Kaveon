@@ -40,7 +40,7 @@ class ChartFreshnessTests(unittest.TestCase):
             result = engine._execute_dataset_query("SELECT COUNT(*)", "warehouse")
 
         self.assertIs(result, expected)
-        execute.assert_called_once_with("SELECT COUNT(*)", "warehouse")
+        execute.assert_called_once_with("SELECT COUNT(*)", "warehouse", timeout_seconds=engine._BUILD_QUERY_TIMEOUT_SECONDS)
 
     def test_native_row_counts_are_exact_engine_queries(self):
         with patch.object(engine.meta, "query_one", return_value={"engine_catalog": "OpenSource"}), \
