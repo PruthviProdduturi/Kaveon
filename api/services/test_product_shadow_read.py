@@ -48,6 +48,38 @@ class ProductShadowReadTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "record and actor identity"):
                     product_shadow_read.compare_dataset(document, actor, "Admin")
 
+    def test_list_comparison_is_owner_scoped_and_projection_only(self):
+        sources = [
+            {"id": "1", "name": "one", "favorite": True},
+            {"id": "2", "name": "two", "favorite": False},
+        ]
+        targets = [
+            {"document": {"id": "1", "name": "one", "columns": ["ignored"]}, "generation": 1},
+            {"document": {"id": "2", "name": "changed"}, "generation": 1},
+        ]
+        with patch.dict(os.environ, {"KAVEON_DATASET_SHADOW_READ_ENABLED": "true"}), \
+             patch.object(product_shadow_read.product_store, "read", side_effect=targets) as read:
+            report = product_shadow_read.compare_dataset_list(sources, "owner@example.test", "Viewer")
+        self.assertEqual(report["status"], "mismatch")
+        self.assertEqual((report["match"], report["mismatch"], report["missing"]), (1, 1, 0))
+        self.assertEqual(read.call_count, 2)
+        self.assertTrue(all(call.args[2:] == ("owner@example.test", "Viewer") for call in read.call_args_list))
+
+    def test_list_bound_skips_all_target_reads(self):
+        sources = [{"id": str(index)} for index in range(product_shadow_read.MAX_SHADOW_LIST_RECORDS + 1)]
+        with patch.dict(os.environ, {"KAVEON_DATASET_SHADOW_READ_ENABLED": "true"}), \
+             patch.object(product_shadow_read.product_store, "read") as read:
+            report = product_shadow_read.compare_dataset_list(sources, "owner", "Admin")
+        self.assertEqual(report["status"], "skipped_limit")
+        read.assert_not_called()
+
+    def test_disabled_list_returns_before_validation_or_target_access(self):
+        with patch.dict(os.environ, {}, clear=True), \
+             patch.object(product_shadow_read.product_store, "read") as read:
+            report = product_shadow_read.compare_dataset_list([{}], "", "bad-role")
+        self.assertEqual(report["status"], "disabled")
+        read.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

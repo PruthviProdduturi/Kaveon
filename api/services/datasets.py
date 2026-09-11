@@ -123,7 +123,14 @@ def list_datasets(user_email: str, role: str = "Viewer") -> List[dict]:
                  d.tables_used, d.created_by, d.modified_by, d.visibility
         ORDER BY d.modified_at DESC
     """, [user_email, role])
-    return [_adapt(r) for r in result["rows"]]
+    items = [_adapt(r) for r in result["rows"]]
+    try:
+        report = product_shadow_read.compare_dataset_list(items, user_email, role)
+        if report.get("enabled"):
+            logger.info("dataset_list_shadow_read %s", json.dumps(report, sort_keys=True))
+    except Exception as error:
+        logger.warning("dataset_list_shadow_read_error type=%s", type(error).__name__)
+    return items
 
 
 def get_dataset_by_id(

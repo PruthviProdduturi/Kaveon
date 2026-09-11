@@ -114,5 +114,8 @@ Datasets now have a first disabled shadow-read call site on authenticated point
 reads. When explicitly enabled, it compares the canonical PostgreSQL dataset
 document with one KaveonDB owner-scoped read under the requesting actor and role,
 then emits hash/size/generation telemetry only. It never changes the returned
-PostgreSQL object and does not cover lists, internal reads or writes. This is a
-parity observation boundary, not a read switch or cutover gate result.
+PostgreSQL object. Dataset lists now compare their response projection through
+at most 25 owner-scoped target point reads; larger results skip target access,
+and telemetry contains aggregate counts and batch hashes. Internal reads and
+writes remain uncovered. This is a parity observation boundary, not a read
+switch or cutover gate result.
