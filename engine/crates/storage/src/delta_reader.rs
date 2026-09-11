@@ -351,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn predicate_prunes_row_groups_across_all_files_without_filtering_rows() {
+    fn predicate_prunes_row_groups_and_filters_rows_across_all_files() {
         use arrow::{
             array::Int64Array,
             datatypes::{DataType, Field, Schema},
@@ -414,7 +414,7 @@ mod tests {
                     .copied(),
             );
         }
-        assert_eq!(values, vec![0, 1, 2, 3]);
+        assert_eq!(values, vec![0, 1]);
         assert_eq!(source.metrics().snapshot().row_groups_pruned(), 3);
         fs::remove_dir_all(table).unwrap();
     }
