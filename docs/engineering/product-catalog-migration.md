@@ -340,3 +340,18 @@ records are checked through owner-scoped point reads; larger lists emit
 match/missing/mismatch counts and order-sensitive batch hashes, never documents
 or principals. Internal service reads and every write path remain outside this
 slice.
+
+## Dataset post-write observer
+
+Set `KAVEON_DATASET_POST_WRITE_VERIFY_ENABLED=true` to observe committed
+PostgreSQL dataset creates, updates and deletes. The control defaults off and
+returns before reading the outbox. After the source transaction commits, the
+observer reads only that exact outbox event. An event without `applied_at` is
+reported as `pending_replay` and causes no target read; replay lag is therefore
+not mislabeled as data divergence. An applied create/update is checked against
+the owner-scoped KaveonDB record hash, while an applied delete verifies target
+absence. Changed or missing source events and target differences have distinct
+statuses. Telemetry contains IDs, source sequence, operation, hashes, sizes,
+generation, attempt count and bounded error code only. It never contains the
+document, actor or owner. Observer failures are reduced to exception type and
+cannot change the PostgreSQL mutation response.

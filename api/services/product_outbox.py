@@ -42,6 +42,21 @@ def pending(limit: int = 50) -> list[dict]:
     """, [limit])["rows"]
 
 
+def status(event_id: str) -> dict | None:
+    """Read bounded replay state for one exact source event."""
+    try:
+        event_id = str(uuid.UUID(event_id))
+    except (AttributeError, TypeError, ValueError):
+        raise ValueError("product outbox event ID must be a UUID") from None
+    return db.query_one("""
+        SELECT event_id, source_sequence, family, operation, record_id,
+               payload_sha256, owner_principal, applied_at, target_generation,
+               apply_attempts, last_error_code
+        FROM product_migration_outbox
+        WHERE event_id = @param0
+    """, [event_id])
+
+
 def mark_applied(event_id: str, payload_sha256: str, target_generation: int | None) -> bool:
     """Acknowledge a target commit only if the locked source event is unchanged."""
     with db.transaction() as transaction:

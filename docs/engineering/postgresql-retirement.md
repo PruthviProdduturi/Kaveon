@@ -135,6 +135,13 @@ aggregate evidence across representative roles, visibility states and changes;
 the existence of this comparator does not satisfy the shadow-read gate for
 datasets or any other family.
 
+The default-off dataset post-write observer distinguishes unapplied outbox lag
+(`pending_replay`) from a changed/missing source event or applied target
+divergence. It verifies applied events with owner-scoped reads and never changes
+the PostgreSQL mutation result. This closes a telemetry boundary only; replay,
+zero-lag fencing, live mutation coverage and durable report aggregation remain
+required before dataset cutover.
+
 Deleting the StatefulSet or PVC before these gates would remove the current
 product metadata authority and break Studio even though ADLS analytical queries
 remain available.

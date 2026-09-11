@@ -119,3 +119,10 @@ at most 25 owner-scoped target point reads; larger results skip target access,
 and telemetry contains aggregate counts and batch hashes. Internal reads and
 writes remain uncovered. This is a parity observation boundary, not a read
 switch or cutover gate result.
+
+Committed dataset mutations now also have a default-off verification observer.
+It checks the exact durable outbox event first, classifies an unapplied event as
+pending replay without reading KaveonDB, and compares only applied events under
+the stored owner. The observer emits content-free telemetry and cannot change
+the successful PostgreSQL response. It neither drives replay nor supplies live
+evidence until explicitly enabled and observed in qualification.

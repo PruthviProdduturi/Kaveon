@@ -76,6 +76,10 @@ Three material boundaries prevent expanding this narrow 8/10 rating:
    emits hash-only aggregate parity telemetry. It has not run in a live
    environment, covers no internal read or write path, and earns no readiness
    score yet.
+   Dataset mutations also have a disabled post-commit observer that separates
+   pending outbox replay from applied target divergence without changing source
+   responses. It has no live observations and does not execute replay or fence
+   writes, so it earns no readiness score.
 3. The checked-in comparison gates fail closed because no publication-scale
    1.90× Trino result or completed PostgreSQL transaction report exists.
 

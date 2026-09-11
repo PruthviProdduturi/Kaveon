@@ -140,6 +140,21 @@ def dataset_input():
 
 
 class DatasetTransactionTests(unittest.TestCase):
+    def test_post_write_observer_runs_after_commit_without_changing_create_response(self):
+        writer = AtomicWriter()
+        observed = []
+
+        def observe(event):
+            observed.append((writer.committed, event.operation, event.owner_principal))
+            return {"enabled": True, "status": "pending_replay"}
+
+        with patch.object(datasets.db, "transaction", return_value=atomic_transaction(writer)), \
+             patch.object(datasets, "get_dataset_by_id", return_value={"id": "7"}), \
+             patch.object(datasets.product_post_write_observer, "observe_dataset", side_effect=observe):
+            result = datasets.create_dataset(dataset_input(), "alice@example.com")
+        self.assertEqual(result, {"id": "7"})
+        self.assertEqual(observed, [(True, "create", "alice@example.com")])
+
     def test_create_commits_parent_children_and_exactly_one_canonical_outbox_event(self):
         writer = AtomicWriter()
         with patch.object(datasets.db, "transaction", return_value=atomic_transaction(writer)), \
