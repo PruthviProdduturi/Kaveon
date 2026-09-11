@@ -505,6 +505,22 @@ command is not scheduled or deployed. No concrete credential provider is built
 into the repository, and no live publication has run; qualification still
 requires a deployment-owned ADLS client and durable evidence.
 
+## Dataset migration rehearsal receipt
+
+`services.dataset_migration_rehearsal.verify` validates a credential-free,
+integrity-bound receipt for one live dataset rehearsal. The receipt must prove
+that replay drained exactly through the fenced source watermark, all five parity
+checks passed at that watermark, the KaveonDB head remained identical across an
+API/Engine restart, and rollback fenced target writes while restoring PostgreSQL
+reads and writes inside the operator-selected recovery objective. Receipts are
+freshness- and size-bounded, reject sensitive field names, and fail closed on
+missing, extra, stale, inconsistent or tampered evidence.
+
+This verifier does not collect evidence, enable a flag, switch reads, or
+authorize cutover. The dataset family remains PostgreSQL-authoritative until a
+deployment-owned runner executes the live sequence and the broader retirement
+gate accepts the resulting evidence.
+
 ## DLM migration rehearsal evidence
 
 `scripts/collect-dlm-migration-evidence.py` builds a credential-free, canonical
