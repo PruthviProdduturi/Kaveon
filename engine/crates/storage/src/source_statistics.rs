@@ -18,15 +18,14 @@ pub struct SourceStatistics {
 pub fn analyze_source(location: &str, format: DataFormat) -> Result<SourceStatistics> {
     match (is_object(location), format) {
         (true, DataFormat::Delta) => {
-            let snapshot = ObjectDeltaReader::from_uri(location)?.snapshot()?;
-            let metadata = ObjectDeltaReader::from_uri(location)?
-                .with_version(snapshot.version)
-                .metadata()?;
+            let reader = ObjectDeltaReader::from_uri(location)?;
+            let snapshot = reader.snapshot()?;
             let mut identity = format!("delta\n{}\n{}\n", location, snapshot.version);
-            for file in snapshot.files {
+            for file in &snapshot.files {
                 identity.push_str(file.as_ref());
                 identity.push('\n');
             }
+            let metadata = reader.metadata_for_snapshot(snapshot)?;
             Ok(stats(identity, metadata.row_count, &metadata.schema))
         }
         (true, DataFormat::Iceberg) => {
