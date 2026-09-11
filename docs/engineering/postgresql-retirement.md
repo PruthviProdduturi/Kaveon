@@ -37,10 +37,11 @@ is an application migration boundary, not an enabled repository adapter:
 backfill, PostgreSQL outbox/units of work, shadow-read wiring, write fencing and
 API cutover remain incomplete. It does not yet cover all 21 PostgreSQL tables.
 
-The PostgreSQL schema and API now contain the source-side unit-of-work and
-idempotent migration-outbox primitives. No repository writer is wired to them
-yet, so they add no migration coverage until a whole family writes its source
-mutation and outbox event in the same transaction.
+The PostgreSQL schema and API contain the source-side unit-of-work and
+idempotent migration-outbox primitives. The dataset parent and semantic-child
+writes now append exactly one event in that transaction. This is source capture,
+not migration completion: the schema is not deployed and no replay, backfill,
+reconciliation, shadow read or cutover is enabled.
 
 PostgreSQL may be retired only after one repeatable migration command proves all
 of the following against a preserved backup:

@@ -9,8 +9,8 @@ family has migrated.
 | --- | --- | --- | --- |
 | `catalog_sources` | `routers/catalog_sources.py`, Engine bridge, Lab and SQL routing | Native Engine catalog definitions plus future non-secret product source record | Unify source lifecycle at one pinned KaveonDB revision; retain only secret references; backfill and reconcile |
 | `data_sources` | `routers/data_sources.py`, connection pool resolution, credentials service | Future non-secret source record | Separate encrypted connection envelope from public metadata; migrate favorites tied to sources |
-| `datasets` | `services/datasets.py`; chat, AI, SQL and Lab readers | `dataset` product record | Put parent and semantic children in one canonical document; add source outbox to every mutation; backfill and shadow reads |
-| `dataset_dimensions`, `dataset_columns`, `dataset_metrics` | Dataset service; chat, query generator, AI and DLM readers | Children inside the revisioned `dataset` document | Replace delete/reinsert autocommit flows with one source unit of work; preserve uniqueness and parent constraints |
+| `datasets` | `services/datasets.py`; chat, AI, SQL and Lab readers | `dataset` product record | Source create/update/delete and one canonical outbox event now commit together; schema deployment, backfill, replay consumer and shadow reads remain |
+| `dataset_dimensions`, `dataset_columns`, `dataset_metrics` | Dataset service; chat, query generator, AI and DLM readers | Children inside the revisioned `dataset` document | Source replacement is now atomic with its parent/outbox; target uniqueness/reference validation, backfill and reconciliation remain |
 | `charts` | `services/charts.py`, dashboard rendering | `chart` product record | Define dataset reference extraction, stable legacy-ID mapping, outbox, backfill and visibility parity |
 | `dashboards` | `services/dashboards.py`, DLM/dashboard routes | `dashboard` product record | Define chart/filter-dataset references at one revision; outbox, backfill and shadow rendering |
 | `favorites` | `services/favorites.py`, dashboard and data-source routes | No typed favorite record yet | Add owner-unique favorite type and atomic dashboard/favorite behavior |
@@ -31,12 +31,12 @@ pins one PostgreSQL connection and commits or rolls back all statements together
 that same transaction, assigns a monotonic source sequence, bounds payloads, and
 rejects reuse of an event UUID with different content.
 
-No production writer uses the unit of work yet. That is deliberate: enabling an
-outbox before the schema migration is applied would break writes, while adding
-it after a mutation would lose atomicity. The next implementation slice must
-apply the schema, then move one complete repository family—datasets and semantic
-children are the strongest first candidate—into the unit of work with failure
-injection after every statement.
+Dataset create/update/delete now use the unit of work and append exactly one
+canonical event after all parent/child statements. Update locks the parent and
+rejects a stale pre-lock revision; child or outbox failures roll the source
+mutation back. Dataset deletion rejects dependent charts so PostgreSQL cannot
+perform a cascade that the dataset event failed to capture. This code must not be deployed before the outbox schema is
+applied. No replay consumer or KaveonDB write is enabled yet.
 
 PostgreSQL retirement still requires a discovered live-schema report because
 runtime and older deployments may contain tables absent from current source.

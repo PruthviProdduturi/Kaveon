@@ -109,7 +109,7 @@ def delete_dataset(dataset_id: str, ctx: UserContext = Depends(require_user_cont
         raise HTTPException(status_code=404, detail="Dataset not found")
     if not can_write(existing["created_by"], ctx):
         raise HTTPException(status_code=403, detail="You don't have permission to delete this dataset")
-    svc.delete_dataset(dataset_id)
+    svc.delete_dataset(dataset_id, ctx.email)
 
 
 @router.put("/datasets/{dataset_id}/favorite")
