@@ -84,3 +84,11 @@ underlying reconciliation report. Sensitive-shaped fields are rejected. The
 gate reads local JSON only and does not discover schemas or access credentials,
 so a separate read-only live-schema inventory must also prove that no
 authoritative runtime table is absent from this maintained manifest.
+
+`scripts/collect-postgresql-retirement-evidence.py` assembles that strict input
+from one locally archived report per family. It is disabled by default, verifies
+each report's canonical digest and binds its producer, PostgreSQL snapshot and
+KaveonDB snapshot provenance. Its exact schema rejects row samples and arbitrary
+fields. The collector is deliberately credential-free and performs no database
+or Engine requests; the family reconcilers remain responsible for producing the
+fresh read-only source/target facts.
