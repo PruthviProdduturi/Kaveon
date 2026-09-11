@@ -31,6 +31,7 @@ use crate::{
 
 const DEFAULT_BATCH_SIZE: usize = 8_192;
 const MAX_METADATA_CACHE_ENTRIES: usize = 256;
+const MAX_OBJECT_METADATA_CACHE_ENTRIES: usize = 256;
 const FULL_OBJECT_CACHE_LIMIT: usize = 64 * 1024 * 1024;
 const FULL_OBJECT_CACHE_MIN_ROW_GROUPS: usize = 32;
 const PROCESS_FULL_OBJECT_CACHE_LIMIT: usize = 256 * 1024 * 1024;
@@ -40,6 +41,38 @@ static FULL_OBJECT_CACHE: OnceLock<Mutex<HashMap<String, Arc<FullObjectEntry>>>>
 static DECODED_BATCH_CACHE_BYTES: AtomicUsize = AtomicUsize::new(0);
 static DECODED_BATCH_CACHE: OnceLock<Mutex<HashMap<String, Arc<DecodedBatchEntry>>>> =
     OnceLock::new();
+static OBJECT_METADATA_CACHE: OnceLock<Mutex<HashMap<String, object_store::ObjectMeta>>> =
+    OnceLock::new();
+
+fn cached_object_metadata(key: &str) -> Option<object_store::ObjectMeta> {
+    OBJECT_METADATA_CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .ok()?
+        .get(key)
+        .cloned()
+}
+
+fn cache_object_metadata(key: String, metadata: object_store::ObjectMeta) {
+    // A cached size is safe only when every subsequent byte request can be
+    // pinned to an immutable object identity.
+    if metadata.e_tag.is_none() && metadata.version.is_none() {
+        return;
+    }
+    let Ok(mut cache) = OBJECT_METADATA_CACHE.get_or_init(Default::default).lock() else {
+        return;
+    };
+    if cache.len() >= MAX_OBJECT_METADATA_CACHE_ENTRIES && !cache.contains_key(&key) {
+        cache.clear();
+    }
+    cache.insert(key, metadata);
+}
+
+fn invalidate_object_metadata(key: &str) {
+    if let Ok(mut cache) = OBJECT_METADATA_CACHE.get_or_init(Default::default).lock() {
+        cache.remove(key);
+    }
+}
 
 struct DecodedBatchEntry {
     batches: Arc<Vec<RecordBatch>>,
@@ -229,7 +262,28 @@ impl AsyncFileReader for AdlsObjectReader {
         range: std::ops::Range<usize>,
     ) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
         if self.shared.is_none() {
-            return self.inner.get_bytes(range);
+            let store = self.store.clone();
+            let path = self.path.clone();
+            let e_tag = self.e_tag.clone();
+            let version = self.version.clone();
+            return async move {
+                store
+                    .get_opts(
+                        &path,
+                        GetOptions {
+                            if_match: e_tag,
+                            version,
+                            range: Some(range.into()),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .map_err(|error| ParquetError::External(Box::new(error)))?
+                    .bytes()
+                    .await
+                    .map_err(|error| ParquetError::External(Box::new(error)))
+            }
+            .boxed();
         }
         async move {
             let cached = self.cached_bytes().await?;
@@ -248,7 +302,37 @@ impl AsyncFileReader for AdlsObjectReader {
         ranges: Vec<std::ops::Range<usize>>,
     ) -> BoxFuture<'_, parquet::errors::Result<Vec<Bytes>>> {
         if self.shared.is_none() {
-            return self.inner.get_byte_ranges(ranges);
+            let store = self.store.clone();
+            let path = self.path.clone();
+            let e_tag = self.e_tag.clone();
+            let version = self.version.clone();
+            return async move {
+                futures::future::try_join_all(ranges.into_iter().map(|range| {
+                    let store = store.clone();
+                    let path = path.clone();
+                    let e_tag = e_tag.clone();
+                    let version = version.clone();
+                    async move {
+                        store
+                            .get_opts(
+                                &path,
+                                GetOptions {
+                                    if_match: e_tag,
+                                    version,
+                                    range: Some(range.into()),
+                                    ..Default::default()
+                                },
+                            )
+                            .await
+                            .map_err(|error| ParquetError::External(Box::new(error)))?
+                            .bytes()
+                            .await
+                            .map_err(|error| ParquetError::External(Box::new(error)))
+                    }
+                }))
+                .await
+            }
+            .boxed();
         }
         async move {
             let cached = self.cached_bytes().await?;
@@ -333,6 +417,7 @@ pub struct AdlsBatchStream {
     output_projection: Option<Vec<usize>>,
     decoded_cache_key: Option<String>,
     decoded_batches: Vec<RecordBatch>,
+    object_cache_key: String,
 }
 
 impl AdlsBatchStream {
@@ -348,7 +433,13 @@ impl AdlsBatchStream {
 
     pub async fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
         let started = Instant::now();
-        let result = self.inner.next().await.transpose().map_err(parquet_error)?;
+        let result = match self.inner.next().await.transpose() {
+            Ok(result) => result,
+            Err(error) => {
+                invalidate_object_metadata(&self.object_cache_key);
+                return Err(parquet_error(error));
+            }
+        };
         self.metrics.read_time(started.elapsed());
         if let Some(batch) = &result {
             self.metrics.emitted(batch.num_rows());
@@ -498,14 +589,24 @@ impl AdlsParquetReader {
         let path =
             Path::parse(&self.object_path).map_err(|error| storage_error(error.to_string()))?;
         let footer_started = Instant::now();
-        let object_metadata = store.head(&path).await.map_err(object_store_error)?;
         let cache_key = format!("{}/{}/{}", self.account, self.container, self.object_path);
+        let object_metadata = match cached_object_metadata(&cache_key) {
+            Some(metadata) => {
+                metrics.object_metadata_cache_hit();
+                metadata
+            }
+            None => {
+                let metadata = store.head(&path).await.map_err(object_store_error)?;
+                cache_object_metadata(cache_key.clone(), metadata.clone());
+                metadata
+            }
+        };
         let identity = object_identity(&object_metadata);
         let metadata = match cached_metadata(&cache_key, &identity) {
             Some(metadata) => metadata,
             None => {
                 let mut object_reader =
-                    ParquetObjectReader::new(store.clone(), object_metadata.clone());
+                    AdlsObjectReader::new(store.clone(), object_metadata.clone(), None);
                 let metadata =
                     ArrowReaderMetadata::load_async(&mut object_reader, Default::default())
                         .await
@@ -584,6 +685,7 @@ impl AdlsParquetReader {
             output_projection,
             decoded_cache_key: (!cache_hit).then_some(decoded_cache_key).flatten(),
             decoded_batches: Vec::new(),
+            object_cache_key: cache_key,
         })
     }
 
@@ -693,6 +795,31 @@ mod tests {
     use super::*;
     use arrow::array::Int64Array;
     use object_store::{ObjectStore, PutPayload, memory::InMemory};
+
+    #[tokio::test]
+    async fn cached_object_metadata_is_identity_pinned_and_invalidatable() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let path = Path::from(format!("identity-cache-{}.parquet", std::process::id()));
+        store
+            .put(&path, PutPayload::from_static(b"first"))
+            .await
+            .unwrap();
+        let first = store.head(&path).await.unwrap();
+        assert!(first.e_tag.is_some() || first.version.is_some());
+        let key = path.to_string();
+        cache_object_metadata(key.clone(), first.clone());
+        assert_eq!(cached_object_metadata(&key).unwrap(), first);
+
+        store
+            .put(&path, PutPayload::from_static(b"second"))
+            .await
+            .unwrap();
+        let mut pinned = AdlsObjectReader::new(store, first, None);
+        assert!(pinned.get_bytes(0..1).await.is_err());
+
+        invalidate_object_metadata(&key);
+        assert!(cached_object_metadata(&key).is_none());
+    }
 
     #[test]
     fn decoded_batches_are_reused_by_exact_snapshot_key() {

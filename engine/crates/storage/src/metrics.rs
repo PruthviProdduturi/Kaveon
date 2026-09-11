@@ -6,6 +6,7 @@ use std::time::Duration;
 pub struct ScanMetricsSnapshot {
     pub files_considered: u64,
     pub files_opened: u64,
+    pub object_metadata_cache_hits: u64,
     pub row_groups_considered: u64,
     pub row_groups_selected: u64,
     pub rows_selected: u64,
@@ -48,6 +49,7 @@ pub struct ScanMetrics(Arc<ScanMetricsInner>);
 struct ScanMetricsInner {
     files_considered: AtomicU64,
     files_opened: AtomicU64,
+    object_metadata_cache_hits: AtomicU64,
     row_groups_considered: AtomicU64,
     row_groups_selected: AtomicU64,
     rows_selected: AtomicU64,
@@ -64,6 +66,7 @@ impl ScanMetrics {
         ScanMetricsSnapshot {
             files_considered: self.load(&self.0.files_considered),
             files_opened: self.load(&self.0.files_opened),
+            object_metadata_cache_hits: self.load(&self.0.object_metadata_cache_hits),
             row_groups_considered: self.load(&self.0.row_groups_considered),
             row_groups_selected: self.load(&self.0.row_groups_selected),
             rows_selected: self.load(&self.0.rows_selected),
@@ -84,6 +87,11 @@ impl ScanMetrics {
     }
     pub(crate) fn file_opened(&self) {
         self.0.files_opened.fetch_add(1, Ordering::Relaxed);
+    }
+    pub(crate) fn object_metadata_cache_hit(&self) {
+        self.0
+            .object_metadata_cache_hits
+            .fetch_add(1, Ordering::Relaxed);
     }
     pub(crate) fn row_groups(&self, considered: u64, selected: u64) {
         self.0
