@@ -65,17 +65,18 @@ If the AKS command attachment limit rejects the generated archive, use an
 approved runner inside the allowed subnet to upload the same files with the
 same create-only headers. Do not open the storage firewall.
 
-Apply the small manifest ConfigMap and a distinct Trino internal secret through
-the same authenticated AKS command path:
+Apply the small manifest ConfigMap and the private Trino authentication and TLS
+secrets through the same authenticated AKS command path:
 
 ```powershell
-python scripts/aks-trino-benchmark-secret.py --release $release --output "tmp/$runId/trino-secret.json"
-az aks command invoke --subscription $subscription --resource-group $resourceGroup `
-  --name $cluster --file "tmp/$runId/trino-secret.json" `
-  --command "kubectl apply -f trino-secret.json" -o json
 az aks command invoke --subscription $subscription --resource-group $resourceGroup `
   --name $cluster --file "tmp/$runId/manifest-configmap.json" `
   --command "kubectl apply -f manifest-configmap.json" -o json
+python scripts/aks-trino-benchmark-secret.py --release $release `
+  --output "tmp/$runId/trino-secret.json"
+az aks command invoke --subscription $subscription --resource-group $resourceGroup `
+  --name $cluster --file "tmp/$runId/trino-secret.json" `
+  --command "kubectl apply -f trino-secret.json" -o json
 ```
 
 ## Build the runner and park Trino
@@ -115,6 +116,13 @@ az aks command invoke --subscription $subscription --resource-group $resourceGro
   --name $cluster --file "tmp/$runId/kaveon-trino-benchmark-chart.tar" `
   --command "tar -xf kaveon-trino-benchmark-chart.tar && helm upgrade --install $release ./kaveon-trino-benchmark --namespace $namespace --set-string trino.image.repository=$registry.azurecr.io/trino --set-string trino.image.digest=$trinoDigest --set-string trino.storage.account=$account --set-string runner.kaveon.expectedImageDigest=$kaveonDigest --wait --timeout 10m" -o json
 ```
+
+The chart uses Trino's manual internal-TLS mode with a dedicated headless
+Service and pod FQDNs. The generated certificate covers the client Service DNS
+names and only the benchmark StatefulSet names beneath the private `kb`
+headless Service. Its short name keeps the coordinator FQDN within Linux's
+64-character hostname limit.
+The same private CA validates both client and node traffic.
 
 Run the read-only preflight. It addresses Azure by subscription, resource group,
 and cluster name, so the unrelated local `kubectl` context cannot redirect it:

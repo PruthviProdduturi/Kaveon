@@ -36,11 +36,13 @@ def main():
     key = rsa.generate_private_key(public_exponent=65537, key_size=3072)
     service = f"{args.release}-trino"
     names = [service, f"{service}.{args.namespace}", f"{service}.{args.namespace}.svc",
-             f"{service}.{args.namespace}.svc.cluster.local"]
+             f"{service}.{args.namespace}.svc.cluster.local",
+             f"*.kb.{args.namespace}.svc.cluster.local"]
+    subject_names = [x509.DNSName(name) for name in names]
     cert = (x509.CertificateBuilder().subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, service)]))
             .issuer_name(ca_name).public_key(key.public_key()).serial_number(x509.random_serial_number())
             .not_valid_before(now - dt.timedelta(minutes=5)).not_valid_after(now + dt.timedelta(days=30))
-            .add_extension(x509.SubjectAlternativeName([x509.DNSName(name) for name in names]), critical=False)
+            .add_extension(x509.SubjectAlternativeName(subject_names), critical=False)
             .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
             .add_extension(x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
             .sign(ca_key, hashes.SHA256()))

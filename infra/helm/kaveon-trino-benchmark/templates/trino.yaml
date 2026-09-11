@@ -17,6 +17,19 @@ spec:
     - {name: https, port: 8443, targetPort: https}
 ---
 apiVersion: v1
+kind: Service
+metadata:
+  name: kb
+  namespace: {{ .Release.Namespace }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/instance: {{ $name }}
+  ports:
+    - {name: https, port: 8443, targetPort: https}
+---
+apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ $name }}-trino-config
@@ -49,7 +62,7 @@ metadata:
   name: {{ $name }}-trino-{{ $role }}
   namespace: {{ $.Release.Namespace }}
 spec:
-  serviceName: {{ $name }}-trino
+  serviceName: kb
   replicas: 0
   podManagementPolicy: Parallel
   selector:
@@ -64,6 +77,8 @@ spec:
         azure.workload.identity/use: "true"
     spec:
       serviceAccountName: {{ $.Values.trino.serviceAccountName }}
+      subdomain: kb
+      setHostnameAsFQDN: true
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 120
       securityContext:
@@ -109,6 +124,9 @@ spec:
               discovery.uri=https://{{ $name }}-trino.{{ $.Release.Namespace }}.svc.cluster.local:8443
               internal-communication.shared-secret=${INTERNAL_SHARED_SECRET}
               internal-communication.https.required=true
+              internal-communication.https.keystore.path=/trino-tls/server.pem
+              internal-communication.https.truststore.path=/trino-tls/ca.crt
+              node.internal-address-source=FQDN
               query.max-memory=2GB
               query.max-total-memory=2GB
               query.max-memory-per-node=512MB
