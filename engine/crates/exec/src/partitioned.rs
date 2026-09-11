@@ -27,16 +27,37 @@ const MAX_ADAPTIVE_BATCHES: usize = 64;
 struct BufferedPrefix {
     schema: SchemaRef,
     batches: Vec<RecordBatch>,
-    guards: Vec<MemoryReservation>,
+    guards: Vec<Option<MemoryReservation>>,
     tail: Option<Box<dyn BatchOperator>>,
     complete: bool,
 }
 
 impl BufferedPrefix {
     fn collect(
+        source: Box<dyn BatchOperator>,
+        memory: &OperatorMemoryAccount,
+        limit: u64,
+    ) -> Result<Self> {
+        Self::collect_with_batch_limit(source, memory, limit, MAX_ADAPTIVE_BATCHES)
+    }
+
+    fn collect_partial_distinct(
+        source: Box<dyn BatchOperator>,
+        memory: &OperatorMemoryAccount,
+        limit: u64,
+    ) -> Result<Self> {
+        // A global DISTINCT state is usually much smaller than its input, but
+        // its encoded partial still contains every admitted value. Let the
+        // byte limit, rather than the generic adaptive batch-count limit,
+        // bound how much input one worker combines before exchange.
+        Self::collect_with_batch_limit(source, memory, limit, usize::MAX)
+    }
+
+    fn collect_with_batch_limit(
         mut source: Box<dyn BatchOperator>,
         memory: &OperatorMemoryAccount,
         limit: u64,
+        batch_limit: usize,
     ) -> Result<Self> {
         let mut prefix = Self {
             schema: source.schema().clone(),
@@ -50,7 +71,7 @@ impl BufferedPrefix {
             prefix.tail = Some(source);
             return Ok(prefix);
         }
-        while prefix.batches.len() < MAX_ADAPTIVE_BATCHES {
+        while prefix.batches.len() < batch_limit {
             memory.check_cancelled()?;
             let Some(batch) = source.next_batch()? else {
                 prefix.complete = true;
@@ -61,17 +82,19 @@ impl BufferedPrefix {
             // preflight, just like a batch returned by any upstream operator.
             if bytes.saturating_add(cost) > limit {
                 prefix.batches.push(batch);
+                prefix.guards.push(None);
                 prefix.tail = Some(source);
                 return Ok(prefix);
             }
             match memory.reserve(cost) {
                 Ok(guard) => {
-                    prefix.guards.push(guard);
+                    prefix.guards.push(Some(guard));
                     bytes += cost;
                     prefix.batches.push(batch);
                 }
                 Err(KaveonError::MemoryLimit(_)) => {
                     prefix.batches.push(batch);
+                    prefix.guards.push(None);
                     prefix.tail = Some(source);
                     return Ok(prefix);
                 }
@@ -87,7 +110,8 @@ impl BufferedPrefix {
             schema: self.schema.clone(),
             batches: self.batches.clone().into(),
             tail: None,
-            _guards: Vec::new(),
+            guards: VecDeque::new(),
+            active_guard: None,
         })
     }
 
@@ -96,8 +120,13 @@ impl BufferedPrefix {
             schema: self.schema,
             batches: self.batches.into(),
             tail: self.tail,
-            _guards: self.guards,
+            guards: self.guards.into(),
+            active_guard: None,
         })
+    }
+
+    fn take_tail(&mut self) -> Option<Box<dyn BatchOperator>> {
+        self.tail.take()
     }
 }
 
@@ -105,14 +134,17 @@ struct ReplayInput {
     schema: SchemaRef,
     batches: VecDeque<RecordBatch>,
     tail: Option<Box<dyn BatchOperator>>,
-    _guards: Vec<MemoryReservation>,
+    guards: VecDeque<Option<MemoryReservation>>,
+    active_guard: Option<MemoryReservation>,
 }
 impl BatchOperator for ReplayInput {
     fn schema(&self) -> &SchemaRef {
         &self.schema
     }
     fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        self.active_guard = None;
         if let Some(batch) = self.batches.pop_front() {
+            self.active_guard = self.guards.pop_front().flatten();
             return Ok(Some(batch));
         }
         self.tail
@@ -644,13 +676,39 @@ impl PartitionedHashAggregate {
             let Some(mut input) = self.input.take() else {
                 return Ok(None);
             };
+            if self.group_by.is_empty()
+                && self.aggregates.iter().any(|aggregate| aggregate.distinct)
+            {
+                let mut prefix = BufferedPrefix::collect_partial_distinct(
+                    input,
+                    &self.memory,
+                    self.adaptive_bytes.unwrap_or(adaptive_limit(&self.memory)?),
+                )?;
+                match self.aggregate_batch(prefix.trial(), true) {
+                    Ok((batch, guard)) => {
+                        self.input = prefix.take_tail();
+                        self.output_memory = guard;
+                        return Ok(batch);
+                    }
+                    Err(KaveonError::MemoryLimit(_)) => {
+                        // Preserve the old one-batch streaming fallback when a
+                        // high-cardinality DISTINCT cannot fit the bounded
+                        // coalescing window. Replaying the prefix avoids losing
+                        // input consumed during the speculative combine.
+                        self.memory.check_cancelled()?;
+                        input = prefix.replay();
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
             if let Some(input_batch) = input.next_batch()? {
                 let input_rows = input_batch.num_rows();
                 let source = Box::new(ReplayInput {
                     schema: Arc::clone(&self.input_schema),
                     batches: VecDeque::from([input_batch.clone()]),
                     tail: None,
-                    _guards: Vec::new(),
+                    guards: VecDeque::new(),
+                    active_guard: None,
                 });
                 match self.aggregate_batch(source, self.input_reserved) {
                     Ok((batch, guard))
@@ -672,7 +730,8 @@ impl PartitionedHashAggregate {
                             schema: Arc::clone(&self.input_schema),
                             batches: VecDeque::from([input_batch]),
                             tail: Some(input),
-                            _guards: Vec::new(),
+                            guards: VecDeque::new(),
+                            active_guard: None,
                         }));
                     }
                     Err(error) => return Err(error),
@@ -1292,6 +1351,98 @@ mod tests {
             1_700_000
         );
         assert_eq!(disk.snapshot().peak_bytes, 0);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn partial_global_distinct_combines_across_worker_batches() {
+        let pool = QueryMemoryPool::new("combined-global-distinct", 128 * 1024 * 1024).unwrap();
+        let disk = spill();
+        let mut aggregate = PartitionedHashAggregate::new_partial(
+            input((0..400_000).map(|value| Some(value % 1_000)).collect(), 128),
+            vec![],
+            vec![AggExpr::new(AggFunc::Count, "id").distinct()],
+            pool.operator("partial").unwrap(),
+            disk.clone(),
+            16,
+        )
+        .unwrap();
+        let mut batches = Vec::new();
+        while let Some(batch) = aggregate.next_batch().unwrap() {
+            batches.push(batch);
+        }
+
+        // The generic streaming path would emit one state for each of the
+        // 3,125 source batches. The byte-bounded DISTINCT window can combine
+        // this complete worker input into one exact state.
+        assert_eq!(batches.len(), 1);
+        let states = grouped_aggregate_states_from_batches(&batches).unwrap();
+        let merged = merge_grouped_aggregate_states(states).unwrap();
+        let finalized = finalize_grouped_aggregate_states(&merged).unwrap();
+        assert_eq!(finalized.len(), 1);
+        assert!(matches!(
+            finalized[0].values[0],
+            crate::aggregate::FinalAggregateValue::Count(1_000)
+        ));
+        assert_eq!(disk.snapshot().peak_bytes, 0);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn partial_global_distinct_releases_memory_when_cancelled_during_combine() {
+        let pool = QueryMemoryPool::new("cancel-global-distinct", 8 * 1024 * 1024).unwrap();
+        pool.set_cancellation_probe(|| true).unwrap();
+        let mut aggregate = PartitionedHashAggregate::new_partial(
+            input((0..10_000).map(Some).collect(), 128),
+            vec![],
+            vec![AggExpr::new(AggFunc::Count, "id").distinct()],
+            pool.operator("partial").unwrap(),
+            spill(),
+            16,
+        )
+        .unwrap();
+
+        assert!(
+            aggregate
+                .next_batch()
+                .unwrap_err()
+                .to_string()
+                .contains("query canceled")
+        );
+        drop(aggregate);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn partial_global_distinct_replays_prefix_when_combine_exceeds_memory() {
+        let pool = QueryMemoryPool::new("bounded-global-distinct", 1024 * 1024).unwrap();
+        let mut aggregate = PartitionedHashAggregate::new_partial(
+            input((0..10_000).map(Some).collect(), 128),
+            vec![],
+            vec![AggExpr::new(AggFunc::Count, "id").distinct()],
+            pool.operator("partial").unwrap(),
+            spill(),
+            16,
+        )
+        .unwrap();
+        // Force the speculative prefix to consume the available budget. Its
+        // aggregate cannot fit beside those retained batches, so execution
+        // must replay them through the original bounded one-batch path.
+        aggregate.adaptive_bytes = Some(256 * 1024);
+        let mut batches = Vec::new();
+        while let Some(batch) = aggregate.next_batch().unwrap() {
+            batches.push(batch);
+        }
+
+        assert!(batches.len() > 1);
+        let states = grouped_aggregate_states_from_batches(&batches).unwrap();
+        let merged = merge_grouped_aggregate_states(states).unwrap();
+        let finalized = finalize_grouped_aggregate_states(&merged).unwrap();
+        assert!(matches!(
+            finalized[0].values[0],
+            crate::aggregate::FinalAggregateValue::Count(10_000)
+        ));
+        assert!(pool.snapshot().peak_bytes <= 1024 * 1024);
         assert_eq!(pool.snapshot().current_bytes, 0);
     }
 
