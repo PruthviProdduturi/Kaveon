@@ -538,7 +538,10 @@ enum Key {
 /// Common integer joins avoid allocating a Vec<Key> for every probe row.
 /// Other key layouts use the existing exact typed composite representation.
 enum JoinIndex {
-    Int64(AHashMap<i64, Vec<usize>>),
+    Int64 {
+        first_rows: AHashMap<i64, usize>,
+        duplicate_rows: AHashMap<i64, Vec<usize>>,
+    },
     Composite(AHashMap<Vec<Key>, Vec<usize>>),
 }
 
@@ -554,16 +557,28 @@ impl JoinIndex {
             let values = right
                 .column(*index)
                 .as_primitive::<arrow::datatypes::Int64Type>();
-            let mut map: AHashMap<i64, Vec<usize>> = AHashMap::new();
+            let mut first_rows = AHashMap::new();
+            let mut duplicate_rows: AHashMap<i64, Vec<usize>> = AHashMap::new();
             for row in 0..values.len() {
                 if row.is_multiple_of(1024) {
                     check_cancelled(memory)?;
                 }
                 if values.is_valid(row) {
-                    map.entry(values.value(row)).or_default().push(row);
+                    let key = values.value(row);
+                    if let Some(first_row) = first_rows.get(&key).copied() {
+                        duplicate_rows
+                            .entry(key)
+                            .or_insert_with(|| vec![first_row])
+                            .push(row);
+                    } else {
+                        first_rows.insert(key, row);
+                    }
                 }
             }
-            return Ok(Self::Int64(map));
+            return Ok(Self::Int64 {
+                first_rows,
+                duplicate_rows,
+            });
         }
         let mut map: AHashMap<Vec<Key>, Vec<usize>> = AHashMap::new();
         for row in 0..right.num_rows() {
@@ -584,14 +599,25 @@ impl JoinIndex {
         keys: &[(usize, usize)],
     ) -> Result<Option<&[usize]>> {
         Ok(match self {
-            Self::Int64(map) => {
+            Self::Int64 {
+                first_rows,
+                duplicate_rows,
+            } => {
                 let values = left
                     .column(keys[0].0)
                     .as_primitive::<arrow::datatypes::Int64Type>();
                 if values.is_null(row) {
                     None
                 } else {
-                    map.get(&values.value(row)).map(Vec::as_slice)
+                    let key = values.value(row);
+                    if duplicate_rows.is_empty() {
+                        first_rows.get(&key).map(std::slice::from_ref)
+                    } else {
+                        duplicate_rows
+                            .get(&key)
+                            .map(Vec::as_slice)
+                            .or_else(|| first_rows.get(&key).map(std::slice::from_ref))
+                    }
                 }
             }
             Self::Composite(map) => row_key(left, row, keys, true)?
