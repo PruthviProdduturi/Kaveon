@@ -56,7 +56,13 @@ pub enum ProductDmlCommand {
 /// Adapt only Kaveon's typed product-record SQL facade. Arbitrary row DML has
 /// no storage contract and is rejected instead of being silently emulated.
 pub fn adapt_product_dml(dml: &NativeDmlStatement) -> Result<ProductDmlCommand> {
-    let kind = product_kind(&dml.table)?;
+    let kind = if dml.table.eq_ignore_ascii_case("kaveon.product.typed_rows")
+        || dml.table.eq_ignore_ascii_case("product.typed_rows")
+    {
+        "typed_row".to_owned()
+    } else {
+        product_kind(&dml.table)?
+    };
     match &dml.ast {
         Statement::Insert(insert) => {
             let columns: Vec<_> = insert
@@ -535,6 +541,7 @@ mod tests {
             "DELETE FROM product.dashboards WHERE id = 'd-1' AND revision = 3",
             "INSERT INTO product.dlm_definitions (id, document_json) VALUES ('ds-1', '{}')",
             "INSERT INTO product.dlm_runs (id, document_json) VALUES ('run-1', '{}')",
+            "INSERT INTO kaveon.product.typed_rows (id, document_json) VALUES ('row-1', '{}')",
         ] {
             let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(sql).unwrap()
             else {
