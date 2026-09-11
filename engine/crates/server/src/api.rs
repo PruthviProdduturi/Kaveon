@@ -2294,10 +2294,48 @@ async fn analyze_failure(
         .into_response()
 }
 
-async fn capabilities(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    Json(
-        serde_json::json!({"native_analyze": state.config.coordinator && state.product_transactions.catalog().is_some()}),
-    )
+#[derive(Debug, Serialize)]
+struct TransactionCapabilities {
+    enabled: bool,
+    supported_statements: [&'static str; 6],
+    single_statement_per_request: bool,
+    parameter_binding: bool,
+    multi_row_insert: bool,
+    returning: bool,
+    savepoints: bool,
+    explicit_isolation_modes: bool,
+    arbitrary_table_dml: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct EngineCapabilities {
+    native_analyze: bool,
+    transactions: TransactionCapabilities,
+}
+
+async fn capabilities(State(state): State<Arc<AppState>>) -> Json<EngineCapabilities> {
+    let transactions_enabled = state.product_transactions.catalog().is_some();
+    Json(EngineCapabilities {
+        native_analyze: state.config.coordinator && transactions_enabled,
+        transactions: TransactionCapabilities {
+            enabled: transactions_enabled,
+            supported_statements: [
+                "BEGIN",
+                "INSERT product record",
+                "UPDATE product record",
+                "DELETE product record",
+                "COMMIT",
+                "ROLLBACK",
+            ],
+            single_statement_per_request: true,
+            parameter_binding: false,
+            multi_row_insert: false,
+            returning: false,
+            savepoints: false,
+            explicit_isolation_modes: false,
+            arbitrary_table_dml: false,
+        },
+    })
 }
 
 const MAX_DIAGNOSTIC_STATISTICS: usize = 100;
@@ -5422,17 +5460,25 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["statistics"][0]["current"], false);
         let enabled = capabilities(axum::extract::State(state)).await.0;
-        assert_eq!(enabled["native_analyze"], true);
+        assert!(enabled.native_analyze);
+        assert!(enabled.transactions.enabled);
+        assert_eq!(enabled.transactions.supported_statements[0], "BEGIN");
+        assert!(enabled.transactions.single_statement_per_request);
+        assert!(!enabled.transactions.parameter_binding);
+        assert!(!enabled.transactions.multi_row_insert);
+        assert!(!enabled.transactions.returning);
+        assert!(!enabled.transactions.savepoints);
+        assert!(!enabled.transactions.explicit_isolation_modes);
+        assert!(!enabled.transactions.arbitrary_table_dml);
         std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[tokio::test]
     async fn capability_is_false_without_durable_statistics_authority() {
         let state = Arc::new(catalog_test_state());
-        assert_eq!(
-            capabilities(axum::extract::State(state)).await.0["native_analyze"],
-            false
-        );
+        let capabilities = capabilities(axum::extract::State(state)).await.0;
+        assert!(!capabilities.native_analyze);
+        assert!(!capabilities.transactions.enabled);
     }
 
     #[tokio::test]
