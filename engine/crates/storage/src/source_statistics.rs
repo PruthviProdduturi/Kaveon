@@ -184,4 +184,35 @@ mod tests {
         assert_ne!(first.identity_sha256, replaced.identity_sha256);
         std::fs::remove_file(path).unwrap();
     }
+
+    #[test]
+    fn local_delta_statistics_follow_the_exact_active_snapshot() {
+        let directory =
+            std::env::temp_dir().join(format!("kaveon-analyze-delta-{}", std::process::id()));
+        let log = directory.join("_delta_log");
+        std::fs::create_dir_all(&log).unwrap();
+        write(&directory.join("first.parquet"), 3);
+        write(&directory.join("second.parquet"), 5);
+        write(&directory.join("third.parquet"), 7);
+        std::fs::write(
+            log.join("00000000000000000000.json"),
+            "{\"add\":{\"path\":\"first.parquet\"}}\n{\"add\":{\"path\":\"second.parquet\"}}",
+        )
+        .unwrap();
+
+        let first = analyze_source(directory.to_str().unwrap(), DataFormat::Delta).unwrap();
+        assert_eq!(first.row_count, 8);
+        assert_eq!(first.columns, ["id", "name"]);
+
+        std::fs::write(
+            log.join("00000000000000000001.json"),
+            "{\"remove\":{\"path\":\"first.parquet\"}}\n{\"add\":{\"path\":\"third.parquet\"}}",
+        )
+        .unwrap();
+        let second = analyze_source(directory.to_str().unwrap(), DataFormat::Delta).unwrap();
+        assert_eq!(second.row_count, 12);
+        assert_ne!(first.identity_sha256, second.identity_sha256);
+
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }
