@@ -59,30 +59,19 @@ impl HashPartitioner {
         self.partition_profiled(batch).map(|(batches, _)| batches)
     }
 
-    /// Returns the same canonical hashes used for partition routing. This is
-    /// used by bounded runtime sampling; hash collisions can only influence a
-    /// performance choice and never query correctness.
-    pub(crate) fn hashes(&self, batch: &RecordBatch) -> Result<Vec<u64>> {
-        let mut hashes = Vec::with_capacity(batch.num_rows());
-        self.for_each_hash(batch, |_, hash| {
-            hashes.push(hash);
-            Ok(())
-        })?;
-        Ok(hashes)
-    }
-
-    fn for_each_hash(
+    pub fn partition_profiled(
         &self,
         batch: &RecordBatch,
-        mut visit: impl FnMut(usize, u64) -> Result<()>,
-    ) -> Result<()> {
+    ) -> Result<(Vec<RecordBatch>, HashPartitionMetrics)> {
+        let hash_started = Instant::now();
         let key_columns = self
             .key_indices
             .iter()
             .map(|index| {
                 let column = batch.column(*index);
-                // Match SQL equality for signed zero and NaN payloads in both
-                // sampling and execution routing.
+                // SQL hash equality treats signed zero and NaN payloads as the
+                // same key. Canonicalize before row encoding so partitions agree
+                // with hash aggregate/join key equality on every worker.
                 match column.data_type() {
                     arrow::datatypes::DataType::Float64 => {
                         std::sync::Arc::new(Float64Array::from_iter(
@@ -130,27 +119,16 @@ impl HashPartitioner {
             .collect();
         let converter = RowConverter::new(fields)?;
         let rows = converter.convert_columns(&key_columns)?;
-        for row in 0..batch.num_rows() {
-            visit(row, stable_hash(rows.row(row).as_ref()))?;
-        }
-        Ok(())
-    }
-
-    pub fn partition_profiled(
-        &self,
-        batch: &RecordBatch,
-    ) -> Result<(Vec<RecordBatch>, HashPartitionMetrics)> {
-        let hash_started = Instant::now();
         let mut indices = (0..self.partition_count)
             .map(|_| UInt32Builder::new())
             .collect::<Vec<_>>();
-        self.for_each_hash(batch, |row_index, hash| {
+        for row_index in 0..batch.num_rows() {
+            let hash = stable_hash(rows.row(row_index).as_ref());
             let partition = (hash % self.partition_count as u64) as usize;
             indices[partition].append_value(u32::try_from(row_index).map_err(|_| {
                 KaveonError::Execution("record batch exceeds Arrow UInt32 row capacity".into())
             })?);
-            Ok(())
-        })?;
+        }
         let hash_us = elapsed_us(hash_started);
         let copy_started = Instant::now();
         let mut copy_allocations = 0_u64;
