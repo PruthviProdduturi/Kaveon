@@ -8,13 +8,13 @@ use std::{
 
 use axum::{
     Extension, Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use kaveon_catalog::{
-    product_commit::{CommitOutcome, ProductCatalogCommit},
+    product_commit::{CommitOutcome, OperationResolution, ProductCatalogCommit},
     product_manifest::{
         CatalogChange, CatalogSnapshot, ImmutableFileRef, ProductRecordKind, ProductRecordRef,
         ProductRecordReference, TypedRow, TypedValue,
@@ -48,6 +48,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/v1/transaction/{transaction_id}/stage", post(stage))
         .route("/v1/transaction/{transaction_id}/commit", post(commit))
         .route("/v1/transaction/{transaction_id}/rollback", post(rollback))
+        .route("/v1/transaction/{transaction_id}/recovery", get(recovery))
         .route("/v1/transaction/sql", post(execute_sql))
         .route("/v1/product/{kind}/{id}", get(read_product))
 }
@@ -124,6 +125,7 @@ impl TransactionRegistry {
         .await
         .map_err(|error| RegistryError::Invalid(error.to_string()))?;
         let base = transaction.base_snapshot().clone();
+        let operation_id = transaction.metadata().operation_id;
         let mut sessions = self.sessions.lock().await;
         expire(&mut sessions);
         if sessions.len() >= MAX_SESSIONS
@@ -146,6 +148,7 @@ impl TransactionRegistry {
         );
         Ok(BeginResponse {
             transaction_id,
+            operation_id,
             base,
         })
     }
@@ -1036,6 +1039,7 @@ fn owned_session<'a>(
 #[derive(Debug, Serialize)]
 struct BeginResponse {
     transaction_id: String,
+    operation_id: String,
     base: CatalogSnapshot,
 }
 
@@ -1050,6 +1054,13 @@ struct StageRequest {
 struct DocumentInput {
     path: String,
     bytes: Vec<u8>,
+}
+
+#[derive(Deserialize)]
+struct RecoveryQuery {
+    request_digest: String,
+    #[serde(default)]
+    max_hops: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -1085,6 +1096,107 @@ async fn read_product(
     {
         Ok(record) => Json(record).into_response(),
         Err(error) => error_response(error),
+    }
+}
+
+async fn recovery(
+    State(state): State<Arc<AppState>>,
+    Extension(_identity): Extension<Identity>,
+    Path(transaction_id): Path<String>,
+    Query(query): Query<RecoveryQuery>,
+) -> Response {
+    let operation_id = match Uuid::parse_str(&transaction_id) {
+        Ok(_) => operation_id_for_transaction(&transaction_id),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "transaction_id must be a UUID",
+                    "code": "TRANSACTION_ID_INVALID"
+                })),
+            )
+                .into_response();
+        }
+    };
+    if query.request_digest.len() != 64
+        || !query
+            .request_digest
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "request_digest must be a 64-character hexadecimal digest",
+                "code": "RECOVERY_DIGEST_INVALID"
+            })),
+        )
+            .into_response();
+    }
+    let max_hops = query.max_hops.unwrap_or(64).clamp(1, 256);
+    let Some(catalog) = state.product_transactions.catalog() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "product transactions are not configured",
+                "code": "TRANSACTION_RECOVERY_UNAVAILABLE"
+            })),
+        )
+            .into_response();
+    };
+    match catalog
+        .resolve_operation(&operation_id, &query.request_digest, max_hops)
+        .await
+    {
+        Ok(resolution) => recovery_resolution_response(&operation_id, resolution),
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "status": "unavailable",
+                "operation_id": operation_id,
+                "code": "TRANSACTION_RECOVERY_UNAVAILABLE",
+                "recovery_required": true
+            })),
+        )
+            .into_response(),
+    }
+}
+
+fn operation_id_for_transaction(transaction_id: &str) -> String {
+    format!("operation-{}", transaction_id.replace('-', ""))
+}
+
+fn recovery_resolution_response(
+    operation_id: &str,
+    resolution: OperationResolution,
+) -> Response {
+    match resolution {
+        OperationResolution::Committed(snapshot) => Json(serde_json::json!({
+            "status": "committed",
+            "operation_id": operation_id,
+            "snapshot": snapshot
+        }))
+        .into_response(),
+        OperationResolution::Conflict => Json(serde_json::json!({
+            "status": "conflict",
+            "operation_id": operation_id
+        }))
+        .into_response(),
+        OperationResolution::NotCommitted => Json(serde_json::json!({
+            "status": "not_committed",
+            "operation_id": operation_id
+        }))
+        .into_response(),
+        OperationResolution::Unresolved => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "status": "unresolved",
+                "operation_id": operation_id,
+                "code": "TRANSACTION_RECOVERY_UNRESOLVED",
+                "recovery_required": true
+            })),
+        )
+            .into_response(),
     }
 }
 
@@ -1348,6 +1460,57 @@ mod tests {
             restarted.take("alice", &begun.transaction_id).await,
             Err(RegistryError::Missing)
         ));
+    }
+
+    #[test]
+    fn recovery_resolution_exposes_committed_conflict_and_unresolved_states() {
+        let operation_id = "operation-1";
+        let committed = recovery_resolution_response(
+            operation_id,
+            OperationResolution::Committed(CatalogSnapshot::empty("snapshot-1").unwrap()),
+        );
+        assert_eq!(committed.status(), StatusCode::OK);
+        let conflict = recovery_resolution_response(operation_id, OperationResolution::Conflict);
+        assert_eq!(conflict.status(), StatusCode::OK);
+        let unresolved = recovery_resolution_response(
+            operation_id,
+            OperationResolution::Unresolved,
+        );
+        assert_eq!(unresolved.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn commit_outcome_statuses_cover_all_durable_result_states() {
+        let snapshot = CatalogSnapshot::empty("snapshot-1").unwrap();
+        assert_eq!(
+            commit_outcome_response(Ok(CommitOutcome::Committed(snapshot.clone())), "tx-1")
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            commit_outcome_response(Ok(CommitOutcome::Replayed(snapshot)), "tx-1").status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            commit_outcome_response(Ok(CommitOutcome::Conflict), "tx-1").status(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            commit_outcome_response(Ok(CommitOutcome::Rejected), "tx-1").status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            commit_outcome_response(Ok(CommitOutcome::Indeterminate), "tx-1").status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+
+    #[test]
+    fn transaction_operation_id_is_stable_for_recovery_lookup() {
+        assert_eq!(
+            operation_id_for_transaction("123e4567-e89b-12d3-a456-426614174000"),
+            "operation-123e4567e89b12d3a456426614174000"
+        );
     }
 
     fn stage_request(name: &str) -> StageRequest {
