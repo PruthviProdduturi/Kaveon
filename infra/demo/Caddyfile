@@ -1,0 +1,14 @@
+# Public HTTPS door for the demo VM. Caddy obtains and renews the certificate
+# for KAVEON_API_HOST automatically; only the API is reachable from outside.
+{$KAVEON_API_HOST} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+	reverse_proxy api:8080 {
+		header_up X-Forwarded-Proto https
+	}
+}

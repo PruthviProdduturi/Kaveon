@@ -1,0 +1,42 @@
+#cloud-config
+# Kaveon demo VM — Docker host for the Compose stack. Host-neutral: the login
+# user is whatever the platform creates (kaveon on Azure, ubuntu on Oracle);
+# the stack runs as the kaveon service account. No application secret is
+# written here; deployment happens afterwards over SSH with the Compose bundle.
+package_update: true
+package_upgrade: true
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - unattended-upgrades
+  - fail2ban
+
+write_files:
+  - path: /etc/apt/keyrings/docker.asc.url
+    permissions: "0644"
+    content: https://download.docker.com/linux/ubuntu/gpg
+  - path: /etc/docker/daemon.json
+    permissions: "0644"
+    content: |
+      { "log-driver": "json-file", "log-opts": { "max-size": "20m", "max-file": "5" }, "live-restore": true }
+  - path: /etc/sysctl.d/60-kaveon.conf
+    permissions: "0644"
+    content: |
+      vm.max_map_count = 262144
+      net.core.somaxconn = 1024
+
+runcmd:
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL "$(cat /etc/apt/keyrings/docker.asc.url)" -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - sh -c 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list'
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  - systemctl enable --now docker
+  - sysctl --system
+  - getent passwd kaveon >/dev/null || useradd --system --create-home --shell /bin/bash kaveon
+  - install -d -m 0750 -o kaveon -g kaveon /opt/kaveon /opt/kaveon/data /opt/kaveon/caddy
+  - usermod -aG docker kaveon
+  - getent passwd ubuntu >/dev/null && usermod -aG docker ubuntu || true
+  - systemctl enable --now unattended-upgrades fail2ban
