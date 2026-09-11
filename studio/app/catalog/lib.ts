@@ -16,6 +16,13 @@ export interface TableDef {
   columns: ColumnDef[];
 }
 export interface Sample { columns: string[]; rows: unknown[][]; executionTime: number }
+export interface Usage {
+  datasets: { id: number; name: string; visibility: string }[];
+  charts: { id: number; name: string; datasetId: number }[];
+  dashboards: { id: string | number; name: string; slug?: string | null }[];
+  dlm: { datasetId: string; status: string | null; builtAt: string | null; rowCount: number | null; rowCountSource: string | null }[];
+}
+export interface TableStatistic { table: string; row_count: number; current: boolean }
 
 export class CatalogError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -42,6 +49,16 @@ export const fetchTables = async (source: string, schema: string) =>
   (await get<{ tables: string[] }>(`/lab/engine/${enc(source)}/schemas/${enc(schema)}/tables`)).tables;
 export const fetchTable = async (source: string, schema: string, table: string) =>
   (await get<{ table: TableDef }>(`/catalog/${enc(source)}/schemas/${enc(schema)}/tables/${enc(table)}`)).table;
+export const fetchUsage = (source: string, schema: string, table: string) =>
+  get<Usage>(`/catalog/${enc(source)}/schemas/${enc(schema)}/tables/${enc(table)}/usage`);
+
+/** Administrators only: KaveonDB's bounded statistics diagnostic, filtered to one table. */
+export async function fetchStatistic(fullName: string): Promise<TableStatistic | null> {
+  const res = await msalFetch(`${API_BASE}/api/v1/engine/console/statistics`);
+  if (!res.ok) return null;
+  const body = (await res.json()) as { statistics?: TableStatistic[] };
+  return body.statistics?.find(s => s.table === fullName) ?? null;
+}
 
 export async function fetchSample(source: string, schema: string, table: string, limit = 20): Promise<Sample> {
   const res = await msalFetch(`${API_BASE}/api/v1/lab/query`, {
