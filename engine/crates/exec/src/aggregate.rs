@@ -56,6 +56,7 @@ const GROUPED_STATE_VERSION: &str = "3";
 mod compact_state;
 const GROUPED_KEY_TYPES: &str = "kaveon.grouped_aggregate_state.key_types";
 const GROUPED_OUTPUT_TYPES: &str = "kaveon.grouped_aggregate_state.output_types";
+const AGGREGATE_RESERVATION_SLAB_BYTES: u64 = 64 * 1024;
 const STATE_SUM: u8 = 1;
 const STATE_COUNT: u8 = 2;
 const STATE_MIN: u8 = 3;
@@ -1854,7 +1855,7 @@ impl HashAggregate {
         // comparatively expensive SipHash. AHash retains per-map randomized
         // seeds while materially reducing the hot-path cost of large GROUP BYs.
         let mut groups: AHashMap<InlineGroupKey, Vec<Accumulator>> = AHashMap::new();
-        let mut reservations = Vec::new();
+        let mut reservations = ReservationSlab::default();
         let metrics = self
             .memory
             .as_ref()
@@ -1892,8 +1893,10 @@ impl HashAggregate {
                 if groups.is_empty()
                     && let Some(memory) = &self.memory
                 {
-                    reservations
-                        .push(memory.reserve(estimated_group_bytes(&[], self.aggregates.len()))?);
+                    reservations.reserve(
+                        memory,
+                        estimated_group_bytes(&[], self.aggregates.len()),
+                    )?;
                 }
                 if groups.is_empty()
                     && let Some(metrics) = &metrics
@@ -1931,8 +1934,10 @@ impl HashAggregate {
                             if admitted
                                 && let Some(memory) = &self.memory
                             {
-                                reservations
-                                    .push(memory.reserve(estimated_distinct_value_bytes(&value))?);
+                                reservations.reserve(
+                                    memory,
+                                    estimated_distinct_value_bytes(&value),
+                                )?;
                             }
                             if admitted
                                 && let Some(metrics) = &metrics
@@ -1992,10 +1997,13 @@ impl HashAggregate {
                     Entry::Occupied(entry) => entry.into_mut(),
                     Entry::Vacant(entry) => {
                         if let Some(memory) = &self.memory {
-                            reservations.push(memory.reserve(estimated_group_bytes(
-                                entry.key().as_slice(),
-                                self.aggregates.len(),
-                            ))?);
+                            reservations.reserve(
+                                memory,
+                                estimated_group_bytes(
+                                    entry.key().as_slice(),
+                                    self.aggregates.len(),
+                                ),
+                            )?;
                         }
                         if let Some(metrics) = &metrics {
                             metrics.groups_created.fetch_add(1, Ordering::Relaxed);
@@ -2016,8 +2024,10 @@ impl HashAggregate {
                             if admitted
                                 && let Some(memory) = &self.memory
                             {
-                                reservations
-                                    .push(memory.reserve(estimated_distinct_value_bytes(&value))?);
+                                reservations.reserve(
+                                    memory,
+                                    estimated_distinct_value_bytes(&value),
+                                )?;
                             }
                             if admitted
                                 && let Some(metrics) = &metrics
@@ -2061,7 +2071,7 @@ impl HashAggregate {
                 .into_iter()
                 .map(|(key, states)| (key.into_vec(), states))
                 .collect(),
-            reservations,
+            reservations.into_guards(),
         ))
     }
 }
@@ -2201,6 +2211,33 @@ enum GroupKey {
 }
 
 type GroupStateMap = Vec<(Vec<GroupKey>, Vec<Accumulator>)>;
+
+#[derive(Default)]
+struct ReservationSlab {
+    guards: Vec<MemoryReservation>,
+    available: u64,
+}
+
+impl ReservationSlab {
+    fn reserve(&mut self, memory: &OperatorMemoryAccount, bytes: u64) -> Result<()> {
+        if bytes > self.available {
+            let slab_bytes = AGGREGATE_RESERVATION_SLAB_BYTES.max(bytes);
+            let guard = match memory.reserve(slab_bytes) {
+                Ok(guard) => guard,
+                Err(KaveonError::MemoryLimit(_)) if slab_bytes != bytes => memory.reserve(bytes)?,
+                Err(error) => return Err(error),
+            };
+            self.available = self.available.saturating_add(guard.bytes());
+            self.guards.push(guard);
+        }
+        self.available -= bytes;
+        Ok(())
+    }
+
+    fn into_guards(self) -> Vec<MemoryReservation> {
+        self.guards
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 enum InlineGroupKey {
@@ -2939,7 +2976,7 @@ mod tests {
         assert_eq!(snapshot.input_rows, 4);
         assert_eq!(snapshot.groups_created, 2);
         assert_eq!(snapshot.distinct_values_admitted, 2);
-        assert!(pool.snapshot().reservation_calls >= 4);
+        assert!(pool.snapshot().reservation_calls <= 3);
         assert!(pool.snapshot().reservation_bytes > 0);
     }
 
@@ -3027,6 +3064,7 @@ mod tests {
         let snapshot = pool.snapshot();
         assert_eq!(snapshot.current_bytes, 0);
         assert!(snapshot.peak_bytes <= snapshot.limit_bytes);
+        assert!(snapshot.reservation_calls < 100);
     }
 
     #[test]
