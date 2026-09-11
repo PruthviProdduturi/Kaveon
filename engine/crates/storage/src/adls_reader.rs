@@ -45,9 +45,7 @@ const PROCESS_FULL_OBJECT_CACHE_LIMIT: usize = 256 * 1024 * 1024;
 const PROCESS_DECODED_BATCH_CACHE_LIMIT: usize = 256 * 1024 * 1024;
 static FULL_OBJECT_CACHE_BYTES: AtomicUsize = AtomicUsize::new(0);
 static FULL_OBJECT_CACHE: OnceLock<Mutex<HashMap<String, Arc<FullObjectEntry>>>> = OnceLock::new();
-static DECODED_BATCH_CACHE_BYTES: AtomicUsize = AtomicUsize::new(0);
-static DECODED_BATCH_CACHE: OnceLock<Mutex<HashMap<String, Arc<DecodedBatchEntry>>>> =
-    OnceLock::new();
+static DECODED_BATCH_CACHE: OnceLock<Mutex<DecodedBatchCache>> = OnceLock::new();
 static OBJECT_METADATA_CACHE: OnceLock<Mutex<HashMap<String, object_store::ObjectMeta>>> =
     OnceLock::new();
 static OBJECT_STORE_CACHE: OnceLock<Mutex<HashMap<String, Arc<dyn ObjectStore>>>> = OnceLock::new();
@@ -128,66 +126,226 @@ struct DecodedBatchEntry {
     _reservation: DecodedCacheReservation,
 }
 
-struct DecodedCacheReservation(usize);
+struct DecodedCacheReservation {
+    bytes: usize,
+    live_bytes: Arc<AtomicUsize>,
+}
 
 impl Drop for DecodedCacheReservation {
     fn drop(&mut self) {
-        DECODED_BATCH_CACHE_BYTES.fetch_sub(self.0, Ordering::AcqRel);
+        self.live_bytes.fetch_sub(self.bytes, Ordering::AcqRel);
     }
 }
 
-fn cached_decoded_batches(key: &str) -> Option<Arc<Vec<RecordBatch>>> {
-    DECODED_BATCH_CACHE
-        .get_or_init(Default::default)
-        .lock()
-        .ok()?
-        .get(key)
-        .map(|entry| Arc::clone(&entry.batches))
+struct DecodedFillState {
+    completed: tokio::sync::watch::Sender<bool>,
 }
 
-fn cache_decoded_batches(key: String, batches: Vec<RecordBatch>) {
-    if batches.is_empty() {
-        return;
+impl DecodedFillState {
+    fn new() -> Self {
+        let (completed, _) = tokio::sync::watch::channel(false);
+        Self { completed }
     }
-    let bytes = batches
-        .iter()
-        .map(RecordBatch::get_array_memory_size)
-        .sum::<usize>();
-    if bytes == 0 || bytes > PROCESS_DECODED_BATCH_CACHE_LIMIT {
-        return;
+
+    fn complete(&self) {
+        self.completed.send_replace(true);
     }
-    let Ok(mut cache) = DECODED_BATCH_CACHE.get_or_init(Default::default).lock() else {
-        return;
-    };
-    if cache.contains_key(&key) {
-        return;
-    }
-    let reserved =
-        DECODED_BATCH_CACHE_BYTES.fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-            current
-                .checked_add(bytes)
-                .filter(|&next| next <= PROCESS_DECODED_BATCH_CACHE_LIMIT)
-        });
-    if reserved.is_err() {
-        cache.clear();
-        if DECODED_BATCH_CACHE_BYTES
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                current
-                    .checked_add(bytes)
-                    .filter(|&next| next <= PROCESS_DECODED_BATCH_CACHE_LIMIT)
-            })
-            .is_err()
-        {
-            return;
+}
+
+enum DecodedCacheSlot {
+    Filling(Arc<DecodedFillState>),
+    Ready {
+        entry: Arc<DecodedBatchEntry>,
+        last_used: u64,
+    },
+}
+
+struct DecodedBatchCache {
+    entries: HashMap<String, DecodedCacheSlot>,
+    clock: u64,
+    limit_bytes: usize,
+    live_bytes: Arc<AtomicUsize>,
+}
+
+impl DecodedBatchCache {
+    fn new(limit_bytes: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            clock: 0,
+            limit_bytes,
+            live_bytes: Arc::new(AtomicUsize::new(0)),
         }
     }
-    cache.insert(
-        key,
-        Arc::new(DecodedBatchEntry {
-            batches: Arc::new(batches),
-            _reservation: DecodedCacheReservation(bytes),
-        }),
-    );
+
+    fn tick(&mut self) -> u64 {
+        self.clock = self.clock.wrapping_add(1);
+        self.clock
+    }
+
+    fn reserve(&mut self, bytes: usize) -> (Option<DecodedCacheReservation>, u64) {
+        let mut evictions = 0;
+        loop {
+            if self
+                .live_bytes
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                    current
+                        .checked_add(bytes)
+                        .filter(|&next| next <= self.limit_bytes)
+                })
+                .is_ok()
+            {
+                return (
+                    Some(DecodedCacheReservation {
+                        bytes,
+                        live_bytes: Arc::clone(&self.live_bytes),
+                    }),
+                    evictions,
+                );
+            }
+            let lru = self
+                .entries
+                .iter()
+                .filter_map(|(key, slot)| match slot {
+                    DecodedCacheSlot::Ready { entry, last_used }
+                        if Arc::strong_count(entry) == 1 =>
+                    {
+                        Some((key.clone(), *last_used))
+                    }
+                    DecodedCacheSlot::Filling(_) => None,
+                    DecodedCacheSlot::Ready { .. } => None,
+                })
+                .min_by_key(|(_, last_used)| *last_used)
+                .map(|(key, _)| key);
+            let Some(lru) = lru else {
+                return (None, evictions);
+            };
+            self.entries.remove(&lru);
+            evictions += 1;
+        }
+    }
+}
+
+impl Default for DecodedBatchCache {
+    fn default() -> Self {
+        Self::new(PROCESS_DECODED_BATCH_CACHE_LIMIT)
+    }
+}
+
+struct DecodedCacheFill {
+    key: String,
+    state: Arc<DecodedFillState>,
+    cache: &'static OnceLock<Mutex<DecodedBatchCache>>,
+    published: bool,
+}
+
+impl DecodedCacheFill {
+    fn publish(mut self, batches: Vec<RecordBatch>, metrics: &ScanMetrics) {
+        let bytes = batches
+            .iter()
+            .map(RecordBatch::get_array_memory_size)
+            .sum::<usize>();
+        if bytes == 0 || bytes > PROCESS_DECODED_BATCH_CACHE_LIMIT {
+            return;
+        }
+        let Ok(mut cache) = self.cache.get_or_init(Default::default).lock() else {
+            return;
+        };
+        let owns_fill = matches!(
+            cache.entries.get(&self.key),
+            Some(DecodedCacheSlot::Filling(state)) if Arc::ptr_eq(state, &self.state)
+        );
+        if !owns_fill {
+            return;
+        }
+        let (reservation, evictions) = cache.reserve(bytes);
+        metrics.decoded_batch_cache_evictions(evictions);
+        let Some(reservation) = reservation else {
+            cache.entries.remove(&self.key);
+            return;
+        };
+        let last_used = cache.tick();
+        cache.entries.insert(
+            self.key.clone(),
+            DecodedCacheSlot::Ready {
+                entry: Arc::new(DecodedBatchEntry {
+                    batches: Arc::new(batches),
+                    _reservation: reservation,
+                }),
+                last_used,
+            },
+        );
+        self.published = true;
+    }
+}
+
+impl Drop for DecodedCacheFill {
+    fn drop(&mut self) {
+        if !self.published
+            && let Ok(mut cache) = self.cache.get_or_init(Default::default).lock()
+            && matches!(
+                cache.entries.get(&self.key),
+                Some(DecodedCacheSlot::Filling(state)) if Arc::ptr_eq(state, &self.state)
+            )
+        {
+            cache.entries.remove(&self.key);
+        }
+        self.state.complete();
+    }
+}
+
+enum DecodedCacheAcquire {
+    Hit(Arc<DecodedBatchEntry>),
+    Fill(DecodedCacheFill),
+}
+
+async fn acquire_decoded_cache(key: String, metrics: &ScanMetrics) -> DecodedCacheAcquire {
+    acquire_decoded_cache_from(&DECODED_BATCH_CACHE, key, metrics).await
+}
+
+async fn acquire_decoded_cache_from(
+    decoded_cache: &'static OnceLock<Mutex<DecodedBatchCache>>,
+    key: String,
+    metrics: &ScanMetrics,
+) -> DecodedCacheAcquire {
+    loop {
+        let wait = {
+            let mut cache = decoded_cache
+                .get_or_init(Default::default)
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let last_used = cache.tick();
+            match cache.entries.get_mut(&key) {
+                Some(DecodedCacheSlot::Ready {
+                    entry,
+                    last_used: used,
+                }) => {
+                    *used = last_used;
+                    metrics.decoded_batch_cache_hit();
+                    return DecodedCacheAcquire::Hit(Arc::clone(entry));
+                }
+                Some(DecodedCacheSlot::Filling(state)) => Some(Arc::clone(state)),
+                None => {
+                    let state = Arc::new(DecodedFillState::new());
+                    cache
+                        .entries
+                        .insert(key.clone(), DecodedCacheSlot::Filling(Arc::clone(&state)));
+                    metrics.decoded_batch_cache_miss();
+                    return DecodedCacheAcquire::Fill(DecodedCacheFill {
+                        key,
+                        state,
+                        cache: decoded_cache,
+                        published: false,
+                    });
+                }
+            }
+        };
+        let state = wait.expect("filling cache entry has a wait state");
+        metrics.decoded_batch_cache_singleflight_wait();
+        let mut completed = state.completed.subscribe();
+        if !*completed.borrow_and_update() {
+            let _ = completed.changed().await;
+        }
+    }
 }
 
 struct CacheReservation(usize);
@@ -464,7 +622,10 @@ pub struct AdlsBatchStream {
     inner: Pin<Box<dyn Stream<Item = parquet::errors::Result<RecordBatch>> + Send>>,
     metrics: ScanMetrics,
     output_projection: Option<Vec<usize>>,
-    decoded_cache_key: Option<String>,
+    decoded_cache_fill: Option<DecodedCacheFill>,
+    // Keep the entry and its byte reservation alive while cached batches are
+    // being consumed, even if a newer fill evicts this key from the LRU.
+    _decoded_cache_entry: Option<Arc<DecodedBatchEntry>>,
     decoded_batches: Vec<RecordBatch>,
     object_cache_key: String,
 }
@@ -492,11 +653,11 @@ impl AdlsBatchStream {
         self.metrics.read_time(started.elapsed());
         if let Some(batch) = &result {
             self.metrics.emitted(batch.num_rows());
-            if self.decoded_cache_key.is_some() {
+            if self.decoded_cache_fill.is_some() {
                 self.decoded_batches.push(batch.clone());
             }
-        } else if let Some(key) = self.decoded_cache_key.take() {
-            cache_decoded_batches(key, std::mem::take(&mut self.decoded_batches));
+        } else if let Some(fill) = self.decoded_cache_fill.take() {
+            fill.publish(std::mem::take(&mut self.decoded_batches), &self.metrics);
         }
         result
             .map(|batch| match &self.output_projection {
@@ -757,10 +918,17 @@ impl AdlsParquetReader {
             Arc::clone(stream.schema()),
             self.columns.as_deref(),
         )?;
-        let cached = decoded_cache_key
-            .as_deref()
-            .and_then(cached_decoded_batches);
-        let cache_hit = cached.is_some();
+        let acquired = match decoded_cache_key {
+            Some(key) => Some(acquire_decoded_cache(key, &metrics).await),
+            None => None,
+        };
+        let (cached, decoded_cache_fill, decoded_cache_entry) = match acquired {
+            Some(DecodedCacheAcquire::Hit(entry)) => {
+                (Some(Arc::clone(&entry.batches)), None, Some(entry))
+            }
+            Some(DecodedCacheAcquire::Fill(fill)) => (None, Some(fill), None),
+            None => (None, None, None),
+        };
         let inner: Pin<Box<dyn Stream<Item = parquet::errors::Result<RecordBatch>> + Send>> =
             match cached {
                 Some(batches) => Box::pin(futures::stream::iter(
@@ -773,7 +941,8 @@ impl AdlsParquetReader {
             inner,
             metrics,
             output_projection,
-            decoded_cache_key: (!cache_hit).then_some(decoded_cache_key).flatten(),
+            decoded_cache_fill,
+            _decoded_cache_entry: decoded_cache_entry,
             decoded_batches: Vec::new(),
             object_cache_key: cache_key,
         })
@@ -891,8 +1060,153 @@ fn object_store_error(error: object_store::Error) -> KaveonError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::Int64Array;
+    use arrow::array::{AsArray, Int64Array};
     use object_store::{ObjectStore, PutPayload, memory::InMemory};
+
+    fn decoded_batch(value: i64) -> RecordBatch {
+        RecordBatch::try_from_iter(vec![(
+            "value",
+            Arc::new(Int64Array::from(vec![value; 32])) as arrow::array::ArrayRef,
+        )])
+        .unwrap()
+    }
+
+    fn decoded_test_cache(limit: usize) -> &'static OnceLock<Mutex<DecodedBatchCache>> {
+        let cache = Box::leak(Box::new(OnceLock::new()));
+        cache.set(Mutex::new(DecodedBatchCache::new(limit))).ok();
+        cache
+    }
+
+    async fn publish_decoded(
+        cache: &'static OnceLock<Mutex<DecodedBatchCache>>,
+        key: &str,
+        batch: RecordBatch,
+        metrics: &ScanMetrics,
+    ) {
+        let DecodedCacheAcquire::Fill(fill) =
+            acquire_decoded_cache_from(cache, key.into(), metrics).await
+        else {
+            panic!("test key unexpectedly cached");
+        };
+        fill.publish(vec![batch], metrics);
+    }
+
+    #[tokio::test]
+    async fn decoded_cache_singleflights_concurrent_exact_identity_fills() {
+        let batch = decoded_batch(7);
+        let cache = decoded_test_cache(batch.get_array_memory_size() * 2);
+        let owner_metrics = ScanMetrics::default();
+        let waiter_metrics = ScanMetrics::default();
+        let DecodedCacheAcquire::Fill(owner) =
+            acquire_decoded_cache_from(cache, "object:etag-1".into(), &owner_metrics).await
+        else {
+            panic!("first lookup must own the fill");
+        };
+        let waiter_metrics_clone = waiter_metrics.clone();
+        let waiter = tokio::spawn(async move {
+            acquire_decoded_cache_from(cache, "object:etag-1".into(), &waiter_metrics_clone).await
+        });
+        tokio::task::yield_now().await;
+        owner.publish(vec![batch], &owner_metrics);
+
+        let DecodedCacheAcquire::Hit(entry) = waiter.await.unwrap() else {
+            panic!("waiter must consume the published fill");
+        };
+        assert_eq!(entry.batches[0].num_rows(), 32);
+        assert_eq!(owner_metrics.snapshot().decoded_batch_cache_misses, 1);
+        assert_eq!(
+            waiter_metrics
+                .snapshot()
+                .decoded_batch_cache_singleflight_waits,
+            1
+        );
+        assert_eq!(waiter_metrics.snapshot().decoded_batch_cache_hits, 1);
+    }
+
+    #[tokio::test]
+    async fn decoded_cache_lru_is_byte_bounded_and_live_readers_survive_eviction() {
+        let batch_bytes = decoded_batch(1).get_array_memory_size();
+        let limit = batch_bytes * 2;
+        let cache = decoded_test_cache(limit);
+        let metrics = ScanMetrics::default();
+        publish_decoded(cache, "object:etag-a", decoded_batch(1), &metrics).await;
+        publish_decoded(cache, "object:etag-b", decoded_batch(2), &metrics).await;
+        let DecodedCacheAcquire::Hit(a) =
+            acquire_decoded_cache_from(cache, "object:etag-a".into(), &metrics).await
+        else {
+            panic!("identity a must be cached");
+        };
+        // Touching a makes b the least-recently-used idle entry.
+        publish_decoded(cache, "object:etag-c", decoded_batch(3), &metrics).await;
+        assert_eq!(metrics.snapshot().decoded_batch_cache_evictions, 1);
+        let DecodedCacheAcquire::Fill(evicted_b) =
+            acquire_decoded_cache_from(cache, "object:etag-b".into(), &metrics).await
+        else {
+            panic!("least-recently-used identity b must be evicted");
+        };
+        drop(evicted_b);
+        let DecodedCacheAcquire::Hit(c) =
+            acquire_decoded_cache_from(cache, "object:etag-c".into(), &metrics).await
+        else {
+            panic!("identity c must be cached");
+        };
+
+        // Both resident entries are leased by active readers, so a fourth fill
+        // is not published past the byte cap. Their Arrow buffers stay valid.
+        publish_decoded(cache, "object:etag-d", decoded_batch(4), &metrics).await;
+        assert_eq!(
+            cache
+                .get()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .live_bytes
+                .load(Ordering::Acquire),
+            limit
+        );
+        assert_eq!(a.batches[0].num_rows(), 32);
+        assert_eq!(c.batches[0].num_rows(), 32);
+        drop(a);
+        drop(c);
+
+        publish_decoded(cache, "object:etag-d", decoded_batch(4), &metrics).await;
+        let DecodedCacheAcquire::Hit(d) =
+            acquire_decoded_cache_from(cache, "object:etag-d".into(), &metrics).await
+        else {
+            panic!("identity d must publish after old leases release");
+        };
+        assert_eq!(
+            d.batches[0]
+                .column(0)
+                .as_primitive::<arrow::datatypes::Int64Type>()
+                .value(0),
+            4
+        );
+    }
+
+    #[tokio::test]
+    async fn abandoned_decoded_fill_is_never_published_and_wakes_a_retry() {
+        let batch = decoded_batch(1);
+        let cache = decoded_test_cache(batch.get_array_memory_size());
+        let metrics = ScanMetrics::default();
+        let DecodedCacheAcquire::Fill(abandoned) =
+            acquire_decoded_cache_from(cache, "object:etag-failed".into(), &metrics).await
+        else {
+            panic!("first lookup must own the fill");
+        };
+        let waiter_metrics = metrics.clone();
+        let retry = tokio::spawn(async move {
+            acquire_decoded_cache_from(cache, "object:etag-failed".into(), &waiter_metrics).await
+        });
+        tokio::task::yield_now().await;
+        drop(abandoned);
+
+        let DecodedCacheAcquire::Fill(retry) = retry.await.unwrap() else {
+            panic!("failed or cancelled fill must not become a hit");
+        };
+        retry.publish(vec![batch], &metrics);
+        assert_eq!(metrics.snapshot().decoded_batch_cache_misses, 2);
+    }
 
     #[tokio::test]
     async fn cached_object_metadata_is_identity_pinned_and_invalidatable() {
@@ -945,21 +1259,30 @@ mod tests {
         assert!(!Arc::ptr_eq(&first, &other));
     }
 
-    #[test]
-    fn decoded_batches_are_reused_by_exact_snapshot_key() {
+    #[tokio::test]
+    async fn decoded_batches_are_reused_by_exact_snapshot_key() {
         let key = format!("decoded-cache-test-{}", std::process::id());
         let batch = RecordBatch::try_from_iter(vec![(
             "value",
             Arc::new(Int64Array::from(vec![1, 2, 3])) as _,
         )])
         .unwrap();
+        let cache = decoded_test_cache(batch.get_array_memory_size() * 2);
+        let metrics = ScanMetrics::default();
 
-        cache_decoded_batches(key.clone(), vec![batch]);
+        publish_decoded(cache, &key, batch, &metrics).await;
 
-        let cached = cached_decoded_batches(&key).expect("exact cache key must resolve");
-        assert_eq!(cached.len(), 1);
-        assert_eq!(cached[0].num_rows(), 3);
-        assert!(cached_decoded_batches(&format!("{key}:different-etag")).is_none());
+        let DecodedCacheAcquire::Hit(cached) =
+            acquire_decoded_cache_from(cache, key.clone(), &metrics).await
+        else {
+            panic!("exact cache key must resolve");
+        };
+        assert_eq!(cached.batches.len(), 1);
+        assert_eq!(cached.batches[0].num_rows(), 3);
+        assert!(matches!(
+            acquire_decoded_cache_from(cache, format!("{key}:different-etag"), &metrics).await,
+            DecodedCacheAcquire::Fill(_)
+        ));
     }
 
     #[test]
