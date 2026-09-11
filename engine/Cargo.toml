@@ -19,6 +19,7 @@ license = "MIT"
 repository = "https://github.com/PruthviProdduturi/Kaveon"
 
 [workspace.dependencies]
+bytes = "1"
 arrow = { version = "54", features = ["ffi"] }
 arrow-schema = { version = "54", features = ["serde"] }
 parquet = { version = "54", features = ["arrow", "async", "object_store", "snap", "zstd"] }

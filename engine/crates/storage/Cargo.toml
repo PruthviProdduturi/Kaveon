@@ -15,6 +15,7 @@ serde_json = { workspace = true }
 sha2 = "0.10"
 object_store = { workspace = true }
 futures = { workspace = true }
+bytes = { workspace = true }
 apache-avro = { version = "=0.22.0", features = ["snappy", "zstandard"] }
 
 [dev-dependencies]
