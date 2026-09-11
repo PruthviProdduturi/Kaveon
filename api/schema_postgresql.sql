@@ -254,6 +254,33 @@ CREATE TABLE IF NOT EXISTS user_recents (
 );
 CREATE INDEX IF NOT EXISTS idx_user_recents_email ON user_recents(user_email);
 
+-- ── KaveonDB migration outbox ────────────────────────────────────────────────
+-- Written in the same PostgreSQL transaction as its product-family mutation.
+-- PostgreSQL stays authoritative until replay, reconciliation and fencing pass.
+CREATE TABLE IF NOT EXISTS product_migration_outbox (
+    source_sequence BIGSERIAL    PRIMARY KEY,
+    event_id        UUID         NOT NULL UNIQUE,
+    family          VARCHAR(50)  NOT NULL
+                    CONSTRAINT ck_product_outbox_family CHECK
+                    (family IN ('datasets','charts','dashboards','saved_queries','user_themes')),
+    operation       VARCHAR(10)  NOT NULL
+                    CONSTRAINT ck_product_outbox_operation CHECK
+                    (operation IN ('create','update','delete')),
+    record_id       VARCHAR(255) NOT NULL,
+    payload_json    TEXT         NOT NULL
+                    CONSTRAINT ck_product_outbox_payload_size CHECK
+                    (OCTET_LENGTH(payload_json) <= 16777216),
+    payload_sha256  CHAR(64)     NOT NULL,
+    actor_principal VARCHAR(255) NOT NULL,
+    created_at      TIMESTAMP    NOT NULL DEFAULT NOW(),
+    applied_at      TIMESTAMP    NULL,
+    target_generation BIGINT     NULL,
+    apply_attempts  INTEGER      NOT NULL DEFAULT 0,
+    last_error_code VARCHAR(100) NULL
+);
+CREATE INDEX IF NOT EXISTS idx_product_outbox_unapplied
+    ON product_migration_outbox(source_sequence) WHERE applied_at IS NULL;
+
 -- ── Adaptive Context Routing (staleness-scored NL query router) ────────────────
 -- Global context representation: one row per profiled table/column element.
 -- Populated from pg_stats + pg_stat_user_tables (no LLM, no data scan). The
