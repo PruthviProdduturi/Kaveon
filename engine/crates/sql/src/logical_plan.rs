@@ -26,6 +26,12 @@ pub enum JoinType {
     Cross,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JoinDistribution {
+    Partitioned,
+    BroadcastRight,
+}
+
 #[derive(Debug)]
 pub enum LogicalPlan {
     Scan {
@@ -38,6 +44,7 @@ pub enum LogicalPlan {
         right: Box<LogicalPlan>,
         join_type: JoinType,
         condition: Option<Expr>,
+        distribution: JoinDistribution,
     },
     Filter {
         input: Box<LogicalPlan>,
@@ -269,6 +276,7 @@ fn build_from_clause(
             right: Box::new(right),
             join_type: JoinType::Cross,
             condition: None,
+            distribution: JoinDistribution::Partitioned,
         };
     }
     Ok(plan)
@@ -353,6 +361,7 @@ fn apply_joins(
             right: Box::new(right),
             join_type,
             condition,
+            distribution: JoinDistribution::Partitioned,
         };
     }
     Ok(left)
