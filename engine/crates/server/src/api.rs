@@ -26,6 +26,9 @@ use kaveon_exec::sort::SortExpr;
 use kaveon_exec::topn::merge_top_n;
 use kaveon_sql::logical_plan::sql_to_logical_plan;
 use kaveon_sql::logical_plan::{AggregateExpr, LogicalPlan};
+use kaveon_sql::parser::{
+    NativeTransactionalStatement, adapt_product_dml, parse_native_transactional,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::cmp::Reverse;
@@ -1327,6 +1330,11 @@ async fn submit_statement(
         }
     };
     let sql = req.query.trim().trim_end_matches(';').to_owned();
+    if let Some((status, body)) =
+        transaction_api_guidance(&sql, state.product_transactions.catalog().is_some())
+    {
+        return (status, Json(body)).into_response();
+    }
     let submitted_at_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -2305,6 +2313,43 @@ struct TransactionCapabilities {
     savepoints: bool,
     explicit_isolation_modes: bool,
     arbitrary_table_dml: bool,
+}
+
+fn transaction_api_guidance(
+    sql: &str,
+    transaction_api_enabled: bool,
+) -> Option<(StatusCode, serde_json::Value)> {
+    let parsed = parse_native_transactional(sql).ok()?;
+    let supported = match parsed {
+        NativeTransactionalStatement::Begin
+        | NativeTransactionalStatement::Commit
+        | NativeTransactionalStatement::Rollback => true,
+        NativeTransactionalStatement::Dml(dml) => adapt_product_dml(&dml).is_ok(),
+    };
+    if !supported {
+        return None;
+    }
+    if transaction_api_enabled {
+        Some((
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({
+                "error": "transaction statements must use the authenticated transaction API",
+                "code": "TRANSACTION_API_REQUIRED",
+                "transaction_endpoint": "/v1/transaction/sql",
+                "capabilities_endpoint": "/v1/capabilities"
+            }),
+        ))
+    } else {
+        Some((
+            StatusCode::SERVICE_UNAVAILABLE,
+            serde_json::json!({
+                "error": "the transaction API is not configured",
+                "code": "TRANSACTION_API_UNAVAILABLE",
+                "transaction_endpoint": "/v1/transaction/sql",
+                "capabilities_endpoint": "/v1/capabilities"
+            }),
+        ))
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -5170,10 +5215,12 @@ mod tests {
         durable_relation_statistics, encode_arrow_stream, exact_metadata_count_plan,
         exact_source_statistics, execute_analyze, general_distributed_eligible,
         merge_partial_aggregates, mutation_actor, parse_analyze_table, statistics_diagnostics,
-        task_request_from_dispatch, top_n_merge_contract, validate_replacement,
+        task_request_from_dispatch, top_n_merge_contract, transaction_api_guidance,
+        validate_replacement,
     };
     use crate::security::Role;
     use arrow::array::{Int64Array, StringArray};
+    use axum::http::StatusCode;
 
     #[test]
     fn analyze_parser_accepts_bounded_table_names_only() {
@@ -5479,6 +5526,29 @@ mod tests {
         let capabilities = capabilities(axum::extract::State(state)).await.0;
         assert!(!capabilities.native_analyze);
         assert!(!capabilities.transactions.enabled);
+    }
+
+    #[test]
+    fn statement_api_directs_supported_transaction_sql_to_transaction_endpoint() {
+        let (status, body) = transaction_api_guidance(
+            "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}')",
+            true,
+        )
+        .expect("supported product DML should be redirected");
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["code"], "TRANSACTION_API_REQUIRED");
+        assert_eq!(body["transaction_endpoint"], "/v1/transaction/sql");
+
+        let (status, body) = transaction_api_guidance("BEGIN", false)
+            .expect("transaction control should be recognized");
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["code"], "TRANSACTION_API_UNAVAILABLE");
+    }
+
+    #[test]
+    fn statement_api_does_not_redirect_unsupported_row_dml_or_reads() {
+        assert!(transaction_api_guidance("INSERT INTO app.users (id) VALUES (1)", true).is_none());
+        assert!(transaction_api_guidance("SELECT 1", true).is_none());
     }
 
     #[tokio::test]
