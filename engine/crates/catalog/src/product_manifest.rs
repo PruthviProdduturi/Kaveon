@@ -884,7 +884,17 @@ fn validate_product_records(
         for (index, value) in &record.unique_values {
             // Ownership is metadata used for access control, not a uniqueness
             // constraint. A principal may own many datasets, charts, or runs.
-            if index == "owner_principal" {
+            if matches!(
+                index.as_str(),
+                "owner_principal"
+                    | "chart_dataset_revision"
+                    | "dashboard_chart_revisions"
+                    | "query_owner"
+                    | "activity_actor"
+                    | "chat_owner"
+                    | "dlm_run_state"
+                    | "dlm_definition_revision"
+            ) {
                 continue;
             }
             if !unique.insert((record.kind, index.as_str(), value.as_str())) {
@@ -1205,6 +1215,31 @@ mod tests {
             .prepare(change(
                 base.reference(),
                 "multiple-owned-datasets",
+                DIGEST,
+                vec![
+                    CatalogChange::CreateProduct { record: first },
+                    CatalogChange::CreateProduct { record: second },
+                ],
+            ))
+            .unwrap();
+        assert_eq!(snapshot.product_records.len(), 2);
+    }
+
+    #[test]
+    fn binding_metadata_is_not_a_global_unique_index() {
+        let base = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        let mut first = product(ProductRecordKind::Chart, "chart-1", 1, "alice/chart-1");
+        let mut second = product(ProductRecordKind::Chart, "chart-2", 1, "alice/chart-2");
+        let binding = (
+            String::from("chart_dataset_revision"),
+            String::from("dataset:1"),
+        );
+        first.unique_values = BTreeMap::from([binding.clone()]);
+        second.unique_values = BTreeMap::from([binding]);
+        let snapshot = base
+            .prepare(change(
+                base.reference(),
+                "multiple-charts-per-dataset",
                 DIGEST,
                 vec![
                     CatalogChange::CreateProduct { record: first },
