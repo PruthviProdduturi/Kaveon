@@ -59,6 +59,26 @@ pub enum OperationResolution {
     Unresolved,
 }
 
+/// Durable mutation journal data retained in the immutable operation index.
+/// `Prepared` means the record was written before head CAS; callers must
+/// resolve the current head to distinguish a committed operation from an
+/// orphaned candidate after an ambiguous response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MutationJournalOutcome {
+    Prepared,
+    Committed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MutationJournalRecord {
+    pub transaction_id: String,
+    pub base_snapshot: Option<SnapshotRef>,
+    pub request_digest: String,
+    pub changes: Vec<CatalogChange>,
+    pub outcome: MutationJournalOutcome,
+    pub committed_snapshot: SnapshotRef,
+}
+
 struct Head {
     snapshot: CatalogSnapshot,
     version: ObjectVersion,
@@ -83,6 +103,22 @@ struct OperationRecord {
     snapshot: SnapshotRef,
     snapshot_sha256: String,
     result: Option<ImmutableIndexRef>,
+    #[serde(default)]
+    transaction_id: String,
+    #[serde(default)]
+    base_snapshot: Option<SnapshotRef>,
+    #[serde(default)]
+    changes: Vec<CatalogChange>,
+    #[serde(default)]
+    outcome: JournalOutcome,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+enum JournalOutcome {
+    #[default]
+    Prepared,
+    Committed,
 }
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct OperationShard {
@@ -257,6 +293,10 @@ impl ProductCatalogCommit {
                 snapshot: next.reference(),
                 snapshot_sha256: snapshot_sha256.clone(),
                 result: None,
+                transaction_id: request.operation_id.clone(),
+                base_snapshot: Some(request.base.clone()),
+                changes: request.changes.clone(),
+                outcome: JournalOutcome::Prepared,
             },
         );
         let mut next_index = index.clone();
@@ -348,6 +388,49 @@ impl ProductCatalogCommit {
         let head = self.read_head().await?;
         self.resolve_from(head.snapshot, operation_id, request_digest, max_hops)
             .await
+    }
+
+    /// Resolves the retained immutable mutation journal entry against the
+    /// current head. A journal entry is committed only when its snapshot is
+    /// head-reachable; otherwise it remains `Prepared` and may be an orphan
+    /// from an ambiguous or conflicting CAS attempt.
+    pub async fn resolve_mutation_journal(
+        &self,
+        transaction_id: &str,
+        request_digest: &str,
+    ) -> Result<Option<MutationJournalRecord>, CommitErrorKind> {
+        let head = self.read_head().await?;
+        let Some(index) = &head.operation_index else {
+            return Ok(None);
+        };
+        let shard_key = digest(transaction_id.as_bytes())[..2].to_owned();
+        let Some(reference) = index.get(&shard_key) else {
+            return Ok(None);
+        };
+        let shard = self.read_shard(Some(reference)).await?;
+        let Some(record) = shard.entries.get(transaction_id) else {
+            return Ok(None);
+        };
+        if record.request_digest != request_digest {
+            return Err(CommitErrorKind::Conflict);
+        }
+        let outcome = if head.snapshot.reference() == record.snapshot {
+            MutationJournalOutcome::Committed
+        } else {
+            MutationJournalOutcome::Prepared
+        };
+        Ok(Some(MutationJournalRecord {
+            transaction_id: if record.transaction_id.is_empty() {
+                transaction_id.to_owned()
+            } else {
+                record.transaction_id.clone()
+            },
+            base_snapshot: record.base_snapshot.clone(),
+            request_digest: record.request_digest.clone(),
+            changes: record.changes.clone(),
+            outcome,
+            committed_snapshot: record.snapshot.clone(),
+        }))
     }
 
     async fn resolve_from(
@@ -1107,6 +1190,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mutation_journal_replays_after_catalog_reopen() {
+        let catalog = catalog();
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        catalog.initialize(genesis.clone()).await;
+        let request = request(genesis.reference(), "journal-op", "bronze.orders");
+        let committed = match catalog.commit(request.clone()).await {
+            CommitOutcome::Committed(snapshot) => snapshot,
+            other => panic!("expected commit, got {other:?}"),
+        };
+        let reopened = ProductCatalogCommit::new(
+            catalog.storage.clone(),
+            "product",
+            Arc::new(TransactionMetrics::default()),
+        )
+        .unwrap();
+        let journal = reopened
+            .resolve_mutation_journal("journal-op", DIGEST)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(journal.transaction_id, "journal-op");
+        assert_eq!(journal.base_snapshot, Some(genesis.reference()));
+        assert_eq!(journal.changes, request.changes);
+        assert_eq!(journal.committed_snapshot, committed.reference());
+        assert_eq!(journal.outcome, MutationJournalOutcome::Committed);
+    }
+
+    #[tokio::test]
     async fn failed_snapshot_create_before_cas_preserves_head() {
         let catalog = catalog();
         let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
@@ -1246,6 +1357,10 @@ mod tests {
                 .commit(request(current.reference(), "op-1", "bronze.orders"))
                 .await,
             CommitOutcome::Indeterminate
+        ));
+        assert!(matches!(
+            catalog.resolve_mutation_journal("op-1", DIGEST).await,
+            Err(CommitErrorKind::Missing)
         ));
         assert_eq!(catalog.read_current().await.unwrap(), current);
     }
