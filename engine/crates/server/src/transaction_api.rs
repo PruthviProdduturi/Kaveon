@@ -416,7 +416,27 @@ fn product_document(
         ));
     }
     let mut derived_values = BTreeMap::new();
-    let references = if kind == ProductRecordKind::DlmDefinition {
+    let references = if kind == ProductRecordKind::Chart {
+        let object = value.as_object().expect("object checked above");
+        let dataset_id = object
+            .get("dataset_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| RegistryError::Invalid("chart dataset_id is invalid".into()))?;
+        let dataset_revision = object
+            .get("dataset_revision")
+            .and_then(serde_json::Value::as_u64)
+            .filter(|value| *value > 0)
+            .ok_or_else(|| RegistryError::Invalid("chart dataset_revision is invalid".into()))?;
+        derived_values.insert(
+            "chart_dataset_revision".into(),
+            format!("{dataset_id}:{dataset_revision}"),
+        );
+        BTreeSet::from([ProductRecordReference {
+            kind: ProductRecordKind::Dataset,
+            id: dataset_id.into(),
+        }])
+    } else if kind == ProductRecordKind::DlmDefinition {
         let object = value.as_object().expect("object checked above");
         if object.len() != 2
             || !object.contains_key("dataset_id")
@@ -546,6 +566,27 @@ fn validate_product_binding(
     references: &BTreeSet<ProductRecordReference>,
     values: &BTreeMap<String, String>,
 ) -> Result<(), RegistryError> {
+    if kind == ProductRecordKind::Chart {
+        let reference = references
+            .iter()
+            .next()
+            .ok_or_else(|| RegistryError::Invalid("chart dataset reference is missing".into()))?;
+        let dataset = snapshot
+            .product_record(ProductRecordKind::Dataset, &reference.id)
+            .map_err(|error| RegistryError::Invalid(error.to_string()))?
+            .ok_or_else(|| RegistryError::Invalid("chart dataset does not exist".into()))?;
+        let expected = values["chart_dataset_revision"]
+            .rsplit(':')
+            .next()
+            .and_then(|value| value.parse::<u64>().ok());
+        return if expected == Some(dataset.revision) {
+            Ok(())
+        } else {
+            Err(RegistryError::Invalid(
+                "chart dataset revision is stale".into(),
+            ))
+        };
+    }
     if kind != ProductRecordKind::DlmRun {
         return Ok(());
     }
@@ -1154,6 +1195,55 @@ mod tests {
                 "unexpectedly accepted {document}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn chart_binds_exact_dataset_revision_and_owner() {
+        let (registry, _) = registry().await;
+        let begun = registry.begin("alice").await.unwrap();
+        for command in [
+            ProductDmlCommand::Create {
+                kind: "dataset".into(),
+                id: "orders".into(),
+                document_json: r#"{"name":"Orders"}"#.into(),
+            },
+            ProductDmlCommand::Create {
+                kind: "chart".into(),
+                id: "chart-1".into(),
+                document_json: r#"{"dataset_id":"orders","dataset_revision":1,"name":"Chart"}"#
+                    .into(),
+            },
+        ] {
+            registry
+                .stage_product_command("alice", &begun.transaction_id, command)
+                .await
+                .unwrap();
+        }
+        let stale = registry
+            .stage_product_command(
+                "alice",
+                &begun.transaction_id,
+                ProductDmlCommand::Create {
+                    kind: "chart".into(),
+                    id: "chart-2".into(),
+                    document_json: r#"{"dataset_id":"orders","dataset_revision":2}"#.into(),
+                },
+            )
+            .await;
+        assert!(matches!(stale, Err(RegistryError::Invalid(_))));
+        let transaction = registry.take("alice", &begun.transaction_id).await.unwrap();
+        let chart = transaction
+            .snapshot()
+            .product_record(ProductRecordKind::Chart, "chart-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            chart.references,
+            BTreeSet::from([ProductRecordReference {
+                kind: ProductRecordKind::Dataset,
+                id: "orders".into()
+            }])
+        );
     }
 
     #[tokio::test]

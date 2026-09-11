@@ -180,6 +180,11 @@ KaveonDB snapshot/generations and reconciliation results. Its verifier rejects
 stale or incomplete evidence. It is scoped DLM migration evidence and does not
 replace the complete authority-family retirement gate.
 
+The chart family now has deterministic snapshot, exact dataset-revision binding,
+checkpoint/resume and target reconciliation code. Retirement remains blocked on
+live backfill evidence, continuous mutation capture, read parity, fencing,
+rollback and backup/restore qualification.
+
 Deleting the StatefulSet or PVC before these gates would remove the current
 product metadata authority and break Studio even though ADLS analytical queries
 remain available.
