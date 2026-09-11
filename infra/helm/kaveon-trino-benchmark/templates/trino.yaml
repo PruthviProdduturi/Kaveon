@@ -51,6 +51,7 @@ data:
     hive.metastore.catalog.dir=file:///data/trino/metastore
     fs.native-local.enabled=true
     fs.azure.enabled=true
+    delta.register-table-procedure.enabled=true
     azure.auth-type=DEFAULT
     azure.application-id=KaveonQualification
 ---

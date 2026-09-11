@@ -24,6 +24,8 @@ external Delta tables resolve to those exact objects. The runner verifies every
 blob's byte length and create-time SHA-256 metadata immediately before the run.
 Trino's native local filesystem is enabled only for its ephemeral file-metastore
 directory; measured table bytes remain in ADLS.
+The runner registers the pre-existing Delta tables with Trino's opt-in
+`system.register_table` procedure, so registration never rewrites fixture data.
 
 ## One-time tools and variables
 
