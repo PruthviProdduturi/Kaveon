@@ -7,10 +7,8 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use kaveon_core::{
-    BatchOperator, CatalogManager, DataFormat, MemoryReservation, OperatorMemoryAccount, Result,
-    StorageType, TableReference,
+    BatchOperator, CatalogManager, MemoryReservation, OperatorMemoryAccount, Result, TableReference,
 };
-use kaveon_storage::{DeltaTableReader, ParquetReader};
 
 pub struct MetadataCount {
     schema: SchemaRef,
@@ -30,24 +28,21 @@ impl MetadataCount {
         memory: Option<OperatorMemoryAccount>,
     ) -> Result<Option<Self>> {
         let resolved = catalog.resolve_table(&TableReference::parse(table))?;
-        if !matches!(resolved.storage, StorageType::Local { .. })
-            || matches!(resolved.table.format, DataFormat::Iceberg)
-        {
-            return Ok(None);
-        }
         if let Some(memory) = &memory {
             memory.check_cancelled()?;
         }
-        // Delta metadata resolves the active file set exactly once and validates
-        // its protocol and physical/logical schema before summing file footers.
-        let metadata = match resolved.table.format {
-            DataFormat::Parquet => ParquetReader::new(resolved.full_path()).metadata()?,
-            DataFormat::Delta => DeltaTableReader::new(resolved.full_path()).metadata()?,
-            DataFormat::Iceberg => unreachable!(),
-        };
+        // This resolves an immutable Delta/Iceberg snapshot or a versioned
+        // Parquet object and reads only metadata. Object-backed COUNT(*) must
+        // not fall through to decoding every data page on distributed clusters.
+        let metadata =
+            kaveon_storage::analyze_source(&resolved.full_path(), resolved.table.format)?;
         if let Some(columns) = columns {
             for name in columns {
-                metadata.schema.index_of(name)?;
+                if !metadata.columns.iter().any(|column| column == name) {
+                    return Err(kaveon_core::KaveonError::Execution(format!(
+                        "metadata COUNT column '{name}' not in input"
+                    )));
+                }
             }
         }
         let bytes = (count_expressions as u64).checked_mul(128).ok_or_else(|| {
