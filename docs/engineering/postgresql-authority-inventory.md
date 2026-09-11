@@ -150,3 +150,9 @@ path/hash. The Engine enforces `building` to one terminal state and owner-scoped
 mutation/read access. Large answer/index/sketch payloads remain external and no
 current PostgreSQL DLM writer publishes a run or its manifest, so this is a
 destination contract rather than migration evidence.
+
+A default-off run backfill now deterministically captures ready legacy artifact
+versions, requires exact locally staged canonical manifests, binds exact
+owner-scoped definition revisions, checkpoints progress and reconciles exact
+target state. It has no ADLS publisher, scheduled execution or live evidence;
+PostgreSQL remains authoritative.
