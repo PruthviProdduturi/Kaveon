@@ -387,6 +387,27 @@ integrity-checked checkpoint advances by atomic replacement only after exact
 owner-scoped reconciliation. No writer/outbox, scheduler, live run or cutover
 exists, so PostgreSQL remains authoritative.
 
+## Dashboard snapshot and shadow parity
+
+The default-dry dashboard backfill captures PostgreSQL under `REPEATABLE READ,
+READ ONLY` at the outbox watermark, with stable ID order, a 10,000-record bound
+and 1 MiB canonical document limit. Layout, charts and filters must be valid JSON;
+owners, visibility and chart IDs must be valid and duplicate chart references
+are rejected. Favorites and thumbnail payloads are excluded.
+
+Every referenced chart is read as the dashboard owner and must resolve at one
+KaveonDB snapshot. The document stores a chart-revision map, and the Engine
+derives typed chart references and rejects missing or stale revisions. Apply uses
+exact owner-scoped create/reconciliation and requires
+`KAVEON_DASHBOARD_MIGRATION_ENABLED=true`. The 8 MiB integrity checkpoint uses
+atomic replacement and exact retry after ambiguous commits.
+
+Set `KAVEON_DASHBOARD_SHADOW_READ_ENABLED=true` to compare authenticated point
+reads. PostgreSQL still supplies the response. Telemetry contains only record ID,
+status, hashes, sizes and target generation; request decorations and documents
+are excluded. Filter-level dataset references, list parity, mutation outbox,
+scheduling and cutover remain pending.
+
 ## DLM definition record
 
 KaveonDB now accepts `kaveon.product.dlm_definitions` as a typed transactional

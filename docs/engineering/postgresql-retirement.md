@@ -185,6 +185,11 @@ checkpoint/resume and target reconciliation code. Retirement remains blocked on
 live backfill evidence, continuous mutation capture, read parity, fencing,
 rollback and backup/restore qualification.
 
+Dashboards now have snapshot/backfill/reconciliation and point-read shadow code,
+including exact referenced chart revisions. Retirement remains blocked on typed
+filter dataset references, continuous writer capture, live parity evidence,
+fencing, rollback and backup/restore qualification.
+
 Deleting the StatefulSet or PVC before these gates would remove the current
 product metadata authority and break Studio even though ADLS analytical queries
 remain available.

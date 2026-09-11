@@ -11,8 +11,8 @@ family has migrated.
 | `data_sources` | `routers/data_sources.py`, connection pool resolution, credentials service | Future non-secret source record | Separate encrypted connection envelope from public metadata; migrate favorites tied to sources |
 | `datasets` | `services/datasets.py`; chat, AI, SQL and Lab readers | `dataset` product record | Source create/update/delete and one canonical outbox event now commit together; schema deployment, backfill, replay consumer and shadow reads remain |
 | `dataset_dimensions`, `dataset_columns`, `dataset_metrics` | Dataset service; chat, query generator, AI and DLM readers | Children inside the revisioned `dataset` document | Source replacement is now atomic with its parent/outbox; target uniqueness/reference validation, backfill and reconciliation remain |
-| `charts` | `services/charts.py`, dashboard rendering | `chart` product record | Define dataset reference extraction, stable legacy-ID mapping, outbox, backfill and visibility parity |
-| `dashboards` | `services/dashboards.py`, DLM/dashboard routes | `dashboard` product record | Define chart/filter-dataset references at one revision; outbox, backfill and shadow rendering |
+| `charts` | `services/charts.py`, dashboard rendering | `chart` product record | Deterministic backfill and exact dataset revision binding exist; outbox, live reconciliation, write parity and cutover remain |
+| `dashboards` | `services/dashboards.py`, DLM/dashboard routes | `dashboard` product record | Deterministic backfill, exact chart revision binding and point-read shadowing exist; filter-dataset references, outbox, live parity and cutover remain |
 | `favorites` | `services/favorites.py`, dashboard and data-source routes | No typed favorite record yet | Add owner-unique favorite type and atomic dashboard/favorite behavior |
 | `saved_queries` | `services/saved_queries.py` | `saved_query` product record | Outbox, backfill, owner/role parity and cutover |
 | `user_themes` | `services/theme.py` | `user_theme` product record | Outbox, backfill and owner-key reconciliation |
@@ -169,3 +169,16 @@ supported PostgreSQL layouts. It binds owner-scoped chart records to exact
 KaveonDB dataset revisions and has checkpoint/resume plus exact reconciliation.
 No live snapshot, ongoing writer/outbox, fencing or cutover exists, so charts
 remain PostgreSQL-authoritative.
+
+Dashboards now have deterministic repeatable-read snapshot capture, exact
+owner-scoped chart revision binding, bounded checkpoint/resume, exact target
+reconciliation and a default-off authenticated point-read shadow comparator.
+The canonical document excludes favorites and thumbnails. Filter-level dataset
+references are not yet typed, mutations have no outbox, and no live backfill or
+parity evidence exists; dashboards remain PostgreSQL-authoritative.
+
+After datasets, DLM definitions/runs, charts and dashboards, the remaining
+authority families with no complete destination/backfill path are catalog/data
+sources, favorites, saved queries, themes, recents, query/activity/chat history,
+context cache and AI provider/key configuration. Dataset, chart and dashboard
+ongoing writers also still require outbox/replay coverage before any cutover.

@@ -416,7 +416,34 @@ fn product_document(
         ));
     }
     let mut derived_values = BTreeMap::new();
-    let references = if kind == ProductRecordKind::Chart {
+    let references = if kind == ProductRecordKind::Dashboard
+        && value.get("chart_revisions").is_some()
+    {
+        let revisions = value["chart_revisions"]
+            .as_object()
+            .ok_or_else(|| RegistryError::Invalid("dashboard chart_revisions is invalid".into()))?;
+        if revisions
+            .values()
+            .any(|revision| revision.as_u64().is_none_or(|value| value == 0))
+        {
+            return Err(RegistryError::Invalid(
+                "dashboard chart revision is invalid".into(),
+            ));
+        }
+        derived_values.insert(
+            "dashboard_chart_revisions".into(),
+            serde_json::to_string(revisions).map_err(|_| {
+                RegistryError::Invalid("dashboard chart revisions cannot be encoded".into())
+            })?,
+        );
+        revisions
+            .keys()
+            .map(|id| ProductRecordReference {
+                kind: ProductRecordKind::Chart,
+                id: id.clone(),
+            })
+            .collect()
+    } else if kind == ProductRecordKind::Chart {
         let object = value.as_object().expect("object checked above");
         let dataset_id = object
             .get("dataset_id")
@@ -566,6 +593,24 @@ fn validate_product_binding(
     references: &BTreeSet<ProductRecordReference>,
     values: &BTreeMap<String, String>,
 ) -> Result<(), RegistryError> {
+    if kind == ProductRecordKind::Dashboard && values.contains_key("dashboard_chart_revisions") {
+        let revisions: BTreeMap<String, u64> =
+            serde_json::from_str(&values["dashboard_chart_revisions"]).map_err(|_| {
+                RegistryError::Invalid("dashboard chart revisions are invalid".into())
+            })?;
+        for reference in references {
+            let chart = snapshot
+                .product_record(ProductRecordKind::Chart, &reference.id)
+                .map_err(|error| RegistryError::Invalid(error.to_string()))?
+                .ok_or_else(|| RegistryError::Invalid("dashboard chart does not exist".into()))?;
+            if revisions.get(&reference.id) != Some(&chart.revision) {
+                return Err(RegistryError::Invalid(
+                    "dashboard chart revision is stale".into(),
+                ));
+            }
+        }
+        return Ok(());
+    }
     if kind == ProductRecordKind::Chart {
         let reference = references
             .iter()
@@ -1213,6 +1258,11 @@ mod tests {
                 document_json: r#"{"dataset_id":"orders","dataset_revision":1,"name":"Chart"}"#
                     .into(),
             },
+            ProductDmlCommand::Create {
+                kind: "dashboard".into(),
+                id: "dashboard-1".into(),
+                document_json: r#"{"chart_revisions":{"chart-1":1},"name":"Dashboard"}"#.into(),
+            },
         ] {
             registry
                 .stage_product_command("alice", &begun.transaction_id, command)
@@ -1242,6 +1292,18 @@ mod tests {
             BTreeSet::from([ProductRecordReference {
                 kind: ProductRecordKind::Dataset,
                 id: "orders".into()
+            }])
+        );
+        let dashboard = transaction
+            .snapshot()
+            .product_record(ProductRecordKind::Dashboard, "dashboard-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            dashboard.references,
+            BTreeSet::from([ProductRecordReference {
+                kind: ProductRecordKind::Chart,
+                id: "chart-1".into()
             }])
         );
     }
