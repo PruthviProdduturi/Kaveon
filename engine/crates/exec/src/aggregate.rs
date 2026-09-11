@@ -1895,12 +1895,6 @@ impl HashAggregate {
                 .iter()
                 .map(|column| batch.column(schema.index_of(column).unwrap()))
                 .collect::<Vec<_>>();
-            // The benchmark and common fact-table shape groups by one Int64
-            // column. Bind its concrete Arrow array once per batch instead of
-            // checking the data type and downcasting through Any for every row.
-            let single_i64_group = (group_arrays.len() == 1
-                && group_arrays[0].data_type() == &DataType::Int64)
-                .then(|| group_arrays[0].as_primitive::<Int64Type>());
             let aggregate_arrays = self
                 .aggregates
                 .iter()
@@ -1995,13 +1989,7 @@ impl HashAggregate {
                 {
                     memory.check_cancelled()?;
                 }
-                let key = if let Some(array) = single_i64_group {
-                    InlineGroupKey::Single(if array.is_null(row) {
-                        GroupKey::Null
-                    } else {
-                        GroupKey::Int64(array.value(row))
-                    })
-                } else if group_arrays.len() == 1 {
+                let key = if group_arrays.len() == 1 {
                     InlineGroupKey::Single(extract_key(group_arrays[0], row))
                 } else {
                     InlineGroupKey::Multiple(
@@ -3168,53 +3156,6 @@ mod tests {
         assert_eq!(snapshot.current_bytes, 0);
         assert!(snapshot.peak_bytes <= snapshot.limit_bytes);
         assert!(snapshot.reservation_calls < 100);
-    }
-
-    #[test]
-    fn single_int64_group_fast_path_preserves_nulls_counts_and_sums() {
-        let batch = RecordBatch::try_from_iter(vec![
-            (
-                "group_key",
-                Arc::new(Int64Array::from(vec![Some(7), None, Some(7), Some(-1), None]))
-                    as ArrayRef,
-            ),
-            (
-                "value",
-                Arc::new(Int64Array::from(vec![10, 20, 30, 40, 50])) as ArrayRef,
-            ),
-        ])
-        .unwrap();
-        let pool = QueryMemoryPool::new("int64-group-fast-path", 1024 * 1024).unwrap();
-        let mut aggregate = HashAggregate::new_with_memory(
-            Box::new(Input::new(batch)),
-            vec!["group_key".into()],
-            vec![
-                AggExpr::new(AggFunc::Count, "*"),
-                AggExpr::new(AggFunc::Sum, "value"),
-            ],
-            pool.operator("aggregate").unwrap(),
-        )
-        .unwrap();
-        let output = aggregate.next_batch().unwrap().unwrap();
-        let keys = output.column(0).as_primitive::<Int64Type>();
-        let counts = output
-            .column(1)
-            .as_primitive::<arrow::datatypes::UInt64Type>();
-        let sums = output.column(2).as_primitive::<Int64Type>();
-        let actual = (0..output.num_rows())
-            .map(|row| {
-                (
-                    (!keys.is_null(row)).then(|| keys.value(row)),
-                    (counts.value(row), sums.value(row)),
-                )
-            })
-            .collect::<std::collections::BTreeMap<_, _>>();
-        assert_eq!(actual[&Some(7)], (2, 40));
-        assert_eq!(actual[&Some(-1)], (1, 40));
-        assert_eq!(actual[&None], (2, 70));
-        drop(output);
-        drop(aggregate);
-        assert_eq!(pool.snapshot().current_bytes, 0);
     }
 
     #[test]
