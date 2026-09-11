@@ -22,6 +22,8 @@ Azure filesystem. The generated fixture stores a Parquet file plus a minimal
 Delta log for each table. Kaveon reads those Parquet objects directly; Trino's
 external Delta tables resolve to those exact objects. The runner verifies every
 blob's byte length and create-time SHA-256 metadata immediately before the run.
+Trino's native local filesystem is enabled only for its ephemeral file-metastore
+directory; measured table bytes remain in ADLS.
 
 ## One-time tools and variables
 
