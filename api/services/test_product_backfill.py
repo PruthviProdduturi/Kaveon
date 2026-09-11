@@ -59,7 +59,10 @@ def snapshot_record():
 
 
 def snapshot():
-    return product_backfill.DatasetSnapshot(41, (snapshot_record(),), "f" * 64)
+    records = (snapshot_record(),)
+    return product_backfill.DatasetSnapshot(
+        41, records, product_backfill.snapshot_digest(records)
+    )
 
 
 class ProductBackfillTests(unittest.TestCase):

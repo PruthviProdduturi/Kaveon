@@ -54,6 +54,11 @@ exact post-create target reconciliation. It is disabled operationally and has
 not run against a real environment, so the required backfill and reconciliation
 evidence remains absent.
 
+The backfill has a disabled-by-default command with an exact snapshot checkpoint
+and resume support. Its existence is not a retirement gate result; only an
+archived successful command report followed by post-watermark replay and final
+reconciliation can supply that evidence.
+
 PostgreSQL may be retired only after one repeatable migration command proves all
 of the following against a preserved backup:
 

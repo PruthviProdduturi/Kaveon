@@ -58,6 +58,8 @@ Three material boundaries prevent expanding this narrow 8/10 rating:
    A bounded deterministic dataset snapshot/reconciliation implementation now
    exists, but it has no real-environment artifact and does not change this
    evidence assessment.
+   The operator command defaults to dry-run and requires a separate enable
+   variable for target writes; it has not been executed for readiness evidence.
 3. The checked-in comparison gates fail closed because no publication-scale
    1.90× Trino result or completed PostgreSQL transaction report exists.
 

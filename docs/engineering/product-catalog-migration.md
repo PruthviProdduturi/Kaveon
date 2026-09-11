@@ -156,6 +156,40 @@ and exact-reads every target before emitting its report. It is an unscheduled,
 unexecuted library; a real snapshot artifact, concurrent source-write test and
 post-catch-up reconciliation report are still required.
 
+### Disabled operational backfill command
+
+The command defaults to a read-only source capture and writes an integrity-
+checked checkpoint under an operator-selected path:
+
+```powershell
+python scripts/backfill-product-catalog.py --checkpoint tmp/dataset-backfill.json
+```
+
+The checkpoint contains the exact product documents, owners and SQL metadata
+needed to resume the same snapshot. Treat it as customer metadata: keep it in a
+restricted directory, never commit it, and retain or delete it under the same
+policy as a database export. `tmp/` is ignored by Git. A rerun refuses to
+overwrite an existing checkpoint; inspect it with a dry-run resume:
+
+```powershell
+python scripts/backfill-product-catalog.py --checkpoint tmp/dataset-backfill.json --resume
+```
+
+Target writes require both an explicit flag and enable variable. This is an
+operator guard, not cutover authorization:
+
+```powershell
+$env:KAVEON_PRODUCT_MIGRATION_ENABLED = "true"
+python scripts/backfill-product-catalog.py --checkpoint tmp/dataset-backfill.json --resume --apply
+```
+
+After each exactly reconciled record, the command atomically replaces and
+flushes the checkpoint with the next position. A crash after target commit but
+before checkpoint replacement safely retries that record through exact target
+comparison. Completion performs a full-snapshot reconciliation before marking
+the checkpoint complete. It does not replay the post-watermark outbox, switch
+reads, fence writes, or alter PostgreSQL authority.
+
 ## Staged KaveonDB delivery
 
 KaveonDB is the logical transactional product database. Its durable tables and

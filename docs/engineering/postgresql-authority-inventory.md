@@ -60,6 +60,12 @@ performs a second exact read of every record before returning a credential-free
 reconciliation report. No command or scheduler invokes this code yet, and no
 real PostgreSQL/KaveonDB report has been produced.
 
+An operational command now exposes that bounded backfill with dry-run default,
+an explicit apply enable variable, an integrity-checked exact-snapshot
+checkpoint and per-record atomic checkpoint replacement. It is not invoked by
+startup, an API route or a scheduler. The checkpoint contains customer metadata
+and must remain in restricted ignored storage.
+
 PostgreSQL retirement still requires a discovered live-schema report because
 runtime and older deployments may contain tables absent from current source.
 Backfill/replay must reconcile IDs, owners, visibility, references and canonical

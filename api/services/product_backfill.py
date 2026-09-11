@@ -51,6 +51,28 @@ def _canonical(document: dict) -> tuple[str, str]:
     return payload, hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def snapshot_digest(records: tuple[SnapshotRecord, ...]) -> str:
+    hasher = hashlib.sha256()
+    for record in records:
+        _, digest = _canonical(record.document)
+        if digest != record.payload_sha256:
+            raise RuntimeError(f"Dataset {record.record_id} payload hash mismatch")
+        for value in (record.record_id, record.owner_principal, digest):
+            encoded = value.encode("utf-8")
+            hasher.update(len(encoded).to_bytes(8, "big"))
+            hasher.update(encoded)
+    return hasher.hexdigest()
+
+
+def validate_snapshot(snapshot: DatasetSnapshot) -> None:
+    if snapshot.source_watermark < 0 or len(snapshot.records) > MAX_DATASETS:
+        raise RuntimeError("Dataset snapshot metadata is invalid")
+    if tuple(sorted(snapshot.records, key=lambda record: int(record.record_id))) != snapshot.records:
+        raise RuntimeError("Dataset snapshot record order is invalid")
+    if snapshot_digest(snapshot.records) != snapshot.snapshot_sha256:
+        raise RuntimeError("Dataset snapshot identity mismatch")
+
+
 def capture_dataset_snapshot() -> DatasetSnapshot:
     """Capture datasets and semantic children at one repeatable source watermark."""
     with db.transaction() as transaction:
@@ -81,7 +103,6 @@ def capture_dataset_snapshot() -> DatasetSnapshot:
 
     records = []
     total_bytes = 0
-    snapshot_hasher = hashlib.sha256()
     for parent in parents:
         dataset_id = int(parent["id"])
         document = datasets._adapt(parent)
@@ -102,15 +123,12 @@ def capture_dataset_snapshot() -> DatasetSnapshot:
             raise RuntimeError("PostgreSQL snapshot exceeds its byte bound")
         record_id = str(dataset_id)
         owner = str(parent["created_by"])
-        for value in (record_id, owner, digest):
-            encoded = value.encode("utf-8")
-            snapshot_hasher.update(len(encoded).to_bytes(8, "big"))
-            snapshot_hasher.update(encoded)
         records.append(SnapshotRecord(record_id, owner, document, digest))
+    immutable_records = tuple(records)
     return DatasetSnapshot(
         source_watermark=int((watermark_row or {}).get("watermark") or 0),
-        records=tuple(records),
-        snapshot_sha256=snapshot_hasher.hexdigest(),
+        records=immutable_records,
+        snapshot_sha256=snapshot_digest(immutable_records),
     )
 
 
@@ -123,6 +141,7 @@ def _target_matches(target: dict | None, record: SnapshotRecord) -> bool:
 
 def apply_and_reconcile(snapshot: DatasetSnapshot) -> dict:
     """Create missing records and prove exact owner-scoped target parity."""
+    validate_snapshot(snapshot)
     created = 0
     already_present = 0
     for record in snapshot.records:
