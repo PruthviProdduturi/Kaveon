@@ -1,0 +1,152 @@
+{{- if .Values.runner.enabled }}
+{{- $name := include "kaveon-trino-benchmark.name" . -}}
+{{- $digest := required "runner.image.digest is required when runner.enabled" .Values.runner.image.digest -}}
+{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" $digest) }}{{ fail "runner.image.digest must be an immutable sha256 digest" }}{{ end -}}
+{{- $runnerRepository := required "runner.image.repository is required when runner.enabled" .Values.runner.image.repository -}}
+{{- $runId := required "runner.runId is required when runner.enabled" .Values.runner.runId -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}-runner
+  namespace: {{ .Release.Namespace }}
+rules:
+  - apiGroups: [apps]
+    resources: [statefulsets]
+    verbs: [get, list]
+  - apiGroups: [apps]
+    resources: [statefulsets/scale]
+    resourceNames:
+      - {{ .Values.runner.kaveon.coordinatorStatefulSet }}
+      - {{ .Values.runner.kaveon.workerStatefulSet }}
+      - {{ $name }}-trino-coordinator
+      - {{ $name }}-trino-worker
+    verbs: [get, patch]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-runner
+  namespace: {{ .Release.Namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.runner.serviceAccountName }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}-runner
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}-runner-observer
+rules:
+  - apiGroups: [""]
+    resources: [nodes, pods]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}-runner-observer
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.runner.serviceAccountName }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}-runner-observer
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.runner.resultsClaim }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: managed-csi
+  resources:
+    requests: {storage: 1Gi}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}-{{ $runId }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ $name }}
+        app.kubernetes.io/component: benchmark-runner
+        azure.workload.identity/use: "true"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ .Values.runner.serviceAccountName }}
+      automountServiceAccountToken: true
+      nodeSelector: {kubernetes.azure.com/agentpool: system}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: runner
+          image: {{ printf "%s@%s" $runnerRepository $digest | quote }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          args: [--manifest, /fixture/manifest.json, --output, /results/{{ $runId }}.json]
+          env:
+            - name: BENCHMARK_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            - {name: KAVEON_COORDINATOR_STATEFULSET, value: {{ .Values.runner.kaveon.coordinatorStatefulSet | quote }}}
+            - {name: KAVEON_WORKER_STATEFULSET, value: {{ .Values.runner.kaveon.workerStatefulSet | quote }}}
+            - {name: KAVEON_URL, value: {{ printf "https://%s.%s.svc.cluster.local:8080" .Values.runner.kaveon.service .Release.Namespace | quote }}}
+            - {name: KAVEON_EXPECTED_IMAGE_DIGEST, value: {{ .Values.runner.kaveon.expectedImageDigest | quote }}}
+            - {name: KAVEON_WORKLOAD_IDENTITY_REFERENCE, value: {{ .Values.runner.kaveon.workloadIdentityReference | quote }}}
+            - {name: TRINO_COORDINATOR_STATEFULSET, value: {{ printf "%s-trino-coordinator" $name | quote }}}
+            - {name: TRINO_WORKER_STATEFULSET, value: {{ printf "%s-trino-worker" $name | quote }}}
+            - {name: TRINO_URL, value: {{ printf "https://%s-trino.%s.svc.cluster.local:8443" $name .Release.Namespace | quote }}}
+            - {name: WORKER_COUNT, value: {{ .Values.runner.policy.workerCount | quote }}}
+            - {name: WARMUPS, value: {{ .Values.runner.policy.warmups | quote }}}
+            - {name: REPETITIONS_PER_ROUND, value: {{ .Values.runner.policy.repetitionsPerRound | quote }}}
+            - {name: THROUGHPUT_ROUNDS, value: {{ .Values.runner.policy.rounds | quote }}}
+            - {name: THROUGHPUT_REPEATS, value: {{ .Values.runner.policy.throughputRepeats | quote }}}
+            - {name: CONCURRENCY, value: {{ .Values.runner.policy.concurrency | quote }}}
+            - {name: TARGET_RATIO, value: {{ .Values.runner.policy.targetRatio | quote }}}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi, ephemeral-storage: 1Gi}
+          volumeMounts:
+            - {name: fixture, mountPath: /fixture, readOnly: true}
+            - {name: tls, mountPath: /tls, readOnly: true}
+            - {name: auth, mountPath: /auth, readOnly: true}
+            - {name: trino-tls, mountPath: /trino-tls, readOnly: true}
+            - {name: trino-auth, mountPath: /trino-auth, readOnly: true}
+            - {name: results, mountPath: /results}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: fixture
+          configMap: {name: {{ .Values.runner.manifestConfigMap }}}
+        - name: tls
+          secret: {secretName: {{ .Values.runner.tlsSecret }}}
+        - name: auth
+          secret: {secretName: {{ .Values.runner.credentialsSecret }}}
+        - name: trino-tls
+          secret: {secretName: {{ .Values.runner.trinoTlsSecret }}}
+        - name: trino-auth
+          secret: {secretName: {{ .Values.runner.trinoAuthSecret }}}
+        - name: results
+          persistentVolumeClaim: {claimName: {{ .Values.runner.resultsClaim }}}
+        - {name: tmp, emptyDir: {sizeLimit: 1Gi}}
+{{- end }}

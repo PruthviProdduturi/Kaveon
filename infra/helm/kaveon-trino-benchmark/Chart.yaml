@@ -1,0 +1,6 @@
+apiVersion: v2
+name: kaveon-trino-benchmark
+description: Resource-matched Trino peer and exclusive benchmark runner for the AKS test cluster
+type: application
+version: 0.1.0
+appVersion: "483"

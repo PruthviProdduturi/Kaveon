@@ -10,9 +10,12 @@ productTransactions:
   container: ""
   prefix: kaveon/product-catalog
 serviceAccountName: kaveon-engine
+serviceAccount:
+  create: true
 credentialsSecret: kaveon-engine-auth
 tlsSecret: kaveon-engine-tls
 coordinator:
+  replicas: 1
   imageDigest: ""
   credentialsSecret: ""
   nodeSelector:

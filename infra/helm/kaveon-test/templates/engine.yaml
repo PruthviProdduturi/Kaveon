@@ -7,6 +7,7 @@
 {{- required "productTransactions.container is required when enabled" .Values.productTransactions.container -}}
 {{- required "productTransactions.prefix is required when enabled" .Values.productTransactions.prefix -}}
 {{- end -}}
+{{- if .Values.serviceAccount.create }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -16,6 +17,7 @@ metadata:
     azure.workload.identity/client-id: {{ $client | quote }}
 automountServiceAccountToken: false
 ---
+{{- end }}
 # Stable client endpoint; coordinator DNS remains for internal discovery/TLS.
 apiVersion: v1
 kind: Service
@@ -81,7 +83,7 @@ metadata:
   namespace: {{ $.Release.Namespace }}
 spec:
   serviceName: {{ $service }}
-  replicas: {{ ternary 1 $.Values.workers.replicas $isCoordinator }}
+  replicas: {{ ternary $.Values.coordinator.replicas $.Values.workers.replicas $isCoordinator }}
   podManagementPolicy: Parallel
   selector:
     matchLabels:
