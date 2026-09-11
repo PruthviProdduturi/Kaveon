@@ -32,6 +32,7 @@ use crate::{
 const DEFAULT_BATCH_SIZE: usize = 8_192;
 const MAX_METADATA_CACHE_ENTRIES: usize = 256;
 const MAX_OBJECT_METADATA_CACHE_ENTRIES: usize = 256;
+const MAX_OBJECT_STORE_CACHE_ENTRIES: usize = 32;
 const FULL_OBJECT_CACHE_LIMIT: usize = 64 * 1024 * 1024;
 const FULL_OBJECT_CACHE_MIN_ROW_GROUPS: usize = 32;
 const PROCESS_FULL_OBJECT_CACHE_LIMIT: usize = 256 * 1024 * 1024;
@@ -43,6 +44,26 @@ static DECODED_BATCH_CACHE: OnceLock<Mutex<HashMap<String, Arc<DecodedBatchEntry
     OnceLock::new();
 static OBJECT_METADATA_CACHE: OnceLock<Mutex<HashMap<String, object_store::ObjectMeta>>> =
     OnceLock::new();
+static OBJECT_STORE_CACHE: OnceLock<Mutex<HashMap<String, Arc<dyn ObjectStore>>>> = OnceLock::new();
+
+fn cached_object_store(key: &str) -> Option<Arc<dyn ObjectStore>> {
+    OBJECT_STORE_CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .ok()?
+        .get(key)
+        .cloned()
+}
+
+fn cache_object_store(key: String, store: Arc<dyn ObjectStore>) {
+    let Ok(mut cache) = OBJECT_STORE_CACHE.get_or_init(Default::default).lock() else {
+        return;
+    };
+    if cache.len() >= MAX_OBJECT_STORE_CACHE_ENTRIES && !cache.contains_key(&key) {
+        cache.clear();
+    }
+    cache.insert(key, store);
+}
 
 fn cached_object_metadata(key: &str) -> Option<object_store::ObjectMeta> {
     OBJECT_METADATA_CACHE
@@ -578,14 +599,25 @@ impl AdlsParquetReader {
         self.validate()?;
         let metrics = self.metrics.clone().unwrap_or_default();
         metrics.files_considered(1);
-        let store: Arc<dyn ObjectStore> = Arc::new(
-            MicrosoftAzureBuilder::from_env()
-                .with_account(&self.account)
-                .with_container_name(&self.container)
-                .with_use_azure_cli(self.auth_mode == AdlsAuthMode::AzureCli)
-                .build()
-                .map_err(object_store_error)?,
-        );
+        let store_key = format!("{}/{}/{:?}", self.account, self.container, self.auth_mode);
+        let store: Arc<dyn ObjectStore> = match cached_object_store(&store_key) {
+            Some(store) => {
+                metrics.object_store_cache_hit();
+                store
+            }
+            None => {
+                let store: Arc<dyn ObjectStore> = Arc::new(
+                    MicrosoftAzureBuilder::from_env()
+                        .with_account(&self.account)
+                        .with_container_name(&self.container)
+                        .with_use_azure_cli(self.auth_mode == AdlsAuthMode::AzureCli)
+                        .build()
+                        .map_err(object_store_error)?,
+                );
+                cache_object_store(store_key, store.clone());
+                store
+            }
+        };
         let path =
             Path::parse(&self.object_path).map_err(|error| storage_error(error.to_string()))?;
         let footer_started = Instant::now();
@@ -819,6 +851,21 @@ mod tests {
 
         invalidate_object_metadata(&key);
         assert!(cached_object_metadata(&key).is_none());
+    }
+
+    #[test]
+    fn object_store_clients_are_reused_by_exact_connection_key() {
+        let key = format!("store-cache-test-{}", std::process::id());
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        cache_object_store(key.clone(), store.clone());
+
+        let cached = cached_object_store(&key).expect("exact store key must resolve");
+        assert!(Arc::ptr_eq(&cached, &store));
+        assert!(cached_object_store(&format!("{key}-other")).is_none());
+
+        let metrics = ScanMetrics::default();
+        metrics.object_store_cache_hit();
+        assert_eq!(metrics.snapshot().object_store_cache_hits, 1);
     }
 
     #[test]
