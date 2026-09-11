@@ -1073,6 +1073,35 @@ mod tests {
     }
 
     #[test]
+    fn failed_attempt_cleanup_releases_exchange_capacity_for_retry() {
+        let store = ExchangeStore::with_capacity(1, 4);
+        let first = ExchangeChunk {
+            identity: identity(),
+            chunk_index: 0,
+            chunk_count: 2,
+            payload: vec![1, 2, 3].into(),
+        };
+        store.insert(first.clone()).unwrap();
+
+        // A failed attempt must not strand its partial exchange and block the
+        // retry attempt from using the bounded store.
+        let mut retry = first.clone();
+        retry.identity.task_id.attempt += 1;
+        assert_eq!(
+            store.insert(retry.clone()),
+            Err(ExchangeError::StoreCapacityExceeded)
+        );
+        assert!(store.remove(&first.identity).unwrap());
+        assert_eq!(store.buffered_bytes().unwrap(), 0);
+        let retry_identity = retry.identity.clone();
+        store.insert(retry).unwrap();
+        assert_eq!(store.buffered_bytes().unwrap(), 3);
+        assert!(!store.remove(&first.identity).unwrap(), "old attempt must be absent");
+        assert!(store.remove(&retry_identity).unwrap());
+        assert_eq!(store.buffered_bytes().unwrap(), 0);
+    }
+
+    #[test]
     fn identity_rejects_query_ids_that_cannot_be_used_in_routes() {
         let mut invalid = identity();
         invalid.task_id.query_id = "query/42".into();
