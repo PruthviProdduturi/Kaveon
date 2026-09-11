@@ -280,10 +280,12 @@ class Engines:
         dataset = self.manifest["dataset"]
         self.trino_query(f"CREATE SCHEMA IF NOT EXISTS lake.{self.catalog}")
         root = f"abfss://{dataset['container']}@{dataset['account']}.dfs.core.windows.net/{dataset['prefix']}"
-        definitions = {"events": "event_id BIGINT, customer_id BIGINT, category BIGINT, amount BIGINT",
-                       "customers": "customer_id BIGINT"}
-        for table, columns in definitions.items():
-            self.trino_query(f"CREATE TABLE lake.{self.catalog}.{table} ({columns}) WITH (format='PARQUET', external_location='{root}/{table}')")
+        for table in ("events", "customers"):
+            self.trino_query(
+                "CALL lake.system.register_table("
+                f"schema_name => '{self.catalog}', table_name => '{table}', "
+                f"table_location => '{root}/{table}')"
+            )
 
     def wait_workers(self, engine, count, timeout=300):
         deadline = time.monotonic() + timeout
