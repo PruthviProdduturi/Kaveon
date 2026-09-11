@@ -607,6 +607,7 @@ pub enum ProductRecordKind {
     Dashboard,
     SavedQuery,
     UserTheme,
+    DlmDefinition,
 }
 
 impl ProductRecordKind {
@@ -617,6 +618,7 @@ impl ProductRecordKind {
             Self::Dashboard => "dashboard",
             Self::SavedQuery => "saved_query",
             Self::UserTheme => "user_theme",
+            Self::DlmDefinition => "dlm_definition",
         }
     }
 
@@ -627,6 +629,7 @@ impl ProductRecordKind {
             "dashboard" => Some(Self::Dashboard),
             "saved_query" => Some(Self::SavedQuery),
             "user_theme" => Some(Self::UserTheme),
+            "dlm_definition" => Some(Self::DlmDefinition),
             _ => None,
         }
     }
@@ -733,6 +736,7 @@ fn validate_product_record(record: &ProductRecordRef) -> Result<(), ManifestErro
             ProductRecordKind::Dataset
             | ProductRecordKind::SavedQuery
             | ProductRecordKind::UserTheme => false,
+            ProductRecordKind::DlmDefinition => reference.kind == ProductRecordKind::Dataset,
         };
         if !allowed {
             return Err(error(format!(

@@ -7,6 +7,14 @@ from services import product_store
 
 
 class ProductStoreTests(unittest.TestCase):
+    def test_dlm_definition_uses_typed_plural_table(self):
+        mutation = product_store.ProductMutation(
+            "create", "dlm_definition", "7", {"dataset_id": "7", "dataset_revision": 3}
+        )
+        statement = product_store._statement(mutation)
+        self.assertIn("kaveon.product.dlm_definitions", statement)
+        self.assertIn('dataset_revision', statement)
+
     def test_multi_record_transaction_uses_one_session_and_canonical_documents(self):
         mutations = [
             product_store.ProductMutation("create", "chart", "chart-1", {"z": 2, "name": "O'Reilly"}),

@@ -148,6 +148,13 @@ coverage, source capture, backfill, replay, write verification and live parity
 evidence remain mandatory, and the comparator cannot satisfy the chart family
 retirement gate by itself.
 
+KaveonDB now has a durable owner-isolated `dlm_definition` record containing
+only dataset identity and positive pinned revision, with a typed dataset
+reference. No PostgreSQL writer/backfill uses it yet. Generated DLM artifacts,
+answers, indexes, router and sketches still lack a bounded atomic generation
+contract, so the DLM family remains PostgreSQL-authoritative/rebuilt state and
+cannot pass retirement.
+
 Deleting the StatefulSet or PVC before these gates would remove the current
 product metadata authority and break Studio even though ADLS analytical queries
 remain available.

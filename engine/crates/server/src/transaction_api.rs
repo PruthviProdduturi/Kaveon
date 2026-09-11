@@ -17,6 +17,7 @@ use kaveon_catalog::{
     product_commit::{CommitOutcome, ProductCatalogCommit},
     product_manifest::{
         CatalogChange, CatalogSnapshot, ImmutableFileRef, ProductRecordKind, ProductRecordRef,
+        ProductRecordReference,
     },
     product_transaction::ProductTransaction,
 };
@@ -34,6 +35,11 @@ const MAX_SESSION_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
 const SESSION_TTL: Duration = Duration::from_secs(5 * 60);
 type StagedDocument = (String, Vec<u8>);
 type ProductStage = (CatalogChange, Option<StagedDocument>);
+type ProductDocument = (
+    ImmutableFileRef,
+    StagedDocument,
+    BTreeSet<ProductRecordReference>,
+);
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -284,7 +290,7 @@ fn product_change(
             document_json,
         } => {
             let kind = record_kind(&kind)?;
-            let (document, bytes) = product_document(kind, &id, 1, &document_json)?;
+            let (document, bytes, references) = product_document(kind, &id, 1, &document_json)?;
             Ok((
                 CatalogChange::CreateProduct {
                     record: ProductRecordRef {
@@ -293,7 +299,7 @@ fn product_change(
                         revision: 1,
                         document,
                         unique_values: BTreeMap::from([("owner_principal".into(), owner.into())]),
-                        references: BTreeSet::new(),
+                        references,
                     },
                 },
                 Some(bytes),
@@ -314,13 +320,15 @@ fn product_change(
             let revision = expected_revision
                 .checked_add(1)
                 .ok_or_else(|| RegistryError::Invalid("product revision overflow".into()))?;
-            let (document, bytes) = product_document(kind, &id, revision, &document_json)?;
+            let (document, bytes, references) =
+                product_document(kind, &id, revision, &document_json)?;
             Ok((
                 CatalogChange::UpdateProduct {
                     expected_revision,
                     record: ProductRecordRef {
                         document,
                         revision,
+                        references,
                         ..current.clone()
                     },
                 },
@@ -370,6 +378,7 @@ fn record_kind(kind: &str) -> Result<ProductRecordKind, RegistryError> {
         "dashboard" => Ok(ProductRecordKind::Dashboard),
         "saved_query" => Ok(ProductRecordKind::SavedQuery),
         "user_theme" => Ok(ProductRecordKind::UserTheme),
+        "dlm_definition" => Ok(ProductRecordKind::DlmDefinition),
         _ => Err(RegistryError::Invalid(
             "unsupported product record kind".into(),
         )),
@@ -381,7 +390,7 @@ fn product_document(
     id: &str,
     revision: u64,
     document_json: &str,
-) -> Result<(ImmutableFileRef, (String, Vec<u8>)), RegistryError> {
+) -> Result<ProductDocument, RegistryError> {
     let value: serde_json::Value = serde_json::from_str(document_json)
         .map_err(|_| RegistryError::Invalid("document_json must be valid JSON".into()))?;
     if !value.is_object() {
@@ -389,6 +398,38 @@ fn product_document(
             "document_json must be a JSON object".into(),
         ));
     }
+    let references = if kind == ProductRecordKind::DlmDefinition {
+        let object = value.as_object().expect("object checked above");
+        if object.len() != 2
+            || !object.contains_key("dataset_id")
+            || !object.contains_key("dataset_revision")
+        {
+            return Err(RegistryError::Invalid(
+                "DLM definition requires only dataset_id and dataset_revision".into(),
+            ));
+        }
+        let dataset_id = object["dataset_id"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| RegistryError::Invalid("DLM definition dataset_id is invalid".into()))?;
+        if dataset_id != id {
+            return Err(RegistryError::Invalid(
+                "DLM definition ID must equal dataset_id".into(),
+            ));
+        }
+        object["dataset_revision"]
+            .as_u64()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| {
+                RegistryError::Invalid("DLM definition dataset_revision is invalid".into())
+            })?;
+        BTreeSet::from([ProductRecordReference {
+            kind: ProductRecordKind::Dataset,
+            id: dataset_id.into(),
+        }])
+    } else {
+        BTreeSet::new()
+    };
     let bytes = serde_json::to_vec(&value)
         .map_err(|_| RegistryError::Invalid("document_json cannot be encoded".into()))?;
     let sha256 = format!("{:x}", Sha256::digest(&bytes));
@@ -398,6 +439,7 @@ fn product_document(
         ProductRecordKind::Dashboard => "dashboard",
         ProductRecordKind::SavedQuery => "saved_query",
         ProductRecordKind::UserTheme => "user_theme",
+        ProductRecordKind::DlmDefinition => "dlm_definition",
     };
     let path = format!("products/{kind_name}/{id}/{revision}-{sha256}.json");
     Ok((
@@ -406,6 +448,7 @@ fn product_document(
             sha256,
         },
         (path, bytes),
+        references,
     ))
 }
 
@@ -944,6 +987,90 @@ mod tests {
         assert!(matches!(error, RegistryError::Invalid(_)));
         let transaction = registry.take("alice", &begun.transaction_id).await.unwrap();
         assert_eq!(transaction.staged_change_count(), 0);
+    }
+
+    #[test]
+    fn dlm_definition_schema_is_canonical_and_references_its_dataset() {
+        let (_, (path, bytes), references) = product_document(
+            ProductRecordKind::DlmDefinition,
+            "orders",
+            1,
+            r#"{"dataset_revision":3,"dataset_id":"orders"}"#,
+        )
+        .unwrap();
+        assert_eq!(bytes, br#"{"dataset_id":"orders","dataset_revision":3}"#);
+        assert!(path.starts_with("products/dlm_definition/orders/1-"));
+        assert_eq!(
+            references,
+            BTreeSet::from([ProductRecordReference {
+                kind: ProductRecordKind::Dataset,
+                id: "orders".into(),
+            }])
+        );
+    }
+
+    #[test]
+    fn dlm_definition_rejects_unpinned_or_mismatched_documents() {
+        for document in [
+            r#"{"dataset_id":"orders"}"#,
+            r#"{"dataset_id":"orders","dataset_revision":0}"#,
+            r#"{"dataset_id":"other","dataset_revision":1}"#,
+            r#"{"dataset_id":"orders","dataset_revision":1,"run":{}}"#,
+        ] {
+            assert!(
+                product_document(ProductRecordKind::DlmDefinition, "orders", 1, document).is_err(),
+                "unexpectedly accepted {document}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn dlm_definition_commits_with_dataset_and_is_owner_isolated() {
+        let (registry, _) = registry().await;
+        let begun = registry.begin("alice").await.unwrap();
+        for command in [
+            ProductDmlCommand::Create {
+                kind: "dataset".into(),
+                id: "orders".into(),
+                document_json: r#"{"name":"Orders"}"#.into(),
+            },
+            ProductDmlCommand::Create {
+                kind: "dlm_definition".into(),
+                id: "orders".into(),
+                document_json: r#"{"dataset_id":"orders","dataset_revision":1}"#.into(),
+            },
+        ] {
+            registry
+                .stage_product_command("alice", &begun.transaction_id, command)
+                .await
+                .unwrap();
+        }
+        let mut transaction = registry.take("alice", &begun.transaction_id).await.unwrap();
+        transaction.bind_request_digest(b"dlm-definition").unwrap();
+        assert!(matches!(
+            transaction.commit().await.unwrap(),
+            CommitOutcome::Committed(_)
+        ));
+        let alice = Identity {
+            principal: "alice".into(),
+            display_identity: None,
+            role: crate::security::Role::Analyst,
+        };
+        let bob = Identity {
+            principal: "bob".into(),
+            ..alice.clone()
+        };
+        let record = registry
+            .read_product(&alice, ProductRecordKind::DlmDefinition, "orders")
+            .await
+            .unwrap();
+        assert_eq!(record.document["dataset_revision"], 1);
+        assert!(matches!(
+            registry
+                .read_product(&bob, ProductRecordKind::DlmDefinition, "orders")
+                .await,
+            Err(RegistryError::Forbidden)
+        ));
     }
 
     #[tokio::test]

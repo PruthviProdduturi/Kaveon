@@ -15,8 +15,8 @@ from fastapi import HTTPException
 from services import engine_bridge
 
 
-ProductKind = Literal["dataset", "chart", "dashboard", "saved_query", "user_theme"]
-_KINDS = {"dataset", "chart", "dashboard", "saved_query", "user_theme"}
+ProductKind = Literal["dataset", "chart", "dashboard", "saved_query", "user_theme", "dlm_definition"]
+_KINDS = {"dataset", "chart", "dashboard", "saved_query", "user_theme", "dlm_definition"}
 
 
 @dataclass(frozen=True)
