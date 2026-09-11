@@ -39,6 +39,39 @@ by the selected database and Kaveon's API guardrails.
   planning is not yet implemented.
 - Dynamic filtering and fully streaming network exchanges.
 
+## Transaction API boundary
+
+The Engine exposes an authenticated transaction API at `/v1/transaction`.
+This is a deliberately bounded product-metadata contract, not a PostgreSQL
+server or a general row-store protocol.
+
+| Existing operation | Behavior |
+|---|---|
+| `BEGIN` | Creates an owner-isolated transaction session against the current product snapshot |
+| `INSERT` | One explicit `(id, document_json)` record into a supported `kaveon.product` family |
+| `UPDATE` | Revision-checked replacement of one product document; `id` and `revision` are required in `WHERE` |
+| `DELETE` | Revision-checked deletion of one product document; `id` and `revision` are required in `WHERE` |
+| `COMMIT` | Publishes a prepared immutable catalog snapshot through the configured product store |
+| `ROLLBACK` | Discards the session without publishing its staged changes |
+
+Each request carries one statement and a transaction ID after `BEGIN`. Product
+operations are authenticated, owner-isolated, revision-checked, and limited to
+the supported product families. Multi-row values, `INSERT ... SELECT`,
+`RETURNING`, `ON CONFLICT`, savepoints, transaction modifiers, arbitrary user
+tables, and parameter binding are rejected explicitly. The current contract
+does not provide PostgreSQL MVCC isolation, row-level indexes, foreign-key
+enforcement, or crash-recovery parity.
+
+## CLI metadata surface
+
+The native CLI provides metadata commands over the Engine HTTP API:
+`SHOW CATALOGS`, `SHOW SCHEMAS [IN catalog]`, `SHOW TABLES [IN schema]`,
+`SHOW COLUMNS FROM table`, `DESCRIBE table`, `USE [catalog.]schema`, and
+single-quoted `LIKE` filters. These commands resolve catalog definitions and
+are not emulations of PostgreSQL's `pg_catalog` or `information_schema`.
+The CLI currently has no PostgreSQL wire-protocol, JDBC, or ODBC compatibility
+claim.
+
 Unsupported syntax should be treated as unsupported even if the upstream SQL
 parser accepts it. The executable contract is the intersection of parsing,
 logical planning, and physical operator construction.
