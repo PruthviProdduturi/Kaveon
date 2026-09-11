@@ -81,6 +81,34 @@ manifest for the whole request. It never rereads current head mid-request.
 8. On HTTP 412, candidate objects remain unreachable. Read current head and
    revalidate from that snapshot; never reuse earlier constraint decisions.
 
+## Transaction semantics currently guaranteed by the prototype
+
+The Rust prototype exposes a deliberately small optimistic transaction model;
+these guarantees apply to the product-catalog path only:
+
+- `begin` pins one complete catalog snapshot. Every staged change is prepared
+  against that snapshot plus the transaction's prior staged changes, so failed
+  validation does not partially alter the transaction view.
+- `commit` publishes at most one new snapshot through the single catalog-head
+  compare-and-swap. A stale base snapshot returns `Conflict`; it cannot merge
+  or overwrite a concurrent commit.
+- `rollback`, session expiry, and a dropped transaction publish no objects that
+  are reachable from the head. Objects uploaded before a failed CAS may remain
+  as unreachable garbage and are handled by the documented GC process.
+- Reusing an operation ID with the same canonical request digest returns the
+  original committed snapshot (`Replayed`). Reusing it with another digest
+  returns `Conflict`.
+- A storage read, missing operation-index shard, checksum failure, or unknown
+  write outcome returns `Indeterminate`. Callers must resolve the operation
+  from durable head/history evidence before retrying; they must not assume
+  that an indeterminate result rolled back.
+
+These semantics are covered by unit tests for concurrent snapshot conflicts,
+rollback visibility, exact replay, stale operation-digest conflicts, and
+indeterminate history/index failures. They do not provide general MVCC row
+visibility, WAL replay, savepoints, arbitrary-table DML, or PostgreSQL-level
+recovery guarantees. Those remain qualification gates below.
+
 The head serializes commits for a tenant/catalog. Independent heads/shards are a
 future protocol change requiring a separate atomicity proof; one transaction may
 not update multiple heads.

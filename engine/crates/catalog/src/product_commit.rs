@@ -1093,10 +1093,13 @@ mod tests {
             catalog.commit(first.clone()).await,
             CommitOutcome::Committed(_)
         ));
-        assert!(matches!(
-            catalog.commit(first).await,
-            CommitOutcome::Replayed(_)
-        ));
+        let replayed = match catalog.commit(first).await {
+            CommitOutcome::Replayed(snapshot) => snapshot,
+            other => panic!("expected replay, got {other:?}"),
+        };
+        assert_eq!(replayed.snapshot_id, "snapshot-op-1");
+        assert_eq!(replayed.generation, 1);
+        assert_eq!(catalog.read_current().await.unwrap(), replayed);
         assert!(matches!(
             catalog.resolve_operation("op-1", &"b".repeat(64), 10).await,
             Ok(OperationResolution::Conflict)
@@ -1197,10 +1200,13 @@ mod tests {
                 _ => panic!("commit"),
             };
         }
-        assert!(matches!(
-            catalog.commit(first).await,
-            CommitOutcome::Replayed(_)
-        ));
+        let replayed = match catalog.commit(first).await {
+            CommitOutcome::Replayed(snapshot) => snapshot,
+            other => panic!("expected replay, got {other:?}"),
+        };
+        assert_eq!(replayed.snapshot_id, "snapshot-op-0");
+        assert_eq!(replayed.generation, 1);
+        assert_eq!(catalog.read_current().await.unwrap(), current);
     }
 
     #[tokio::test]
