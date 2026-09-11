@@ -16,6 +16,7 @@ credentialsSecret: kaveon-engine-auth
 tlsSecret: kaveon-engine-tls
 coordinator:
   replicas: 1
+  localParallelism: 2
   imageDigest: ""
   credentialsSecret: ""
   nodeSelector:
@@ -27,6 +28,7 @@ coordinator:
     limits: {cpu: "2", memory: 4Gi, ephemeral-storage: 8Gi}
 workers:
   replicas: 3
+  localParallelism: 3
   nodeSelector:
     workload: kaveon-worker
   resources:

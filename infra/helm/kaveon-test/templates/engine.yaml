@@ -7,6 +7,8 @@
 {{- required "productTransactions.container is required when enabled" .Values.productTransactions.container -}}
 {{- required "productTransactions.prefix is required when enabled" .Values.productTransactions.prefix -}}
 {{- end -}}
+{{- if lt (int .Values.coordinator.localParallelism) 1 }}{{ fail "coordinator.localParallelism must be positive" }}{{ end -}}
+{{- if lt (int .Values.workers.localParallelism) 1 }}{{ fail "workers.localParallelism must be positive" }}{{ end -}}
 {{- if .Values.serviceAccount.create }}
 apiVersion: v1
 kind: ServiceAccount
@@ -193,6 +195,8 @@ spec:
               value: {{ $.Values.queryMemoryLimitBytes | quote }}
             - name: KAVEON_MEMORY_ADMISSION_LIMIT_BYTES
               value: {{ $.Values.memoryAdmissionLimitBytes | quote }}
+            - name: KAVEON_LOCAL_PARALLELISM
+              value: {{ required (printf "%s.localParallelism is required" $role) $settings.localParallelism | quote }}
           resources:
             {{- toYaml $settings.resources | nindent 12 }}
           startupProbe:

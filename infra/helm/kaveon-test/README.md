@@ -21,6 +21,11 @@ The engine's default reqwest transport uses native TLS/OpenSSL. The chart points
 
 Containers run as numeric UID/GID 10001 with a read-only root filesystem, no Linux capabilities, writable `/tmp`, and group-writable state volumes. Coordinator SQLite and exchange files persist across pod replacements; running queries do not resume and this is not HA. Worker state and spills are ephemeral. Coordinator readiness uses `/ready`, which requires an initialized catalog; bootstrap through pod-local access before the coordinator Service has ready endpoints. Worker readiness uses `/health`, proving process health only: workers execute shipped fragments without a synchronized local catalog, so catalog-dependent `/ready` would prevent their headless DNS endpoints from being published. Probes do not demonstrate worker registration, ADLS authorization or query correctness; verify these separately with a distributed query. Drain queries before upgrades; the grace period alone does not provide draining.
 
+`coordinator.localParallelism` and `workers.localParallelism` bound CPU-parallel
+operators inside each Engine process. Defaults are 2 and 3 respectively, matching
+this chart's CPU limits. Keep each value at or below its container CPU limit when
+changing resources; distributed query concurrency is controlled separately.
+
 ```powershell
 helm upgrade --install kaveon infra/helm/kaveon-test --namespace kaveon --create-namespace --set image.repository=<registry>/kaveon-engine --set image.digest=sha256:<digest> --set workloadIdentity.clientId=<client-id> --set productTransactions.enabled=true --set productTransactions.account=<storage-account> --set productTransactions.container=<product-container> --set productTransactions.prefix=<product-prefix> --wait --timeout 10m
 ```
