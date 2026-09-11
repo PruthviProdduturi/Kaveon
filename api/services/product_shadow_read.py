@@ -153,3 +153,24 @@ def compare_dashboard(source_document: dict, actor: str, role: str) -> dict:
     return {**base, "status": "match" if source_sha == target_sha else "mismatch",
             "target_sha256": target_sha, "target_bytes": target_bytes,
             "target_generation": int(target.get("generation") or 0)}
+
+
+def observe_user_theme(source_document: dict, owner: str) -> dict:
+    """Compare an owner-keyed theme and return content-free telemetry."""
+    if os.getenv("KAVEON_USER_THEME_SHADOW_READ_ENABLED") != "true":
+        return {"family": "user_themes", "enabled": False, "status": "disabled"}
+    document = {"user_email": owner, "theme_color": source_document.get("theme_color")}
+    source_sha, source_bytes = _identity(document)
+    target = product_store.read("user_theme", owner, owner, "Viewer")
+    base = {"family": "user_themes", "enabled": True, "record_id_sha256":
+            hashlib.sha256(owner.encode()).hexdigest(), "source_sha256": source_sha,
+            "source_bytes": source_bytes}
+    if target is None:
+        return {**base, "status": "missing", "target_sha256": None}
+    target_document = target.get("document")
+    if not isinstance(target_document, dict):
+        raise RuntimeError("KaveonDB user theme shadow response is invalid")
+    target_sha, target_bytes = _identity(target_document)
+    return {**base, "status": "match" if source_sha == target_sha else "mismatch",
+            "target_sha256": target_sha, "target_bytes": target_bytes,
+            "target_generation": int(target.get("generation") or 0)}
