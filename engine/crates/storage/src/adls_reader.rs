@@ -25,7 +25,8 @@ use parquet::{errors::ParquetError, file::metadata::ParquetMetaData};
 use crate::{
     ScanMetrics, ScanPartition,
     parquet_reader::{
-        matching_row_groups, projection_indices, record_selection_metrics, validate_predicate,
+        matching_row_groups, parquet_row_filter, projection_indices, record_selection_metrics,
+        validate_predicate,
     },
 };
 
@@ -720,6 +721,14 @@ impl AdlsParquetReader {
             builder = builder.with_projection(mask);
         }
 
+        if let Some(predicate) = self
+            .predicate
+            .as_ref()
+            .and_then(|predicate| parquet_row_filter(builder.parquet_schema(), &schema, predicate))
+        {
+            builder = builder.with_row_filter(predicate);
+        }
+
         let mut row_groups = if let Some(predicate) = &self.predicate {
             validate_predicate(predicate, &schema)?;
             matching_row_groups(builder.metadata().as_ref(), &schema, predicate)
@@ -737,8 +746,8 @@ impl AdlsParquetReader {
         );
         let decoded_cache_key = preload.then(|| {
             format!(
-                "{cache_key}:{identity}:batch={}:projection={projection:?}:row_groups={row_groups:?}",
-                batch_size
+                "{cache_key}:{identity}:batch={}:projection={projection:?}:predicate={:?}:row_groups={row_groups:?}",
+                batch_size, self.predicate
             )
         });
         builder = builder.with_row_groups(row_groups);

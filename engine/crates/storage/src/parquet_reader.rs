@@ -1,8 +1,12 @@
+use arrow::array::Int64Array;
+use arrow::compute::kernels::cmp;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchReader as ArrowRecordBatchReader};
 use kaveon_core::{BatchSource, CompareOp, KaveonError, Result, ScalarValue, StoragePredicate};
 use parquet::arrow::ProjectionMask;
-use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
+use parquet::arrow::arrow_reader::{
+    ArrowPredicateFn, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder, RowFilter,
+};
 use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use parquet::file::statistics::Statistics;
 use std::cmp::Ordering;
@@ -182,6 +186,14 @@ impl ParquetReader {
             builder = builder.with_projection(mask);
         }
 
+        if let Some(predicate) = self
+            .predicate
+            .as_ref()
+            .and_then(|predicate| parquet_row_filter(builder.parquet_schema(), &schema, predicate))
+        {
+            builder = builder.with_row_filter(predicate);
+        }
+
         let mut groups = if let Some(predicate) = &self.predicate {
             validate_predicate(predicate, &schema)?;
             matching_row_groups(builder.metadata().as_ref(), &schema, predicate)
@@ -202,6 +214,42 @@ impl ParquetReader {
         }
         Ok(builder)
     }
+}
+
+/// Build an exact decoder-level filter for the common single-column integer
+/// comparison. The logical filter remains in the execution plan as a
+/// correctness backstop; unsupported types and compound predicates continue
+/// to use conservative row-group pruning only.
+pub(crate) fn parquet_row_filter(
+    parquet_schema: &parquet::schema::types::SchemaDescriptor,
+    schema: &SchemaRef,
+    predicate: &StoragePredicate,
+) -> Option<RowFilter> {
+    let StoragePredicate::Compare { column, op, value } = predicate else {
+        return None;
+    };
+    let ScalarValue::Int64(value) = value else {
+        return None;
+    };
+    let index = schema.index_of(column).ok()?;
+    if schema.field(index).data_type() != &DataType::Int64 {
+        return None;
+    }
+    let op = *op;
+    let scalar = Int64Array::new_scalar(*value);
+    let projection = ProjectionMask::roots(parquet_schema, [index]);
+    let filter = ArrowPredicateFn::new(projection, move |batch| {
+        let column = batch.column(0);
+        match op {
+            CompareOp::Eq => cmp::eq(column, &scalar),
+            CompareOp::Ne => cmp::neq(column, &scalar),
+            CompareOp::Lt => cmp::lt(column, &scalar),
+            CompareOp::Le => cmp::lt_eq(column, &scalar),
+            CompareOp::Gt => cmp::gt(column, &scalar),
+            CompareOp::Ge => cmp::gt_eq(column, &scalar),
+        }
+    });
+    Some(RowFilter::new(vec![Box::new(filter)]))
 }
 
 pub(crate) fn record_selection_metrics(
@@ -717,13 +765,15 @@ mod tests {
     }
 
     #[test]
-    fn prunes_row_groups_without_filtering_decoded_rows() {
+    fn prunes_row_groups_and_filters_decoded_int64_rows() {
         let file = fixture();
         let matching = ParquetReader::new(&file.0).with_predicate(compare(
             "id",
             CompareOp::Eq,
             ScalarValue::Int64(4),
         ));
+        // The fixture stores id as Int32, which deliberately remains on the
+        // conservative row-group-only path.
         assert_eq!(row_count(&matching), ROW_GROUP_SIZE);
 
         let absent = ParquetReader::new(&file.0).with_predicate(compare(
@@ -732,6 +782,52 @@ mod tests {
             ScalarValue::Int64(99),
         ));
         assert_eq!(row_count(&absent), 0);
+    }
+
+    #[test]
+    fn pushes_int64_comparison_into_decoder_without_exposing_filter_column() {
+        let id = NEXT_FILE_ID.fetch_add(1, AtomicOrdering::Relaxed);
+        let file = TestFile(std::env::temp_dir().join(format!(
+            "kaveon-storage-int64-filter-{}-{id}.parquet",
+            std::process::id()
+        )));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("label", DataType::Utf8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::Int64Array::from(vec![
+                    Some(0),
+                    Some(1),
+                    None,
+                    Some(3),
+                    Some(4),
+                    Some(5),
+                ])),
+                Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e", "f"])),
+            ],
+        )
+        .unwrap();
+        let output = File::create(&file.0).unwrap();
+        let mut writer = ArrowWriter::try_new(output, schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let mut reader = ParquetReader::new(&file.0)
+            .with_columns(vec!["label".to_owned()])
+            .with_predicate(compare("id", CompareOp::Gt, ScalarValue::Int64(3)))
+            .read()
+            .unwrap();
+        let metrics = reader.metrics();
+        let batches = reader.by_ref().collect::<Result<Vec<_>>>().unwrap();
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 2);
+        assert_eq!(batches[0].num_columns(), 1);
+        assert_eq!(batches[0].schema().field(0).name(), "label");
+        let metrics = metrics.snapshot();
+        assert_eq!(metrics.rows_selected, 6);
+        assert_eq!(metrics.rows_emitted, 2);
     }
 
     #[test]
