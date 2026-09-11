@@ -5,9 +5,11 @@ use arrow::array::{ArrayRef, Float64Array, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use kaveon_core::{BatchOperator, BinaryOp, Expr, Result, ScalarValue};
+use kaveon_core::{BatchOperator, BinaryOp, Expr, QueryMemoryPool, Result, ScalarValue};
 use kaveon_exec::aggregate::{AggExpr, AggFunc, HashAggregate};
 use kaveon_exec::filter::FilterOperator;
+use kaveon_exec::partitioned::PartitionedHashAggregate;
+use kaveon_exec::spill::SpillManager;
 use kaveon_exec::project::ProjectOperator;
 
 const DEFAULT_ROW_COUNT: usize = 1_000_000;
@@ -197,5 +199,43 @@ fn benchmark_vector_pipeline(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, benchmark_hash_aggregate, benchmark_vector_pipeline);
+fn benchmark_partitioned_spill(c: &mut Criterion) {
+    let row_count = benchmark_row_count();
+    let source = MemorySource::new(make_batches(row_count, HIGH_CARDINALITY.max(row_count)));
+    let mut group = c.benchmark_group("partitioned_hash_aggregate");
+    group.throughput(Throughput::Elements(row_count as u64));
+    group.sample_size(SAMPLE_SIZE);
+    group.measurement_time(Duration::from_secs(MEASUREMENT_SECONDS));
+    group.bench_function("bounded_spill_with_metrics", |b| {
+        b.iter(|| {
+            let pool = QueryMemoryPool::new("criterion-partitioned", 64 * 1024 * 1024)
+                .expect("benchmark memory pool must initialize");
+            let spill = SpillManager::new(
+                std::env::temp_dir().join(format!("kaveon-criterion-{}", std::process::id())),
+                2 * 1024 * 1024 * 1024,
+            )
+            .expect("benchmark spill manager must initialize");
+            let mut operator = PartitionedHashAggregate::new(
+                Box::new(source.clone()),
+                vec!["group_id".to_owned()],
+                vec![AggExpr::new(AggFunc::Count, "*")],
+                pool.operator("partitioned").expect("operator account"),
+                spill.clone(),
+                16,
+            )
+            .expect("partitioned aggregate must initialize");
+            let rows = consume(&mut operator);
+            let metrics = spill.snapshot();
+            black_box((rows, metrics.bytes_written, metrics.runs_written, metrics.peak_bytes));
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    benchmark_hash_aggregate,
+    benchmark_vector_pipeline,
+    benchmark_partitioned_spill
+);
 criterion_main!(benches);
