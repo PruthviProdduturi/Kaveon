@@ -2,10 +2,11 @@
 
 import json
 import re
-import pyodbc
 from datetime import datetime, timezone
 from typing import List, Optional
+from fastapi import HTTPException
 import database.metadata as db
+from services import product_outbox
 
 VALID_VISIBILITY = {"private", "internal", "published"}
 
@@ -215,11 +216,9 @@ def create_dataset(data: dict, user_id: str) -> dict:
     if visibility not in VALID_VISIBILITY:
         visibility = "internal"
 
-    base_name = data["name"]
-    name = base_name
-    for attempt in range(1, 100):
-        try:
-            db.execute("""
+    name = data["name"]
+    with db.transaction() as transaction:
+        inserted = transaction.query_one("""
                 INSERT INTO datasets (
                   dataset_name, description, fact_table, schema_name, database_name,
                   date_column, tables_used, visibility, created_at, modified_at, created_by, modified_by
@@ -227,32 +226,44 @@ def create_dataset(data: dict, user_id: str) -> dict:
                   @param0, @param1, @param2, @param3, @param4,
                   @param5, @param6, @param7, @param8, @param9, @param10, @param11
                 )
-            """, [
-                name, data.get("description"), data.get("table_name") or "",
-                data.get("schema_name", "dbo"), data.get("database_name", ""),
-                data.get("date_column"), tables_used, visibility,
-                now, now, user_id, user_id,
-            ])
-            break
-        except pyodbc.IntegrityError:
-            name = f"{base_name} ({attempt})"
+                RETURNING id
+        """, [
+            name, data.get("description"), data.get("table_name") or "",
+            data.get("schema_name", "dbo"), data.get("database_name", ""),
+            data.get("date_column"), tables_used, visibility,
+            now, now, user_id, user_id,
+        ])
+        if not inserted:
+            raise RuntimeError("Failed to retrieve created dataset")
+        dataset_id = inserted["id"]
+        _replace_dimensions(transaction, dataset_id, data.get("dimensions") or [], delete_first=False)
+        _replace_columns(transaction, dataset_id, data.get("columns") or [], delete_first=False)
+        _replace_metrics(transaction, dataset_id, data.get("metrics") or [], delete_first=False)
+        product_outbox.enqueue(
+            transaction,
+            family="datasets",
+            operation="create",
+            record_id=str(dataset_id),
+            payload=_dataset_product_document_from_source(transaction, dataset_id),
+            actor=user_id,
+        )
 
-    inserted = db.query_one(
-        "SELECT TOP 1 id FROM datasets WHERE dataset_name = @param0 AND created_by = @param1 ORDER BY id DESC",
-        [name, user_id],
-    )
-    if not inserted:
+    created = get_dataset_by_id(str(dataset_id))
+    if not created:
         raise RuntimeError("Failed to retrieve created dataset")
+    return created
 
-    dataset_id = inserted["id"]
 
-    for dim in (data.get("dimensions") or []):
+def _replace_dimensions(transaction, dataset_id: int, dimensions: list, *, delete_first: bool) -> None:
+    if delete_first:
+        transaction.execute("DELETE FROM dataset_dimensions WHERE dataset_id = @param0", [dataset_id])
+    for dim in dimensions:
         parts = (dim.get("dimension_table") or "").split(".")
         dim_table = parts[1] if len(parts) > 1 else parts[0] if parts else ""
         join_match = re.search(r"\[([^\]]+)\]\.?\s*=\s*.*\[([^\]]+)\]\s*$", dim.get("join_condition") or "")
         fact_key = join_match.group(1) if join_match else ""
         join_key = join_match.group(2) if join_match else "Key"
-        db.execute("""
+        transaction.execute("""
             INSERT INTO dataset_dimensions (
               dataset_id, dimension_table, table_name, join_condition,
               fact_key, join_key, dim_name, display_name, created_at
@@ -261,33 +272,66 @@ def create_dataset(data: dict, user_id: str) -> dict:
               @param4, @param5, @param6, @param7, GETUTCDATE()
             )
         """, [dataset_id, dim.get("dimension_table"), dim_table, dim.get("join_condition"),
-              fact_key, join_key, dim_table, dim.get("display_name") or dim_table])
+               fact_key, join_key, dim_table, dim.get("display_name") or dim_table])
 
-    for col in (data.get("columns") or []):
-        db.execute("""
+
+def _replace_columns(transaction, dataset_id: int, columns: list, *, delete_first: bool) -> None:
+    if delete_first:
+        transaction.execute("DELETE FROM dataset_columns WHERE dataset_id = @param0", [dataset_id])
+    for col in columns:
+        transaction.execute("""
             INSERT INTO dataset_columns (
               dataset_id, table_name, column_name, data_type,
               is_dimension, is_metric, semantic_type
             ) VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6)
         """, [dataset_id, col.get("table_name") or "", col.get("column_name") or "", col.get("data_type") or "",
-              bool(col.get("is_dimension")),
-              bool(col.get("is_metric")),
-              col.get("semantic_type")])
+               bool(col.get("is_dimension")), bool(col.get("is_metric")), col.get("semantic_type")])
 
-    try:
-        for metric in (data.get("metrics") or []):
-            db.execute("""
+
+def _replace_metrics(transaction, dataset_id: int, metrics: list, *, delete_first: bool) -> None:
+    if delete_first:
+        transaction.execute("DELETE FROM dataset_metrics WHERE dataset_id = @param0", [dataset_id])
+    for metric in metrics:
+        transaction.execute("""
                 INSERT INTO dataset_metrics (dataset_id, metric_name, expression, metric_type, format)
                 VALUES (@param0, @param1, @param2, @param3, @param4)
-            """, [dataset_id, metric.get("name"), metric.get("expression"),
-                  metric.get("metric_type", "sum"), metric.get("format")])
-    except Exception:
-        pass
+        """, [dataset_id, metric.get("name"), metric.get("expression"),
+               metric.get("metric_type", "sum"), metric.get("format")])
 
-    created = get_dataset_by_id(str(dataset_id))
-    if not created:
-        raise RuntimeError("Failed to retrieve created dataset")
-    return created
+
+def _dataset_product_document_from_source(transaction, dataset_id: int) -> dict:
+    row = transaction.query_one("""
+        SELECT id, dataset_name, description, fact_table, schema_name,
+               database_name, created_at, modified_at, date_column,
+               tables_used, created_by, modified_by, visibility, 0 as favorite
+        FROM datasets WHERE id = @param0
+    """, [dataset_id])
+    if not row:
+        raise RuntimeError("Dataset disappeared before outbox capture")
+    document = _adapt(row)
+    document.pop("favorite", None)
+    document["dimensions"] = transaction.query("""
+        SELECT dimension_table, table_name, join_condition,
+               fact_key, join_key, dim_name, display_name
+        FROM dataset_dimensions WHERE dataset_id = @param0 ORDER BY id
+    """, [dataset_id])["rows"]
+    document["columns"] = transaction.query("""
+        SELECT table_name, column_name, data_type, is_dimension, is_metric, semantic_type
+        FROM dataset_columns WHERE dataset_id = @param0 ORDER BY id
+    """, [dataset_id])["rows"]
+    document["metrics"] = transaction.query("""
+        SELECT metric_name as name, expression, metric_type, format
+        FROM dataset_metrics WHERE dataset_id = @param0 ORDER BY id
+    """, [dataset_id])["rows"]
+    document["filters"] = []
+    if row.get("tables_used"):
+        try:
+            metadata = json.loads(row["tables_used"])
+            if isinstance(metadata, dict) and isinstance(metadata.get("filters"), list):
+                document["filters"] = metadata["filters"]
+        except (TypeError, json.JSONDecodeError):
+            pass
+    return document
 
 
 def update_dataset(dataset_id: str, data: dict, user_id: str) -> Optional[dict]:
@@ -332,58 +376,61 @@ def update_dataset(dataset_id: str, data: dict, user_id: str) -> Optional[dict]:
     updates.append(f"modified_at = @param{i}"); params.append(now); i += 1
     updates.append(f"modified_by = @param{i}"); params.append(user_id); i += 1
     params.append(did)
+    with db.transaction() as transaction:
+        locked = transaction.query_one(
+            "SELECT id, modified_at FROM datasets WHERE id = @param0 FOR UPDATE", [did]
+        )
+        if not locked:
+            return None
+        if str(locked.get("modified_at")) != str(existing.get("modified_at")):
+            raise HTTPException(409, "Dataset changed concurrently; reload before retrying")
+        transaction.execute(f"UPDATE datasets SET {', '.join(updates)} WHERE id = @param{i}", params)
 
-    db.execute(f"UPDATE datasets SET {', '.join(updates)} WHERE id = @param{i}", params)
+        if "dimensions" in data and isinstance(data["dimensions"], list):
+            _replace_dimensions(transaction, did, data["dimensions"], delete_first=True)
+        if "columns" in data and isinstance(data["columns"], list):
+            _replace_columns(transaction, did, data["columns"], delete_first=True)
+        if "metrics" in data and isinstance(data["metrics"], list):
+            _replace_metrics(transaction, did, data["metrics"], delete_first=True)
 
-    if "dimensions" in data and isinstance(data["dimensions"], list):
-        db.execute("DELETE FROM dataset_dimensions WHERE dataset_id = @param0", [did])
-        for dim in data["dimensions"]:
-            parts = (dim.get("dimension_table") or "").split(".")
-            dim_table = parts[1] if len(parts) > 1 else parts[0] if parts else ""
-            join_match = re.search(r"\[([^\]]+)\]\.?\s*=\s*.*\[([^\]]+)\]\s*$", dim.get("join_condition") or "")
-            fact_key = join_match.group(1) if join_match else ""
-            join_key = join_match.group(2) if join_match else "Key"
-            db.execute("""
-                INSERT INTO dataset_dimensions (
-                  dataset_id, dimension_table, table_name, join_condition,
-                  fact_key, join_key, dim_name, display_name, created_at
-                ) VALUES (
-                  @param0, @param1, @param2, @param3,
-                  @param4, @param5, @param6, @param7, GETUTCDATE()
-                )
-            """, [did, dim.get("dimension_table"), dim_table, dim.get("join_condition"),
-                  fact_key, join_key, dim_table, dim.get("display_name") or dim_table])
-
-    if "columns" in data and isinstance(data["columns"], list):
-        db.execute("DELETE FROM dataset_columns WHERE dataset_id = @param0", [did])
-        for col in data["columns"]:
-            db.execute("""
-                INSERT INTO dataset_columns (
-                  dataset_id, table_name, column_name, data_type,
-                  is_dimension, is_metric, semantic_type
-                ) VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6)
-            """, [did, col.get("table_name"), col.get("column_name"), col.get("data_type"),
-                  bool(col.get("is_dimension")),
-                  bool(col.get("is_metric")),
-                  col.get("semantic_type")])
-
-    if "metrics" in data and isinstance(data["metrics"], list):
-        try:
-            db.execute("DELETE FROM dataset_metrics WHERE dataset_id = @param0", [did])
-            for metric in data["metrics"]:
-                db.execute("""
-                    INSERT INTO dataset_metrics (dataset_id, metric_name, expression, metric_type, format)
-                    VALUES (@param0, @param1, @param2, @param3, @param4)
-                """, [did, metric.get("name"), metric.get("expression"),
-                      metric.get("metric_type", "sum"), metric.get("format")])
-        except Exception:
-            pass
+        product_outbox.enqueue(
+            transaction,
+            family="datasets",
+            operation="update",
+            record_id=str(did),
+            payload=_dataset_product_document_from_source(transaction, did),
+            actor=user_id,
+        )
 
     return get_dataset_by_id(dataset_id)
 
 
-def delete_dataset(dataset_id: str) -> bool:
-    return db.execute("DELETE FROM datasets WHERE id = @param0", [int(dataset_id)]) > 0
+def delete_dataset(dataset_id: str, user_id: str) -> bool:
+    did = int(dataset_id)
+    with db.transaction() as transaction:
+        existing = transaction.query_one(
+            "SELECT id FROM datasets WHERE id = @param0 FOR UPDATE", [did]
+        )
+        if not existing:
+            return False
+        chart_refs = transaction.query_one(
+            "SELECT COUNT(*) AS count FROM charts WHERE dataset_id = @param0", [did]
+        )
+        if chart_refs and int(chart_refs.get("count") or 0) > 0:
+            raise HTTPException(
+                409,
+                "Delete dependent charts before deleting this dataset",
+            )
+        deleted = transaction.execute("DELETE FROM datasets WHERE id = @param0", [did]) > 0
+        product_outbox.enqueue(
+            transaction,
+            family="datasets",
+            operation="delete",
+            record_id=str(did),
+            payload={"id": str(did), "deleted": True},
+            actor=user_id,
+        )
+        return deleted
 
 
 def count_datasets() -> int:

@@ -149,10 +149,12 @@ and transactions instead of arbitrary metadata SQL.
 
 ### Stage 0 — contract and PostgreSQL transaction repair
 
-Status: **foundation implemented, repository conversion pending.** PostgreSQL
+Status: **dataset source conversion implemented; live qualification pending.** PostgreSQL
 has a connection-pinned unit-of-work API and a bounded, sequenced, canonical
-product migration outbox with event-ID/digest replay validation. No repository
-family uses it yet, and therefore the Stage 0 exit gate has not passed.
+product migration outbox with event-ID/digest replay validation. Dataset parent
+and semantic-child writes use it atomically in source, with failure injection at
+each statement. The schema is not deployed and the full repository set has not
+been converted, so the Stage 0 exit gate has not passed.
 
 Define typed schemas, canonical JSON/timestamp encodings, immutable
 tenant/subject identity, foreign and unique constraints, revision tokens,
