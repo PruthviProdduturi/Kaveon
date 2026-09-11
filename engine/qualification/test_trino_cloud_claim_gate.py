@@ -12,7 +12,7 @@ def valid_report():
         "tasks_with_cpu": 3, "compute_cpu_us": 10, "exchange_input_bytes": 20,
         "exchange_decode_bytes": 30, "exchange_decode_us": 4, "memory_peak_bytes": 40,
         "spill_bytes_written": 0, "spill_runs_written": 0, "spill_compactions": 0,
-        "spill_compaction_input_bytes": 0}}
+        "spill_compaction_input_bytes": 0, "object_metadata_cache_hits": 0}}
     objects = [{"path": name, "sha256": "a" * 64, "content_md5": "bWQ1", "bytes": 1, "parquet_data": name.endswith("parquet")}
                for name in ("events/data.parquet", "events/log", "customers/data.parquet", "customers/log")]
     cases = [{"name": name, "sql": sql, "passed": True, "result_sha256": "b" * 64,

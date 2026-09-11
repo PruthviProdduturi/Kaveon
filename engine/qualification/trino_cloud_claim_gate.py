@@ -19,6 +19,7 @@ def valid_execution_summary(summary):
         "compute_cpu_us", "exchange_input_bytes", "exchange_decode_bytes",
         "exchange_decode_us", "memory_peak_bytes", "spill_bytes_written",
         "spill_runs_written", "spill_compactions", "spill_compaction_input_bytes",
+        "object_metadata_cache_hits",
     }
     return all(
         required <= set(stage)

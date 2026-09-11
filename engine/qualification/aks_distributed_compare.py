@@ -33,6 +33,7 @@ EXECUTION_SUM_FIELDS = (
     "spill_runs_written", "spill_compactions", "spill_compaction_input_bytes",
 )
 EXECUTION_MAX_FIELDS = ("memory_peak_bytes", "spill_peak_bytes")
+SCAN_SUM_FIELDS = ("object_metadata_cache_hits",)
 
 
 def merge_stage_execution(target, stages):
@@ -42,11 +43,18 @@ def merge_stage_execution(target, stages):
         summary = target.setdefault(stage_id, {
             "samples": 0, "tasks_observed": 0, "tasks_with_metrics": 0,
             "tasks_with_cpu": 0, "compute_cpu_us": 0,
-            **{field: 0 for field in EXECUTION_SUM_FIELDS + EXECUTION_MAX_FIELDS},
+            **{field: 0 for field in EXECUTION_SUM_FIELDS + EXECUTION_MAX_FIELDS + SCAN_SUM_FIELDS},
         })
         summary["samples"] += 1
         for task in stage.get("tasks") or []:
             summary["tasks_observed"] += 1
+            scan = task.get("scan")
+            for field in SCAN_SUM_FIELDS:
+                # Engines predating this counter omit it. Retain those reports
+                # as a measured zero while new responses preserve cache hits.
+                value = scan.get(field, 0) if isinstance(scan, dict) else 0
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                    summary[field] += value
             metrics = task.get("execution")
             if not isinstance(metrics, dict):
                 continue
