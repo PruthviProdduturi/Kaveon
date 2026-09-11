@@ -1,0 +1,62 @@
+# Builds the 504M-row telemetry table inside the cluster and uploads it to the
+# OpenSource snapshot prefix, where the storage firewall's VNet rule allows it.
+# Deterministic: the same output as scripts/build-kaveon-events-parquet.py run
+# anywhere else. Inputs created out of band and deleted afterwards:
+#
+#   kubectl -n kaveon create configmap kaveon-events-build-scripts \
+#     --from-file=scripts/build-kaveon-events-parquet.py --from-file=scripts/upload-kaveon-events-adls.py
+#   kubectl -n kaveon create secret generic kaveon-opensource-upload \
+#     --from-literal=token="$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)"
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kaveon-events-build-v1
+  namespace: kaveon
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 10800
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: {app: kaveon-events-build}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      nodeSelector: {workload: kaveon-worker}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: build
+          image: kvtestegmf6oweugsno.azurecr.io/kaveon-curate@sha256:07d5439e68834e0edb724652810d0f7d1f0349aa33cd637a89027034c8557125
+          command: [sh, -c]
+          args: ["set -eu; python /scripts/build-kaveon-events-parquet.py build --output /work; python /scripts/upload-kaveon-events-adls.py; cat /work/kaveon-events-singlefile-manifest.json"]
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            - {name: KAVEON_EVENTS_ROOT, value: /work}
+            - {name: ADLS_ACCOUNT, value: kvtestegmf6oweugsno}
+            - {name: ADLS_CONTAINER, value: opensource}
+            - {name: ADLS_PREFIX, value: snapshots/2026-09-09-v1}
+            - name: ADLS_UPLOAD_TOKEN
+              valueFrom: {secretKeyRef: {name: kaveon-opensource-upload, key: token}}
+          resources:
+            requests: {cpu: "1", memory: 4Gi, ephemeral-storage: 10Gi}
+            limits: {cpu: "3", memory: 8Gi, ephemeral-storage: 20Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: work, mountPath: /work}
+            - {name: scripts, mountPath: /scripts, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: work
+          emptyDir: {sizeLimit: 18Gi}
+        - name: tmp
+          emptyDir: {sizeLimit: 1Gi}
+        - name: scripts
+          configMap: {name: kaveon-events-build-scripts}
