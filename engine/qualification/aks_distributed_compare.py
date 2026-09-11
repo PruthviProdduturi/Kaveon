@@ -182,7 +182,7 @@ def verify_blobs(manifest):
         url = f"https://{dataset['account']}.blob.core.windows.net/{dataset['container']}/{path}"
         status, headers, _ = http("HEAD", url, {"Authorization": "Bearer " + token, "x-ms-version": "2023-11-03"})
         normalized = {key.lower(): value for key, value in headers.items()}
-        if (status != 200 or normalized.get("x-ms-meta-kaveon-sha256") != item["sha256"]
+        if (status != 200 or normalized.get("x-ms-meta-sha256") != item["sha256"]
                 or normalized.get("content-md5") != item["content_md5"] or int(normalized["content-length"]) != item["bytes"]):
             raise RuntimeError(f"blob identity mismatch for {item['path']}")
         verified.append({"path": item["path"], "sha256": item["sha256"], "content_md5": item["content_md5"], "bytes": item["bytes"],

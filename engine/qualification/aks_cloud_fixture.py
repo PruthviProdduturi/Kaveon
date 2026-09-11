@@ -127,7 +127,7 @@ def main():
             f'header = "Authorization: Bearer {token}"', 'header = "x-ms-version: 2023-11-03"',
             'header = "x-ms-blob-type: BlockBlob"', 'header = "If-None-Match: *"',
             f'header = "Content-MD5: {item["content_md5"]}"',
-            f'header = "x-ms-meta-kaveon-sha256: {item["sha256"]}"',
+            f'header = "x-ms-meta-sha256: {item["sha256"]}"',
             f'upload-file = "payload/{source.relative_to(data).as_posix()}"',
         ]) + "\n", encoding="utf-8", newline="\n")
         commands.append(f"curl --config upload-{index}.curl")
