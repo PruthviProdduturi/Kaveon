@@ -61,5 +61,53 @@ class CatalogTableTests(unittest.TestCase):
             self.assertEqual(engine_bridge.table_columns("OpenSource", "nyc_taxi", "green_trips", "a", "Viewer"), DEFINITION["columns"])
 
 
+class CatalogUsageTests(unittest.TestCase):
+    def test_usage_joins_datasets_charts_dashboards_and_dlm_with_visibility(self):
+        ctx = UserContext("alice@example.com", "Analyst")
+        calls = []
+        def fake_query(sql, params=None):
+            calls.append((sql, params))
+            if "FROM dbo.datasets" in sql:
+                self.assertIn("d.database_name = @param0", sql)
+                self.assertEqual(params[:4], ["OpenSource", "nyc_taxi", "green_trips", '%"green_trips"%'])
+                self.assertEqual(params[4:], ["Analyst", "alice@example.com"])
+                return {"rows": [{"id": 7, "dataset_name": "Green trips", "visibility": "internal", "created_by": "bob"}]}
+            if "FROM dbo.charts" in sql:
+                self.assertEqual(params, [7, "Analyst", "alice@example.com"])
+                return {"rows": [{"id": 31, "name": "Trips by hour", "dataset_id": 7}, {"id": 32, "name": "Fare mix", "dataset_id": 7}]}
+            if "FROM dbo.dashboards" in sql:
+                return {"rows": [
+                    {"id": "d1", "name": "NYC Yellow Taxi", "slug": "nyc", "charts": "[31, 99]"},
+                    {"id": "d2", "name": "Unrelated", "slug": "u", "charts": "[99]"},
+                    {"id": "d3", "name": "Broken", "slug": "b", "charts": "not json"},
+                ]}
+            if "FROM dbo.dlm_artifact" in sql:
+                self.assertEqual(params, ["7"])
+                return {"rows": [{"dataset_id": "7", "status": "ready", "built_at": "2026-09-09",
+                                  "stats_rollup": '{"row_counts": {"green_trips": 48131}, "row_count_source": "kaveon_engine_exact"}'}]}
+            raise AssertionError(sql)
+        with patch.object(lab, "_engine_source", return_value={"engine_catalog": "OpenSource"}), \
+             patch.object(catalog.db, "query", side_effect=fake_query):
+            result = catalog.get_table_usage("source-1", "nyc_taxi", "green_trips", Response(), ctx)
+        self.assertEqual([d["name"] for d in result["datasets"]], ["Green trips"])
+        self.assertEqual([c["id"] for c in result["charts"]], [31, 32])
+        self.assertEqual([d["id"] for d in result["dashboards"]], ["d1"])
+        self.assertEqual(result["dlm"][0]["rowCount"], 48131)
+        self.assertEqual(result["dlm"][0]["rowCountSource"], "kaveon_engine_exact")
+        self.assertEqual(len(calls), 4)
+
+    def test_usage_without_datasets_skips_the_dependent_queries(self):
+        ctx = UserContext("viewer@example.com", "Viewer")
+        calls = []
+        def fake_query(sql, params=None):
+            calls.append(sql)
+            return {"rows": []}
+        with patch.object(lab, "_engine_source", return_value={"engine_catalog": "OpenSource"}), \
+             patch.object(catalog.db, "query", side_effect=fake_query):
+            result = catalog.get_table_usage("source-1", "covid", "who_daily", Response(), ctx)
+        self.assertEqual(result, {"success": True, "datasets": [], "charts": [], "dashboards": [], "dlm": []})
+        self.assertEqual(len(calls), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

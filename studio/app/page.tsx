@@ -455,11 +455,13 @@ export default function Home() {
           }));
           setDatasets(dsList);
           if (dsList.length === 0) setSchemasReady(true);
-          // Auto-select first dataset
+          // Auto-select: the dataset named in the URL when it is visible to this user, else the first.
           if (dsList.length > 0 && !selectedDataset) {
-            setSelectedDataset(dsList[0].id);
+            const requested = Number(new URLSearchParams(window.location.search).get("dataset"));
+            const initial = dsList.find((d: { id: number }) => d.id === requested) ?? dsList[0];
+            setSelectedDataset(initial.id);
             // Auto-select matching source
-            const matchSource = list.find((s: any) => s.database_name === dsList[0].database_name);
+            const matchSource = list.find((s: any) => s.database_name === initial.database_name);
             if (matchSource) setSelectedSource({ id: matchSource.id, name: matchSource.name, database_name: matchSource.database_name });
           }
         } else {
