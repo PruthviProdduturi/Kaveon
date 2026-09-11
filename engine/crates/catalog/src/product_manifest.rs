@@ -612,6 +612,7 @@ pub enum ProductRecordKind {
     Favorite,
     Source,
     UserRecent,
+    QueryHistory,
 }
 
 impl ProductRecordKind {
@@ -627,6 +628,7 @@ impl ProductRecordKind {
             Self::Favorite => "favorite",
             Self::Source => "source",
             Self::UserRecent => "user_recent",
+            Self::QueryHistory => "query_history",
         }
     }
 
@@ -642,6 +644,7 @@ impl ProductRecordKind {
             "favorite" => Some(Self::Favorite),
             "source" => Some(Self::Source),
             "user_recent" => Some(Self::UserRecent),
+            "query_history" => Some(Self::QueryHistory),
             _ => None,
         }
     }
@@ -749,6 +752,7 @@ fn validate_product_record(record: &ProductRecordRef) -> Result<(), ManifestErro
             | ProductRecordKind::SavedQuery
             | ProductRecordKind::UserTheme
             | ProductRecordKind::Source => false,
+            ProductRecordKind::QueryHistory => matches!(reference.kind, ProductRecordKind::Dataset),
             ProductRecordKind::DlmDefinition => reference.kind == ProductRecordKind::Dataset,
             ProductRecordKind::DlmRun => reference.kind == ProductRecordKind::DlmDefinition,
             ProductRecordKind::Favorite => matches!(

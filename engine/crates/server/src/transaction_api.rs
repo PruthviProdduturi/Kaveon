@@ -381,8 +381,11 @@ fn validate_favorite_owner(
     owner: &str,
     values: &BTreeMap<String, String>,
 ) -> Result<(), RegistryError> {
-    if (kind == ProductRecordKind::Favorite && !values["favorite_owner_target"].starts_with(&format!("{owner}:")))
-        || (kind == ProductRecordKind::UserRecent && !values["recent_owner_item"].starts_with(&format!("{owner}:")))
+    if (kind == ProductRecordKind::Favorite
+        && !values["favorite_owner_target"].starts_with(&format!("{owner}:")))
+        || (kind == ProductRecordKind::UserRecent
+            && !values["recent_owner_item"].starts_with(&format!("{owner}:")))
+        || (kind == ProductRecordKind::QueryHistory && values["query_owner"] != owner)
     {
         return Err(RegistryError::Forbidden);
     }
@@ -414,6 +417,7 @@ fn record_kind(kind: &str) -> Result<ProductRecordKind, RegistryError> {
         "favorite" => Ok(ProductRecordKind::Favorite),
         "source" => Ok(ProductRecordKind::Source),
         "user_recent" => Ok(ProductRecordKind::UserRecent),
+        "query_history" => Ok(ProductRecordKind::QueryHistory),
         _ => Err(RegistryError::Invalid(
             "unsupported product record kind".into(),
         )),
@@ -434,30 +438,150 @@ fn product_document(
         ));
     }
     let mut derived_values = BTreeMap::new();
-    let references = if kind == ProductRecordKind::UserRecent {
-        let object=value.as_object().expect("object checked above");
-        const ALLOWED:[&str;6]=["user_email","item_id","label","href","type","created_at"];
-        if object.keys().any(|key| !ALLOWED.contains(&key.as_str())) { return Err(RegistryError::Invalid("user recent document schema is invalid".into())); }
-        let owner=object.get("user_email").and_then(serde_json::Value::as_str).filter(|v|!v.is_empty()).ok_or_else(||RegistryError::Invalid("user recent owner is invalid".into()))?;
-        let item=object.get("item_id").and_then(serde_json::Value::as_str).filter(|v|!v.is_empty()).ok_or_else(||RegistryError::Invalid("user recent item is invalid".into()))?;
-        let target=match object.get("type").and_then(serde_json::Value::as_str) { Some("dataset")=>ProductRecordKind::Dataset,Some("chart")=>ProductRecordKind::Chart,Some("dashboard")=>ProductRecordKind::Dashboard,_=>return Err(RegistryError::Invalid("user recent type is unsupported".into())) };
-        if object.get("href").and_then(serde_json::Value::as_str).is_none_or(|v|v.is_empty()) || object.get("created_at").and_then(serde_json::Value::as_str).is_none_or(|v|v.is_empty()) { return Err(RegistryError::Invalid("user recent document is invalid".into())); }
-        derived_values.insert("recent_owner_item".into(),format!("{owner}:{item}"));
-        BTreeSet::from([ProductRecordReference{kind:target,id:item.into()}])
+    let references = if kind == ProductRecordKind::QueryHistory {
+        let object = value.as_object().expect("object checked above");
+        const ALLOWED: [&str; 12] = [
+            "id",
+            "sql_text",
+            "database_name",
+            "executed_at",
+            "execution_time",
+            "row_count",
+            "status",
+            "error_message",
+            "user_email",
+            "trigger_source",
+            "dataset_id",
+            "tables_used",
+        ];
+        if object.keys().any(|key| !ALLOWED.contains(&key.as_str()))
+            || object.get("id").and_then(serde_json::Value::as_str) != Some(id)
+        {
+            return Err(RegistryError::Invalid(
+                "query history document schema is invalid".into(),
+            ));
+        }
+        let owner = object
+            .get("user_email")
+            .and_then(serde_json::Value::as_str)
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| RegistryError::Invalid("query history owner is invalid".into()))?;
+        if object
+            .get("sql_text")
+            .and_then(serde_json::Value::as_str)
+            .is_none_or(|v| v.is_empty())
+            || object
+                .get("executed_at")
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(|v| v.is_empty())
+        {
+            return Err(RegistryError::Invalid(
+                "query history document is invalid".into(),
+            ));
+        }
+        derived_values.insert("query_owner".into(), owner.into());
+        match object
+            .get("dataset_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|v| !v.is_empty())
+        {
+            Some(dataset) => BTreeSet::from([ProductRecordReference {
+                kind: ProductRecordKind::Dataset,
+                id: dataset.into(),
+            }]),
+            None => BTreeSet::new(),
+        }
+    } else if kind == ProductRecordKind::UserRecent {
+        let object = value.as_object().expect("object checked above");
+        const ALLOWED: [&str; 6] = [
+            "user_email",
+            "item_id",
+            "label",
+            "href",
+            "type",
+            "created_at",
+        ];
+        if object.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
+            return Err(RegistryError::Invalid(
+                "user recent document schema is invalid".into(),
+            ));
+        }
+        let owner = object
+            .get("user_email")
+            .and_then(serde_json::Value::as_str)
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| RegistryError::Invalid("user recent owner is invalid".into()))?;
+        let item = object
+            .get("item_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| RegistryError::Invalid("user recent item is invalid".into()))?;
+        let target = match object.get("type").and_then(serde_json::Value::as_str) {
+            Some("dataset") => ProductRecordKind::Dataset,
+            Some("chart") => ProductRecordKind::Chart,
+            Some("dashboard") => ProductRecordKind::Dashboard,
+            _ => {
+                return Err(RegistryError::Invalid(
+                    "user recent type is unsupported".into(),
+                ));
+            }
+        };
+        if object
+            .get("href")
+            .and_then(serde_json::Value::as_str)
+            .is_none_or(|v| v.is_empty())
+            || object
+                .get("created_at")
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(|v| v.is_empty())
+        {
+            return Err(RegistryError::Invalid(
+                "user recent document is invalid".into(),
+            ));
+        }
+        derived_values.insert("recent_owner_item".into(), format!("{owner}:{item}"));
+        BTreeSet::from([ProductRecordReference {
+            kind: target,
+            id: item.into(),
+        }])
     } else if kind == ProductRecordKind::Source {
         let object = value.as_object().expect("object checked above");
-        const ALLOWED: [&str; 12] = ["source_kind", "source_id", "name", "catalog_identity", "source_type", "database_name", "region", "description", "is_active", "lifecycle", "secret_ref", "adapter_type"];
+        const ALLOWED: [&str; 12] = [
+            "source_kind",
+            "source_id",
+            "name",
+            "catalog_identity",
+            "source_type",
+            "database_name",
+            "region",
+            "description",
+            "is_active",
+            "lifecycle",
+            "secret_ref",
+            "adapter_type",
+        ];
         if object.keys().any(|key| !ALLOWED.contains(&key.as_str()))
             || object.get("source_id").and_then(serde_json::Value::as_str) != Some(id)
-            || !matches!(object.get("source_kind").and_then(serde_json::Value::as_str), Some("catalog" | "data"))
+            || !matches!(
+                object
+                    .get("source_kind")
+                    .and_then(serde_json::Value::as_str),
+                Some("catalog" | "data")
+            )
         {
-            return Err(RegistryError::Invalid("source document schema is invalid".into()));
+            return Err(RegistryError::Invalid(
+                "source document schema is invalid".into(),
+            ));
         }
-        let secret_ref = object.get("secret_ref").and_then(serde_json::Value::as_str)
+        let secret_ref = object
+            .get("secret_ref")
+            .and_then(serde_json::Value::as_str)
             .filter(|value| !value.is_empty() && value.len() <= 512)
             .ok_or_else(|| RegistryError::Invalid("source secret_ref is invalid".into()))?;
         if secret_ref.chars().any(char::is_control) {
-            return Err(RegistryError::Invalid("source secret_ref is invalid".into()));
+            return Err(RegistryError::Invalid(
+                "source secret_ref is invalid".into(),
+            ));
         }
         BTreeSet::new()
     } else if kind == ProductRecordKind::Favorite {
@@ -636,6 +760,7 @@ fn product_document(
         ProductRecordKind::Favorite => "favorite",
         ProductRecordKind::Source => "source",
         ProductRecordKind::UserRecent => "user_recent",
+        ProductRecordKind::QueryHistory => "query_history",
     };
     let path = format!("products/{kind_name}/{id}/{revision}-{sha256}.json");
     Ok((
@@ -1354,7 +1479,8 @@ mod tests {
     #[test]
     fn source_accepts_only_non_secret_metadata_and_opaque_reference() {
         let document = r#"{"source_kind":"catalog","source_id":"catalog:lake","name":"Lake","catalog_identity":"lake","source_type":"adls_gen2","database_name":null,"region":null,"description":null,"is_active":true,"lifecycle":"active","secret_ref":"https://example.vault.azure.net/secrets/lake"}"#;
-        let (_, _, references, _) = product_document(ProductRecordKind::Source, "catalog:lake", 1, document).unwrap();
+        let (_, _, references, _) =
+            product_document(ProductRecordKind::Source, "catalog:lake", 1, document).unwrap();
         assert!(references.is_empty());
         for rejected in [
             r#"{"source_kind":"data","source_id":"data:1","secret_ref":"ref","connection_string":"secret"}"#,
@@ -1369,10 +1495,29 @@ mod tests {
     fn user_recent_is_owner_unique_and_references_target() {
         let (_,_,references,values)=product_document(ProductRecordKind::UserRecent,"recent",1,
             r#"{"user_email":"alice","item_id":"dash","label":"Dashboard","href":"/dashboards/dash","type":"dashboard","created_at":"2026-01-01T00:00:00"}"#).unwrap();
-        assert_eq!(values["recent_owner_item"],"alice:dash");
-        assert_eq!(references,BTreeSet::from([ProductRecordReference{kind:ProductRecordKind::Dashboard,id:"dash".into()}]));
-        assert!(validate_favorite_owner(ProductRecordKind::UserRecent,"alice",&values).is_ok());
-        assert_eq!(validate_favorite_owner(ProductRecordKind::UserRecent,"bob",&values),Err(RegistryError::Forbidden));
+        assert_eq!(values["recent_owner_item"], "alice:dash");
+        assert_eq!(
+            references,
+            BTreeSet::from([ProductRecordReference {
+                kind: ProductRecordKind::Dashboard,
+                id: "dash".into()
+            }])
+        );
+        assert!(validate_favorite_owner(ProductRecordKind::UserRecent, "alice", &values).is_ok());
+        assert_eq!(
+            validate_favorite_owner(ProductRecordKind::UserRecent, "bob", &values),
+            Err(RegistryError::Forbidden)
+        );
+    }
+
+    #[test]
+    fn query_history_is_owner_isolated_and_binds_optional_dataset() {
+        let (_,_,references,values)=product_document(ProductRecordKind::QueryHistory,"q1",1,
+            r#"{"id":"q1","sql_text":"SELECT 1","database_name":"db","executed_at":"2026-01-01T00:00:00","execution_time":1,"row_count":1,"status":"success","error_message":null,"user_email":"alice","trigger_source":"lab","dataset_id":"ds","tables_used":"[]"}"#).unwrap();
+        assert_eq!(values["query_owner"],"alice");
+        assert_eq!(references,BTreeSet::from([ProductRecordReference{kind:ProductRecordKind::Dataset,id:"ds".into()}]));
+        assert!(validate_favorite_owner(ProductRecordKind::QueryHistory,"alice",&values).is_ok());
+        assert_eq!(validate_favorite_owner(ProductRecordKind::QueryHistory,"bob",&values),Err(RegistryError::Forbidden));
     }
 
     #[tokio::test]

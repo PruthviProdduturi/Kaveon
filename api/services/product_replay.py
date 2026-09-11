@@ -18,6 +18,7 @@ _KINDS = {
     "catalog_sources": "source",
     "data_sources": "source",
     "user_recents": "user_recent",
+    "query_history": "query_history",
     "dlm_definitions": "dlm_definition",
 }
 

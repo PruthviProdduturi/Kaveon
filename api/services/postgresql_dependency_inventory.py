@@ -37,6 +37,7 @@ DEPENDENCIES = {
     "services/migrate_credentials.py": {"ai_configuration": "write"},
     "services/product_backfill.py": {"datasets": "read", "dataset_semantics": "read"},
     "services/query_history.py": {"query_history": "read-write"},
+    "services/query_history_backfill.py": {"query_history": "read"},
     "services/saved_query_backfill.py": {"saved_queries": "read"},
     "services/saved_queries.py": {"saved_queries": "read-write", "favorites": "read"},
     "services/theme.py": {"user_themes": "read-write"},
