@@ -1,0 +1,108 @@
+/* Catalog — browse the lake on the left, read one thing on the right.
+   Same vocabulary as the KaveonDB console: Inter for prose, mono for data,
+   color only where it carries meaning. */
+
+.root {
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--text-primary);
+  --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  display: grid; grid-template-columns: 288px minmax(0, 1fr); gap: 14px;
+  min-height: calc(100vh - 56px);
+  align-items: start;
+}
+.rootCollapsed { grid-template-columns: 44px minmax(0, 1fr) }
+
+/* ── Tree ─────────────────────────────────────────────────────────────────── */
+.tree {
+  position: sticky; top: 28px; align-self: start;
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-sm);
+  display: flex; flex-direction: column; max-height: calc(100vh - 56px); overflow: hidden;
+}
+.treeHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 12px 10px 14px; border-bottom: 1px solid var(--border) }
+.treeTitle { margin: 0; font-size: 13px; font-weight: 600 }
+.treeTitle span { font-weight: 500; color: var(--text-muted); margin-left: 6px; font-family: var(--mono); font-size: 11px }
+.collapse { width: 26px; height: 26px; display: grid; place-items: center; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer }
+.collapse:hover { color: var(--text-primary); border-color: var(--border); background: var(--bg-hover) }
+.treeBody { overflow: auto; padding: 6px 6px 10px }
+.treeFoot { padding: 10px 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px }
+.node { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 28px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font: 12.5px Inter, sans-serif; text-align: left; cursor: pointer; text-decoration: none }
+.node:hover { background: var(--bg-hover); color: var(--text-primary) }
+.node[aria-current="page"] { background: rgba(var(--accent-rgb), .10); color: var(--text-primary); font-weight: 600 }
+.node:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
+.nodeLabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1 }
+.nodeCount { font: 11px var(--mono); color: var(--text-muted) }
+.chev { width: 14px; flex-shrink: 0; color: var(--text-faint); font-size: 10px; text-align: center; transition: transform .12s }
+.chevOpen { transform: rotate(90deg) }
+.kind { width: 14px; flex-shrink: 0; color: var(--text-faint); font-size: 11px; text-align: center }
+.level1 { padding-left: 22px } .level2 { padding-left: 38px }
+.treeNote { padding: 6px 14px; font-size: 12px; color: var(--text-muted) }
+.treeErr { color: var(--error) }
+.rail { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 0 }
+
+.ghost {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 30px; padding: 0 11px;
+  font: 600 12px Inter, sans-serif; color: var(--text-secondary); text-decoration: none;
+  background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px; cursor: pointer;
+}
+.ghost:hover { color: var(--text-primary); border-color: var(--border-hover) }
+.primary { background: var(--accent); border-color: var(--accent); color: #fff }
+.primary:hover { color: #fff; background: var(--accent-dark) }
+
+/* ── Right pane ───────────────────────────────────────────────────────────── */
+.pane { min-width: 0 }
+.crumbs { display: flex; align-items: center; gap: 6px; font: 12px var(--mono); color: var(--text-muted); margin-bottom: 10px; flex-wrap: wrap }
+.crumbs b { color: var(--text-secondary); font-weight: 500 }
+.crumbs i { font-style: normal; color: var(--text-faint) }
+.head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  padding: 18px 22px; margin-bottom: 14px;
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-sm);
+}
+.title { margin: 0; font: 600 20px/1.2 var(--mono); letter-spacing: -.01em; overflow-wrap: anywhere }
+.subtitle { margin: 6px 0 0; font-size: 12.5px; color: var(--text-muted) }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px }
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; font: 600 11px Inter, sans-serif; color: var(--text-secondary); background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px }
+.chip span { font-weight: 500; color: var(--text-muted) }
+.chipShortcut { color: var(--accent); border-color: rgba(var(--accent-rgb), .35) }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center }
+.copied { font: 11px var(--mono); color: var(--text-muted); min-width: 70px }
+
+.panel { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; margin-bottom: 14px }
+.panelHead { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px }
+.panelTitle { margin: 0; font-size: 13px; font-weight: 600 }
+.panelMeta { font: 11.5px var(--mono); color: var(--text-muted) }
+
+.grid { overflow: auto; border: 1px solid var(--border); border-radius: 8px; max-height: 420px }
+.grid table { width: 100%; border-collapse: collapse; font-size: 12.5px }
+.grid th { position: sticky; top: 0; text-align: left; padding: 8px 12px; font-size: 11px; font-weight: 600; color: var(--text-muted); background: var(--bg-elevated); border-bottom: 1px solid var(--border); white-space: nowrap }
+.grid td { padding: 7px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; font-family: var(--mono) }
+.grid tr:last-child td { border-bottom: 0 }
+.type { color: var(--text-secondary) }
+.nullable { color: var(--text-muted); font-family: Inter, sans-serif; font-size: 11.5px }
+.null { color: var(--text-muted); font-style: italic }
+.ord { color: var(--text-faint); text-align: right; width: 32px }
+
+.loc { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font: 12.5px var(--mono); align-items: baseline }
+.loc dt { color: var(--text-muted); font-family: Inter, sans-serif; font-size: 12px }
+.loc dd { margin: 0; overflow-wrap: anywhere }
+
+.note { padding: 10px 12px; font-size: 12.5px; color: var(--text-secondary); background: var(--bg-primary); border: 1px solid var(--border); border-radius: 8px }
+.note b { color: var(--text-primary) }
+.noteErr { border-color: rgba(239, 68, 68, .35); color: var(--error) }
+
+.empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; padding: 56px 24px; color: var(--text-muted); background: var(--bg-surface); border: 1px dashed var(--border); border-radius: 12px }
+.emptyTitle { font-size: 15px; font-weight: 600; color: var(--text-primary) }
+.emptyBody { font-size: 13px; max-width: 520px; line-height: 1.55 }
+.emptyActions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; justify-content: center }
+
+.overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 14px }
+.stat { padding: 14px 16px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-sm) }
+.statLabel { font-size: 12px; color: var(--text-muted); margin-bottom: 4px }
+.statValue { font: 600 20px/1.1 var(--mono) }
+.statValue small { font: 500 12px Inter, sans-serif; color: var(--text-muted); margin-left: 6px }
+
+@media (max-width: 900px) {
+  .root, .rootCollapsed { grid-template-columns: 1fr }
+  .tree { position: static; max-height: 320px }
+}
+@media (prefers-reduced-motion: reduce) { .root * { transition: none !important } }
