@@ -27,25 +27,26 @@ visible when reporting a rating.
 
 ### Current assessment — September 10
 
-The evidence-backed score for the current integrated direction is **77/100
-(7.7/10)**. This is a readiness estimate for the declared Engine scope, not a
-feature-parity score against Trino or PostgreSQL. It remains below 8/10 because
-release-critical gaps cannot be averaged away.
+The evidence-backed score for the current integrated direction is **80/100
+(8.0/10)**. This is a readiness estimate for the declared Engine scope, not a
+feature-parity score against Trino or PostgreSQL. The threshold is met narrowly;
+the remaining boundaries still prevent a broad production-readiness claim.
 
 | Area | Points | Evidence credited | Evidence still withheld |
 |---|---:|---|---|
 | SQL correctness and types | 22/25 | 37-case differential suite, 12-query extended same-file suite, typed aggregates/windows/subqueries/set operations, explicit unsupported errors, native `ANALYZE` | Re-run the complete differential corpus on the integrated release image; broaden decimal, timestamp, nested-type, DML and randomized coverage |
 | Memory and spill | 12/15 | Admission, bounded result/history/exchange paths, aggregate spill and a clean-current-image two-worker pressure run covering 11 spill, rejection and cancellation cases | Complete retained-result/worker-response accounting, successful join spill under skew, current-image AKS disk exhaustion and sustained pressure |
-| Distributed execution and recovery | 12/15 | Multi-worker operators, immutable query catalog pinning, authenticated worker recovery, compatible-worker scheduling, and a clean-current-image million-row consumer-loss recovery with exact results and zero retained exchange files | Current-image AKS worker loss/node drain, coordinator restart, catalog mutation during query and sustained concurrency |
+| Distributed execution and recovery | 14/15 | Multi-worker operators, immutable query catalog pinning, authenticated worker recovery, clean local consumer-loss recovery, and current-image AKS evidence for 12/12 concurrent exact queries plus forced in-flight worker loss, alternate-worker attempt-1 retry, exact output and three-worker catalog-compatible recovery | Node drain, catalog mutation during a running query, and multi-coordinator consistency |
 | Authentication and platform integration | 13/15 | Entra/TLS, owner-bound results and transactions, role checks, exchange authentication, fail-closed secrets/configuration | Live rotation/revocation, tenant isolation and adversarial authorization qualification on the release deployment |
 | Storage correctness | 8/10 | Parquet/Delta/Iceberg readers, pinned source identities, authenticated ADLS reads, CAS-backed immutable product/statistics documents | Live ADLS conflict/fault/restart evidence, broader schema evolution and corruption/recovery qualification |
-| Operability | 7/10 | Reproducible CLI/images, Helm/Bicep, health/readiness/metrics/history, checked-in AKS verifiers | Deploy and qualify the current digests, backup/restore, upgrade/rollback, alerting and a sustained current-image soak |
+| Operability | 8/10 | Reproducible CLI/images, Helm/Bicep, health/readiness/metrics/history, immutable ACR build and current-digest AKS rollout, startup stale-exchange reconciliation, and a passing combined restart/fault/pressure gate | Backup/restore, upgrade/rollback, alerting and a sustained current-image soak |
 | Performance | 3/10 | Resource-matched harness, exact-result hashes, fail-closed claim evaluators; best recorded six-query diagnostic ratio is 1.057× | Run the publication-scale extended corpus on immutable current images; the required 1.90× Trino throughput result and PostgreSQL transaction comparison do not exist |
 
-Three release-critical conditions currently cap the score below 8/10:
+Three material boundaries prevent expanding this narrow 8/10 rating:
 
-1. No current integrated image has passed the complete AKS correctness, pressure,
-   worker-loss, coordinator-restart and catalog-catch-up sequence.
+1. The current image has passed bounded coordinator restart, catalog catch-up,
+   concurrent correctness, pressure and worker-loss recovery, but not a sustained
+   mixed-workload soak, backup/restore or upgrade/rollback qualification.
 2. Kaveon's transactional surface is a durable, typed product-record protocol.
    Arbitrary relational row DML, parameter binding, constraints/indexes,
    multi-table SQL transactions and a qualified isolation level remain absent.
@@ -64,14 +65,30 @@ Claims must therefore stay scoped as follows:
   Trino throughput. It is below the 1.90× target and is not the publication
   workload.
 
-Immutable Engine/API/Studio images through `0fe58a9` are deployed, and the
-catalog-recovery Engine digest passed a three-worker identity check plus an exact
-34-row distributed smoke query. That closes deployment and basic catalog
-catch-up; it does not close fault or sustained-load qualification. The exact
-next gates are: (1) run the current AKS SQL, worker-loss, coordinator-restart,
-pressure and soak suite while retaining machine-readable reports; (2) run the
-extended matched Trino publication gate; (3) qualify the declared product-record
+Engine commit `c88f7ed` is deployed from ACR build `ca1u` as immutable digest
+`sha256:1b41e38c56cb4fff74f17aa3c67ea599d6c3a6adfa4df55dede984ebc1d8d50a`.
+The coordinator restart removed 15 abandoned valid exchange directories and
+eight chunk files while preserving byte-identical result-named, malformed-name
+and unrelated PVC canaries. The same digest then passed the combined AKS
+worker-loss, concurrency and pressure gate. The exact next gates are: (1) run
+the extended matched Trino publication gate; (2) run a sustained mixed-workload
+soak plus backup/upgrade recovery; (3) qualify the declared product-record
 transaction scope separately. Re-score only from those artifacts.
+
+#### Current-image AKS restart and fault evidence — September 10
+
+The credential-free report
+`engine-aks-fault-pressure-validation-2026-09-10-pass-c88f7ed.json` records all
+six top-level checks passing. Twelve concurrent known-result queries and twelve
+bounded-pressure grouped queries returned exact hashes. During a four-stage
+3,412,043-row taxi join, the verifier force-deleted `kaveon-worker-2`; stage 2
+partition 2 retried as attempt 1 on `kaveon-worker-0` and returned exact result
+`(3412043, 6077935)`. The replacement restored three active, catalog-compatible
+workers. Coordinator exchange and all worker spill file counts were zero before
+and after, no unrelated pod restarted, and sampled Engine memory remained below
+pod limits. The separate cleanup artifact records the coordinator PVC namespace
+isolation checks. This is bounded failure evidence, not coordinator HA or a
+sustained-load claim.
 
 #### Current-image local fault evidence — September 10
 

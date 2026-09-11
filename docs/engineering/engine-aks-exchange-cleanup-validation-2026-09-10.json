@@ -1,0 +1,34 @@
+{
+  "captured_at_utc": "2026-09-11T01:29:00Z",
+  "context": "kaveon-test-aks",
+  "namespace": "kaveon",
+  "commit": "c88f7ed",
+  "acr_build_id": "ca1u",
+  "image_digest": "sha256:1b41e38c56cb4fff74f17aa3c67ea599d6c3a6adfa4df55dede984ebc1d8d50a",
+  "credential_material_recorded": false,
+  "subscription_policy_changed": false,
+  "before_restart": {
+    "valid_exchange_directories": 15,
+    "chunk_files": 8
+  },
+  "after_restart": {
+    "abandoned_valid_exchange_directories": 0,
+    "running_coordinator_exchange_directories": 1,
+    "chunk_files": 0
+  },
+  "namespace_canaries": {
+    "sha256": "4c8d51bb080700351f2fb8a3df7348266934fe09496300562e305985298391bc",
+    "result_named_path_preserved": true,
+    "malformed_exchange_name_preserved": true,
+    "unrelated_operator_path_preserved": true,
+    "removed_after_verification": true
+  },
+  "checks": {
+    "stale_exchange_directories_removed": true,
+    "stale_exchange_chunks_removed": true,
+    "namespace_boundaries_preserved": true,
+    "coordinator_ready_on_expected_digest": true
+  },
+  "passed": true,
+  "boundary": "Paged result files and their index are pod-local and in-memory; this artifact proves cleanup isolation and startup hygiene, not result replay or coordinator high availability."
+}
