@@ -142,3 +142,8 @@
 .dlmBody b { color: var(--text-secondary); font-weight: 600; font-family: var(--mono) }
 
 @media (max-width: 1100px) { .body { grid-template-columns: 1fr } .signals { grid-template-columns: 1fr 1fr } .signal:nth-child(3) { border-left: 0 } .signal:nth-child(n + 3) { border-top: 1px solid var(--border) } }
+
+/* ── Query mode: the workbench takes the pane; its own chrome stays inside ── */
+.query { display: flex; flex-direction: column; min-width: 0 }
+.workbench { min-width: 0; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-sm); overflow: hidden }
+.workbench :global(.main-content) { height: calc(100vh - 120px) !important; min-height: 560px }

@@ -19,9 +19,9 @@ export default function CatalogOverviewPage() {
       <div className={s.empty}>
         <div className={s.emptyTitle}>No catalogs yet</div>
         <div className={s.emptyBody}>
-          Register a storage location under System settings and synchronize it with KaveonDB. Its schemas and tables appear here and in SQL Lab.
+          Register a storage location under Settings → Storage and synchronize it with KaveonDB. Its schemas and tables appear here and in SQL Lab.
         </div>
-        {isAdmin && <div className={s.emptyActions}><Link href="/settings/system" className={`${s.ghost} ${s.primary}`}>Register a catalog source</Link></div>}
+        {isAdmin && <div className={s.emptyActions}><Link href="/settings/storage" className={`${s.ghost} ${s.primary}`}>Register a catalog source</Link></div>}
       </div>
     );
   }
@@ -33,7 +33,7 @@ export default function CatalogOverviewPage() {
           <h1 className={s.title} style={{ fontFamily: "inherit" }}>Catalog</h1>
           <p className={s.subtitle}>Every table here is read where it lives in your lake. Open one for its columns, location, format and a sample of rows — then query it in SQL Lab.</p>
         </div>
-        {isAdmin && <div className={s.actions}><Link href="/settings/system" className={s.ghost}><i className="fas fa-sliders" aria-hidden="true" /> Catalog sources</Link></div>}
+        {isAdmin && <div className={s.actions}><Link href="/settings/storage" className={s.ghost}><i className="fas fa-sliders" aria-hidden="true" /> Catalog sources</Link></div>}
       </header>
 
       {(catalogs ?? []).map(cat => {
