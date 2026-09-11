@@ -8,6 +8,7 @@ from services import product_store
 
 
 MAX_SHADOW_DOCUMENT_BYTES = 1024 * 1024
+MAX_SHADOW_LIST_RECORDS = 25
 
 
 def _identity(document: dict) -> tuple[str, int]:
@@ -42,4 +43,47 @@ def compare_dataset(source_document: dict, actor: str, role: str) -> dict:
         "source_sha256": source_sha, "target_sha256": target_sha,
         "source_bytes": source_bytes, "target_bytes": target_bytes,
         "target_generation": int(target.get("generation") or 0),
+    }
+
+
+def compare_dataset_list(source_documents: list[dict], actor: str, role: str) -> dict:
+    """Compare the PostgreSQL list projection through bounded owner-scoped reads."""
+    if os.getenv("KAVEON_DATASET_SHADOW_READ_ENABLED") != "true":
+        return {"family": "datasets", "operation": "list", "enabled": False, "status": "disabled"}
+    if not actor:
+        raise RuntimeError("dataset list shadow comparison requires actor identity")
+    if len(source_documents) > MAX_SHADOW_LIST_RECORDS:
+        return {
+            "family": "datasets", "operation": "list", "enabled": True,
+            "status": "skipped_limit", "source_count": len(source_documents),
+            "limit": MAX_SHADOW_LIST_RECORDS,
+        }
+    counts = {"match": 0, "missing": 0, "mismatch": 0}
+    source_identities, target_identities = [], []
+    for source in source_documents:
+        projection = {key: value for key, value in source.items() if key != "favorite"}
+        record_id = str(projection.get("id") or "")
+        if not record_id:
+            raise RuntimeError("dataset list shadow comparison requires record identity")
+        source_sha, _ = _identity(projection)
+        source_identities.append(source_sha)
+        target = product_store.read("dataset", record_id, actor, role)
+        if target is None:
+            counts["missing"] += 1
+            target_identities.append("missing")
+            continue
+        document = target.get("document")
+        if not isinstance(document, dict):
+            raise RuntimeError("KaveonDB dataset list shadow response is invalid")
+        target_projection = {key: document.get(key) for key in projection}
+        target_sha, _ = _identity(target_projection)
+        target_identities.append(target_sha)
+        counts["match" if target_sha == source_sha else "mismatch"] += 1
+    batch_source_sha = hashlib.sha256("".join(source_identities).encode("ascii")).hexdigest()
+    batch_target_sha = hashlib.sha256("".join(target_identities).encode("ascii")).hexdigest()
+    return {
+        "family": "datasets", "operation": "list", "enabled": True,
+        "status": "match" if counts["match"] == len(source_documents) else "mismatch",
+        "source_count": len(source_documents), "compared": len(source_documents),
+        **counts, "source_sha256": batch_source_sha, "target_sha256": batch_target_sha,
     }

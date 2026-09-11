@@ -14,6 +14,20 @@ from services import datasets
 
 
 class DatasetShadowIntegrationTests(unittest.TestCase):
+    def test_list_reports_shadow_and_returns_postgresql_items_unchanged(self):
+        row = {
+            "id": 7, "dataset_name": "Orders", "description": None,
+            "fact_table": "orders", "schema_name": "sales", "database_name": "lake",
+            "created_at": "created", "modified_at": "updated", "date_column": None,
+            "tables_used": None, "created_by": "alice@example.com",
+            "modified_by": "alice@example.com", "visibility": "private", "favorite": 1,
+        }
+        with patch.object(datasets.db, "query", return_value={"rows": [row]}), \
+             patch.object(datasets.product_shadow_read, "compare_dataset_list", return_value={"enabled": True, "status": "match"}) as compare:
+            result = datasets.list_datasets("alice@example.com", "Viewer")
+        compare.assert_called_once_with(result, "alice@example.com", "Viewer")
+        self.assertTrue(result[0]["favorite"])
+
     def test_user_read_reports_shadow_without_changing_postgresql_response(self):
         parent = {
             "id": 7, "dataset_name": "Orders", "description": None,

@@ -333,5 +333,10 @@ children, and performs one owner-scoped KaveonDB point read using the same actor
 and role. Each canonical document is capped at 1 MiB. Logs contain only record
 ID, status, byte counts, SHA-256 identities and target generation; errors are
 reduced to exception type. PostgreSQL still supplies the unchanged response.
-List reads, internal service reads and every write path remain outside this
-first slice.
+Dataset list reads use the same control and compare only the PostgreSQL list
+projection, excluding the caller-specific favorite decoration. At most 25
+records are checked through owner-scoped point reads; larger lists emit
+`skipped_limit` without target access. List telemetry contains aggregate
+match/missing/mismatch counts and order-sensitive batch hashes, never documents
+or principals. Internal service reads and every write path remain outside this
+slice.
