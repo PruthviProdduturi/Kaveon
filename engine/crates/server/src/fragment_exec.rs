@@ -16,7 +16,8 @@ use kaveon_exec::aggregate::{
 };
 #[cfg(test)]
 use kaveon_exec::aggregate::{
-    grouped_aggregate_states_to_batch, grouped_aggregate_states_to_typed_batch,
+    grouped_aggregate_states_from_batches, grouped_aggregate_states_to_batch,
+    grouped_aggregate_states_to_typed_batch, merge_grouped_aggregate_states,
 };
 use kaveon_exec::distinct::DistinctOperator;
 use kaveon_exec::exchange::{HashPartitionMetrics, HashPartitioner};
@@ -350,6 +351,20 @@ fn compile_node(
                         .transpose()?,
                 ),
                 AggregateMode::Partial => {
+                    let parallelism = kaveon_exec::local_parallel::configured_parallelism()?;
+                    if parallelism > 1
+                        && let Some(memory) = memory
+                    {
+                        return Ok(Box::new(
+                            kaveon_exec::local_parallel::ParallelPartials::new(
+                                input,
+                                group_by,
+                                aggregates,
+                                memory.clone(),
+                                parallelism,
+                            )?,
+                        ));
+                    }
                     let output_types = kaveon_exec::aggregate::aggregate_output_types(
                         &aggregates,
                         input.schema(),
@@ -1431,6 +1446,117 @@ mod tests {
             .downcast_ref::<UInt64Array>()
             .unwrap();
         assert_eq!(counts.values().iter().sum::<u64>(), 4);
+    }
+
+    #[test]
+    fn distributed_partial_fragment_uses_key_affine_parallelism() {
+        const CHILD: &str = "KAVEON_FRAGMENT_AFFINITY_REGRESSION_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "fragment_exec::tests::distributed_partial_fragment_uses_key_affine_parallelism",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env("KAVEON_LOCAL_PARALLELISM", "4")
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            return;
+        }
+
+        let rows = 20_000i64;
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "key",
+                Arc::new(arrow::array::Int64Array::from_iter_values(0..rows)) as ArrayRef,
+            ),
+            (
+                "value",
+                Arc::new(arrow::array::Int64Array::from_iter_values(
+                    (0..rows).map(|value| value.saturating_mul(-3)),
+                )) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let fragment = ExecutableFragment {
+            version: EXECUTABLE_FRAGMENT_VERSION,
+            stage_id: StageId(19),
+            root: FragmentNodeId(2),
+            nodes: vec![
+                node(
+                    1,
+                    vec![],
+                    FragmentOperator::ExchangeInput(ExchangeInput {
+                        exchange_id: ExchangeId("raw".into()),
+                    }),
+                ),
+                node(
+                    2,
+                    vec![1],
+                    FragmentOperator::Aggregate {
+                        mode: AggregateMode::Partial,
+                        group_by: vec![kaveon_core::NamedExpr {
+                            name: "key".into(),
+                            expression: Expr::Column("key".into()),
+                        }],
+                        aggregates: vec![
+                            AggregateSpec {
+                                function: AggregateFunction::Count,
+                                argument: None,
+                                output: "count".into(),
+                            },
+                            AggregateSpec {
+                                function: AggregateFunction::Sum,
+                                argument: Some(Expr::Column("value".into())),
+                                output: "sum".into(),
+                            },
+                        ],
+                    },
+                ),
+            ],
+        };
+        let pool = QueryMemoryPool::new("fragment-key-affine", 256 * 1024 * 1024).unwrap();
+        let execution = execute_fragment_with_memory(
+            &fragment,
+            &CatalogManager::new("test", "default"),
+            &BatchInputs {
+                values: HashMap::from([(ExchangeId("raw".into()), vec![batch])]),
+            },
+            first_partition(),
+            Some(&pool),
+        )
+        .unwrap();
+        let partials = grouped_aggregate_states_from_batches(&execution.result_batches).unwrap();
+        let merged = merge_grouped_aggregate_states(partials).unwrap();
+        assert_eq!(merged.len(), rows as usize);
+        assert!(merged.iter().all(|group| {
+            let AggregateValue::Int64(key) = group.group_keys[0] else {
+                return false;
+            };
+            group.states
+                == vec![
+                    AggregateState::Count(1),
+                    AggregateState::IntegerSum {
+                        sum: key.saturating_mul(-3) as i128,
+                        count: 1,
+                    },
+                ]
+        }));
+        let metrics = kaveon_exec::aggregate::aggregate_metrics(&pool)
+            .unwrap()
+            .snapshot();
+        assert_eq!(metrics.local_affinity_dispatches, 1);
+        assert_eq!(metrics.local_round_robin_dispatches, 0);
+        assert_eq!(metrics.local_affinity_routed_rows, rows as u64);
+        assert!(metrics.local_affinity_routed_bytes > 0);
+        assert_eq!(pool.snapshot().current_bytes, 0);
     }
 
     #[test]
