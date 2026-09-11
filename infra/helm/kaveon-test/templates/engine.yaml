@@ -194,7 +194,7 @@ spec:
             failureThreshold: 30
             periodSeconds: 5
           readinessProbe:
-            httpGet: {path: {{ ternary "/ready" "/health" $isCoordinator }}, port: https, scheme: HTTPS}
+            httpGet: {path: {{ ternary "/health" "/ready" $isCoordinator }}, port: https, scheme: HTTPS}
             periodSeconds: 5
           livenessProbe:
             httpGet: {path: /health, port: https, scheme: HTTPS}
