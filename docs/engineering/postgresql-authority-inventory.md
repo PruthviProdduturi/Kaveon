@@ -15,7 +15,7 @@ family has migrated.
 | `dashboards` | `services/dashboards.py`, DLM/dashboard routes | `dashboard` product record | Deterministic backfill, exact chart revision binding and point-read shadowing exist; filter-dataset references, outbox, live parity and cutover remain |
 | `favorites` | `services/favorites.py`, dashboard and data-source routes | No typed favorite record yet | Add owner-unique favorite type and atomic dashboard/favorite behavior |
 | `saved_queries` | `services/saved_queries.py` | `saved_query` product record | Source mutations and outbox are atomic; deterministic backfill exists; shadow parity, live reconciliation and cutover remain |
-| `user_themes` | `services/theme.py` | `user_theme` product record | Outbox, backfill and owner-key reconciliation |
+| `user_themes` | `services/theme.py` | `user_theme` product record | Atomic source/outbox, bounded backfill and owner shadow code exist; outbox schema deployment, live replay/parity, fencing and cutover remain |
 | `user_recents` | `services/user_recents.py`, dashboard cleanup | No destination | Define bounded ordered personal-state record and retention |
 | `query_history` | `services/query_history.py`, DLM usage | No destination | Partitioned append path, stable cursor ordering, retention and payload policy |
 | `activity` | Catalog-source audit paths | No destination | Immutable audit schema, retention and actor identity |
@@ -190,3 +190,10 @@ authority families with no complete destination/backfill path are catalog/data
 sources, favorites, saved queries, themes, recents, query/activity/chat history,
 context cache and AI provider/key configuration. Dataset, chart and dashboard
 ongoing writers also still require outbox/replay coverage before any cutover.
+
+User themes now have a single PostgreSQL mutation/outbox transaction, canonical
+owner-keyed documents, deterministic checkpointed backfill, exact owner
+reconciliation and default-off shadow reads. A September 11 live AKS read-only
+probe confirmed `public.product_migration_outbox` is absent, so these writers
+must not be enabled or deployed as migration-ready. No live backfill, replay,
+parity, fencing or rollback evidence exists.

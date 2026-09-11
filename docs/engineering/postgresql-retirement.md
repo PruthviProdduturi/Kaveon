@@ -185,6 +185,12 @@ checkpoint/resume and target reconciliation code. Retirement remains blocked on
 live backfill evidence, continuous mutation capture, read parity, fencing,
 rollback and backup/restore qualification.
 
+User themes now have atomic source/outbox writes, bounded checkpointed backfill,
+exact owner reconciliation and shadow parity code. The source outbox table is
+absent in the live AKS PostgreSQL deployment as verified by a read-only
+`to_regclass('public.product_migration_outbox')` probe on September 11, 2026.
+Deployment, replay, live evidence, fencing and rollback remain required.
+
 The saved-query family now has atomic source mutation/outbox capture plus a
 bounded deterministic backfill with exact owner-scoped reconciliation and
 tamper-evident checkpoint/resume. The command is disabled for apply by default.

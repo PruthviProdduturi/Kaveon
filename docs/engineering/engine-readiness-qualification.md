@@ -262,6 +262,11 @@ release evidence after combined validation.
   layouts and exact dataset revisions; local fixtures grant no readiness credit.
 - Live dashboard backfill and role-filtered shadow evidence with exact chart
   revisions; filter dataset bindings and mutation replay remain pending.
+- Deploy and qualify `public.product_migration_outbox`; a September 11, 2026
+  read-only AKS probe returned false from `to_regclass` and therefore blocks the
+  dataset and user-theme migration writers.
+- Live user-theme backfill/replay and owner-shadow parity, followed by fencing,
+  rollback and backup/restore evidence.
 
 ### Engine-backed virtual chart datasets
 

@@ -356,6 +356,30 @@ generation, attempt count and bounded error code only. It never contains the
 document, actor or owner. Observer failures are reduced to exception type and
 cannot change the PostgreSQL mutation response.
 
+## User theme migration
+
+Theme save/update now locks the owner-keyed PostgreSQL row, writes the normalized
+lowercase color and appends exactly one canonical `user_themes` outbox event in
+the same transaction. Delete locks first and emits one tombstone only when a row
+exists. Source or outbox failure propagates so callers cannot observe a false
+success, and cache invalidation occurs after the transaction.
+
+The default-dry backfill captures at most 100,000 themes under PostgreSQL
+`REPEATABLE READ, READ ONLY` at the outbox watermark. Documents contain exactly
+the owner email and validated six-digit color, with deterministic record and
+snapshot hashes. `scripts/backfill-user-themes.py` uses an integrity-checked 8
+MiB atomic checkpoint; apply requires
+`KAVEON_USER_THEME_MIGRATION_ENABLED=true` and advances only after exact
+owner-scoped reconciliation.
+
+`KAVEON_USER_THEME_SHADOW_READ_ENABLED=true` enables an owner-scoped KaveonDB
+point comparison for cached and uncached reads. Telemetry hashes the record ID
+and contains hashes, sizes, generation and status only. Observer failures cannot
+change the PostgreSQL response. The source outbox schema is not deployed: a live
+read-only AKS probe on September 11, 2026 returned false for
+`to_regclass('public.product_migration_outbox')`. No theme migration write can be
+enabled until that schema exists and is qualified.
+
 ## Chart shadow point reads
 
 Charts are the next typed family after datasets. Set
