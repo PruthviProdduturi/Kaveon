@@ -87,6 +87,10 @@ Three material boundaries prevent expanding this narrow 8/10 rating:
    isolation and referential validation. No writer, backfill, shadow evidence or
    generated-run publication exists, so this foundation earns no readiness
    score by itself.
+   A default-dry DLM-definition backfill now seals ready PostgreSQL definitions
+   against one KaveonDB dataset snapshot and resumes from an integrity-checked
+   checkpoint. It has no live artifact and excludes generated runs, so it earns
+   no readiness score.
 3. The checked-in comparison gates fail closed because no publication-scale
    1.90× Trino result or completed PostgreSQL transaction report exists.
 
