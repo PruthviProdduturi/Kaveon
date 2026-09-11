@@ -79,6 +79,28 @@ nonzero exit code. This credential-free checker does not create reconciliation
 evidence, discover live tables, enable reads or writes, fence PostgreSQL, or
 authorize retirement.
 
+For a live migration rehearsal, use the combined runner after the read-only
+reconciliation jobs have written every family report and `retirement-gates.json`.
+Pin `--now` to the run's UTC checkpoint so the evidence and freshness decision
+are reproducible:
+
+```powershell
+$env:KAVEON_RETIREMENT_EVIDENCE_COLLECTION_ENABLED = "true"
+python scripts/run-postgresql-retirement-evidence.py `
+  --reports tmp/reconciliation-reports `
+  --evidence tmp/postgresql-reconciliation-evidence.json `
+  --audit tmp/postgresql-retirement-audit.json `
+  --now 2026-09-10T20:00:00Z `
+  --max-age-hours 24
+```
+
+The runner reads only local, content-bound reports. It requires all authority
+families plus source watermark, zero outbox lag, write-fence, shadow-parity,
+restart/recovery, rollback and backup/restore evidence. It writes outputs only
+after validation; a missing, stale, failed or malformed input returns a
+nonzero exit code. It never connects to PostgreSQL, changes the write fence,
+scales a workload, or authorizes retirement.
+
 Reconciliation jobs produce one strict, content-free JSON report per family.
 The local collector verifies each report's canonical SHA-256 and exact family
 identity before assembling the gate input:
