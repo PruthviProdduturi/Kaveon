@@ -43,6 +43,7 @@ DEPENDENCIES = {
     "services/theme.py": {"user_themes": "read-write"},
     "services/user_theme_backfill.py": {"user_themes": "read"},
     "services/source_backfill.py": {"catalog_sources": "read", "data_sources": "read"},
+    "services/activity_backfill.py": {"activity": "read"},
     "services/user_recent_backfill.py": {"user_recents": "read"},
     "services/user_recents.py": {"user_recents": "read-write"},
 }

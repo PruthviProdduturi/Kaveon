@@ -233,3 +233,15 @@ def observe_saved_query_list(sources:list[dict],owner:str)->dict:
     for source in sources:
         result=observe_saved_query(source,owner);counts[result["status"]]+=1
     return {"family":"saved_queries","enabled":True,"status":"match" if counts["match"]==len(sources) else "mismatch","source_count":len(sources),**counts}
+
+def observe_activity_list(sources:list[dict])->dict:
+    if os.getenv("KAVEON_ACTIVITY_SHADOW_READ_ENABLED")!="true":return {"family":"activity","enabled":False,"status":"disabled"}
+    if len(sources)>50:return {"family":"activity","enabled":True,"status":"skipped_limit","source_count":len(sources)}
+    from services.activity_backfill import document
+    counts={"match":0,"missing":0,"mismatch":0}
+    for source in sources:
+        expected=document(source);owner=expected["user_email"];target=product_store.read("activity",expected["id"],owner,"Admin")
+        if target is None:counts["missing"]+=1
+        elif target.get("document")==expected:counts["match"]+=1
+        else:counts["mismatch"]+=1
+    return {"family":"activity","enabled":True,"status":"match" if counts["match"]==len(sources) else "mismatch","source_count":len(sources),**counts}

@@ -19,6 +19,7 @@ _KINDS = {
     "data_sources": "source",
     "user_recents": "user_recent",
     "query_history": "query_history",
+    "activity": "activity",
     "dlm_definitions": "dlm_definition",
 }
 
