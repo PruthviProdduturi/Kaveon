@@ -2,8 +2,15 @@
 
 from datetime import datetime, timezone
 from typing import List, Optional
+import logging
+import os
 import database.metadata as db
 from services import product_outbox
+from services import product_shadow_read
+
+def _enqueue(transaction, **kwargs):
+    if os.getenv("KAVEON_SAVED_QUERY_OUTBOX_ENABLED") == "true":
+        return product_outbox.enqueue(transaction, **kwargs)
 
 
 _SELECT = """
@@ -57,7 +64,12 @@ def list_saved_queries(user_id: str) -> List[dict]:
             AND f.object_type = 'query' AND f.user_email = @param0
         WHERE s.created_by = @param0 ORDER BY s.modified_at DESC
     """, [user_id])
-    return [_adapt(r) for r in result["rows"]]
+    adapted=[_adapt(r) for r in result["rows"]]
+    try:
+        report=product_shadow_read.observe_saved_query_list([_product_document(r) for r in result["rows"]],user_id)
+        if report.get("enabled"):logging.getLogger(__name__).info("saved_query_shadow %s",report)
+    except Exception as error:logging.getLogger(__name__).warning("saved_query_shadow_error type=%s",type(error).__name__)
+    return adapted
 
 
 def get_by_id(query_id: str, user_id: str) -> Optional[dict]:
@@ -65,6 +77,11 @@ def get_by_id(query_id: str, user_id: str) -> Optional[dict]:
         _SELECT + "WHERE id = @param0 AND created_by = @param1",
         [query_id, user_id],
     )
+    if row:
+        try:
+            report=product_shadow_read.observe_saved_query(_product_document(row),user_id)
+            if report.get("enabled"):logging.getLogger(__name__).info("saved_query_shadow %s",report)
+        except Exception as error:logging.getLogger(__name__).warning("saved_query_shadow_error type=%s",type(error).__name__)
     return _adapt(row) if row else None
 
 
@@ -81,7 +98,7 @@ def create_saved_query(data: dict, user_id: str) -> dict:
                 user_id, now, False, False])
         if not inserted:
             raise RuntimeError("Failed to retrieve created saved query")
-        product_outbox.enqueue(
+        _enqueue(
             transaction, family="saved_queries", operation="create",
             record_id=str(inserted["id"]), payload=_product_document(inserted),
             actor=user_id, owner=user_id,
@@ -120,7 +137,7 @@ def update_saved_query(query_id: str, data: dict, user_id: str) -> Optional[dict
         )
         if not updated:
             raise RuntimeError("Saved query changed after acquiring its row lock")
-        product_outbox.enqueue(
+        _enqueue(
             transaction, family="saved_queries", operation="update",
             record_id=str(query_id), payload=_product_document(updated),
             actor=user_id, owner=str(existing["created_by"]),
@@ -142,7 +159,7 @@ def delete_saved_query(query_id: str, user_id: str) -> bool:
         )
         if deleted != 1:
             raise RuntimeError("Saved query changed after acquiring its row lock")
-        product_outbox.enqueue(
+        _enqueue(
             transaction, family="saved_queries", operation="delete",
             record_id=str(query_id), payload={"id": str(query_id), "deleted": True},
             actor=user_id, owner=str(existing["created_by"]),

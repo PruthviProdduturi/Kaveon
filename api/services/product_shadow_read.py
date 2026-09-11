@@ -217,3 +217,19 @@ def observe_query_history_list(source_records:list[dict],owner:str)->dict:
         elif target.get("document")==expected:counts["match"]+=1
         else:counts["mismatch"]+=1
     return {"family":"query_history","enabled":True,"status":"match" if counts["match"]==len(source_records) else "mismatch","source_count":len(source_records),**counts}
+
+def observe_saved_query(source:dict,owner:str)->dict:
+    if os.getenv("KAVEON_SAVED_QUERY_SHADOW_READ_ENABLED")!="true":return {"family":"saved_queries","enabled":False,"status":"disabled"}
+    record_id=str(source.get("id") or "");source_sha,source_bytes=_identity(source);target=product_store.read("saved_query",record_id,owner,"Viewer")
+    if target is None:return {"family":"saved_queries","enabled":True,"status":"missing","record_id":record_id,"source_sha256":source_sha,"source_bytes":source_bytes}
+    target_document=target.get("document")
+    if not isinstance(target_document,dict):raise RuntimeError("KaveonDB saved query shadow response is invalid")
+    target_sha,target_bytes=_identity(target_document)
+    return {"family":"saved_queries","enabled":True,"status":"match" if source_sha==target_sha else "mismatch","record_id":record_id,"source_sha256":source_sha,"target_sha256":target_sha,"source_bytes":source_bytes,"target_bytes":target_bytes}
+def observe_saved_query_list(sources:list[dict],owner:str)->dict:
+    if os.getenv("KAVEON_SAVED_QUERY_SHADOW_READ_ENABLED")!="true":return {"family":"saved_queries","enabled":False,"status":"disabled"}
+    if len(sources)>MAX_SHADOW_LIST_RECORDS:return {"family":"saved_queries","enabled":True,"status":"skipped_limit","source_count":len(sources)}
+    counts={"match":0,"missing":0,"mismatch":0}
+    for source in sources:
+        result=observe_saved_query(source,owner);counts[result["status"]]+=1
+    return {"family":"saved_queries","enabled":True,"status":"match" if counts["match"]==len(sources) else "mismatch","source_count":len(sources),**counts}
