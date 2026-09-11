@@ -20,6 +20,8 @@ pub struct SourceStatistics {
     pub identity_sha256: String,
     pub row_count: u64,
     pub columns: Vec<String>,
+    /// Immutable Delta version used to derive these statistics.
+    pub delta_version: Option<u64>,
 }
 
 /// Resolves the source and derives exact row count without reading data pages.
@@ -50,6 +52,7 @@ pub fn analyze_source(location: &str, format: DataFormat) -> Result<SourceStatis
                     .iter()
                     .map(|f| f.name().clone())
                     .collect(),
+                delta_version: None,
             })
         }
         (true, DataFormat::Parquet) => {
@@ -114,11 +117,10 @@ pub fn analyze_source(location: &str, format: DataFormat) -> Result<SourceStatis
             let metadata = crate::DeltaTableReader::new(location)
                 .with_version(version)
                 .metadata()?;
-            Ok(cache_statistics(stats_from_digest(
-                identity_sha256,
-                metadata.row_count,
-                &metadata.schema,
-            )))
+            let mut statistics =
+                stats_from_digest(identity_sha256, metadata.row_count, &metadata.schema);
+            statistics.delta_version = Some(version);
+            Ok(cache_statistics(statistics))
         }
         (false, DataFormat::Iceberg) => {
             let snapshot = IcebergReader::new(location).snapshot()?;
@@ -134,6 +136,7 @@ pub fn analyze_source(location: &str, format: DataFormat) -> Result<SourceStatis
                     .iter()
                     .map(|f| f.name().clone())
                     .collect(),
+                delta_version: None,
             })
         }
     }
@@ -167,6 +170,7 @@ fn analyze_object_delta(location: &str, reader: &ObjectDeltaReader) -> Result<So
             .iter()
             .map(|field| field.name().clone())
             .collect(),
+        delta_version: Some(version),
     });
     cache_delta_statistics(location, version, statistics.clone());
     Ok(statistics)
@@ -181,6 +185,7 @@ fn stats_from_digest(
         identity_sha256,
         row_count,
         columns: schema.fields().iter().map(|f| f.name().clone()).collect(),
+        delta_version: None,
     }
 }
 
@@ -327,6 +332,7 @@ mod tests {
         let first = analyze_source(directory.to_str().unwrap(), DataFormat::Delta).unwrap();
         assert_eq!(first.row_count, 8);
         assert_eq!(first.columns, ["id", "name"]);
+        assert_eq!(first.delta_version, Some(0));
 
         std::fs::write(
             log.join("00000000000000000001.json"),
@@ -336,6 +342,7 @@ mod tests {
         let second = analyze_source(directory.to_str().unwrap(), DataFormat::Delta).unwrap();
         assert_eq!(second.row_count, 12);
         assert_ne!(first.identity_sha256, second.identity_sha256);
+        assert_eq!(second.delta_version, Some(1));
 
         std::fs::remove_dir_all(directory).unwrap();
     }
@@ -362,6 +369,7 @@ mod tests {
         let location = format!("memory://delta-cache-{}", std::process::id());
         let first = analyze_object_delta(&location, &reader).unwrap();
         assert_eq!(first.row_count, 3);
+        assert_eq!(first.delta_version, Some(0));
         assert_eq!(analyze_object_delta(&location, &reader).unwrap(), first);
 
         runtime
@@ -378,5 +386,6 @@ mod tests {
         let second = analyze_object_delta(&location, &reader).unwrap();
         assert_eq!(second.row_count, 7);
         assert_ne!(second.identity_sha256, first.identity_sha256);
+        assert_eq!(second.delta_version, Some(1));
     }
 }

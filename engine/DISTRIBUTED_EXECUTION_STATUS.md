@@ -65,6 +65,8 @@ The eighth gate passed 228 tests across the full workspace after window frame sp
 
 The September 11 AKS profiling follow-up added bounded cumulative task counters at the remaining diagnostic boundaries. Hash repartition now reports row hashing/encoding time separately from Arrow `take` time, allocation count, and copied bytes. Worker execution reports blocking-pool queue delay and compute wall time alongside Linux thread CPU. Spill snapshots report cumulative Arrow IPC write/read time alongside existing bytes, runs, and compactions. Existing fetch, IPC decode, encode, upload, memory, and admission counters remain intact. The counters use two clocks per hash-partition batch or spill operation and atomic accumulation for shared spill state; query results and execution decisions are unchanged. Focused exchange, spill, fragment, and task-metric tests passed, as did strict workspace Clippy and formatting checks on all four touched Rust files. No AKS deployment or measurement was performed.
 
+Delta join planning now carries the exact analyzed transaction-log version into executable fragment construction. The pin is keyed by the resolved source URI from the query's immutable catalog publication, so a later add/remove commit cannot make the physical scan diverge from the snapshot whose exact cardinality selected the join distribution, and a catalog source replacement cannot consume the old source's pin. This also avoids resolving the Delta head a second time during fragment construction. Parquet behavior is unchanged. All 151 server tests and the focused storage statistics tests pass; no deployment or performance measurement was performed.
+
 ## Continuation point
 
 Complete the current round in this order:

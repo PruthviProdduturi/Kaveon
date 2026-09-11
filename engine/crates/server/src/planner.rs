@@ -160,13 +160,31 @@ pub fn build_executable_fragments(
     catalog: &CatalogManager,
     worker_count: usize,
 ) -> Result<BTreeMap<StageId, ExecutableFragment>> {
+    build_executable_fragments_with_delta_versions(
+        query_id,
+        plan,
+        catalog,
+        worker_count,
+        &BTreeMap::new(),
+    )
+}
+
+pub fn build_executable_fragments_with_delta_versions(
+    query_id: impl Into<String>,
+    plan: &LogicalPlan,
+    catalog: &CatalogManager,
+    worker_count: usize,
+    analyzed_delta_versions: &BTreeMap<String, u64>,
+) -> Result<BTreeMap<StageId, ExecutableFragment>> {
     let graph = build_stage_graph(query_id, plan, worker_count)?;
     let mut builder = ExecutableFragmentBuilder {
         graph: &graph,
         catalog,
         fragments: BTreeMap::new(),
         next_stage: 0,
-        delta_versions: BTreeMap::new(),
+        // Keys are resolved source URIs from the same pinned catalog used by
+        // this builder. A catalog replacement therefore cannot redirect a pin.
+        delta_versions: analyzed_delta_versions.clone(),
         iceberg_snapshots: BTreeMap::new(),
     };
     let root = builder.build(plan)?;
@@ -527,13 +545,7 @@ impl ExecutableFragmentBuilder<'_> {
                 join_type,
                 condition,
                 distribution,
-            } => self.build_join(
-                left,
-                right,
-                *join_type,
-                condition.as_ref(),
-                *distribution,
-            ),
+            } => self.build_join(left, right, *join_type, condition.as_ref(), *distribution),
             LogicalPlan::SemiJoin { .. } | LogicalPlan::AntiJoin { .. } => Err(
                 KaveonError::Execution("distributed semi/anti joins are not implemented".into()),
             ),
@@ -2266,15 +2278,16 @@ mod tests {
         )
         .unwrap();
         qualify_tables(&mut plan, "test", "default");
-        let plan = kaveon_optim::statistics::optimize_with_statistics(
-            plan,
-            &mut |table| {
-                Some(kaveon_optim::statistics::RelationStatistics {
-                    rows: if table.ends_with("customers") { 10 } else { 10_000 },
-                    columns: vec!["id".into(), "name".into()],
-                })
-            },
-        );
+        let plan = kaveon_optim::statistics::optimize_with_statistics(plan, &mut |table| {
+            Some(kaveon_optim::statistics::RelationStatistics {
+                rows: if table.ends_with("customers") {
+                    10
+                } else {
+                    10_000
+                },
+                columns: vec!["id".into(), "name".into()],
+            })
+        });
 
         let graph = build_stage_graph("broadcast-query", &plan, 4).unwrap();
         assert_eq!(graph.stages.len(), 2);
@@ -2301,6 +2314,106 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn analyzed_delta_version_pins_fragments_across_add_remove_commit() {
+        let mut fixture = fixture();
+        let delta = fixture.directory.join("delta-events");
+        fs::create_dir_all(delta.join("_delta_log")).unwrap();
+        fs::copy(
+            fixture.directory.join("items.parquet"),
+            delta.join("old.parquet"),
+        )
+        .unwrap();
+        fs::copy(
+            fixture.directory.join("items.parquet"),
+            delta.join("new.parquet"),
+        )
+        .unwrap();
+        fs::write(
+            delta.join("_delta_log/00000000000000000000.json"),
+            r#"{"add":{"path":"old.parquet"}}"#,
+        )
+        .unwrap();
+        let analyzed =
+            kaveon_storage::analyze_source(delta.to_str().unwrap(), DataFormat::Delta).unwrap();
+        assert_eq!(analyzed.delta_version, Some(0));
+
+        fs::write(
+            delta.join("_delta_log/00000000000000000001.json"),
+            "{\"remove\":{\"path\":\"old.parquet\"}}\n{\"add\":{\"path\":\"new.parquet\"}}",
+        )
+        .unwrap();
+
+        let schema = fixture
+            .catalog
+            .resolve_table(&TableReference::parse("test.default.items"))
+            .unwrap()
+            .table
+            .arrow_schema
+            .clone();
+        let mut lake = MemoryCatalog::new(
+            "lake",
+            StorageType::Local {
+                base_path: fixture.directory.clone(),
+            },
+        )
+        .with_schema("default");
+        lake.register_table(
+            "default",
+            TableMeta {
+                name: "events".into(),
+                arrow_schema: schema,
+                location: "delta-events".into(),
+                access: AccessPattern::Shortcut,
+                format: DataFormat::Delta,
+            },
+        )
+        .unwrap();
+        fixture.catalog.register_catalog(Box::new(lake));
+        let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT * FROM test.default.items i JOIN lake.default.events e ON i.id = e.id",
+        )
+        .unwrap();
+        qualify_tables(&mut plan, "test", "default");
+        let source = fixture
+            .catalog
+            .resolve_table(&TableReference::parse("lake.default.events"))
+            .unwrap()
+            .full_path();
+        let pins = BTreeMap::from([(source.clone(), analyzed.delta_version.unwrap())]);
+        let pinned = build_executable_fragments_with_delta_versions(
+            "pinned-delta",
+            &plan,
+            &fixture.catalog,
+            2,
+            &pins,
+        )
+        .unwrap();
+        let fresh = build_executable_fragments("fresh-delta", &plan, &fixture.catalog, 2).unwrap();
+        let version = |fragments: &BTreeMap<StageId, ExecutableFragment>| {
+            fragments
+                .values()
+                .flat_map(|fragment| &fragment.nodes)
+                .find_map(|node| match &node.operator {
+                    FragmentOperator::Scan(scan) if scan.source_uri == source => scan.delta_version,
+                    _ => None,
+                })
+        };
+        assert_eq!(version(&pinned), Some(0));
+        assert_eq!(version(&fresh), Some(1));
+
+        let unrelated = BTreeMap::from([("different-source".into(), 0)]);
+        let replacement = build_executable_fragments_with_delta_versions(
+            "replacement-delta",
+            &plan,
+            &fixture.catalog,
+            2,
+            &unrelated,
+        )
+        .unwrap();
+        assert_eq!(version(&replacement), Some(1));
     }
 
     #[test]

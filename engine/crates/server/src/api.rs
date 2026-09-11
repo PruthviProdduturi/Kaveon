@@ -1466,7 +1466,8 @@ async fn submit_statement(
     let logical_plan = crate::planner::logical_plan_tree(&plan);
     let plan = kaveon_optim::rules::push_filter_down(plan);
     let plan = kaveon_optim::rules::push_projection_down(plan);
-    let plan = optimize_with_durable_statistics(&state, plan, &catalog_snapshot).await;
+    let (plan, planning_source_pins) =
+        optimize_with_durable_statistics(&state, plan, &catalog_snapshot).await;
     let optimized_plan = crate::planner::optimized_plan_tree(&plan);
     let physical_plan = crate::planner::physical_plan_tree(&plan);
     if let Some(record) = QUERY_STORE.write().await.queries.get_mut(&query_id) {
@@ -1476,8 +1477,15 @@ async fn submit_statement(
         record.plan.physical = Some(physical_plan.clone());
     }
 
-    if let Some(distributed) =
-        execute_distributed_fragments(&state, &query_id, &context, &plan, &catalog_snapshot).await
+    if let Some(distributed) = execute_distributed_fragments(
+        &state,
+        &query_id,
+        &context,
+        &plan,
+        &catalog_snapshot,
+        &planning_source_pins.delta_versions,
+    )
+    .await
     {
         match distributed {
             Ok((result, stages, planning_us)) => {
@@ -2329,11 +2337,11 @@ async fn optimize_with_durable_statistics(
     state: &AppState,
     plan: LogicalPlan,
     catalog: &crate::PublishedCatalog,
-) -> LogicalPlan {
+) -> (LogicalPlan, PlanningSourcePins) {
     let mut tables = std::collections::BTreeSet::new();
     collect_join_statistics_tables(&plan, &mut tables);
     if tables.is_empty() {
-        return plan;
+        return (plan, PlanningSourcePins::default());
     }
     let durable = match state.product_transactions.catalog() {
         Some(commit) => commit.read_current().await.ok(),
@@ -2352,19 +2360,20 @@ async fn optimize_with_durable_statistics(
             resolved.catalog, resolved.schema, resolved.table.name
         );
         loads.spawn_blocking(move || {
-            (
-                table,
-                qualified,
-                kaveon_storage::analyze_source(&location, format).ok(),
-            )
+            let current = kaveon_storage::analyze_source(&location, format).ok();
+            (table, qualified, location, current)
         });
     }
     let catalog_digest = format!("{:x}", Sha256::digest(catalog.snapshot_id.as_bytes()));
     let mut cache = HashMap::new();
+    let mut pins = PlanningSourcePins::default();
     while let Some(loaded) = loads.join_next().await {
-        let Ok((table, qualified, current)) = loaded else {
+        let Ok((table, qualified, location, current)) = loaded else {
             continue;
         };
+        if let Some(version) = current.as_ref().and_then(|value| value.delta_version) {
+            pins.delta_versions.insert(location, version);
+        }
         let value = current.map(|current| {
             let rows = durable
                 .as_ref()
@@ -2381,9 +2390,17 @@ async fn optimize_with_durable_statistics(
         });
         cache.insert(table, value);
     }
-    kaveon_optim::statistics::optimize_with_statistics(plan, &mut |table| {
-        cache.get(table).cloned().flatten()
-    })
+    (
+        kaveon_optim::statistics::optimize_with_statistics(plan, &mut |table| {
+            cache.get(table).cloned().flatten()
+        }),
+        pins,
+    )
+}
+
+#[derive(Default)]
+struct PlanningSourcePins {
+    delta_versions: BTreeMap<String, u64>,
 }
 
 /// Collects only relations for which the statistics optimizer will request
@@ -3573,10 +3590,9 @@ fn encode_arrow_stream(
         let options = arrow::ipc::writer::IpcWriteOptions::default()
             .try_with_compression(Some(arrow::ipc::CompressionType::LZ4_FRAME))
             .map_err(|error| format!("cannot configure Arrow stream: {error}"))?;
-        let mut writer = arrow::ipc::writer::StreamWriter::try_new_with_options(
-            &mut bytes, schema, options,
-        )
-        .map_err(|error| format!("cannot create Arrow stream: {error}"))?;
+        let mut writer =
+            arrow::ipc::writer::StreamWriter::try_new_with_options(&mut bytes, schema, options)
+                .map_err(|error| format!("cannot create Arrow stream: {error}"))?;
         for batch in batches {
             writer
                 .write(batch)
@@ -3791,6 +3807,7 @@ async fn execute_distributed_fragments(
     context: &QueryContext,
     plan: &LogicalPlan,
     catalog_snapshot: &kaveon_core::CatalogManager,
+    analyzed_delta_versions: &BTreeMap<String, u64>,
 ) -> Option<Result<(TaskResponse, Vec<StageTelemetry>, u64), String>> {
     if exact_metadata_count_plan(plan) || !general_distributed_eligible(plan) {
         return None;
@@ -3811,9 +3828,14 @@ async fn execute_distributed_fragments(
 
     let planning_start = Instant::now();
     let graph = crate::planner::build_stage_graph(query_id, plan, workers.len()).ok()?;
-    let fragments =
-        crate::planner::build_executable_fragments(query_id, plan, catalog_snapshot, workers.len())
-            .ok()?;
+    let fragments = crate::planner::build_executable_fragments_with_delta_versions(
+        query_id,
+        plan,
+        catalog_snapshot,
+        workers.len(),
+        analyzed_delta_versions,
+    )
+    .ok()?;
     let planning_us = elapsed_us(planning_start);
     let mut orchestrator = match CoordinatorOrchestrator::new(graph, fragments, workers.clone()) {
         Ok(orchestrator) => orchestrator,
