@@ -67,6 +67,10 @@ Three material boundaries prevent expanding this narrow 8/10 rating:
    The disabled credential-free collector only verifies and assembles local
    family reports with explicit source/target provenance; it does not execute a
    PostgreSQL or KaveonDB comparison and likewise earns no readiness credit.
+   The static cutover dependency check classifies current Python database call
+   sites against all 16 authority families. It catches new unclassified direct
+   references but does not prove deployed runtime or dynamic-SQL coverage, so it
+   is review evidence and adds no replacement readiness score by itself.
 3. The checked-in comparison gates fail closed because no publication-scale
    1.90× Trino result or completed PostgreSQL transaction report exists.
 
