@@ -30,7 +30,6 @@ All paths below are relative to the FastAPI origin.
 | Context router | `/api/v1/context/*` | Build, validity, and adaptive-context ask endpoints |
 | Chat | `/api/v1/chat`, `/api/v1/chat/history*` | Assistant and conversation persistence |
 | User state | `/api/v1/favorites`, `/api/v1/theme`, `/api/v1/user/recents`, `/api/v1/users/me` | Per-user state |
-| Optional AI | `/api/v1/ai/*` | Provider configuration, personal keys, and hosted-model chat |
 
 ### Important behavior
 

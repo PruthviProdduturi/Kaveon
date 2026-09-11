@@ -30,7 +30,6 @@ AUTHORITY_FAMILIES = {
     "context_cache": ("context_snapshots", "context_answer_cache"),
     "dlm_generation": ("dlm_artifact", "dlm_value_index", "dlm_router", "dlm_answers", "dlm_sketch"),
     "chat_history": ("chat_sessions", "chat_messages"),
-    "ai_configuration": ("ai_providers", "user_ai_keys"),
 }
 _FORBIDDEN_KEY_PARTS = ("password", "secret", "token", "credential", "connection_string", "api_key")
 

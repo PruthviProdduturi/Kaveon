@@ -70,9 +70,8 @@ export default function DocsIntro() {
       </p>
 
       <Callout type="note">
-        Kaveon is open source under MIT and self-hosted. Nothing phones home, and the deterministic
-        question path requires no AI provider at all. Studio&rsquo;s optional inline SQL assistant can use a
-        hosted model if you configure one; that is separate from DLM routing.
+        Kaveon is open source under MIT and self-hosted. Nothing phones home: the question path is
+        deterministic and there is no hosted-model integration anywhere in the product.
       </Callout>
 
       <h2>Where the project actually is</h2>

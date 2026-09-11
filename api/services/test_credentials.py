@@ -88,25 +88,22 @@ class LegacyCiphertextTests(unittest.TestCase):
     def test_explicit_legacy_migration_and_no_runtime_fallback(self):
         import base64
         import hashlib
-        from services import credentials, ai_service, auth_config
+        from services import credentials, auth_config
         secret = "explicit-old-secret"
         legacy = Fernet(base64.urlsafe_b64encode(hashlib.sha256(secret.encode()).digest())).encrypt(b"private-key").decode()
         key = Fernet.generate_key().decode()
         with patch.dict("os.environ", {"KAVEON_CREDENTIAL_KEYS": json.dumps({"new": key}), "KAVEON_CREDENTIAL_ACTIVE_KEY": "new"}):
-            for decrypt in [ai_service._decrypt, auth_config._decrypt]:
-                with self.assertRaises(credentials.CredentialError):
-                    decrypt(legacy)
+            with self.assertRaises(credentials.CredentialError):
+                auth_config._decrypt(legacy)
             with self.assertRaises(credentials.CredentialError):
                 credentials.migrate_legacy_ciphertext(legacy, "")
             with self.assertRaises(credentials.CredentialError):
                 credentials.migrate_legacy_ciphertext(legacy, "wrong")
             migrated = credentials.migrate_legacy_ciphertext(legacy, secret)
-            self.assertEqual(ai_service._decrypt(migrated), "private-key")
             self.assertEqual(auth_config._decrypt(migrated), "private-key")
         with patch.dict("os.environ", {}, clear=True):
-            for encrypt in [ai_service._encrypt, auth_config._encrypt]:
-                with self.assertRaises(credentials.CredentialError):
-                    encrypt("private-key")
+            with self.assertRaises(credentials.CredentialError):
+                auth_config._encrypt("private-key")
 
 
     def test_auth_file_migration_dry_run_and_write(self):

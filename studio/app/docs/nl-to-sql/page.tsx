@@ -12,8 +12,7 @@ export default function NlToSqlDocs() {
       />
 
       <Callout type="note">
-        There is no hosted model call in either deterministic path, so there is no model-inference charge. Resolution is reproducible for the same request and context version; source results may change as data changes. The separate <a href="/docs/sql-lab">SQL Lab inline AI</a> is where LLM providers (Claude,
-        GPT-4o, GitHub Models) come in for open-ended generation.
+        There is no hosted model call in either deterministic path, so there is no model-inference charge. Resolution is reproducible for the same request and context version; source results may change as data changes. Kaveon ships no hosted-model path at all.
       </Callout>
 
       <Diagram src="/docs/architecture/kaveon-intelligence-loop.svg" alt="Natural-language intelligence and analytical compute paths in Kaveon" caption="The current DLM path resolves against registered SQL sources. Routing its compiled SQL into Kaveon Engine is target architecture, not a shipping integration." />
