@@ -66,9 +66,9 @@ impl ObjectDeltaReader {
     /// Delta commit files are immutable and their numeric versions are
     /// consecutive. A successful, strongly consistent `HEAD` for version
     /// `N + 1` therefore invalidates a cached version `N`; `NotFound`
-    /// establishes that `N` is current at the time of the request. Kaveon's
-    /// object readers instantiate only ADLS Gen2 and S3 stores, both of which
-    /// provide read-after-write consistency for object metadata.
+    /// establishes that `N` is current at the time of the request unless log
+    /// cleanup has replaced newer JSON commits with a checkpoint. Reading
+    /// `_last_checkpoint` after the probe covers that valid cleanup case.
     pub(crate) fn is_latest_version(&self, version: u64) -> Result<bool> {
         let Some(next) = version.checked_add(1) else {
             return Ok(true);
@@ -80,10 +80,29 @@ impl ObjectDeltaReader {
                 .child("_delta_log")
                 .child(format!("{next:020}.json"));
             match location.store.head(&path).await {
-                Ok(_) => Ok(false),
-                Err(object_store::Error::NotFound { .. }) => Ok(true),
-                Err(source) => Err(error(source.to_string())),
+                Ok(_) => return Ok(false),
+                Err(object_store::Error::NotFound { .. }) => {}
+                Err(source) => return Err(error(source.to_string())),
             }
+            let checkpoint = location.path.child("_delta_log").child("_last_checkpoint");
+            let result = match location.store.get(&checkpoint).await {
+                Ok(result) => result,
+                Err(object_store::Error::NotFound { .. }) => return Ok(true),
+                Err(source) => return Err(error(source.to_string())),
+            };
+            if result.meta.size > 64 * 1024 {
+                return Err(error("Delta _last_checkpoint exceeds 64 KiB"));
+            }
+            let bytes = result
+                .bytes()
+                .await
+                .map_err(|source| error(source.to_string()))?;
+            let checkpoint_version = serde_json::from_slice::<serde_json::Value>(&bytes)
+                .map_err(|source| error(source.to_string()))?
+                .get("version")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| error("Delta _last_checkpoint has no valid version"))?;
+            Ok(checkpoint_version <= version)
         })
     }
     pub fn metadata(&self) -> Result<ParquetFileMetadata> {
@@ -297,6 +316,17 @@ mod tests {
             .unwrap();
         assert!(!reader.is_latest_version(0).unwrap());
         assert!(reader.is_latest_version(1).unwrap());
+
+        runtime
+            .block_on(store.delete(&Path::from("table/_delta_log/00000000000000000001.json")))
+            .unwrap();
+        runtime
+            .block_on(store.put(
+                &Path::from("table/_delta_log/_last_checkpoint"),
+                br#"{"version":2,"size":1}"#.to_vec().into(),
+            ))
+            .unwrap();
+        assert!(!reader.is_latest_version(0).unwrap());
     }
 
     #[test]

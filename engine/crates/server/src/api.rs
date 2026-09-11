@@ -3812,6 +3812,11 @@ async fn execute_distributed_fragments(
     let mut stage_started = BTreeMap::<StageId, Instant>::new();
     let mut stage_tasks = BTreeMap::<StageId, Vec<TaskTelemetry>>::new();
     let mut task_failures = Vec::new();
+    // Exchange deletion is best-effort housekeeping. A consumed exchange cannot
+    // be read by a later stage, so overlap its HTTP deletes with the next ready
+    // stage instead of leaving every worker idle between stage waves. We still
+    // join these jobs before returning to preserve the prior cleanup lifetime.
+    let mut exchange_cleanups = tokio::task::JoinSet::new();
     let mut result_schema = None;
     let mut result_batches = Vec::new();
     let mut result_bytes = 0usize;
@@ -3947,7 +3952,19 @@ async fn execute_distributed_fragments(
                 }
             }
         }
-        release_completed_exchanges(&client, &token, &mut orchestrator).await;
+        schedule_completed_exchange_cleanup(
+            &client,
+            &token,
+            &mut orchestrator,
+            &mut exchange_cleanups,
+        );
+    }
+
+    while let Some(cleanup) = exchange_cleanups.join_next().await {
+        if cleanup.is_err() {
+            // Deletion was already best-effort. Query finalization also removes
+            // every worker-side artifact for the query.
+        }
     }
 
     if !orchestrator.is_finished() {
@@ -4090,15 +4107,16 @@ fn task_request_from_dispatch(dispatch: &TaskDispatch, context: &QueryContext) -
     }
 }
 
-async fn release_completed_exchanges(
+fn schedule_completed_exchange_cleanup(
     client: &reqwest::Client,
     token: &str,
     orchestrator: &mut CoordinatorOrchestrator,
+    cleanups: &mut tokio::task::JoinSet<()>,
 ) {
-    let Ok(cleanups) = orchestrator.drain_exchange_cleanup() else {
+    let Ok(intents) = orchestrator.drain_exchange_cleanup() else {
         return;
     };
-    let locations = cleanups
+    let locations: Vec<(String, crate::exchange::ExchangeIdentity)> = intents
         .into_iter()
         .flat_map(|cleanup| {
             cleanup.locations.into_iter().map(move |location| {
@@ -4113,7 +4131,21 @@ async fn release_completed_exchanges(
             })
         })
         .collect();
-    release_exchange_locations(client, token, locations).await;
+    if locations.is_empty() {
+        return;
+    }
+    spawn_exchange_cleanup(cleanups, client.clone(), token.to_owned(), locations);
+}
+
+fn spawn_exchange_cleanup(
+    cleanups: &mut tokio::task::JoinSet<()>,
+    client: reqwest::Client,
+    token: String,
+    locations: Vec<(String, crate::exchange::ExchangeIdentity)>,
+) {
+    cleanups.spawn(async move {
+        release_exchange_locations(&client, &token, locations).await;
+    });
 }
 
 const MAX_CONCURRENT_EXCHANGE_RELEASES: usize = 16;
@@ -4959,6 +4991,33 @@ mod tests {
             peak.load(std::sync::atomic::Ordering::SeqCst),
             super::MAX_CONCURRENT_EXCHANGE_RELEASES as u64
         );
+    }
+
+    #[tokio::test]
+    async fn exchange_cleanup_is_enqueued_without_waiting_for_network_completion() {
+        let mut cleanups = tokio::task::JoinSet::new();
+        let identity = crate::exchange::ExchangeIdentity {
+            exchange_id: kaveon_core::ExchangeId("cleanup-exchange".into()),
+            task_id: kaveon_core::TaskId {
+                query_id: "cleanup-query".into(),
+                stage_id: kaveon_core::StageId(0),
+                partition: 0,
+                attempt: 0,
+            },
+            output_partition: 0,
+        };
+
+        super::spawn_exchange_cleanup(
+            &mut cleanups,
+            reqwest::Client::new(),
+            "token".into(),
+            vec![("http://127.0.0.1:1".into(), identity)],
+        );
+
+        // Scheduling returns before the release future is joined, allowing the
+        // coordinator to dispatch the next ready stage immediately.
+        assert_eq!(cleanups.len(), 1);
+        while cleanups.join_next().await.is_some() {}
     }
 
     #[tokio::test]
