@@ -25,6 +25,54 @@ visible when reporting a rating.
 
 ## Current local evidence
 
+### Current assessment — September 10
+
+The evidence-backed score for the current integrated direction is **75/100
+(7.5/10)**. This is a readiness estimate for the declared Engine scope, not a
+feature-parity score against Trino or PostgreSQL. It remains below 8/10 because
+release-critical gaps cannot be averaged away.
+
+| Area | Points | Evidence credited | Evidence still withheld |
+|---|---:|---|---|
+| SQL correctness and types | 22/25 | 37-case differential suite, 12-query extended same-file suite, typed aggregates/windows/subqueries/set operations, explicit unsupported errors, native `ANALYZE` | Re-run the complete differential corpus on the integrated release image; broaden decimal, timestamp, nested-type, DML and randomized coverage |
+| Memory and spill | 11/15 | Admission, bounded result/history/exchange paths, aggregate spill and pressure/cancellation fixtures, bounded coordinator aggregate merge | Complete retained-result/worker-response accounting, join spill under skew, disk exhaustion and current-image pressure evidence |
+| Distributed execution and recovery | 11/15 | Multi-worker operators, immutable query catalog pinning, authenticated worker recovery, compatible-worker scheduling, prior worker-loss fixture | Current-image AKS worker loss/node drain, coordinator restart, catalog mutation during query, retry/exchange-loss and sustained concurrency |
+| Authentication and platform integration | 13/15 | Entra/TLS, owner-bound results and transactions, role checks, exchange authentication, fail-closed secrets/configuration | Live rotation/revocation, tenant isolation and adversarial authorization qualification on the release deployment |
+| Storage correctness | 8/10 | Parquet/Delta/Iceberg readers, pinned source identities, authenticated ADLS reads, CAS-backed immutable product/statistics documents | Live ADLS conflict/fault/restart evidence, broader schema evolution and corruption/recovery qualification |
+| Operability | 7/10 | Reproducible CLI/images, Helm/Bicep, health/readiness/metrics/history, checked-in AKS verifiers | Deploy and qualify the current digests, backup/restore, upgrade/rollback, alerting and a sustained current-image soak |
+| Performance | 3/10 | Resource-matched harness, exact-result hashes, fail-closed claim evaluators; best recorded six-query diagnostic ratio is 1.057× | Run the publication-scale extended corpus on immutable current images; the required 1.90× Trino throughput result and PostgreSQL transaction comparison do not exist |
+
+Three release-critical conditions currently cap the score below 8/10:
+
+1. No current integrated image has passed the complete AKS correctness, pressure,
+   worker-loss, coordinator-restart and catalog-catch-up sequence.
+2. Kaveon's transactional surface is a durable, typed product-record protocol.
+   Arbitrary relational row DML, parameter binding, constraints/indexes,
+   multi-table SQL transactions and a qualified isolation level remain absent.
+3. The checked-in comparison gates fail closed because no publication-scale
+   1.90× Trino result or completed PostgreSQL transaction report exists.
+
+Claims must therefore stay scoped as follows:
+
+- **Supported:** Kaveon is a distributed lakehouse analytics engine with a
+  durable product-record transaction substrate, demonstrated by the named local
+  and AKS fixtures.
+- **Unsupported:** full Trino feature parity, general PostgreSQL replacement,
+  broad production readiness, or performance superiority beyond a declared
+  workload whose checked-in gate passes.
+- **Measured diagnostic:** the best recorded matched six-query result is 1.057×
+  Trino throughput. It is below the 1.90× target and is not the publication
+  workload.
+
+Immutable Engine/API/Studio images through `0fe58a9` are deployed, and the
+catalog-recovery Engine digest passed a three-worker identity check plus an exact
+34-row distributed smoke query. That closes deployment and basic catalog
+catch-up; it does not close fault or sustained-load qualification. The exact
+next gates are: (1) run the current AKS SQL, worker-loss, coordinator-restart,
+pressure and soak suite while retaining machine-readable reports; (2) run the
+extended matched Trino publication gate; (3) qualify the declared product-record
+transaction scope separately. Re-score only from those artifacts.
+
 ### Provisional assessment — September 8
 
 The evidence-based engineering estimate is **74/100 (7.4/10)**, not independent
@@ -136,9 +184,11 @@ showcase wrappers require live Engine validation.
 
 ## External and performance gates
 
-The current Azure CLI identity cannot access the recorded Kaveon subscription.
-Live ADLS/AKS qualification needs the user's accessible subscription and designated
-storage scope. Do not infer cloud validation from in-memory object-store tests.
+AKS and authenticated ADLS evidence now exists for earlier deployed images, but
+the newest catalog recovery, native statistics and product-transaction changes
+still require immutable-image rollout and repeat qualification. Do not infer
+current deployment readiness from earlier digests or from in-memory object-store
+tests.
 
 Pending a user preference, the working metric is **1.9× throughput** on the
 published workload. This differs from 90% lower latency or compute cost. A
