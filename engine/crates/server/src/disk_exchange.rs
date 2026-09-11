@@ -312,6 +312,25 @@ mod tests {
         assert_eq!(store.quota.state.lock().unwrap().total, 0);
         assert!(store.body(&chunk.identity).unwrap().is_none());
     }
+
+    #[test]
+    fn finish_query_releases_partial_attempts_before_restart() {
+        let store = DiskExchangeStore::new(&std::env::temp_dir(), 1024).unwrap();
+        let first = chunk();
+        let mut retry = first.clone();
+        retry.identity.task_id.attempt = 1;
+        store.insert(first.clone()).unwrap();
+        store.insert(retry).unwrap();
+        assert!(store.quota.state.lock().unwrap().total > 0);
+
+        // Query finalization is the coordinator's restart boundary: every
+        // incomplete attempt must become unreachable and release its quota.
+        store.finish_query("query");
+        assert_eq!(store.quota.state.lock().unwrap().total, 0);
+        assert!(store.body(&first.identity).unwrap().is_none());
+        assert!(store.insert(first).is_err());
+    }
+
     #[test]
     fn disk_quota_failure_does_not_leave_files_or_reservations() {
         let store = DiskExchangeStore::new(&std::env::temp_dir(), 1).unwrap();
