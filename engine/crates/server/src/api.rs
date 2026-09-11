@@ -3903,15 +3903,21 @@ async fn execute_distributed_fragments(
 }
 
 async fn release_dispatch_outputs(client: &reqwest::Client, token: &str, dispatch: &TaskDispatch) {
-    for location in &dispatch.exchange_outputs {
-        let identity = crate::exchange::ExchangeIdentity {
-            exchange_id: location.exchange_id.clone(),
-            task_id: location.producer.clone(),
-            output_partition: location.output_partition,
-        };
-        let _ =
-            crate::exchange::release_exchange(client, &location.worker_uri, token, &identity).await;
-    }
+    let locations = dispatch
+        .exchange_outputs
+        .iter()
+        .map(|location| {
+            (
+                location.worker_uri.clone(),
+                crate::exchange::ExchangeIdentity {
+                    exchange_id: location.exchange_id.clone(),
+                    task_id: location.producer.clone(),
+                    output_partition: location.output_partition,
+                },
+            )
+        })
+        .collect();
+    release_exchange_locations(client, token, locations).await;
 }
 
 fn general_distributed_eligible(plan: &LogicalPlan) -> bool {
@@ -3995,18 +4001,48 @@ async fn release_completed_exchanges(
     let Ok(cleanups) = orchestrator.drain_exchange_cleanup() else {
         return;
     };
-    for cleanup in cleanups {
-        for location in cleanup.locations {
-            let identity = crate::exchange::ExchangeIdentity {
-                exchange_id: cleanup.exchange_id.clone(),
-                task_id: location.producer,
-                output_partition: location.output_partition,
-            };
-            let _ =
-                crate::exchange::release_exchange(client, &location.worker_uri, token, &identity)
-                    .await;
-        }
-    }
+    let locations = cleanups
+        .into_iter()
+        .flat_map(|cleanup| {
+            cleanup.locations.into_iter().map(move |location| {
+                (
+                    location.worker_uri,
+                    crate::exchange::ExchangeIdentity {
+                        exchange_id: cleanup.exchange_id.clone(),
+                        task_id: location.producer,
+                        output_partition: location.output_partition,
+                    },
+                )
+            })
+        })
+        .collect();
+    release_exchange_locations(client, token, locations).await;
+}
+
+const MAX_CONCURRENT_EXCHANGE_RELEASES: usize = 16;
+
+async fn run_bounded_exchange_releases<F>(releases: Vec<F>)
+where
+    F: std::future::Future<Output = ()>,
+{
+    futures::stream::iter(releases)
+        .buffer_unordered(MAX_CONCURRENT_EXCHANGE_RELEASES)
+        .for_each(|()| async {})
+        .await;
+}
+
+async fn release_exchange_locations(
+    client: &reqwest::Client,
+    token: &str,
+    locations: Vec<(String, crate::exchange::ExchangeIdentity)>,
+) {
+    let releases = locations
+        .into_iter()
+        .map(|(worker_uri, identity)| async move {
+            let _ = crate::exchange::release_exchange(client, &worker_uri, token, &identity).await;
+        })
+        .collect();
+    run_bounded_exchange_releases(releases).await;
 }
 
 async fn execute_distributed_top_n(
@@ -4802,6 +4838,32 @@ async fn finish_failed_query(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn exchange_releases_are_concurrent_and_bounded() {
+        let active = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let peak = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let releases = (0..(super::MAX_CONCURRENT_EXCHANGE_RELEASES * 2))
+            .map(|_| {
+                let active = active.clone();
+                let peak = peak.clone();
+                async move {
+                    let current = active.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                    peak.fetch_max(current, std::sync::atomic::Ordering::SeqCst);
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            })
+            .collect();
+
+        super::run_bounded_exchange_releases(releases).await;
+
+        assert_eq!(active.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(
+            peak.load(std::sync::atomic::Ordering::SeqCst),
+            super::MAX_CONCURRENT_EXCHANGE_RELEASES as u64
+        );
+    }
+
     #[tokio::test]
     async fn task_response_stream_retains_cache_until_slow_consumer_drops() {
         use futures::StreamExt;
