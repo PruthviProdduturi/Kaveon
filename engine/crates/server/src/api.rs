@@ -138,9 +138,14 @@ struct ExchangeDecodeMetrics {
 
 /// Counters emitted by a worker's storage readers, never derived from query output.
 #[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 struct TaskScanMetrics {
     files_considered: u64,
     files_opened: u64,
+    decoded_batch_cache_hits: u64,
+    decoded_batch_cache_misses: u64,
+    decoded_batch_cache_evictions: u64,
+    decoded_batch_cache_singleflight_waits: u64,
     row_groups_considered: u64,
     row_groups_selected: u64,
     rows_selected: u64,
@@ -173,6 +178,10 @@ struct QueryContext {
 struct ScanTelemetry {
     files_considered: u64,
     files_opened: u64,
+    decoded_batch_cache_hits: u64,
+    decoded_batch_cache_misses: u64,
+    decoded_batch_cache_evictions: u64,
+    decoded_batch_cache_singleflight_waits: u64,
     row_groups_considered: u64,
     row_groups_read: u64,
     row_groups_pruned: u64,
@@ -4885,6 +4894,10 @@ fn scan_telemetry(metrics: &kaveon_storage::ScanMetrics) -> ScanTelemetry {
     ScanTelemetry {
         files_considered: snapshot.files_considered,
         files_opened: snapshot.files_opened,
+        decoded_batch_cache_hits: snapshot.decoded_batch_cache_hits,
+        decoded_batch_cache_misses: snapshot.decoded_batch_cache_misses,
+        decoded_batch_cache_evictions: snapshot.decoded_batch_cache_evictions,
+        decoded_batch_cache_singleflight_waits: snapshot.decoded_batch_cache_singleflight_waits,
         row_groups_considered: snapshot.row_groups_considered,
         row_groups_read: snapshot.row_groups_selected,
         row_groups_pruned: snapshot.row_groups_pruned(),
@@ -4907,6 +4920,11 @@ fn merge_task_scan_metrics<'a>(
         let snapshot = metrics.snapshot();
         total.files_considered += snapshot.files_considered;
         total.files_opened += snapshot.files_opened;
+        total.decoded_batch_cache_hits += snapshot.decoded_batch_cache_hits;
+        total.decoded_batch_cache_misses += snapshot.decoded_batch_cache_misses;
+        total.decoded_batch_cache_evictions += snapshot.decoded_batch_cache_evictions;
+        total.decoded_batch_cache_singleflight_waits +=
+            snapshot.decoded_batch_cache_singleflight_waits;
         total.row_groups_considered += snapshot.row_groups_considered;
         total.row_groups_selected += snapshot.row_groups_selected;
         total.rows_selected += snapshot.rows_selected;
@@ -4934,6 +4952,11 @@ fn distributed_scan_telemetry(stages: &[StageTelemetry]) -> (Vec<ScanTelemetry>,
         .fold(TaskScanMetrics::default(), |mut total, scan| {
             total.files_considered += scan.files_considered;
             total.files_opened += scan.files_opened;
+            total.decoded_batch_cache_hits += scan.decoded_batch_cache_hits;
+            total.decoded_batch_cache_misses += scan.decoded_batch_cache_misses;
+            total.decoded_batch_cache_evictions += scan.decoded_batch_cache_evictions;
+            total.decoded_batch_cache_singleflight_waits +=
+                scan.decoded_batch_cache_singleflight_waits;
             total.row_groups_considered += scan.row_groups_considered;
             total.row_groups_selected += scan.row_groups_selected;
             total.rows_selected += scan.rows_selected;
@@ -4960,6 +4983,10 @@ fn distributed_scan_telemetry(stages: &[StageTelemetry]) -> (Vec<ScanTelemetry>,
         vec![ScanTelemetry {
             files_considered: total.files_considered,
             files_opened: total.files_opened,
+            decoded_batch_cache_hits: total.decoded_batch_cache_hits,
+            decoded_batch_cache_misses: total.decoded_batch_cache_misses,
+            decoded_batch_cache_evictions: total.decoded_batch_cache_evictions,
+            decoded_batch_cache_singleflight_waits: total.decoded_batch_cache_singleflight_waits,
             row_groups_considered: total.row_groups_considered,
             row_groups_read: total.row_groups_selected,
             row_groups_pruned: total

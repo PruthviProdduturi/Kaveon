@@ -8,6 +8,10 @@ pub struct ScanMetricsSnapshot {
     pub files_opened: u64,
     pub object_metadata_cache_hits: u64,
     pub object_store_cache_hits: u64,
+    pub decoded_batch_cache_hits: u64,
+    pub decoded_batch_cache_misses: u64,
+    pub decoded_batch_cache_evictions: u64,
+    pub decoded_batch_cache_singleflight_waits: u64,
     pub row_groups_considered: u64,
     pub row_groups_selected: u64,
     pub rows_selected: u64,
@@ -52,6 +56,10 @@ struct ScanMetricsInner {
     files_opened: AtomicU64,
     object_metadata_cache_hits: AtomicU64,
     object_store_cache_hits: AtomicU64,
+    decoded_batch_cache_hits: AtomicU64,
+    decoded_batch_cache_misses: AtomicU64,
+    decoded_batch_cache_evictions: AtomicU64,
+    decoded_batch_cache_singleflight_waits: AtomicU64,
     row_groups_considered: AtomicU64,
     row_groups_selected: AtomicU64,
     rows_selected: AtomicU64,
@@ -70,6 +78,11 @@ impl ScanMetrics {
             files_opened: self.load(&self.0.files_opened),
             object_metadata_cache_hits: self.load(&self.0.object_metadata_cache_hits),
             object_store_cache_hits: self.load(&self.0.object_store_cache_hits),
+            decoded_batch_cache_hits: self.load(&self.0.decoded_batch_cache_hits),
+            decoded_batch_cache_misses: self.load(&self.0.decoded_batch_cache_misses),
+            decoded_batch_cache_evictions: self.load(&self.0.decoded_batch_cache_evictions),
+            decoded_batch_cache_singleflight_waits: self
+                .load(&self.0.decoded_batch_cache_singleflight_waits),
             row_groups_considered: self.load(&self.0.row_groups_considered),
             row_groups_selected: self.load(&self.0.row_groups_selected),
             rows_selected: self.load(&self.0.rows_selected),
@@ -99,6 +112,26 @@ impl ScanMetrics {
     pub(crate) fn object_store_cache_hit(&self) {
         self.0
             .object_store_cache_hits
+            .fetch_add(1, Ordering::Relaxed);
+    }
+    pub(crate) fn decoded_batch_cache_hit(&self) {
+        self.0
+            .decoded_batch_cache_hits
+            .fetch_add(1, Ordering::Relaxed);
+    }
+    pub(crate) fn decoded_batch_cache_miss(&self) {
+        self.0
+            .decoded_batch_cache_misses
+            .fetch_add(1, Ordering::Relaxed);
+    }
+    pub(crate) fn decoded_batch_cache_evictions(&self, value: u64) {
+        self.0
+            .decoded_batch_cache_evictions
+            .fetch_add(value, Ordering::Relaxed);
+    }
+    pub(crate) fn decoded_batch_cache_singleflight_wait(&self) {
+        self.0
+            .decoded_batch_cache_singleflight_waits
             .fetch_add(1, Ordering::Relaxed);
     }
     pub(crate) fn row_groups(&self, considered: u64, selected: u64) {

@@ -41,7 +41,7 @@
 | SQL parser, remote-first CLI, HTTP statement API | 🧪 Alpha | Engine query execution is not yet wired into Studio/API identity |
 | Native durable catalog | 🧪 Alpha | SQLite/WAL single-coordinator authority with revisions, lifecycle, audit, Arrow schemas, authenticated mutation API, and restart recovery |
 | Coordinator/worker discovery and heartbeats | 🧪 Alpha | Two-worker local Docker topology verified on real Delta data |
-| Query lifecycle and storage-scan telemetry | 🧪 Alpha | HTTP history retains real phase timings, logical plans, file/row-group pruning, selected bytes, emitted rows, and scan throughput |
+| Query lifecycle and storage-scan telemetry | 🧪 Alpha | HTTP history retains real phase timings, logical plans, file/row-group pruning, selected bytes, emitted rows, scan throughput, and decoded-cache hit/miss/eviction/single-flight counters |
 | Physical operator, stage, and task telemetry | 🧪 Alpha | Completed distributed stages/tasks report worker, partition, elapsed time, rows, Arrow batches, and bytes; live and per-operator metrics remain target |
 | Sort and TopN | 🧪 Alpha | Local and distributed execution with fixed-fan-in external merge |
 | Filter-pushdown optimizer pass | 🧪 Alpha | Wired conservative pushdown with residual row-level evaluation |
