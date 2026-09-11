@@ -148,6 +148,14 @@ comparison, locks before source acknowledgment, and stops at the first failure.
 It is not scheduled or deployed, and it has no initial backfill watermark;
 live catch-up and reconciliation remain unproven.
 
+Snapshot implementation status: datasets and their semantic children can be
+captured under one PostgreSQL repeatable-read transaction with a recorded
+outbox watermark, stable ordering, bounded row/byte limits and deterministic
+record/snapshot hashes. The backfill path creates only missing target records
+and exact-reads every target before emitting its report. It is an unscheduled,
+unexecuted library; a real snapshot artifact, concurrent source-write test and
+post-catch-up reconciliation report are still required.
+
 ## Staged KaveonDB delivery
 
 KaveonDB is the logical transactional product database. Its durable tables and
