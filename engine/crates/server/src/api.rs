@@ -2306,9 +2306,29 @@ async fn optimize_with_durable_statistics(
         }
         let value = durable
             .as_ref()
-            .and_then(|snapshot| durable_relation_statistics(catalog, snapshot, table));
+            .and_then(|snapshot| durable_relation_statistics(catalog, snapshot, table))
+            .or_else(|| exact_source_statistics(catalog, table));
         cache.insert(table.to_owned(), value.clone());
         value
+    })
+}
+
+/// Derives exact planning statistics directly from the immutable source
+/// metadata when no current ANALYZE publication exists. The caller caches the
+/// result for the planning pass, so repeated references to one relation do not
+/// reopen its metadata. Failures stay conservative and retain partitioned joins.
+fn exact_source_statistics(
+    catalog: &crate::PublishedCatalog,
+    table: &str,
+) -> Option<kaveon_optim::statistics::RelationStatistics> {
+    let resolved = catalog
+        .resolve_table(&kaveon_core::TableReference::parse(table))
+        .ok()?;
+    let current =
+        kaveon_storage::analyze_source(&resolved.full_path(), resolved.table.format).ok()?;
+    Some(kaveon_optim::statistics::RelationStatistics {
+        rows: current.row_count,
+        columns: current.columns,
     })
 }
 
@@ -4823,7 +4843,7 @@ mod tests {
     use super::{
         ColumnInfo, MergeOperation, TaskRequest, TaskResponse, aggregate_merge_contract,
         await_task_memory, capabilities, decode_arrow_stream, durable_relation_statistics,
-        encode_arrow_stream, exact_metadata_count_plan, execute_analyze,
+        encode_arrow_stream, exact_metadata_count_plan, exact_source_statistics, execute_analyze,
         general_distributed_eligible, merge_partial_aggregates, mutation_actor,
         parse_analyze_table, statistics_diagnostics, task_request_from_dispatch,
         top_n_merge_contract, validate_replacement,
@@ -4987,6 +5007,13 @@ mod tests {
     #[tokio::test]
     async fn analyze_requires_admin_and_publishes_exact_durable_binding() {
         let (state, commit, directory) = analyze_test_state().await;
+        let catalog = state.catalog.read().await.clone();
+        assert_eq!(
+            exact_source_statistics(&catalog, "lake.sales.orders")
+                .unwrap()
+                .rows,
+            3
+        );
         let reader = crate::security::Identity {
             principal: "reader".into(),
             display_identity: None,
@@ -5032,7 +5059,6 @@ mod tests {
             snapshot.runtime_table_sources["lake.sales.orders"].source_identity_sha256,
             stats.source_identity_sha256
         );
-        let catalog = state.catalog.read().await.clone();
         assert_eq!(
             durable_relation_statistics(&catalog, &snapshot, "lake.sales.orders")
                 .unwrap()
@@ -5080,6 +5106,12 @@ mod tests {
         writer.write(&batch).unwrap();
         writer.close().unwrap();
         assert!(durable_relation_statistics(&catalog, &snapshot, "lake.sales.orders").is_none());
+        assert_eq!(
+            exact_source_statistics(&catalog, "lake.sales.orders")
+                .unwrap()
+                .rows,
+            4
+        );
         let stale =
             statistics_diagnostics(axum::extract::State(state.clone()), axum::Extension(admin))
                 .await;
