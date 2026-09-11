@@ -44,6 +44,22 @@ pub struct TableManifestRef {
     pub parquet_files: Vec<ImmutableFileRef>,
 }
 
+impl TableManifestRef {
+    /// Validates a manifest assembled from immutable writer references before
+    /// it is staged into a catalog snapshot.
+    pub fn validated(
+        manifest: ImmutableFileRef,
+        parquet_files: Vec<ImmutableFileRef>,
+    ) -> Result<Self, ManifestError> {
+        let reference = Self {
+            manifest,
+            parquet_files,
+        };
+        validate_table_reference(&reference)?;
+        Ok(reference)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TableStatisticsRef {
     /// Immutable catalog-definition snapshot used to resolve the runtime table.

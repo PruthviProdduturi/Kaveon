@@ -5,6 +5,7 @@ pub mod adls_reader;
 pub mod delta_reader;
 pub mod delta_snapshot;
 pub mod iceberg_reader;
+pub mod immutable_data_writer;
 pub mod metrics;
 pub mod object_delta;
 pub mod object_reader;
@@ -18,6 +19,10 @@ pub use adls_commit::{
 pub use adls_reader::{AdlsAuthMode, AdlsBatchSource, AdlsBatchStream, AdlsParquetReader};
 pub use delta_reader::{DeltaBatchIterator, DeltaTableReader};
 pub use iceberg_reader::{IcebergReader, IcebergSnapshot, IcebergSource};
+pub use immutable_data_writer::{
+    DataWriteError, ImmutableDataReference, ImmutableParquetWriter,
+    DEFAULT_MAX_PARQUET_BYTES,
+};
 pub use metrics::{ScanMetrics, ScanMetricsSnapshot};
 pub use object_delta::{ObjectDeltaReader, ObjectDeltaSource};
 pub use object_reader::{ObjectBatchSource, ObjectLocation, ObjectParquetReader};
