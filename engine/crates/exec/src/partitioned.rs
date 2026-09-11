@@ -22,6 +22,11 @@ use crate::{
 const MAX_PARTITIONS: usize = 256;
 const MAX_RUNS_PER_PARTITION: usize = 16;
 const MAX_ADAPTIVE_BATCHES: usize = 64;
+// A grouped partial whose cardinality is too high is replayed through the
+// partitioned spill path. Keep that speculative cardinality probe small: its
+// hash table is discarded on rejection, so processing a large prefix repeats
+// the most expensive work without changing the exact result.
+const MAX_PARTIAL_PROBE_BATCHES: usize = 8;
 
 /// A bounded prefix can be replayed from memory without reopening its source.
 struct BufferedPrefix {
@@ -556,6 +561,7 @@ pub struct PartitionedHashAggregate {
     output_memory: Option<MemoryReservation>,
     adaptive_bytes: Option<u64>,
     streaming_partial: bool,
+    partial_probe_complete: bool,
 }
 
 impl PartitionedHashAggregate {
@@ -595,6 +601,7 @@ impl PartitionedHashAggregate {
             output_memory: None,
             adaptive_bytes: None,
             streaming_partial: true,
+            partial_probe_complete: false,
         })
     }
 
@@ -709,8 +716,10 @@ impl PartitionedHashAggregate {
                 self.adaptive_bytes.unwrap_or(adaptive_limit(&self.memory)?),
                 if global_distinct {
                     1
-                } else {
+                } else if self.partial_probe_complete {
                     MAX_ADAPTIVE_BATCHES
+                } else {
+                    MAX_PARTIAL_PROBE_BATCHES
                 },
             )?;
             let input_rows = prefix.row_count();
@@ -726,6 +735,7 @@ impl PartitionedHashAggregate {
                         // 8x; otherwise retain the bounded partition/spill path.
                         self.input = prefix.take_tail();
                         self.output_memory = guard;
+                        self.partial_probe_complete = true;
                         return Ok(batch);
                     }
                     Ok(_) | Err(KaveonError::MemoryLimit(_)) => {
@@ -1041,8 +1051,8 @@ fn resolve_key(schema: &SchemaRef, name: &str) -> Result<String> {
 mod tests {
     use super::*;
     use crate::aggregate::{
-        AggFunc, finalize_grouped_aggregate_states, grouped_aggregate_states_from_batches,
-        merge_grouped_aggregate_states,
+        AggFunc, aggregate_metrics, finalize_grouped_aggregate_states,
+        grouped_aggregate_states_from_batches, merge_grouped_aggregate_states,
     };
     use arrow::{
         array::{Array, Int64Array, UInt64Array},
@@ -1501,6 +1511,16 @@ mod tests {
         let states = grouped_aggregate_states_from_batches(&high_cardinality_batches).unwrap();
         let merged = merge_grouped_aggregate_states(states).unwrap();
         assert_eq!(merged.len(), 100_000);
+        // The rejected adaptive trial processes only a small sample before the
+        // exact partitioned fallback consumes all rows. A 64-batch trial used
+        // to repeat most of this high-cardinality workload.
+        assert_eq!(
+            aggregate_metrics(&bounded_pool)
+                .unwrap()
+                .snapshot()
+                .input_rows,
+            200_000 + (MAX_PARTIAL_PROBE_BATCHES * 8_192) as u64
+        );
         assert!(bounded_spill.snapshot().peak_bytes > 0);
         assert_eq!(bounded_pool.snapshot().current_bytes, 0);
     }
