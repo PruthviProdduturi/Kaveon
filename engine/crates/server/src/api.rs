@@ -32,7 +32,10 @@ use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap};
 #[cfg(test)]
 use std::io::Cursor;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::Duration;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -86,7 +89,38 @@ struct TaskTelemetry {
     output_batches: usize,
     output_bytes: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
+    execution: Option<TaskExecutionMetrics>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     scan: Option<TaskScanMetrics>,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+struct TaskExecutionMetrics {
+    compute_cpu_us: Option<u64>,
+    admission_wait_us: u64,
+    exchange_input_payloads: u64,
+    exchange_input_bytes: u64,
+    exchange_fetch_us: u64,
+    exchange_decode_batches: u64,
+    exchange_decode_bytes: u64,
+    exchange_decode_us: u64,
+    exchange_output_copies: u64,
+    exchange_output_bytes: u64,
+    exchange_encode_us: u64,
+    exchange_upload_us: u64,
+    memory_peak_bytes: u64,
+    spill_peak_bytes: u64,
+    spill_bytes_written: u64,
+    spill_runs_written: u64,
+    spill_compactions: u64,
+    spill_compaction_input_bytes: u64,
+}
+
+#[derive(Default)]
+struct ExchangeDecodeMetrics {
+    batches: AtomicU64,
+    bytes: AtomicU64,
+    elapsed_us: AtomicU64,
 }
 
 /// Counters emitted by a worker's storage readers, never derived from query output.
@@ -448,6 +482,7 @@ async fn execute_owned_task(
             return task_failure_response(StatusCode::BAD_REQUEST, &message);
         }
     };
+    let admission_started = Instant::now();
     let admitted = match await_task_memory(
         &state.memory_admission,
         format!(
@@ -481,7 +516,15 @@ async fn execute_owned_task(
     }
     let started = Instant::now();
     if let Some(fragment) = req.fragment.as_ref() {
-        let result = execute_fragment_task(state, &req, fragment, partition, admitted.pool()).await;
+        let result = execute_fragment_task(
+            state,
+            &req,
+            fragment,
+            partition,
+            admitted.pool(),
+            elapsed_us(admission_started),
+        )
+        .await;
         if cancellation.is_cancelled() {
             let _ = owner.complete(TaskOutcome::Failed(Arc::from("query canceled")));
             return canceled_task_response();
@@ -546,6 +589,7 @@ async fn execute_owned_task(
                     bytes,
                     elapsed,
                     scan_metrics_header,
+                    None,
                 ) {
                     Ok(cached) => cached,
                     Err(error) => {
@@ -744,6 +788,7 @@ fn digest_canonical_json(digest: &mut Sha256, value: &serde_json::Value) {
 struct PrefetchedExchangeInputs {
     inputs: HashMap<ExchangeId, Vec<crate::transport::ArrowPayload>>,
     memory: kaveon_core::OperatorMemoryAccount,
+    decode_metrics: Arc<ExchangeDecodeMetrics>,
 }
 
 async fn buffered_ordered<T, U, E, F, Fut>(
@@ -767,6 +812,7 @@ struct DiskExchangeInput {
     memory: kaveon_core::OperatorMemoryAccount,
     encoded: Option<kaveon_core::MemoryReservation>,
     decoded_extra: Option<kaveon_core::MemoryReservation>,
+    metrics: Arc<ExchangeDecodeMetrics>,
 }
 impl kaveon_core::BatchOperator for DiskExchangeInput {
     fn schema(&self) -> &arrow::datatypes::SchemaRef {
@@ -779,10 +825,18 @@ impl kaveon_core::BatchOperator for DiskExchangeInput {
             if self.encoded.is_none() {
                 self.encoded = Some(self.memory.reserve(payload.bytes() as u64)?);
             }
+            let decode_started = Instant::now();
             if let Some(batch) = payload
                 .next_batch()
                 .map_err(kaveon_core::KaveonError::Execution)?
             {
+                self.metrics
+                    .elapsed_us
+                    .fetch_add(elapsed_us(decode_started), Ordering::AcqRel);
+                self.metrics.batches.fetch_add(1, Ordering::AcqRel);
+                self.metrics
+                    .bytes
+                    .fetch_add(batch.get_array_memory_size() as u64, Ordering::AcqRel);
                 let extra =
                     (batch.get_array_memory_size() as u64).saturating_sub(payload.bytes() as u64);
                 if extra > 0 {
@@ -828,6 +882,7 @@ impl crate::fragment_exec::ExchangeInputProvider for PrefetchedExchangeInputs {
             memory: self.memory.clone(),
             encoded: None,
             decoded_extra: None,
+            metrics: Arc::clone(&self.decode_metrics),
         }))
     }
 }
@@ -838,14 +893,21 @@ async fn execute_fragment_task(
     fragment: &ExecutableFragment,
     partition: kaveon_storage::ScanPartition,
     memory: &kaveon_core::QueryMemoryPool,
+    admission_wait_us: u64,
 ) -> Result<
     (
         arrow::datatypes::SchemaRef,
         Vec<arrow::record_batch::RecordBatch>,
         Option<TaskScanMetrics>,
+        TaskExecutionMetrics,
     ),
     String,
 > {
+    let mut metrics = TaskExecutionMetrics {
+        admission_wait_us,
+        ..Default::default()
+    };
+    let fetch_started = Instant::now();
     let client = reqwest::Client::new();
     let token = state
         .config
@@ -883,6 +945,10 @@ async fn execute_fragment_task(
     .await;
     for fetched in fetched {
         let (location, payload) = fetched?;
+        metrics.exchange_input_payloads += 1;
+        metrics.exchange_input_bytes = metrics
+            .exchange_input_bytes
+            .saturating_add(payload.bytes() as u64);
         let schema = payload.schema();
         let entry = inputs.entry(location.exchange_id.clone()).or_default();
         if let Some(first) = entry.first()
@@ -898,26 +964,43 @@ async fn execute_fragment_task(
         }
         entry.push(payload);
     }
+    metrics.exchange_fetch_us = elapsed_us(fetch_started);
+    let decode_metrics = Arc::new(ExchangeDecodeMetrics::default());
+    let spill = kaveon_exec::partitioned::spill_from_environment(memory)
+        .map_err(|error| error.to_string())?
+        .map(|(spill, _)| spill);
+    let spill_before = spill.as_ref().map(|spill| spill.snapshot());
     let execution_state = Arc::clone(state);
     let execution_fragment = fragment.clone();
     let execution_memory = memory.clone();
+    let worker_decode_metrics = Arc::clone(&decode_metrics);
     let execution = tokio::task::spawn_blocking(move || {
+        let cpu_started = thread_cpu_us();
         let catalog = execution_state.catalog.blocking_read();
-        crate::fragment_exec::execute_fragment_with_memory(
+        let result = crate::fragment_exec::execute_fragment_with_memory(
             &execution_fragment,
             &catalog,
             &PrefetchedExchangeInputs {
                 inputs,
                 memory: input_account,
+                decode_metrics: worker_decode_metrics,
             },
             partition,
             Some(&execution_memory),
         )
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string());
+        let cpu_us =
+            cpu_started.and_then(|started| thread_cpu_us().map(|end| end.saturating_sub(started)));
+        (result, cpu_us)
     })
     .await
     .map_err(|error| format!("fragment execution task failed: {error}"))?;
+    let (execution, compute_cpu_us) = execution;
     let execution = execution?;
+    metrics.compute_cpu_us = compute_cpu_us;
+    metrics.exchange_decode_batches = decode_metrics.batches.load(Ordering::Acquire);
+    metrics.exchange_decode_bytes = decode_metrics.bytes.load(Ordering::Acquire);
+    metrics.exchange_decode_us = decode_metrics.elapsed_us.load(Ordering::Acquire);
     for (exchange_id, output) in execution.exchange_outputs {
         for (output_partition, batches) in output.partitions.iter().enumerate() {
             let destinations = req.exchange_outputs.iter().filter(|location| {
@@ -941,6 +1024,7 @@ async fn execute_fragment_task(
                     task_id: destination.producer.clone(),
                     output_partition,
                 };
+                let encode_started = Instant::now();
                 let chunks = crate::exchange::encode_batches(
                     identity,
                     &output.schema,
@@ -948,6 +1032,17 @@ async fn execute_fragment_task(
                     crate::exchange::ExchangeLimits::default(),
                 )
                 .map_err(|error| format!("cannot encode exchange '{}': {error}", exchange_id.0))?;
+                metrics.exchange_encode_us = metrics
+                    .exchange_encode_us
+                    .saturating_add(elapsed_us(encode_started));
+                metrics.exchange_output_copies += 1;
+                metrics.exchange_output_bytes = metrics.exchange_output_bytes.saturating_add(
+                    chunks
+                        .iter()
+                        .map(|chunk| chunk.payload.len() as u64)
+                        .sum::<u64>(),
+                );
+                let upload_started = Instant::now();
                 crate::exchange::upload_chunks(
                     &client,
                     &destination.worker_uri,
@@ -957,6 +1052,9 @@ async fn execute_fragment_task(
                 )
                 .await
                 .map_err(|error| format!("cannot upload exchange '{}': {error}", exchange_id.0))?;
+                metrics.exchange_upload_us = metrics
+                    .exchange_upload_us
+                    .saturating_add(elapsed_us(upload_started));
             }
             if destination_count == 0 {
                 return Err(format!(
@@ -969,7 +1067,43 @@ async fn execute_fragment_task(
     let scan = execution
         .scan_metrics_complete
         .then(|| merge_task_scan_metrics(execution.scan_metrics.iter()));
-    Ok((execution.result_schema, execution.result_batches, scan))
+    metrics.memory_peak_bytes = memory.snapshot().peak_bytes;
+    if let (Some(before), Some(after)) = (spill_before, spill.map(|spill| spill.snapshot())) {
+        metrics.spill_peak_bytes = after.peak_bytes;
+        metrics.spill_bytes_written = after.bytes_written.saturating_sub(before.bytes_written);
+        metrics.spill_runs_written = after.runs_written.saturating_sub(before.runs_written);
+        metrics.spill_compactions = after.compactions.saturating_sub(before.compactions);
+        metrics.spill_compaction_input_bytes = after
+            .compaction_input_bytes
+            .saturating_sub(before.compaction_input_bytes);
+    }
+    Ok((
+        execution.result_schema,
+        execution.result_batches,
+        scan,
+        metrics,
+    ))
+}
+
+#[cfg(unix)]
+fn thread_cpu_us() -> Option<u64> {
+    let mut time = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `time` is a valid writable timespec and CLOCK_THREAD_CPUTIME_ID
+    // does not retain the pointer.
+    let status = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) };
+    (status == 0).then(|| {
+        (time.tv_sec as u64)
+            .saturating_mul(1_000_000)
+            .saturating_add((time.tv_nsec as u64) / 1_000)
+    })
+}
+
+#[cfg(not(unix))]
+fn thread_cpu_us() -> Option<u64> {
+    None
 }
 
 fn requested_partition_index(req: &TaskRequest) -> usize {
@@ -986,18 +1120,20 @@ fn complete_owned_task(
             arrow::datatypes::SchemaRef,
             Vec<arrow::record_batch::RecordBatch>,
             Option<TaskScanMetrics>,
+            TaskExecutionMetrics,
         ),
         String,
     >,
 ) -> Response {
     match result {
-        Ok((schema, batches, scan)) => match encode_arrow_stream(&schema, &batches) {
+        Ok((schema, batches, scan, execution)) => match encode_arrow_stream(&schema, &batches) {
             Ok(bytes) => {
                 let elapsed = elapsed_us(started);
                 let cached = match crate::transport::CachedTaskResult::new(
                     bytes,
                     elapsed,
                     scan.and_then(|scan| serde_json::to_string(&scan).ok()),
+                    serde_json::to_string(&execution).ok(),
                 ) {
                     Ok(cached) => cached,
                     Err(error) => {
@@ -1031,6 +1167,10 @@ fn task_outcome_response(outcome: TaskOutcome<crate::transport::CachedTaskResult
             .header(
                 "x-kaveon-task-scan-metrics",
                 result.scan_metrics_header.as_deref().unwrap_or(""),
+            )
+            .header(
+                "x-kaveon-task-execution-metrics",
+                result.execution_metrics_header.as_deref().unwrap_or(""),
             )
             .body(Body::from_stream(futures::stream::unfold(
                 (result, 0usize),
@@ -3369,17 +3509,18 @@ async fn execute_remote_task(
         u64,
         usize,
         Option<TaskScanMetrics>,
+        Option<TaskExecutionMetrics>,
     ),
     RemoteTaskFailure,
 > {
-    let (payload, elapsed_us, scan) =
+    let (payload, elapsed_us, scan, execution) =
         execute_remote_task_payload(client, worker, request, exchange_token).await?;
     let output_bytes = payload.bytes();
     let (schema, batches) = payload.collect().map_err(|message| RemoteTaskFailure {
         message,
         retryable: false,
     })?;
-    Ok((schema, batches, elapsed_us, output_bytes, scan))
+    Ok((schema, batches, elapsed_us, output_bytes, scan, execution))
 }
 
 async fn execute_remote_task_payload(
@@ -3387,7 +3528,15 @@ async fn execute_remote_task_payload(
     worker: &NodeInfo,
     request: &TaskRequest,
     exchange_token: Option<&str>,
-) -> Result<(crate::transport::ArrowPayload, u64, Option<TaskScanMetrics>), RemoteTaskFailure> {
+) -> Result<
+    (
+        crate::transport::ArrowPayload,
+        u64,
+        Option<TaskScanMetrics>,
+        Option<TaskExecutionMetrics>,
+    ),
+    RemoteTaskFailure,
+> {
     let url = format!("{}/v1/task", worker.address.trim_end_matches('/'));
     let mut submission = client.post(url).json(request);
     if let Some(token) = exchange_token {
@@ -3435,13 +3584,19 @@ async fn execute_remote_task_payload(
         .and_then(|value| value.to_str().ok())
         .filter(|value| !value.is_empty())
         .and_then(|value| serde_json::from_str(value).ok());
+    let execution = response
+        .headers()
+        .get("x-kaveon-task-execution-metrics")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+        .and_then(|value| serde_json::from_str(value).ok());
     let payload = crate::transport::receive(response)
         .await
         .map_err(|message| RemoteTaskFailure {
             retryable: message.starts_with("network receive:"),
             message,
         })?;
-    Ok((payload, elapsed_us, scan))
+    Ok((payload, elapsed_us, scan, execution))
 }
 
 async fn cleanup_distributed_query(state: &Arc<AppState>, query_id: &str) {
@@ -3596,7 +3751,7 @@ async fn execute_distributed_fragments(
             };
             let task_id = &dispatch.assignment.task_id;
             match result {
-                Ok((mut payload, elapsed_us, scan)) => {
+                Ok((mut payload, elapsed_us, scan, execution)) => {
                     let schema = payload.schema();
                     let output_bytes = payload.bytes();
                     let mut output_rows = 0;
@@ -3648,6 +3803,7 @@ async fn execute_distributed_fragments(
                             output_rows,
                             output_batches,
                             output_bytes,
+                            execution,
                             scan,
                         });
                     if let Err(error) = orchestrator.finish_task(task_id) {
@@ -3900,7 +4056,7 @@ async fn execute_distributed_top_n(
                 match execute_remote_task(&client, &worker, &request, exchange_token.as_deref())
                     .await
                 {
-                    Ok((schema, batches, elapsed_us, output_bytes, scan)) => {
+                    Ok((schema, batches, elapsed_us, output_bytes, scan, execution)) => {
                         let output_rows = batches.iter().map(|batch| batch.num_rows()).sum();
                         let telemetry = TaskTelemetry {
                             task_id,
@@ -3910,6 +4066,7 @@ async fn execute_distributed_top_n(
                             output_rows,
                             output_batches: batches.len(),
                             output_bytes,
+                            execution,
                             scan,
                         };
                         return Ok((schema, batches, telemetry));
@@ -4073,7 +4230,7 @@ async fn execute_distributed_aggregate(
                 match execute_remote_task(&client, &worker, &request, exchange_token.as_deref())
                     .await
                 {
-                    Ok((schema, batches, elapsed_us, output_bytes, scan)) => {
+                    Ok((schema, batches, elapsed_us, output_bytes, scan, execution)) => {
                         let data = batches_to_json(&batches);
                         let telemetry = TaskTelemetry {
                             task_id,
@@ -4083,6 +4240,7 @@ async fn execute_distributed_aggregate(
                             output_rows: data.len(),
                             output_batches: batches.len(),
                             output_bytes,
+                            execution,
                             scan,
                         };
                         return Ok((
@@ -4627,11 +4785,33 @@ mod tests {
     #[tokio::test]
     async fn task_response_stream_retains_cache_until_slow_consumer_drops() {
         use futures::StreamExt;
+        let metrics = super::TaskExecutionMetrics {
+            exchange_input_bytes: 42,
+            spill_compactions: 3,
+            ..Default::default()
+        };
         let cached = std::sync::Arc::new(
-            crate::transport::CachedTaskResult::new(vec![1; 200_000], 10, None).unwrap(),
+            crate::transport::CachedTaskResult::new(
+                vec![1; 200_000],
+                10,
+                None,
+                serde_json::to_string(&metrics).ok(),
+            )
+            .unwrap(),
         );
         let response =
             super::task_outcome_response(crate::lifecycle::TaskOutcome::Success(cached.clone()));
+        let observed: super::TaskExecutionMetrics = serde_json::from_str(
+            response
+                .headers()
+                .get("x-kaveon-task-execution-metrics")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(observed.exchange_input_bytes, 42);
+        assert_eq!(observed.spill_compactions, 3);
         let mut stream = response.into_body().into_data_stream();
         assert_eq!(std::sync::Arc::strong_count(&cached), 2);
         assert_eq!(stream.next().await.unwrap().unwrap().len(), 64 * 1024);
@@ -5560,6 +5740,7 @@ mod tests {
             output_rows: 999,
             output_batches: 1,
             output_bytes: 1,
+            execution: None,
             scan,
         };
         let scan = |rows_emitted, rows_selected| super::TaskScanMetrics {

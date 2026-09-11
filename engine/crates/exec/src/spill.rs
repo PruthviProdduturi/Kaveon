@@ -23,6 +23,10 @@ pub struct SpillSnapshot {
     pub current_bytes: u64,
     pub peak_bytes: u64,
     pub limit_bytes: u64,
+    pub bytes_written: u64,
+    pub runs_written: u64,
+    pub compactions: u64,
+    pub compaction_input_bytes: u64,
 }
 
 #[derive(Debug)]
@@ -31,6 +35,10 @@ struct SpillInner {
     limit_bytes: u64,
     current_bytes: AtomicU64,
     peak_bytes: AtomicU64,
+    bytes_written: AtomicU64,
+    runs_written: AtomicU64,
+    compactions: AtomicU64,
+    compaction_input_bytes: AtomicU64,
 }
 
 impl SpillInner {
@@ -111,6 +119,10 @@ impl SpillManager {
                 limit_bytes,
                 current_bytes: AtomicU64::new(0),
                 peak_bytes: AtomicU64::new(0),
+                bytes_written: AtomicU64::new(0),
+                runs_written: AtomicU64::new(0),
+                compactions: AtomicU64::new(0),
+                compaction_input_bytes: AtomicU64::new(0),
             }),
         })
     }
@@ -121,7 +133,18 @@ impl SpillManager {
             current_bytes: self.inner.current_bytes.load(Ordering::Acquire),
             peak_bytes: self.inner.peak_bytes.load(Ordering::Acquire),
             limit_bytes: self.inner.limit_bytes,
+            bytes_written: self.inner.bytes_written.load(Ordering::Acquire),
+            runs_written: self.inner.runs_written.load(Ordering::Acquire),
+            compactions: self.inner.compactions.load(Ordering::Acquire),
+            compaction_input_bytes: self.inner.compaction_input_bytes.load(Ordering::Acquire),
         }
+    }
+
+    pub fn record_compaction(&self, input_bytes: u64) {
+        self.inner.compactions.fetch_add(1, Ordering::AcqRel);
+        self.inner
+            .compaction_input_bytes
+            .fetch_add(input_bytes, Ordering::AcqRel);
     }
 
     pub fn write_run(&self, schema: &SchemaRef, batches: &[RecordBatch]) -> Result<SpillRun> {
@@ -164,6 +187,8 @@ impl SpillManager {
         }
 
         let bytes = output.commit();
+        self.inner.bytes_written.fetch_add(bytes, Ordering::AcqRel);
+        self.inner.runs_written.fetch_add(1, Ordering::AcqRel);
         Ok(SpillRun {
             inner: Arc::clone(&self.inner),
             path,
@@ -325,7 +350,11 @@ mod tests {
             .unwrap();
 
         assert!(run.bytes() > 0);
-        assert_eq!(manager.snapshot().current_bytes, run.bytes());
+        let snapshot = manager.snapshot();
+        assert_eq!(snapshot.current_bytes, run.bytes());
+        assert_eq!(snapshot.bytes_written, run.bytes());
+        assert_eq!(snapshot.runs_written, 1);
+        assert_eq!(snapshot.compactions, 0);
         assert_eq!(run.read().unwrap(), vec![input]);
         let path = run.path().to_owned();
         drop(run);

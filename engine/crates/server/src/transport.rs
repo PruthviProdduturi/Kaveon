@@ -16,12 +16,14 @@ pub struct CachedTaskResult {
     pub bytes: Vec<u8>,
     pub elapsed_us: u64,
     pub scan_metrics_header: Option<String>,
+    pub execution_metrics_header: Option<String>,
 }
 impl CachedTaskResult {
     pub fn new(
         bytes: Vec<u8>,
         elapsed_us: u64,
         scan_metrics_header: Option<String>,
+        execution_metrics_header: Option<String>,
     ) -> Result<Self, String> {
         CACHED_BYTES
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
@@ -33,6 +35,7 @@ impl CachedTaskResult {
             bytes,
             elapsed_us,
             scan_metrics_header,
+            execution_metrics_header,
         })
     }
 }
