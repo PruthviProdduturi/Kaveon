@@ -667,6 +667,18 @@ fn product_document(
                 ));
             }
         };
+        // The portal stores recent item IDs with their product type prefix,
+        // while product records use the canonical target ID. Strip exactly
+        // the prefix for the declared type when it is present; retain
+        // already-canonical IDs for backwards compatibility.
+        let target_id = match target {
+            ProductRecordKind::Dataset => item.strip_prefix("dataset-").unwrap_or(item),
+            ProductRecordKind::Chart => item.strip_prefix("chart-").unwrap_or(item),
+            ProductRecordKind::Dashboard => item
+                .strip_prefix("dashboard-")
+                .unwrap_or(item),
+            _ => unreachable!("user recent target is restricted above"),
+        };
         if object
             .get("href")
             .and_then(serde_json::Value::as_str)
@@ -683,7 +695,7 @@ fn product_document(
         derived_values.insert("recent_owner_item".into(), format!("{owner}:{item}"));
         BTreeSet::from([ProductRecordReference {
             kind: target,
-            id: item.into(),
+            id: target_id.into(),
         }])
     } else if kind == ProductRecordKind::Source {
         let object = value.as_object().expect("object checked above");
@@ -1855,6 +1867,22 @@ mod tests {
         assert_eq!(
             validate_favorite_owner(ProductRecordKind::UserRecent, "bob", &values),
             Err(RegistryError::Forbidden)
+        );
+
+        let (_, _, prefixed_references, prefixed_values) = product_document(
+            ProductRecordKind::UserRecent,
+            "recent-prefixed",
+            1,
+            r#"{"user_email":"alice","item_id":"dashboard-dash","label":"Dashboard","href":"/dashboards/dash","type":"dashboard","created_at":"2026-01-01T00:00:00"}"#,
+        )
+        .unwrap();
+        assert_eq!(prefixed_values["recent_owner_item"], "alice:dashboard-dash");
+        assert_eq!(
+            prefixed_references,
+            BTreeSet::from([ProductRecordReference {
+                kind: ProductRecordKind::Dashboard,
+                id: "dash".into()
+            }])
         );
     }
 
