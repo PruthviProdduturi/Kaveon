@@ -41,6 +41,24 @@ class ChartFreshnessTests(unittest.TestCase):
             "ANALYZE kaveon_product.kaveon_events_enriched", "OpenSource", "kaveon-system", "Admin", "kaveon_product",
         )
 
+    def test_native_catalog_builds_its_value_index_by_bounded_scan(self):
+        columns = [{"table_name": "trips", "column_name": "borough", "is_dimension": True},
+                   {"table_name": "trips", "column_name": "fare", "is_dimension": False}]
+        with patch.object(engine, "_native_catalog", return_value={"engine_catalog": "OpenSource"}), \
+             patch.object(engine, "_scan_distinct", return_value=[("Brooklyn", 10.0), ("Queens", 4.0)]) as scan:
+            rows = engine._value_inventory("7", "OpenSource", "nyc_taxi", columns, [], {}, stats_supported=False)
+        scan.assert_called_once_with("OpenSource", "nyc_taxi", "trips", "borough", engine._MAX_CARDINALITY_FOR_VALUES)
+        self.assertEqual([r["value_text"] for r in rows], ["Brooklyn", "Queens"])
+        self.assertEqual({r["source"] for r in rows}, {"scan.group_by"})
+
+    def test_external_source_without_statistics_gets_no_value_index(self):
+        columns = [{"table_name": "t", "column_name": "region", "is_dimension": True}]
+        with patch.object(engine, "_native_catalog", return_value=None), \
+             patch.object(engine, "_scan_distinct") as scan:
+            rows = engine._value_inventory("7", "warehouse", "public", columns, [], {}, stats_supported=False)
+        scan.assert_not_called()
+        self.assertEqual(rows, [])
+
     def test_external_catalog_build_queries_keep_database_pool(self):
         expected = {"rows": [[42]]}
         with patch.object(engine.meta, "query_one", return_value=None), \
