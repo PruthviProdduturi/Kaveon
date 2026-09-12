@@ -13,6 +13,13 @@ class Snapshot: source_watermark:int;records:tuple[Record,...];snapshot_sha256:s
 def canonical(v):
  b=json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode();return hashlib.sha256(b).hexdigest()
 def record_id(owner,item):return hashlib.sha256(f"{owner}\0{item}".encode()).hexdigest()
+def normalize_item_id(item,item_type):
+ item=str(item or "");prefix={"dataset":"dataset-","chart":"chart-","dashboard":"dashboard-"}.get(str(item_type))
+ if not item or prefix is None:raise RuntimeError("user recent item reference is invalid")
+ if any(item.startswith(value) for value in ("dataset-","chart-","dashboard-")):
+  if not item.startswith(prefix):raise RuntimeError("user recent item prefix does not match its type")
+  return item
+ return prefix+item
 def digest(records):return hashlib.sha256("".join(r.payload_sha256 for r in records).encode()).hexdigest()
 def validate(s):
  if s.source_watermark<0 or len(s.records)>MAX_RECORDS or s.records!=tuple(sorted(s.records,key=lambda r:r.record_id)):raise RuntimeError("user recent snapshot metadata is invalid")
@@ -20,7 +27,7 @@ def validate(s):
  if any(n>20 for n in counts.values()):raise RuntimeError("user recent owner retention exceeds 20")
  for r in s.records:
   d=r.document
-  if not r.owner_principal or r.record_id!=record_id(r.owner_principal,str(d.get("item_id") or "")) or d.get("user_email")!=r.owner_principal or d.get("type") not in {"dataset","chart","dashboard"} or canonical(d)!=r.payload_sha256:raise RuntimeError("user recent record is invalid")
+  if not r.owner_principal or d.get("user_email")!=r.owner_principal or d.get("type") not in {"dataset","chart","dashboard"} or r.record_id not in {record_id(r.owner_principal,str(d.get("item_id") or "")),record_id(r.owner_principal,str(d.get("item_id") or "").removeprefix(f"{d.get('type')}-"))} or canonical(d)!=r.payload_sha256:raise RuntimeError("user recent record is invalid")
  if digest(s.records)!=s.snapshot_sha256:raise RuntimeError("user recent snapshot identity mismatch")
 def capture_snapshot():
  with db.transaction() as tx:
@@ -31,8 +38,8 @@ def capture_snapshot():
  records=[]
  for row in rows:
   owner=str(row.get("user_email") or "");item=str(row.get("item_id") or "");created=row.get("created_at");created=created.isoformat() if hasattr(created,"isoformat") else str(created or "")
-  document={"user_email":owner,"item_id":item,"label":row.get("label"),"href":row.get("href"),"type":row.get("type"),"created_at":created}
-  records.append(Record(record_id(owner,item),owner,document,canonical(document)))
+  document={"user_email":owner,"item_id":normalize_item_id(item,row.get("type")),"label":row.get("label"),"href":row.get("href"),"type":row.get("type"),"created_at":created}
+  records.append(Record(record_id(owner,document["item_id"]),owner,document,canonical(document)))
  records=tuple(sorted(records,key=lambda r:r.record_id));s=Snapshot(int(wm.get("watermark") or 0),records,digest(records));validate(s);return s
 def apply_and_reconcile(s):
  validate(s);created=present=0

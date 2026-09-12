@@ -196,13 +196,17 @@ def observe_favorite_list(source_records: list[dict], owner: str) -> dict:
 def observe_user_recent_list(source_records:list[dict],owner:str)->dict:
     if os.getenv("KAVEON_USER_RECENT_SHADOW_READ_ENABLED")!="true":return {"family":"user_recents","enabled":False,"status":"disabled"}
     if len(source_records)>20:return {"family":"user_recents","enabled":True,"status":"skipped_limit","source_count":len(source_records)}
-    from services.user_recent_backfill import record_id
+    from services.user_recent_backfill import normalize_item_id, record_id
     counts={"match":0,"missing":0,"mismatch":0}
     for source in source_records:
-        document={"user_email":owner,"item_id":str(source.get("item_id") or ""),"label":source.get("label"),"href":source.get("href"),"type":source.get("type"),"created_at":source.get("created_at").isoformat() if hasattr(source.get("created_at"),"isoformat") else str(source.get("created_at") or "")}
-        target=product_store.read("user_recent",record_id(owner,document["item_id"]),owner,"Viewer")
+        legacy_item=str(source.get("item_id") or "")
+        normalized_item=normalize_item_id(legacy_item,source.get("type"))
+        document={"user_email":owner,"item_id":normalized_item,"label":source.get("label"),"href":source.get("href"),"type":source.get("type"),"created_at":source.get("created_at").isoformat() if hasattr(source.get("created_at"),"isoformat") else str(source.get("created_at") or "")}
+        target=product_store.read("user_recent",record_id(owner,normalized_item),owner,"Viewer")
+        if target is None and normalized_item != legacy_item:
+            target=product_store.read("user_recent",record_id(owner,legacy_item),owner,"Viewer")
         if target is None:counts["missing"]+=1
-        elif target.get("document")==document:counts["match"]+=1
+        elif target.get("document")==document or target.get("document")=={**document,"item_id":legacy_item}:counts["match"]+=1
         else:counts["mismatch"]+=1
     return {"family":"user_recents","enabled":True,"status":"match" if counts["match"]==len(source_records) else "mismatch","source_count":len(source_records),**counts}
 

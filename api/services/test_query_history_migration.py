@@ -11,7 +11,10 @@ class Tx:
  def __init__(self,ones=(),rows=()):self.ones=list(ones);self.rows=list(rows);self.calls=[]
  def execute(self,sql,params=None):self.calls.append(("execute",sql,params));return 1
  def query_one(self,sql,params=None):self.calls.append(("one",sql,params));return self.ones.pop(0) if self.ones else {"watermark":3}
- def query(self,sql,params=None):self.calls.append(("many",sql,params));return {"rows":self.rows.pop(0) if self.rows else []}
+ def query(self,sql,params=None):
+  self.calls.append(("many",sql,params))
+  if "FROM datasets" in sql:return {"rows":[]}
+  return {"rows":self.rows.pop(0) if self.rows else []}
 @contextlib.contextmanager
 def transaction(tx):yield tx
 class Tests(unittest.TestCase):
@@ -19,7 +22,8 @@ class Tests(unittest.TestCase):
   tx=Tx(rows=[[row("q2"),row("q1")]])
   with patch.object(b.db,"transaction",return_value=transaction(tx)):snapshot=b.capture_snapshot()
   self.assertEqual([r.record_id for r in snapshot.records],["q1","q2"]);b.validate(snapshot)
-  self.assertIn("ROW_NUMBER() OVER",tx.calls[2][1]);self.assertEqual(tx.calls[2][2][0],b.MAX_PER_OWNER)
+  history_call=next(call for call in tx.calls if "ROW_NUMBER() OVER" in call[1])
+  self.assertEqual(history_call[2][0],b.MAX_PER_OWNER)
   targets=[None,None,*({"document":r.document} for r in snapshot.records)]
   with patch.object(b.product_store,"read",side_effect=targets),patch.object(b.product_store,"transact") as transact:self.assertEqual(b.apply_and_reconcile(snapshot)["created"],2)
   self.assertEqual(transact.call_count,2)

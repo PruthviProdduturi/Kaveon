@@ -30,6 +30,8 @@ class Source:
 
     def query(self, sql, params=None):
         self.statements.append(" ".join(sql.split()))
+        if "FROM datasets" in sql:
+            return {"rows": [{"id": "1"}]}
         return {"rows": [self.row]}
 
 
@@ -73,6 +75,13 @@ class QueryHistoryBackfillTests(unittest.TestCase):
             captured = backfill.capture_snapshot()
         self.assertEqual(captured, snapshot())
         self.assertIn("REPEATABLE READ, READ ONLY", source.statements[0])
+
+    def test_missing_dataset_reference_is_cleared_without_creating_a_placeholder(self):
+        source = Source(row())
+        source.row["dataset_id"] = "13"
+        with patch.object(backfill.db, "transaction", return_value=transaction(source)):
+            captured = backfill.capture_snapshot()
+        self.assertIsNone(captured.records[0].document["dataset_id"])
 
     def test_validation_rejects_owner_mismatch_and_retention_overflow(self):
         value = snapshot()

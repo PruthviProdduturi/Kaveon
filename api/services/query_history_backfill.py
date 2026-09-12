@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from fastapi import HTTPException
 import database.metadata as db
 from services import product_store
-MAX_RECORDS=100_000;MAX_PER_OWNER=1_000;MAX_DOCUMENT_BYTES=1024*1024
+MAX_RECORDS=100_000;MAX_PER_OWNER=1_000;MAX_DOCUMENT_BYTES=1024*1024;MAX_DATASET_REFERENCES=1_000_000
 @dataclass(frozen=True)
 class Record:record_id:str;owner_principal:str;document:dict;payload_sha256:str
 @dataclass(frozen=True)
@@ -14,9 +14,14 @@ def canonical(value):
  if len(encoded)>MAX_DOCUMENT_BYTES:raise RuntimeError("query history document exceeds its bound")
  return hashlib.sha256(encoded).hexdigest()
 def digest(records):return hashlib.sha256("".join(r.record_id+r.owner_principal+r.payload_sha256 for r in records).encode()).hexdigest()
-def document(row):
+def document(row, dataset_ids=None):
  def text(value):return value.isoformat() if hasattr(value,"isoformat") else value
- value={key:text(row.get(key)) for key in ("id","sql_text","database_name","executed_at","execution_time","row_count","status","error_message","user_email","trigger_source","dataset_id","tables_used")};value["id"]=str(value["id"]);value["user_email"]=str(value["user_email"] or "");value["dataset_id"]=str(value["dataset_id"]) if value["dataset_id"] is not None else None;return value
+ value={key:text(row.get(key)) for key in ("id","sql_text","database_name","executed_at","execution_time","row_count","status","error_message","user_email","trigger_source","dataset_id","tables_used")};value["id"]=str(value["id"]);value["user_email"]=str(value["user_email"] or "");value["dataset_id"]=str(value["dataset_id"]) if value["dataset_id"] is not None else None
+ if value["dataset_id"] is not None and dataset_ids is not None and value["dataset_id"] not in dataset_ids:
+  # Historical SQL remains useful when its old dataset was deleted. Preserve
+  # the query record without creating a fabricated target dataset/reference.
+  value["dataset_id"] = None
+ return value
 def validate(snapshot):
  if snapshot.source_watermark<0 or len(snapshot.records)>MAX_RECORDS or snapshot.records!=tuple(sorted(snapshot.records,key=lambda r:r.record_id)):raise RuntimeError("query history snapshot metadata is invalid")
  counts={}
@@ -28,9 +33,12 @@ def validate(snapshot):
 def capture_snapshot():
  with db.transaction() as tx:
   tx.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY");wm=tx.query_one("SELECT COALESCE(MAX(source_sequence),0) AS watermark FROM product_migration_outbox") or {}
+  dataset_rows=tx.query("SELECT id FROM datasets LIMIT @param0",[MAX_DATASET_REFERENCES+1])["rows"]
+  if len(dataset_rows)>MAX_DATASET_REFERENCES:raise RuntimeError("dataset reference inventory exceeds its bound")
+  dataset_ids={str(row.get("id")) for row in dataset_rows if row.get("id") is not None}
   rows=tx.query("SELECT id,sql_text,database_name,executed_at,execution_time,row_count,status,error_message,user_email,trigger_source,dataset_id,tables_used FROM (SELECT id,sql_text,database_name,executed_at,execution_time,row_count,status,error_message,user_email,trigger_source,dataset_id,tables_used,ROW_NUMBER() OVER (PARTITION BY user_email ORDER BY executed_at DESC,id DESC) AS retention_rank FROM query_history) retained WHERE retention_rank<=@param0 ORDER BY id LIMIT @param1",[MAX_PER_OWNER,MAX_RECORDS+1])["rows"]
  if len(rows)>MAX_RECORDS:raise RuntimeError("query history snapshot exceeds its bound")
- records=tuple(sorted((Record(str(r["id"]),str(r.get("user_email") or ""),document(r),canonical(document(r))) for r in rows),key=lambda r:r.record_id));snapshot=Snapshot(int(wm.get("watermark") or 0),records,digest(records));validate(snapshot);return snapshot
+ records=tuple(sorted((Record(str(r["id"]),str(r.get("user_email") or ""),document(r,dataset_ids),canonical(document(r,dataset_ids))) for r in rows),key=lambda r:r.record_id));snapshot=Snapshot(int(wm.get("watermark") or 0),records,digest(records));validate(snapshot);return snapshot
 def apply_and_reconcile(snapshot):
  validate(snapshot);created=present=0
  for r in snapshot.records:

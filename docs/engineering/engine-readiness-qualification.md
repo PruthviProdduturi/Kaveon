@@ -61,14 +61,14 @@ Three material boundaries prevent expanding this narrow 8/10 rating:
    The operator command defaults to dry-run and requires a separate enable
    variable for target writes; it has not been executed for readiness evidence.
    The credential-free retirement parity audit likewise only validates supplied
-   evidence. It fails closed over all 16 maintained authority families but does
+   evidence. It fails closed over all 15 maintained authority families but does
    not produce live reconciliation, schema-discovery, shadow-read, fencing,
    restart, backup/restore or rollback evidence, so it earns no score by itself.
    The disabled credential-free collector only verifies and assembles local
    family reports with explicit source/target provenance; it does not execute a
    PostgreSQL or KaveonDB comparison and likewise earns no readiness credit.
    The static cutover dependency check classifies current Python database call
-   sites against all 16 authority families. It catches new unclassified direct
+   sites against all 15 authority families. It catches new unclassified direct
    references but does not prove deployed runtime or dynamic-SQL coverage, so it
    is review evidence and adds no replacement readiness score by itself.
    Dataset authenticated point reads and lists up to 25 records now have a
