@@ -26,8 +26,26 @@ html {
   height: 100%;
 }
 
+/* Inter is the product typeface everywhere, self-hosted so the family name
+   resolves for CSS and for ECharts canvas text alike. SIL OFL 1.1. */
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/InterVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/InterVariable-Italic.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+
 body {
-  font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", sans-serif;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  font-feature-settings: "cv11", "ss01";
   background: #f8fafc;
   color: #334155;
   min-height: 100vh;

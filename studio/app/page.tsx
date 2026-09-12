@@ -352,6 +352,8 @@ export default function Home() {
       const res = await msalFetch(`/api/v1/chat/history/${sessionId}`);
       if (!res.ok) return;
       const body = await res.json();
+      const withFrame = [...(body.messages || [])].reverse().find((m: Record<string, unknown>) => (m.data as Record<string, unknown> | null)?.frame);
+      lastFrame.current = withFrame ? ((withFrame.data as Record<string, unknown>).frame as Record<string, unknown>) : null;
       const msgs: Message[] = (body.messages || []).map((m: Record<string, unknown>) => ({
         role: m.role as "user" | "assistant",
         content: m.content as string,
@@ -826,7 +828,9 @@ export default function Home() {
               const summary = dlm.note ? `${dlm.note}\n\n${insight}` : insight;
               if (sid) {
                 void saveMessage(sid, "user", text.trim());
-                void saveMessage(sid, "assistant", summary, { sql_query: dlm.sql, chart_type: wantsChart ? dlm.chartType : undefined, data: { columns, rows: rows.slice(0, 100), row_count: rows.length }, route });
+                // The frame rides along in the message's data blob so a reopened
+                // session resumes with the same context the DLM last answered in.
+                void saveMessage(sid, "assistant", summary, { sql_query: dlm.sql, chart_type: wantsChart ? dlm.chartType : undefined, data: { columns, rows: rows.slice(0, 100), row_count: rows.length, ...(dlm.frame ? { frame: dlm.frame } : {}) }, route });
               }
               setMessages(prev => [...prev.slice(0, -1), {
                 role: "assistant",

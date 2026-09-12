@@ -12,7 +12,7 @@
   display: flow-root;
   min-height: 100vh;
   color: var(--text-primary, #1a1a2e);
-  font-family: "Segoe UI", Inter, system-ui, sans-serif;
+  font-family: Inter, system-ui, "Segoe UI", sans-serif;
 }
 .docs-skip { position: fixed; left: 16px; top: -80px; z-index: 1000; padding: 10px 14px;
   border-radius: 8px; background: var(--accent); color: #fff; text-decoration: none; }
