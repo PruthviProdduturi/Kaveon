@@ -57,3 +57,4 @@ def apply_record(r):
   target=product_store.read(r.kind,r.record_id,r.owner_principal,"Admin")
   if error.status_code!=409 or target is None or target.get("document")!=r.document:raise
  return True
+

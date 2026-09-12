@@ -160,8 +160,58 @@ CREATE TABLE IF NOT EXISTS saved_queries (
     updated_at    TIMESTAMP    NOT NULL DEFAULT NOW(),
     created_by    VARCHAR(255) NOT NULL DEFAULT 'system'
 );
+-- Reconcile the original compact layout with the product service's extended
+-- metadata contract. These columns are additive so existing saved queries are
+-- preserved while the migration snapshot can read one stable projection.
+ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS sql_text TEXT;
+ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS dataset_id VARCHAR(36);
+ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS tables_used TEXT;
+ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS run_context TEXT;
+ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS parameters JSONB;
+ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS row_limit INTEGER;
+ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS last_run_at TIMESTAMP;
+ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS last_run_status VARCHAR(20);
+ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS last_run_row_count INTEGER;
+ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS last_run_duration_ms INTEGER;
+ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS modified_by VARCHAR(255);
+ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS modified_at TIMESTAMP;
+ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS is_shared BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS tags JSONB;
+ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS chart_id VARCHAR(36);
+ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS dashboard_id VARCHAR(36);
+ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS favorite BOOLEAN NOT NULL DEFAULT FALSE;
+UPDATE saved_queries SET sql_text = sql WHERE sql_text IS NULL;
+UPDATE saved_queries SET modified_at = updated_at WHERE modified_at IS NULL;
+UPDATE saved_queries SET modified_by = created_by WHERE modified_by IS NULL;
+ALTER TABLE saved_queries ALTER COLUMN sql_text SET NOT NULL;
+ALTER TABLE saved_queries ALTER COLUMN modified_at SET NOT NULL;
+ALTER TABLE saved_queries ALTER COLUMN modified_by SET NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_saved_queries_name       ON saved_queries(name);
 CREATE INDEX IF NOT EXISTS idx_saved_queries_created_by ON saved_queries(created_by);
+
+-- Chat history is a PostgreSQL-owned source until its replay is qualified.
+-- The metadata adapter strips SQL Server's dbo. prefix for PostgreSQL, so the
+-- physical tables live in public here.
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    id SERIAL PRIMARY KEY,
+    user_email VARCHAR(255) NOT NULL,
+    title VARCHAR(500) NOT NULL DEFAULT 'New conversation',
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions (user_email, updated_at DESC);
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id SERIAL PRIMARY KEY,
+    session_id INTEGER NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    role VARCHAR(10) NOT NULL CHECK (role IN ('user', 'assistant')),
+    content TEXT NOT NULL,
+    sql_query TEXT,
+    chart_type VARCHAR(20),
+    data JSONB,
+    route VARCHAR(20),
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages (session_id, created_at);
 
 -- ── Query History ─────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS query_history (
@@ -284,6 +334,14 @@ UPDATE product_migration_outbox
 SET owner_principal = actor_principal
 WHERE owner_principal IS NULL;
 ALTER TABLE product_migration_outbox ALTER COLUMN owner_principal SET NOT NULL;
+-- Keep the deployed constraint aligned with the families emitted by the API.
+-- Older databases accepted only the first five families and would roll back
+-- otherwise valid metadata writes before migration could observe them.
+ALTER TABLE product_migration_outbox DROP CONSTRAINT IF EXISTS ck_product_outbox_family;
+ALTER TABLE product_migration_outbox ADD CONSTRAINT ck_product_outbox_family CHECK
+    (family IN ('datasets','charts','dashboards','saved_queries','user_themes',
+                'user_recents','favorites','catalog_sources','data_sources',
+                'activity','chat_sessions','chat_messages','dlm_definitions'));
 CREATE INDEX IF NOT EXISTS idx_product_outbox_unapplied
     ON product_migration_outbox(source_sequence) WHERE applied_at IS NULL;
 

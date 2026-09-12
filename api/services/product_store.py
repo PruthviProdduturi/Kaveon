@@ -47,12 +47,21 @@ def _identifier(value: str, label: str) -> str:
 def _sql_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
+_PRODUCT_TABLES = {
+    "dataset": "datasets", "chart": "charts", "dashboard": "dashboards",
+    "saved_query": "saved_queries", "user_theme": "user_themes",
+    "dlm_definition": "dlm_definitions", "dlm_run": "dlm_runs",
+    "favorite": "favorites", "source": "sources", "user_recent": "user_recents",
+    "query_history": "query_history", "activity": "activity",
+    "chat_session": "chat_sessions", "chat_message": "chat_messages",
+}
+
 
 def _statement(mutation: ProductMutation) -> str:
     if mutation.kind not in _KINDS:
         raise HTTPException(422, "Unsupported product record kind")
     record_id = _identifier(mutation.record_id, "record ID")
-    table = mutation.kind + "s"
+    table = _PRODUCT_TABLES[mutation.kind]
     if mutation.operation == "create":
         if mutation.document is None or mutation.expected_revision is not None:
             raise HTTPException(422, "Create requires a document and no expected revision")

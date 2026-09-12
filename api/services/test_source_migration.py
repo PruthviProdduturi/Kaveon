@@ -17,7 +17,7 @@ def transaction():yield Tx()
 class SourceMigrationTests(unittest.TestCase):
  def test_capture_contains_only_public_metadata_and_opaque_secret_refs(self):
   with patch.object(b.db,"transaction",return_value=transaction()):s=b.capture_snapshot()
-  self.assertEqual([r.record_id for r in s.records],["catalog:1","data:2"])
+  self.assertEqual([r.record_id for r in s.records],["catalog-1","data-2"])
   encoded=str([r.document for r in s.records]).lower()
   self.assertNotIn("connection_string",encoded);self.assertNotIn("cipher",encoded)
   self.assertEqual(s.records[1].document["secret_ref"],"key-managed:data_sources/2")
