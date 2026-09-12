@@ -135,9 +135,16 @@ def run(api, apply: bool, generate: bool, ask: bool, register: bool = True) -> d
                      "dataset_id": answer.get("dataset_id"), "sql": answer.get("sql")}
             if answer.get("ok") and answer.get("sql") and not answer.get("from_context"):
                 t1 = time.time()
-                executed = api("POST", "sql/execute", {"sql_text": answer["sql"], "database": answer.get("database") or CATALOG, "source": "qualification"})
-                rows = executed.get("rows") or executed.get("data") or []
-                entry["live"] = {"seconds": round(time.time() - t1, 2), "rows": len(rows), "first": rows[:3]}
+                try:
+                    if answer.get("engine"):
+                        executed = api("POST", "sql/engine", {"sql_text": answer["sql"], "database": answer.get("database") or CATALOG,
+                                                              "dataset_id": int(answer["dataset_id"]), "source": "qualification"})
+                    else:
+                        executed = api("POST", "sql/execute", {"sql_text": answer["sql"], "database": answer.get("database") or CATALOG, "source": "qualification"})
+                    rows = executed.get("rows") or executed.get("data") or []
+                    entry["live"] = {"seconds": round(time.time() - t1, 2), "rows": len(rows), "first": rows[:3]}
+                except RuntimeError as exc:
+                    entry["live"] = {"seconds": round(time.time() - t1, 2), "error": str(exc)[:300]}
             elif answer.get("from_context"):
                 entry["rows"] = (answer.get("rows") or [])[:3]
             asked.append(entry)
@@ -152,8 +159,11 @@ def main() -> int:
     parser.add_argument("--generate", action="store_true", help="compile the DLM after registering")
     parser.add_argument("--ask", action="store_true", help="ask the qualification questions and time them")
     parser.add_argument("--no-register", action="store_true", help="with --apply: skip the dataset PUT/POST")
+    parser.add_argument("--question", action="append", help="ask these instead of the built-in questions (repeatable)")
     parser.add_argument("--report", type=Path, default=ROOT / "tmp/kaveon-telemetry-dataset.json")
     args = parser.parse_args()
+    if args.question:
+        QUESTIONS[:] = args.question
     from playwright.sync_api import sync_playwright
     with sync_playwright() as playwright:
         request = playwright.request.new_context(base_url=args.portal.rstrip("/"), timeout=1_800_000)

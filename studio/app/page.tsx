@@ -809,10 +809,14 @@ export default function Home() {
                 if (last && last.loading) copy[copy.length - 1] = { ...last, liveSince: Date.now(), contextHints: dlm.context_hints || [] };
                 return copy;
               });
-              const execRes = await msalFetch("/api/v1/sql/execute", {
+              // A KaveonDB catalog executes through the Engine plane, scoped to
+              // the dataset's schema by the server; external sources keep the pool.
+              const execRes = await msalFetch(dlm.engine ? "/api/v1/sql/engine" : "/api/v1/sql/execute", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ sql_text: dlm.sql, database: dlm.database || "kaveon", source: "chat" }),
+                body: JSON.stringify(dlm.engine
+                  ? { sql_text: dlm.sql, database: dlm.database, dataset_id: Number(dlm.dataset_id), source: "chat" }
+                  : { sql_text: dlm.sql, database: dlm.database || "kaveon", source: "chat" }),
               });
               if (execRes.ok) {
                 const execData = await execRes.json();
