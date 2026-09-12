@@ -175,6 +175,16 @@ overwrite an existing checkpoint; inspect it with a dry-run resume:
 python scripts/backfill-product-catalog.py --checkpoint tmp/dataset-backfill.json --resume
 ```
 
+Each replacement checkpoint is written to a temporary file, flushed before the
+atomic rename, and preserves the previous complete checkpoint as
+`dataset-backfill.json.bak`. If the active file is missing after a process or
+host restart, resume may recover that last checkpoint; a present but corrupt
+active file fails closed and must be investigated. Resume uses the captured
+snapshot and does not reconnect to PostgreSQL, so a temporary source outage
+cannot change the migration input or silently recapture a different snapshot.
+This is local checkpoint recovery evidence, not a PostgreSQL backup or proof of
+live cutover readiness.
+
 Target writes require both an explicit flag and enable variable. This is an
 operator guard, not cutover authorization:
 
