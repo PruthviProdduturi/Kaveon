@@ -132,7 +132,8 @@ def run(api, apply: bool, generate: bool, ask: bool, register: bool = True) -> d
             answer = api("POST", "dlm/ask", {"question": question})
             entry = {"question": question, "seconds": round(time.time() - t0, 2), "ok": answer.get("ok"),
                      "reason": answer.get("reason"), "from_context": answer.get("from_context"),
-                     "dataset_id": answer.get("dataset_id"), "sql": answer.get("sql")}
+                     "dataset_id": answer.get("dataset_id"), "sql": answer.get("sql"),
+                     **({"clarification": answer.get("clarification")} if answer.get("clarification") else {})}
             if answer.get("ok") and answer.get("sql") and not answer.get("from_context"):
                 t1 = time.time()
                 try:
