@@ -268,7 +268,11 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
     except Exception:
         stats_supported = False
 
-    if not stats_supported:
+    # Without catalog statistics a rebuild can only be an improvement if the
+    # caller asked for one: a background sweep keeps a ready artifact rather
+    # than replacing it with less, but an explicit force always rebuilds —
+    # native catalogs never have a profiler, so this is their only path.
+    if not stats_supported and not force:
         existing_art = meta.query_one(
             "SELECT status FROM dlm_artifact WHERE dataset_id = @param0",
             [str(dataset_id)],

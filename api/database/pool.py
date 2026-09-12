@@ -274,7 +274,7 @@ class FabricSQLConnection:
                 "Azure AD token authentication failed"
             )
 
-    def execute_query(self, sql: str, params: Optional[list] = None) -> Dict[str, Any]:
+    def execute_query(self, sql: str, params: Optional[list] = None, max_rows: Optional[int] = None) -> Dict[str, Any]:
         """Execute SQL and return {columns, rows, rows_objects, row_count}."""
         self.connect()
         cursor = self.connection.cursor()
@@ -288,13 +288,8 @@ class FabricSQLConnection:
 
         if cursor.description:
             columns = [col[0] for col in cursor.description]
-            rows_arrays: List[list] = []
-            rows_objects: List[dict] = []
 
-            for row in cursor.fetchall():
-                safe_row = [_safe(v) for v in row]
-                rows_arrays.append(safe_row)
-                rows_objects.append({columns[i]: safe_row[i] for i in range(len(columns))})
+            rows_arrays, rows_objects, truncated = _collect_rows(cursor, columns, max_rows)
 
             cursor.close()
             if is_modification:
@@ -305,6 +300,7 @@ class FabricSQLConnection:
                 "rows": rows_arrays,
                 "rows_objects": rows_objects,
                 "row_count": len(rows_arrays),
+                "truncated": truncated,
             }
         else:
             row_count = cursor.rowcount
@@ -313,7 +309,7 @@ class FabricSQLConnection:
             return {"columns": [], "rows": [], "rows_objects": [], "row_count": row_count}
 
     def execute_query_cancellable(
-        self, sql: str, params: Optional[list] = None, cancel_event=None
+        self, sql: str, params: Optional[list] = None, cancel_event=None, max_rows: Optional[int] = None
     ) -> Dict[str, Any]:
         """Like execute_query but watches *cancel_event* (threading.Event).
         When the event is set the pyodbc cursor is cancelled mid-flight."""
@@ -342,16 +338,11 @@ class FabricSQLConnection:
 
             if cursor.description:
                 columns = [col[0] for col in cursor.description]
-                rows_arrays: List[list] = []
-                rows_objects: List[dict] = []
-                for row in cursor.fetchall():
-                    safe_row = [_safe(v) for v in row]
-                    rows_arrays.append(safe_row)
-                    rows_objects.append({columns[i]: safe_row[i] for i in range(len(columns))})
+                rows_arrays, rows_objects, truncated = _collect_rows(cursor, columns, max_rows)
                 cursor.close()
                 if is_modification:
                     self.connection.commit()
-                return {"columns": columns, "rows": rows_arrays, "rows_objects": rows_objects, "row_count": len(rows_arrays)}
+                return {"columns": columns, "rows": rows_arrays, "rows_objects": rows_objects, "row_count": len(rows_arrays), "truncated": truncated}
             else:
                 row_count = cursor.rowcount
                 cursor.close()
@@ -453,7 +444,7 @@ class PostgreSQLConnection:
         self.connection.autocommit = True
         print(f"[Pool] Connected (PostgreSQL) -> {self.database}")
 
-    def execute_query(self, sql: str, params: Optional[list] = None) -> Dict[str, Any]:
+    def execute_query(self, sql: str, params: Optional[list] = None, max_rows: Optional[int] = None) -> Dict[str, Any]:
         self.connect()
         cursor = self.connection.cursor()
         # Only pass params when present — an empty sequence still makes the driver
@@ -468,16 +459,11 @@ class PostgreSQLConnection:
 
         if cursor.description:
             columns = [col[0] for col in cursor.description]
-            rows_arrays: List[list] = []
-            rows_objects: List[dict] = []
-            for row in cursor.fetchall():
-                safe_row = [_safe(v) for v in row]
-                rows_arrays.append(safe_row)
-                rows_objects.append({columns[i]: safe_row[i] for i in range(len(columns))})
+            rows_arrays, rows_objects, truncated = _collect_rows(cursor, columns, max_rows)
             cursor.close()
             if is_modification:
                 self.connection.commit()
-            return {"columns": columns, "rows": rows_arrays, "rows_objects": rows_objects, "row_count": len(rows_arrays)}
+            return {"columns": columns, "rows": rows_arrays, "rows_objects": rows_objects, "row_count": len(rows_arrays), "truncated": truncated}
         else:
             row_count = cursor.rowcount
             cursor.close()
@@ -485,7 +471,7 @@ class PostgreSQLConnection:
             return {"columns": [], "rows": [], "rows_objects": [], "row_count": row_count}
 
     def execute_query_cancellable(
-        self, sql: str, params: Optional[list] = None, cancel_event=None
+        self, sql: str, params: Optional[list] = None, cancel_event=None, max_rows: Optional[int] = None
     ) -> Dict[str, Any]:
         """Like execute_query but watches *cancel_event* (threading.Event).
         When set, psycopg2's thread-safe connection.cancel() aborts the query."""
@@ -514,16 +500,11 @@ class PostgreSQLConnection:
 
             if cursor.description:
                 columns = [col[0] for col in cursor.description]
-                rows_arrays: List[list] = []
-                rows_objects: List[dict] = []
-                for row in cursor.fetchall():
-                    safe_row = [_safe(v) for v in row]
-                    rows_arrays.append(safe_row)
-                    rows_objects.append({columns[i]: safe_row[i] for i in range(len(columns))})
+                rows_arrays, rows_objects, truncated = _collect_rows(cursor, columns, max_rows)
                 cursor.close()
                 if is_modification:
                     self.connection.commit()
-                return {"columns": columns, "rows": rows_arrays, "rows_objects": rows_objects, "row_count": len(rows_arrays)}
+                return {"columns": columns, "rows": rows_arrays, "rows_objects": rows_objects, "row_count": len(rows_arrays), "truncated": truncated}
             else:
                 row_count = cursor.rowcount
                 cursor.close()
@@ -610,7 +591,7 @@ class MySQLConnection:
             )
         print(f"[Pool] Connected (MySQL) -> {self.database}")
 
-    def execute_query(self, sql: str, params: Optional[list] = None) -> Dict[str, Any]:
+    def execute_query(self, sql: str, params: Optional[list] = None, max_rows: Optional[int] = None) -> Dict[str, Any]:
         self.connect()
         cursor = self.connection.cursor()
         # Only pass params when present — an empty sequence still makes the driver
@@ -625,16 +606,11 @@ class MySQLConnection:
 
         if cursor.description:
             columns = [col[0] for col in cursor.description]
-            rows_arrays: List[list] = []
-            rows_objects: List[dict] = []
-            for row in cursor.fetchall():
-                safe_row = [_safe(v) for v in row]
-                rows_arrays.append(safe_row)
-                rows_objects.append({columns[i]: safe_row[i] for i in range(len(columns))})
+            rows_arrays, rows_objects, truncated = _collect_rows(cursor, columns, max_rows)
             cursor.close()
             if is_modification:
                 self.connection.commit()
-            return {"columns": columns, "rows": rows_arrays, "rows_objects": rows_objects, "row_count": len(rows_arrays)}
+            return {"columns": columns, "rows": rows_arrays, "rows_objects": rows_objects, "row_count": len(rows_arrays), "truncated": truncated}
         else:
             row_count = cursor.rowcount
             cursor.close()
@@ -642,7 +618,7 @@ class MySQLConnection:
             return {"columns": [], "rows": [], "rows_objects": [], "row_count": row_count}
 
     def execute_query_cancellable(
-        self, sql: str, params: Optional[list] = None, cancel_event=None
+        self, sql: str, params: Optional[list] = None, cancel_event=None, max_rows: Optional[int] = None
     ) -> Dict[str, Any]:
         """Best-effort: MySQL/StarRocks lack an in-process cancel (would need a
         side connection issuing KILL QUERY), so this just runs to completion.
@@ -958,6 +934,48 @@ def _resolve_endpoint(database: str) -> str:
             meta_pool.return_connection(conn)
 
 
+def _collect_rows(cursor, columns: List[str], max_rows: Optional[int]):
+    """Fetch at most `max_rows` rows (one more is read to learn whether the
+    result was cut). Drivers that stream (pyodbc) stop reading here; the
+    PostgreSQL/MySQL clients buffer the whole result on execute, which is why
+    `_bound_rows` also wraps their statements in a LIMIT."""
+    rows_arrays: List[list] = []
+    rows_objects: List[dict] = []
+    truncated = False
+    want = None if not max_rows else int(max_rows) + 1
+    batch = 1000
+    while True:
+        take = batch if want is None else min(batch, want - len(rows_arrays))
+        if take <= 0:
+            break
+        chunk = cursor.fetchmany(take)
+        if not chunk:
+            break
+        for row in chunk:
+            safe_row = [_safe(v) for v in row]
+            rows_arrays.append(safe_row)
+            rows_objects.append({columns[i]: safe_row[i] for i in range(len(columns))})
+        if len(chunk) < take:
+            break
+    if want is not None and len(rows_arrays) >= want:
+        truncated = True
+        del rows_arrays[max_rows:]
+        del rows_objects[max_rows:]
+    return rows_arrays, rows_objects, truncated
+
+
+def _bound_rows(sql: str, db_type: str, max_rows: int) -> str:
+    """Wrap a SELECT/WITH statement so the server returns at most max_rows+1
+    rows. PostgreSQL and MySQL accept an ordered query as a derived table;
+    T-SQL does not, and pyodbc streams anyway, so it is left to the fetch bound."""
+    if db_type not in ("postgresql", "mysql"):
+        return sql
+    body = sql.strip().rstrip(";").rstrip()
+    if not re.match(r"^(select|with)\b", body, re.I):
+        return sql
+    return f"SELECT * FROM ({body}) AS _bounded LIMIT {int(max_rows) + 1}"
+
+
 def _bound_statement(sql: str, db_type: str, timeout_seconds: float) -> str:
     """Attach a per-statement execution bound in the dialect's own idiom.
     PostgreSQL: SET LOCAL inside the implicit transaction of one multi-statement
@@ -973,7 +991,7 @@ def _bound_statement(sql: str, db_type: str, timeout_seconds: float) -> str:
 
 
 def execute_query(sql: str, database: str, params: Optional[list] = None,
-                  timeout_seconds: Optional[float] = None) -> Dict[str, Any]:
+                  timeout_seconds: Optional[float] = None, max_rows: Optional[int] = None) -> Dict[str, Any]:
     """
     Execute *sql* against *database* using the connection pool.
     Retries up to 3 attempts on stale-connection errors (08S01 / 10054), with a
@@ -986,6 +1004,8 @@ def execute_query(sql: str, database: str, params: Optional[list] = None,
     sql = adapt_sql(sql, pool.db_type)
     if timeout_seconds:
         sql = _bound_statement(sql, pool.db_type, timeout_seconds)
+    if max_rows:
+        sql = _bound_rows(sql, pool.db_type, max_rows)
     driver_bound = bool(timeout_seconds) and pool.db_type in ("fabric_sql", "azure_sql")
     max_attempts = 3
     for attempt in range(max_attempts):
@@ -996,7 +1016,7 @@ def execute_query(sql: str, database: str, params: Optional[list] = None,
             if driver is not None:
                 driver.timeout = int(math.ceil(timeout_seconds))
             try:
-                result = conn.execute_query(sql, params)
+                result = conn.execute_query(sql, params, max_rows=max_rows)
             finally:
                 if driver is not None:
                     driver.timeout = previous_timeout
@@ -1015,14 +1035,17 @@ def execute_query(sql: str, database: str, params: Optional[list] = None,
 
 
 def execute_query_cancellable(
-    sql: str, database: str, params: Optional[list] = None, cancel_event=None
+    sql: str, database: str, params: Optional[list] = None, cancel_event=None,
+    max_rows: Optional[int] = None,
 ) -> Dict[str, Any]:
     """execute_query variant that supports mid-flight cancellation via cancel_event."""
     db_pool = get_connection_pool(database)
     sql = adapt_sql(sql, db_pool.db_type)
+    if max_rows:
+        sql = _bound_rows(sql, db_pool.db_type, max_rows)
     conn = db_pool.get_connection()
     try:
-        result = conn.execute_query_cancellable(sql, params, cancel_event=cancel_event)
+        result = conn.execute_query_cancellable(sql, params, cancel_event=cancel_event, max_rows=max_rows)
         db_pool.return_connection(conn)
         return result
     except Exception as e:
