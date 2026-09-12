@@ -37,7 +37,7 @@ class Harness(ExitStack):
         self.enter_context(patch.object(engine, "route", lambda q, limit=1: self.routed))
         self.enter_context(patch.object(engine.datasets_svc, "get_dataset_by_id", lambda i: DATASET if str(i) == "7" else None))
         self.enter_context(patch.object(engine, "_effective_spec", lambda i: {}))
-        self.enter_context(patch.object(engine, "_resolve_entity_filters", lambda i, q: list(self.filters)))
+        self.enter_context(patch.object(engine, "_resolve_entity_filters", lambda i, q, **kw: list(self.filters)))
         self.enter_context(patch.object(engine, "_serve_from_context", lambda *a, **k: None))
         self.enter_context(patch.object(engine, "_dataset_year_bounds", lambda i: (2023, 2026)))
         self.enter_context(patch.object(engine, "_metric_year_bounds", lambda *a, **k: (2023, 2026)))
@@ -160,6 +160,56 @@ class GroupingTests(unittest.TestCase):
         self.assertEqual(result["xAxis"], "channel")
         self.assertIn("by channel and region", result["title"])
         self.assertEqual(result["frame"]["group_col"], "channel|region")
+
+
+class CorpusRegressionTests(unittest.TestCase):
+    """Shapes the 80-question corpus caught on 2026-09-12."""
+
+    def test_total_in_the_question_does_not_reach_a_metric_named_total(self):
+        metrics = [{"name": "Total actions", "expression": "SUM(actions)"}, {"name": "Errors", "expression": "SUM(errors)"},
+                   {"name": "Duration (sec)", "expression": "SUM(duration_sec)"}, {"name": "Sessions", "expression": "SUM(sessions)"}]
+        ds = dict(DATASET, metrics=metrics)
+        for q, want in [("errors in total", "Errors"), ("what is the total duration in seconds", "Duration (sec)"),
+                        ("number of sessions by region", "Sessions")]:
+            with Harness(), patch.object(engine.datasets_svc, "get_dataset_by_id", lambda i: ds):
+                result = engine.ask(q)
+            self.assertTrue(result["ok"], (q, result))
+            self.assertEqual(result["frame"]["metric"], want, q)
+
+    def test_a_time_phrase_does_not_pull_a_duration_metric(self):
+        metrics = [{"name": "Errors", "expression": "SUM(errors)"}, {"name": "Duration (sec)", "expression": "SUM(duration_sec)"}]
+        ds = dict(DATASET, metrics=metrics)
+        with Harness(), patch.object(engine.datasets_svc, "get_dataset_by_id", lambda i: ds):
+            result = engine.ask("errors last 7 days")
+        self.assertEqual(result["frame"]["metric"], "Errors")
+        self.assertRegex(result["sql"], r"\"order_date\" >= '\d{4}-\d{2}-\d{2}'")
+
+    def test_a_superlative_with_a_dimension_is_a_top_one(self):
+        with Harness():
+            result = engine.ask("lowest net revenue region")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["frame"]["group_col"], "region")
+        self.assertEqual(result["frame"]["top_n"], 1)
+        self.assertTrue(result["frame"]["sort_asc"])
+
+    def test_a_value_in_several_columns_is_a_question_then_a_filter(self):
+        hits = [{"element_key": "sales.orders.customer", "value_text": "Enterprise", "key_value": "Enterprise", "freq": 5},
+                {"element_key": "sales.orders.region", "value_text": "Enterprise", "key_value": "Enterprise", "freq": 3}]
+        index = lambda dataset_id, term, limit=5, exact_only=False: hits if term == "Enterprise" else []
+        with patch.object(engine, "resolve_value", index), patch.object(engine, "_effective_spec", lambda i: {}):
+            amb = []
+            self.assertEqual(engine._resolve_entity_filters("7", "orders for Enterprise customers", ambiguous=amb), [])
+            self.assertEqual(amb, [{"value": "Enterprise", "columns": ["customer", "region"]}])
+            pinned = engine._resolve_entity_filters("7", "orders for Enterprise customers",
+                                                    choices={"value": "region", "value_phrase": "enterprise"})
+            self.assertEqual([(f["column"], f["value"]) for f in pinned], [("region", "Enterprise")])
+
+    def test_sql_pasted_as_a_question_is_out_of_scope_with_a_hint(self):
+        with Harness(), patch.object(engine, "_dataset_names", lambda: ["Sales"]):
+            for q in ("select * from users", "DROP TABLE orders"):
+                result = engine.ask(q)
+                self.assertEqual(result["reason"], "out_of_scope", q)
+                self.assertIn("SQL Lab", result["hint"])
 
 
 class EditDistanceTests(unittest.TestCase):

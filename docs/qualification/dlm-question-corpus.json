@@ -2,96 +2,869 @@
   "dataset": "Kaveon Telemetry",
   "notes": "Every question shape the DLM claims to answer, against the 504M-row telemetry dataset (24) and its neighbours on kaveon-test-aks. `expect` is the contract; the runner reports every deviation. Exact figures come from the deterministic generator and were first observed on 2026-09-11 (HANDSHAKE query IDs).",
   "questions": [
-    {"id": "T01", "group": "totals", "q": "Kaveon Telemetry total actions", "expect": {"ok": true, "dataset": "24", "route": "context", "first_value": 6078000539}},
-    {"id": "T02", "group": "totals", "q": "how many sessions in the telemetry", "expect": {"ok": true, "dataset": "24"}},
-    {"id": "T03", "group": "totals", "q": "telemetry sum of queries run", "expect": {"ok": true, "dataset": "24"}},
-    {"id": "T04", "group": "totals", "q": "telemetry average latency", "expect": {"ok": true, "dataset": "24", "metric": "Average latency (ms)"}},
-    {"id": "T05", "group": "totals", "q": "what is the total duration in seconds for telemetry", "expect": {"ok": true, "dataset": "24", "metric": "Duration (sec)"}},
-    {"id": "T06", "group": "totals", "q": "telemetry cache hits overall", "expect": {"ok": true, "dataset": "24", "metric": "Cache hits"}},
-    {"id": "T07", "group": "totals", "q": "telemetry errors in total", "expect": {"ok": true, "dataset": "24", "metric": "Errors"}},
-    {"id": "T08", "group": "totals", "q": "telemetry rows scanned", "expect": {"ok": true, "dataset": "24", "metric": "Rows scanned"}},
-    {"id": "T09", "group": "totals", "q": "telemetry charts created", "expect": {"ok": true, "dataset": "24", "metric": "Charts created"}},
-
-    {"id": "B01", "group": "breakdown", "q": "Kaveon Telemetry total actions by surface", "expect": {"ok": true, "dataset": "24", "route": "context", "rows": 6, "first_row": ["API", 2460000399]}},
-    {"id": "B02", "group": "breakdown", "q": "telemetry sessions per country", "expect": {"ok": true, "dataset": "24", "route": "context", "rows": 26, "first_row": ["United States", 116290050]}},
-    {"id": "B03", "group": "breakdown", "q": "telemetry errors across platforms", "expect": {"ok": true, "dataset": "24", "group": "platform"}},
-    {"id": "B04", "group": "breakdown", "q": "telemetry queries run for each license", "expect": {"ok": true, "dataset": "24", "group": "license", "rows": 4}},
-    {"id": "B05", "group": "breakdown", "q": "telemetry duration by segment", "expect": {"ok": true, "dataset": "24", "group": "segment"}},
-    {"id": "B06", "group": "breakdown", "q": "telemetry charts created by industry", "expect": {"ok": true, "dataset": "24", "group": "industry"}},
-    {"id": "B07", "group": "breakdown", "q": "telemetry cache hits by region", "expect": {"ok": true, "dataset": "24", "group": "region", "rows": 6}},
-    {"id": "B08", "group": "breakdown", "q": "telemetry rows scanned by deployment", "expect": {"ok": true, "dataset": "24", "group": "deployment", "rows": 3}},
-    {"id": "B09", "group": "breakdown", "q": "telemetry latency by acquisition channel", "expect": {"ok": true, "dataset": "24", "group": "acquisition_channel"}},
-    {"id": "B10", "group": "breakdown", "q": "telemetry actions by team size", "expect": {"ok": true, "dataset": "24", "group": "team_size"}},
-
-    {"id": "P01", "group": "pairs", "q": "telemetry errors by platform and deployment", "expect": {"ok": true, "dataset": "24", "route": "context", "group": "deployment|platform", "rows": 9}},
-    {"id": "P02", "group": "pairs", "q": "telemetry sessions by license, segment", "expect": {"ok": true, "dataset": "24", "route": "context", "group": "license|segment"}},
-    {"id": "P03", "group": "pairs", "q": "telemetry actions by region & deployment", "expect": {"ok": true, "dataset": "24", "group": "deployment|region"}},
-    {"id": "P04", "group": "pairs", "q": "telemetry actions by country and industry", "expect": {"ok": true, "dataset": "24", "route": "live", "group": "country|industry", "sql_contains": ["GROUP BY country, industry"]}},
-
-    {"id": "R01", "group": "ranking", "q": "telemetry top 3 countries by sessions", "expect": {"ok": true, "dataset": "24", "rows": 3, "first_row": ["United States", 116290050]}},
-    {"id": "R02", "group": "ranking", "q": "telemetry top 5 industries by actions", "expect": {"ok": true, "dataset": "24", "rows": 5}},
-    {"id": "R03", "group": "ranking", "q": "telemetry bottom 3 platforms by errors", "expect": {"ok": true, "dataset": "24", "rows": 3, "sort": "asc"}},
-    {"id": "R04", "group": "ranking", "q": "which surface has the most actions in telemetry", "expect": {"ok": true, "dataset": "24", "rows": 1, "first_row": ["API", 2460000399]}},
-    {"id": "R05", "group": "ranking", "q": "which region has the fewest sessions in telemetry", "expect": {"ok": true, "dataset": "24", "rows": 1, "sort": "asc"}},
-    {"id": "R06", "group": "ranking", "q": "telemetry top surfaces by cache hits", "expect": {"ok": true, "dataset": "24", "group": "surface"}},
-    {"id": "R07", "group": "ranking", "q": "telemetry lowest latency platform", "expect": {"ok": true, "dataset": "24", "group": "platform", "sort": "asc"}},
-
-    {"id": "F01", "group": "filters", "q": "telemetry sessions in India", "expect": {"ok": true, "dataset": "24", "filters": [["country", "India"]]}},
-    {"id": "F02", "group": "filters", "q": "telemetry errors on Mobile", "expect": {"ok": true, "dataset": "24", "filters": [["platform", "Mobile"]]}},
-    {"id": "F03", "group": "filters", "q": "telemetry queries run in Europe by country", "expect": {"ok": true, "dataset": "24", "filters": [["region", "Europe"]], "group": "country"}},
-    {"id": "F04", "group": "filters", "q": "telemetry actions in United States by surface", "expect": {"ok": true, "dataset": "24", "filters": [["country", "United States"]], "group": "surface", "rows": 6}},
-    {"id": "F05", "group": "filters", "q": "telemetry sessions for Cloud deployment in Asia", "expect": {"ok": true, "dataset": "24", "filters": [["deployment", "Cloud"], ["region", "Asia"]]}},
-    {"id": "F06", "group": "filters", "q": "telemetry actions for Enterprise customers", "expect": {"reason": "clarify", "dataset": "24"}},
-    {"id": "F07", "group": "filters", "q": "telemetry sessions in Atlantis", "expect": {"ok": true, "dataset": "24", "note_contains": "not found"}},
-    {"id": "F08", "group": "filters", "q": "telemetry actions on the Chat surface by license", "expect": {"ok": true, "dataset": "24", "filters": [["surface", "Chat"]], "group": "license"}},
-
-    {"id": "Y01", "group": "time", "q": "telemetry actions in July 2026", "expect": {"ok": true, "dataset": "24"}},
-    {"id": "Y02", "group": "time", "q": "telemetry sessions in 2026 by country", "expect": {"ok": true, "dataset": "24", "year": 2026, "group": "country"}},
-    {"id": "Y03", "group": "time", "q": "telemetry actions in 2025", "expect": {"ok": true, "dataset": "24"}},
-    {"id": "Y04", "group": "time", "q": "telemetry errors last 7 days", "expect": {"ok": true, "dataset": "24"}},
-    {"id": "Y05", "group": "time", "q": "telemetry sessions by month", "expect": {"ok": true, "dataset": "24"}},
-    {"id": "Y06", "group": "time", "q": "trend of telemetry actions over time", "expect": {"ok": true, "dataset": "24"}},
-
-    {"id": "S01", "group": "spelling", "q": "Telemetry Total Actions By Surface!", "expect": {"ok": true, "dataset": "24", "group": "surface", "rows": 6}},
-    {"id": "S02", "group": "spelling", "q": "telemetry sesions by contry", "expect": {"ok": true, "dataset": "24", "group": "country"}},
-    {"id": "S03", "group": "spelling", "q": "telemetry erors by platfrom", "expect": {"ok": true, "dataset": "24", "group": "platform"}},
-    {"id": "S04", "group": "spelling", "q": "TELEMETRY TOP 3 COUNTRIES BY SESSIONS", "expect": {"ok": true, "dataset": "24", "rows": 3}},
-    {"id": "S05", "group": "spelling", "q": "telemetry  queries   run  by  license ?", "expect": {"ok": true, "dataset": "24", "group": "license"}},
-    {"id": "S06", "group": "spelling", "q": "telemetry cache-hits by region", "expect": {"ok": true, "dataset": "24", "group": "region"}},
-
-    {"id": "V01", "group": "vocabulary", "q": "telemetry usage by surface", "expect": {"ok": true, "dataset": "24", "group": "surface"}},
-    {"id": "V02", "group": "vocabulary", "q": "telemetry avg latency per platform", "expect": {"ok": true, "dataset": "24", "metric": "Average latency (ms)", "group": "platform"}},
-    {"id": "V03", "group": "vocabulary", "q": "telemetry number of sessions by country", "expect": {"ok": true, "dataset": "24", "metric": "Sessions", "group": "country"}},
-    {"id": "V04", "group": "vocabulary", "q": "telemetry mean latency", "expect": {"ok": true, "dataset": "24", "metric": "Average latency (ms)"}},
-    {"id": "V05", "group": "vocabulary", "q": "telemetry revenue by region", "expect": {"dataset": "24"}},
-
-    {"id": "C01", "group": "conversation", "q": "Kaveon Telemetry total actions by surface", "expect": {"ok": true, "dataset": "24", "rows": 6}},
-    {"id": "C02", "group": "conversation", "q": "what about 2026?", "follow_up_of": "C01", "expect": {"ok": true, "dataset": "24", "group": "surface", "year": 2026}},
-    {"id": "C03", "group": "conversation", "q": "and by platform", "follow_up_of": "C02", "expect": {"ok": true, "dataset": "24", "group": "platform"}},
-    {"id": "C04", "group": "conversation", "q": "only for Mobile", "follow_up_of": "C03", "expect": {"ok": true, "dataset": "24", "filters": [["platform", "Mobile"]]}},
-    {"id": "C05", "group": "conversation", "q": "top 3", "follow_up_of": "C01", "expect": {"ok": true, "dataset": "24", "rows": 3, "group": "surface"}},
-    {"id": "C06", "group": "conversation", "q": "lowest first", "follow_up_of": "C01", "expect": {"ok": true, "dataset": "24", "group": "surface", "sort": "asc"}},
-    {"id": "C07", "group": "conversation", "q": "telemetry actions for Enterprise customers", "expect": {"reason": "clarify"}},
-    {"id": "C08", "group": "conversation", "q": "telemetry actions for Enterprise customers", "resume_of": "C07", "choose": {"kind": "dimension", "id": "license"}, "expect": {"ok": true, "dataset": "24", "filters": [["license", "Enterprise"]]}},
-
-    {"id": "O01", "group": "scope", "q": "write a poem about data", "expect": {"reason": "out_of_scope"}},
-    {"id": "O02", "group": "scope", "q": "what's the weather in Seattle tomorrow", "expect": {"reason": "out_of_scope"}},
-    {"id": "O03", "group": "scope", "q": "hello", "expect": {"reason": "out_of_scope"}},
-    {"id": "O04", "group": "scope", "q": "select * from users", "expect": {"reason_in": ["out_of_scope", "no_dataset"]}},
-    {"id": "O05", "group": "scope", "q": "drop table kaveon_events_enriched", "expect": {"ok": false}},
-    {"id": "O06", "group": "scope", "q": "telemetry", "expect": {"ok": true, "dataset": "24"}},
-    {"id": "O07", "group": "scope", "q": "actions", "expect": {"ok": true}},
-
-    {"id": "X01", "group": "routing", "q": "Kaveon Events actions by surface", "expect": {"ok": true, "dataset": "23"}},
-    {"id": "X02", "group": "routing", "q": "What is current Kaveon usage?", "expect": {"ok": true}},
-    {"id": "X03", "group": "routing", "q": "trips by borough", "expect": {"ok": true}},
-    {"id": "X04", "group": "routing", "q": "covid deaths by country", "expect": {"ok": true}},
-    {"id": "X05", "group": "routing", "q": "energy consumption by country", "expect": {"ok": true}},
-    {"id": "X06", "group": "routing", "q": "telemetry actions by surface", "expect": {"ok": true, "dataset": "24"}},
-
-    {"id": "M01", "group": "measures", "q": "telemetry average latency in ms by platform", "expect": {"ok": true, "dataset": "24", "metric": "Average latency (ms)", "group": "platform"}},
-    {"id": "M02", "group": "measures", "q": "telemetry actions per surface as a percentage", "expect": {"ok": true, "dataset": "24", "group": "surface"}},
-    {"id": "M03", "group": "measures", "q": "how many rows are in telemetry", "expect": {"dataset": "24"}},
-    {"id": "M04", "group": "measures", "q": "telemetry compare sessions and actions by surface", "expect": {"dataset": "24"}}
+    {
+      "id": "T01",
+      "group": "totals",
+      "q": "Kaveon Telemetry total actions",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "route": "context",
+        "first_value": 6078000539
+      }
+    },
+    {
+      "id": "T02",
+      "group": "totals",
+      "q": "how many sessions in the telemetry",
+      "expect": {
+        "ok": true,
+        "dataset": "24"
+      }
+    },
+    {
+      "id": "T03",
+      "group": "totals",
+      "q": "telemetry sum of queries run",
+      "expect": {
+        "ok": true,
+        "dataset": "24"
+      }
+    },
+    {
+      "id": "T04",
+      "group": "totals",
+      "q": "telemetry average latency",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "metric": "Average latency (ms)"
+      }
+    },
+    {
+      "id": "T05",
+      "group": "totals",
+      "q": "what is the total duration in seconds for telemetry",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "metric": "Duration (sec)"
+      }
+    },
+    {
+      "id": "T06",
+      "group": "totals",
+      "q": "telemetry cache hits overall",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "metric": "Cache hits"
+      }
+    },
+    {
+      "id": "T07",
+      "group": "totals",
+      "q": "telemetry errors in total",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "metric": "Errors"
+      }
+    },
+    {
+      "id": "T08",
+      "group": "totals",
+      "q": "telemetry rows scanned",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "metric": "Rows scanned"
+      }
+    },
+    {
+      "id": "T09",
+      "group": "totals",
+      "q": "telemetry charts created",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "metric": "Charts created"
+      }
+    },
+    {
+      "id": "B01",
+      "group": "breakdown",
+      "q": "Kaveon Telemetry total actions by surface",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "route": "context",
+        "rows": 6,
+        "first_row": [
+          "API",
+          2460000399
+        ]
+      }
+    },
+    {
+      "id": "B02",
+      "group": "breakdown",
+      "q": "telemetry sessions per country",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "route": "context",
+        "rows": 26,
+        "first_row": [
+          "United States",
+          116290050
+        ]
+      }
+    },
+    {
+      "id": "B03",
+      "group": "breakdown",
+      "q": "telemetry errors across platforms",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "group": "platform"
+      }
+    },
+    {
+      "id": "B04",
+      "group": "breakdown",
+      "q": "telemetry queries run for each license",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "group": "license",
+        "rows": 4
+      }
+    },
+    {
+      "id": "B05",
+      "group": "breakdown",
+      "q": "telemetry duration by segment",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "group": "segment"
+      }
+    },
+    {
+      "id": "B06",
+      "group": "breakdown",
+      "q": "telemetry charts created by industry",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "group": "industry"
+      }
+    },
+    {
+      "id": "B07",
+      "group": "breakdown",
+      "q": "telemetry cache hits by region",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "group": "region",
+        "rows": 6
+      }
+    },
+    {
+      "id": "B08",
+      "group": "breakdown",
+      "q": "telemetry rows scanned by deployment",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "group": "deployment",
+        "rows": 3
+      }
+    },
+    {
+      "id": "B09",
+      "group": "breakdown",
+      "q": "telemetry latency by acquisition channel",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "group": "acquisition_channel"
+      }
+    },
+    {
+      "id": "B10",
+      "group": "breakdown",
+      "q": "telemetry actions by team size",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "group": "team_size"
+      }
+    },
+    {
+      "id": "P01",
+      "group": "pairs",
+      "q": "telemetry errors by platform and deployment",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "route": "context",
+        "group": "deployment|platform",
+        "rows": 9
+      }
+    },
+    {
+      "id": "P02",
+      "group": "pairs",
+      "q": "telemetry sessions by license, segment",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "route": "context",
+        "group": "license|segment"
+      }
+    },
+    {
+      "id": "P03",
+      "group": "pairs",
+      "q": "telemetry actions by region & deployment",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "group": "deployment|region"
+      }
+    },
+    {
+      "id": "P04",
+      "group": "pairs",
+      "q": "telemetry actions by country and industry",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "route": "live",
+        "group": "country|industry",
+        "sql_contains": [
+          "GROUP BY country, industry"
+        ]
+      }
+    },
+    {
+      "id": "R01",
+      "group": "ranking",
+      "q": "telemetry top 3 countries by sessions",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "rows": 3,
+        "first_row": [
+          "United States",
+          116290050
+        ]
+      }
+    },
+    {
+      "id": "R02",
+      "group": "ranking",
+      "q": "telemetry top 5 industries by actions",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "rows": 5
+      }
+    },
+    {
+      "id": "R03",
+      "group": "ranking",
+      "q": "telemetry bottom 3 platforms by errors",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "rows": 3,
+        "sort": "asc"
+      }
+    },
+    {
+      "id": "R04",
+      "group": "ranking",
+      "q": "which surface has the most actions in telemetry",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "rows": 1,
+        "first_row": [
+          "API",
+          2460000399
+        ]
+      }
+    },
+    {
+      "id": "R05",
+      "group": "ranking",
+      "q": "which region has the fewest sessions in telemetry",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "rows": 1,
+        "sort": "asc"
+      }
+    },
+    {
+      "id": "R06",
+      "group": "ranking",
+      "q": "telemetry top surfaces by cache hits",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "group": "surface"
+      }
+    },
+    {
+      "id": "R07",
+      "group": "ranking",
+      "q": "telemetry lowest latency platform",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "group": "platform",
+        "sort": "asc",
+        "rows": 1
+      }
+    },
+    {
+      "id": "F01",
+      "group": "filters",
+      "q": "telemetry sessions in India",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "filters": [
+          [
+            "country",
+            "India"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "F02",
+      "group": "filters",
+      "q": "telemetry errors on Mobile",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "filters": [
+          [
+            "platform",
+            "Mobile"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "F03",
+      "group": "filters",
+      "q": "telemetry queries run in Europe by country",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "filters": [
+          [
+            "region",
+            "Europe"
+          ]
+        ],
+        "group": "country"
+      }
+    },
+    {
+      "id": "F04",
+      "group": "filters",
+      "q": "telemetry actions in United States by surface",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "filters": [
+          [
+            "country",
+            "United States"
+          ]
+        ],
+        "group": "surface",
+        "rows": 6
+      }
+    },
+    {
+      "id": "F05",
+      "group": "filters",
+      "q": "telemetry sessions for Cloud deployment in Asia",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "filters": [
+          [
+            "deployment",
+            "Cloud"
+          ],
+          [
+            "region",
+            "Asia"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "F06",
+      "group": "filters",
+      "q": "telemetry actions for Enterprise customers",
+      "expect": {
+        "reason": "clarify",
+        "dataset": "24",
+        "clarify_kind": "value"
+      }
+    },
+    {
+      "id": "F07",
+      "group": "filters",
+      "q": "telemetry sessions in Atlantis",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "note_contains": "not found"
+      }
+    },
+    {
+      "id": "F08",
+      "group": "filters",
+      "q": "telemetry actions on the Chat surface by license",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "filters": [
+          [
+            "surface",
+            "Chat"
+          ]
+        ],
+        "group": "license"
+      }
+    },
+    {
+      "id": "Y01",
+      "group": "time",
+      "q": "telemetry actions in July 2026",
+      "expect": {
+        "ok": true,
+        "dataset": "24"
+      }
+    },
+    {
+      "id": "Y02",
+      "group": "time",
+      "q": "telemetry sessions in 2026 by country",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "year": 2026,
+        "group": "country"
+      }
+    },
+    {
+      "id": "Y03",
+      "group": "time",
+      "q": "telemetry actions in 2025",
+      "expect": {
+        "ok": true,
+        "dataset": "24"
+      }
+    },
+    {
+      "id": "Y04",
+      "group": "time",
+      "q": "telemetry errors last 7 days",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "metric": "Errors",
+        "route": "live"
+      }
+    },
+    {
+      "id": "Y05",
+      "group": "time",
+      "q": "telemetry sessions by month",
+      "expect": {
+        "ok": true,
+        "dataset": "24"
+      }
+    },
+    {
+      "id": "Y06",
+      "group": "time",
+      "q": "trend of telemetry actions over time",
+      "expect": {
+        "ok": true,
+        "dataset": "24"
+      }
+    },
+    {
+      "id": "S01",
+      "group": "spelling",
+      "q": "Telemetry Total Actions By Surface!",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "group": "surface",
+        "rows": 6
+      }
+    },
+    {
+      "id": "S02",
+      "group": "spelling",
+      "q": "telemetry sesions by contry",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "group": "country"
+      }
+    },
+    {
+      "id": "S03",
+      "group": "spelling",
+      "q": "telemetry erors by platfrom",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "group": "platform"
+      }
+    },
+    {
+      "id": "S04",
+      "group": "spelling",
+      "q": "TELEMETRY TOP 3 COUNTRIES BY SESSIONS",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "rows": 3
+      }
+    },
+    {
+      "id": "S05",
+      "group": "spelling",
+      "q": "telemetry  queries   run  by  license ?",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "group": "license"
+      }
+    },
+    {
+      "id": "S06",
+      "group": "spelling",
+      "q": "telemetry cache-hits by region",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "group": "region"
+      }
+    },
+    {
+      "id": "V01",
+      "group": "vocabulary",
+      "q": "telemetry usage by surface",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "group": "surface"
+      }
+    },
+    {
+      "id": "V02",
+      "group": "vocabulary",
+      "q": "telemetry avg latency per platform",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "metric": "Average latency (ms)",
+        "group": "platform"
+      }
+    },
+    {
+      "id": "V03",
+      "group": "vocabulary",
+      "q": "telemetry number of sessions by country",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "metric": "Sessions",
+        "group": "country"
+      }
+    },
+    {
+      "id": "V04",
+      "group": "vocabulary",
+      "q": "telemetry mean latency",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "metric": "Average latency (ms)"
+      }
+    },
+    {
+      "id": "V05",
+      "group": "vocabulary",
+      "q": "telemetry revenue by region",
+      "expect": {
+        "dataset": "24"
+      }
+    },
+    {
+      "id": "C01",
+      "group": "conversation",
+      "q": "Kaveon Telemetry total actions by surface",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "rows": 6
+      }
+    },
+    {
+      "id": "C02",
+      "group": "conversation",
+      "q": "what about 2026?",
+      "follow_up_of": "C01",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "group": "surface",
+        "year": 2026
+      }
+    },
+    {
+      "id": "C03",
+      "group": "conversation",
+      "q": "and by platform",
+      "follow_up_of": "C02",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "group": "platform"
+      }
+    },
+    {
+      "id": "C04",
+      "group": "conversation",
+      "q": "only for Mobile",
+      "follow_up_of": "C03",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "filters": [
+          [
+            "platform",
+            "Mobile"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "C05",
+      "group": "conversation",
+      "q": "top 3",
+      "follow_up_of": "C01",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "rows": 3,
+        "group": "surface"
+      }
+    },
+    {
+      "id": "C06",
+      "group": "conversation",
+      "q": "lowest first",
+      "follow_up_of": "C01",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "group": "surface",
+        "sort": "asc"
+      }
+    },
+    {
+      "id": "C07",
+      "group": "conversation",
+      "q": "telemetry actions for Enterprise customers",
+      "expect": {
+        "reason": "clarify",
+        "clarify_kind": "value"
+      }
+    },
+    {
+      "id": "C08",
+      "group": "conversation",
+      "q": "telemetry actions for Enterprise customers",
+      "resume_of": "C07",
+      "choose": {
+        "kind": "value",
+        "id": "license"
+      },
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "filters": [
+          [
+            "license",
+            "Enterprise"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "O01",
+      "group": "scope",
+      "q": "write a poem about data",
+      "expect": {
+        "reason": "out_of_scope"
+      }
+    },
+    {
+      "id": "O02",
+      "group": "scope",
+      "q": "what's the weather in Seattle tomorrow",
+      "expect": {
+        "reason": "out_of_scope"
+      }
+    },
+    {
+      "id": "O03",
+      "group": "scope",
+      "q": "hello",
+      "expect": {
+        "reason": "out_of_scope"
+      }
+    },
+    {
+      "id": "O04",
+      "group": "scope",
+      "q": "select * from users",
+      "expect": {
+        "reason": "out_of_scope"
+      }
+    },
+    {
+      "id": "O05",
+      "group": "scope",
+      "q": "drop table kaveon_events_enriched",
+      "expect": {
+        "reason": "out_of_scope"
+      }
+    },
+    {
+      "id": "O06",
+      "group": "scope",
+      "q": "telemetry",
+      "expect": {
+        "ok": true,
+        "dataset": "24"
+      }
+    },
+    {
+      "id": "O07",
+      "group": "scope",
+      "q": "actions",
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "id": "X01",
+      "group": "routing",
+      "q": "Kaveon Events actions by surface",
+      "expect": {
+        "ok": true,
+        "dataset": "23"
+      }
+    },
+    {
+      "id": "X02",
+      "group": "routing",
+      "q": "What is current Kaveon usage?",
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "id": "X03",
+      "group": "routing",
+      "q": "trips by borough",
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "id": "X04",
+      "group": "routing",
+      "q": "covid deaths by country",
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "id": "X05",
+      "group": "routing",
+      "q": "energy consumption by country",
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "id": "X06",
+      "group": "routing",
+      "q": "telemetry actions by surface",
+      "expect": {
+        "ok": true,
+        "dataset": "24"
+      }
+    },
+    {
+      "id": "M01",
+      "group": "measures",
+      "q": "telemetry average latency in ms by platform",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "metric": "Average latency (ms)",
+        "group": "platform"
+      }
+    },
+    {
+      "id": "M02",
+      "group": "measures",
+      "q": "telemetry actions per surface as a percentage",
+      "expect": {
+        "ok": true,
+        "dataset": "24",
+        "group": "surface"
+      }
+    },
+    {
+      "id": "M03",
+      "group": "measures",
+      "q": "how many rows are in telemetry",
+      "expect": {
+        "dataset": "24"
+      }
+    },
+    {
+      "id": "M04",
+      "group": "measures",
+      "q": "telemetry compare sessions and actions by surface",
+      "expect": {
+        "dataset": "24"
+      }
+    }
   ]
 }

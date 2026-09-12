@@ -1245,11 +1245,11 @@ def _fuzzy_question(question: str, vocab: set) -> str:
 
 def _rank_metrics(qset: set, metrics: List[dict], extra: Optional[Dict[str, List[str]]] = None) -> List[tuple]:
     """Every metric with its overlap score, best first, stable in dataset order."""
-    q = _expand_tokens(qset) - _GENERIC_METRIC_TOKENS
+    q = _distinctive(qset)
     ranked = []
     for m in metrics:
         name = m.get("name") or m.get("metric_name") or ""
-        toks = _expand_tokens(set(_tokenize(name)) | set(_tokenize(m.get("expression") or "")) | set(_syn(name, extra))) - _GENERIC_METRIC_TOKENS
+        toks = _distinctive(set(_tokenize(name)) | set(_tokenize(m.get("expression") or "")) | set(_syn(name, extra)))
         ranked.append((m, len(q & toks)))
     ranked.sort(key=lambda t: -t[1])
     return ranked
@@ -1313,6 +1313,10 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
     ensure_tables()
     choices = dict(choices or {})
     original_question = question
+    if re.match(r"^\s*(select|with|insert|update|delete|drop|alter|create|truncate|merge|grant)\b", question, re.I):
+        return {"ok": False, "reason": "out_of_scope", "datasets": _dataset_names(),
+                "hint": "That is SQL. Run it in SQL Lab; Chat answers questions in plain language.",
+                "duration_ms": round((_time_mod.monotonic() - t0) * 1000, 1)}
     routed = route(question, limit=1)
     follow_up = bool(frame and frame.get("dataset_id")) and (
         not routed or str(routed[0]["dataset_id"]) == str(frame["dataset_id"]) or bool(_FOLLOW_UP_RE.search(question)))
@@ -1348,10 +1352,19 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
             if not _dspec.get(d.get("column_name") or d.get("name"), {}).get("hidden")]
 
     question = _fuzzy_question(question, _dataset_vocabulary(metrics, dims, m_alias, d_alias))
-    qset = set(_tokenize(question))
+    qset = set(_tokenize(_strip_time_phrases(question)))
 
-    # 1) entity filters from the value index (e.g. "india" -> country='India')
-    filters = _resolve_entity_filters(dataset_id, question)
+    # 1) entity filters from the value index (e.g. "india" -> country='India').
+    #    A value that lives in more than one column is a question, not a guess.
+    ambiguous: List[Dict[str, Any]] = []
+    filters = _resolve_entity_filters(dataset_id, question, choices=choices, ambiguous=ambiguous)
+    if ambiguous:
+        amb = ambiguous[0]
+        cols = amb["columns"]
+        prompt = f'"{amb["value"]}" is ' + ", ".join(f"a {c}" for c in cols[:-1]) + f" and a {cols[-1]} — which did you mean?"
+        return _clarify("value", prompt,
+                        [{"id": c, "label": f"{c} = {amb['value']}", "description": ""} for c in cols],
+                        original_question, dict(choices, value_phrase=amb["value"].lower()), dataset_id, ds, t0)
     if follow_up and frame and frame.get("filters"):
         carried = [f for f in frame["filters"] if isinstance(f, dict) and f.get("column")
                    and not any(n.get("column") == f.get("column") for n in filters)]
@@ -1423,9 +1436,15 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
         group_col = frame["group_col"] if any((d.get("column_name") or d.get("name")) == frame["group_col"] for d in dims) else None
     if not top_n and follow_up and frame and frame.get("top_n"):
         top_n = frame["top_n"]
-    limit_n = top_n or limit
     sort_asc = bool(re.search(r"\b(lowest|least|fewest|smallest|bottom)\b", question, re.I)) or bool(
         follow_up and frame and frame.get("sort_asc") and not re.search(r"\b(highest|most|largest|top)\b", question, re.I))
+    # "lowest latency platform" / "highest error region": a superlative with a
+    # dimension in the sentence is a top-1 over that dimension.
+    if not group_col and not top_n and re.search(r"\b(lowest|least|fewest|smallest|highest|most|largest|biggest|greatest)\b", question, re.I):
+        group_col = _match_any_dim(question, dims, d_alias)
+        if group_col:
+            top_n = 1
+    limit_n = top_n or limit
 
     note = None
     if unresolved_entity:
@@ -3012,15 +3031,28 @@ def _metric_year_bounds(database: str, schema: str, table: str, date_column: Opt
     return (_yr(mn), _yr(mx))
 
 
-def _resolve_entity_filters(dataset_id: str, question: str) -> List[Dict[str, Any]]:
+def _hit_column(hit: Dict[str, Any]) -> Optional[str]:
+    """The dimension column a value-index hit belongs to."""
+    col = hit.get("key_column") or hit.get("column")
+    if col:
+        return col
+    ek = str(hit.get("element_key") or "")
+    return ek.rsplit(".", 1)[-1] if ek else None
+
+
+def _resolve_entity_filters(dataset_id: str, question: str, choices: Optional[Dict[str, str]] = None,
+                            ambiguous: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     """Resolve value phrases in the question to (column, value) filters via the
     value index. Longest n-grams first so "United States" wins over "United".
-    One filter per column."""
+    One filter per column. A value indexed under several columns ("Enterprise"
+    as a license, a segment and a team size) is appended to `ambiguous` and
+    left unfiltered unless `choices` pins the column for it."""
     words = re.findall(r"[A-Za-z0-9][A-Za-z0-9&.\-]*", question)
     out: List[Dict[str, Any]] = []
     used_cols: set = set()
     used_spans: set = set()
     va = _effective_spec(dataset_id).get("value_aliases") or {}   # curated e.g. "smb" -> "Team"
+    choices = choices or {}
     n = len(words)
     for size in (3, 2, 1):
         for i in range(0, n - size + 1):
@@ -3032,11 +3064,28 @@ def _resolve_entity_filters(dataset_id: str, question: str) -> List[Dict[str, An
             # single stop/short words never denote a value ("in" != India)
             if size == 1 and (phrase.lower() in _STOPWORDS or len(phrase) < 3):
                 continue
-            hits = resolve_value(dataset_id, va.get(phrase.lower(), phrase), limit=1, exact_only=True)
+            hits = resolve_value(dataset_id, va.get(phrase.lower(), phrase), limit=8, exact_only=True)
             if not hits:
                 continue
-            h = hits[0]
-            col = h.get("key_column") or h.get("column")
+            columns: List[str] = []
+            for hit in hits:
+                c = _hit_column(hit)
+                if c and c not in columns and c not in used_cols:
+                    columns.append(c)
+            if not columns:
+                continue
+            if len(columns) > 1:
+                pinned = choices.get("value") if choices.get("value_phrase") == phrase.lower() else None
+                if pinned in columns:
+                    columns = [pinned]
+                else:
+                    if ambiguous is not None:
+                        ambiguous.append({"value": phrase, "columns": columns})
+                    for k in range(size):
+                        used_spans.add(i + k)
+                    continue
+            col = columns[0]
+            h = next(hit for hit in hits if _hit_column(hit) == col)
             if not col or col in used_cols:
                 continue
             used_cols.add(col)
@@ -3054,6 +3103,29 @@ _GENERIC_METRIC_TOKENS = {"sum", "avg", "average", "mean", "count", "total",
                          "number", "num", "amount", "overall", "all", "of", "the"}
 
 
+def _distinctive(tokens: set) -> set:
+    """Tokens that can tell one metric from another: aggregate words are
+    dropped before synonym expansion as well as after, so "total" in a
+    question never reaches "Total actions" through its own synonyms."""
+    return _expand_tokens(set(tokens) - _GENERIC_METRIC_TOKENS) - _GENERIC_METRIC_TOKENS
+
+
+_TIME_PHRASE_RES = None
+
+
+def _strip_time_phrases(question: str) -> str:
+    """The question without its time expressions, so "last 7 days" cannot
+    pull a duration metric and "in 2026" cannot pull a year-named column."""
+    global _TIME_PHRASE_RES
+    if _TIME_PHRASE_RES is None:
+        _TIME_PHRASE_RES = (_RELATIVE_TIME_RE, _RELATIVE_NAMED_RE, _TODAY_RE, _YESTERDAY_RE,
+                            re.compile(r"\b(?:in|for|during|of)?\s*(?:19|20)\d{2}\b", re.I))
+    out = question
+    for rx in _TIME_PHRASE_RES:
+        out = rx.sub(" ", out)
+    return out
+
+
 def _match_metric(qset: set, metrics: List[dict], extra: Optional[Dict[str, List[str]]] = None,
                   default_metric: Optional[str] = None) -> Optional[dict]:
     """Pick the metric whose name/expression/alias tokens best overlap the question,
@@ -3063,12 +3135,12 @@ def _match_metric(qset: set, metrics: List[dict], extra: Optional[Dict[str, List
     else the simplest additive metric (COUNT(*)), else the first."""
     if not metrics:
         return None
-    q = _expand_tokens(qset) - _GENERIC_METRIC_TOKENS
+    q = _distinctive(qset)
     best, best_score = None, 0
     for m in metrics:
         name = m.get("name") or m.get("metric_name") or ""
         expr = m.get("expression") or ""
-        toks = _expand_tokens(set(_tokenize(name)) | set(_tokenize(expr)) | set(_syn(name, extra))) - _GENERIC_METRIC_TOKENS
+        toks = _distinctive(set(_tokenize(name)) | set(_tokenize(expr)) | set(_syn(name, extra)))
         score = len(q & toks)
         if score > best_score:
             best, best_score = m, score
@@ -3148,15 +3220,18 @@ _YESTERDAY_RE = re.compile(r"\byesterday\b", re.I)
 def _extract_relative_time(question: str) -> Optional[str]:
     """Parse relative time expressions into a SQL-embeddable interval clause.
     Returns an expression like ``CURRENT_DATE - INTERVAL '7 days'`` or None."""
+    from datetime import date, timedelta
+    today = date.today()
     m = _RELATIVE_TIME_RE.search(question)
     if m:
         n, unit = int(m.group(1)), m.group(2).lower()
-        return f"CURRENT_DATE - INTERVAL '{n} {unit}s'"
+        days = {"day": 1, "week": 7, "month": 30, "year": 365}[unit] * n
+        return f"'{(today - timedelta(days=days)).isoformat()}'"
     m = _RELATIVE_NAMED_RE.search(question)
     if m:
         _qual, unit = m.group(1).lower(), m.group(2).lower()
-        mapping = {"week": "7 days", "month": "1 month", "quarter": "3 months", "year": "1 year"}
-        return f"CURRENT_DATE - INTERVAL '{mapping[unit]}'"
+        days = {"week": 7, "month": 30, "quarter": 91, "year": 365}[unit]
+        return f"'{(today - timedelta(days=days)).isoformat()}'"
     if _TODAY_RE.search(question):
         return "CURRENT_DATE"
     if _YESTERDAY_RE.search(question):
