@@ -325,9 +325,10 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
     # 8) precompute the common answers (each metric's total + per-dimension
     #    breakdown the spec marks for precompute) so those questions serve from
     #    context with no live query. A handful of scans now; a lookup forever after.
+    precompute_report: Dict[str, Any] = {}
     answers = _precompute_answers(str(dataset_id), database, schema,
                                   ds.get("table_name") or ds.get("fact_table"),
-                                  columns, dimensions, metrics, spec)
+                                  columns, dimensions, metrics, spec, report=precompute_report)
     _evict_answers(str(dataset_id))  # invalidate in-memory caches after regen
     _SKETCH_CACHE.pop(str(dataset_id), None)
     _RANGE_CACHE.pop(str(dataset_id), None)
@@ -348,6 +349,7 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
         "values_indexed": len(value_rows),
         "rows_scanned": max((stats_rollup.get("row_counts") or {}).values(), default=None),
         "scans": 1 + len([c for c in columns if c.get("is_dimension")]),  # totals + per-dim
+        "skipped_breakdowns": precompute_report.get("skipped") or [],
     }
     # 9) dashboard-level curation — precompute N-dim combos for any dashboards
     #    that reference this dataset, so multi-filter interactions serve instantly.
@@ -402,14 +404,30 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
     }
 
 
+def _failure_reason(exc: BaseException) -> str:
+    """One line a person can act on: the HTTP detail for bridge errors, else the
+    exception's own message, never a traceback."""
+    detail = getattr(exc, "detail", None)
+    if isinstance(detail, dict):
+        detail = detail.get("message") or json.dumps(detail, default=str)
+    text = str(detail or exc or type(exc).__name__)
+    return text[:300]
+
+
 def _precompute_answers(dataset_id: str, database: str, schema: str, fact: Optional[str],
                         columns: List[dict], dimensions: List[dict], metrics: List[dict],
-                        spec: Optional[dict] = None) -> int:
+                        spec: Optional[dict] = None, report: Optional[dict] = None) -> int:
     """Compute + store the common answers for this dataset: every metric's grand
     total (one scan for all metrics) and every metric grouped by each dimension the
     curated spec marks for precompute, to its configured depth. Stored in dlm_answers
-    for instant, no-DB-trip serving. Returns how many answers were stored."""
+    for instant, no-DB-trip serving. Returns how many answers were stored. Anything
+    the source could not deliver is appended to `report["skipped"]` with its
+    reason, so a missing breakdown is visible on the dataset page instead of
+    silently sending every question live."""
     import database.pool as pool
+    skipped: List[Dict[str, str]] = []
+    if report is not None:
+        report["skipped"] = skipped
     meta.execute("DELETE FROM dlm_answers WHERE dataset_id = @param0", [dataset_id])
     if not fact or not metrics:
         return 0
@@ -437,8 +455,9 @@ def _precompute_answers(dataset_id: str, database: str, schema: str, fact: Optio
             v = vals[j] if j < len(vals) else None
             _store_answer(dataset_id, name, "", [name], [[_json_scalar(v)]], now)
             stored += 1
-    except Exception:
-        pass
+    except Exception as exc:
+        skipped.append({"dimension": "", "reason": _failure_reason(exc)})
+        logger.warning("DLM precompute: grand totals skipped for dataset %s: %s", dataset_id, _failure_reason(exc))
 
     # 2) per dimension — one scan per dim computes all metrics grouped. Honor the
     #    curated spec: skip dims marked precompute=false/hidden; use the curated depth.
@@ -470,7 +489,9 @@ def _precompute_answers(dataset_id: str, database: str, schema: str, fact: Optio
                 out = [[_json_scalar(rv[0]), _json_scalar(rv[j + 1] if j + 1 < len(rv) else None)] for rv in norm]
                 _store_answer(dataset_id, name, dim, [dim, name], out, now)
                 stored += 1
-        except Exception:
+        except Exception as exc:
+            skipped.append({"dimension": dim, "reason": _failure_reason(exc)})
+            logger.warning("DLM precompute: breakdown by %s skipped for dataset %s: %s", dim, dataset_id, _failure_reason(exc))
             continue
 
     # 3) common 2-dim combos — so a two-filter question ("... in Asia Enterprise")
@@ -506,7 +527,9 @@ def _precompute_answers(dataset_id: str, database: str, schema: str, fact: Optio
                         _json_scalar(rv[j + 2] if j + 2 < len(rv) else None)] for rv in norm]
                 _store_answer(dataset_id, name, key, [d1, d2, name], out, now)
                 stored += 1
-        except Exception:
+        except Exception as exc:
+            skipped.append({"dimension": f"{d1}|{d2}", "reason": _failure_reason(exc)})
+            logger.warning("DLM precompute: pair %s|%s skipped for dataset %s: %s", d1, d2, dataset_id, _failure_reason(exc))
             continue
 
     # 4) sketch cuboid — for non-additive COUNT(DISTINCT) metrics, build ONE base
@@ -3399,7 +3422,8 @@ def _execute_dataset_query(sql: str, database: str,
     )
     schema = (schema_match.group(1) or schema_match.group(2)) if schema_match else None
     result = execute(
-        engine_sql, source["engine_catalog"], "kaveon-system", "Admin", schema
+        engine_sql, source["engine_catalog"], "kaveon-system", "Admin", schema,
+        timeout=timeout_seconds or _BUILD_QUERY_TIMEOUT_SECONDS,
     )
     raw_columns = result.get("columns") or []
     columns = [

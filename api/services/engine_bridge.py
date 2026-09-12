@@ -36,7 +36,7 @@ def _verify_context():
         raise HTTPException(503, "Engine CA certificate is unavailable or invalid") from None
 
 
-def _request(method, path, token_name, actor, *, payload=None, revision=None, role=None):
+def _request(method, path, token_name, actor, *, payload=None, revision=None, role=None, timeout=60):
     token = os.getenv(token_name)
     if not token:
         raise HTTPException(503, "Engine service credential is not configured")
@@ -47,7 +47,11 @@ def _request(method, path, token_name, actor, *, payload=None, revision=None, ro
         headers["If-Match"] = str(revision)
     try:
         response = httpx.request(method, _endpoint() + path, headers=headers, json=payload,
-                                 timeout=60, follow_redirects=False, verify=_verify_context())
+                                 timeout=timeout, follow_redirects=False, verify=_verify_context())
+    except httpx.TimeoutException:
+        # The statement may still be running on the Engine; the caller chose how
+        # long it was prepared to wait, so say that rather than "unavailable".
+        raise HTTPException(504, f"Engine statement exceeded the client bound ({timeout}s)") from None
     except httpx.HTTPError:
         raise HTTPException(502, "Engine is unavailable") from None
     if response.status_code == 404:
@@ -113,13 +117,17 @@ def sync_catalog(source, actor, expected_revision=None):
     return {"catalog": result, "changed": True}
 
 
-def execute(sql, catalog, actor, role, schema=None):
+def execute(sql, catalog, actor, role, schema=None, timeout=60):
+    """Run one statement. `timeout` is how long this caller waits for the
+    response: 60 s suits an interactive request; a DLM build passes its own
+    bound because a full-table aggregate legitimately runs for minutes."""
     roles = {"Analyst": "analyst", "Editor": "analyst", "Admin": "admin"}
     if role not in roles:
         raise HTTPException(403, "A recognized Kaveon role is required for Engine SQL")
     result = _request("POST", "/v1/statement", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
                       payload={"query": sql, "catalog": catalog, "schema": schema,
-                               "source": "studio", "client": "kaveon-api"}, role=roles[role])
+                               "source": "studio", "client": "kaveon-api"}, role=roles[role],
+                      timeout=timeout)
     if result is None:
         raise HTTPException(422, "Engine query failed")
     query_id = result.get("id")

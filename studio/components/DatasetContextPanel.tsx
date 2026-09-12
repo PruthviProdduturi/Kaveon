@@ -9,7 +9,10 @@ interface DLM {
   values_indexed?: number;
   manifest?: { columns?: { name?: string; is_dimension?: boolean; is_metric?: boolean }[]; metrics?: { name?: string }[] };
   stats_rollup?: {
-    generation?: { duration_ms?: number; built_at?: string; answers_precomputed?: number; values_indexed?: number; rows_scanned?: number; scans?: number };
+    generation?: {
+      duration_ms?: number; built_at?: string; answers_precomputed?: number; values_indexed?: number; rows_scanned?: number; scans?: number;
+      skipped_breakdowns?: { dimension: string; reason: string }[];   // what the source could not deliver, and why
+    };
     date_range?: { min?: string; max?: string };
     row_counts?: Record<string, number>;
   };
@@ -192,6 +195,18 @@ export function DatasetContextPanel({ datasetId }: { datasetId?: string }) {
             {gen?.duration_ms != null && (
               <div style={{ marginTop: 6, fontSize: 12, color: "var(--text-muted)" }}>
                 Last generation took {fmtMs(gen.duration_ms)}
+              </div>
+            )}
+            {!!gen?.skipped_breakdowns?.length && (
+              <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+                <div style={{ fontWeight: 600 }}>
+                  {gen.skipped_breakdowns.length} breakdown{gen.skipped_breakdowns.length === 1 ? "" : "s"} not precomputed — questions on them run live
+                </div>
+                {gen.skipped_breakdowns.slice(0, 6).map(sk => (
+                  <div key={sk.dimension || "totals"}>
+                    <code style={{ fontSize: 11.5 }}>{sk.dimension || "grand totals"}</code> — {sk.reason}
+                  </div>
+                ))}
               </div>
             )}
 
