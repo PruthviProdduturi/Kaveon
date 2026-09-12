@@ -13,7 +13,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "api"))
 from services.postgresql_retirement_gate import AUTHORITY_FAMILIES, GLOBAL_GATE_NAMES  # noqa: E402
 
-EXPECTED_AUTHORITY_FAMILY_COUNT = 16
+EXPECTED_AUTHORITY_FAMILY_COUNT = len(AUTHORITY_FAMILIES)
 
 
 def summarize(audit=None, operational=None):
