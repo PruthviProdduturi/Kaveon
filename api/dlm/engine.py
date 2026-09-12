@@ -1257,18 +1257,36 @@ def _rank_metrics(qset: set, metrics: List[dict], extra: Optional[Dict[str, List
 
 def _group_by_candidates(question: str, dims: List[dict],
                          extra: Optional[Dict[str, List[str]]] = None) -> List[str]:
-    """All dimensions a 'by <x>' phrase could mean, in dataset order."""
-    m = re.search(r"\b(?:by|per|across|for each)\s+([A-Za-z][A-Za-z ]*)", question, re.I)
+    """All dimensions a 'by <x>' phrase could mean, in dataset order.
+
+    A dimension named outright in the phrase ("by license") outranks one that
+    only a synonym reaches ("segment" through a curated alias), so naming a
+    column never provokes a question. Two dimensions named together ("by
+    platform and deployment") are one two-dimension group, returned as the
+    canonical pair key the precomputed answers use ("deployment|platform")."""
+    m = re.search(r"\b(?:by|per|across|for each)\s+([A-Za-z][A-Za-z ,&]*)", question, re.I)
     if not m:
         return []
-    target = _expand_tokens(set(_tokenize(m.group(1))))
-    out = []
+    phrase = m.group(1)
+    phrase_tokens = set(_tokenize(phrase))
+    target = _expand_tokens(phrase_tokens)
+    exact: List[str] = []
+    loose: List[str] = []
     for d in dims:
         col = d.get("column_name") or d.get("name") or ""
-        ctoks = _expand_tokens(set(_tokenize(col)) | set(_syn(col, extra)))
-        if target & ctoks:
-            out.append(col)
-    return out
+        own = set(_tokenize(col))
+        if own and own <= phrase_tokens:
+            exact.append(col)
+        elif target & _expand_tokens(own | set(_syn(col, extra))):
+            loose.append(col)
+    if len(exact) == 2 and re.search(r"\band\b|[,&]", phrase, re.I):
+        return ["|".join(sorted(exact))]
+    return exact or loose
+
+
+def _group_cols(group_col: Optional[str]) -> List[str]:
+    """The column(s) behind a group key: one name, or a canonical 'a|b' pair."""
+    return [c for c in (group_col or "").split("|") if c]
 
 
 def _clarify(kind: str, prompt: str, options: List[Dict[str, str]], question: str,
@@ -1491,8 +1509,8 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
     select_parts: List[str] = []
     if time_group:
         select_parts.append(_qid(time_group))
-    if group_col:
-        select_parts.append(_qid(group_col))
+    group_cols = _group_cols(group_col)
+    select_parts.extend(_qid(c) for c in group_cols)
     select_parts.append(f"{metric_expr} AS {_qid(metric_name)}")
 
     where: List[str] = []
@@ -1507,22 +1525,21 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
     if where:
         sql += " WHERE " + " AND ".join(where)
     if time_group:
-        gb = _qid(time_group)
-        if group_col:
-            gb += f", {_qid(group_col)}"
+        gb = ", ".join([_qid(time_group)] + [_qid(c) for c in group_cols])
         sql += f" GROUP BY {gb} ORDER BY {_qid(time_group)} LIMIT 1000"
-    elif group_col:
+    elif group_cols:
         order_dir = "ASC" if sort_asc else "DESC"
-        sql += f" GROUP BY {_qid(group_col)} ORDER BY {_qid(metric_name)} {order_dir} LIMIT {int(limit_n)}"
+        sql += (f" GROUP BY {', '.join(_qid(c) for c in group_cols)} "
+                f"ORDER BY {_qid(metric_name)} {order_dir} LIMIT {int(limit_n)}")
 
-    chart_type = "line" if time_group else ("bar" if group_col else "kpi")
-    x_axis = time_group or group_col
+    chart_type = "line" if time_group else ("bar" if group_cols else "kpi")
+    x_axis = time_group or (group_cols[0] if group_cols else None)
 
     title = metric_name
     if time_group:
         title += " over time"
-    elif group_col:
-        title += f" by {group_col}"
+    elif group_cols:
+        title += " by " + " and ".join(group_cols)
     ctx_bits = [f["value"] for f in filters] + ([str(year)] if year else [])
     if relative_time:
         rt_m = _RELATIVE_TIME_RE.search(question) or _RELATIVE_NAMED_RE.search(question)
@@ -1554,7 +1571,7 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
         "xAxis": x_axis,
         "yAxis": metric_name,
         "title": title,
-        "columns": ([group_col] if group_col else []) + [metric_name],
+        "columns": group_cols + [metric_name],
         "filters": filters,
         "year": year,
         "note": note,
@@ -1941,7 +1958,7 @@ def _serve_from_context(dataset_id: str, ds: dict, metric_name: str, group_col: 
             return None
         rows = ctx["rows"]
         if group_col and sort_asc:
-            rows = list(reversed(rows))
+            rows = sorted(rows, key=lambda r: (r[-1] is None, r[-1]))
         if group_col and top_n:
             rows = rows[:int(top_n)]
         return _ctx_response(dataset_id, dataset_name, metric_name, group_col, ctx["columns"], rows, conf)
@@ -2105,7 +2122,7 @@ def _ctx_response(dataset_id, dataset_name, metric_name, group_col, columns, row
         "from_context": True, "route": "context",
         "columns": columns, "rows": rows,
         "chartType": "bar" if group_col else "kpi",
-        "xAxis": group_col, "yAxis": metric_name, "title": title,
+        "xAxis": _group_cols(group_col)[0] if group_col else None, "yAxis": metric_name, "title": title,
         "note": None, "confidence": conf, "approx": approx,
     }
 
@@ -2169,7 +2186,7 @@ def _sketch_response(dataset_id, dataset_name, metric_name, group_col, columns, 
         "from_context": True, "route": "context", "approx": True,
         "columns": columns, "rows": rows,
         "chartType": "bar" if group_col else "kpi",
-        "xAxis": group_col, "yAxis": metric_name, "title": title,
+        "xAxis": _group_cols(group_col)[0] if group_col else None, "yAxis": metric_name, "title": title,
         "note": "≈ estimated from a HyperLogLog sketch (~1-2% error) · no DB scan",
         "confidence": conf,
     }

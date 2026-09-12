@@ -131,6 +131,37 @@ class QueryPlaneTests(unittest.TestCase):
         self.assertIn('GROUP BY "region"', result["sql"])
 
 
+class GroupingTests(unittest.TestCase):
+    DIMS = [{"column_name": "license"}, {"column_name": "segment"}, {"column_name": "platform"},
+            {"column_name": "deployment"}, {"column_name": "acquisition_channel"}]
+
+    def test_a_named_dimension_outranks_a_synonym_match(self):
+        # "segment" reaches "license" only through a curated alias; naming the column wins outright.
+        self.assertEqual(engine._group_by_candidates("rows scanned by license", self.DIMS, {"segment": ["license"]}),
+                         ["license"])
+
+    def test_two_named_dimensions_become_one_pair_group(self):
+        self.assertEqual(engine._group_by_candidates("errors by platform and deployment", self.DIMS),
+                         ["deployment|platform"])
+        self.assertEqual(engine._group_by_candidates("errors by deployment, platform", self.DIMS),
+                         ["deployment|platform"])
+
+    def test_a_multi_word_column_is_matched_whole(self):
+        self.assertEqual(engine._group_by_candidates("sessions by acquisition channel", self.DIMS),
+                         ["acquisition_channel"])
+
+    def test_a_pair_group_builds_two_column_sql(self):
+        dataset = dict(DATASET, columns=DATASET["columns"] + [{"column_name": "channel", "is_dimension": True}])
+        with Harness(), patch.object(engine.datasets_svc, "get_dataset_by_id", lambda i: dataset):
+            result = engine.ask("orders by region and channel")
+        self.assertTrue(result["ok"], result)
+        self.assertIn('GROUP BY "channel", "region"', result["sql"])
+        self.assertEqual(result["columns"], ["channel", "region", "Orders"])
+        self.assertEqual(result["xAxis"], "channel")
+        self.assertIn("by channel and region", result["title"])
+        self.assertEqual(result["frame"]["group_col"], "channel|region")
+
+
 class EditDistanceTests(unittest.TestCase):
     def test_a_typo_resolves_to_the_nearest_vocabulary_token(self):
         with Harness():
