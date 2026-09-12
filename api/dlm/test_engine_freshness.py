@@ -29,7 +29,7 @@ class ChartFreshnessTests(unittest.TestCase):
         self.assertEqual(result["rows_objects"], [{"country": "US", "total": 42}])
         execute.assert_called_once_with(
             'SELECT country, SUM(trips) AS total FROM silver.trips GROUP BY country',
-            "OpenSource", "kaveon-system", "Admin", "silver",
+            "OpenSource", "kaveon-system", "Admin", "silver", timeout=engine._BUILD_QUERY_TIMEOUT_SECONDS,
         )
         pool_execute.assert_not_called()
 
@@ -39,6 +39,7 @@ class ChartFreshnessTests(unittest.TestCase):
             engine._execute_dataset_query('ANALYZE "kaveon_product"."kaveon_events_enriched"', "OpenSource")
         execute.assert_called_once_with(
             "ANALYZE kaveon_product.kaveon_events_enriched", "OpenSource", "kaveon-system", "Admin", "kaveon_product",
+            timeout=engine._BUILD_QUERY_TIMEOUT_SECONDS,
         )
 
     def test_native_catalog_builds_its_value_index_by_bounded_scan(self):
