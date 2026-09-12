@@ -11,6 +11,14 @@ cargo bench -p kaveon-storage --bench storage
 cargo bench -p kaveon-exec --bench aggregate
 ```
 
+The aggregate benchmark includes separate exact `COUNT(DISTINCT ...)` and
+partitioned high-cardinality spill cases. The spill case black-boxes measured
+spill bytes, run count, and peak bytes so optimization changes cannot silently
+turn a bounded path into an unmeasured in-memory path. Aggregate correctness
+tests separately cover typed `MIN`/`MAX` output (including nullable Int32 and
+UInt64 values). These are execution measurements only; they do not establish
+DML, MVCC, WAL, or transaction guarantees.
+
 The default data set contains 1,000,000 rows. Override it without changing the workload shape:
 
 ```shell

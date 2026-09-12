@@ -199,6 +199,27 @@ fn benchmark_vector_pipeline(c: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_exact_distinct(c: &mut Criterion) {
+    let row_count = benchmark_row_count();
+    let source = MemorySource::new(make_batches(row_count, HIGH_CARDINALITY.max(row_count)));
+    let mut group = c.benchmark_group("exact_distinct");
+    group.throughput(Throughput::Elements(row_count as u64));
+    group.sample_size(SAMPLE_SIZE);
+    group.measurement_time(Duration::from_secs(MEASUREMENT_SECONDS));
+    group.bench_function("count_distinct_group_id", |b| {
+        b.iter(|| {
+            let mut operator = HashAggregate::new(
+                Box::new(source.clone()),
+                vec![],
+                vec![AggExpr::new(AggFunc::Count, "group_id").distinct()],
+            )
+            .expect("distinct aggregate must initialize");
+            black_box(consume(&mut operator));
+        });
+    });
+    group.finish();
+}
+
 fn benchmark_partitioned_spill(c: &mut Criterion) {
     let row_count = benchmark_row_count();
     let source = MemorySource::new(make_batches(row_count, HIGH_CARDINALITY.max(row_count)));
@@ -235,6 +256,7 @@ fn benchmark_partitioned_spill(c: &mut Criterion) {
 criterion_group!(
     benches,
     benchmark_hash_aggregate,
+    benchmark_exact_distinct,
     benchmark_vector_pipeline,
     benchmark_partitioned_spill
 );
