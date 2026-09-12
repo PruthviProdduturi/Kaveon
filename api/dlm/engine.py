@@ -26,6 +26,7 @@ degrades to a no-op on other metadata dialects while the manifest still builds.
 from __future__ import annotations
 
 import hashlib
+from collections import OrderedDict
 import json
 import logging
 import re
@@ -327,7 +328,7 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
     answers = _precompute_answers(str(dataset_id), database, schema,
                                   ds.get("table_name") or ds.get("fact_table"),
                                   columns, dimensions, metrics, spec)
-    _ANSWER_CACHE.pop(str(dataset_id), None)  # invalidate in-memory caches after regen
+    _evict_answers(str(dataset_id))  # invalidate in-memory caches after regen
     _SKETCH_CACHE.pop(str(dataset_id), None)
     _RANGE_CACHE.pop(str(dataset_id), None)
     artifact_status = "ready" if stats_supported or answers > 0 or value_rows else "unsupported"
@@ -355,7 +356,7 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
         dash_answers = _curate_linked_dashboards(str(dataset_id))
         if dash_answers:
             answers += dash_answers
-            _ANSWER_CACHE.pop(str(dataset_id), None)
+            _evict_answers(str(dataset_id))
     except Exception:
         pass
 
@@ -1564,34 +1565,68 @@ def _context_hints(dataset_id: str, metric_name: str,
     return hints
 
 
-# In-memory answer cache: {dataset_id: {(metric_name, group_col): {columns, rows}}}.
-# Warmed lazily from dlm_answers (one query per dataset), invalidated on regen.
-# After warmup every context answer is a dict hit — microseconds, zero DB trip.
-_ANSWER_CACHE: Dict[str, Dict[tuple, Dict[str, Any]]] = {}
+# In-memory answer cache keyed by (dataset_id, metric_name, group_col), one
+# precomputed answer per entry, least-recently-used out, bounded by the bytes
+# of JSON it holds. Answers are fetched one at a time by key: a curated dataset
+# can hold thousands of multi-dimension cuboids (144 MB of JSON on one showcase
+# dataset), and loading a dataset's answers whole on the ask path is what
+# OOM-killed a 1 GiB API pod. A miss is cached too, so an absent breakdown
+# costs one query, not one per question.
+_ANSWER_CACHE: "OrderedDict[tuple, Optional[Dict[str, Any]]]" = OrderedDict()
+_ANSWER_CACHE_SIZES: Dict[tuple, int] = {}
+_ANSWER_CACHE_LIMIT_BYTES = 64 * 1024 * 1024
 
 
-def _load_answers(dataset_id: str) -> Dict[tuple, Dict[str, Any]]:
-    cached = _ANSWER_CACHE.get(dataset_id)
-    if cached is not None:
-        return cached
+def _answer_cache_bytes() -> int:
+    return sum(_ANSWER_CACHE_SIZES.values())
+
+
+def _evict_answers(dataset_id: Optional[str] = None) -> int:
+    """Drop cached answers — one dataset's, or all. Returns entries dropped."""
+    keys = [k for k in _ANSWER_CACHE if dataset_id is None or k[0] == str(dataset_id)]
+    for k in keys:
+        _ANSWER_CACHE.pop(k, None)
+        _ANSWER_CACHE_SIZES.pop(k, None)
+    return len(keys)
+
+
+def _remember_answer(key: tuple, entry: Optional[Dict[str, Any]], size: int) -> None:
+    _ANSWER_CACHE[key] = entry
+    _ANSWER_CACHE_SIZES[key] = size
+    _ANSWER_CACHE.move_to_end(key)
+    while _ANSWER_CACHE and _answer_cache_bytes() > _ANSWER_CACHE_LIMIT_BYTES:
+        old, _ = _ANSWER_CACHE.popitem(last=False)
+        _ANSWER_CACHE_SIZES.pop(old, None)
+
+
+def _answer_keys(dataset_id: str) -> List[tuple]:
+    """(metric_name, group_col) for every precomputed answer — no rows loaded."""
     ensure_tables()
     res = meta.query(
-        "SELECT metric_name, group_col, columns, rows FROM dlm_answers WHERE dataset_id = @param0",
-        [dataset_id])
-    out: Dict[tuple, Dict[str, Any]] = {}
-    for r in res.get("rows_objects", res.get("rows", [])):
-        if not isinstance(r, dict):
-            continue
-        out[(r.get("metric_name"), r.get("group_col") or "")] = {
-            "columns": _loads(r.get("columns")) or [],
-            "rows": _loads(r.get("rows")) or [],
-        }
-    _ANSWER_CACHE[dataset_id] = out
-    return out
+        "SELECT metric_name, group_col FROM dlm_answers WHERE dataset_id = @param0",
+        [str(dataset_id)])
+    return [(r.get("metric_name"), r.get("group_col") or "")
+            for r in res.get("rows_objects", res.get("rows", [])) if isinstance(r, dict)]
 
 
 def _context_answer(dataset_id: str, metric_name: str, group_col: str) -> Optional[Dict[str, Any]]:
-    return _load_answers(dataset_id).get((metric_name, group_col or ""))
+    key = (str(dataset_id), metric_name, group_col or "")
+    if key in _ANSWER_CACHE:
+        _ANSWER_CACHE.move_to_end(key)
+        return _ANSWER_CACHE[key]
+    ensure_tables()
+    res = meta.query(
+        "SELECT columns, rows FROM dlm_answers "
+        "WHERE dataset_id = @param0 AND metric_name = @param1 AND group_col = @param2",
+        [key[0], key[1], key[2]])
+    rows = [r for r in res.get("rows_objects", res.get("rows", [])) if isinstance(r, dict)]
+    if not rows:
+        _remember_answer(key, None, 0)
+        return None
+    r = rows[0]
+    entry = {"columns": _loads(r.get("columns")) or [], "rows": _loads(r.get("rows")) or []}
+    _remember_answer(key, entry, len(r.get("columns") or "") + len(r.get("rows") or ""))
+    return entry
 
 
 # Per-dataset HLL sketch cuboids: {metric_name: {"dims":[...], "cells": {raw-value
@@ -1685,14 +1720,13 @@ def invalidate_caches(dataset_id: Optional[str] = None) -> int:
     """Clear in-memory caches. Returns count of datasets cleared."""
     if dataset_id:
         ds_id = str(dataset_id)
-        cleared = int(ds_id in _ANSWER_CACHE)
-        _ANSWER_CACHE.pop(ds_id, None)
+        cleared = int(_evict_answers(ds_id) > 0)
         _SKETCH_CACHE.pop(ds_id, None)
         _RANGE_CACHE.pop(ds_id, None)
         _SPEC_CACHE.pop(ds_id, None)
         return cleared
-    n = len(_ANSWER_CACHE)
-    _ANSWER_CACHE.clear()
+    n = len({k[0] for k in _ANSWER_CACHE})
+    _evict_answers()
     _SKETCH_CACHE.clear()
     _RANGE_CACHE.clear()
     _SPEC_CACHE.clear()
@@ -2504,9 +2538,11 @@ def filter_values(dataset_id: str, column: str, limit: int = 200) -> Dict[str, A
     if not matched_col:
         return {"ok": False, "reason": "dimension_not_found", "values": []}
 
-    answers = _load_answers(dataset_id)
-    for (metric_name, group_col), entry in answers.items():
-        if _normalize(group_col) == col_norm and entry.get("rows"):
+    for metric_name, group_col in _answer_keys(dataset_id):
+        if _normalize(group_col) != col_norm:
+            continue
+        entry = _context_answer(dataset_id, metric_name, group_col)
+        if entry and entry.get("rows"):
             vals = sorted(set(
                 str(r[0]) for r in entry["rows"] if r and r[0] is not None
             ))[:limit]
@@ -2654,7 +2690,7 @@ def curate_dashboard(dashboard_id: str) -> Dict[str, Any]:
             if n:
                 total_combos += 1
 
-        _ANSWER_CACHE.pop(ds_id, None)
+        _evict_answers(ds_id)
 
     return {
         "ok": True,
@@ -2799,7 +2835,7 @@ def incremental_refresh(dataset_id: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    _ANSWER_CACHE.pop(dataset_id, None)
+    _evict_answers(dataset_id)
     _SKETCH_CACHE.pop(dataset_id, None)
     _RANGE_CACHE.pop(dataset_id, None)
 
@@ -2812,15 +2848,18 @@ def _delta_merge(dataset_id: str, database: str, schema: str, fact: str,
                  metrics: List[dict]) -> int:
     """Compute deltas for rows added since prev_date and merge into existing answers.
     Returns count of answers updated."""
-    answers = _load_answers(dataset_id)
-    if not answers:
+    keys = _answer_keys(dataset_id)
+    if not keys:
         return 0
 
     where_new = f"{_qid(date_col)} > '{str(prev_date).replace(chr(39), chr(39)*2)}'"
     now = _now_iso()
     updated = 0
 
-    for (metric_name, group_col), entry in list(answers.items()):
+    for metric_name, group_col in keys:
+        entry = _context_answer(dataset_id, metric_name, group_col)
+        if not entry:
+            continue
         m = next((m for m in metrics
                   if (m.get("name") or m.get("metric_name")) == metric_name), None)
         if not m:
@@ -3594,7 +3633,7 @@ def save_curation(dataset_id: str, curation: Any) -> Dict[str, Any]:
     meta.execute("UPDATE dlm_artifact SET curation = @param0 WHERE dataset_id = @param1",
                  [json.dumps(clean, default=str), str(dataset_id)])
     _SPEC_CACHE.pop(str(dataset_id), None)
-    _ANSWER_CACHE.pop(str(dataset_id), None)
+    _evict_answers(str(dataset_id))
     _SKETCH_CACHE.pop(str(dataset_id), None)
     return {"ok": True, "dataset_id": str(dataset_id),
             "needs_regenerate": _curation_affects_precompute(prev, clean),

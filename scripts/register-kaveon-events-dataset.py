@@ -98,7 +98,7 @@ def find_existing(api) -> dict[str, Any] | None:
     return None
 
 
-def run(api, apply: bool, generate: bool, ask: bool) -> dict[str, Any]:
+def run(api, apply: bool, generate: bool, ask: bool, register: bool = True) -> dict[str, Any]:
     report: dict[str, Any] = {"dataset": DATASET_NAME, "table": f"{CATALOG}.{SCHEMA}.{TABLE}", "applied": apply}
     existing = find_existing(api)
     if not apply:
@@ -106,8 +106,9 @@ def run(api, apply: bool, generate: bool, ask: bool) -> dict[str, Any]:
         return report
     if existing:
         dataset_id = str(existing["id"])
-        api("PUT", f"datasets/{dataset_id}", dataset_body())
-        report["action"] = "updated"
+        if register:
+            api("PUT", f"datasets/{dataset_id}", dataset_body())
+        report["action"] = "updated" if register else "kept"
     else:
         created = api("POST", "datasets", dataset_body())
         dataset_id = str(created["id"])
@@ -150,6 +151,7 @@ def main() -> int:
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--generate", action="store_true", help="compile the DLM after registering")
     parser.add_argument("--ask", action="store_true", help="ask the qualification questions and time them")
+    parser.add_argument("--no-register", action="store_true", help="with --apply: skip the dataset PUT/POST")
     parser.add_argument("--report", type=Path, default=ROOT / "tmp/kaveon-telemetry-dataset.json")
     args = parser.parse_args()
     from playwright.sync_api import sync_playwright
@@ -174,7 +176,7 @@ def main() -> int:
                     raise RuntimeError(f"{method} {path}: {result.status} {result.text()[:700]}")
                 return None if result.status == 204 else result.json()
 
-            report = run(api, args.apply, args.generate, args.ask)
+            report = run(api, args.apply, args.generate, args.ask, register=not args.no_register)
         finally:
             request.dispose()
     args.report.parent.mkdir(parents=True, exist_ok=True)
