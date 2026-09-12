@@ -1506,6 +1506,13 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
     if note:
         title += " (latest available)"
 
+    # A native KaveonDB catalog is executed through /sql/engine with the
+    # dataset's schema selected, and its parser keeps ANSI quotes as part of
+    # an identifier, so the statement is handed over already unquoted.
+    engine = bool(_native_catalog(database))
+    if engine:
+        sql = re.sub(r'"([A-Za-z_][A-Za-z0-9_]*)"', r'\1', sql)
+
     return {
         "ok": True,
         "dataset_id": dataset_id,
@@ -1513,6 +1520,7 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
         "database": database,
         "schema_name": schema,
         "sql": sql,
+        "engine": engine,
         "from_context": False,
         "route": "live",
         "chartType": chart_type,

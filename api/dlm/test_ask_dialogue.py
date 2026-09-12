@@ -25,10 +25,11 @@ DATASET = {
 
 class Harness(ExitStack):
     """Pins every collaborator ask() reaches for, so the tests exercise only its dialogue logic."""
-    def __init__(self, routed=None, filters=None):
+    def __init__(self, routed=None, filters=None, native=None):
         super().__init__()
         self.routed = [{"dataset_id": "7", "score": 9.0}] if routed is None else routed
         self.filters = filters or []
+        self.native = native
 
     def __enter__(self):
         super().__enter__()
@@ -42,6 +43,7 @@ class Harness(ExitStack):
         self.enter_context(patch.object(engine, "_metric_year_bounds", lambda *a, **k: (2023, 2026)))
         self.enter_context(patch.object(engine, "_context_hints", lambda *a, **k: []))
         self.enter_context(patch.object(engine, "_vocabulary_hit", lambda q: True))
+        self.enter_context(patch.object(engine, "_native_catalog", lambda db: self.native))
         return self
 
 
@@ -111,6 +113,22 @@ class FrameTests(unittest.TestCase):
             result = engine.ask("orders by region", frame=frame)
         self.assertEqual(result["dataset_id"], "7")
         self.assertIn("COUNT(*)", result["sql"])
+
+
+class QueryPlaneTests(unittest.TestCase):
+    def test_a_native_catalog_answer_is_marked_for_the_engine_and_unquoted(self):
+        with Harness(native={"engine_catalog": "OpenSource"}):
+            result = engine.ask("net revenue by region")
+        self.assertTrue(result["engine"])
+        self.assertIn('AS "Net revenue"', result["sql"])   # aliases with spaces stay quoted
+        self.assertIn("FROM sales.orders", result["sql"])
+        self.assertIn("GROUP BY region", result["sql"])
+
+    def test_an_external_source_keeps_quoted_sql_for_the_pool(self):
+        with Harness():
+            result = engine.ask("net revenue by region")
+        self.assertFalse(result["engine"])
+        self.assertIn('GROUP BY "region"', result["sql"])
 
 
 class EditDistanceTests(unittest.TestCase):
