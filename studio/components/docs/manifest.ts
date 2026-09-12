@@ -80,6 +80,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
       { title: "Kaveon vs Trino", href: "/docs/research/trino", description: "Compare architecture, execution maturity, and proof requirements.", keywords: ["trino", "distributed sql", "benchmark"], status: "Reference", lastVerified: "September 4, 2026" },
       { title: "Engine vs Fabric SQL", href: "/docs/research/fabric-sql-endpoint", description: "Compare Kaveon Engine with the Fabric Lakehouse SQL analytics endpoint.", keywords: ["fabric", "sql analytics endpoint", "onelake"], status: "Reference", lastVerified: "September 4, 2026" },
       { title: "Kaveon vs HTAP platforms", href: "/docs/research/htap-platforms", description: "Compare Snowflake Unistore, Databricks LTAP, TiDB X, and Fabric on engines, storage authority, licensing, and maturity.", keywords: ["htap", "unistore", "lakebase", "ltap", "tidb", "transactional"], status: "Reference", lastVerified: "September 10, 2026" },
+      { title: "KaveonDB scorecard", href: "/docs/research/scorecard", description: "Per-dimension ratings against Trino and PostgreSQL from measured evidence.", keywords: ["scorecard", "trino", "postgresql", "benchmark", "rating"], status: "Reference", lastVerified: "September 12, 2026" },
     ],
   },
 ] as const;

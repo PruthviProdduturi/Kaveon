@@ -16,6 +16,7 @@ export default function ResearchDocs() {
       <tr><td>Kaveon vs Trino</td><td>Distributed SQL architecture, maturity, differentiation, and benchmark proof requirements</td><td><a href="/docs/research/trino">Read comparison</a></td></tr>
       <tr><td>Kaveon Engine vs Fabric SQL endpoint</td><td>Direct-lake execution compared with the managed Lakehouse SQL serving boundary</td><td><a href="/docs/research/fabric-sql-endpoint">Read comparison</a></td></tr>
       <tr><td>Kaveon vs HTAP platforms</td><td>Snowflake Unistore, Databricks LTAP, TiDB X, and Fabric compared on engines, storage authority, licensing, and maturity</td><td><a href="/docs/research/htap-platforms">Read comparison</a></td></tr>
+      <tr><td>KaveonDB scorecard</td><td>Per-dimension ratings against Trino for analytics and PostgreSQL for the record store, from measured evidence</td><td><a href="/docs/research/scorecard">Read scorecard</a></td></tr>
     </tbody></table>
 
     <h2>Patent disclosure</h2>
