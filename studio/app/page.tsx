@@ -57,6 +57,17 @@ interface Message {
   chosen?: string;      // option id the user picked, once the clarification is answered
 }
 
+/** Assistant text is rendered with **bold** markup only. Everything else is
+ *  escaped first: dataset names, notes and column values reach this string
+ *  from the database, and an Analyst-authored name must never become markup
+ *  in another viewer's chat. */
+function renderAssistantHtml(content: string): string {
+  const escaped = content
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  return escaped.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+}
+
 /** Compact number format for context hints (3.9M / 12.4K / 1,234). */
 function fmtNum(v: number | string | null): string {
   if (v == null) return "—";
@@ -1229,7 +1240,7 @@ export default function Home() {
                       <>
                         {m.content && (
                           <div style={{ padding: m.chart ? "0 0 8px" : 0, whiteSpace: "pre-wrap", lineHeight: 1.6 }}
-                            dangerouslySetInnerHTML={{ __html: m.content.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>") }}
+                            dangerouslySetInnerHTML={{ __html: renderAssistantHtml(m.content) }}
                           />
                         )}
                         {m.clarification && (
