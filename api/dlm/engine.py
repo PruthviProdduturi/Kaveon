@@ -287,10 +287,8 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
     # 3) value inventory — prefer pg_stats most_common_vals (zero scan); fall
     #    back to a bounded generate-time scan for views / unanalyzed tables that
     #    have no catalog stats. Only low-cardinality dimensions get indexed.
-    value_rows: List[Dict[str, Any]] = []
-    if stats_supported:
-        value_rows = _build_value_index(str(dataset_id), database, schema,
-                                        columns, dimensions, snapshots)
+    value_rows = _value_inventory(str(dataset_id), database, schema, columns, dimensions,
+                                  snapshots, stats_supported)
 
     # 4) usage rollup — how often each table has actually been asked about
     usage_rollup = _usage_rollup(schema, columns, dimensions, snapshots)
@@ -332,7 +330,7 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
     _ANSWER_CACHE.pop(str(dataset_id), None)  # invalidate in-memory caches after regen
     _SKETCH_CACHE.pop(str(dataset_id), None)
     _RANGE_CACHE.pop(str(dataset_id), None)
-    artifact_status = "ready" if stats_supported or answers > 0 else "unsupported"
+    artifact_status = "ready" if stats_supported or answers > 0 or value_rows else "unsupported"
     if artifact_status == "ready" and not stats_supported:
         meta.execute(
             "UPDATE dlm_artifact SET status = 'ready' WHERE dataset_id = @param0",
@@ -838,6 +836,21 @@ def _value_dataset_hits(q_tokens: set) -> Dict[str, int]:
 # --------------------------------------------------------------------------- #
 # builders                                                                     #
 # --------------------------------------------------------------------------- #
+
+
+def _value_inventory(dataset_id: str, database: str, schema: str, columns: List[dict],
+                     dimensions: List[dict], snapshots: Dict[str, dict],
+                     stats_supported: bool) -> List[Dict[str, Any]]:
+    """Which dimension values the DLM can recognise. With catalog statistics the
+    index is built from them plus bounded scans; a native KaveonDB catalog has
+    no pg_stats but runs the same bounded distinct scan on the Engine, so its
+    datasets resolve entities ("in India") exactly like PostgreSQL ones. Other
+    external sources without statistics get no index rather than a full scan."""
+    if stats_supported:
+        return _build_value_index(dataset_id, database, schema, columns, dimensions, snapshots)
+    if _native_catalog(database):
+        return _build_value_index(dataset_id, database, schema, columns, dimensions, {})
+    return []
 
 
 def _build_value_index(dataset_id: str, database: str, schema: str, columns: List[dict],
