@@ -3707,6 +3707,41 @@ mod tests {
     }
 
     #[test]
+    fn numeric_min_max_preserve_input_types_and_ignore_nulls() {
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "small",
+                Arc::new(Int32Array::from(vec![Some(3), None, Some(-7), Some(9)])) as ArrayRef,
+            ),
+            (
+                "large",
+                Arc::new(UInt64Array::from(vec![Some(9), None, Some(2), Some(18)])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let mut aggregate = HashAggregate::new(
+            Box::new(Input::new(batch)),
+            Vec::new(),
+            vec![
+                AggExpr::new(AggFunc::Min, "small"),
+                AggExpr::new(AggFunc::Max, "small"),
+                AggExpr::new(AggFunc::Min, "large"),
+                AggExpr::new(AggFunc::Max, "large"),
+            ],
+        )
+        .unwrap();
+        let output = aggregate.next_batch().unwrap().unwrap();
+        assert_eq!(output.schema().field(0).data_type(), &DataType::Int32);
+        assert_eq!(output.schema().field(1).data_type(), &DataType::Int32);
+        assert_eq!(output.schema().field(2).data_type(), &DataType::UInt64);
+        assert_eq!(output.schema().field(3).data_type(), &DataType::UInt64);
+        assert_eq!(output.column(0).as_primitive::<Int32Type>().value(0), -7);
+        assert_eq!(output.column(1).as_primitive::<Int32Type>().value(0), 9);
+        assert_eq!(output.column(2).as_primitive::<arrow::datatypes::UInt64Type>().value(0), 2);
+        assert_eq!(output.column(3).as_primitive::<arrow::datatypes::UInt64Type>().value(0), 18);
+    }
+
+    #[test]
     fn count_distinct_remains_exact_across_many_partial_states() {
         let mut partials = Vec::new();
         for partition in 0..8_u64 {
