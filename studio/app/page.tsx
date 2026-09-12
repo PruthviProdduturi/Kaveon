@@ -39,7 +39,7 @@ interface ContextHint { label: string; value: number | string | null }
 // guessing. Picking an option re-posts the original question with the slot
 // pinned; the DLM does not pick silently.
 interface Clarification {
-  kind: "metric" | "dimension";
+  kind: "metric" | "dimension" | "value";
   prompt: string;
   options: { id: string; label: string; description?: string }[];
   resume: { question: string; choices: Record<string, string> };
@@ -790,9 +790,11 @@ export default function Home() {
           }
           if (!dlm?.ok && dlm?.reason === "out_of_scope") {
             const names: string[] = dlm.datasets || [];
-            const scopeMsg = names.length === 0
-              ? "No datasets are registered yet. Create a dataset in the Library, then return here to ask questions about it."
-              : `That question is outside the data Kaveon holds. Ask about one of these datasets: ${names.map(n => `**${n}**`).join(", ")}.`;
+            const scopeMsg = dlm.hint
+              ? String(dlm.hint)
+              : names.length === 0
+                ? "No datasets are registered yet. Create a dataset in the Library, then return here to ask questions about it."
+                : `That question is outside the data Kaveon holds. Ask about one of these datasets: ${names.map(n => `**${n}**`).join(", ")}.`;
             if (sid) {
               void saveMessage(sid, "user", text.trim());
               void saveMessage(sid, "assistant", scopeMsg, { route: "out_of_scope" });

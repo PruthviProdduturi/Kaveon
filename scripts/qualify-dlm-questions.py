@@ -35,6 +35,8 @@ def check(expect: dict[str, Any], answer: dict[str, Any], live: dict[str, Any] |
         problems.append(f"reason={reason} expected {expect['reason']}")
     if "reason_in" in expect and reason not in expect["reason_in"]:
         problems.append(f"reason={reason} expected one of {expect['reason_in']}")
+    if "clarify_kind" in expect and (answer.get("clarification") or {}).get("kind") != expect["clarify_kind"]:
+        problems.append(f"clarify kind={(answer.get('clarification') or {}).get('kind')} expected {expect['clarify_kind']}")
     if "dataset" in expect and str(answer.get("dataset_id")) != expect["dataset"]:
         problems.append(f"dataset={answer.get('dataset_id')} expected {expect['dataset']}")
     if not answer.get("ok"):
