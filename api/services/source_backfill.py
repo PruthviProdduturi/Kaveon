@@ -26,7 +26,18 @@ def digest(records):
  return h.hexdigest()
 def _catalog_secret_ref(row):
  ref=row.get("credential_ref")
- if not ref:return f"identity:{row.get('credential_kind') or 'managed_identity'}"
+ raw_kind=row.get("credential_kind")
+ kind=str(raw_kind or "managed_identity").casefold()
+ # Workload identity uses a non-secret principal/client reference. Preserve
+ # only that bounded identifier; never copy a token or connection string into
+ # the KaveonDB document.
+ if raw_kind is not None and kind in {"workload_identity", "managed_identity"}:
+  if not ref:return f"identity:{kind}"
+  value=str(ref)
+  if any(part in value.casefold() for part in FORBIDDEN) or len(value)>255:
+   raise RuntimeError("workload identity reference is invalid")
+  return f"identity:{value}"
+ if not ref:return f"identity:{kind}"
  ref=str(ref)
  if not (ref.startswith("https://") and ".vault.azure.net/" in ref):
   raise RuntimeError("catalog credential reference is not a Key Vault reference")
@@ -53,12 +64,14 @@ def capture_snapshot():
  if len(cats)+len(data)>MAX_SOURCES:raise RuntimeError("source snapshot exceeds its record bound")
  records=[]
  for row in cats:
-  rid=f"catalog:{row['id']}";owner=str(row.get("created_by") or "")
+  # Product object paths are normalized relative paths; avoid ':' from the
+  # legacy PostgreSQL namespace while keeping the source kind explicit.
+  rid=f"catalog-{row['id']}";owner=str(row.get("created_by") or "")
   ref=_catalog_secret_ref(row)
   doc={"source_kind":"catalog","source_id":rid,"name":row.get("name"),"catalog_identity":row.get("engine_catalog"),"source_type":row.get("storage_type"),"database_name":None,"region":None,"description":row.get("description"),"is_active":row.get("lifecycle")=="active","lifecycle":row.get("lifecycle"),"secret_ref":ref}
   records.append(SourceRecord(rid,owner,doc,_canonical(doc)[1]))
  for row in data:
-  rid=f"data:{row['id']}";owner=str(row.get("created_by") or "")
+  rid=f"data-{row['id']}";owner=str(row.get("created_by") or "")
   doc={"source_kind":"data","source_id":rid,"name":row.get("name"),"catalog_identity":row.get("database_name"),"source_type":row.get("type"),"database_name":row.get("database_name"),"region":row.get("region"),"description":row.get("description"),"is_active":bool(row.get("is_active")),"lifecycle":"active" if row.get("is_active") else "suspended","secret_ref":f"key-managed:data_sources/{row['id']}"}
   records.append(SourceRecord(rid,owner,doc,_canonical(doc)[1]))
  records=tuple(sorted(records,key=lambda r:r.record_id));s=SourceSnapshot(int(wm.get("watermark") or 0),records,digest(records));validate_snapshot(s);return s

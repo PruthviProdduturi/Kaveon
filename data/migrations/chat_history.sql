@@ -1,6 +1,8 @@
 -- Chat persistence tables
 -- Run against the kaveon metadata database (PostgreSQL)
 
+CREATE SCHEMA IF NOT EXISTS dbo;
+
 CREATE TABLE IF NOT EXISTS dbo.chat_sessions (
     id          SERIAL PRIMARY KEY,
     user_email  VARCHAR(255) NOT NULL,
