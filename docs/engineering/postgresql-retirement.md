@@ -101,6 +101,23 @@ after validation; a missing, stale, failed or malformed input returns a
 nonzero exit code. It never connects to PostgreSQL, changes the write fence,
 scales a workload, or authorizes retirement.
 
+After the read-only evidence runner, produce the final qualification summary:
+
+```powershell
+python scripts/retirement-qualification-summary.py `
+  --audit tmp/postgresql-retirement-audit.json `
+  --operational tmp/postgresql-operational-rehearsals.json `
+  --output tmp/postgresql-retirement-summary.json
+```
+
+The summary is fail-closed and reports every declared authority family and all
+seven global gates, plus separate backup/restore, rollback,
+PostgreSQL-unavailable restart, and durable-checkpoint rehearsal gates. It
+returns exit code 2 while any evidence is missing. The current checked-in
+authority manifest declares 15 families while this retirement program requires
+16; the summary records that inventory mismatch as an open gate instead of
+silently treating the 15-family report as complete.
+
 Reconciliation jobs produce one strict, content-free JSON report per family.
 The local collector verifies each report's canonical SHA-256 and exact family
 identity before assembling the gate input:
