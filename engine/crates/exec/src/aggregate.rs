@@ -68,6 +68,8 @@ const STATE_INTEGER_SUM: u8 = 10;
 const STATE_INTEGER_MIN: u8 = 11;
 const STATE_INTEGER_MAX: u8 = 12;
 const STATE_INTEGER_SUM_DISTINCT: u8 = 13;
+const STATE_UTF8_MIN: u8 = 15;
+const STATE_UTF8_MAX: u8 = 16;
 const VALUE_BOOL: u8 = 1;
 const VALUE_INT32: u8 = 2;
 const VALUE_INT64: u8 = 3;
@@ -175,6 +177,8 @@ pub enum AggregateState {
     Count(u64),
     Min(Option<f64>),
     Max(Option<f64>),
+    Utf8Min(Option<String>),
+    Utf8Max(Option<String>),
     Avg {
         sum: f64,
         count: u64,
@@ -204,6 +208,11 @@ pub fn aggregate_output_types(aggregates: &[AggExpr], input: &SchemaRef) -> Resu
                 }
             }
             if let Ok(field) = input.field_with_name(&agg.column) {
+                if matches!(agg.func, AggFunc::Min | AggFunc::Max)
+                    && matches!(field.data_type(), DataType::Utf8 | DataType::LargeUtf8)
+                {
+                    return Ok(field.data_type().clone());
+                }
                 if matches!(agg.func, AggFunc::Sum | AggFunc::Min | AggFunc::Max)
                     && field.data_type() == &DataType::UInt64
                 {
@@ -232,6 +241,7 @@ pub enum FinalAggregateValue {
     Numeric(Option<f64>),
     Decimal(Option<i128>, i8),
     Integer(Option<i128>),
+    Utf8(Option<String>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -263,6 +273,13 @@ impl AggregateState {
                 (AggFunc::Sum, true) => Self::IntegerSumDistinct(HashSet::new()),
                 (AggFunc::Min, _) => Self::IntegerMin(None),
                 (AggFunc::Max, _) => Self::IntegerMax(None),
+                _ => Self::new(expression),
+            };
+        }
+        if matches!(output_type, DataType::Utf8 | DataType::LargeUtf8) {
+            return match expression.func {
+                AggFunc::Min => Self::Utf8Min(None),
+                AggFunc::Max => Self::Utf8Max(None),
                 _ => Self::new(expression),
             };
         }
@@ -432,6 +449,23 @@ impl AggregateState {
         Ok(())
     }
 
+    pub fn update_utf8(&mut self, value: &str) -> Result<()> {
+        match self {
+            Self::Utf8Min(current) => {
+                if current.as_ref().is_none_or(|old| value < old.as_str()) {
+                    *current = Some(value.to_owned());
+                }
+            }
+            Self::Utf8Max(current) => {
+                if current.as_ref().is_none_or(|old| value > old.as_str()) {
+                    *current = Some(value.to_owned());
+                }
+            }
+            _ => return Err(exec_err("UTF-8 update applied to an incompatible aggregate state")),
+        }
+        Ok(())
+    }
+
     pub fn update_distinct(&mut self, value: AggregateValue) -> Result<()> {
         self.insert_distinct(value).map(|_| ())
     }
@@ -571,6 +605,20 @@ impl AggregateState {
                     *value = Some(value.map_or(*other, |current| current.max(*other)));
                 }
             }
+            (Self::Utf8Min(value), Self::Utf8Min(other)) => {
+                if let Some(other) = other {
+                    if value.as_ref().is_none_or(|current| other < current) {
+                        *value = Some(other.clone());
+                    }
+                }
+            }
+            (Self::Utf8Max(value), Self::Utf8Max(other)) => {
+                if let Some(other) = other {
+                    if value.as_ref().is_none_or(|current| other > current) {
+                        *value = Some(other.clone());
+                    }
+                }
+            }
             (Self::CountDistinct(values), Self::CountDistinct(other))
             | (Self::IntegerSumDistinct(values), Self::IntegerSumDistinct(other))
             | (Self::SumDistinct(values), Self::SumDistinct(other))
@@ -615,6 +663,13 @@ impl AggregateState {
             _ => Err(exec_err(
                 "numeric result requested from a count aggregate state",
             )),
+        }
+    }
+
+    pub fn utf8_result(&self) -> Result<Option<String>> {
+        match self {
+            Self::Utf8Min(value) | Self::Utf8Max(value) => Ok(value.clone()),
+            _ => Err(exec_err("UTF-8 result requested from a non-UTF-8 aggregate state")),
         }
     }
 }
@@ -1077,6 +1132,8 @@ fn state_layout(states: &[AggregateState]) -> Result<Vec<(u8, Option<i8>)>> {
                     AggregateState::Count(_) => STATE_COUNT,
                     AggregateState::Min(_) => STATE_MIN,
                     AggregateState::Max(_) => STATE_MAX,
+                    AggregateState::Utf8Min(_) => STATE_UTF8_MIN,
+                    AggregateState::Utf8Max(_) => STATE_UTF8_MAX,
                     AggregateState::Avg { .. } => STATE_AVG,
                     AggregateState::CountDistinct(_) => STATE_COUNT_DISTINCT,
                     AggregateState::SumDistinct(_) => STATE_SUM_DISTINCT,
@@ -1119,6 +1176,9 @@ pub fn finalize_grouped_aggregate_states(
                     }
                     AggregateState::Count(_) | AggregateState::CountDistinct(_) => {
                         state.count_result().map(FinalAggregateValue::Count)
+                    }
+                    AggregateState::Utf8Min(_) | AggregateState::Utf8Max(_) => {
+                        state.utf8_result().map(FinalAggregateValue::Utf8)
                     }
                     AggregateState::SumDistinct(_) | AggregateState::AvgDistinct(_) => {
                         state.numeric_result().map(FinalAggregateValue::Numeric)
@@ -1322,6 +1382,22 @@ pub fn encode_aggregate_states(states: &[AggregateState]) -> Result<Vec<u8>> {
                 extrema.push(*value);
                 distinct_payloads.push(None);
             }
+            AggregateState::Utf8Min(value) | AggregateState::Utf8Max(value) => {
+                kinds.push(if matches!(state, AggregateState::Utf8Min(_)) {
+                    STATE_UTF8_MIN
+                } else {
+                    STATE_UTF8_MAX
+                });
+                sums.push(None);
+                counts.push(None);
+                extrema.push(None);
+                distinct_payloads.push(
+                    value
+                        .as_ref()
+                        .map(|value| encode_aggregate_value(&AggregateValue::Utf8(value.clone())))
+                        .transpose()?,
+                );
+            }
             AggregateState::Avg { sum, count } => {
                 kinds.push(STATE_AVG);
                 sums.push(Some(*sum));
@@ -1449,6 +1525,23 @@ pub fn decode_aggregate_states(bytes: &[u8]) -> Result<Vec<AggregateState>> {
                 STATE_COUNT => AggregateState::Count(required_u64(counts, row, "count")?),
                 STATE_MIN => AggregateState::Min(optional_f64(extrema, row)),
                 STATE_MAX => AggregateState::Max(optional_f64(extrema, row)),
+                STATE_UTF8_MIN | STATE_UTF8_MAX => {
+                    let value = if distinct.is_null(row) {
+                        None
+                    } else {
+                        let AggregateValue::Utf8(value) =
+                            decode_aggregate_value(distinct.value(row))?
+                        else {
+                            return Err(exec_err("invalid UTF-8 extremum payload"));
+                        };
+                        Some(value)
+                    };
+                    if kinds.value(row) == STATE_UTF8_MIN {
+                        AggregateState::Utf8Min(value)
+                    } else {
+                        AggregateState::Utf8Max(value)
+                    }
+                }
                 STATE_AVG => AggregateState::Avg {
                     sum: required_f64(sums, row, "average sum")?,
                     count: required_u64(counts, row, "average count")?,
@@ -1804,7 +1897,13 @@ impl HashAggregate {
                 let index = source_schema.index_of(&agg.column).map_err(|_| {
                     exec_err(format!("aggregate column '{}' not in input", agg.column))
                 })?;
-                if !is_numeric_type(source_schema.field(index).data_type()) {
+                if !is_numeric_type(source_schema.field(index).data_type())
+                    && !(matches!(agg.func, AggFunc::Min | AggFunc::Max)
+                        && matches!(
+                            source_schema.field(index).data_type(),
+                            DataType::Utf8 | DataType::LargeUtf8
+                        ))
+                {
                     return Err(exec_err(format!(
                         "{} requires a numeric column, got {}",
                         agg.output_name(),
@@ -2020,6 +2119,13 @@ impl HashAggregate {
                             }
                         } else if matches!(state, AggregateState::Exact { .. }) {
                             state.update_exact(extract_key(array, row).into())?;
+                        } else if matches!(state, AggregateState::Utf8Min(_) | AggregateState::Utf8Max(_)) {
+                            let value = match array.data_type() {
+                                DataType::Utf8 => array.as_string::<i32>().value(row),
+                                DataType::LargeUtf8 => array.as_string::<i64>().value(row),
+                                _ => return Err(exec_err("UTF-8 aggregate input type mismatch")),
+                            };
+                            state.update_utf8(value)?;
                         } else if matches!(state, AggregateState::DecimalSum { .. }) {
                             state.update_decimal(
                                 array
@@ -2126,6 +2232,16 @@ impl HashAggregate {
                             accumulators[index].update_count()?;
                         } else if matches!(accumulators[index], AggregateState::Exact { .. }) {
                             accumulators[index].update_exact(extract_key(array, row).into())?;
+                        } else if matches!(
+                            accumulators[index],
+                            AggregateState::Utf8Min(_) | AggregateState::Utf8Max(_)
+                        ) {
+                            let value = match array.data_type() {
+                                DataType::Utf8 => array.as_string::<i32>().value(row),
+                                DataType::LargeUtf8 => array.as_string::<i64>().value(row),
+                                _ => return Err(exec_err("UTF-8 aggregate input type mismatch")),
+                            };
+                            accumulators[index].update_utf8(value)?;
                         } else if matches!(accumulators[index], AggregateState::DecimalSum { .. }) {
                             accumulators[index].update_decimal(
                                 array
@@ -2415,6 +2531,30 @@ impl BatchOperator for HashAggregate {
                         })
                         .collect();
                     columns.push(Arc::new(UInt64Array::from(values?)));
+                }
+                DataType::Utf8 => {
+                    let values = entries
+                        .iter()
+                        .map(|(_, states)| states[ai].utf8_result())
+                        .collect::<Result<Vec<_>>>()?;
+                    columns.push(Arc::new(StringArray::from(
+                        values
+                            .iter()
+                            .map(|value| value.as_deref())
+                            .collect::<Vec<_>>(),
+                    )));
+                }
+                DataType::LargeUtf8 => {
+                    let values = entries
+                        .iter()
+                        .map(|(_, states)| states[ai].utf8_result())
+                        .collect::<Result<Vec<_>>>()?;
+                    columns.push(Arc::new(arrow::array::LargeStringArray::from(
+                        values
+                            .iter()
+                            .map(|value| value.as_deref())
+                            .collect::<Vec<_>>(),
+                    )));
                 }
                 _ => {
                     let values: Result<Vec<Option<f64>>> = entries
@@ -3519,6 +3659,70 @@ mod tests {
         assert!(
             matches!(result, Err(KaveonError::Execution(message)) if message.contains("numeric"))
         );
+    }
+
+    #[test]
+    fn utf8_min_max_are_lexical_null_ignoring_and_mergeable() {
+        let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringArray::from(vec![
+                Some("zebra"),
+                None,
+                Some("éclair"),
+                Some("apple"),
+            ]))],
+        )
+        .unwrap();
+        let mut aggregate = HashAggregate::new(
+            Box::new(Input::new(batch)),
+            Vec::new(),
+            vec![
+                AggExpr::new(AggFunc::Min, "value"),
+                AggExpr::new(AggFunc::Max, "value"),
+            ],
+        )
+        .unwrap();
+        let output = aggregate.next_batch().unwrap().unwrap();
+        assert_eq!(output.schema().field(0).data_type(), &DataType::Utf8);
+        assert_eq!(output.column(0).as_string::<i32>().value(0), "apple");
+        assert_eq!(output.column(1).as_string::<i32>().value(0), "éclair");
+
+        let mut left = AggregateState::Utf8Min(Some("zebra".into()));
+        let right = AggregateState::Utf8Min(Some("apple".into()));
+        left.merge(&right).unwrap();
+        assert_eq!(left.utf8_result().unwrap().as_deref(), Some("apple"));
+        let encoded = encode_aggregate_states(&[
+            AggregateState::Utf8Min(Some("apple".into())),
+            AggregateState::Utf8Max(Some("éclair".into())),
+        ])
+        .unwrap();
+        assert_eq!(
+            decode_aggregate_states(&encoded).unwrap(),
+            vec![
+                AggregateState::Utf8Min(Some("apple".into())),
+                AggregateState::Utf8Max(Some("éclair".into())),
+            ]
+        );
+    }
+
+    #[test]
+    fn count_distinct_remains_exact_across_many_partial_states() {
+        let mut partials = Vec::new();
+        for partition in 0..8_u64 {
+            let mut state = AggregateState::CountDistinct(HashSet::new());
+            for value in 0..25_000_u64 {
+                state
+                    .update_distinct(AggregateValue::UInt64(value + (partition % 2) * 20_000))
+                    .unwrap();
+            }
+            partials.push(state);
+        }
+        let mut merged = partials.remove(0);
+        for partial in partials {
+            merged.merge(&partial).unwrap();
+        }
+        assert_eq!(merged.count_result().unwrap(), 45_000);
     }
 
     #[test]
