@@ -49,7 +49,25 @@ def save_checkpoint(path: Path, snapshot, next_index: int, *, complete: bool = F
     destination = path.resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
+    backup_temporary = None
     try:
+        # Keep the last complete checkpoint beside the active one.  The backup
+        # is written and fsynced before replacing the active file, so a process
+        # or host restart cannot turn an otherwise resumable migration into an
+        # unrecoverable gap.  It is recovery evidence, not a second source of
+        # truth: a corrupt active checkpoint remains fail-closed.
+        if destination.exists():
+            backup = destination.with_name(destination.name + ".bak")
+            with tempfile.NamedTemporaryFile(
+                mode="wb", dir=destination.parent, prefix=backup.name + ".", delete=False
+            ) as handle:
+                backup_temporary = Path(handle.name)
+                os.chmod(backup_temporary, 0o600)
+                handle.write(destination.read_bytes())
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(backup_temporary, backup)
+            backup_temporary = None
         with tempfile.NamedTemporaryFile(
             mode="wb", dir=destination.parent, prefix=destination.name + ".", delete=False
         ) as handle:
@@ -62,10 +80,18 @@ def save_checkpoint(path: Path, snapshot, next_index: int, *, complete: bool = F
     finally:
         if temporary and temporary.exists():
             temporary.unlink()
+        if backup_temporary and backup_temporary.exists():
+            backup_temporary.unlink()
 
 
 def load_checkpoint(path: Path):
     source = path.resolve()
+    if not source.exists():
+        backup = source.with_name(source.name + ".bak")
+        if backup.exists():
+            source = backup
+        else:
+            raise RuntimeError("Dataset checkpoint is missing")
     if source.stat().st_size > MAX_CHECKPOINT_BYTES:
         raise RuntimeError("Dataset checkpoint exceeds its byte bound")
     try:

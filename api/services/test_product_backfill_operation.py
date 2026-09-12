@@ -36,6 +36,27 @@ class ProductBackfillOperationTests(unittest.TestCase):
         self.assertEqual(restored, snapshot())
         self.assertEqual((next_index, complete), (1, False))
 
+    def test_checkpoint_keeps_last_complete_backup_and_recovers_if_active_file_is_lost(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "checkpoint.json"
+            product_backfill_operation.save_checkpoint(path, snapshot(), 0)
+            product_backfill_operation.save_checkpoint(path, snapshot(), 1)
+            backup = Path(str(path) + ".bak")
+            self.assertTrue(backup.exists())
+            path.unlink()
+            restored, next_index, complete = product_backfill_operation.load_checkpoint(path)
+        self.assertEqual(restored, snapshot())
+        self.assertEqual((next_index, complete), (0, False))
+
+    def test_corrupt_active_checkpoint_fails_closed_even_when_backup_exists(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "checkpoint.json"
+            product_backfill_operation.save_checkpoint(path, snapshot(), 0)
+            product_backfill_operation.save_checkpoint(path, snapshot(), 1)
+            path.write_text("{}", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "checkpoint identity mismatch"):
+                product_backfill_operation.load_checkpoint(path)
+
     def test_corrupt_checkpoint_document_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "checkpoint.json"
