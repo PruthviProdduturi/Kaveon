@@ -52,6 +52,26 @@ class ChartFreshnessTests(unittest.TestCase):
         self.assertEqual([r["value_text"] for r in rows], ["Brooklyn", "Queens"])
         self.assertEqual({r["source"] for r in rows}, {"scan.group_by"})
 
+    def test_force_rebuilds_a_ready_artifact_even_without_statistics(self):
+        dataset = {"id": "24", "dataset_name": "T", "database_name": "OpenSource", "schema_name": "s",
+                   "fact_table": "t", "columns": [], "metrics": [], "dimensions": []}
+        stubs = {"_analyze_tables": None, "_value_inventory": [], "_usage_rollup": {}, "_stats_rollup": {},
+                 "_native_row_counts": {}, "_manifest": {}, "_persist_value_index": None, "_upsert_artifact": None,
+                 "_upsert_router": None, "_effective_spec": {}, "_curate_linked_dashboards": 0}
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(engine, "ensure_tables", lambda: None))
+            stack.enter_context(patch.object(engine.datasets_svc, "get_dataset_by_id", return_value=dataset))
+            stack.enter_context(patch.object(engine.profiler, "build_context", return_value={"supported": False}))
+            stack.enter_context(patch.object(engine.meta, "query_one", return_value={"status": "ready"}))
+            stack.enter_context(patch.object(engine.meta, "execute", lambda *a, **k: None))
+            for name, value in stubs.items():
+                stack.enter_context(patch.object(engine, name, lambda *a, _v=value, **k: _v))
+            precompute = stack.enter_context(patch.object(engine, "_precompute_answers", return_value=3))
+            result = engine.generate_dlm("24", force=True)
+        self.assertTrue(result.get("rebuilt"), result)
+        precompute.assert_called_once()
+
     def test_external_source_without_statistics_gets_no_value_index(self):
         columns = [{"table_name": "t", "column_name": "region", "is_dimension": True}]
         with patch.object(engine, "_native_catalog", return_value=None), \

@@ -19,6 +19,8 @@ import database.pool as pool
 import database.metadata as meta_db
 
 router = APIRouter()
+
+MAX_RESULT_ROWS = 5000   # the most any Studio surface renders from one statement
 NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
 
 # ── Query result cache ──────────────────────────────────────────────────────
@@ -442,15 +444,12 @@ def execute_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Dep
             }
 
     start_time = int(time.time() * 1000)
+    # The result is bounded at the source: 5,000 rows is the most any Studio
+    # surface renders, and an unbounded SELECT over a large table must never
+    # be materialised in the API.
+    hard_limit = min(max(1, int(row_limit)), MAX_RESULT_ROWS) if row_limit else MAX_RESULT_ROWS
     try:
-        result = pool.execute_query(sql_text, database)
-
-        if row_limit:
-            lim = min(max(1, int(row_limit)), 5000)
-            rows = result.get("rows") or []
-            if len(rows) > lim:
-                result["rows"] = rows[:lim]
-                result["row_count"] = lim
+        result = pool.execute_query(sql_text, database, max_rows=hard_limit)
     except Exception as e:
         duration_ms = int(time.time() * 1000) - start_time
         print(f"[SQL EXEC FAILED] {type(e).__name__}: {e}\n  DB: {database}\n  SQL: {sql_text[:500]}")
@@ -485,12 +484,14 @@ def execute_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Dep
         print(f"[History] Failed to save execute history: {e}")
 
     row_count = result.get("row_count") or 0
+    truncated = bool(result.get("truncated"))
     return {
         "columns": result.get("columns") or [],
         "rows": result.get("rows") or [],
-        "message": f"Returned {row_count} rows" if row_count else None,
+        "message": (f"Showing the first {row_count:,} rows" if truncated else f"Returned {row_count} rows") if row_count else None,
         "duration_ms": duration_ms,
         "from_cache": False,
+        "truncated": truncated,
     }
 
 

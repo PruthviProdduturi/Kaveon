@@ -100,7 +100,7 @@ class BoundedScanTests(unittest.TestCase):
 
         class Conn:
             connection = SimpleNamespace(timeout=0)
-            def execute_query(self, sql, params=None):
+            def execute_query(self, sql, params=None, max_rows=None):
                 seen["sql"] = sql
                 return {"rows": []}
 
@@ -114,7 +114,7 @@ class BoundedScanTests(unittest.TestCase):
         seen = {}
 
         class Conn:
-            def execute_query(self, sql, params=None):
+            def execute_query(self, sql, params=None, max_rows=None):
                 seen["sql"] = sql
                 return {"rows": []}
 
@@ -130,7 +130,7 @@ class BoundedScanTests(unittest.TestCase):
 
         class Conn:
             connection = state
-            def execute_query(self, sql, params=None):
+            def execute_query(self, sql, params=None, max_rows=None):
                 seen["timeout_during"] = state.timeout
                 return {"rows": []}
 
