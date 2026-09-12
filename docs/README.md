@@ -62,6 +62,7 @@ it is running. The Engine HTTP API does not currently publish an OpenAPI documen
 - [Kaveon and Trino: architectural comparison](research/kaveon-vs-trino.md)
 - [Kaveon Engine and Fabric SQL analytics endpoint](research/kaveon-engine-vs-fabric-sql-analytics-endpoint.md)
 - [Kaveon and unified transactional/analytical platforms](research/kaveon-vs-htap-platforms.md)
+- [Where KaveonDB stands: a rated comparison with Trino and PostgreSQL](research/kaveondb-scorecard-trino-postgresql.md)
 
 White papers and the patent draft contain research descriptions and historical
 measurements. They are not substitutes for current capability status. Performance

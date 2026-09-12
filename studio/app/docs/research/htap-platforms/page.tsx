@@ -26,6 +26,6 @@ export default function KaveonVsHtapPlatformsDocs() {
 
     <h2>Canonical paper</h2>
     <p>The full market map, per-platform notes, defensible claim, and primary references live in <a href="https://github.com/PruthviProdduturi/Kaveon/blob/dev/docs/research/kaveon-vs-htap-platforms.md">Kaveon and unified transactional/analytical platforms</a>.</p>
-    <Pager prev={{ href: "/docs/research/fabric-sql-endpoint", title: "Engine vs Fabric SQL" }} />
+    <Pager prev={{ href: "/docs/research/fabric-sql-endpoint", title: "Engine vs Fabric SQL" }} next={{ href: "/docs/research/scorecard", title: "KaveonDB scorecard" }} />
   </div>;
 }
