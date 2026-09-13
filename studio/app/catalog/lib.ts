@@ -14,6 +14,7 @@ export interface TableDef {
   revision: number | null;
   lifecycle: string | null;
   columns: ColumnDef[];
+  rowCount: number | null;   // exact, from footer statistics on KaveonDB; null when not yet counted
 }
 export interface Sample { columns: string[]; rows: unknown[][]; executionTime: number }
 export interface Usage {
