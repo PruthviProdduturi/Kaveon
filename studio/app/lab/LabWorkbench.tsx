@@ -680,24 +680,31 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
   const embeddedSchemaRef = useRef<string | null>(embeddedSchema);
   useEffect(() => { embeddedSchemaRef.current = embeddedSchema; }, [embeddedSchema]);
 
-  // Embedded: the Catalog shell owns source and schema; follow them whenever they change.
+  // A caller can name the catalog and schema to open: the Catalog shell through
+  // props when embedded, or the Catalog's Query action through ?catalog=&schema=
+  // on the SQL Lab page. Either way the workbench follows whenever they change.
+  const requestedCatalog = embedded ? null : searchParams.get("catalog");
+  const requestedSourceId = embedded
+    ? embeddedSourceId
+    : (requestedCatalog ? (engineSources.find((source) => source.catalog === requestedCatalog)?.id ?? null) : null);
+  const requestedSchema = embedded ? embeddedSchema : searchParams.get("schema");
   useEffect(() => {
-    if (!embedded || !embeddedSourceId || isLoadingEngineSources) return;
-    if (!engineSources.some((source) => source.id === embeddedSourceId)) return;
-    if (currentEngineSourceId !== embeddedSourceId) {
+    if (!requestedSourceId || isLoadingEngineSources) return;
+    if (!engineSources.some((source) => source.id === requestedSourceId)) return;
+    if (currentEngineSourceId !== requestedSourceId) {
       setCurrentDataSourceId(null);
-      setCurrentEngineSourceId(embeddedSourceId);
-      lastEngineSourceIdRef.current = embeddedSourceId;
-      void loadEngineSchemas(embeddedSourceId).catch((error) => setLoadError(error instanceof Error ? error.message : "Failed to load Engine schemas"));
+      setCurrentEngineSourceId(requestedSourceId);
+      lastEngineSourceIdRef.current = requestedSourceId;
+      void loadEngineSchemas(requestedSourceId).catch((error) => setLoadError(error instanceof Error ? error.message : "Failed to load Engine schemas"));
       return;
     }
-    if (embeddedSchema && embeddedSchema !== currentDatabase && engineSchemas.includes(embeddedSchema)) setCurrentDatabase(embeddedSchema);
+    if (requestedSchema && requestedSchema !== currentDatabase && engineSchemas.includes(requestedSchema)) setCurrentDatabase(requestedSchema);
     // Source and schema follow the caller; the loaders are stable for a given source.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [embedded, embeddedSourceId, embeddedSchema, isLoadingEngineSources, engineSources, currentEngineSourceId, engineSchemas]);
+  }, [requestedSourceId, requestedSchema, isLoadingEngineSources, engineSources, currentEngineSourceId, engineSchemas]);
 
   useEffect(() => {
-    if (embedded) return;
+    if (embedded || requestedSourceId) return;
     if (isLoadingDatabases || isLoadingEngineSources || currentDataSourceId !== null || currentEngineSourceId !== null || !engineSources.length || dataSources.length) return;
     const source = engineSources[0];
     setCurrentEngineSourceId(source.id);

@@ -1,16 +1,9 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect } from "react";
+import { LabWorkbench } from "./LabWorkbench";
 
-// SQL Lab is the query mode of the Catalog. This URL forwards there, keeping
-// any prefilled query, saved query, or dataset the caller passed along.
-export default function LabRedirect() {
-  const router = useRouter();
-  const search = useSearchParams();
-  useEffect(() => {
-    const qs = search.toString();
-    router.replace(qs ? `/catalog/query?${qs}` : "/catalog/query");
-  }, [router, search]);
-  return null;
+// SQL Lab is a destination of its own. The Catalog's Query action opens it
+// with ?catalog=&schema=&name=&query= so the table arrives preselected.
+export default function LabPage() {
+  return <LabWorkbench />;
 }
