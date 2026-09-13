@@ -79,8 +79,6 @@
 .grid tr:last-child td { border-bottom: 0 }
 .type { color: var(--text-secondary) }
 .nullable { color: var(--text-muted); font-family: Inter, sans-serif; font-size: 11.5px }
-.null { color: var(--text-muted); font-style: italic }
-.ord { color: var(--text-faint); text-align: right; width: 32px }
 
 .loc { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font: 12.5px var(--mono); align-items: baseline }
 .loc dt { color: var(--text-muted); font-family: Inter, sans-serif; font-size: 12px }
@@ -107,21 +105,54 @@
 }
 @media (prefers-reduced-motion: reduce) { .root * { transition: none !important } }
 
-/* ── Table hub ─────────────────────────────────────────────────────────────── */
-.signals { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-sm); margin-bottom: 14px; overflow: hidden }
-.signal { padding: 14px 20px; min-width: 0 }
-.signal + .signal { border-left: 1px solid var(--border) }
-.signalLabel { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; display: flex; align-items: center; gap: 6px }
-.signalValue { font: 600 20px/1.15 var(--mono); letter-spacing: -.02em; display: flex; align-items: baseline; gap: 8px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
-.signalValue small { font: 500 12px Inter, sans-serif; color: var(--text-muted) }
-.signalValue > span { display: inline-flex; align-items: baseline; gap: 8px; min-width: 0 }
-.signalValue a { color: inherit; text-decoration: none }
-.signalValue a:hover { color: var(--accent) }
-.ok { color: var(--success) } .warn { color: var(--warning) } .muted { color: var(--text-muted) }
+/* ── Table page: one composed surface, no rail. The count is the first number;
+   columns are the body with sample values beside them; use is one section. ── */
+.table { max-width: 1180px; min-width: 0 }
 
-.body { display: grid; grid-template-columns: minmax(0, 7fr) minmax(280px, 5fr); gap: 14px; align-items: start }
-.col { display: flex; flex-direction: column; gap: 14px; min-width: 0 }
-.panel .grid { max-height: 520px }
+.hero {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "main actions" "location location";
+  gap: 12px 24px; align-items: start;
+  padding: 22px 26px 18px; margin-bottom: 20px;
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow-sm);
+}
+.heroMain { grid-area: main; min-width: 0 }
+.heroActions { grid-area: actions; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; padding-top: 4px }
+.heroName { margin: 0; display: flex; align-items: center; gap: 8px; font: 600 24px/1.15 var(--mono); letter-spacing: -.015em; overflow-wrap: anywhere; min-width: 0 }
+.copyBtn { width: 26px; height: 26px; display: grid; place-items: center; flex-shrink: 0; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-faint); font-size: 12px; cursor: pointer }
+.copyBtn:hover { color: var(--text-secondary); border-color: var(--border); background: var(--bg-hover) }
+.heroPath { margin: 4px 0 0; font: 12.5px var(--mono); color: var(--text-muted); overflow-wrap: anywhere }
+.heroFacts { display: flex; align-items: baseline; gap: 22px; flex-wrap: wrap; margin-top: 16px }
+.heroStat { font: 600 26px/1 var(--mono); letter-spacing: -.02em; color: var(--text-primary); display: inline-flex; align-items: baseline; gap: 7px; white-space: nowrap }
+.heroStat small { font: 500 12.5px Inter, sans-serif; color: var(--text-muted); letter-spacing: 0 }
+.heroFact { font: 500 12.5px Inter, sans-serif; color: var(--text-secondary); display: inline-flex; align-items: center; gap: 6px; white-space: nowrap }
+.heroFactOk { color: var(--success) }
+.heroFactOk i { font-size: 10px }
+.heroLocation { grid-area: location; margin: 2px 0 0; padding-top: 12px; border-top: 1px solid var(--border); font: 12px var(--mono); color: var(--text-secondary); overflow-wrap: anywhere }
+.heroLocation span { font-family: Inter, sans-serif; color: var(--text-muted); margin-right: 4px }
+
+.sectionHead { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 10px 2px }
+.sectionTitle { margin: 0; font-size: 13.5px; font-weight: 600 }
+.sectionMeta { font: 11.5px var(--mono); color: var(--text-muted); text-align: right }
+
+.columnsSection { margin-bottom: 22px }
+.columns { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow-sm) }
+.columns th { text-align: left; padding: 9px 14px; font-size: 11px; font-weight: 600; color: var(--text-muted); background: var(--bg-elevated); border-bottom: 1px solid var(--border); white-space: nowrap }
+.columns td { padding: 8px 14px; border-bottom: 1px solid var(--border); vertical-align: baseline }
+.columns tr:last-child td { border-bottom: 0 }
+.columns tr:hover td { background: var(--bg-hover) }
+.colName { font-family: var(--mono); color: var(--text-primary); white-space: nowrap }
+.required { display: inline-block; margin-left: 8px; font: 500 10.5px Inter, sans-serif; color: var(--text-muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; vertical-align: middle }
+.colType { font-family: var(--mono); color: var(--text-secondary); white-space: nowrap; width: 140px }
+.colSample { font-family: var(--mono); color: var(--text-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 0; width: 46% }
+.colSample span + span::before { content: "  ·  "; color: var(--text-faint) }
+.faint { color: var(--text-faint) }
+.ord { color: var(--text-faint); text-align: right; width: 32px; font-family: var(--mono) }
+.null { color: var(--text-muted); font-style: italic }
+
+.usedSection { margin-bottom: 22px }
+.quiet { margin: 0; padding: 14px 16px; font-size: 13px; line-height: 1.55; color: var(--text-muted); background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px }
+.usedGroups { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px }
+.usedGroup { padding: 14px 16px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px }
 
 .list { list-style: none; margin: 0; padding: 0 }
 .list li { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); font-size: 13px; min-width: 0 }
@@ -131,17 +162,13 @@
 .list a:hover { color: var(--accent) }
 .list i { width: 14px; text-align: center; color: var(--text-faint); font-size: 12px; flex-shrink: 0 }
 .tag { font: 500 11px Inter, sans-serif; color: var(--text-muted); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; flex-shrink: 0 }
-.group { font-size: 11.5px; color: var(--text-muted); margin: 12px 0 6px }
-.group:first-of-type { margin-top: 0 }
+.group { font-size: 11.5px; color: var(--text-muted); margin: 0 0 8px }
 
-.dlm { display: flex; align-items: flex-start; gap: 12px }
-.dlmMark { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; flex-shrink: 0; background: var(--bg-primary); border: 1px solid var(--border); color: var(--text-muted); font-size: 14px }
-.dlmMarkOn { color: var(--success); border-color: rgba(16, 185, 129, .35) }
-.dlmTitle { font-size: 13px; font-weight: 600 }
-.dlmBody { font-size: 12.5px; color: var(--text-muted); margin-top: 2px; line-height: 1.5 }
-.dlmBody b { color: var(--text-secondary); font-weight: 600; font-family: var(--mono) }
-
-@media (max-width: 1100px) { .body { grid-template-columns: 1fr } .signals { grid-template-columns: 1fr 1fr } .signal:nth-child(3) { border-left: 0 } .signal:nth-child(n + 3) { border-top: 1px solid var(--border) } }
+@media (max-width: 900px) {
+  .hero { grid-template-columns: 1fr; grid-template-areas: "main" "actions" "location" }
+  .heroActions { justify-content: flex-start }
+  .colSample { display: none }
+}
 
 /* ── Query mode: the workbench takes the pane; its own chrome stays inside ── */
 .query { display: flex; flex-direction: column; min-width: 0 }
