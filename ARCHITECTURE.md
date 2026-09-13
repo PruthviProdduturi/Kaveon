@@ -18,7 +18,7 @@ record flow, storage boundaries, and recovery evidence, see
 [Kaveon connected architecture](docs/reference/kaveon-connected-architecture.md).
 
 The boardroom-ready visual is available at
-[Kaveon branded unified architecture visual](docs/reference/kaveon-unified-architecture-branded.png).
+[Kaveon complete unified architecture visual](docs/reference/kaveon-unified-architecture-complete.png).
 
 ## Platform at a glance
 
