@@ -71,7 +71,9 @@ export async function fetchSample(source: string, schema: string, table: string,
 }
 
 export function enc(v: string) { return encodeURIComponent(v); }
-export function quoteIdent(v: string) { return `"${v.replace(/"/g, '""')}"`; }
+// KaveonDB's parser keeps ANSI quotes as part of an identifier, so a plain
+// identifier is written bare; only a name that needs quoting gets quotes.
+export function quoteIdent(v: string) { return /^[A-Za-z_][A-Za-z0-9_]*$/.test(v) ? v : `"${v.replace(/"/g, '""')}"`; }
 export function sampleSql(schema: string, table: string, limit: number) {
   return `SELECT * FROM ${quoteIdent(schema)}.${quoteIdent(table)} LIMIT ${limit}`;
 }
