@@ -18,6 +18,13 @@ class Tx:
 @contextlib.contextmanager
 def transaction(tx):yield tx
 class Tests(unittest.TestCase):
+ def test_checkpoint_save_syncs_the_parent_directory_after_atomic_replace(self):
+  with tempfile.TemporaryDirectory() as directory:
+   path=Path(directory)/"query-history.json";snapshot=b.Snapshot(0,(),b.digest(()))
+   with patch.object(operation,"_sync_checkpoint_directory") as sync:
+    operation.save(path,snapshot,0)
+   sync.assert_called_once_with(path)
+
  def test_deterministic_snapshot_and_exact_reconciliation(self):
   tx=Tx(rows=[[row("q2"),row("q1")]])
   with patch.object(b.db,"transaction",return_value=transaction(tx)):snapshot=b.capture_snapshot()
