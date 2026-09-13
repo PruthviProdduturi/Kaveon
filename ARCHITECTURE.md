@@ -19,6 +19,9 @@ record flow, storage boundaries, and recovery evidence, see
 
 The boardroom-ready visual is available at
 [Kaveon complete unified architecture visual](docs/reference/kaveon-unified-architecture-complete.png).
+The sharper 2× export and animated flow version are available as
+[2× PNG](docs/reference/kaveon-unified-architecture-complete-2x.png) and
+[animated GIF](docs/reference/kaveon-unified-architecture-complete.gif).
 
 ## Platform at a glance
 
