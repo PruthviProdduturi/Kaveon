@@ -16,6 +16,13 @@ def transaction(rows):yield Tx(rows)
 def row(item="1",owner="a"):
  return {"user_email":owner,"item_id":item,"label":"Item","href":"/items/"+item,"type":"dashboard","created_at":datetime(2026,1,1)}
 class Tests(unittest.TestCase):
+ def test_checkpoint_save_syncs_the_parent_directory_after_atomic_replace(self):
+  with tempfile.TemporaryDirectory() as directory:
+   path=Path(directory)/"recent.json";snapshot=b.Snapshot(0,(),b.digest(()))
+   with patch.object(operation,"_sync_checkpoint_directory") as sync:
+    operation.save(path,snapshot,0)
+   sync.assert_called_once_with(path)
+
  def test_snapshot_is_deterministic_owner_scoped_and_bounded(self):
   with patch.object(b.db,"transaction",return_value=transaction([row("2"),row("1")])):s=b.capture_snapshot()
   self.assertEqual(len(s.records),2);self.assertTrue(all(r.owner_principal=="a" for r in s.records));b.validate(s)

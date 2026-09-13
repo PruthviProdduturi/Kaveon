@@ -3,6 +3,14 @@ import hashlib,json,os,tempfile
 from pathlib import Path
 from services import query_history_backfill as backfill
 VERSION=1;MAX_CHECKPOINT_BYTES=64*1024*1024
+def _sync_checkpoint_directory(path):
+ try:
+  descriptor=os.open(str(path.parent),os.O_RDONLY)
+ except OSError:
+  return
+ try:os.fsync(descriptor)
+ except OSError:pass
+ finally:os.close(descriptor)
 def _body(s,index,complete):return {"version":VERSION,"family":"query_history","source_watermark":s.source_watermark,"snapshot_sha256":s.snapshot_sha256,"next_index":index,"complete":complete,"records":[r.__dict__ for r in s.records]}
 def save(path,s,index,complete=False):
  backfill.validate(s)
@@ -12,7 +20,7 @@ def save(path,s,index,complete=False):
  path=path.resolve();path.parent.mkdir(parents=True,exist_ok=True);temporary=None
  try:
   with tempfile.NamedTemporaryFile(mode="wb",dir=path.parent,prefix=path.name+".",delete=False) as handle:temporary=Path(handle.name);os.chmod(temporary,0o600);handle.write(encoded);handle.flush();os.fsync(handle.fileno())
-  os.replace(temporary,path)
+  os.replace(temporary,path);_sync_checkpoint_directory(path)
  finally:
   if temporary and temporary.exists():temporary.unlink()
 def load(path):
