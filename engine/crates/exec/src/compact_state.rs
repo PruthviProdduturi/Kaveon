@@ -33,10 +33,17 @@ pub(super) fn encode(states: &[AggregateState]) -> Result<Vec<u8>> {
                 }
             }
             AggregateState::Utf8Min(value) | AggregateState::Utf8Max(value) => {
-                out.push(if matches!(state, AggregateState::Utf8Min(_)) { 15 } else { 16 });
+                out.push(if matches!(state, AggregateState::Utf8Min(_)) {
+                    15
+                } else {
+                    16
+                });
                 out.push(u8::from(value.is_some()));
                 if let Some(value) = value {
-                    payload(&mut out, &encode_aggregate_value(&AggregateValue::Utf8(value.clone()))?)?;
+                    payload(
+                        &mut out,
+                        &encode_aggregate_value(&AggregateValue::Utf8(value.clone()))?,
+                    )?;
                 }
             }
             AggregateState::CountDistinct(values)
@@ -142,7 +149,8 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Vec<AggregateState>> {
             }
             15 | 16 => {
                 let value = if input.flag()? {
-                    let AggregateValue::Utf8(value) = decode_aggregate_value(input.payload()?)? else {
+                    let AggregateValue::Utf8(value) = decode_aggregate_value(input.payload()?)?
+                    else {
                         return Err(exec_err("invalid UTF-8 extremum payload"));
                     };
                     Some(value)

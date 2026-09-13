@@ -780,11 +780,13 @@ mod tests {
         let store = CatalogStore::open_in_memory().unwrap();
         let (catalog, _, _) = values();
         store.create_catalog("test", &catalog).unwrap();
-        assert!(store
-            .create_catalog("test", &catalog)
-            .unwrap_err()
-            .to_string()
-            .contains("already exists"));
+        assert!(
+            store
+                .create_catalog("test", &catalog)
+                .unwrap_err()
+                .to_string()
+                .contains("already exists")
+        );
     }
     #[test]
     fn stale_revision_rolls_back() {

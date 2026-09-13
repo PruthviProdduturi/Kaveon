@@ -8,6 +8,8 @@ never by running SQL. Locations are storage paths; definitions hold credential
 references only, so nothing secret can appear here.
 """
 import json
+import time
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
@@ -57,8 +59,37 @@ def get_table_definition(source_id: str, schema: str, table: str, response: Resp
             "revision": definition.get("revision") if isinstance(definition.get("revision"), int) else None,
             "lifecycle": _text(definition.get("lifecycle")),
             "columns": columns,
+            "rowCount": _exact_row_count(source["engine_catalog"], schema, table),
         },
     }
+
+
+# The Engine answers COUNT(*) from Parquet footers and pinned Delta snapshots
+# without scanning, so every reader of a definition can see the exact row count.
+# Bounded (10 s) and remembered for five minutes per table; None when unknown.
+_ROW_COUNT_TTL_SECONDS = 300
+_ROW_COUNT_CACHE: dict = {}
+
+
+def _exact_row_count(catalog: str, schema: str, table: str):
+    key = (catalog, schema, table)
+    now = time.monotonic()
+    cached = _ROW_COUNT_CACHE.get(key)
+    if cached and now - cached[0] < _ROW_COUNT_TTL_SECONDS:
+        return cached[1]
+    ident = lambda v: v if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", v) else None  # noqa: E731
+    if not (ident(schema) and ident(table)):
+        return None
+    try:
+        result = engine_bridge.execute(f"SELECT COUNT(*) AS row_count FROM {schema}.{table}", catalog,
+                                       "kaveon-system", "Admin", schema, timeout=10)
+        rows = result.get("data") or result.get("rows") or []
+        value = rows[0][0] if rows and isinstance(rows[0], (list, tuple)) else (rows[0].get("row_count") if rows and isinstance(rows[0], dict) else None)
+        count = int(value) if value is not None else None
+    except Exception:
+        count = None
+    _ROW_COUNT_CACHE[key] = (now, count)
+    return count
 
 
 def _ids(value):

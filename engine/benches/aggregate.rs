@@ -9,8 +9,8 @@ use kaveon_core::{BatchOperator, BinaryOp, Expr, QueryMemoryPool, Result, Scalar
 use kaveon_exec::aggregate::{AggExpr, AggFunc, HashAggregate};
 use kaveon_exec::filter::FilterOperator;
 use kaveon_exec::partitioned::PartitionedHashAggregate;
-use kaveon_exec::spill::SpillManager;
 use kaveon_exec::project::ProjectOperator;
+use kaveon_exec::spill::SpillManager;
 
 const DEFAULT_ROW_COUNT: usize = 1_000_000;
 const BATCH_SIZE: usize = 8_192;
@@ -247,7 +247,12 @@ fn benchmark_partitioned_spill(c: &mut Criterion) {
             .expect("partitioned aggregate must initialize");
             let rows = consume(&mut operator);
             let metrics = spill.snapshot();
-            black_box((rows, metrics.bytes_written, metrics.runs_written, metrics.peak_bytes));
+            black_box((
+                rows,
+                metrics.bytes_written,
+                metrics.runs_written,
+                metrics.peak_bytes,
+            ));
         });
     });
     group.finish();
