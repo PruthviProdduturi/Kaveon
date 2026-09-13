@@ -20,8 +20,7 @@ pub use adls_reader::{AdlsAuthMode, AdlsBatchSource, AdlsBatchStream, AdlsParque
 pub use delta_reader::{DeltaBatchIterator, DeltaTableReader};
 pub use iceberg_reader::{IcebergReader, IcebergSnapshot, IcebergSource};
 pub use immutable_data_writer::{
-    DataWriteError, ImmutableDataReference, ImmutableParquetWriter,
-    DEFAULT_MAX_PARQUET_BYTES,
+    DEFAULT_MAX_PARQUET_BYTES, DataWriteError, ImmutableDataReference, ImmutableParquetWriter,
 };
 pub use metrics::{ScanMetrics, ScanMetricsSnapshot};
 pub use object_delta::{ObjectDeltaReader, ObjectDeltaSource};

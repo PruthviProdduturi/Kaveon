@@ -64,35 +64,32 @@ pub fn optimize_with_statistics(
             let left_relation = relation(&left, statistics);
             let right_relation = relation(&right, statistics);
             let swap = if join_type == JoinType::Inner {
-                left_relation
-                    .clone()
-                    .zip(right_relation.clone())
-                    .and_then(
-                        |(
-                            (left_rows, left_alias, left_columns),
-                            (right_rows, right_alias, right_columns),
-                        )| {
-                            if left_rows >= right_rows || left_alias == right_alias {
-                                return None;
-                            }
-                            let reversed =
-                                reverse_keys(condition.as_ref()?, &left_alias, &right_alias)?;
-                            let columns = left_columns
-                                .into_iter()
-                                .map(|column| format!("{left_alias}.{column}"))
-                                .chain(
-                                    right_columns
-                                        .into_iter()
-                                        .map(|column| format!("{right_alias}.{column}")),
-                                )
-                                .map(|name| Expr::Alias {
-                                    expr: Box::new(Expr::Column(name.clone())),
-                                    name,
-                                })
-                                .collect();
-                            Some((reversed, columns))
-                        },
-                    )
+                left_relation.clone().zip(right_relation.clone()).and_then(
+                    |(
+                        (left_rows, left_alias, left_columns),
+                        (right_rows, right_alias, right_columns),
+                    )| {
+                        if left_rows >= right_rows || left_alias == right_alias {
+                            return None;
+                        }
+                        let reversed =
+                            reverse_keys(condition.as_ref()?, &left_alias, &right_alias)?;
+                        let columns = left_columns
+                            .into_iter()
+                            .map(|column| format!("{left_alias}.{column}"))
+                            .chain(
+                                right_columns
+                                    .into_iter()
+                                    .map(|column| format!("{right_alias}.{column}")),
+                            )
+                            .map(|name| Expr::Alias {
+                                expr: Box::new(Expr::Column(name.clone())),
+                                name,
+                            })
+                            .collect();
+                        Some((reversed, columns))
+                    },
+                )
             } else {
                 None
             };

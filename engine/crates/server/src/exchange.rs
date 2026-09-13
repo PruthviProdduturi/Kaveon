@@ -1096,7 +1096,10 @@ mod tests {
         let retry_identity = retry.identity.clone();
         store.insert(retry).unwrap();
         assert_eq!(store.buffered_bytes().unwrap(), 3);
-        assert!(!store.remove(&first.identity).unwrap(), "old attempt must be absent");
+        assert!(
+            !store.remove(&first.identity).unwrap(),
+            "old attempt must be absent"
+        );
         assert!(store.remove(&retry_identity).unwrap());
         assert_eq!(store.buffered_bytes().unwrap(), 0);
     }

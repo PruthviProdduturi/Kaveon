@@ -86,7 +86,9 @@ impl TransactionRegistry {
         self.catalog.clone()
     }
 
-    fn metrics(&self) -> Result<kaveon_catalog::product_metrics::TransactionMetricsSnapshot, RegistryError> {
+    fn metrics(
+        &self,
+    ) -> Result<kaveon_catalog::product_metrics::TransactionMetricsSnapshot, RegistryError> {
         self.catalog
             .as_ref()
             .map(ProductCatalogCommit::transaction_metrics)
@@ -303,10 +305,7 @@ fn product_change(
         } => {
             if kind == "typed_row" {
                 let (table, row) = typed_row_document(&id, &document_json, owner, 1)?;
-                return Ok((
-                    CatalogChange::InsertTypedRow { table, row },
-                    None,
-                ));
+                return Ok((CatalogChange::InsertTypedRow { table, row }, None));
             }
             let kind = record_kind(&kind)?;
             let (document, bytes, references, derived_values) =
@@ -566,27 +565,123 @@ fn product_document(
         ));
     }
     let mut derived_values = BTreeMap::new();
-    let references = if matches!(kind,ProductRecordKind::ChatSession|ProductRecordKind::ChatMessage) {
-        let object=value.as_object().expect("object checked above");
-        let owner=object.get("user_email").and_then(serde_json::Value::as_str).filter(|v|!v.is_empty()).ok_or_else(||RegistryError::Invalid("chat owner is invalid".into()))?;
-        if object.get("id").and_then(serde_json::Value::as_str)!=Some(id) { return Err(RegistryError::Invalid("chat record ID is invalid".into())); }
-        derived_values.insert("chat_owner".into(),owner.into());
-        if kind==ProductRecordKind::ChatSession {
-            const ALLOWED:[&str;5]=["id","user_email","title","created_at","updated_at"];
-            if object.keys().any(|k|!ALLOWED.contains(&k.as_str())) || object.get("title").and_then(serde_json::Value::as_str).is_none() { return Err(RegistryError::Invalid("chat session document is invalid".into())); } BTreeSet::new()
+    let references = if matches!(
+        kind,
+        ProductRecordKind::ChatSession | ProductRecordKind::ChatMessage
+    ) {
+        let object = value.as_object().expect("object checked above");
+        let owner = object
+            .get("user_email")
+            .and_then(serde_json::Value::as_str)
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| RegistryError::Invalid("chat owner is invalid".into()))?;
+        if object.get("id").and_then(serde_json::Value::as_str) != Some(id) {
+            return Err(RegistryError::Invalid("chat record ID is invalid".into()));
+        }
+        derived_values.insert("chat_owner".into(), owner.into());
+        if kind == ProductRecordKind::ChatSession {
+            const ALLOWED: [&str; 5] = ["id", "user_email", "title", "created_at", "updated_at"];
+            if object.keys().any(|k| !ALLOWED.contains(&k.as_str()))
+                || object
+                    .get("title")
+                    .and_then(serde_json::Value::as_str)
+                    .is_none()
+            {
+                return Err(RegistryError::Invalid(
+                    "chat session document is invalid".into(),
+                ));
+            }
+            BTreeSet::new()
         } else {
-            const ALLOWED:[&str;10]=["id","session_id","user_email","role","content","sql_query","chart_type","data","route","created_at"];
-            if object.keys().any(|k|!ALLOWED.contains(&k.as_str())) || !matches!(object.get("role").and_then(serde_json::Value::as_str),Some("user"|"assistant")) || object.get("content").and_then(serde_json::Value::as_str).is_none() { return Err(RegistryError::Invalid("chat message document is invalid".into())); }
-            let session=object.get("session_id").and_then(serde_json::Value::as_str).filter(|v|!v.is_empty()).ok_or_else(||RegistryError::Invalid("chat session reference is invalid".into()))?;BTreeSet::from([ProductRecordReference{kind:ProductRecordKind::ChatSession,id:session.into()}])
+            const ALLOWED: [&str; 10] = [
+                "id",
+                "session_id",
+                "user_email",
+                "role",
+                "content",
+                "sql_query",
+                "chart_type",
+                "data",
+                "route",
+                "created_at",
+            ];
+            if object.keys().any(|k| !ALLOWED.contains(&k.as_str()))
+                || !matches!(
+                    object.get("role").and_then(serde_json::Value::as_str),
+                    Some("user" | "assistant")
+                )
+                || object
+                    .get("content")
+                    .and_then(serde_json::Value::as_str)
+                    .is_none()
+            {
+                return Err(RegistryError::Invalid(
+                    "chat message document is invalid".into(),
+                ));
+            }
+            let session = object
+                .get("session_id")
+                .and_then(serde_json::Value::as_str)
+                .filter(|v| !v.is_empty())
+                .ok_or_else(|| {
+                    RegistryError::Invalid("chat session reference is invalid".into())
+                })?;
+            BTreeSet::from([ProductRecordReference {
+                kind: ProductRecordKind::ChatSession,
+                id: session.into(),
+            }])
         }
     } else if kind == ProductRecordKind::Activity {
-        let object=value.as_object().expect("object checked above");
-        const ALLOWED:[&str;8]=["id","action","object_type","object_id","object_name","timestamp","user_email","details"];
-        if object.keys().any(|key|!ALLOWED.contains(&key.as_str())) || object.get("id").and_then(serde_json::Value::as_str)!=Some(id) { return Err(RegistryError::Invalid("activity document schema is invalid".into())); }
-        let actor=object.get("user_email").and_then(serde_json::Value::as_str).filter(|v|!v.is_empty()).ok_or_else(||RegistryError::Invalid("activity actor is invalid".into()))?;
-        for field in ["action","object_type","object_id","object_name","timestamp"] { if object.get(field).and_then(serde_json::Value::as_str).is_none_or(|v|v.is_empty()) { return Err(RegistryError::Invalid("activity document is invalid".into())); } }
-        if object.get("details").is_some_and(|v|!v.is_null()&&!v.is_object()) { return Err(RegistryError::Invalid("activity details must be an object".into())); }
-        derived_values.insert("activity_actor".into(),actor.into());BTreeSet::new()
+        let object = value.as_object().expect("object checked above");
+        const ALLOWED: [&str; 8] = [
+            "id",
+            "action",
+            "object_type",
+            "object_id",
+            "object_name",
+            "timestamp",
+            "user_email",
+            "details",
+        ];
+        if object.keys().any(|key| !ALLOWED.contains(&key.as_str()))
+            || object.get("id").and_then(serde_json::Value::as_str) != Some(id)
+        {
+            return Err(RegistryError::Invalid(
+                "activity document schema is invalid".into(),
+            ));
+        }
+        let actor = object
+            .get("user_email")
+            .and_then(serde_json::Value::as_str)
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| RegistryError::Invalid("activity actor is invalid".into()))?;
+        for field in [
+            "action",
+            "object_type",
+            "object_id",
+            "object_name",
+            "timestamp",
+        ] {
+            if object
+                .get(field)
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(|v| v.is_empty())
+            {
+                return Err(RegistryError::Invalid(
+                    "activity document is invalid".into(),
+                ));
+            }
+        }
+        if object
+            .get("details")
+            .is_some_and(|v| !v.is_null() && !v.is_object())
+        {
+            return Err(RegistryError::Invalid(
+                "activity details must be an object".into(),
+            ));
+        }
+        derived_values.insert("activity_actor".into(), actor.into());
+        BTreeSet::new()
     } else if kind == ProductRecordKind::QueryHistory {
         let object = value.as_object().expect("object checked above");
         const ALLOWED: [&str; 12] = [
@@ -682,9 +777,7 @@ fn product_document(
         let target_id = match target {
             ProductRecordKind::Dataset => item.strip_prefix("dataset-").unwrap_or(item),
             ProductRecordKind::Chart => item.strip_prefix("chart-").unwrap_or(item),
-            ProductRecordKind::Dashboard => item
-                .strip_prefix("dashboard-")
-                .unwrap_or(item),
+            ProductRecordKind::Dashboard => item.strip_prefix("dashboard-").unwrap_or(item),
             _ => unreachable!("user recent target is restricted above"),
         };
         if object
@@ -1196,10 +1289,7 @@ fn operation_id_for_transaction(transaction_id: &str) -> String {
     format!("operation-{}", transaction_id.replace('-', ""))
 }
 
-fn recovery_resolution_response(
-    operation_id: &str,
-    resolution: OperationResolution,
-) -> Response {
+fn recovery_resolution_response(operation_id: &str, resolution: OperationResolution) -> Response {
     match resolution {
         OperationResolution::Committed(snapshot) => Json(serde_json::json!({
             "status": "committed",
@@ -1475,10 +1565,12 @@ mod tests {
         assert_eq!(value["code"], "TRANSACTION_OUTCOME_INDETERMINATE");
         assert_eq!(value["transaction_id"], "transaction-1");
         assert_eq!(value["recovery_required"], true);
-        assert!(value["error"]
-            .as_str()
-            .unwrap()
-            .contains("neither confirmed committed nor confirmed rolled back"));
+        assert!(
+            value["error"]
+                .as_str()
+                .unwrap()
+                .contains("neither confirmed committed nor confirmed rolled back")
+        );
     }
 
     #[tokio::test]
@@ -1518,10 +1610,8 @@ mod tests {
         assert_eq!(committed.status(), StatusCode::OK);
         let conflict = recovery_resolution_response(operation_id, OperationResolution::Conflict);
         assert_eq!(conflict.status(), StatusCode::OK);
-        let unresolved = recovery_resolution_response(
-            operation_id,
-            OperationResolution::Unresolved,
-        );
+        let unresolved =
+            recovery_resolution_response(operation_id, OperationResolution::Unresolved);
         assert_eq!(unresolved.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
@@ -1924,19 +2014,32 @@ mod tests {
     fn query_history_is_owner_isolated_and_binds_optional_dataset() {
         let (_,_,references,values)=product_document(ProductRecordKind::QueryHistory,"q1",1,
             r#"{"id":"q1","sql_text":"SELECT 1","database_name":"db","executed_at":"2026-01-01T00:00:00","execution_time":1,"row_count":1,"status":"success","error_message":null,"user_email":"alice","trigger_source":"lab","dataset_id":"ds","tables_used":"[]"}"#).unwrap();
-        assert_eq!(values["query_owner"],"alice");
-        assert_eq!(references,BTreeSet::from([ProductRecordReference{kind:ProductRecordKind::Dataset,id:"ds".into()}]));
-        assert!(validate_favorite_owner(ProductRecordKind::QueryHistory,"alice",&values).is_ok());
-        assert_eq!(validate_favorite_owner(ProductRecordKind::QueryHistory,"bob",&values),Err(RegistryError::Forbidden));
+        assert_eq!(values["query_owner"], "alice");
+        assert_eq!(
+            references,
+            BTreeSet::from([ProductRecordReference {
+                kind: ProductRecordKind::Dataset,
+                id: "ds".into()
+            }])
+        );
+        assert!(validate_favorite_owner(ProductRecordKind::QueryHistory, "alice", &values).is_ok());
+        assert_eq!(
+            validate_favorite_owner(ProductRecordKind::QueryHistory, "bob", &values),
+            Err(RegistryError::Forbidden)
+        );
     }
 
     #[test]
     fn activity_is_actor_isolated_and_rejects_unstructured_details() {
         let (_,_,references,values)=product_document(ProductRecordKind::Activity,"a1",1,
             r#"{"id":"a1","action":"created","object_type":"catalog_source","object_id":"c1","object_name":"Lake","timestamp":"2026-01-01T00:00:00","user_email":"alice","details":{"storage_type":"adls_gen2"}}"#).unwrap();
-        assert!(references.is_empty());assert_eq!(values["activity_actor"],"alice");
-        assert!(validate_favorite_owner(ProductRecordKind::Activity,"alice",&values).is_ok());
-        assert_eq!(validate_favorite_owner(ProductRecordKind::Activity,"bob",&values),Err(RegistryError::Forbidden));
+        assert!(references.is_empty());
+        assert_eq!(values["activity_actor"], "alice");
+        assert!(validate_favorite_owner(ProductRecordKind::Activity, "alice", &values).is_ok());
+        assert_eq!(
+            validate_favorite_owner(ProductRecordKind::Activity, "bob", &values),
+            Err(RegistryError::Forbidden)
+        );
         assert!(product_document(ProductRecordKind::Activity,"a1",1,r#"{"id":"a1","action":"created","object_type":"source","object_id":"c1","object_name":"Lake","timestamp":"now","user_email":"alice","details":"raw"}"#).is_err());
     }
 
@@ -2452,7 +2555,10 @@ mod tests {
                         expected_revision: 1,
                         document_json: create
                             .replace("\"revision\":1", "\"revision\":2")
-                            .replace("\"owner_principal\":\"alice\"", "\"owner_principal\":\"bob\"")
+                            .replace(
+                                "\"owner_principal\":\"alice\"",
+                                "\"owner_principal\":\"bob\""
+                            )
                             .replace("ada@example.com", "bob@example.com"),
                     },
                 )
@@ -2469,12 +2575,17 @@ mod tests {
                     kind: "typed_row".into(),
                     id: "u-1".into(),
                     expected_revision: 1,
-                    document_json: create.replace("ada@example.com", "grace@example.com").replace("\"revision\":1", "\"revision\":2"),
+                    document_json: create
+                        .replace("ada@example.com", "grace@example.com")
+                        .replace("\"revision\":1", "\"revision\":2"),
                 },
             )
             .await
             .unwrap();
-        let mut transaction = registry.take("alice", &update.transaction_id).await.unwrap();
+        let mut transaction = registry
+            .take("alice", &update.transaction_id)
+            .await
+            .unwrap();
         transaction.bind_request_digest(b"typed-update").unwrap();
         transaction.commit().await.unwrap();
 
@@ -2491,8 +2602,14 @@ mod tests {
             )
             .await
             .unwrap();
-        let transaction = registry.take("alice", &rollback.transaction_id).await.unwrap();
-        assert_eq!(transaction.rollback().typed_rows["app.users"]["u-1"].revision, 2);
+        let transaction = registry
+            .take("alice", &rollback.transaction_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            transaction.rollback().typed_rows["app.users"]["u-1"].revision,
+            2
+        );
         assert_eq!(
             catalog.read_current().await.unwrap().typed_rows["app.users"]["u-1"].revision,
             2

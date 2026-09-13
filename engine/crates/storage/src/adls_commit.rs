@@ -5,8 +5,8 @@
 //! response. Retryable and unknown write outcomes require durable-head
 //! reconciliation before a caller retries an operation.
 
-use std::sync::Arc;
 use std::path::{Path as FsPath, PathBuf};
+use std::sync::Arc;
 
 use futures::StreamExt;
 use object_store::{

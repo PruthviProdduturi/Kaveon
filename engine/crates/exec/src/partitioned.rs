@@ -1049,7 +1049,6 @@ fn resolve_key(schema: &SchemaRef, name: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use super::*;
     use crate::aggregate::{
         AggFunc, aggregate_metrics, finalize_grouped_aggregate_states,
@@ -1060,6 +1059,7 @@ mod tests {
         datatypes::{DataType, Field, Schema},
     };
     use kaveon_core::{MemoryAdmissionController, QueryMemoryPool};
+    use std::collections::HashMap;
 
     #[test]
     fn projected_repeat_uses_string_schema_and_query_expansion_budget() {
@@ -1726,8 +1726,16 @@ mod tests {
         .unwrap();
         let mut counts = HashMap::new();
         while let Some(batch) = aggregate.next_batch().unwrap() {
-            let keys = batch.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
-            let values = batch.column(1).as_any().downcast_ref::<UInt64Array>().unwrap();
+            let keys = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap();
+            let values = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap();
             for row in 0..batch.num_rows() {
                 counts.insert(keys.value(row), values.value(row));
             }
@@ -1798,7 +1806,10 @@ mod tests {
         )
         .unwrap();
         let error = join.next_batch().unwrap_err().to_string();
-        assert!(error.contains("memory") || error.contains("skew"), "{error}");
+        assert!(
+            error.contains("memory") || error.contains("skew"),
+            "{error}"
+        );
         assert!(join.next_batch().unwrap().is_none());
         assert_eq!(pool.snapshot().current_bytes, 0);
         assert_eq!(spill.snapshot().current_bytes, 0);

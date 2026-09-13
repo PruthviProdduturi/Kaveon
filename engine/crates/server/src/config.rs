@@ -386,7 +386,10 @@ fn validate_product_transactions(config: &ServerConfig) -> anyhow::Result<()> {
             "product transactions may be enabled only on a coordinator"
         );
         anyhow::ensure!(
-            matches!(config.product_transactions.storage_mode.as_str(), "adls" | "local"),
+            matches!(
+                config.product_transactions.storage_mode.as_str(),
+                "adls" | "local"
+            ),
             "product transaction storage mode must be 'adls' or 'local'"
         );
         if config.product_transactions.storage_mode == "adls" {
@@ -400,7 +403,11 @@ fn validate_product_transactions(config: &ServerConfig) -> anyhow::Result<()> {
             );
         } else {
             anyhow::ensure!(
-                !config.product_transactions.local_path.as_os_str().is_empty(),
+                !config
+                    .product_transactions
+                    .local_path
+                    .as_os_str()
+                    .is_empty(),
                 "local product transactions require a storage path"
             );
         }

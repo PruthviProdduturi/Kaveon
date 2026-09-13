@@ -26,22 +26,39 @@ DEFINITION = {
 class CatalogTableTests(unittest.TestCase):
     def test_definition_is_read_through_metadata_with_the_source_catalog(self):
         ctx = UserContext("viewer@example.com", "Viewer")
+        catalog._ROW_COUNT_CACHE.clear()
         with patch.object(lab, "_engine_source", return_value={"engine_catalog": "OpenSource"}), \
-             patch.object(engine_bridge, "table_definition", return_value=DEFINITION) as definition:
+             patch.object(engine_bridge, "table_definition", return_value=DEFINITION) as definition, \
+             patch.object(engine_bridge, "execute", return_value={"columns": [{"name": "row_count"}], "data": [[48131]]}) as execute:
             result = catalog.get_table_definition("source-1", "nyc_taxi", "green_trips", Response(), ctx)
         definition.assert_called_once_with("OpenSource", "nyc_taxi", "green_trips", "viewer@example.com", "Viewer")
+        execute.assert_called_once_with("SELECT COUNT(*) AS row_count FROM nyc_taxi.green_trips", "OpenSource", "kaveon-system", "Admin", "nyc_taxi", timeout=10)
         table = result["table"]
+        self.assertEqual(table["rowCount"], 48131)     # exact, from footer statistics, for every reader
         self.assertEqual((table["catalog"], table["schema"], table["name"]), ("OpenSource", "nyc_taxi", "green_trips"))
         self.assertEqual((table["access"], table["format"], table["revision"]), ("Shortcut", "Parquet", 4))
         self.assertTrue(table["location"].startswith("abfss://"))
         self.assertEqual(table["columns"][0], {"name": "vendor_id", "dataType": "Int64", "isNullable": False})
         self.assertEqual(table["columns"][1]["dataType"], "{'Decimal128': [10, 2]}")
 
+    def test_row_count_is_remembered_and_unknown_when_the_engine_declines(self):
+        ctx = UserContext("viewer@example.com", "Viewer")
+        catalog._ROW_COUNT_CACHE.clear()
+        with patch.object(lab, "_engine_source", return_value={"engine_catalog": "OpenSource"}), \
+             patch.object(engine_bridge, "table_definition", return_value=DEFINITION), \
+             patch.object(engine_bridge, "execute", side_effect=RuntimeError("down")) as execute:
+            first = catalog.get_table_definition("source-1", "nyc_taxi", "green_trips", Response(), ctx)
+            second = catalog.get_table_definition("source-1", "nyc_taxi", "green_trips", Response(), ctx)
+        self.assertIsNone(first["table"]["rowCount"])
+        self.assertIsNone(second["table"]["rowCount"])
+        execute.assert_called_once()
+
     def test_unknown_access_and_format_values_are_not_passed_through(self):
         ctx = UserContext("viewer@example.com", "Viewer")
         odd = {**DEFINITION, "access": "Weird", "format": "CSV", "revision": "4"}
         with patch.object(lab, "_engine_source", return_value={"engine_catalog": "OpenSource"}), \
-             patch.object(engine_bridge, "table_definition", return_value=odd):
+             patch.object(engine_bridge, "table_definition", return_value=odd), \
+             patch.object(engine_bridge, "execute", side_effect=RuntimeError("no engine")):
             table = catalog.get_table_definition("source-1", "nyc_taxi", "green_trips", Response(), ctx)["table"]
         self.assertIsNone(table["access"])
         self.assertIsNone(table["format"])
@@ -51,7 +68,8 @@ class CatalogTableTests(unittest.TestCase):
         ctx = UserContext("viewer@example.com", "Viewer")
         broken = {**DEFINITION, "columns": [{"name": 7}]}
         with patch.object(lab, "_engine_source", return_value={"engine_catalog": "OpenSource"}), \
-             patch.object(engine_bridge, "table_definition", return_value=broken):
+             patch.object(engine_bridge, "table_definition", return_value=broken), \
+             patch.object(engine_bridge, "execute", side_effect=RuntimeError("no engine")):
             with self.assertRaises(HTTPException) as error:
                 catalog.get_table_definition("source-1", "nyc_taxi", "green_trips", Response(), ctx)
         self.assertEqual(error.exception.status_code, 502)
