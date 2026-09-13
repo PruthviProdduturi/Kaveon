@@ -13,6 +13,10 @@ This is the architectural contract for the repository. It separates verified run
 
 See [STATUS.md](STATUS.md) and [HANDSHAKE.md](HANDSHAKE.md) for volatile delivery status and interface ownership.
 
+For the connected system view, including analytical query stages, transactional
+record flow, storage boundaries, and recovery evidence, see
+[Kaveon connected architecture](docs/reference/kaveon-connected-architecture.md).
+
 ## Platform at a glance
 
 <div align="center">
