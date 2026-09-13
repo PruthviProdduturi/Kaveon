@@ -14,3 +14,21 @@ workflow and validation limits. Canonical `abfss://` Parquet locations execute
 through Azure object-store range reads with environment/workload identity or
 Azure CLI authentication. See the Engine qualification documentation for the
 supported readers and remaining format/adapter limitations.
+
+## Cloud read boundary
+
+An ADLS Parquet scan pins the object identity returned by `HEAD` (ETag or
+version, together with size) before loading the footer. Footer, object metadata,
+and decoded batches are cached only under that identity. A range read uses the
+same identity with conditional `GET`; replacement of an object therefore fails
+closed and invalidates the metadata cache instead of returning mixed data.
+
+Parquet range requests are bounded to 16 in-flight requests per reader. The
+bound preserves request order while preventing a wide projection or many row
+groups from turning one scan into an unbounded connection and memory burst.
+Large immutable objects may use the bounded full-object cache; its process-wide
+byte limit is explicit and eviction is safe because active readers retain their
+lease. Exact source statistics are likewise keyed by the pinned object identity
+or Delta snapshot version. The cache is an optimization only: if identity or
+statistics cannot be established, the reader returns an error rather than
+guessing.

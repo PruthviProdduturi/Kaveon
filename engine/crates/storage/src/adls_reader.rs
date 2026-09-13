@@ -39,6 +39,11 @@ const PRELOADED_BATCH_SIZE: usize = 65_536;
 const MAX_METADATA_CACHE_ENTRIES: usize = 256;
 const MAX_OBJECT_METADATA_CACHE_ENTRIES: usize = 256;
 const MAX_OBJECT_STORE_CACHE_ENTRIES: usize = 32;
+// Keep a fragment's remote range fan-out bounded. Parquet may request one
+// range per projected column/row group; issuing all of those requests at once
+// turns a single scan into an unbounded connection and memory burst on ADLS.
+// `buffered` preserves the caller's range order while applying this limit.
+const MAX_REMOTE_RANGE_CONCURRENCY: usize = 16;
 const FULL_OBJECT_CACHE_LIMIT: usize = 64 * 1024 * 1024;
 const FULL_OBJECT_CACHE_MIN_ROW_GROUPS: usize = 32;
 const PROCESS_FULL_OBJECT_CACHE_LIMIT: usize = 256 * 1024 * 1024;
@@ -514,7 +519,7 @@ impl AsyncFileReader for AdlsObjectReader {
             let e_tag = self.e_tag.clone();
             let version = self.version.clone();
             return async move {
-                futures::future::try_join_all(ranges.into_iter().map(|range| {
+                futures::stream::iter(ranges.into_iter().map(|range| {
                     let store = store.clone();
                     let path = path.clone();
                     let e_tag = e_tag.clone();
@@ -537,7 +542,11 @@ impl AsyncFileReader for AdlsObjectReader {
                             .map_err(|error| ParquetError::External(Box::new(error)))
                     }
                 }))
+                .buffered(MAX_REMOTE_RANGE_CONCURRENCY)
+                .collect::<Vec<_>>()
                 .await
+                .into_iter()
+                .collect()
             }
             .boxed();
         }
@@ -1340,6 +1349,30 @@ mod tests {
                 "abfss://lake@account.blob.core.windows.net/file.parquet"
             )
             .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_range_reads_are_bounded_and_keep_request_order() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let path = Path::from("ordered-ranges.parquet");
+        store
+            .put(&path, PutPayload::from_static(b"0123456789abcdef"))
+            .await
+            .unwrap();
+        let metadata = store.head(&path).await.unwrap();
+        // No shared full-object cache: this exercises the remote range path.
+        let mut reader = AdlsObjectReader::new(store, metadata, None);
+        let ranges = vec![12..16, 0..2, 8..12, 4..8];
+        let result = reader.get_byte_ranges(ranges).await.unwrap();
+        assert_eq!(
+            result,
+            vec![
+                Bytes::from_static(b"cdef"),
+                Bytes::from_static(b"01"),
+                Bytes::from_static(b"89ab"),
+                Bytes::from_static(b"4567"),
+            ]
         );
     }
 
