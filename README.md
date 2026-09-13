@@ -95,6 +95,11 @@ docker compose up --build
 
 Open Studio at `http://localhost:3000`, the API at `http://localhost:8082`, and the Engine UI at `http://localhost:8081/ui`. All published ports bind to localhost. The stack uses an explicit development identity and local-only secrets; it is not a production deployment configuration. The Engine coordinator distributes eligible single-source partial aggregates across its two workers; joins, shuffle, retries, and fault-tolerant execution are not implemented. Use `docker compose down` to stop it; add `--volumes` only when you intentionally want to delete the local PostgreSQL state.
 
+For a standalone KaveonDB and Engine install with no metadata service, run
+`./scripts/kavedb.sh build` or `./scripts/kavedb.ps1 -Build`. It binds the
+local Engine to `http://localhost:8080`, persists the KaveonDB catalog in a
+named Docker volume, and is ready for the CLI. See the [local KaveonDB guide](docs/guides/local-kavedb.md).
+
 ## Platform quick start
 
 Requires Node.js 22, pnpm, and Python 3.11. Copy `.env.example` to `.env` and configure the required connections first.
