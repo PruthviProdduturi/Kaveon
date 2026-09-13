@@ -17,7 +17,9 @@ For the connected system view, including analytical query stages, transactional
 record flow, storage boundaries, and recovery evidence, see
 [Kaveon connected architecture](docs/reference/kaveon-connected-architecture.md).
 
-The boardroom-ready visual is available at
+The truthful technical visual is available at
+[Kaveon current/target architecture](docs/reference/kaveon-architecture-truthful.svg).
+The boardroom visual is also available at
 [Kaveon complete unified architecture visual](docs/reference/kaveon-unified-architecture-complete.png).
 The sharper 2× export and animated flow version are available as
 [2× PNG](docs/reference/kaveon-unified-architecture-complete-2x.png) and
