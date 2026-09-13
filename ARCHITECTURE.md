@@ -17,6 +17,9 @@ For the connected system view, including analytical query stages, transactional
 record flow, storage boundaries, and recovery evidence, see
 [Kaveon connected architecture](docs/reference/kaveon-connected-architecture.md).
 
+The boardroom-ready visual is available at
+[Kaveon unified architecture visual](docs/reference/kaveon-unified-architecture.png).
+
 ## Platform at a glance
 
 <div align="center">
