@@ -8,7 +8,7 @@ export default function SqlLabDocs() {
       <PageHeader
         eyebrow="Studio"
         title="SQL Lab"
-        lead="A full query editor for exploring your data sources directly — Monaco-powered, multi-tab, with a live schema browser and cancellable execution. Open it as the query mode of the Catalog."
+        lead="A full query editor for exploring your data sources directly — Monaco-powered, multi-tab, with a live schema browser and cancellable execution. Open it from the sidebar, or from any table in the Catalog with Query in SQL Lab."
       />
 
       <h2>Editor</h2>

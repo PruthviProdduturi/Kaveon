@@ -41,6 +41,14 @@ function WorkspaceIcon() {
   );
 }
 
+function CatalogIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <ellipse cx="12" cy="6" rx="8" ry="3" /><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6" /><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" />
+    </svg>
+  );
+}
+
 function SqlLabIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -399,6 +407,11 @@ export function Sidebar({ children }: SidebarProps) {
     {
       label: "Catalog",
       href: "/catalog",
+      icon: <CatalogIcon />,
+    },
+    {
+      label: "SQL Lab",
+      href: "/lab",
       icon: <SqlLabIcon />,
     },
   ];
@@ -810,7 +823,7 @@ const PAGES: SearchResult[] = [
   { id: "p-chat",    label: "New Chat",     href: "/",                  type: "page", icon: "fa-plus" },
   { id: "p-library", label: "Library",      href: "/workspace",         type: "page", icon: "fa-grid-2" },
   { id: "p-catalog", label: "Catalog",      href: "/catalog",           type: "page", icon: "fa-database" },
-  { id: "p-sql",     label: "SQL Lab",      href: "/catalog/query",     type: "page", icon: "fa-code" },
+  { id: "p-sql",     label: "SQL Lab",      href: "/lab",               type: "page", icon: "fa-code" },
   { id: "p-lineage", label: "Lineage",      href: "/workspace?tab=lineage", type: "page", icon: "fa-project-diagram" },
   { id: "p-ds",      label: "Data Sources", href: "/data-sources",      type: "page", icon: "fa-database" },
   { id: "p-engine",  label: "KaveonDB",     href: "/engine",            type: "page", icon: "fa-bolt" },
