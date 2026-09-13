@@ -1,0 +1,10 @@
+# Local cluster (no Docker): worker 3 as a native process.
+[node]
+environment = "local"
+coordinator = false
+
+[http]
+port = 8083
+
+[discovery]
+uri = "http://127.0.0.1:8080"
