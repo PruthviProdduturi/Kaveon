@@ -17,23 +17,10 @@ For the connected system view, including analytical query stages, transactional
 record flow, storage boundaries, and recovery evidence, see
 [Kaveon connected architecture](docs/reference/kaveon-connected-architecture.md).
 
-The truthful technical visual is available at
-[Kaveon current/target architecture](docs/reference/kaveon-architecture-truthful.svg).
-The preferred compact presentation diagram is
-[Kaveon premium technical architecture](docs/reference/kaveon-architecture-premium.svg).
-The preferred poster-pattern version with corrected current-state wording is
-[Kaveon accurate unified architecture](docs/reference/kaveon-unified-architecture-accurate.svg).
-The PostgreSQL-free future vision is
+The single approved poster is the PostgreSQL-free
 [Kaveon future architecture](docs/reference/kaveon-unified-architecture-future.svg).
-The boardroom visual is also available at
-[Kaveon complete unified architecture visual](docs/reference/kaveon-unified-architecture-complete.png).
-The sharper 2× export and animated flow version are available as
-[2× PNG](docs/reference/kaveon-unified-architecture-complete-2x.png) and
-[animated GIF](docs/reference/kaveon-unified-architecture-complete.gif).
-A verified drawing that separates implemented components (solid) from targets
-(dashed, gate named) is
-[Kaveon unified architecture, verified](docs/reference/kaveon-unified-architecture-verified.svg)
-([PNG](docs/reference/kaveon-unified-architecture-verified.png), [2×](docs/reference/kaveon-unified-architecture-verified-2x.png)).
+It is a target-state visual; the connected architecture document remains the
+technical reference for current versus target capability boundaries.
 
 ## Platform at a glance
 
