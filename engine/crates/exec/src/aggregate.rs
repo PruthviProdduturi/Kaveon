@@ -1,7 +1,7 @@
 use ahash::AHashMap;
 use arrow::array::{
-    Array, ArrayRef, AsArray, BinaryArray, BooleanArray, Float64Array, Int32Array, Int64Array,
-    StringArray, UInt8Array, UInt64Array,
+    Array, ArrayRef, AsArray, BinaryArray, BooleanArray, Float64Array, Int32Array,
+    Int32DictionaryArray, Int64Array, StringArray, UInt8Array, UInt64Array,
 };
 use arrow::datatypes::{DataType, Field, Float64Type, Int32Type, Int64Type, Schema, SchemaRef};
 use arrow::ipc::reader::StreamReader;
@@ -45,7 +45,9 @@ impl AggregateMetrics {
 }
 
 pub fn aggregate_metrics(memory: &QueryMemoryPool) -> Result<Arc<AggregateMetrics>> {
-    memory.shared_resource(AGGREGATE_METRICS_RESOURCE, || Ok(AggregateMetrics::default()))
+    memory.shared_resource(AGGREGATE_METRICS_RESOURCE, || {
+        Ok(AggregateMetrics::default())
+    })
 }
 
 const AGGREGATE_STATE_VERSION_KEY: &str = "kaveon.aggregate_state.version";
@@ -199,34 +201,39 @@ pub fn aggregate_output_types(aggregates: &[AggExpr], input: &SchemaRef) -> Resu
         .iter()
         .map(|agg| {
             if let Ok(field) = input.field_with_name(&agg.column)
-                && matches!(field.data_type(), DataType::Int32 | DataType::Int64)
+                && matches!(
+                    logical_data_type(field.data_type()),
+                    DataType::Int32 | DataType::Int64
+                )
             {
+                let data_type = logical_data_type(field.data_type());
                 match agg.func {
                     AggFunc::Sum => return Ok(DataType::Int64),
-                    AggFunc::Min | AggFunc::Max => return Ok(field.data_type().clone()),
+                    AggFunc::Min | AggFunc::Max => return Ok(data_type.clone()),
                     _ => {}
                 }
             }
             if let Ok(field) = input.field_with_name(&agg.column) {
+                let data_type = logical_data_type(field.data_type());
                 if matches!(agg.func, AggFunc::Min | AggFunc::Max)
-                    && matches!(field.data_type(), DataType::Utf8 | DataType::LargeUtf8)
+                    && matches!(data_type, DataType::Utf8 | DataType::LargeUtf8)
                 {
-                    return Ok(field.data_type().clone());
+                    return Ok(data_type.clone());
                 }
                 if matches!(agg.func, AggFunc::Sum | AggFunc::Min | AggFunc::Max)
-                    && field.data_type() == &DataType::UInt64
+                    && data_type == &DataType::UInt64
                 {
                     return Ok(DataType::UInt64);
                 }
                 if matches!(agg.func, AggFunc::Min | AggFunc::Max)
-                    && matches!(field.data_type(), DataType::Decimal128(_, _))
+                    && matches!(data_type, DataType::Decimal128(_, _))
                 {
-                    return Ok(field.data_type().clone());
+                    return Ok(data_type.clone());
                 }
             }
             if matches!(agg.func, AggFunc::Sum)
                 && let Ok(field) = input.field_with_name(&agg.column)
-                && let DataType::Decimal128(_, scale) = field.data_type()
+                && let DataType::Decimal128(_, scale) = logical_data_type(field.data_type())
             {
                 return Ok(DataType::Decimal128(38, *scale));
             }
@@ -461,7 +468,11 @@ impl AggregateState {
                     *current = Some(value.to_owned());
                 }
             }
-            _ => return Err(exec_err("UTF-8 update applied to an incompatible aggregate state")),
+            _ => {
+                return Err(exec_err(
+                    "UTF-8 update applied to an incompatible aggregate state",
+                ));
+            }
         }
         Ok(())
     }
@@ -669,7 +680,9 @@ impl AggregateState {
     pub fn utf8_result(&self) -> Result<Option<String>> {
         match self {
             Self::Utf8Min(value) | Self::Utf8Max(value) => Ok(value.clone()),
-            _ => Err(exec_err("UTF-8 result requested from a non-UTF-8 aggregate state")),
+            _ => Err(exec_err(
+                "UTF-8 result requested from a non-UTF-8 aggregate state",
+            )),
         }
     }
 }
@@ -1866,21 +1879,7 @@ impl HashAggregate {
                 .index_of(col)
                 .map_err(|_| exec_err(format!("group-by column '{col}' not in input")))?;
             let data_type = source_schema.field_with_name(col)?.data_type();
-            if !matches!(
-                data_type,
-                DataType::Null
-                    | DataType::Boolean
-                    | DataType::Int32
-                    | DataType::Int64
-                    | DataType::UInt64
-                    | DataType::Decimal128(_, _)
-                    | DataType::Date32
-                    | DataType::Date64
-                    | DataType::Timestamp(_, _)
-                    | DataType::Float64
-                    | DataType::Utf8
-                    | DataType::LargeUtf8
-            ) {
+            if !supported_group_key_type(data_type) {
                 return Err(exec_err(format!(
                     "unsupported GROUP BY key type: {data_type}"
                 )));
@@ -1897,12 +1896,10 @@ impl HashAggregate {
                 let index = source_schema.index_of(&agg.column).map_err(|_| {
                     exec_err(format!("aggregate column '{}' not in input", agg.column))
                 })?;
-                if !is_numeric_type(source_schema.field(index).data_type())
+                let data_type = logical_data_type(source_schema.field(index).data_type());
+                if !is_numeric_type(data_type)
                     && !(matches!(agg.func, AggFunc::Min | AggFunc::Max)
-                        && matches!(
-                            source_schema.field(index).data_type(),
-                            DataType::Utf8 | DataType::LargeUtf8
-                        ))
+                        && matches!(data_type, DataType::Utf8 | DataType::LargeUtf8))
                 {
                     return Err(exec_err(format!(
                         "{} requires a numeric column, got {}",
@@ -1921,7 +1918,11 @@ impl HashAggregate {
             .iter()
             .map(|col| {
                 let f = source_schema.field_with_name(col).unwrap();
-                f.clone()
+                Field::new(
+                    f.name(),
+                    logical_data_type(f.data_type()).clone(),
+                    f.is_nullable(),
+                )
             })
             .collect();
         for (agg, data_type) in aggregates
@@ -2068,10 +2069,8 @@ impl HashAggregate {
                 if groups.is_empty()
                     && let Some(memory) = &self.memory
                 {
-                    reservations.reserve(
-                        memory,
-                        estimated_group_bytes(&[], self.aggregates.len()),
-                    )?;
+                    reservations
+                        .reserve(memory, estimated_group_bytes(&[], self.aggregates.len()))?;
                 }
                 if groups.is_empty()
                     && let Some(metrics) = &metrics
@@ -2110,22 +2109,19 @@ impl HashAggregate {
                                 self.memory.as_ref(),
                                 &mut reservations,
                             )?;
-                            if admitted
-                                && let Some(metrics) = &metrics
-                            {
+                            if admitted && let Some(metrics) = &metrics {
                                 metrics
                                     .distinct_values_admitted
                                     .fetch_add(1, Ordering::Relaxed);
                             }
                         } else if matches!(state, AggregateState::Exact { .. }) {
                             state.update_exact(extract_key(array, row).into())?;
-                        } else if matches!(state, AggregateState::Utf8Min(_) | AggregateState::Utf8Max(_)) {
-                            let value = match array.data_type() {
-                                DataType::Utf8 => array.as_string::<i32>().value(row),
-                                DataType::LargeUtf8 => array.as_string::<i64>().value(row),
-                                _ => return Err(exec_err("UTF-8 aggregate input type mismatch")),
-                            };
-                            state.update_utf8(value)?;
+                        } else if matches!(
+                            state,
+                            AggregateState::Utf8Min(_) | AggregateState::Utf8Max(_)
+                        ) {
+                            let value = extract_utf8_value(array, row)?;
+                            state.update_utf8(&value)?;
                         } else if matches!(state, AggregateState::DecimalSum { .. }) {
                             state.update_decimal(
                                 array
@@ -2189,10 +2185,13 @@ impl HashAggregate {
                     }
                 };
                 if let Some(values) = count_sum_i64 {
-                    let [AggregateState::Count(count), AggregateState::IntegerSum {
-                        sum,
-                        count: sum_count,
-                    }] = accumulators.as_mut_slice()
+                    let [
+                        AggregateState::Count(count),
+                        AggregateState::IntegerSum {
+                            sum,
+                            count: sum_count,
+                        },
+                    ] = accumulators.as_mut_slice()
                     else {
                         return Err(exec_err("COUNT/SUM aggregate state layout mismatch"));
                     };
@@ -2221,9 +2220,7 @@ impl HashAggregate {
                                 self.memory.as_ref(),
                                 &mut reservations,
                             )?;
-                            if admitted
-                                && let Some(metrics) = &metrics
-                            {
+                            if admitted && let Some(metrics) = &metrics {
                                 metrics
                                     .distinct_values_admitted
                                     .fetch_add(1, Ordering::Relaxed);
@@ -2236,12 +2233,8 @@ impl HashAggregate {
                             accumulators[index],
                             AggregateState::Utf8Min(_) | AggregateState::Utf8Max(_)
                         ) {
-                            let value = match array.data_type() {
-                                DataType::Utf8 => array.as_string::<i32>().value(row),
-                                DataType::LargeUtf8 => array.as_string::<i64>().value(row),
-                                _ => return Err(exec_err("UTF-8 aggregate input type mismatch")),
-                            };
-                            accumulators[index].update_utf8(value)?;
+                            let value = extract_utf8_value(array, row)?;
+                            accumulators[index].update_utf8(&value)?;
                         } else if matches!(accumulators[index], AggregateState::DecimalSum { .. }) {
                             accumulators[index].update_decimal(
                                 array
@@ -2807,8 +2800,61 @@ fn extract_key(arr: &ArrayRef, row: usize) -> GroupKey {
         }
         DataType::Utf8 => GroupKey::Utf8(arr.as_string::<i32>().value(row).to_owned()),
         DataType::LargeUtf8 => GroupKey::Utf8(arr.as_string::<i64>().value(row).to_owned()),
+        DataType::Dictionary(key_type, _) if key_type.as_ref() == &DataType::Int32 => {
+            let dictionary = arr
+                .as_any()
+                .downcast_ref::<Int32DictionaryArray>()
+                .expect("dictionary key type must match schema");
+            let index = dictionary.keys().value(row) as usize;
+            extract_key(&dictionary.values().clone(), index)
+        }
         _ => GroupKey::Utf8(format!("{:?}", arr.slice(row, 1))),
     }
+}
+
+fn extract_utf8_value(arr: &ArrayRef, row: usize) -> Result<String> {
+    match arr.data_type() {
+        DataType::Utf8 => Ok(arr.as_string::<i32>().value(row).to_owned()),
+        DataType::LargeUtf8 => Ok(arr.as_string::<i64>().value(row).to_owned()),
+        DataType::Dictionary(key_type, _) if key_type.as_ref() == &DataType::Int32 => {
+            let dictionary = arr
+                .as_any()
+                .downcast_ref::<Int32DictionaryArray>()
+                .ok_or_else(|| exec_err("dictionary key type must match schema"))?;
+            let index = dictionary.keys().value(row) as usize;
+            extract_utf8_value(&dictionary.values().clone(), index)
+        }
+        _ => Err(exec_err("UTF-8 aggregate input type mismatch")),
+    }
+}
+
+fn logical_data_type(data_type: &DataType) -> &DataType {
+    match data_type {
+        DataType::Dictionary(_, value_type) => value_type.as_ref(),
+        _ => data_type,
+    }
+}
+
+fn supported_group_key_type(data_type: &DataType) -> bool {
+    matches!(
+        logical_data_type(data_type),
+        DataType::Null
+            | DataType::Boolean
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt64
+            | DataType::Decimal128(_, _)
+            | DataType::Date32
+            | DataType::Date64
+            | DataType::Timestamp(_, _)
+            | DataType::Float64
+            | DataType::Utf8
+            | DataType::LargeUtf8
+    )
+        && match data_type {
+            DataType::Dictionary(key, _) => matches!(key.as_ref(), DataType::Int32),
+            _ => true,
+        }
 }
 
 fn extract_f64(arr: &ArrayRef, row: usize) -> Result<f64> {
@@ -3313,6 +3359,57 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn dictionary_utf8_group_keys_and_extrema_use_logical_values() {
+        let dictionary: arrow::array::Int32DictionaryArray =
+            vec!["b", "a", "b", "c"].into_iter().collect();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "category",
+            dictionary.data_type().clone(),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(dictionary)]).unwrap();
+
+        let mut grouped = HashAggregate::new(
+            Box::new(Input::new(batch.clone())),
+            vec!["category".into()],
+            vec![AggExpr::new(AggFunc::Count, "*")],
+        )
+        .unwrap();
+        let output = grouped.next_batch().unwrap().unwrap();
+        assert_eq!(output.schema().field(0).data_type(), &DataType::Utf8);
+        let keys = output.column(0).as_string::<i32>();
+        let counts = output
+            .column(1)
+            .as_primitive::<arrow::datatypes::UInt64Type>();
+        let mut result = HashMap::new();
+        for row in 0..output.num_rows() {
+            result.insert(keys.value(row).to_owned(), counts.value(row));
+        }
+        assert_eq!(
+            result,
+            HashMap::from([
+                (String::from("a"), 1),
+                (String::from("b"), 2),
+                (String::from("c"), 1)
+            ])
+        );
+
+        let mut extrema = HashAggregate::new(
+            Box::new(Input::new(batch)),
+            vec![],
+            vec![
+                AggExpr::new(AggFunc::Min, "category"),
+                AggExpr::new(AggFunc::Max, "category"),
+            ],
+        )
+        .unwrap();
+        let output = extrema.next_batch().unwrap().unwrap();
+        assert_eq!(output.column(0).as_string::<i32>().value(0), "a");
+        assert_eq!(output.column(1).as_string::<i32>().value(0), "c");
+    }
+
     use std::collections::VecDeque;
 
     struct Input {
@@ -3367,7 +3464,8 @@ mod tests {
 
     #[test]
     fn distinct_admission_handles_hash_neighbors_and_duplicates_at_a_full_budget() {
-        let pool = QueryMemoryPool::new("distinct-probe", AGGREGATE_RESERVATION_SLAB_BYTES).unwrap();
+        let pool =
+            QueryMemoryPool::new("distinct-probe", AGGREGATE_RESERVATION_SLAB_BYTES).unwrap();
         let account = pool.operator("distinct").unwrap();
         let mut reservations = ReservationSlab::default();
         let mut state = AggregateState::CountDistinct(HashSet::new());
@@ -3419,7 +3517,12 @@ mod tests {
             schema,
             vec![
                 Arc::new(StringArray::from(vec!["a", "a", "b", "b"])),
-                Arc::new(StringArray::from(vec![Some("x"), Some("x"), Some("y"), None])),
+                Arc::new(StringArray::from(vec![
+                    Some("x"),
+                    Some("x"),
+                    Some("y"),
+                    None,
+                ])),
             ],
         )
         .unwrap();
@@ -3605,8 +3708,7 @@ mod tests {
                     Some(1),
                     None,
                     Some(-7),
-                ]))
-                    as ArrayRef,
+                ])) as ArrayRef,
             ),
         ])
         .unwrap();
@@ -3737,8 +3839,20 @@ mod tests {
         assert_eq!(output.schema().field(3).data_type(), &DataType::UInt64);
         assert_eq!(output.column(0).as_primitive::<Int32Type>().value(0), -7);
         assert_eq!(output.column(1).as_primitive::<Int32Type>().value(0), 9);
-        assert_eq!(output.column(2).as_primitive::<arrow::datatypes::UInt64Type>().value(0), 2);
-        assert_eq!(output.column(3).as_primitive::<arrow::datatypes::UInt64Type>().value(0), 18);
+        assert_eq!(
+            output
+                .column(2)
+                .as_primitive::<arrow::datatypes::UInt64Type>()
+                .value(0),
+            2
+        );
+        assert_eq!(
+            output
+                .column(3)
+                .as_primitive::<arrow::datatypes::UInt64Type>()
+                .value(0),
+            18
+        );
     }
 
     #[test]
