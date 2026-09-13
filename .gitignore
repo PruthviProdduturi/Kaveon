@@ -134,6 +134,9 @@ CLAUDE.md
 .api_err.log
 .superpowers/
 
+# Native Engine local catalog and SQLite sidecars
+engine/kaveon-catalog.db*
+
 .vercel
 .env*
 data/covid-taxi/*.csv

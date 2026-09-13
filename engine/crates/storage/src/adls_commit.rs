@@ -6,6 +6,7 @@
 //! reconciliation before a caller retries an operation.
 
 use std::sync::Arc;
+use std::path::{Path as FsPath, PathBuf};
 
 use futures::StreamExt;
 use object_store::{
@@ -73,12 +74,23 @@ pub type CommitResult<T> = std::result::Result<T, CommitError>;
 #[derive(Clone)]
 pub struct AdlsConditionalCommit {
     store: Arc<dyn ObjectStore>,
+    local_root: Option<Arc<PathBuf>>,
 }
 
 impl AdlsConditionalCommit {
     #[must_use]
     pub fn new(store: Arc<dyn ObjectStore>) -> Self {
-        Self { store }
+        Self {
+            store,
+            local_root: None,
+        }
+    }
+
+    fn new_local(root: PathBuf) -> Self {
+        Self {
+            store: Arc::new(object_store::memory::InMemory::new()),
+            local_root: Some(Arc::new(root)),
+        }
     }
 
     /// Atomically writes a new immutable object and fails if it already exists.
@@ -87,6 +99,9 @@ impl AdlsConditionalCommit {
         object_path: &str,
         bytes: Vec<u8>,
     ) -> CommitResult<ObjectVersion> {
+        if let Some(root) = &self.local_root {
+            return local_create(root, object_path, bytes);
+        }
         let path = parse_path(object_path)?;
         let result = self
             .store
@@ -98,6 +113,9 @@ impl AdlsConditionalCommit {
 
     /// Reads bytes and the exact version returned for those bytes in one GET.
     pub async fn read(&self, object_path: &str) -> CommitResult<VersionedObject> {
+        if let Some(root) = &self.local_root {
+            return local_read(root, object_path);
+        }
         let path = parse_path(object_path)?;
         let result = self.store.get(&path).await.map_err(classify_error)?;
         let version = version_from_put(result.meta.e_tag.clone(), result.meta.version.clone())?;
@@ -118,6 +136,15 @@ impl AdlsConditionalCommit {
             return Err(CommitError {
                 kind: CommitErrorKind::Invalid,
             });
+        }
+        if let Some(root) = &self.local_root {
+            let result = local_read(root, object_path)?;
+            if result.bytes.len() > max_bytes {
+                return Err(CommitError {
+                    kind: CommitErrorKind::LimitExceeded,
+                });
+            }
+            return Ok(result);
         }
         let path = parse_path(object_path)?;
         let result = self.store.get(&path).await.map_err(classify_error)?;
@@ -143,6 +170,9 @@ impl AdlsConditionalCommit {
         expected: &ObjectVersion,
         bytes: Vec<u8>,
     ) -> CommitResult<ObjectVersion> {
+        if let Some(root) = &self.local_root {
+            return local_compare_and_swap(root, object_path, expected, bytes);
+        }
         let path = parse_path(object_path)?;
         let result = self
             .store
@@ -259,8 +289,112 @@ pub fn workload_identity_adls_commit(
     Ok(AdlsConditionalCommit::new(Arc::new(store)))
 }
 
+/// Builds the same conditional immutable commit primitive over a local
+/// directory. This is the single-node development equivalent of the ADLS
+/// store: the transaction protocol, object layout, and compare-and-swap
+/// semantics remain identical while the durable root is a caller-owned path.
+pub fn local_file_commit(root: &FsPath) -> Result<AdlsConditionalCommit, String> {
+    std::fs::create_dir_all(root)
+        .map_err(|error| format!("cannot create local transaction store: {error}"))?;
+    Ok(AdlsConditionalCommit::new_local(root.to_path_buf()))
+}
+
+fn local_path(root: &FsPath, object_path: &str) -> CommitResult<PathBuf> {
+    let relative = parse_path(object_path)?.to_string();
+    let path = root.join(relative);
+    if !path.starts_with(root) {
+        return Err(CommitError {
+            kind: CommitErrorKind::Invalid,
+        });
+    }
+    Ok(path)
+}
+
+fn local_version(bytes: &[u8]) -> ObjectVersion {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    ObjectVersion {
+        e_tag: format!("{:016x}", hasher.finish()),
+        version: None,
+    }
+}
+
+fn local_create(root: &FsPath, object_path: &str, bytes: Vec<u8>) -> CommitResult<ObjectVersion> {
+    let path = local_path(root, object_path)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|_| CommitError {
+            kind: CommitErrorKind::Other,
+        })?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|error| CommitError {
+            kind: if error.kind() == std::io::ErrorKind::AlreadyExists {
+                CommitErrorKind::Conflict
+            } else {
+                CommitErrorKind::Other
+            },
+        })?;
+    std::io::Write::write_all(&mut file, &bytes).map_err(|_| CommitError {
+        kind: CommitErrorKind::Other,
+    })?;
+    Ok(local_version(&bytes))
+}
+
+fn local_read(root: &FsPath, object_path: &str) -> CommitResult<VersionedObject> {
+    let path = local_path(root, object_path)?;
+    let bytes = std::fs::read(path).map_err(|error| CommitError {
+        kind: if error.kind() == std::io::ErrorKind::NotFound {
+            CommitErrorKind::Missing
+        } else {
+            CommitErrorKind::Other
+        },
+    })?;
+    let version = local_version(&bytes);
+    Ok(VersionedObject { bytes, version })
+}
+
+fn local_compare_and_swap(
+    root: &FsPath,
+    object_path: &str,
+    expected: &ObjectVersion,
+    bytes: Vec<u8>,
+) -> CommitResult<ObjectVersion> {
+    let path = local_path(root, object_path)?;
+    let lock = path.with_extension("kaveon-lock");
+    let _guard = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock)
+        .map_err(|_| CommitError {
+            kind: CommitErrorKind::Conflict,
+        })?;
+    let result = (|| {
+        let current = local_read(root, object_path)?;
+        if current.version != *expected {
+            return Err(CommitError {
+                kind: CommitErrorKind::Conflict,
+            });
+        }
+        let temporary = path.with_extension(format!("kaveon-tmp-{}", std::process::id()));
+        std::fs::write(&temporary, &bytes).map_err(|_| CommitError {
+            kind: CommitErrorKind::Other,
+        })?;
+        std::fs::rename(&temporary, &path).map_err(|_| CommitError {
+            kind: CommitErrorKind::Conflict,
+        })?;
+        Ok(local_version(&bytes))
+    })();
+    let _ = std::fs::remove_file(&lock);
+    result
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
     use std::sync::Arc;
 
     use object_store::memory::InMemory;
@@ -269,6 +403,35 @@ mod tests {
 
     fn store() -> AdlsConditionalCommit {
         AdlsConditionalCommit::new(Arc::new(InMemory::new()))
+    }
+
+    #[tokio::test]
+    async fn local_store_preserves_conditional_commit_contract() {
+        let root = std::env::temp_dir().join(format!(
+            "kaveon-local-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = local_file_commit(&root).unwrap();
+        let first = store
+            .create_immutable("heads/catalog.json", b"generation-1".to_vec())
+            .await
+            .unwrap();
+        let read = store.read("heads/catalog.json").await.unwrap();
+        assert_eq!(read.bytes, b"generation-1");
+        assert_eq!(read.version, first);
+        store
+            .compare_and_swap("heads/catalog.json", &first, b"generation-2".to_vec())
+            .await
+            .unwrap();
+        assert_eq!(
+            store.read("heads/catalog.json").await.unwrap().bytes,
+            b"generation-2"
+        );
+        std::fs::remove_dir_all(PathBuf::from(root)).unwrap();
     }
 
     #[tokio::test]

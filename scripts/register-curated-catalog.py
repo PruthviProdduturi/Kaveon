@@ -14,11 +14,23 @@ from urllib.parse import quote
 import httpx
 import database.metadata as metadata
 
-CATALOG_ID = 'aks-opensource'
 CATALOG = 'OpenSource'
 ROOT = 'snapshots/2026-09-09-v1'
+# Storage comes from the environment so the same registration runs on AKS
+# (ADLS Gen2 through workload identity) and on the local cluster (a directory).
+LOCAL_LAKE = os.environ.get('KAVEON_LOCAL_LAKE_PATH')
+if LOCAL_LAKE:
+    CATALOG_ID = 'local-opensource'
+    STORAGE = {'Local': {'base_path': LOCAL_LAKE}}
+    CREDENTIAL = None
+    SOURCE_STORAGE = ('local', json.dumps({'base_path': LOCAL_LAKE}), 'environment', 'local')
+else:
+    CATALOG_ID = 'aks-opensource'
+    STORAGE = {'AdlsGen2': {'account': 'kvtestegmf6oweugsno', 'container': 'opensource', 'root_path': ROOT}}
+    CREDENTIAL = {'kind': 'WorkloadIdentity', 'reference': 'kaveon-test-reader'}
+    SOURCE_STORAGE = ('adls_gen2', json.dumps({'account': 'kvtestegmf6oweugsno', 'container': 'opensource', 'root_path': ROOT}), 'workload_identity', 'kaveon-test-reader')
 client = httpx.Client(base_url=os.environ['KAVEON_ENGINE_URL'],
-                     verify=os.environ['KAVEON_ENGINE_CA_CERT'], timeout=120,
+                     verify=os.environ.get('KAVEON_ENGINE_CA_CERT') or True, timeout=120,
                      headers={'Authorization': 'Bearer ' + os.environ['KAVEON_ENGINE_CATALOG_TOKEN'],
                               'x-kaveon-actor': 'opensource-curation'})
 
@@ -41,9 +53,8 @@ def register(collection, path, body):
         response.raise_for_status()
 
 register('/v1/catalog/definitions', '/v1/catalog/definitions/'+CATALOG_ID,
-         {'id': CATALOG_ID, 'name': CATALOG, 'adapter': 'Native',
-          'storage': {'AdlsGen2': {'account': 'kvtestegmf6oweugsno', 'container': 'opensource', 'root_path': ROOT}},
-          'credential': {'kind': 'WorkloadIdentity', 'reference': 'kaveon-test-reader'}})
+         {'id': CATALOG_ID, 'name': CATALOG, 'adapter': 'Native', 'storage': STORAGE,
+          **({'credential': CREDENTIAL} if CREDENTIAL else {})})
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--definitions-only', action='store_true',
                     help='Register definitions without running reads or updating API metadata')
@@ -113,12 +124,13 @@ metadata.execute('''INSERT INTO catalog_sources
     (name, engine_catalog, storage_type, storage_config, data_format,
      credential_kind, credential_ref, adapter_type, adapter_config,
      lifecycle, description, created_by, modified_by)
-    VALUES (@param0, @param1, 'adls_gen2', @param2, 'parquet',
-            'workload_identity', 'kaveon-test-reader', 'native', '{}',
+    VALUES (@param0, @param1, @param2, @param3, 'parquet',
+            @param4, @param5, 'native', '{}',
             'active', 'Public NYC Taxi, WHO COVID, OWID energy, NASA climate, and archived AI benchmarks', 'system', 'system')
     ON CONFLICT (engine_catalog) DO UPDATE SET
       name=EXCLUDED.name, description=EXCLUDED.description, storage_config=EXCLUDED.storage_config,
+      storage_type=EXCLUDED.storage_type, credential_kind=EXCLUDED.credential_kind, credential_ref=EXCLUDED.credential_ref,
       lifecycle='active', modified_at=NOW()''',
-    [CATALOG, CATALOG, json.dumps({'account':'kvtestegmf6oweugsno', 'container':'opensource', 'root_path':ROOT})])
+    [CATALOG, CATALOG, SOURCE_STORAGE[0], SOURCE_STORAGE[1], SOURCE_STORAGE[2], SOURCE_STORAGE[3]])
 print(json.dumps({'catalog': CATALOG, 'registered_tables': len(tables)}))
 print('VALIDATION=' + json.dumps(checks))
