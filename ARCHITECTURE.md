@@ -19,6 +19,8 @@ record flow, storage boundaries, and recovery evidence, see
 
 The truthful technical visual is available at
 [Kaveon current/target architecture](docs/reference/kaveon-architecture-truthful.svg).
+The presentation version uses fewer, larger architectural zones:
+[Kaveon premium technical architecture](docs/reference/kaveon-architecture-premium.svg).
 The presentation visual is
 [Kaveon unified data intelligence architecture](docs/reference/kaveon-unified-architecture.svg)
 ([PNG](docs/reference/kaveon-unified-architecture.png), [2× PNG](docs/reference/kaveon-unified-architecture-2x.png)):
