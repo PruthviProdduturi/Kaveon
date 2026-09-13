@@ -18,6 +18,20 @@ curl.exe http://localhost:8080/health
 kaveon --server http://localhost:8080 --auth none
 ```
 
+This profile enables the Engine transaction API with the same immutable
+revision/CAS protocol used by cloud deployments. Product records are stored in
+the durable `kaveon-db-products` volume; the catalog metadata is stored in
+`kaveon-db-catalog`. The local mode does not require Azure credentials or
+PostgreSQL. It is a single-node development profile, so it does not provide
+cloud-level replication or multi-node failover.
+
+Verify the transaction capability and identity boundary:
+
+```powershell
+curl.exe -H "Authorization: Bearer kaveon-local-admin-token-not-for-production" `
+  http://localhost:8080/v1/capabilities
+```
+
 On macOS or Linux:
 
 ```bash

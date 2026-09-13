@@ -22,8 +22,13 @@ services:
         {"principals":[{"token":"${KAVEON_DB_ADMIN_TOKEN:-kaveon-local-admin-token-not-for-production}","principal":"local-admin","role":"admin"}],"bridge_token":"${KAVEON_DB_BRIDGE_TOKEN:-kaveon-local-bridge-token-not-for-production}"}
       KAVEON_DATA_DIR: /data
       KAVEON_CATALOG_ADMIN_TOKEN: ${KAVEON_DB_CATALOG_TOKEN:-kaveon-local-catalog-admin}
+      KAVEON_PRODUCT_TRANSACTIONS_ENABLED: "true"
+      KAVEON_PRODUCT_STORAGE_MODE: local
+      KAVEON_PRODUCT_LOCAL_PATH: /var/lib/kaveon/product-transactions
+      KAVEON_PRODUCT_ADLS_PREFIX: kaveon/product-catalog
     volumes:
       - kaveon-db-catalog:/var/lib/kaveon
+      - kaveon-db-products:/var/lib/kaveon/product-transactions
       - type: bind
         source: ${KAVEON_DATA_PATH:-./data}
         target: /data
@@ -40,3 +45,4 @@ services:
 
 volumes:
   kaveon-db-catalog:
+  kaveon-db-products:

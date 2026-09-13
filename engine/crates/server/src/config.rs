@@ -49,10 +49,22 @@ pub struct ProductTransactionsConfig {
     pub container: String,
     #[serde(default = "default_product_prefix")]
     pub prefix: String,
+    #[serde(default = "default_product_storage_mode")]
+    pub storage_mode: String,
+    #[serde(default = "default_product_local_path")]
+    pub local_path: PathBuf,
 }
 
 fn default_product_prefix() -> String {
     "kaveon/product-catalog".to_owned()
+}
+
+fn default_product_storage_mode() -> String {
+    "adls".to_owned()
+}
+
+fn default_product_local_path() -> PathBuf {
+    PathBuf::from("/var/lib/kaveon/product-transactions")
 }
 
 impl Default for ProductTransactionsConfig {
@@ -62,6 +74,8 @@ impl Default for ProductTransactionsConfig {
             account: String::new(),
             container: String::new(),
             prefix: default_product_prefix(),
+            storage_mode: default_product_storage_mode(),
+            local_path: default_product_local_path(),
         }
     }
 }
@@ -266,6 +280,12 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     if let Ok(value) = std::env::var("KAVEON_PRODUCT_ADLS_PREFIX") {
         config.product_transactions.prefix = value;
     }
+    if let Ok(value) = std::env::var("KAVEON_PRODUCT_STORAGE_MODE") {
+        config.product_transactions.storage_mode = value;
+    }
+    if let Ok(value) = std::env::var("KAVEON_PRODUCT_LOCAL_PATH") {
+        config.product_transactions.local_path = PathBuf::from(value);
+    }
     if let Ok(v) = std::env::var("KAVEON_QUERY_MEMORY_LIMIT_BYTES") {
         config.query_memory_limit_bytes = v.parse().map_err(|_| {
             anyhow::anyhow!("KAVEON_QUERY_MEMORY_LIMIT_BYTES must be an unsigned integer")
@@ -366,13 +386,24 @@ fn validate_product_transactions(config: &ServerConfig) -> anyhow::Result<()> {
             "product transactions may be enabled only on a coordinator"
         );
         anyhow::ensure!(
-            !config.product_transactions.account.is_empty(),
-            "enabled product transactions require an ADLS account"
+            matches!(config.product_transactions.storage_mode.as_str(), "adls" | "local"),
+            "product transaction storage mode must be 'adls' or 'local'"
         );
-        anyhow::ensure!(
-            !config.product_transactions.container.is_empty(),
-            "enabled product transactions require an ADLS container"
-        );
+        if config.product_transactions.storage_mode == "adls" {
+            anyhow::ensure!(
+                !config.product_transactions.account.is_empty(),
+                "ADLS product transactions require an account"
+            );
+            anyhow::ensure!(
+                !config.product_transactions.container.is_empty(),
+                "ADLS product transactions require a container"
+            );
+        } else {
+            anyhow::ensure!(
+                !config.product_transactions.local_path.as_os_str().is_empty(),
+                "local product transactions require a storage path"
+            );
+        }
         anyhow::ensure!(
             !config.product_transactions.prefix.is_empty(),
             "enabled product transactions require an ADLS prefix"
@@ -387,11 +418,16 @@ pub fn product_catalog_commit(
     if !config.product_transactions.enabled {
         return Ok(None);
     }
-    let storage = kaveon_storage::workload_identity_adls_commit(
-        &config.product_transactions.account,
-        &config.product_transactions.container,
-    )
-    .map_err(anyhow::Error::msg)?;
+    let storage = if config.product_transactions.storage_mode == "local" {
+        kaveon_storage::local_file_commit(&config.product_transactions.local_path)
+            .map_err(anyhow::Error::msg)?
+    } else {
+        kaveon_storage::workload_identity_adls_commit(
+            &config.product_transactions.account,
+            &config.product_transactions.container,
+        )
+        .map_err(anyhow::Error::msg)?
+    };
     let commit = kaveon_catalog::product_commit::ProductCatalogCommit::new(
         storage,
         &config.product_transactions.prefix,
@@ -821,6 +857,8 @@ mod tests {
                 account: "kaveontest".into(),
                 container: "product".into(),
                 prefix: "kaveon/product-catalog".into(),
+                storage_mode: "adls".into(),
+                local_path: "/tmp/kaveon-product-transactions".into(),
             },
             ..ServerConfig::default()
         };
@@ -846,6 +884,25 @@ mod tests {
         config.product_transactions.account = "kaveontest".into();
         config.product_transactions.prefix = "../escape".into();
         assert!(product_catalog_commit(&config).is_err());
+    }
+
+    #[test]
+    fn local_product_transactions_need_only_a_durable_path() {
+        let directory = temporary_directory();
+        let mut config = ServerConfig {
+            product_transactions: ProductTransactionsConfig {
+                enabled: true,
+                storage_mode: "local".into(),
+                local_path: directory.join("products"),
+                ..Default::default()
+            },
+            ..ServerConfig::default()
+        };
+        validate_product_transactions(&config).unwrap();
+        assert!(product_catalog_commit(&config).unwrap().is_some());
+        config.product_transactions.local_path = std::path::PathBuf::new();
+        assert!(validate_product_transactions(&config).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

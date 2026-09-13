@@ -96,16 +96,18 @@ def main() -> int:
         request = playwright.request.new_context(base_url=args.portal.rstrip("/"), timeout=600_000)
         try:
             config = request.get("/api/auth/entra-config").json()
-            az = "az.cmd" if os.name == "nt" else "az"
-            auth = subprocess.run([az, "account", "get-access-token", "--tenant", config["tenantId"],
-                                   "--scope", config["scope"], "-o", "json"], capture_output=True, text=True, check=True)
-            token = json.loads(auth.stdout)["accessToken"]
-            csrf = request.get("/api/auth/csrf").json()["csrfToken"]
-            response = request.post("/api/auth/callback/entra-public",
-                                    form={"csrfToken": csrf, "token": token, "callbackUrl": f"{args.portal.rstrip('/')}/"},
-                                    headers={"X-Auth-Return-Redirect": "1"})
-            if not response.ok:
-                raise RuntimeError("Portal sign-in failed")
+            if config.get("enabled"):
+                az = "az.cmd" if os.name == "nt" else "az"
+                auth = subprocess.run([az, "account", "get-access-token", "--tenant", config["tenantId"],
+                                       "--scope", config["scope"], "-o", "json"], capture_output=True, text=True, check=True)
+                token = json.loads(auth.stdout)["accessToken"]
+                csrf = request.get("/api/auth/csrf").json()["csrfToken"]
+                response = request.post("/api/auth/callback/entra-public",
+                                        form={"csrfToken": csrf, "token": token, "callbackUrl": f"{args.portal.rstrip('/')}/"},
+                                        headers={"X-Auth-Return-Redirect": "1"})
+                if not response.ok:
+                    raise RuntimeError("Portal sign-in failed")
+            # Entra disabled: the local portal's development identity is already signed in.
 
             def api(method: str, path: str, body: dict[str, Any] | None = None) -> Any:
                 result = request.fetch(f"/api/kaveon/api/v1/{path}", method=method, data=body)

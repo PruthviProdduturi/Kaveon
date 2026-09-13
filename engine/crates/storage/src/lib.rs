@@ -14,7 +14,7 @@ pub mod source_statistics;
 
 pub use adls_commit::{
     AdlsConditionalCommit, CommitError, CommitErrorKind, CommitResult, ObjectVersion,
-    VersionedObject, workload_identity_adls_commit,
+    VersionedObject, local_file_commit, workload_identity_adls_commit,
 };
 pub use adls_reader::{AdlsAuthMode, AdlsBatchSource, AdlsBatchStream, AdlsParquetReader};
 pub use delta_reader::{DeltaBatchIterator, DeltaTableReader};
