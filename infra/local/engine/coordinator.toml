@@ -1,0 +1,8 @@
+# Local cluster (no Docker): the coordinator as a native process.
+# Paths and secrets come from the environment set by scripts/local-cluster.ps1.
+[node]
+environment = "local"
+coordinator = true
+
+[http]
+port = 8080
