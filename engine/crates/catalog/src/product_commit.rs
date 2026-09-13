@@ -209,6 +209,14 @@ impl ProductCatalogCommit {
         }
     }
 
+    /// Returns payload-free transaction counters for operational health and
+    /// retirement evidence. The counters are process-local and approximate
+    /// during a concurrent scrape; they are never used for commit decisions.
+    #[must_use]
+    pub fn transaction_metrics(&self) -> crate::product_metrics::TransactionMetricsSnapshot {
+        self.metrics.snapshot()
+    }
+
     /// Publishes the prepared immutable snapshot, then conditionally advances the head.
     pub async fn commit(&self, request: PrepareChange) -> CommitOutcome {
         self.commit_with_documents(request, BTreeMap::new()).await

@@ -49,6 +49,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/v1/transaction/{transaction_id}/commit", post(commit))
         .route("/v1/transaction/{transaction_id}/rollback", post(rollback))
         .route("/v1/transaction/{transaction_id}/recovery", get(recovery))
+        .route("/v1/transaction/metrics", get(metrics))
         .route("/v1/transaction/sql", post(execute_sql))
         .route("/v1/product/{kind}/{id}", get(read_product))
 }
@@ -83,6 +84,13 @@ enum RegistryError {
 impl TransactionRegistry {
     pub(crate) fn catalog(&self) -> Option<ProductCatalogCommit> {
         self.catalog.clone()
+    }
+
+    fn metrics(&self) -> Result<kaveon_catalog::product_metrics::TransactionMetricsSnapshot, RegistryError> {
+        self.catalog
+            .as_ref()
+            .map(ProductCatalogCommit::transaction_metrics)
+            .ok_or(RegistryError::Disabled)
     }
     pub fn disabled() -> Self {
         Self {
@@ -1174,6 +1182,16 @@ async fn recovery(
     }
 }
 
+async fn metrics(
+    State(state): State<Arc<AppState>>,
+    Extension(_identity): Extension<Identity>,
+) -> Response {
+    match state.product_transactions.metrics() {
+        Ok(snapshot) => Json(snapshot).into_response(),
+        Err(error) => error_response(error),
+    }
+}
+
 fn operation_id_for_transaction(transaction_id: &str) -> String {
     format!("operation-{}", transaction_id.replace('-', ""))
 }
@@ -1461,6 +1479,22 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("neither confirmed committed nor confirmed rolled back"));
+    }
+
+    #[tokio::test]
+    async fn transaction_metrics_are_payload_free_and_available_when_enabled() {
+        let (registry, catalog) = registry().await;
+        let snapshot = registry.metrics().unwrap();
+        assert_eq!(snapshot.attempts, 1);
+        assert_eq!(snapshot.committed, 1);
+        assert_eq!(snapshot.in_flight, 0);
+        assert_eq!(snapshot.replayed, 0);
+        assert_eq!(snapshot.conflicts, 0);
+        assert_eq!(catalog.transaction_metrics().attempts, 1);
+        assert!(matches!(
+            TransactionRegistry::disabled().metrics(),
+            Err(RegistryError::Disabled)
+        ));
     }
 
     #[tokio::test]
