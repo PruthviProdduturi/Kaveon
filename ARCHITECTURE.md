@@ -19,6 +19,10 @@ record flow, storage boundaries, and recovery evidence, see
 
 The truthful technical visual is available at
 [Kaveon current/target architecture](docs/reference/kaveon-architecture-truthful.svg).
+The preferred compact presentation diagram is
+[Kaveon premium technical architecture](docs/reference/kaveon-architecture-premium.svg).
+The preferred poster-pattern version with corrected current-state wording is
+[Kaveon accurate unified architecture](docs/reference/kaveon-unified-architecture-accurate.svg).
 The boardroom visual is also available at
 [Kaveon complete unified architecture visual](docs/reference/kaveon-unified-architecture-complete.png).
 The sharper 2× export and animated flow version are available as
