@@ -19,11 +19,11 @@ record flow, storage boundaries, and recovery evidence, see
 
 The truthful technical visual is available at
 [Kaveon current/target architecture](docs/reference/kaveon-architecture-truthful.svg).
-The boardroom visual is also available at
-[Kaveon complete unified architecture visual](docs/reference/kaveon-unified-architecture-complete.png).
-The sharper 2× export and animated flow version are available as
-[2× PNG](docs/reference/kaveon-unified-architecture-complete-2x.png) and
-[animated GIF](docs/reference/kaveon-unified-architecture-complete.gif).
+The presentation visual is
+[Kaveon unified data intelligence architecture](docs/reference/kaveon-unified-architecture.svg)
+([PNG](docs/reference/kaveon-unified-architecture.png), [2× PNG](docs/reference/kaveon-unified-architecture-2x.png)):
+solid components are implemented and verified on AKS, dashed components are
+targets with their gate named, and both execution paths are drawn end to end.
 
 ## Platform at a glance
 
