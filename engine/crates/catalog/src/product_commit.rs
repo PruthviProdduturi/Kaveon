@@ -88,6 +88,17 @@ pub struct MutationJournalRecord {
     pub committed_snapshot: SnapshotRef,
 }
 
+/// Result of resolving a transaction after a lost response or process restart.
+/// `Prepared` is deliberately distinct from `NotFound`: a prepared journal
+/// entry proves that immutable intent reached storage, but not that the head
+/// CAS committed it. Callers must not retry it blindly or expose its writes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MutationRecovery {
+    Committed(MutationJournalRecord),
+    Prepared(MutationJournalRecord),
+    NotFound,
+}
+
 struct Head {
     snapshot: CatalogSnapshot,
     version: ObjectVersion,
@@ -485,10 +496,24 @@ impl ProductCatalogCommit {
         if record.request_digest != request_digest {
             return Err(CommitErrorKind::Conflict);
         }
-        let outcome = if head.snapshot.reference() == record.snapshot {
-            MutationJournalOutcome::Committed
-        } else {
-            MutationJournalOutcome::Prepared
+        // The operation may no longer be the current head after later
+        // commits. Resolve the retained parent chain instead of comparing only
+        // with the current snapshot; otherwise every successful historical
+        // transaction would be misreported as merely prepared after restart.
+        let outcome = match self
+            .resolve_from(
+                head.snapshot.clone(),
+                transaction_id,
+                request_digest,
+                MAX_INDEX_SHARD_ENTRIES,
+            )
+            .await?
+        {
+            OperationResolution::Committed(_) => MutationJournalOutcome::Committed,
+            OperationResolution::Conflict => return Err(CommitErrorKind::Conflict),
+            OperationResolution::NotCommitted | OperationResolution::Unresolved => {
+                MutationJournalOutcome::Prepared
+            }
         };
         Ok(Some(MutationJournalRecord {
             transaction_id: if record.transaction_id.is_empty() {
@@ -502,6 +527,27 @@ impl ProductCatalogCommit {
             outcome,
             committed_snapshot: record.snapshot.clone(),
         }))
+    }
+
+    /// Resolves a transaction using only durable journal/head state. This is
+    /// the restart-safe API for callers that lost a commit response; it never
+    /// replays writes and never treats an absent entry as proof of non-commit
+    /// beyond the retained operation index.
+    pub async fn recover_transaction(
+        &self,
+        transaction_id: &str,
+        request_digest: &str,
+    ) -> Result<MutationRecovery, CommitErrorKind> {
+        match self
+            .resolve_mutation_journal(transaction_id, request_digest)
+            .await?
+        {
+            Some(record) => Ok(match record.outcome {
+                MutationJournalOutcome::Committed => MutationRecovery::Committed(record),
+                MutationJournalOutcome::Prepared => MutationRecovery::Prepared(record),
+            }),
+            None => Ok(MutationRecovery::NotFound),
+        }
     }
 
     async fn resolve_from(
@@ -1448,6 +1494,32 @@ mod tests {
         assert_eq!(journal.changes, request.changes);
         assert_eq!(journal.committed_snapshot, committed.reference());
         assert_eq!(journal.outcome, MutationJournalOutcome::Committed);
+        let recovery = reopened
+            .recover_transaction("journal-op", DIGEST)
+            .await
+            .unwrap();
+        assert!(matches!(recovery, MutationRecovery::Committed(_)));
+        assert!(matches!(
+            reopened
+                .recover_transaction("missing-after-restart", DIGEST)
+                .await
+                .unwrap(),
+            MutationRecovery::NotFound
+        ));
+
+        let current = reopened.read_current().await.unwrap();
+        let later = super::tests::request(current.reference(), "later-op", "bronze.customers");
+        assert!(matches!(
+            reopened.commit(later).await,
+            CommitOutcome::Committed(_)
+        ));
+        assert!(matches!(
+            reopened
+                .recover_transaction("journal-op", DIGEST)
+                .await
+                .unwrap(),
+            MutationRecovery::Committed(_)
+        ));
     }
 
     #[tokio::test]
