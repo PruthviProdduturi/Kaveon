@@ -3,7 +3,7 @@
 .bg{fill:#fafbfd}.t{font:700 38px Inter,Arial,sans-serif;fill:#102a56}.s{font:400 16px Inter,Arial,sans-serif;fill:#61728c}.h{font:700 17px Inter,Arial,sans-serif;fill:#102a56}.b{font:400 14px Inter,Arial,sans-serif;fill:#3f5879}.k{font:700 13px Inter,Arial,sans-serif;letter-spacing:2px;fill:#2f659f}.box{stroke:#337bc2;stroke-width:2;rx:10}.cur{fill:#eef6ff}.alp{fill:#f1f8f5;stroke:#278a78}.tar{fill:#fffaf0;stroke:#d18a2b;stroke-dasharray:8 6}.leg{fill:#f1f3f6;stroke:#7b8797;stroke-dasharray:8 6}.ln{fill:none;stroke:#2f7bc4;stroke-width:3;marker-end:url(#a)}.or{fill:none;stroke:#d27a21;stroke-width:3;marker-end:url(#o)}.small{font:400 12px Inter,Arial,sans-serif;fill:#61728c}.badge{font:700 10px Inter,Arial,sans-serif;letter-spacing:1px}.white{fill:#fff}.foot{font:400 13px Inter,Arial,sans-serif;fill:#52647e}
 </style><marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="#2f7bc4"/></marker><marker id="o" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="#d27a21"/></marker></defs>
 <rect width="1920" height="1080" class="bg"/>
-<text x="55" y="62" class="t">KAVEON | Future-state unified data intelligence</text><text x="55" y="91" class="s">One KaveonDB authority for product records and customer-owned lake analytics</text>
+<text x="55" y="62" class="t">KΛVEON | Future-state unified data intelligence</text><text x="55" y="91" class="s">One KaveonDB authority for product records and customer-owned lake analytics</text>
 <text x="55" y="133" class="k">DATA SOURCES</text><text x="850" y="133" class="k">KAVEON PLATFORM</text><text x="1510" y="133" class="k">PRODUCT SURFACES</text>
 <rect x="55" y="151" width="330" height="100" class="box cur"/><text x="80" y="183" class="h">Customer lake</text><text x="80" y="208" class="b">Local and ADLS Gen2 Parquet / Delta</text><text x="80" y="230" class="b">Snapshot-aware reads</text>
 <rect x="55" y="270" width="330" height="100" class="box cur"/><text x="80" y="302" class="h">API-managed sources</text><text x="80" y="327" class="b">Cataloged connection metadata</text><text x="80" y="349" class="b">Passthrough SQL through FastAPI</text>
@@ -24,12 +24,12 @@
 <text x="55" y="1002" class="foot">Analytical path: request → route → plan → distributed execute → result · Transactional path: validate → revision CAS → commit → audit → recovery</text>
 <text x="55" y="1032" class="foot">Talk to your data · future-state product architecture</text>
 <g aria-label="animated data flows" opacity="0.9">
- <circle r="5" fill="#2f7bc4"><animateMotion dur="4.8s" repeatCount="indefinite" path="M385 201 H500"/></circle>
- <circle r="5" fill="#2f7bc4"><animateMotion dur="5.2s" repeatCount="indefinite" path="M1400 201 H1510"/></circle>
- <circle r="5" fill="#d27a21"><animateMotion dur="5.6s" repeatCount="indefinite" path="M1400 439 H1510"/></circle>
- <circle r="5" fill="#2f7bc4"><animateMotion dur="4.2s" repeatCount="indefinite" path="M760 608 V680"/></circle>
- <circle r="5" fill="#d27a21"><animateMotion dur="4.6s" repeatCount="indefinite" path="M1170 608 V680"/></circle>
- <circle r="5" fill="#2f7bc4"><animateMotion dur="5.4s" repeatCount="indefinite" path="M270 815 V840"/></circle>
+ <circle r="5" fill="#2f7bc4"><animateMotion dur="2.1s" calcMode="linear" repeatCount="indefinite" path="M385 201 H500"/></circle>
+ <circle r="5" fill="#2f7bc4"><animateMotion dur="2.3s" calcMode="linear" repeatCount="indefinite" path="M1400 201 H1510"/></circle>
+ <circle r="5" fill="#d27a21"><animateMotion dur="2.5s" calcMode="linear" repeatCount="indefinite" path="M1400 439 H1510"/></circle>
+ <circle r="5" fill="#2f7bc4"><animateMotion dur="1.8s" calcMode="linear" repeatCount="indefinite" path="M760 608 V680"/></circle>
+ <circle r="5" fill="#d27a21"><animateMotion dur="2s" calcMode="linear" repeatCount="indefinite" path="M1170 608 V680"/></circle>
+ <circle r="5" fill="#2f7bc4"><animateMotion dur="2.4s" calcMode="linear" repeatCount="indefinite" path="M270 815 V840"/></circle>
 </g>
 </svg>
 
