@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from middleware.auth import require_user_context, UserContext
 import database.metadata as db
 from services import product_outbox
+from services import chat_history_store, product_read_authority
 from services.chat_history_backfill import session_document,message_document
 
 router = APIRouter()
@@ -122,7 +123,7 @@ def get_session(session_id: int, ctx: UserContext = Depends(require_user_context
     if product_read_authority.enabled("chat_history"):
         documents = product_read_authority.list_typed("chat_message", "chat_history", ctx.email, ctx.role)
         message_rows = [row for row in documents if str(row.get("session_id")) == str(session_id)]
-        message_rows.sort(key=lambda row: str(row.get("created_at") or ""))
+        message_rows.sort(key=lambda row: (str(row.get("created_at") or ""), int(row.get("id") or 0)))
         msgs = {"rows": message_rows}
     else:
         msgs = db.query(
@@ -153,6 +154,9 @@ def create_session(body: SessionCreate, ctx: UserContext = Depends(require_user_
     """Create a new chat session."""
     title = (body.title or "New conversation").strip()[:500]
 
+    if product_read_authority.enabled("chat_history"):
+        return _legacy_ids(chat_history_store.create_session(ctx.email, title))
+
     if _enabled():
      with db.transaction() as tx:
       row=tx.query_one(
@@ -182,6 +186,12 @@ def add_message(
             status_code=400,
             detail={"code": "invalid_role", "message": "Role must be 'user' or 'assistant'."},
         )
+
+    if product_read_authority.enabled("chat_history"):
+        return _legacy_ids(chat_history_store.add_message(
+            str(session_id), ctx.email, role=body.role, content=body.content,
+            sql_query=body.sql_query, chart_type=body.chart_type,
+            data=body.data, route=body.route))
 
     import json
     data_json = json.dumps(body.data) if body.data else None
@@ -215,6 +225,9 @@ def add_message(
 def delete_session(session_id: int, ctx: UserContext = Depends(require_user_context)):
     """Delete a session and its messages (CASCADE)."""
     _assert_session_owner(session_id, ctx.email)
+    if product_read_authority.enabled("chat_history"):
+        chat_history_store.delete_session(str(session_id), ctx.email)
+        return
     if _enabled():
      with db.transaction() as tx:
       session=tx.query_one("SELECT id,user_email FROM dbo.chat_sessions WHERE id=@param0 AND user_email=@param1 FOR UPDATE",[session_id,ctx.email])

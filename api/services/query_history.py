@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timezone
 from typing import List, Optional
 import database.metadata as db
-from services import product_outbox
+from services import product_outbox, product_store, product_read_authority
 from services.query_history_backfill import document as migration_document
 import os
 import logging
@@ -126,6 +126,37 @@ def create_history(data: dict, user_id: str) -> dict:
     new_id = str(uuid.uuid4())
 
     engine_query_id, engine_details = _engine_metadata(data)
+    if product_read_authority.enabled("query_history"):
+        result = {
+            "id": new_id, "sql_text": data["sql_text"],
+            "database_name": data.get("database_name"), "executed_at": started_at,
+            "execution_time": execution_time, "row_count": data.get("row_count"),
+            "status": data["status"], "error_message": data.get("error_message"),
+            "user_email": user_id, "trigger_source": trigger_source,
+            "dataset_id": data.get("dataset_id"), "tables_used": data.get("tables_used"),
+        }
+        document = migration_document(result)
+        # Owner-scoped listing makes retention deterministic without exposing
+        # another principal's query text to the API process.
+        records = product_store.list_records(
+            "query_history", user_id, "Viewer", max_records=MAX_HISTORY_PER_OWNER)
+        mutations = [product_store.ProductMutation(
+            "create", "query_history", new_id, document)]
+        if len(records) == MAX_HISTORY_PER_OWNER:
+            def ordering(record):
+                item = record.get("document") or {}
+                return (str(item.get("executed_at") or ""), str(item.get("id") or ""))
+            oldest = min(records, key=ordering)
+            revision = oldest.get("revision")
+            item = oldest.get("document")
+            if type(revision) is not int or revision < 1 or not isinstance(item, dict) \
+                    or item.get("user_email") != user_id:
+                raise RuntimeError("KaveonDB query history retention state is invalid")
+            mutations.append(product_store.ProductMutation(
+                "delete", "query_history", str(item["id"]), expected_revision=revision))
+        product_store.transact(mutations, user_id, "Analyst")
+        return {**result, "engine_query_id": engine_query_id,
+                "engine_details": json.loads(engine_details) if engine_details else None}
     supports_details=_supports_engine_details()
     sql = """
         INSERT INTO query_history (
@@ -201,6 +232,22 @@ def create_history(data: dict, user_id: str) -> dict:
 
 
 def delete_all_history(user_id: str) -> int:
+    if product_read_authority.enabled("query_history"):
+        records = product_store.list_records(
+            "query_history", user_id, "Viewer", max_records=MAX_HISTORY_PER_OWNER)
+        if len(records) > MAX_DELETE_FANOUT:
+            raise RuntimeError("query history delete exceeds its fanout bound")
+        mutations = []
+        for record in records:
+            document, revision = record.get("document"), record.get("revision")
+            if not isinstance(document, dict) or document.get("user_email") != user_id \
+                    or type(revision) is not int or revision < 1:
+                raise RuntimeError("KaveonDB query history delete state is invalid")
+            mutations.append(product_store.ProductMutation(
+                "delete", "query_history", str(document["id"]), expected_revision=revision))
+        if mutations:
+            product_store.transact(mutations, user_id, "Analyst")
+        return len(mutations)
     if os.getenv("KAVEON_QUERY_HISTORY_OUTBOX_ENABLED")=="true":
         with db.transaction() as transaction:
             rows=transaction.query("SELECT id FROM query_history WHERE user_email=@param0 ORDER BY id LIMIT @param1 FOR UPDATE",[user_id,MAX_DELETE_FANOUT+1])["rows"]
