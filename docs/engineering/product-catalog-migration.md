@@ -490,37 +490,47 @@ owner-scoped KaveonDB definition at one target snapshot and binds its exact
 record revision. Only `ready` rows with positive versions and valid JSON are
 supported; every other status fails the whole capture.
 
-Before capture, an operator must stage the canonical manifest JSON bytes at
-`dlm/<dataset-id>/v<version>/manifest.json` under a local artifact root. Missing
-or byte-divergent files fail before a checkpoint is created. The sealed run
-contains that relative path and SHA-256; apply publishes `building` followed by
-`ready` in one KaveonDB transaction.
+Capture create-only stages the canonical compiled artifact at
+`dlm/<dataset-id>/v<version>/compiled.json`. The sealed run contains that path
+and SHA-256; apply publishes `building` followed by `ready` in one KaveonDB
+transaction. Resume reconstructs missing local staging from the unchanged
+PostgreSQL snapshot and rejects any checkpoint/path/hash drift.
 
 ```powershell
-python scripts/backfill-dlm-runs.py `
+python -m services.dlm_run_backfill_cli `
   --checkpoint tmp/dlm-run-backfill.json `
   --artifact-root tmp/staged-dlm-artifacts
 
 $env:KAVEON_DLM_RUN_MIGRATION_ENABLED = "true"
 $env:KAVEON_DLM_ARTIFACT_PUBLISH_ENABLED = "true"
-python scripts/backfill-dlm-runs.py `
+$env:KAVEON_MIGRATION_CHECKPOINT_MODE = "adls"
+$env:KAVEON_ADLS_ACCOUNT = "<artifact-account>"
+$env:KAVEON_ADLS_CONTAINER = "<artifact-container>"
+$env:KAVEON_MIGRATION_CHECKPOINT_ADLS_ACCOUNT = "<checkpoint-account>"
+$env:KAVEON_MIGRATION_CHECKPOINT_ADLS_CONTAINER = "<checkpoint-container>"
+$env:KAVEON_MIGRATION_CHECKPOINT_ADLS_PREFIX = "postgresql-retirement/dlm-runs"
+python -m services.dlm_run_backfill_cli `
   --checkpoint tmp/dlm-run-backfill.json `
-  --artifact-root tmp/staged-dlm-artifacts --resume --apply `
-  --client-factory deployment_adls:create_immutable_client
+  --artifact-root tmp/staged-dlm-artifacts --apply
 ```
 
-Dry-run is the default. Apply requires both enable variables and an explicitly
-injected client factory. The client contract exposes conditional create and a
-bounded point read; it must never overwrite. Before target metadata is written,
+Dry-run is the default. The CLI is included in the API image. Apply requires
+both enable variables, workload identity, complete artifact storage settings,
+and durable checkpoint settings. It automatically resumes when the durable
+checkpoint hydrates the local path. Before target metadata is written,
 the publisher rehashes the staged bytes, conditionally creates the remote path,
 and reads it back exactly. A create error is treated as an ambiguous outcome and
 accepted only when the remote bytes match; mismatch preserves the error.
 
 The integrity-checked 4 MiB checkpoint holds at most
 10,000 records and advances by atomic replacement after reconciliation. The
-command is not scheduled or deployed. No concrete credential provider is built
-into the repository, and no live publication has run; qualification still
-requires a deployment-owned ADLS client and durable evidence.
+The Helm chart exposes the same operation as the disabled-by-default
+`api.dlmRunMigration` Job. Set its artifact/checkpoint account and container
+values, enable it for one release revision, and watch
+`job/kaveon-dlm-run-migration-<revision>` to completion. The Job reuses the API
+workload identity, PostgreSQL secret, Engine bridge secret and private CA; it
+does not embed credentials. A completed Job is migration output, not retirement
+evidence until its checkpoint and reconciliation receipts are collected.
 
 ## Dataset migration rehearsal receipt
 

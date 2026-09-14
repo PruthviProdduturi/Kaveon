@@ -1,0 +1,68 @@
+{{- if .Values.api.dlmRunMigration.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kaveon-dlm-run-migration-{{ .Release.Revision }}
+  namespace: {{ .Values.namespace }}
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: kaveon-api
+        job: kaveon-dlm-run-migration
+        azure.workload.identity/use: "true"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: kaveon-api
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: migration
+          image: {{ include "portal.image" (list .Values.images.api "api") }}
+          command: [python, -m, services.dlm_run_backfill_cli]
+          args: [--checkpoint, /tmp/checkpoints/dlm-runs.json, --artifact-root, /tmp/artifacts, --apply]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          env:
+            - {name: KAVEON_ENVIRONMENT, value: production}
+            - {name: KAVEON_DLM_RUN_MIGRATION_ENABLED, value: "true"}
+            - {name: KAVEON_DLM_ARTIFACT_PUBLISH_ENABLED, value: "true"}
+            - {name: KAVEON_MIGRATION_CHECKPOINT_MODE, value: adls}
+            - {name: KAVEON_ADLS_ACCOUNT, value: {{ required "api.dlmRunMigration.artifactAccount is required" .Values.api.dlmRunMigration.artifactAccount | quote }}}
+            - {name: KAVEON_ADLS_CONTAINER, value: {{ required "api.dlmRunMigration.artifactContainer is required" .Values.api.dlmRunMigration.artifactContainer | quote }}}
+            - {name: KAVEON_MIGRATION_CHECKPOINT_ADLS_ACCOUNT, value: {{ required "api.dlmRunMigration.checkpointAccount is required" .Values.api.dlmRunMigration.checkpointAccount | quote }}}
+            - {name: KAVEON_MIGRATION_CHECKPOINT_ADLS_CONTAINER, value: {{ required "api.dlmRunMigration.checkpointContainer is required" .Values.api.dlmRunMigration.checkpointContainer | quote }}}
+            - {name: KAVEON_MIGRATION_CHECKPOINT_ADLS_PREFIX, value: {{ required "api.dlmRunMigration.checkpointPrefix is required" .Values.api.dlmRunMigration.checkpointPrefix | quote }}}
+            - {name: METADATA_DB_TYPE, value: postgresql}
+            - {name: METADATA_HOST, value: kaveon-postgres}
+            - {name: METADATA_PORT, value: "5432"}
+            - {name: METADATA_DATABASE, value: kaveonmeta}
+            - {name: METADATA_USER, value: kaveon}
+            - {name: METADATA_SSLMODE, value: disable}
+            - {name: KAVEON_ENGINE_URL, value: "https://{{ .Values.engine.service }}:{{ .Values.engine.port }}"}
+            - {name: KAVEON_ENGINE_CA_CERT, value: /var/run/kaveon/engine-ca/{{ .Values.engine.caKey }} }
+            - {name: METADATA_PASSWORD, valueFrom: {secretKeyRef: {name: {{ required "secrets.portalAuth is required" .Values.secrets.portalAuth }}, key: METADATA_PASSWORD}}}
+            - {name: KAVEON_ENGINE_BRIDGE_TOKEN, valueFrom: {secretKeyRef: {name: {{ .Values.secrets.portalAuth }}, key: KAVEON_ENGINE_BRIDGE_TOKEN}}}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: engine-ca, mountPath: /var/run/kaveon/engine-ca, readOnly: true}
+          resources:
+{{ toYaml .Values.api.dlmRunMigration.resources | indent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: engine-ca
+{{- if .Values.engine.caSecret }}
+          secret: {secretName: {{ .Values.engine.caSecret }}}
+{{- else }}
+          configMap: {name: {{ required "engine.caConfigMap is required when engine.caSecret is empty" .Values.engine.caConfigMap }}}
+{{- end }}
+{{- end }}
