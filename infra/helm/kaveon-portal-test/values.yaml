@@ -93,6 +93,23 @@ api:
     resources:
       requests: {cpu: 100m, memory: 128Mi}
       limits: {cpu: 500m, memory: 512Mi}
+  postgresqlFreeSmoke:
+    # Enable only after a verified rehearsal/final API pod is ready. The probe
+    # identity must own migrated fixtures in every user-scoped family.
+    enabled: false
+    baseUrl: http://kaveon-api.kaveon.svc.cluster.local:8080
+    identity: ""
+    datasetId: ""
+    question: ""
+    evidencePvc: ""
+    outputFile: receipts/postgresql-free-smoke.json
+    useCaCert: false
+    caConfigMap: ""
+    caSecret: ""
+    caKey: ca.crt
+    resources:
+      requests: {cpu: 50m, memory: 96Mi}
+      limits: {cpu: 250m, memory: 256Mi}
   resources:
     requests: {cpu: 250m, memory: 512Mi}
     limits: {cpu: "1", memory: 1Gi}
