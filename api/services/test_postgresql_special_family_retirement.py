@@ -33,6 +33,22 @@ def captured():
 
 
 class Tests(unittest.TestCase):
+    def test_operator_sql_matches_restored_postgresql_schema(self):
+        api_root = Path(__file__).resolve().parents[1]
+        schema = (api_root / "schema_postgresql.sql").read_text(encoding="utf-8")
+        dlm_schema = (api_root / "dlm" / "engine.py").read_text(encoding="utf-8")
+        declared = schema + "\n" + dlm_schema
+        for table in (*retirement.CONTEXT_TABLES, *retirement.DLM_TABLES,
+                      "product_migration_outbox"):
+            self.assertIn(f"CREATE TABLE IF NOT EXISTS {table} (", declared)
+        outbox_block = schema[schema.index("CREATE TABLE IF NOT EXISTS product_migration_outbox ("):
+                              schema.index(");", schema.index(
+                                  "CREATE TABLE IF NOT EXISTS product_migration_outbox ("))]
+        self.assertIn("source_sequence BIGSERIAL", outbox_block)
+        self.assertNotRegex(outbox_block, r"(?m)^\s*id\s+")
+        self.assertEqual(retirement.OUTBOX_WATERMARK_SQL,
+            "SELECT COALESCE(MAX(source_sequence),0) FROM product_migration_outbox")
+
     def test_refuses_before_live_fence_without_calling_delete(self):
         called = []
         with patch.dict(os.environ, {"KAVEON_SPECIAL_FAMILY_RETIREMENT_ENABLED": "true",

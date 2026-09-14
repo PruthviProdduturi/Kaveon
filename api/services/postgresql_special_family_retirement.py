@@ -18,6 +18,9 @@ CONTEXT_TABLES = ("context_answer_cache", "context_snapshots")
 DLM_TABLES = tuple(dlm_generation_retirement.TABLES)
 DELETE_ORDER = ("dlm_answers", "dlm_value_index", "dlm_router", "dlm_sketch",
                 "dlm_artifact", *CONTEXT_TABLES)
+OUTBOX_WATERMARK_SQL = (
+    "SELECT COALESCE(MAX(source_sequence),0) FROM product_migration_outbox"
+)
 
 
 def _canonical(value: object) -> bytes:
@@ -93,7 +96,7 @@ def _delete_transactionally(expected_counts: dict[str, int]) -> dict:
                            + " IN ACCESS EXCLUSIVE MODE")
             cursor.execute("SELECT txid_current_snapshot()")
             snapshot_id = str(cursor.fetchone()[0])
-            cursor.execute("SELECT COALESCE(MAX(id),0) FROM product_migration_outbox")
+            cursor.execute(OUTBOX_WATERMARK_SQL)
             watermark = int(cursor.fetchone()[0])
             schemas = {table: _schema_digest(cursor, table)
                        for table in (*CONTEXT_TABLES, *DLM_TABLES)}
