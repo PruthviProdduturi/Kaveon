@@ -100,3 +100,24 @@ plain HTTP by design; for an HTTPS route set its exact hostname in
 `caConfigMap` plus `caKey`. Preserve the completed Job logs and
 receipt, then disable the Job in the next values revision. A failed or missing
 Job receipt is not restart-recovery evidence.
+
+Start from the checked-in
+[`examples/postgresql-free.values.yaml`](examples/postgresql-free.values.yaml)
+for the first PostgreSQL-free boot. It contains the exact 16 evidence families,
+the exact 12 runtime read families, ADLS artifact/checkpoint locations, the
+restricted evidence PVC and the smoke Job without any credential value. Replace
+all angle-bracket placeholders and render it before use:
+
+```powershell
+$values = "infra/helm/kaveon-portal-test/examples/postgresql-free.values.yaml"
+helm lint infra/helm/kaveon-portal-test --namespace kaveon -f $values
+helm template kaveon-portal-test infra/helm/kaveon-portal-test `
+  --namespace kaveon -f $values > tmp/postgresql-free-rendered.yaml
+```
+
+The example selects restart rehearsal (`true/false`). After its smoke receipt,
+restart-recovery receipt and the complete final audit are archived on the PVC,
+create a reviewed final overlay that changes only those mode booleans to
+`false/true`. Keep the write fence on, replay/shadow/report Jobs off, and the
+PostgreSQL image reference available for rollback. Neither mode renders the
+PostgreSQL StatefulSet or deletes its PVC.
