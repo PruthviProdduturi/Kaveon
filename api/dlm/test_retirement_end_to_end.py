@@ -93,3 +93,17 @@ def test_legacy_context_profiler_fails_before_postgresql(no_postgres):
     assert error.value.status_code == 503
     profile.assert_not_called()
     no_postgres.assert_not_called()
+
+
+def test_retirement_discovery_uses_admin_storage_read_then_caller_visibility(no_postgres):
+    state = engine._RetirementServingState("viewer", "Viewer")
+    token = engine._RETIREMENT_SERVING.set(state)
+    try:
+        with patch("services.product_store.list_records", return_value=[{"id": "24"}]) as records, \
+             patch.object(engine, "get_dlm", return_value=ARTIFACT) as visible_read:
+            assert engine._serving_artifacts() == [ARTIFACT]
+        records.assert_called_once_with("dataset", "viewer", "Admin", max_records=1000)
+        visible_read.assert_called_once_with("24", "viewer", "Viewer")
+    finally:
+        engine._RETIREMENT_SERVING.reset(token)
+    no_postgres.assert_not_called()
