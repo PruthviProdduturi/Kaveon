@@ -119,6 +119,8 @@ def query(sql: str, params: Optional[List[Any]] = None) -> dict:
         )
 
     db_type = _os.environ.get("METADATA_DB_TYPE") or settings.METADATA_DB_TYPE or "fabric_sql"
+    from services.postgresql_write_fence import assert_allowed
+    assert_allowed(sql, db_type)
     adapted = _adapt_sql(sql, db_type)
     native_sql, native_params = _to_native_params(adapted, params, db_type)
 
@@ -147,6 +149,8 @@ class MetadataTransaction:
         self._db_type = db_type
 
     def query(self, sql: str, params: Optional[List[Any]] = None) -> dict:
+        from services.postgresql_write_fence import assert_allowed
+        assert_allowed(sql, self._db_type)
         adapted = _adapt_sql(sql, self._db_type)
         native_sql, native_params = _to_native_params(adapted, params, self._db_type)
         cursor = self._connection.connection.cursor()
