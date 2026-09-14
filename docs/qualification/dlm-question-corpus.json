@@ -801,7 +801,8 @@
       "group": "routing",
       "q": "trips by borough",
       "expect": {
-        "ok": true
+        "ok": true,
+        "dataset": "NYC Taxi by Borough"
       }
     },
     {
@@ -809,7 +810,8 @@
       "group": "routing",
       "q": "covid deaths by country",
       "expect": {
-        "ok": true
+        "ok": true,
+        "dataset": "COVID-19 Global"
       }
     },
     {
