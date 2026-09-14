@@ -58,6 +58,7 @@ class _RetirementBuildState:
     router: Dict[str, Any] = field(default_factory=dict)
     manifest: Dict[str, Any] = field(default_factory=dict)
     curation: Dict[str, Any] = field(default_factory=dict)
+    answer_sets: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
 
 
 _RETIREMENT_BUILD: ContextVar[Optional[_RetirementBuildState]] = ContextVar(
@@ -702,8 +703,10 @@ def _store_answer(dataset_id: str, metric_name: str, group_col: str,
     if state is not None:
         if len(state.answers) >= _MAX_COMPILED_INDEX_ROWS:
             raise RuntimeError("Compiled DLM answer index exceeds its row bound")
-        state.answers.append({"metric_name": metric_name, "group_col": group_col,
-                              "columns": cols, "rows": rows, "computed_at": now})
+        answer = {"metric_name": metric_name, "group_col": group_col,
+                  "columns": cols, "rows": rows, "computed_at": now}
+        state.answers.append(answer)
+        state.answer_sets.setdefault(str(dataset_id), []).append(answer)
         return
     meta.execute(
         "INSERT INTO dlm_answers (id, dataset_id, metric_name, group_col, columns, rows, computed_at) "
@@ -2989,6 +2992,47 @@ def _dashboard_combos(dashboard_id: str, actor: Optional[str] = None) -> Dict[st
 
 
 def curate_dashboard(dashboard_id: str, actor: Optional[str] = None) -> Dict[str, Any]:
+    """Curate through an isolated compiled-context transaction after retirement."""
+    from services import postgresql_retirement_runtime
+    if not postgresql_retirement_runtime.requested() or _RETIREMENT_BUILD.get() is not None:
+        return _curate_dashboard_impl(dashboard_id, actor)
+    if not actor:
+        raise RuntimeError("PostgreSQL-free dashboard curation requires actor identity")
+    state = _RetirementBuildState()
+    token = _RETIREMENT_BUILD.set(state)
+    try:
+        result = _curate_dashboard_impl(dashboard_id, actor)
+        if not result.get("ok"):
+            return result
+        dataset_ids = sorted(_dashboard_combos(dashboard_id, actor))
+        for dataset_id in dataset_ids:
+            artifact = get_dlm(dataset_id, actor, "Admin")
+            if not artifact:
+                raise RuntimeError(f"Compiled DLM artifact is missing for dataset {dataset_id}")
+            context = artifact.get("compiled_context")
+            if not isinstance(context, dict):
+                raise RuntimeError(f"Compiled DLM context is missing for dataset {dataset_id}")
+            replacements = state.answer_sets.get(str(dataset_id), [])
+            replace_keys = {(item.get("metric_name"), item.get("group_col")) for item in replacements}
+            existing_answers = [item for item in (context.get("answers") or [])
+                                if (item.get("metric_name"), item.get("group_col")) not in replace_keys]
+            payload = {key: value for key, value in artifact.items() if key != "version"}
+            payload["built_at"] = _now_iso()
+            payload["compiled_context"] = {
+                "values": context.get("values") or [],
+                "answers": existing_answers + replacements,
+                "sketches": context.get("sketches") or [],
+                "router": context.get("router") or {},
+                "curation": context.get("curation") or {},
+            }
+            from services import dlm_generation_cutover
+            dlm_generation_cutover.publish(payload, actor)
+        return result
+    finally:
+        _RETIREMENT_BUILD.reset(token)
+
+
+def _curate_dashboard_impl(dashboard_id: str, actor: Optional[str] = None) -> Dict[str, Any]:
     """Precompute N-dim answer combos driven by a dashboard's filter×chart definitions.
     Stores in the same dlm_answers table — serve_chart picks them up transparently."""
     ensure_tables()
