@@ -86,6 +86,29 @@ and `nyc_taxi.daily_trips`; the last has `pickup_date`, `service_type`,
 `trip_count`, `total_amount_cents`, and `total_trip_distance`. Private
 credential material must not be committed or printed.
 
+## Restore after a cluster rebuild
+
+The Engine catalog is SQLite on the coordinator volume. It is not in the
+PostgreSQL snapshot, so a rebuilt cluster comes back with datasets, artifacts
+and answers but an empty `/v1/catalog/definitions`. The 2026-09-14 westus2
+rebuild was recovered this way, in this order:
+
+1. Copy the lake prefix to the new account server-side (`azcopy copy
+   https://<old>.blob.core.windows.net/opensource/snapshots/2026-09-09-v1
+   https://<new>.blob.core.windows.net/opensource/snapshots --recursive`, signed
+   in with the Azure CLI). Compare file counts and bytes on both sides before
+   going on; 509 files and 6,951,933,217 bytes for the current snapshot.
+2. Confirm the `kaveon-test-reader` identity holds Storage Blob Data Reader on
+   the new account.
+3. From a running API pod, with `KAVEON_LAKE_ADLS_ACCOUNT=<new account>`:
+   `PYTHONPATH=/app python register-curated-catalog.py opensource-catalog-manifest.json`
+   using [`infra/aks/opensource-catalog-manifest.json`](../../infra/aks/opensource-catalog-manifest.json).
+   The script registers the catalog, every schema and table, runs `COUNT(*)`
+   on each and refuses to update the platform source registry unless every
+   count matches the manifest.
+4. Run `scripts/qualify-dlm-questions.py --execute-live` through the portal;
+   the corpus names its datasets, so the restored ids do not matter.
+
 ## Verify
 
 Use CLI 0.2.0 or newer to check `SHOW CATALOGS`, `SHOW SCHEMAS`, `SHOW TABLES`,

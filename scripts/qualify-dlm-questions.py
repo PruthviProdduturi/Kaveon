@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CORPUS = ROOT / "docs" / "qualification" / "dlm-question-corpus.json"
 
 
-def check(expect: dict[str, Any], answer: dict[str, Any], live: dict[str, Any] | None) -> list[str]:
+def check(expect: dict[str, Any], answer: dict[str, Any], live: dict[str, Any] | None, names: dict[str, str]) -> list[str]:
     """Every way the answer departs from the contract, in words."""
     problems: list[str] = []
     reason = answer.get("reason")
@@ -37,8 +37,8 @@ def check(expect: dict[str, Any], answer: dict[str, Any], live: dict[str, Any] |
         problems.append(f"reason={reason} expected one of {expect['reason_in']}")
     if "clarify_kind" in expect and (answer.get("clarification") or {}).get("kind") != expect["clarify_kind"]:
         problems.append(f"clarify kind={(answer.get('clarification') or {}).get('kind')} expected {expect['clarify_kind']}")
-    if "dataset" in expect and str(answer.get("dataset_id")) != expect["dataset"]:
-        problems.append(f"dataset={answer.get('dataset_id')} expected {expect['dataset']}")
+    if "dataset" in expect and names.get(str(answer.get("dataset_id"))) != expect["dataset"]:
+        problems.append(f"dataset={names.get(str(answer.get('dataset_id')), answer.get('dataset_id'))} expected {expect['dataset']}")
     if not answer.get("ok"):
         return problems
     route = "context" if answer.get("from_context") else "live"
@@ -115,9 +115,21 @@ def main() -> int:
                     return {"_http": result.status, "_text": result.text()[:300]}
                 return result.json()
 
+            # Expectations name datasets; ids differ between clusters.
+            registered = api("GET", "datasets")
+            names = {str(d["id"]): d["dataset_name"] for d in (registered if isinstance(registered, list) else [])}
+            missing = sorted({q["expect"]["dataset"] for q in questions if q["expect"].get("dataset")} - set(names.values()))
+            if missing:
+                print(f"not registered here, questions on them are skipped: {', '.join(missing)}")
+
             answers: dict[str, dict[str, Any]] = {}
             results = []
+            skipped = []
             for q in questions:
+                if q["expect"].get("dataset") in missing:
+                    skipped.append(q["id"])
+                    print(f"SKIP {q['id']:4}        {q['expect']['dataset']:11} {q['q'][:60]}", flush=True)
+                    continue
                 body: dict[str, Any] = {"question": q["q"]}
                 if q.get("follow_up_of"):
                     prev = answers.get(q["follow_up_of"]) or {}
@@ -143,7 +155,7 @@ def main() -> int:
                         live = {"seconds": round(time.time() - t1, 2), "error": f"HTTP {executed['_http']} {executed['_text']}"}
                     else:
                         live = {"seconds": round(time.time() - t1, 2), "rows": executed.get("rows") or executed.get("data") or []}
-                problems = check(q["expect"], answer, live)
+                problems = check(q["expect"], answer, live, names)
                 if "_http" in answer:
                     problems.insert(0, f"HTTP {answer['_http']} {answer['_text']}")
                 if live and live.get("error"):
@@ -164,13 +176,13 @@ def main() -> int:
 
     failed = [r for r in results if r["problems"]]
     summary = {"asked": len(results), "passed": len(results) - len(failed), "failed": len(failed),
-               "by_group": {}, "results": results}
+               "skipped": skipped, "by_group": {}, "results": results}
     for r in results:
         g = summary["by_group"].setdefault(r["group"], {"passed": 0, "failed": 0})
         g["failed" if r["problems"] else "passed"] += 1
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
-    print(f"\n{summary['passed']}/{summary['asked']} passed; report {args.report}")
+    print(f"\n{summary['passed']}/{summary['asked']} passed{f', {len(skipped)} skipped' if skipped else ''}; report {args.report}")
     return 0 if not failed else 1
 
 
