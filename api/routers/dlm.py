@@ -104,7 +104,7 @@ def status(dataset_id: str, ctx: UserContext = Depends(require_user_context)):
 def get_context(dataset_id: str, ctx: UserContext = Depends(require_user_context)):
     """The dataset's curatable context spec — auto-suggested defaults overlaid with
     human curation — for the context editor."""
-    spec = dlm.get_context_spec(dataset_id)
+    spec = dlm.get_context_spec(dataset_id, ctx.email, ctx.role)
     if not spec.get("ok"):
         raise HTTPException(status_code=404, detail=spec.get("reason", "no_artifact"))
     return spec
@@ -116,7 +116,7 @@ def put_context(dataset_id: str, body: CurationBody,
     """Save human curation overrides (aliases, breakdowns, additivity, value aliases,
     default metric). Returns needs_regenerate=true when a breakdown/depth change means
     the precomputed answers must be rebuilt."""
-    result = dlm.save_curation(dataset_id, body.dict())
+    result = dlm.save_curation(dataset_id, body.dict(), ctx.email)
     if not result.get("ok"):
         raise HTTPException(status_code=404, detail=result.get("reason", "save_failed"))
     return result
@@ -207,7 +207,7 @@ def curate_dashboard(dashboard_id: str,
                      ctx: UserContext = Depends(require_min_role("Analyst"))):
     """Precompute N-dim answer combos for a dashboard's filter×chart definitions.
     Multi-filter interactions serve instantly from context after curation."""
-    result = dlm.curate_dashboard(dashboard_id)
+    result = dlm.curate_dashboard(dashboard_id, ctx.email)
     if not result.get("ok"):
         raise HTTPException(status_code=404, detail=result.get("reason", "curation_failed"))
     return result

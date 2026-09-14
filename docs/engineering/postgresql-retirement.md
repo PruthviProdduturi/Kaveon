@@ -429,6 +429,14 @@ transaction and outbox path. Immutable bytes deliberately precede the KaveonDB
 transaction, so a failed metadata commit can leave an unreferenced object but
 can never expose a ready run whose bytes are missing or divergent.
 
+The retirement compiler holds value-index rows, router terms and precomputed
+answers in request-local bounded state rather than writing its five legacy DLM
+tables. Native source discovery and all build scans use the Engine bridge. The
+state, including preserved human curation, is sealed into the immutable compiled
+artifact before the KaveonDB run becomes ready. Context edits use the same
+create-only artifact and new-run path. The non-retirement compiler continues to
+use its existing metadata tables and outbox contract.
+
 A credential-free rehearsal bundle can now bind completed definition/run
 checkpoints, artifact receipts, source watermarks, exact revision bindings,
 KaveonDB snapshot/generations and reconciliation results. Its verifier rejects

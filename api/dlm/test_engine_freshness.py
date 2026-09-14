@@ -12,6 +12,26 @@ from dlm import engine
 
 
 class ChartFreshnessTests(unittest.TestCase):
+    def test_retirement_curation_creates_new_immutable_generation_without_metadata_write(self):
+        artifact = {
+            "dataset_id": "24", "version": 2,
+            "manifest": {"name": "T", "context_spec": {"metrics": {}, "dimensions": {},
+                                                               "value_aliases": {}}},
+            "stats_rollup": {}, "usage_rollup": {}, "source_hash": "s",
+            "built_at": "old", "status": "ready", "values_indexed": 0,
+            "compiled_context": {"values": [], "answers": [], "sketches": [],
+                                 "router": {}, "curation": {}},
+        }
+        with patch("services.postgresql_retirement_runtime.requested", return_value=True), \
+             patch.object(engine, "get_dlm", return_value=artifact), \
+             patch("services.dlm_generation_cutover.publish") as publish, \
+             patch.object(engine.meta, "execute", side_effect=AssertionError("PostgreSQL write reached")):
+            result = engine.save_curation("24", {"default_metric": "Revenue"}, "owner")
+        self.assertTrue(result["ok"])
+        next_payload = publish.call_args.args[0]
+        self.assertNotIn("version", next_payload)
+        self.assertEqual(next_payload["compiled_context"]["curation"]["default_metric"], "Revenue")
+
     def test_native_catalog_build_queries_use_engine_bridge(self):
         bridge_result = {
             "columns": [{"name": "country"}, {"name": "total"}],
@@ -80,19 +100,26 @@ class ChartFreshnessTests(unittest.TestCase):
         dataset = {"id": "24", "dataset_name": "T", "database_name": "OpenSource",
                    "schema_name": "s", "fact_table": "t", "columns": [], "metrics": [],
                    "dimensions": [], "created_by": "owner"}
-        stubs = {"_analyze_tables": None, "_value_inventory": [], "_usage_rollup": {},
-                 "_stats_rollup": {}, "_native_row_counts": {}, "_manifest": {"name": "T"},
-                 "_persist_value_index": None, "_upsert_artifact": None, "_upsert_router": None,
-                 "_effective_spec": {}, "_curate_linked_dashboards": 0}
+        expected_value = {"id": "v", "dataset_id": "24", "element_key": "region",
+                 "value_text": "West", "value_norm": "west", "key_column": "region",
+                 "key_value": "West", "freq": 1.0, "source": "test"}
+        stubs = {"_analyze_tables": None, "_value_inventory": [expected_value], "_usage_rollup": {},
+                 "_stats_rollup": {}, "_native_row_counts": {}}
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch.object(engine, "ensure_tables", lambda: None))
             stack.enter_context(patch.object(engine.datasets_svc, "get_dataset_by_id", return_value=dataset))
+            stack.enter_context(patch.object(engine, "get_dlm", return_value=None))
             stack.enter_context(patch.object(engine.profiler, "build_context", return_value={"supported": False}))
-            stack.enter_context(patch.object(engine.meta, "query_one", return_value={"status": "ready"}))
+            stack.enter_context(patch.object(engine.meta, "query_one",
+                                             side_effect=AssertionError("PostgreSQL read reached")))
+            stack.enter_context(patch.object(engine.meta, "query",
+                                             side_effect=AssertionError("PostgreSQL read reached")))
+            stack.enter_context(patch.object(engine.meta, "execute",
+                                             side_effect=AssertionError("PostgreSQL write reached")))
             stack.enter_context(patch.object(engine.meta, "transaction",
                                              side_effect=AssertionError("PostgreSQL transaction reached")))
-            stack.enter_context(patch.object(engine, "_precompute_answers", return_value=3))
             stack.enter_context(patch("services.postgresql_retirement_runtime.requested", return_value=True))
+            stack.enter_context(patch("services.product_store.list_records", return_value=[]))
             direct = stack.enter_context(patch("services.dlm_generation_cutover.publish"))
             for name, value in stubs.items():
                 stack.enter_context(patch.object(engine, name, lambda *a, _v=value, **k: _v))
@@ -101,6 +128,9 @@ class ChartFreshnessTests(unittest.TestCase):
         direct.assert_called_once()
         self.assertEqual(direct.call_args.args[0]["dataset_id"], "24")
         self.assertNotIn("version", direct.call_args.args[0])
+        self.assertEqual(set(direct.call_args.args[0]["compiled_context"]),
+                         {"values", "answers", "sketches", "router", "curation"})
+        self.assertEqual(direct.call_args.args[0]["compiled_context"]["values"], [expected_value])
 
     def test_external_source_without_statistics_gets_no_value_index(self):
         columns = [{"table_name": "t", "column_name": "region", "is_dimension": True}]

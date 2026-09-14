@@ -12,6 +12,11 @@ MAX_BYTES = 16 * 1024 * 1024
 LIVE_PUBLISH_KEY = "KAVEON_DLM_LIVE_ARTIFACT_PUBLISH_ENABLED"
 _FIELDS = frozenset({"dataset_id", "version", "manifest", "stats_rollup", "usage_rollup",
                      "source_hash", "built_at", "status", "values_indexed"})
+_RETIREMENT_FIELDS = _FIELDS | {"compiled_context"}
+
+
+def _valid_fields(payload: dict) -> bool:
+    return set(payload) in (_FIELDS, _RETIREMENT_FIELDS)
 
 
 def _canonical(value: dict) -> bytes:
@@ -29,8 +34,15 @@ def publish(payload: dict) -> dict | None:
     """Create and reconcile immutable bytes; disabled mode preserves legacy builds."""
     if os.getenv(LIVE_PUBLISH_KEY) != "true":
         return None
-    if set(payload) != _FIELDS or payload.get("status") != "ready":
+    if not _valid_fields(payload) or payload.get("status") != "ready":
         raise RuntimeError("Compiled DLM artifact payload is invalid")
+    context = payload.get("compiled_context")
+    if context is not None and (not isinstance(context, dict)
+            or set(context) != {"values", "answers", "sketches", "router", "curation"}
+            or not isinstance(context["values"], list) or not isinstance(context["answers"], list)
+            or not isinstance(context["sketches"], list) or not isinstance(context["router"], dict)
+            or not isinstance(context["curation"], dict)):
+        raise RuntimeError("Compiled DLM context payload is invalid")
     dataset_id, version = str(payload.get("dataset_id") or ""), payload.get("version")
     if not dataset_id.isdecimal() or type(version) is not int or version < 1:
         raise RuntimeError("Compiled DLM artifact identity is invalid")
@@ -102,7 +114,7 @@ def read(dataset_id: str, actor: str, role: str) -> dict | None:
         payload = json.loads(content)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise RuntimeError("Compiled DLM artifact JSON is invalid") from error
-    if (not isinstance(payload, dict) or set(payload) != _FIELDS
+    if (not isinstance(payload, dict) or not _valid_fields(payload)
             or payload.get("dataset_id") != dataset_id or payload.get("version") != version
             or payload.get("status") != "ready" or not isinstance(payload.get("manifest"), dict)
             or not isinstance(payload.get("stats_rollup"), dict)
