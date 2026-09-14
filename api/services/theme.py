@@ -22,6 +22,11 @@ def _observe(result: dict, user_email: str) -> None:
 
 
 def get_user_theme(user_email: str) -> dict:
+    from services import product_read_authority
+    if product_read_authority.enabled("user_themes"):
+        document = product_read_authority.read_document(
+            "user_themes", user_email, user_email, "Viewer")
+        return {"theme_color": document.get("theme_color", DEFAULT_COLOR)} if document else {"theme_color": DEFAULT_COLOR}
     entry = _cache.get(user_email)
     if entry and time.monotonic() < entry[1]:
         result = {"theme_color": entry[0]}

@@ -17,6 +17,10 @@ def _event(tx,operation,row,actor):
 
 
 def get_recents(user_email: str) -> List[dict]:
+    from services import product_read_authority
+    if product_read_authority.enabled("user_recents"):
+        rows = product_read_authority.list_documents("user_recents", user_email, "Viewer")[:20]
+        return [{key: row.get(key) for key in ("item_id", "label", "href", "type", "created_at")} for row in rows]
     rows=db.query("""
         SELECT item_id, label, href, type, created_at
         FROM user_recents

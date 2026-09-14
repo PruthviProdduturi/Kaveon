@@ -19,6 +19,14 @@ def _document(owner, row):
 
 
 def list_favorites(user_id: str) -> List[dict]:
+    from services import product_read_authority
+    if product_read_authority.enabled("favorites"):
+        documents = product_read_authority.list_documents("favorites", user_id, "Viewer")
+        return [{"favorite_id": _record_id(user_id, item["object_type"], item["object_id"]),
+                 "kind": item["object_type"], "id": item["object_id"],
+                 "name": item.get("object_name"), "owner": user_id,
+                 "created_at": None, "updated_at": None, "favorited_at": None}
+                for item in documents]
     charts = db.query("""
         SELECT
             f.id as favorite_id, 'chart' as kind,
@@ -60,6 +68,10 @@ def list_favorites(user_id: str) -> List[dict]:
 
 
 def is_favorite(user_id: str, object_type: str, object_id: str) -> bool:
+    from services import product_read_authority
+    if product_read_authority.enabled("favorites"):
+        return product_read_authority.read_document(
+            "favorites", _record_id(user_id, object_type, object_id), user_id, "Viewer") is not None
     result = db.query_one("""
         SELECT COUNT(*) as count FROM favorites
         WHERE user_email = @param0 AND object_type = @param1 AND object_id = @param2

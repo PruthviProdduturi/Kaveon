@@ -78,6 +78,11 @@ def _engine_metadata(data: dict) -> tuple[Optional[str], Optional[str]]:
 
 
 def list_history(user_id: Optional[str], limit: int = 50) -> List[dict]:
+    from services import product_read_authority
+    if product_read_authority.enabled("query_history"):
+        actor = user_id if user_id and user_id != "all" else "kaveon-system"
+        role = "Admin" if not user_id or user_id == "all" else "Viewer"
+        return product_read_authority.list_documents("query_history", actor, role)[:limit]
     columns = _BASE_COLS + (_ENGINE_COLS if _supports_engine_details() else "")
     fetch_all = not user_id or user_id == "all"
     if fetch_all:
