@@ -382,8 +382,19 @@ def generate_dlm(dataset_id: str, force: bool = False, actor: Optional[str] = No
     }
 
     if artifact_status == "ready":
-        from services import dlm_definition_mutations
+        from services import dlm_compiled_artifact, dlm_definition_mutations
         publication_actor = actor or str(ds.get("modified_by") or ds.get("created_by") or "")
+        artifact_row = meta.query_one(
+            "SELECT version, source_hash, built_at FROM dlm_artifact WHERE dataset_id = @param0",
+            [str(dataset_id)],
+        ) or {}
+        compiled = dlm_compiled_artifact.publish({
+            "dataset_id": str(dataset_id), "version": artifact_row.get("version"),
+            "manifest": manifest, "stats_rollup": stats_rollup,
+            "usage_rollup": usage_rollup, "source_hash": artifact_row.get("source_hash"),
+            "built_at": str(artifact_row.get("built_at") or ""), "status": "ready",
+            "values_indexed": len(value_rows),
+        })
         with meta.transaction() as transaction:
             changed = transaction.execute(
                 "UPDATE dlm_artifact SET status = 'ready', stats_rollup = @param0 "
@@ -392,9 +403,12 @@ def generate_dlm(dataset_id: str, force: bool = False, actor: Optional[str] = No
             )
             if changed != 1:
                 raise RuntimeError("DLM artifact disappeared before ready publication")
-            dlm_definition_mutations.publish_ready(
+            definition = dlm_definition_mutations.publish_ready(
                 transaction, str(dataset_id), publication_actor,
             )
+            if compiled is not None:
+                dlm_compiled_artifact.enqueue_run(transaction, str(dataset_id),
+                    definition.owner, publication_actor, definition.revision, compiled)
 
     return {
         "ok": True,
@@ -712,8 +726,14 @@ def _build_sketch_cuboids(dataset_id: str, database: str, schema: str, fact: Opt
     return built
 
 
-def get_dlm(dataset_id: str) -> Optional[Dict[str, Any]]:
+def get_dlm(dataset_id: str, actor: Optional[str] = None, role: str = "Viewer") -> Optional[Dict[str, Any]]:
     """Return the compiled artifact row (manifest/rollups parsed) or None."""
+    from services import postgresql_retirement_runtime
+    if postgresql_retirement_runtime.requested():
+        if not actor:
+            raise RuntimeError("PostgreSQL-free DLM reads require actor identity")
+        from services import dlm_compiled_artifact
+        return dlm_compiled_artifact.read(str(dataset_id), actor, role)
     ensure_tables()
     row = meta.query_one(
         "SELECT dataset_id, version, manifest, stats_rollup, usage_rollup, "

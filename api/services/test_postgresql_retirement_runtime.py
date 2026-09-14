@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from services import postgresql_retirement_gate as gate
 from services import postgresql_retirement_runtime as runtime
+from services import product_read_authority
 
 
 NOW = datetime(2026, 9, 14, 20, 0, tzinfo=timezone.utc)
@@ -59,8 +60,11 @@ class RetirementRuntimeTests(unittest.TestCase):
                 runtime.MODE_KEY: "true", runtime.EVIDENCE_KEY: str(path),
                 runtime.AUDIT_KEY: str(audit_path),
                 runtime.AUTHORITY_KEY: ",".join(gate.AUTHORITY_FAMILIES),
+                product_read_authority.ENVIRONMENT_KEY: ",".join(product_read_authority.SUPPORTED_FAMILIES),
                 "KAVEON_ENGINE_URL": "https://engine.example.test",
                 "KAVEON_ENGINE_BRIDGE_TOKEN": "test-token",
+                "KAVEON_DLM_LIVE_ARTIFACT_PUBLISH_ENABLED": "true",
+                "KAVEON_ADLS_ACCOUNT": "account", "KAVEON_ADLS_CONTAINER": "artifacts",
             }
             with patch.dict(os.environ, environment, clear=True), \
                  patch.object(runtime.engine_bridge, "_verify_context", return_value=True):
@@ -86,8 +90,11 @@ class RetirementRuntimeTests(unittest.TestCase):
         environment = {
             runtime.REHEARSAL_MODE_KEY: "true",
             runtime.AUTHORITY_KEY: ",".join(gate.AUTHORITY_FAMILIES),
+            product_read_authority.ENVIRONMENT_KEY: ",".join(product_read_authority.SUPPORTED_FAMILIES),
             "KAVEON_ENGINE_URL": "https://engine.example.test",
             "KAVEON_ENGINE_BRIDGE_TOKEN": "test-token",
+            "KAVEON_DLM_LIVE_ARTIFACT_PUBLISH_ENABLED": "true",
+            "KAVEON_ADLS_ACCOUNT": "account", "KAVEON_ADLS_CONTAINER": "artifacts",
         }
         prerequisites = {"authority_family_count": 16, "evidence_sha256": "a" * 64,
                          "checked_at": "2026-09-14T20:00:00Z", "phase": "restart_rehearsal"}
@@ -103,6 +110,14 @@ class RetirementRuntimeTests(unittest.TestCase):
         environment = {runtime.MODE_KEY: "true", runtime.REHEARSAL_MODE_KEY: "true",
                        runtime.AUTHORITY_KEY: ",".join(gate.AUTHORITY_FAMILIES)}
         with patch.dict(os.environ, environment, clear=True), self.assertRaisesRegex(RuntimeError, "mutually exclusive"):
+            runtime.validate(now=NOW)
+
+    def test_retirement_rejects_partial_runtime_read_cutover(self):
+        environment = {runtime.REHEARSAL_MODE_KEY: "true",
+            runtime.AUTHORITY_KEY: ",".join(gate.AUTHORITY_FAMILIES),
+            product_read_authority.ENVIRONMENT_KEY: "datasets,charts"}
+        with patch.dict(os.environ, environment, clear=True), \
+             self.assertRaisesRegex(RuntimeError, "read-authority"):
             runtime.validate(now=NOW)
 
 

@@ -1,6 +1,15 @@
 """Atomic publication of the ready-DLM definition migration event."""
 
+from dataclasses import dataclass
+
 from services import product_outbox, product_store
+
+
+@dataclass(frozen=True)
+class DefinitionPublication:
+    event: object
+    owner: str
+    revision: int
 
 
 def publish_ready(transaction, dataset_id: str, actor: str):
@@ -31,7 +40,15 @@ def publish_ready(transaction, dataset_id: str, actor: str):
     document = {"dataset_id": dataset_id, "dataset_revision": revision}
     existing = product_store.read("dlm_definition", dataset_id, owner, "Admin")
     operation = "create" if existing is None else "update"
-    return product_outbox.enqueue(
+    if existing is None:
+        resulting_revision = 1
+    else:
+        current_revision = existing.get("revision")
+        if type(current_revision) is not int or current_revision < 1:
+            raise RuntimeError("KaveonDB DLM definition revision is invalid")
+        resulting_revision = current_revision if existing.get("document") == document else current_revision + 1
+    event = product_outbox.enqueue(
         transaction, family="dlm_definitions", operation=operation,
         record_id=dataset_id, payload=document, actor=actor, owner=owner,
     )
+    return DefinitionPublication(event, owner, resulting_revision)
