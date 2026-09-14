@@ -20,6 +20,27 @@ spec:
       restartPolicy: Never
       automountServiceAccountToken: false
       securityContext: {runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001, seccompProfile: {type: RuntimeDefault}}
+      initContainers:
+        - name: wait-for-api
+          image: {{ include "portal.image" (list .Values.images.api "api") }}
+          command: [python, -c]
+          args:
+            - |
+              import json,time,urllib.request
+              endpoint={{ .Values.api.postgresqlFreeSmoke.baseUrl | quote }}.rstrip("/")+"/api/health"
+              for attempt in range(120):
+                  try:
+                      with urllib.request.urlopen(endpoint,timeout=3) as response:
+                          value=json.load(response)
+                      if response.status==200 and value.get("status")=="healthy" and value.get("authority")=="kaveondb":break
+                  except Exception:
+                      pass
+                  if attempt==119:raise RuntimeError("PostgreSQL-free API did not become ready")
+                  time.sleep(1)
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 64Mi}
       containers:
         - name: smoke
           image: {{ include "portal.image" (list .Values.images.api "api") }}
