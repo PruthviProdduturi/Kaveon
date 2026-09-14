@@ -2307,9 +2307,16 @@ def maybe_auto_rebuild(dataset_id: str) -> Optional[bool]:
 _SWEEP_INTERVAL_SECONDS = 1800.0  # 30 minutes
 
 
+def _postgresql_freshness_sweep_disabled() -> bool:
+    from services import postgresql_retirement_runtime, postgresql_write_fence
+    return postgresql_write_fence.enabled() or postgresql_retirement_runtime.requested()
+
+
 def freshness_sweep() -> Dict[str, Any]:
     """Check all datasets and trigger rebuilds for any that are stale. Returns
     a summary of what was found and triggered — useful for cron/health checks."""
+    if _postgresql_freshness_sweep_disabled():
+        return {"checked": 0, "stale": 0, "triggered": 0, "datasets": []}
     ensure_tables()
     arts = meta.query("SELECT dataset_id FROM dlm_artifact WHERE status = 'ready'", [])
     results: Dict[str, Any] = {"checked": 0, "stale": 0, "triggered": 0, "datasets": []}
@@ -2329,6 +2336,9 @@ def freshness_sweep() -> Dict[str, Any]:
 def _start_sweep_loop():
     """Background loop that runs freshness_sweep periodically. Started once at
     import time so DLM context stays fresh without requiring user traffic."""
+    if _postgresql_freshness_sweep_disabled():
+        return
+
     def _loop():
         import time as _t
         _t.sleep(30)  # let the app finish startup
