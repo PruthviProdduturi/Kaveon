@@ -34,6 +34,8 @@ import threading
 import time as _time_mod
 import unicodedata
 import uuid
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -44,6 +46,23 @@ import services.datasets as datasets_svc
 import dlm.hll as hll
 
 logger = logging.getLogger(__name__)
+
+_MAX_COMPILED_INDEX_ROWS = 10_000
+
+
+@dataclass
+class _RetirementBuildState:
+    values: List[Dict[str, Any]] = field(default_factory=list)
+    answers: List[Dict[str, Any]] = field(default_factory=list)
+    sketches: List[Dict[str, Any]] = field(default_factory=list)
+    router: Dict[str, Any] = field(default_factory=dict)
+    manifest: Dict[str, Any] = field(default_factory=dict)
+    curation: Dict[str, Any] = field(default_factory=dict)
+
+
+_RETIREMENT_BUILD: ContextVar[Optional[_RetirementBuildState]] = ContextVar(
+    "dlm_retirement_build", default=None,
+)
 
 # Low-cardinality dimensions get a value index; high-card columns (ids, free
 # text) are matched structurally, never by value.
@@ -218,6 +237,8 @@ _tables_ready = False
 
 def ensure_tables() -> None:
     global _tables_ready
+    if _RETIREMENT_BUILD.get() is not None:
+        return
     if _tables_ready:
         return
     for stmt in filter(str.strip, _DDL.split(";")):
@@ -231,6 +252,19 @@ def ensure_tables() -> None:
 
 
 def generate_dlm(dataset_id: str, force: bool = False, actor: Optional[str] = None) -> Dict[str, Any]:
+    from services import postgresql_retirement_runtime
+    if not postgresql_retirement_runtime.requested():
+        return _generate_dlm_impl(dataset_id, force, actor)
+    state = _RetirementBuildState()
+    token = _RETIREMENT_BUILD.set(state)
+    try:
+        return _generate_dlm_impl(dataset_id, force, actor)
+    finally:
+        _RETIREMENT_BUILD.reset(token)
+
+
+def _generate_dlm_impl(dataset_id: str, force: bool = False,
+                       actor: Optional[str] = None) -> Dict[str, Any]:
     """Compile (or refresh) the DLM artifact for one dataset. Idempotent: a
     matching ``source_hash`` short-circuits unless *force*. Returns a summary."""
     import time as _time
@@ -241,6 +275,16 @@ def generate_dlm(dataset_id: str, force: bool = False, actor: Optional[str] = No
     if not ds:
         return {"ok": False, "reason": "dataset_not_found", "dataset_id": dataset_id}
 
+    state = _RETIREMENT_BUILD.get()
+    prior_artifact = None
+    if state is not None:
+        if not actor:
+            raise RuntimeError("Retirement DLM generation requires actor identity")
+        prior_artifact = get_dlm(str(dataset_id), actor, "Admin")
+        prior_context = prior_artifact.get("compiled_context") if prior_artifact else None
+        if isinstance(prior_context, dict) and isinstance(prior_context.get("curation"), dict):
+            state.curation = dict(prior_context["curation"])
+
     database = ds.get("database_name") or _metadata_database()
     schema = ds.get("schema_name") or "public"
     columns = ds.get("columns") or []
@@ -250,10 +294,13 @@ def generate_dlm(dataset_id: str, force: bool = False, actor: Optional[str] = No
     # 1) fingerprint the structural definition — cheap change-detection
     source_hash = _fingerprint(ds, columns, dimensions, metrics)
     if not force:
-        existing = meta.query_one(
-            "SELECT source_hash, status FROM dlm_artifact WHERE dataset_id = @param0",
-            [str(dataset_id)],
-        )
+        if state is not None:
+            existing = prior_artifact
+        else:
+            existing = meta.query_one(
+                "SELECT source_hash, status FROM dlm_artifact WHERE dataset_id = @param0",
+                [str(dataset_id)],
+            )
         if existing and existing.get("source_hash") == source_hash and existing.get("status") == "ready":
             return {"ok": True, "dataset_id": dataset_id, "status": "ready", "rebuilt": False}
 
@@ -263,8 +310,9 @@ def generate_dlm(dataset_id: str, force: bool = False, actor: Optional[str] = No
     try:
         _analyze_tables(database, schema, _dataset_tables(columns, dimensions,
                         ds.get("table_name") or ds.get("fact_table")))
-        prof = profiler.build_context(database, schema)
-        stats_supported = bool(prof.get("supported"))
+        if _RETIREMENT_BUILD.get() is None:
+            prof = profiler.build_context(database, schema)
+            stats_supported = bool(prof.get("supported"))
     except Exception:
         stats_supported = False
 
@@ -273,10 +321,11 @@ def generate_dlm(dataset_id: str, force: bool = False, actor: Optional[str] = No
     # than replacing it with less, but an explicit force always rebuilds —
     # native catalogs never have a profiler, so this is their only path.
     if not stats_supported and not force:
-        existing_art = meta.query_one(
-            "SELECT status FROM dlm_artifact WHERE dataset_id = @param0",
-            [str(dataset_id)],
-        )
+        existing_art = (prior_artifact if state is not None
+                        else meta.query_one(
+                            "SELECT status FROM dlm_artifact WHERE dataset_id = @param0",
+                            [str(dataset_id)],
+                        ))
         if existing_art and existing_art.get("status") == "ready":
             logger.info("Profiler unavailable for dataset %s — preserving existing ready artifact", dataset_id)
             return {"ok": True, "dataset_id": dataset_id, "status": "ready",
@@ -353,12 +402,13 @@ def generate_dlm(dataset_id: str, force: bool = False, actor: Optional[str] = No
     #    that reference this dataset, so multi-filter interactions serve instantly.
     dash_answers = 0
     try:
-        dash_answers = _curate_linked_dashboards(str(dataset_id))
+        dash_answers = _curate_linked_dashboards(str(dataset_id), actor)
         if dash_answers:
             answers += dash_answers
             _evict_answers(str(dataset_id))
     except Exception:
-        pass
+        if _RETIREMENT_BUILD.get() is not None:
+            raise
 
     # 10) watermark — track row count + max date for incremental refresh
     row_count = max((stats_rollup.get("row_counts") or {}).values(), default=0)
@@ -386,11 +436,17 @@ def generate_dlm(dataset_id: str, force: bool = False, actor: Optional[str] = No
         from services import postgresql_retirement_runtime
         if postgresql_retirement_runtime.requested():
             from services import dlm_generation_cutover
+            state = _RETIREMENT_BUILD.get()
+            if state is None:
+                raise RuntimeError("Retirement DLM build state is missing")
             dlm_generation_cutover.publish({
                 "dataset_id": str(dataset_id), "manifest": manifest,
                 "stats_rollup": stats_rollup, "usage_rollup": usage_rollup,
                 "source_hash": source_hash, "built_at": _now_iso(),
                 "status": "ready", "values_indexed": len(value_rows),
+                "compiled_context": {"values": state.values, "answers": state.answers,
+                    "sketches": state.sketches, "router": state.router,
+                    "curation": state.curation},
             }, publication_actor)
         else:
             from services import dlm_compiled_artifact, dlm_definition_mutations
@@ -459,7 +515,8 @@ def _precompute_answers(dataset_id: str, database: str, schema: str, fact: Optio
     skipped: List[Dict[str, str]] = []
     if report is not None:
         report["skipped"] = skipped
-    meta.execute("DELETE FROM dlm_answers WHERE dataset_id = @param0", [dataset_id])
+    if _RETIREMENT_BUILD.get() is None:
+        meta.execute("DELETE FROM dlm_answers WHERE dataset_id = @param0", [dataset_id])
     if not fact or not metrics:
         return 0
 
@@ -578,6 +635,13 @@ def _precompute_answers(dataset_id: str, database: str, schema: str, fact: Optio
 
 def _store_answer(dataset_id: str, metric_name: str, group_col: str,
                   cols: List[str], rows: List[list], now: str) -> None:
+    state = _RETIREMENT_BUILD.get()
+    if state is not None:
+        if len(state.answers) >= _MAX_COMPILED_INDEX_ROWS:
+            raise RuntimeError("Compiled DLM answer index exceeds its row bound")
+        state.answers.append({"metric_name": metric_name, "group_col": group_col,
+                              "columns": cols, "rows": rows, "computed_at": now})
+        return
     meta.execute(
         "INSERT INTO dlm_answers (id, dataset_id, metric_name, group_col, columns, rows, computed_at) "
         "VALUES (@param0,@param1,@param2,@param3,@param4,@param5,@param6) "
@@ -655,6 +719,8 @@ def _build_sketch_cuboids(dataset_id: str, database: str, schema: str, fact: Opt
     cuboids built. Postgres-only (register SQL is dialect-specific); other engines
     skip cleanly — the live path is unchanged for them."""
     import database.pool as pool
+    if _RETIREMENT_BUILD.get() is not None:
+        return 0
     if not fact:
         return 0
     try:
@@ -2698,17 +2764,19 @@ def _precompute_n_dim(dataset_id: str, database: str, schema: str, fact: str,
             stored += 1
         return stored
     except Exception:
+        if _RETIREMENT_BUILD.get() is not None:
+            raise
         return 0
 
 
-def _dashboard_combos(dashboard_id: str) -> Dict[str, set]:
+def _dashboard_combos(dashboard_id: str, actor: Optional[str] = None) -> Dict[str, set]:
     """Derive per-dataset N-dim combos from a dashboard's filters × chart groupbys.
     Returns {dataset_id: set of dim tuples (sorted, 3+ dims)}."""
     from itertools import combinations as _combs
     import services.charts as chart_svc
     import services.dashboards as dash_svc
 
-    dash = dash_svc.get_dashboard_by_id(dashboard_id)
+    dash = dash_svc.get_dashboard_by_id(dashboard_id, actor, "Admin")
     if not dash:
         return {}
 
@@ -2724,7 +2792,7 @@ def _dashboard_combos(dashboard_id: str) -> Dict[str, set]:
 
     ds_groupbys: Dict[str, set] = {}
     for cid in chart_ids:
-        chart = chart_svc.get_chart_by_id(str(cid))
+        chart = chart_svc.get_chart_by_id(str(cid), actor, "Admin")
         if not chart:
             continue
         qc = _loads(chart.get("query_config")) or {}
@@ -2755,11 +2823,11 @@ def _dashboard_combos(dashboard_id: str) -> Dict[str, set]:
     return result
 
 
-def curate_dashboard(dashboard_id: str) -> Dict[str, Any]:
+def curate_dashboard(dashboard_id: str, actor: Optional[str] = None) -> Dict[str, Any]:
     """Precompute N-dim answer combos driven by a dashboard's filter×chart definitions.
     Stores in the same dlm_answers table — serve_chart picks them up transparently."""
     ensure_tables()
-    combo_map = _dashboard_combos(dashboard_id)
+    combo_map = _dashboard_combos(dashboard_id, actor)
     if not combo_map:
         return {"ok": False, "reason": "no_combos_needed"}
 
@@ -2768,7 +2836,7 @@ def curate_dashboard(dashboard_id: str) -> Dict[str, Any]:
     now = _now_iso()
 
     for ds_id, combos in combo_map.items():
-        ds = datasets_svc.get_dataset_by_id(ds_id)
+        ds = datasets_svc.get_dataset_by_id(ds_id, actor, "Admin")
         if not ds:
             continue
         database = ds.get("database_name") or ds.get("database")
@@ -2804,14 +2872,25 @@ def curate_dashboard(dashboard_id: str) -> Dict[str, Any]:
     }
 
 
-def _curate_linked_dashboards(dataset_id: str) -> int:
+def _curate_linked_dashboards(dataset_id: str, actor: Optional[str] = None) -> int:
     """Find dashboards that reference this dataset and curate their N-dim combos.
     Called at the end of generate_dlm to keep dashboard curation in sync."""
     try:
-        rows = meta.query(
-            "SELECT id, charts, filters FROM dashboards", [])
-        all_dashes = rows.get("rows_objects", rows.get("rows", []))
+        if _RETIREMENT_BUILD.get() is not None:
+            if not actor:
+                raise RuntimeError("Retirement dashboard curation requires actor identity")
+            from services import product_store
+            all_dashes = []
+            for record in product_store.list_records("dashboard", actor, "Admin", max_records=1000):
+                document = record.get("document")
+                if isinstance(document, dict):
+                    all_dashes.append({"id": record.get("id"), **document})
+        else:
+            rows = meta.query("SELECT id, charts, filters FROM dashboards", [])
+            all_dashes = rows.get("rows_objects", rows.get("rows", []))
     except Exception:
+        if _RETIREMENT_BUILD.get() is not None:
+            raise
         return 0
 
     curated = 0
@@ -2832,7 +2911,7 @@ def _curate_linked_dashboards(dataset_id: str) -> int:
             for cid in charts_raw:
                 try:
                     import services.charts as chart_svc
-                    chart = chart_svc.get_chart_by_id(str(cid))
+                    chart = chart_svc.get_chart_by_id(str(cid), actor, "Admin")
                     if chart:
                         qc = _loads(chart.get("query_config")) or {}
                         cds = str(qc.get("dataset_id") or "")
@@ -2843,7 +2922,7 @@ def _curate_linked_dashboards(dataset_id: str) -> int:
                     continue
 
         if str(dataset_id) in ds_ids and dash_id:
-            result = curate_dashboard(str(dash_id))
+            result = curate_dashboard(str(dash_id), actor)
             if result.get("ok"):
                 curated += result.get("answers_stored", 0)
     return curated
@@ -3364,6 +3443,8 @@ def _native_row_counts(database: str, schema: str, tables: List[str]) -> Dict[st
 
 
 def _native_catalog(database: str) -> Optional[Dict[str, Any]]:
+    if _RETIREMENT_BUILD.get() is not None:
+        return {"engine_catalog": database}
     return meta.query_one(
         "SELECT engine_catalog FROM catalog_sources "
         "WHERE engine_catalog = @param0 AND lifecycle = 'active' AND adapter_type = 'native'",
@@ -3432,6 +3513,12 @@ def _usage_rollup(schema: str, columns: List[dict], dimensions: List[dict],
 
 
 def _persist_value_index(dataset_id: str, rows: List[Dict[str, Any]]) -> None:
+    state = _RETIREMENT_BUILD.get()
+    if state is not None:
+        if len(rows) > _MAX_COMPILED_INDEX_ROWS:
+            raise RuntimeError("Compiled DLM value index exceeds its row bound")
+        state.values = [dict(row) for row in rows]
+        return
     meta.execute("DELETE FROM dlm_value_index WHERE dataset_id = @param0", [dataset_id])
     for r in rows:
         try:
@@ -3450,6 +3537,10 @@ def _persist_value_index(dataset_id: str, rows: List[Dict[str, Any]]) -> None:
 
 def _upsert_artifact(dataset_id: str, manifest: dict, stats_rollup: dict,
                      usage_rollup: dict, source_hash: str, status: str) -> None:
+    state = _RETIREMENT_BUILD.get()
+    if state is not None:
+        state.manifest = dict(manifest)
+        return
     now = _now_iso()
     existing = meta.query_one(
         "SELECT version FROM dlm_artifact WHERE dataset_id = @param0", [dataset_id]
@@ -3483,6 +3574,10 @@ def _upsert_router(dataset_id: str, ds: dict, columns: List[dict],
         t for src in [name, desc, *col_names, *met_names, *top_values]
         for t in _tokenize(src)
     })
+    state = _RETIREMENT_BUILD.get()
+    if state is not None:
+        state.router = {"summary": summary, "terms": terms, "updated_at": _now_iso()}
+        return
     now = _now_iso()
     existing = meta.query_one("SELECT dataset_id FROM dlm_router WHERE dataset_id = @param0", [dataset_id])
     terms_json = json.dumps(terms)
@@ -3523,11 +3618,7 @@ def _execute_dataset_query(sql: str, database: str,
     the existing connection pool, bounded by `timeout_seconds` (default: the
     build bound) so one table cannot monopolise a shared server.
     """
-    source = meta.query_one(
-        "SELECT engine_catalog FROM catalog_sources "
-        "WHERE engine_catalog = @param0 AND lifecycle = 'active' AND adapter_type = 'native'",
-        [database],
-    )
+    source = _native_catalog(database)
     if not source:
         return pool.execute_query(sql, database,
                                   timeout_seconds=timeout_seconds or _BUILD_QUERY_TIMEOUT_SECONDS)
@@ -3726,6 +3817,12 @@ def _effective_spec(dataset_id: str) -> dict:
     and on save). Empty spec when no artifact exists."""
     if dataset_id in _SPEC_CACHE:
         return _SPEC_CACHE[dataset_id]
+    state = _RETIREMENT_BUILD.get()
+    if state is not None:
+        suggested = state.manifest.get("context_spec") or {}
+        eff = _merge_spec(suggested, state.curation)
+        _SPEC_CACHE[dataset_id] = eff
+        return eff
     ensure_tables()
     row = meta.query_one(
         "SELECT manifest, curation FROM dlm_artifact WHERE dataset_id = @param0", [dataset_id]) or {}
@@ -3756,9 +3853,25 @@ def _syn(name: str, extra: Optional[Dict[str, List[str]]] = None) -> List[str]:
     return list(base)
 
 
-def get_context_spec(dataset_id: str) -> Dict[str, Any]:
+def get_context_spec(dataset_id: str, actor: Optional[str] = None,
+                     role: str = "Viewer") -> Dict[str, Any]:
     """Effective context spec (suggested ⊕ curation) for the curation editor, with
     the raw pieces so the UI can show default vs edited and offer a reset."""
+    from services import postgresql_retirement_runtime
+    if postgresql_retirement_runtime.requested():
+        if not actor:
+            raise RuntimeError("PostgreSQL-free DLM context reads require actor identity")
+        artifact = get_dlm(str(dataset_id), actor, role)
+        if not artifact:
+            return {"ok": False, "reason": "no_artifact", "dataset_id": str(dataset_id)}
+        context = artifact.get("compiled_context") or {}
+        suggested = (artifact.get("manifest") or {}).get("context_spec") or {}
+        curation = context.get("curation") or {}
+        return {"ok": True, "dataset_id": str(dataset_id),
+                "dataset_name": (artifact.get("manifest") or {}).get("name"),
+                "status": artifact.get("status"), "built_at": artifact.get("built_at"),
+                "suggested": suggested, "curation": curation,
+                "effective": _merge_spec(suggested, curation)}
     ensure_tables()
     row = meta.query_one(
         "SELECT manifest, curation, status, built_at FROM dlm_artifact WHERE dataset_id = @param0",
@@ -3780,10 +3893,32 @@ def get_context_spec(dataset_id: str) -> Dict[str, Any]:
     }
 
 
-def save_curation(dataset_id: str, curation: Any) -> Dict[str, Any]:
+def save_curation(dataset_id: str, curation: Any, actor: Optional[str] = None) -> Dict[str, Any]:
     """Persist human curation overrides. Alias / display / default / value-alias edits
     take effect immediately (caches invalidated). Breakdown / depth edits change what
     is precomputed, so those need a regenerate — flagged as ``needs_regenerate``."""
+    from services import postgresql_retirement_runtime
+    if postgresql_retirement_runtime.requested():
+        if not actor:
+            raise RuntimeError("PostgreSQL-free DLM curation requires actor identity")
+        artifact = get_dlm(str(dataset_id), actor, "Admin")
+        if not artifact:
+            return {"ok": False, "reason": "no_artifact"}
+        context = artifact.get("compiled_context")
+        if not isinstance(context, dict):
+            raise RuntimeError("Compiled DLM context is unavailable for curation")
+        clean = _sanitize_curation(curation)
+        previous = context.get("curation") or {}
+        from services import dlm_generation_cutover
+        next_payload = {key: value for key, value in artifact.items() if key != "version"}
+        next_payload["built_at"] = _now_iso()
+        next_payload["compiled_context"] = {**context, "curation": clean}
+        dlm_generation_cutover.publish(next_payload, actor)
+        suggested = (artifact.get("manifest") or {}).get("context_spec") or {}
+        _SPEC_CACHE.pop(str(dataset_id), None)
+        return {"ok": True, "dataset_id": str(dataset_id),
+                "needs_regenerate": _curation_affects_precompute(previous, clean),
+                "effective": _merge_spec(suggested, clean)}
     ensure_tables()
     row = meta.query_one(
         "SELECT curation FROM dlm_artifact WHERE dataset_id = @param0", [str(dataset_id)])

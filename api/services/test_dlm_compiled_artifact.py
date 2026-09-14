@@ -33,6 +33,17 @@ class CompiledArtifactTests(unittest.TestCase):
         self.assertEqual(result["sha256"], repeated["sha256"])
         self.assertEqual(result["path"], "dlm/7/v2/compiled.json")
 
+    def test_retirement_context_shape_is_strict_and_immutable(self):
+        complete = {**payload(), "compiled_context": {
+            "values": [], "answers": [], "sketches": [], "router": {}, "curation": {},
+        }}
+        client = Client()
+        with patch.dict(os.environ, {artifact.LIVE_PUBLISH_KEY: "true"}, clear=True), \
+             patch.object(artifact, "_client", return_value=client):
+            self.assertEqual(artifact.publish(complete)["version"], 2)
+            with self.assertRaisesRegex(RuntimeError, "context payload"):
+                artifact.publish({**payload(3), "compiled_context": {"values": []}})
+
     def test_read_binds_dataset_definition_run_and_bytes(self):
         client = Client(); content = artifact._canonical(payload())
         path = "dlm/7/v2/compiled.json"; client.values[path] = content
