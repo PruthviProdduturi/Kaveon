@@ -339,6 +339,30 @@ of the following against a preserved backup:
 7. PostgreSQL is first scaled to zero while its PVC is retained. Permanent
    deletion happens only after the rollback window passes.
 
+After the first PostgreSQL-free API restart, run the API-image black-box smoke
+probe through the same HTTP service used by Studio. Use a dedicated migrated
+test identity that owns at least one saved query, recent, favorite, chat session
+and query-history record, and choose a visible dataset with a ready DLM:
+
+```powershell
+$env:KAVEON_POSTGRESQL_FREE_SMOKE_ENABLED = "true"
+$env:KAVEON_PROXY_SECRET = "<from the existing API secret>"
+python -m services.postgresql_free_smoke_cli `
+  --base-url http://kaveon-api.kaveon.svc.cluster.local:8080 `
+  --identity retirement-probe@example.test `
+  --dataset-id 7 `
+  --question "show total sessions" `
+  --output /retirement/receipts/postgresql-free-smoke.json
+```
+
+Plain HTTP is accepted only for loopback and Kubernetes service DNS; use
+`--ca-cert` with HTTPS. The command authenticates through the trusted proxy
+header contract and probes health, source discovery, list and point reads,
+user-owned product state, DLM artifact/context/ask, and chat serving. It fails
+on empty required fixture families. Its receipt contains endpoint names,
+statuses, counts and canonical state digests only; it never writes the proxy
+secret, identity-bearing rows, SQL, questions, chat answers, or response bodies.
+
 The AKS cluster has the repository-owned `kaveon-azuredisk-retain`
 `VolumeSnapshotClass` (`disk.csi.azure.com`, incremental, `Retain`). Before the
 schema/cutover rehearsal, fence application writes, force a PostgreSQL
