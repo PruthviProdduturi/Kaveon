@@ -25,8 +25,12 @@ class Probe:
   parsed=urlparse(base_url)
   if parsed.scheme not in {"http","https"} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
    raise RuntimeError("smoke API URL is invalid")
-  if parsed.scheme!="https" and parsed.hostname not in {"localhost","127.0.0.1","::1"} and not parsed.hostname.endswith(".svc.cluster.local"):
+  local=parsed.hostname in {"localhost","127.0.0.1","::1"} or parsed.hostname.endswith(".svc.cluster.local")
+  allowed={item.strip().lower() for item in os.getenv("KAVEON_POSTGRESQL_FREE_SMOKE_ALLOWED_HOSTS","").split(",") if item.strip()}
+  if parsed.scheme!="https" and not local:
    raise RuntimeError("plain HTTP smoke probes are restricted to loopback or cluster DNS")
+  if not local and parsed.hostname.lower() not in allowed:
+   raise RuntimeError("smoke API host is not explicitly allowed")
   if not email or "@" not in email or not proxy_secret:raise RuntimeError("trusted smoke identity is incomplete")
   self.base=base_url.rstrip("/");self.headers={"x-proxy-secret":proxy_secret,"x-user-email":email.lower(),"x-user-role":REQUIRED_ROLE,"x-user-roles":REQUIRED_ROLE,"x-user-name":"Retirement probe"}
   self.client=client or httpx.Client(timeout=60,verify=ca_cert or True,trust_env=False)

@@ -21,10 +21,21 @@ import ssl
 import statistics
 import time
 import urllib.request
+import urllib.parse
 from pathlib import Path
 
 TYPES = {"Utf8": "VARCHAR", "Int64": "BIGINT", "Float64": "DOUBLE", "Boolean": "BOOLEAN"}
 REPETITIONS = 3
+
+
+def validated_next_uri(base_url, candidate):
+    """Keep Trino credentials on the configured origin and statement path."""
+    base, target = urllib.parse.urlsplit(base_url), urllib.parse.urlsplit(str(candidate or ""))
+    if (target.scheme, target.hostname, target.port) != (base.scheme, base.hostname, base.port) \
+            or target.username or target.password or target.fragment \
+            or not target.path.startswith("/v1/statement/"):
+        raise RuntimeError("Trino returned an unsafe next URI")
+    return target.geturl()
 
 
 class Trino:
@@ -50,7 +61,7 @@ class Trino:
             rows.extend(page.get("data") or [])
             if not page.get("nextUri"):
                 return rows
-            page = self._fetch("GET", page["nextUri"])
+            page = self._fetch("GET", validated_next_uri(self.url, page["nextUri"]))
 
 
 def declare_tables(trino, manifest, account):

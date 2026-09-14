@@ -1,5 +1,5 @@
 """Fail-closed, resumable execution of the AKS PostgreSQL retirement rehearsal."""
-import hashlib,json,os,subprocess
+import hashlib,json,os,subprocess,tempfile
 from pathlib import Path
 import yaml
 
@@ -49,16 +49,27 @@ def load_plan(path,overlay):
 
 def run(plan,checkpoint,runner=subprocess.run):
  digest=hashlib.sha256(canonical(plan)).hexdigest();completed=[]
+ helm=plan["steps"][1]["commands"][0]["argv"]
+ if "-f" not in helm or helm.index("-f")+1>=len(helm):raise RuntimeError("retirement plan lost its values overlay")
+ overlay=Path(helm[helm.index("-f")+1])
+ if not overlay.is_file() or overlay.stat().st_size>256*1024:raise RuntimeError("retirement values overlay is missing or oversized")
+ overlay_sha256=hashlib.sha256(overlay.read_bytes()).hexdigest()
  if checkpoint.exists():
   try:state=json.loads(checkpoint.read_text(encoding="utf-8"))
   except (OSError,ValueError) as error:raise RuntimeError("retirement checkpoint is invalid") from error
-  if set(state)!={"schema_version","run_id","plan_sha256","completed"} or state["schema_version"]!=1 or state["run_id"]!=plan["run_id"] or state["plan_sha256"]!=digest or not isinstance(state["completed"],list) or state["completed"]!=list(STEPS[:len(state["completed"])]):raise RuntimeError("retirement checkpoint does not match the immutable plan")
+  if set(state)!={"schema_version","run_id","plan_sha256","overlay_sha256","completed"} or state["schema_version"]!=1 or state["run_id"]!=plan["run_id"] or state["plan_sha256"]!=digest or state["overlay_sha256"]!=overlay_sha256 or not isinstance(state["completed"],list) or state["completed"]!=list(STEPS[:len(state["completed"])]):raise RuntimeError("retirement checkpoint does not match the immutable plan or values overlay")
   completed=state["completed"]
  for step in plan["steps"][len(completed):]:
   for entry in step["commands"]:
    try:result=runner(entry["argv"],shell=False,capture_output=True,timeout=entry["timeout_seconds"],check=False)
    except (OSError,subprocess.TimeoutExpired) as error:raise RuntimeError(f"retirement step could not complete: {step['id']}") from error
    if result.returncode!=0:raise RuntimeError(f"retirement step failed: {step['id']}")
-  completed.append(step["id"]);state={"schema_version":1,"run_id":plan["run_id"],"plan_sha256":digest,"completed":completed}
-  checkpoint.parent.mkdir(parents=True,exist_ok=True);temporary=checkpoint.with_name(checkpoint.name+f".{os.getpid()}.tmp");temporary.write_bytes(canonical(state)+b"\n");os.replace(temporary,checkpoint)
- return {"passed":True,"run_id":plan["run_id"],"completed_steps":len(completed),"plan_sha256":digest}
+  completed.append(step["id"]);state={"schema_version":1,"run_id":plan["run_id"],"plan_sha256":digest,"overlay_sha256":overlay_sha256,"completed":completed}
+  checkpoint.parent.mkdir(parents=True,exist_ok=True);temporary=None
+  try:
+   with tempfile.NamedTemporaryFile("wb",dir=checkpoint.parent,prefix=checkpoint.name+".",delete=False) as handle:
+    temporary=Path(handle.name);os.chmod(temporary,0o600);handle.write(canonical(state)+b"\n");handle.flush();os.fsync(handle.fileno())
+   os.replace(temporary,checkpoint);temporary=None
+  finally:
+   if temporary and temporary.exists():temporary.unlink()
+ return {"passed":True,"run_id":plan["run_id"],"completed_steps":len(completed),"plan_sha256":digest,"overlay_sha256":overlay_sha256}

@@ -27,6 +27,12 @@ def test_ordered_plan_is_resumable_and_digest_bound(tmp_path):
  changed=plan(overlay);changed["steps"][0]["commands"][0]["argv"].append("changed")
  with pytest.raises(RuntimeError,match="immutable plan"):o.run(changed,checkpoint,runner)
 
+def test_resume_rejects_changed_values_overlay(tmp_path):
+ overlay=tmp_path/"values.yaml";overlay.write_text("api: {}\n");value=plan(overlay);checkpoint=tmp_path/"checkpoint.json"
+ def runner(argv,**kwargs):return SimpleNamespace(returncode=0,stdout=b"",stderr=b"")
+ o.run(value,checkpoint,runner);overlay.write_text("api:\n  cutover: changed\n")
+ with pytest.raises(RuntimeError,match="values overlay"):o.run(value,checkpoint,runner)
+
 def test_failure_stops_and_resume_begins_at_failed_step(tmp_path):
  overlay=tmp_path/"values.yaml";overlay.write_text("api: {}\n");value=plan(overlay);checkpoint=tmp_path/"c.json";count=0
  def failing(argv,**kwargs):

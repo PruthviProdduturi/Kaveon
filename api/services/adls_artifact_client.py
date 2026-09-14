@@ -8,6 +8,7 @@ byte through ``read`` before treating it as idempotent.
 from __future__ import annotations
 
 import os
+import re
 from urllib.parse import quote
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -17,10 +18,15 @@ from azure.identity import DefaultAzureCredential
 
 class AzureArtifactClient:
     def __init__(self, account: str, container: str, credential=None, opener=urlopen):
-        if not account or not container:
-            raise ValueError("ADLS account and container are required")
-        self.account = account
-        self.container = container.strip("/")
+        if re.fullmatch(r"[a-z0-9]{3,24}", str(account or "")) is None:
+            raise ValueError("ADLS account name is invalid")
+        normalized_container = str(container or "").strip("/")
+        if (not 3 <= len(normalized_container) <= 63
+                or re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])", normalized_container) is None
+                or "--" in normalized_container):
+            raise ValueError("ADLS container name is invalid")
+        self.account = str(account)
+        self.container = normalized_container
         self.credential = credential or DefaultAzureCredential()
         self._opener = opener
 
@@ -30,10 +36,21 @@ class AzureArtifactClient:
                    os.environ.get("KAVEON_ADLS_CONTAINER", ""))
 
     def _url(self, path: str) -> str:
+        self._validate_path(path)
         encoded = quote(path, safe="/")
         return f"https://{self.account}.blob.core.windows.net/{self.container}/{encoded}"
 
+    @staticmethod
+    def _validate_path(path: str) -> None:
+        if (not isinstance(path, str) or not path or len(path.encode("utf-8")) > 2048
+                or path.startswith("/") or any(ord(character) < 32 for character in path)
+                or any(part in {"", ".", ".."} for part in path.split("/"))):
+            raise RuntimeError("ADLS object path is invalid")
+
     def _request(self, method: str, path: str, body: bytes | None = None, **headers):
+        # Validate the destination before obtaining a bearer token. A malformed
+        # path must never cause credential acquisition or an outbound request.
+        self._validate_path(path)
         token = self.credential.get_token("https://storage.azure.com/.default").token
         request_headers = {
             "Authorization": f"Bearer {token}",
@@ -84,14 +101,16 @@ class AzureArtifactClient:
         return content
 
     def delete_if_match(self, path: str, etag: str) -> None:
-        if not etag:
+        if (not isinstance(etag, str) or not etag or len(etag) > 256
+                or any(ord(character) < 32 for character in etag)):
             raise RuntimeError("ADLS cleanup requires an ETag")
         response = self._request("DELETE", path, **{"If-Match": etag})
         response.close()
 
     def list(self, prefix: str, max_objects: int = 10000) -> list[dict]:
         import xml.etree.ElementTree as ET
-        if not prefix.strip("/") or not 1 <= max_objects <= 10000:
+        self._validate_path(prefix)
+        if not 1 <= max_objects <= 10000:
             raise RuntimeError("ADLS list prefix or bound is invalid")
         values, marker = [], None
         while True:

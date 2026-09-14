@@ -75,7 +75,12 @@ def read(dataset_id: str, actor: str, role: str) -> dict | None:
     dataset_id = str(dataset_id or "")
     if not dataset_id.isdecimal() or not actor:
         raise RuntimeError("Compiled DLM read identity is invalid")
-    dataset = product_store.read("dataset", dataset_id, actor, role)
+    if role not in {"Viewer", "Analyst", "Editor", "Admin"}:
+        raise RuntimeError("Compiled DLM application role is invalid")
+    # The bridge uses its server-held admin credential, then applies the same
+    # product visibility rules as dataset routes. Passing Viewer/Analyst to the
+    # storage layer would incorrectly reduce reads to owner-only records.
+    dataset = product_store.read("dataset", dataset_id, actor, "Admin")
     if dataset is None:
         return None
     dataset_document = dataset.get("document")
@@ -83,7 +88,12 @@ def read(dataset_id: str, actor: str, role: str) -> dict | None:
     dataset_revision = dataset.get("revision")
     if not owner or type(dataset_revision) is not int or dataset_revision < 1:
         raise RuntimeError("Compiled DLM dataset authority is invalid")
-    definition = product_store.read("dlm_definition", dataset_id, actor, role)
+    visibility = dataset_document.get("visibility") or "internal"
+    if not (role == "Admin" or visibility == "published"
+            or visibility == "internal" and role in {"Analyst", "Editor"}
+            or visibility == "private" and owner == actor):
+        return None
+    definition = product_store.read("dlm_definition", dataset_id, actor, "Admin")
     expected_definition = {"dataset_id": dataset_id, "dataset_revision": dataset_revision}
     if not definition or definition.get("document") != expected_definition:
         raise RuntimeError("Compiled DLM definition is missing or stale")
@@ -91,7 +101,7 @@ def read(dataset_id: str, actor: str, role: str) -> dict | None:
     if type(definition_revision) is not int or definition_revision < 1:
         raise RuntimeError("Compiled DLM definition revision is invalid")
     candidates = []
-    for record in product_store.list_records("dlm_run", actor, role, max_records=1000):
+    for record in product_store.list_records("dlm_run", actor, "Admin", max_records=1000):
         document = record.get("document") if isinstance(record, dict) else None
         match = re.fullmatch(re.escape(dataset_id) + r"-v([1-9][0-9]*)", str(record.get("id") or ""))
         if (match and isinstance(document, dict) and document.get("definition_id") == dataset_id

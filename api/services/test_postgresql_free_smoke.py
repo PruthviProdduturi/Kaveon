@@ -26,7 +26,7 @@ class Client:
   return Response(value,status)
 class Tests(unittest.TestCase):
  def collect(self,client):
-  with patch.dict(os.environ,{"KAVEON_POSTGRESQL_FREE_SMOKE_ENABLED":"true"}):return smoke.collect("https://example.test","probe@example.test","super-secret","show totals","7",client=client,now=NOW)
+  with patch.dict(os.environ,{"KAVEON_POSTGRESQL_FREE_SMOKE_ENABLED":"true","KAVEON_POSTGRESQL_FREE_SMOKE_ALLOWED_HOSTS":"example.test"}):return smoke.collect("https://example.test","probe@example.test","super-secret","show totals","7",client=client,now=NOW)
  def test_exercises_full_http_surface_and_emits_only_counts_and_digests(self):
   client=Client();report=self.collect(client);self.assertEqual(report["status"],"passed");self.assertEqual(report["check_count"],21);encoded=json.dumps(report);self.assertNotIn("private",encoded);self.assertNotIn("secret sql",encoded);self.assertNotIn("super-secret",encoded);self.assertEqual(len(report["state_sha256"]),64);self.assertTrue(all(call[2]["x-proxy-secret"]=="super-secret" for call in client.calls));self.assertEqual(client.calls[-2][0],"POST");self.assertEqual(client.calls[-1][0],"POST")
  def test_requires_kaveondb_health_and_nonempty_migrated_families(self):
@@ -46,6 +46,7 @@ class Tests(unittest.TestCase):
  def test_disabled_invalid_identity_and_remote_http_are_rejected(self):
   with patch.dict(os.environ,{},clear=True),self.assertRaisesRegex(RuntimeError,"explicit enablement"):smoke.collect("https://example.test","a@b.test","s","q","7",client=Client())
   with patch.dict(os.environ,{"KAVEON_POSTGRESQL_FREE_SMOKE_ENABLED":"true"}):
-   with self.assertRaisesRegex(RuntimeError,"trusted.*incomplete"):smoke.collect("https://example.test","invalid","s","q","7",client=Client())
+   with self.assertRaisesRegex(RuntimeError,"trusted.*incomplete"):smoke.collect("https://localhost","invalid","s","q","7",client=Client())
    with self.assertRaisesRegex(RuntimeError,"plain HTTP"):smoke.collect("http://example.test","a@b.test","s","q","7",client=Client())
+   with self.assertRaisesRegex(RuntimeError,"not explicitly allowed"):smoke.collect("https://evil.example","a@b.test","s","q","7",client=Client())
 if __name__=="__main__":unittest.main()

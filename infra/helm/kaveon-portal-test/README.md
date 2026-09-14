@@ -95,7 +95,8 @@ release revision. The Job requires a migrated fixture identity, a visible ready
 DLM dataset ID, a bounded question and the evidence PVC. It reads
 `KAVEON_PROXY_SECRET` from `secrets.portalAuth`, uses no service-account token,
 and writes the content-free receipt at `outputFile`. The in-cluster API URL uses
-plain HTTP by design; for an HTTPS route set `useCaCert=true` and supply either
-`caSecret` or `caConfigMap` plus `caKey`. Preserve the completed Job logs and
+plain HTTP by design; for an HTTPS route set its exact hostname in
+`allowedHosts`, set `useCaCert=true`, and supply either `caSecret` or
+`caConfigMap` plus `caKey`. Preserve the completed Job logs and
 receipt, then disable the Job in the next values revision. A failed or missing
 Job receipt is not restart-recovery evidence.
