@@ -82,6 +82,29 @@ class RetirementRuntimeTests(unittest.TestCase):
             self.assertIs(runtime.probe(), state)
         read.assert_called_once_with("dataset", "__kaveon_health__", "kaveon-system", "Admin")
 
+    def test_first_restart_rehearsal_does_not_require_its_own_receipt(self):
+        environment = {
+            runtime.REHEARSAL_MODE_KEY: "true",
+            runtime.AUTHORITY_KEY: ",".join(gate.AUTHORITY_FAMILIES),
+            "KAVEON_ENGINE_URL": "https://engine.example.test",
+            "KAVEON_ENGINE_BRIDGE_TOKEN": "test-token",
+        }
+        prerequisites = {"authority_family_count": 16, "evidence_sha256": "a" * 64,
+                         "checked_at": "2026-09-14T20:00:00Z", "phase": "restart_rehearsal"}
+        with patch.dict(os.environ, environment, clear=True), \
+             patch.object(runtime, "_validate_rehearsal_evidence", return_value=prerequisites) as validate_rehearsal, \
+             patch.object(runtime.engine_bridge, "_verify_context", return_value=True):
+            state = runtime.validate(now=NOW)
+        validate_rehearsal.assert_called_once_with(NOW, 24)
+        self.assertEqual(state["phase"], "restart_rehearsal")
+        self.assertTrue(state["enabled"])
+
+    def test_final_mode_still_requires_final_audit_and_cannot_mix_phases(self):
+        environment = {runtime.MODE_KEY: "true", runtime.REHEARSAL_MODE_KEY: "true",
+                       runtime.AUTHORITY_KEY: ",".join(gate.AUTHORITY_FAMILIES)}
+        with patch.dict(os.environ, environment, clear=True), self.assertRaisesRegex(RuntimeError, "mutually exclusive"):
+            runtime.validate(now=NOW)
+
 
 class RetirementStartupTests(unittest.IsolatedAsyncioTestCase):
     async def test_retirement_startup_clears_postgresql_and_skips_warmup(self):
