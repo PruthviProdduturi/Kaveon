@@ -48,7 +48,7 @@ class CompiledArtifactTests(unittest.TestCase):
         client = Client(); content = artifact._canonical(payload())
         path = "dlm/7/v2/compiled.json"; client.values[path] = content
         digest = hashlib.sha256(content).hexdigest()
-        dataset = {"revision": 4, "document": {"created_by": "owner"}}
+        dataset = {"revision": 4, "document": {"created_by": "owner", "visibility": "published"}}
         definition = {"revision": 3, "document": {"dataset_id": "7", "dataset_revision": 4}}
         runs = [{"id": "7-v2", "document": {"definition_id": "7", "definition_revision": 3,
                  "status": "ready", "artifact": {"path": path, "sha256": digest}}}]
@@ -58,7 +58,7 @@ class CompiledArtifactTests(unittest.TestCase):
             self.assertEqual(artifact.read("7", "viewer", "Viewer"), payload())
 
     def test_read_fails_closed_on_stale_definition_or_corrupt_bytes(self):
-        dataset = {"revision": 4, "document": {"created_by": "owner"}}
+        dataset = {"revision": 4, "document": {"created_by": "owner", "visibility": "published"}}
         stale = {"revision": 3, "document": {"dataset_id": "7", "dataset_revision": 2}}
         with patch.object(artifact.product_store, "read", side_effect=[dataset, stale]), \
              self.assertRaisesRegex(RuntimeError, "stale"):
@@ -71,8 +71,19 @@ class CompiledArtifactTests(unittest.TestCase):
         with patch.object(artifact.product_store, "read", side_effect=[dataset, definition]), \
              patch.object(artifact.product_store, "list_records", return_value=runs), \
              patch.object(artifact, "_client", return_value=client), \
-             self.assertRaisesRegex(RuntimeError, "corrupt"):
+            self.assertRaisesRegex(RuntimeError, "corrupt"):
             artifact.read("7", "viewer", "Viewer")
+
+    def test_read_applies_visibility_after_server_asserted_admin_read(self):
+        private = {"revision": 1, "document": {"created_by": "owner", "visibility": "private"}}
+        with patch.object(artifact.product_store, "read", return_value=private) as read:
+            self.assertIsNone(artifact.read("7", "other", "Viewer"))
+        read.assert_called_once_with("dataset", "7", "other", "Admin")
+        internal = {"revision": 1, "document": {"created_by": "owner", "visibility": "internal"}}
+        with patch.object(artifact.product_store, "read", side_effect=[internal, None]) as read, \
+             self.assertRaisesRegex(RuntimeError, "missing or stale"):
+            artifact.read("7", "analyst", "Analyst")
+        self.assertTrue(all(call.args[-1] == "Admin" for call in read.call_args_list))
 
     def test_enqueue_run_is_owner_and_definition_revision_bound(self):
         transaction = Mock()

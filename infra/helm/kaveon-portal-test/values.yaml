@@ -98,6 +98,8 @@ api:
     # identity must own migrated fixtures in every user-scoped family.
     enabled: false
     baseUrl: http://kaveon-api.kaveon.svc.cluster.local:8080
+    # Required for non-cluster HTTPS routes before the proxy secret is sent.
+    allowedHosts: ""
     identity: ""
     datasetId: ""
     question: ""

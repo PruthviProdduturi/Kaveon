@@ -1,4 +1,5 @@
 import io
+import pytest
 
 from services.adls_artifact_client import AzureArtifactClient
 
@@ -48,3 +49,17 @@ def test_list_is_prefix_scoped_and_bounded():
         return Response(xml)
     client=AzureArtifactClient("acct","state",Credential(),opener)
     assert client.list("active")==[{"path":"active/head.json","etag":"etag-1","size":12}]
+
+
+def test_rejects_host_injection_and_path_escape_before_requesting_a_token():
+    class UnusedCredential:
+        def get_token(self, scope):
+            raise AssertionError("credential must not be accessed for invalid destinations")
+    with pytest.raises(ValueError, match="account"):
+        AzureArtifactClient("evil.example/path", "state", UnusedCredential(), lambda _: None)
+    with pytest.raises(ValueError, match="container"):
+        AzureArtifactClient("acct", "state?comp=list", UnusedCredential(), lambda _: None)
+    client = AzureArtifactClient("acct", "state", UnusedCredential(), lambda _: None)
+    for path in ("../other", "/absolute", "active//head", "active/./head"):
+        with pytest.raises(RuntimeError, match="path"):
+            client.read(path, 10)

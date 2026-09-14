@@ -40,6 +40,7 @@ spec:
             - /evidence/{{ .Values.api.postgresqlFreeSmoke.outputFile }}
           env:
             - {name: KAVEON_POSTGRESQL_FREE_SMOKE_ENABLED, value: "true"}
+            - {name: KAVEON_POSTGRESQL_FREE_SMOKE_ALLOWED_HOSTS, value: {{ .Values.api.postgresqlFreeSmoke.allowedHosts | quote }}}
             - {name: KAVEON_PROXY_SECRET, valueFrom: {secretKeyRef: {name: {{ required "secrets.portalAuth is required" .Values.secrets.portalAuth }}, key: KAVEON_PROXY_SECRET}}}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           volumeMounts:
