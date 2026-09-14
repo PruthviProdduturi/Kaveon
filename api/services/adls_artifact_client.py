@@ -63,7 +63,7 @@ class AzureArtifactClient:
             return self._opener(request)
         except Exception as error:
             status = getattr(error, "code", None)
-            if status is not None:
+            if status is not None and getattr(error, "status", None) is None:
                 error.status = status
             raise
 
@@ -89,7 +89,8 @@ class AzureArtifactClient:
 
     def read(self, path: str, max_bytes: int) -> bytes | None:
         try:
-            response = self._request("GET", path, Range=f"bytes=0-{max_bytes}")
+            headers = {} if max_bytes == 0 else {"Range": f"bytes=0-{max_bytes}"}
+            response = self._request("GET", path, **headers)
         except Exception as error:
             if getattr(error, "status", None) == 404:
                 return None
@@ -114,7 +115,8 @@ class AzureArtifactClient:
             raise RuntimeError("ADLS list prefix or bound is invalid")
         values, marker = [], None
         while True:
-            query={"restype":"container","comp":"list","prefix":prefix.rstrip("/")+"/","maxresults":"5000"}
+            query={"restype":"container","comp":"list","include":"metadata",
+                   "prefix":prefix.rstrip("/")+"/","maxresults":"5000"}
             if marker: query["marker"]=marker
             token=self.credential.get_token("https://storage.azure.com/.default").token
             request=Request(f"https://{self.account}.blob.core.windows.net/{self.container}?{urlencode(query)}",
@@ -128,6 +130,13 @@ class AzureArtifactClient:
             except Exception as error: raise RuntimeError("ADLS list returned invalid XML") from error
             finally: response.close()
             for blob in root.findall("./Blobs/Blob"):
+                metadata = blob.find("Metadata")
+                is_directory = metadata is not None and any(
+                    child.tag.lower() == "hdi_isfolder" and (child.text or "").lower() == "true"
+                    for child in metadata
+                )
+                if is_directory:
+                    continue
                 name=blob.findtext("Name");etag=blob.findtext("./Properties/Etag");size=blob.findtext("./Properties/Content-Length")
                 try: size=int(size)
                 except (TypeError,ValueError): raise RuntimeError("ADLS list returned invalid object metadata") from None

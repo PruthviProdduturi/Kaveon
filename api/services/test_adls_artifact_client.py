@@ -1,4 +1,5 @@
 import io
+from urllib.error import HTTPError
 import pytest
 
 from services.adls_artifact_client import AzureArtifactClient
@@ -42,13 +43,43 @@ def test_read_returns_bounded_content():
     assert client.read("x", 16) == b"payload"
 
 
+def test_read_zero_byte_object_omits_invalid_range():
+    def opener(request):
+        assert request.method == "GET"
+        assert "Range" not in request.headers
+        return Response(b"")
+
+    client = AzureArtifactClient("acct", "artifacts", Credential(), opener)
+    assert client.read("empty", 0) == b""
+
+
+def test_http_error_preserves_read_only_status():
+    failure = HTTPError("https://acct.blob.core.windows.net/artifacts/x", 416,
+                        "invalid range", {}, None)
+
+    client = AzureArtifactClient("acct", "artifacts", Credential(), lambda _: (_ for _ in ()).throw(failure))
+    with pytest.raises(HTTPError) as raised:
+        client.read("x", 0)
+    assert raised.value is failure
+
+
 def test_list_is_prefix_scoped_and_bounded():
     xml=b"""<EnumerationResults><Blobs><Blob><Name>active/head.json</Name><Properties><Etag>etag-1</Etag><Content-Length>12</Content-Length></Properties></Blob></Blobs><NextMarker /></EnumerationResults>"""
     def opener(request):
         assert "comp=list" in request.full_url and "prefix=active%2F" in request.full_url
+        assert "include=metadata" in request.full_url
         return Response(xml)
     client=AzureArtifactClient("acct","state",Credential(),opener)
     assert client.list("active")==[{"path":"active/head.json","etag":"etag-1","size":12}]
+
+
+def test_list_excludes_hierarchical_namespace_directory_markers():
+    xml=b"""<EnumerationResults><Blobs>
+    <Blob><Name>active/records</Name><Metadata><hdi_isfolder>true</hdi_isfolder></Metadata><Properties><Etag>dir-etag</Etag><Content-Length>0</Content-Length></Properties></Blob>
+    <Blob><Name>active/records/empty.json</Name><Metadata /><Properties><Etag>file-etag</Etag><Content-Length>0</Content-Length></Properties></Blob>
+    </Blobs><NextMarker /></EnumerationResults>"""
+    client=AzureArtifactClient("acct","state",Credential(),lambda _: Response(xml))
+    assert client.list("active")==[{"path":"active/records/empty.json","etag":"file-etag","size":0}]
 
 
 def test_rejects_host_injection_and_path_escape_before_requesting_a_token():
