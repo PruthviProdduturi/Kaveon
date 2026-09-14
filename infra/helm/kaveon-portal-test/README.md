@@ -1,10 +1,12 @@
 # Kaveon portal test add-on
 
 This chart is a test-AKS add-on for the existing Engine in the `kaveon`
-namespace. It creates one Studio service (`kaveon-portal:3000`), one API service
-(`kaveon-api:8080`), and one PostgreSQL StatefulSet (`kaveon-postgres:5432`) with
-one `ReadWriteOnce` PVC. It does not create a namespace, secrets, credentials,
-Ingress, or Engine resources.
+namespace. In normal mode it creates one Studio service (`kaveon-portal:3000`),
+one API service (`kaveon-api:8080`), and one PostgreSQL StatefulSet
+(`kaveon-postgres:5432`) with one `ReadWriteOnce` PVC. PostgreSQL and its init
+Job are omitted in verified restart-rehearsal or final-retirement mode. The
+chart does not create a namespace, secrets, credentials, Ingress, or Engine
+resources.
 
 Every image is required as an immutable `sha256` digest. Supply a values file
 with the three image repositories and digests and the ADLS location for the
@@ -64,3 +66,26 @@ helm template kaveon-portal-test infra/helm/kaveon-portal-test --namespace kaveo
 
 Deploy only after the referenced Secret, CA ConfigMap, and Engine TLS service
 have been prepared separately.
+
+## PostgreSQL retirement controls
+
+All cutover switches under `api.cutover` default off. Shadow-read and outbox
+flags may be enabled family by family while PostgreSQL remains authoritative;
+`productReplay.enabled` controls the replay worker independently. The write
+fence is also explicit and should be activated only for the final live drain.
+
+`restartRehearsalMode` and `retirementMode` are mutually exclusive. Enabling
+either requires the evidence PVC, exact authority and read-authority family
+lists, and compiled-DLM ADLS account/container. The API's PostgreSQL schema init
+container is omitted only in those modes. The evidence PVC is mounted read-only
+at `/retirement`, and runtime validation must pass before the process clears its
+PostgreSQL environment. Rehearsal uses the family-report and operational-receipt
+directories; final mode requires the complete evidence and matching audit.
+
+The `dlmRunMigration` Job exposes durable ADLS checkpoint and immutable artifact
+locations separately and requires all of them when enabled. The
+`retirementReports` Jobs are also disabled by default and require a restricted
+PVC containing live observations; they validate and write the two special
+reports but never perform deletion or invent observations. Keep these controls
+in a reviewed values file rather than long `--set` commands so comma-delimited
+family lists remain exact and auditable.

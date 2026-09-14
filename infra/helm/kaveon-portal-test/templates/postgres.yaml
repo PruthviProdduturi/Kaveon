@@ -1,3 +1,4 @@
+{{- if not (or .Values.api.cutover.retirementMode .Values.api.cutover.restartRehearsalMode) }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -72,3 +73,4 @@ spec:
         storageClassName: {{ required "postgres.storageClass is required" .Values.postgres.storageClass }}
         resources:
           requests: {storage: {{ required "postgres.storageSize is required" .Values.postgres.storageSize }}}
+{{- end }}

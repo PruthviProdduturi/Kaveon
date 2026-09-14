@@ -1,3 +1,13 @@
+{{- $retirement := .Values.api.cutover.retirementMode }}
+{{- $rehearsal := .Values.api.cutover.restartRehearsalMode }}
+{{- if and $retirement $rehearsal }}{{ fail "api.cutover retirement and rehearsal modes are mutually exclusive" }}{{ end }}
+{{- if or $retirement $rehearsal }}
+{{- $_ := required "api.cutover.evidencePvc is required for PostgreSQL-free mode" .Values.api.cutover.evidencePvc }}
+{{- $_ := required "api.cutover.authorityFamilies is required for PostgreSQL-free mode" .Values.api.cutover.authorityFamilies }}
+{{- $_ := required "api.cutover.readAuthorityFamilies is required for PostgreSQL-free mode" .Values.api.cutover.readAuthorityFamilies }}
+{{- $_ := required "api.cutover.artifactAccount is required for PostgreSQL-free mode" .Values.api.cutover.artifactAccount }}
+{{- $_ := required "api.cutover.artifactContainer is required for PostgreSQL-free mode" .Values.api.cutover.artifactContainer }}
+{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -43,6 +53,7 @@ spec:
         runAsGroup: 10001
         fsGroup: 10001
         seccompProfile: {type: RuntimeDefault}
+{{- if not (or $retirement $rehearsal) }}
       initContainers:
         - name: require-product-migration-schema
           image: {{ include "portal.image" (list .Values.images.api "api") }}
@@ -82,6 +93,7 @@ spec:
           resources:
             requests: {cpu: 25m, memory: 64Mi}
             limits: {cpu: 250m, memory: 256Mi}
+{{- end }}
       containers:
         - name: api
           image: {{ include "portal.image" (list .Values.images.api "api") }}
@@ -104,6 +116,37 @@ spec:
             - {name: KAVEON_PRODUCT_REPLAY_ENABLED, value: {{ .Values.api.productReplay.enabled | quote }}}
             - {name: KAVEON_PRODUCT_REPLAY_BATCH_SIZE, value: {{ .Values.api.productReplay.batchSize | quote }}}
             - {name: KAVEON_PRODUCT_REPLAY_INTERVAL_SECONDS, value: {{ .Values.api.productReplay.intervalSeconds | quote }}}
+            - {name: KAVEON_POSTGRESQL_RETIREMENT_MODE, value: {{ $retirement | quote }}}
+            - {name: KAVEON_POSTGRESQL_RESTART_REHEARSAL_MODE, value: {{ $rehearsal | quote }}}
+            - {name: KAVEONDB_AUTHORITY_FAMILIES, value: {{ .Values.api.cutover.authorityFamilies | quote }}}
+            - {name: KAVEONDB_READ_AUTHORITY_FAMILIES, value: {{ .Values.api.cutover.readAuthorityFamilies | quote }}}
+            - {name: KAVEON_POSTGRESQL_RETIREMENT_EVIDENCE, value: {{ .Values.api.cutover.evidencePath | quote }}}
+            - {name: KAVEON_POSTGRESQL_RETIREMENT_AUDIT, value: {{ .Values.api.cutover.auditPath | quote }}}
+            - {name: KAVEON_POSTGRESQL_RECONCILIATION_REPORTS, value: {{ .Values.api.cutover.reportDirectory | quote }}}
+            - {name: KAVEON_POSTGRESQL_OPERATIONAL_RECEIPTS, value: {{ .Values.api.cutover.receiptDirectory | quote }}}
+            - {name: KAVEON_POSTGRESQL_RETIREMENT_MAX_AGE_HOURS, value: {{ .Values.api.cutover.maxAgeHours | quote }}}
+            - {name: KAVEON_POSTGRESQL_WRITE_FENCE_ENABLED, value: {{ .Values.api.cutover.postgresqlWriteFence | quote }}}
+            - {name: KAVEON_DLM_LIVE_ARTIFACT_PUBLISH_ENABLED, value: {{ .Values.api.cutover.liveDlmArtifactPublish | quote }}}
+            - {name: KAVEON_ADLS_ACCOUNT, value: {{ .Values.api.cutover.artifactAccount | quote }}}
+            - {name: KAVEON_ADLS_CONTAINER, value: {{ .Values.api.cutover.artifactContainer | quote }}}
+            - {name: KAVEON_SOURCE_SHADOW_READ_ENABLED, value: {{ .Values.api.cutover.shadowReads.sources | quote }}}
+            - {name: KAVEON_DATASET_SHADOW_READ_ENABLED, value: {{ .Values.api.cutover.shadowReads.datasets | quote }}}
+            - {name: KAVEON_CHART_SHADOW_READ_ENABLED, value: {{ .Values.api.cutover.shadowReads.charts | quote }}}
+            - {name: KAVEON_DASHBOARD_SHADOW_READ_ENABLED, value: {{ .Values.api.cutover.shadowReads.dashboards | quote }}}
+            - {name: KAVEON_USER_THEME_SHADOW_READ_ENABLED, value: {{ .Values.api.cutover.shadowReads.userThemes | quote }}}
+            - {name: KAVEON_FAVORITE_SHADOW_READ_ENABLED, value: {{ .Values.api.cutover.shadowReads.favorites | quote }}}
+            - {name: KAVEON_USER_RECENT_SHADOW_READ_ENABLED, value: {{ .Values.api.cutover.shadowReads.userRecents | quote }}}
+            - {name: KAVEON_QUERY_HISTORY_SHADOW_READ_ENABLED, value: {{ .Values.api.cutover.shadowReads.queryHistory | quote }}}
+            - {name: KAVEON_SAVED_QUERY_SHADOW_READ_ENABLED, value: {{ .Values.api.cutover.shadowReads.savedQueries | quote }}}
+            - {name: KAVEON_ACTIVITY_SHADOW_READ_ENABLED, value: {{ .Values.api.cutover.shadowReads.activity | quote }}}
+            - {name: KAVEON_CHAT_HISTORY_SHADOW_READ_ENABLED, value: {{ .Values.api.cutover.shadowReads.chatHistory | quote }}}
+            - {name: KAVEON_DLM_DEFINITION_SHADOW_READ_ENABLED, value: {{ .Values.api.cutover.shadowReads.dlmDefinitions | quote }}}
+            - {name: KAVEON_CHART_OUTBOX_ENABLED, value: {{ .Values.api.cutover.outbox.charts | quote }}}
+            - {name: KAVEON_DASHBOARD_OUTBOX_ENABLED, value: {{ .Values.api.cutover.outbox.dashboards | quote }}}
+            - {name: KAVEON_SAVED_QUERY_OUTBOX_ENABLED, value: {{ .Values.api.cutover.outbox.savedQueries | quote }}}
+            - {name: KAVEON_QUERY_HISTORY_OUTBOX_ENABLED, value: {{ .Values.api.cutover.outbox.queryHistory | quote }}}
+            - {name: KAVEON_ACTIVITY_OUTBOX_ENABLED, value: {{ .Values.api.cutover.outbox.activity | quote }}}
+            - {name: KAVEON_CHAT_HISTORY_OUTBOX_ENABLED, value: {{ .Values.api.cutover.outbox.chatHistory | quote }}}
             - {name: KAVEON_ENGINE_URL, value: "https://{{ .Values.engine.service }}:{{ .Values.engine.port }}"}
             - {name: KAVEON_ENGINE_CA_CERT, value: /var/run/kaveon/engine-ca/{{ .Values.engine.caKey }}}
             - {name: METADATA_PASSWORD, valueFrom: {secretKeyRef: {name: {{ required "secrets.portalAuth is required" .Values.secrets.portalAuth }}, key: METADATA_PASSWORD}}}
@@ -127,6 +170,9 @@ spec:
           volumeMounts:
             - {name: tmp, mountPath: /tmp}
             - {name: engine-ca, mountPath: /var/run/kaveon/engine-ca, readOnly: true}
+{{- if or $retirement $rehearsal }}
+            - {name: retirement-evidence, mountPath: /retirement, readOnly: true}
+{{- end }}
           resources:
 {{ toYaml .Values.api.resources | indent 12 }}
       volumes:
@@ -137,4 +183,8 @@ spec:
           secret: {secretName: {{ .Values.engine.caSecret }}}
 {{- else }}
           configMap: {name: {{ required "engine.caConfigMap is required when engine.caSecret is empty" .Values.engine.caConfigMap }}}
+{{- end }}
+{{- if or $retirement $rehearsal }}
+        - name: retirement-evidence
+          persistentVolumeClaim: {claimName: {{ .Values.api.cutover.evidencePvc }}}
 {{- end }}
