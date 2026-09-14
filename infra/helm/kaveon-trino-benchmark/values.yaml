@@ -19,6 +19,12 @@ trino:
   storage:
     account: ""
     container: silver
+  # A read-only Hive catalog over the same Parquet objects the OpenSource
+  # Engine catalog reads, so the product corpus's live SQL can be timed on
+  # Trino during a leased window. External tables are declared from
+  # infra/aks/opensource-catalog-manifest.json; nothing is written to the lake.
+  opensource:
+    enabled: false
   internalSharedSecretName: kaveon-trino-benchmark-auth
   tlsSecretName: kaveon-trino-benchmark-tls
 
