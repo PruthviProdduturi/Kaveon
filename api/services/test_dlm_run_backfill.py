@@ -88,22 +88,36 @@ class DlmRunBackfillTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, message):
                         backfill.capture_snapshot(root)
 
-    def test_apply_atomically_publishes_building_then_ready_and_reruns_exactly(self):
+    def test_apply_publishes_building_then_ready_with_one_change_per_transaction(self):
         value = snapshot()
         exact = {"document": value.records[0].document}
         with patch.object(backfill.product_store, "read", side_effect=[None, exact]), \
              patch.object(backfill.product_store, "transact") as transact:
             report = backfill.apply_and_reconcile(value)
         self.assertEqual((report["created"], report["reconciled"]), (1, 1))
-        mutations = transact.call_args.args[0]
-        self.assertEqual([item.operation for item in mutations], ["create", "update"])
-        self.assertEqual([item.document["status"] for item in mutations], ["building", "ready"])
-        self.assertEqual(mutations[1].expected_revision, 1)
-        self.assertEqual(transact.call_args.args[1:], ("owner@example.test", "Admin"))
+        self.assertEqual(transact.call_count, 2)
+        create, promote = [call.args[0] for call in transact.call_args_list]
+        self.assertEqual([(item.operation, item.document["status"]) for item in create], [("create", "building")])
+        self.assertEqual([(item.operation, item.document["status"]) for item in promote], [("update", "ready")])
+        self.assertEqual(promote[0].expected_revision, 1)
+        self.assertTrue(all(call.args[1:] == ("owner@example.test", "Admin") for call in transact.call_args_list))
         with patch.object(backfill.product_store, "read", side_effect=[exact, exact]), \
              patch.object(backfill.product_store, "transact") as transact:
             self.assertEqual(backfill.apply_and_reconcile(value)["already_present"], 1)
         transact.assert_not_called()
+
+    def test_apply_resumes_exact_building_record_after_interrupted_promotion(self):
+        value = snapshot()
+        building = {**value.records[0].document, "status": "building", "artifact": None}
+        exact = {"document": value.records[0].document}
+        with patch.object(backfill.product_store, "read",
+                          side_effect=[{"document": building, "revision": 3}, exact]), \
+             patch.object(backfill.product_store, "transact") as transact:
+            report = backfill.apply_and_reconcile(value)
+        self.assertEqual(report["created"], 1)
+        mutation = transact.call_args.args[0][0]
+        self.assertEqual((mutation.operation, mutation.expected_revision), ("update", 3))
+        self.assertEqual(mutation.document, value.records[0].document)
 
     def test_divergence_corruption_and_ambiguous_create_fail_closed(self):
         value = snapshot()
@@ -120,7 +134,7 @@ class DlmRunBackfillTests(unittest.TestCase):
         exact = {"document": value.records[0].document}
         with patch.object(backfill.product_store, "read", side_effect=[None, exact, exact]), \
              patch.object(backfill.product_store, "transact", side_effect=HTTPException(409, "conflict")):
-            self.assertEqual(backfill.apply_and_reconcile(value)["created"], 1)
+            self.assertEqual(backfill.apply_and_reconcile(value)["already_present"], 1)
 
     def test_checkpoint_dry_run_guard_tamper_and_failure_resume(self):
         value = snapshot()

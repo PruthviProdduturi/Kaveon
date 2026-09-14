@@ -200,17 +200,32 @@ def apply_and_reconcile(snapshot: RunSnapshot) -> dict:
         if target is not None and target.get("document") == record.document:
             already_present += 1
             continue
-        if target is not None:
-            raise RuntimeError(f"KaveonDB DLM run {record.record_id} diverges")
         building = {**record.document, "status": "building", "artifact": None}
+        if target is None:
+            try:
+                product_store.transact([
+                    product_store.ProductMutation("create", "dlm_run", record.record_id, building),
+                ], record.owner_principal, "Admin")
+                target = {"document": building, "revision": 1}
+            except HTTPException as error:
+                target = product_store.read("dlm_run", record.record_id,
+                                            record.owner_principal, "Admin")
+                if error.status_code != 409 or target is None:
+                    raise
+        if target.get("document") == record.document:
+            already_present += 1
+            continue
+        revision = target.get("revision")
+        if target.get("document") != building or type(revision) is not int or revision < 1:
+            raise RuntimeError(f"KaveonDB DLM run {record.record_id} diverges")
         try:
             product_store.transact([
-                product_store.ProductMutation("create", "dlm_run", record.record_id, building),
                 product_store.ProductMutation("update", "dlm_run", record.record_id,
-                                              record.document, expected_revision=1),
+                                              record.document, expected_revision=revision),
             ], record.owner_principal, "Admin")
         except HTTPException as error:
-            resolved = product_store.read("dlm_run", record.record_id, record.owner_principal, "Admin")
+            resolved = product_store.read("dlm_run", record.record_id,
+                                          record.owner_principal, "Admin")
             if error.status_code != 409 or resolved is None or resolved.get("document") != record.document:
                 raise
         created += 1
