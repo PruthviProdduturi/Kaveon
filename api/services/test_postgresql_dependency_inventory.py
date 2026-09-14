@@ -14,6 +14,9 @@ class DependencyInventoryTests(unittest.TestCase):
         result = inventory.scan(API_ROOT)
         self.assertEqual(result["family_count"], len(AUTHORITY_FAMILIES))
         self.assertEqual({item["family"] for item in result["families"]}, set(AUTHORITY_FAMILIES))
+        ai = next(item for item in result["families"] if item["family"] == "ai_configuration")
+        self.assertEqual(ai["disposition"], "legacy-only")
+        self.assertEqual(ai["call_sites"], [])
         self.assertNotIn("connection_string", str(result).lower())
 
     def test_new_unclassified_authority_reference_fails(self):

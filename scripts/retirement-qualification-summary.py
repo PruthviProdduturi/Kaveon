@@ -54,8 +54,14 @@ def summarize(audit=None, operational=None):
         ),
         "durable_checkpoint": operational.get("durable_checkpoint", {"status": "pending"}),
     }
-    family_inventory_complete = len(families) == EXPECTED_AUTHORITY_FAMILY_COUNT
-    passed = family_inventory_complete and all(item["status"] == "passed" for item in families + gates)
+    observed_families = set(family_by_name)
+    family_inventory_complete = (
+        observed_families == set(AUTHORITY_FAMILIES)
+        and audit.get("authority_family_count") == EXPECTED_AUTHORITY_FAMILY_COUNT
+    )
+    audit_validated = audit.get("passed") is True
+    passed = audit_validated and family_inventory_complete
+    passed = passed and all(item["status"] == "passed" for item in families + gates)
     passed = passed and all(item.get("status") == "passed" for item in rehearsal.values())
     return {
         "schema_version": 1,
@@ -71,6 +77,7 @@ def summarize(audit=None, operational=None):
         "rehearsal_gates": rehearsal,
         "source": {
             "audit_loaded": bool(audit),
+            "audit_validated": audit_validated,
             "operational_loaded": bool(operational),
         },
     }

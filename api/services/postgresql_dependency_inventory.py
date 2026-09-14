@@ -47,6 +47,12 @@ DEPENDENCIES = {
     "services/user_recents.py": {"user_recents": "read-write"},
 }
 
+# Older PostgreSQL snapshots may retain these tables after their application
+# service has been removed. Keep them in the retirement manifest so cutover
+# must prove absence, secure migration, or deliberate deletion. Any future SQL
+# reference still fails the unclassified-call-site check above.
+LEGACY_ONLY_FAMILIES = frozenset({"ai_configuration"})
+
 
 def scan(api_root: Path, dependencies=None) -> dict:
     """Return inventory or fail when a table reference is not classified."""
@@ -116,7 +122,12 @@ def scan(api_root: Path, dependencies=None) -> dict:
             for path in sorted(classifications)
             if family in classifications[path]
         ]
-        if not call_sites:
+        if not call_sites and family not in LEGACY_ONLY_FAMILIES:
             raise RuntimeError(f"{family} has no classified application call site")
-        families.append({"family": family, "tables": list(tables), "call_sites": call_sites})
+        families.append({
+            "family": family,
+            "tables": list(tables),
+            "call_sites": call_sites,
+            "disposition": "legacy-only" if family in LEGACY_ONLY_FAMILIES else "active",
+        })
     return {"schema_version": 1, "family_count": len(families), "families": families}

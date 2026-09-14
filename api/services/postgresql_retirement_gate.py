@@ -34,6 +34,7 @@ FAMILY_KEYS = frozenset((
 ))
 PROVENANCE_KEYS = frozenset(("producer", "source_snapshot", "target_snapshot"))
 AUTHORITY_FAMILIES = {
+    "ai_configuration": ("ai_providers", "user_ai_keys"),
     "catalog_sources": ("catalog_sources",),
     "data_sources": ("data_sources",),
     "datasets": ("datasets",),
