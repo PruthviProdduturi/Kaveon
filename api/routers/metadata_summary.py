@@ -10,6 +10,7 @@ import services.charts as charts_svc
 import services.dashboards as dashboards_svc
 import services.favorites as favorites_svc
 import services.saved_queries as saved_queries_svc
+from services import postgresql_retirement_runtime
 
 router = APIRouter()
 NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
@@ -22,7 +23,7 @@ def metadata_summary(response: Response, ctx: UserContext = Depends(require_user
     # Return empty payload while app is in setup mode — the frontend shows the setup overlay
     db_type = os.environ.get("METADATA_DB_TYPE") or "fabric_sql"
     has_connection = os.environ.get("METADATA_ENDPOINT") if db_type in ("fabric_sql", "azure_sql") else os.environ.get("METADATA_HOST")
-    if not has_connection or not os.environ.get("METADATA_DATABASE"):
+    if (not has_connection or not os.environ.get("METADATA_DATABASE")) and not postgresql_retirement_runtime.requested():
         return {"datasets": [], "charts": [], "dashboards": [], "favorites": [], "savedQueries": []}
 
     # Fetch all in parallel using threads (pyodbc is synchronous)

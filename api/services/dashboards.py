@@ -114,6 +114,55 @@ def _adapt_product(document: dict) -> dict:
     return result
 
 
+def _product_value(value, label: str) -> list:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError as error:
+            raise ValueError(f"Dashboard {label} must be valid JSON") from error
+    if not isinstance(value, list):
+        raise ValueError(f"Dashboard {label} must be a list")
+    return value
+
+
+def _product_document(data: dict, dashboard_id: str, actor: str, prior: dict | None = None) -> dict:
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    prior = prior or {}
+    charts = _product_value(data.get("charts", prior.get("charts", [])), "charts")
+    if len(charts) > dashboard_backfill.MAX_CHART_REFS or len({str(value) for value in charts}) != len(charts):
+        raise ValueError("Dashboard chart references are invalid")
+    revisions = {}
+    for chart_id in sorted(str(value) for value in charts):
+        chart = product_store.read("chart", chart_id, actor, "Admin")
+        revision = chart.get("revision") if chart else None
+        if type(revision) is not int or revision < 1:
+            raise ValueError(f"Dashboard chart {chart_id} is unavailable")
+        revisions[chart_id] = revision
+    visibility = data.get("visibility", prior.get("visibility", "internal")) or "internal"
+    if visibility not in VALID_VISIBILITY:
+        raise ValueError("Dashboard visibility is invalid")
+    owner = str(prior.get("created_by") or actor)
+    return {
+        "id": dashboard_id,
+        "name": data.get("name", prior.get("name")),
+        "description": data.get("description", prior.get("description")),
+        "layout": _product_value(data.get("layout", prior.get("layout", [])), "layout"),
+        "charts": charts,
+        "chart_revisions": revisions,
+        "filters": _product_value(data.get("filters", prior.get("filters", [])), "filters"),
+        "theme": data.get("theme", prior.get("theme")),
+        "visibility": visibility,
+        "is_published": bool(data.get("is_published", prior.get("is_published", False))),
+        "is_archived": bool(data.get("is_archived", prior.get("is_archived", False))),
+        "created_by": owner,
+        "modified_by": actor,
+        "created_at": prior.get("created_at") or now,
+        "updated_at": now,
+    }
+
+
 def _vis_clause(role_idx: int, email_idx: int, alias: str = "d") -> str:
     return (
         f"({alias}.visibility = 'published' "
@@ -190,6 +239,16 @@ def get_dashboard_by_id(
 
 def create_dashboard(data: dict, user_id: str) -> dict:
     d_id = str(uuid.uuid4())
+    from services import product_read_authority
+    if product_read_authority.enabled("dashboards"):
+        document = _product_document(data, d_id, user_id)
+        product_store.transact([
+            product_store.ProductMutation("create", "dashboard", d_id, document)
+        ], user_id, "Analyst")
+        created = get_dashboard_by_id(d_id, user_id, "Admin")
+        if not created:
+            raise RuntimeError("KaveonDB did not return the created dashboard")
+        return created
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     slug = re.sub(r"[^a-z0-9-]", "", data["name"].lower().replace(" ", "-"))
 
@@ -232,6 +291,22 @@ def create_dashboard(data: dict, user_id: str) -> dict:
 
 
 def update_dashboard(dashboard_id: str, data: dict, actor: str | None = None) -> Optional[dict]:
+    from services import product_read_authority
+    if product_read_authority.enabled("dashboards"):
+        if not actor:
+            raise RuntimeError("KaveonDB dashboard update requires actor identity")
+        current = product_store.read("dashboard", dashboard_id, actor, "Admin")
+        if current is None:
+            return None
+        revision = current.get("revision")
+        document = current.get("document")
+        if type(revision) is not int or revision < 1 or not isinstance(document, dict):
+            raise RuntimeError("KaveonDB returned invalid dashboard revision state")
+        updated = _product_document(data, dashboard_id, actor, document)
+        product_store.transact([
+            product_store.ProductMutation("update", "dashboard", dashboard_id, updated, revision)
+        ], actor, "Analyst")
+        return get_dashboard_by_id(dashboard_id, actor, "Admin")
     if not get_dashboard_by_id(dashboard_id):
         return None
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -281,6 +356,21 @@ def update_dashboard(dashboard_id: str, data: dict, actor: str | None = None) ->
 
 
 def delete_dashboard(dashboard_id: str, actor: str | None = None) -> bool:
+    from services import product_read_authority
+    if product_read_authority.enabled("dashboards"):
+        if not actor:
+            raise RuntimeError("KaveonDB dashboard delete requires actor identity")
+        current = product_store.read("dashboard", dashboard_id, actor, "Admin")
+        if current is None:
+            return False
+        revision = current.get("revision")
+        if type(revision) is not int or revision < 1:
+            raise RuntimeError("KaveonDB returned invalid dashboard revision state")
+        product_store.transact([
+            product_store.ProductMutation("delete", "dashboard", dashboard_id,
+                                          expected_revision=revision)
+        ], actor, "Analyst")
+        return True
     if not _outbox_enabled():
         return db.execute("DELETE FROM dashboards WHERE id = @param0", [dashboard_id]) > 0
     if not actor:
@@ -295,5 +385,8 @@ def delete_dashboard(dashboard_id: str, actor: str | None = None) -> bool:
 
 
 def count_dashboards() -> int:
+    from services import product_read_authority
+    if product_read_authority.enabled("dashboards"):
+        return len(product_read_authority.list_documents("dashboards", "kaveon-system", "Admin"))
     result = db.query_one("SELECT COUNT(*) as count FROM dashboards")
     return result.get("count") or 0
