@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import HTTPException
 import database.metadata as db
-from services import product_outbox, product_post_write_observer, product_shadow_read
+from services import product_outbox, product_post_write_observer, product_shadow_read, product_read_authority
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +154,14 @@ def get_dataset_by_id(
     called from a user-facing endpoint.
     """
     did = int(dataset_id)
+
+    if product_read_authority.enabled("datasets"):
+        document = product_read_authority.read_document(
+            "datasets", str(did), user_email, role,
+        )
+        if document is not None:
+            document.setdefault("favorite", False)
+        return document
 
     if user_email:
         vis = _vis_clause(2, 1)
