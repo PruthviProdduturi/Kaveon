@@ -330,6 +330,13 @@ def _save_message(session_id: int, owner_email: str, role: str, content: str,
     import json as _json
     data_json = _json.dumps(data) if data else None
 
+    from services import chat_history_store, product_read_authority
+    if product_read_authority.enabled("chat_history"):
+        chat_history_store.add_message(
+            str(session_id), owner_email, role=role, content=content,
+            sql_query=sql_query, chart_type=chart_type, data=data, route=route)
+        return
+
     if os.getenv("KAVEON_CHAT_HISTORY_OUTBOX_ENABLED") == "true":
         with db.transaction() as transaction:
             session = transaction.query_one(
