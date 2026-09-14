@@ -74,7 +74,8 @@ enum RegistryError {
     Capacity,
     Missing,
     ProductMissing,
-    Forbidden,
+    SessionForbidden,
+    OwnershipForbidden,
     Conflict,
     Invalid(String),
     Corrupt,
@@ -203,7 +204,9 @@ impl TransactionRegistry {
         expire(&mut sessions);
         match sessions.get(id) {
             None => return Err(RegistryError::Missing),
-            Some(session) if session.owner != owner => return Err(RegistryError::Forbidden),
+            Some(session) if session.owner != owner => {
+                return Err(RegistryError::SessionForbidden);
+            }
             Some(_) => {}
         }
         Ok(sessions
@@ -268,7 +271,7 @@ impl TransactionRegistry {
         if identity.role != crate::security::Role::Admin
             && owner.map(String::as_str) != Some(identity.principal.as_str())
         {
-            return Err(RegistryError::Forbidden);
+            return Err(RegistryError::OwnershipForbidden);
         }
         let bytes = catalog
             .fetch_product_document_at(&snapshot, kind, id)
@@ -452,7 +455,7 @@ fn typed_row_document(
         ));
     }
     if document.owner_principal != owner {
-        return Err(RegistryError::Forbidden);
+        return Err(RegistryError::OwnershipForbidden);
     }
     let mut columns = document.columns;
     columns.insert(
@@ -473,7 +476,7 @@ fn typed_row_document(
 fn require_typed_row_owner(row: &TypedRow, owner: &str) -> Result<(), RegistryError> {
     match row.columns.get("owner_principal") {
         Some(TypedValue::String(value)) if value == owner => Ok(()),
-        _ => Err(RegistryError::Forbidden),
+        _ => Err(RegistryError::OwnershipForbidden),
     }
 }
 
@@ -511,7 +514,7 @@ fn validate_favorite_owner(
         || (kind == ProductRecordKind::ChatSession && values["chat_owner"] != owner)
         || (kind == ProductRecordKind::ChatMessage && values["chat_owner"] != owner)
     {
-        return Err(RegistryError::Forbidden);
+        return Err(RegistryError::OwnershipForbidden);
     }
     Ok(())
 }
@@ -525,7 +528,7 @@ fn require_product_owner(record: &ProductRecordRef, owner: &str) -> Result<(), R
     {
         Ok(())
     } else {
-        Err(RegistryError::Forbidden)
+        Err(RegistryError::OwnershipForbidden)
     }
 }
 
@@ -1144,7 +1147,7 @@ fn owned_session<'a>(
 ) -> Result<&'a mut Session, RegistryError> {
     match sessions.get_mut(id) {
         None => Err(RegistryError::Missing),
-        Some(session) if session.owner != owner => Err(RegistryError::Forbidden),
+        Some(session) if session.owner != owner => Err(RegistryError::SessionForbidden),
         Some(session) => Ok(session),
     }
 }
@@ -1509,9 +1512,13 @@ fn error_response(error: RegistryError) -> Response {
         RegistryError::ProductMissing => {
             (StatusCode::NOT_FOUND, "product record not found".to_owned())
         }
-        RegistryError::Forbidden => (
+        RegistryError::SessionForbidden => (
             StatusCode::FORBIDDEN,
             "transaction session belongs to another principal".to_owned(),
+        ),
+        RegistryError::OwnershipForbidden => (
+            StatusCode::FORBIDDEN,
+            "product record owner does not match the authenticated principal".to_owned(),
         ),
         RegistryError::Conflict => (StatusCode::CONFLICT, "transaction conflict".to_owned()),
         RegistryError::Invalid(message) => (StatusCode::BAD_REQUEST, message),
@@ -1571,6 +1578,28 @@ mod tests {
                 .unwrap()
                 .contains("neither confirmed committed nor confirmed rolled back")
         );
+    }
+
+    #[tokio::test]
+    async fn authorization_errors_distinguish_session_and_record_ownership() {
+        for (error, expected) in [
+            (
+                RegistryError::SessionForbidden,
+                "transaction session belongs to another principal",
+            ),
+            (
+                RegistryError::OwnershipForbidden,
+                "product record owner does not match the authenticated principal",
+            ),
+        ] {
+            let response = error_response(error);
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            let body = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(value["error"], expected);
+        }
     }
 
     #[tokio::test]
@@ -1711,7 +1740,7 @@ mod tests {
                 .await
                 .err()
                 .unwrap(),
-            RegistryError::Forbidden
+            RegistryError::SessionForbidden
         );
         assert_eq!(
             registry
@@ -1719,7 +1748,7 @@ mod tests {
                 .await
                 .err()
                 .unwrap(),
-            RegistryError::Forbidden
+            RegistryError::SessionForbidden
         );
         let _ = registry
             .take("alice", &begun.transaction_id)
@@ -1947,7 +1976,7 @@ mod tests {
         assert!(validate_favorite_owner(ProductRecordKind::Favorite, "alice", &values).is_ok());
         assert_eq!(
             validate_favorite_owner(ProductRecordKind::Favorite, "bob", &values),
-            Err(RegistryError::Forbidden)
+            Err(RegistryError::OwnershipForbidden)
         );
         assert!(
             product_document(
@@ -1990,7 +2019,7 @@ mod tests {
         assert!(validate_favorite_owner(ProductRecordKind::UserRecent, "alice", &values).is_ok());
         assert_eq!(
             validate_favorite_owner(ProductRecordKind::UserRecent, "bob", &values),
-            Err(RegistryError::Forbidden)
+            Err(RegistryError::OwnershipForbidden)
         );
 
         let (_, _, prefixed_references, prefixed_values) = product_document(
@@ -2025,7 +2054,7 @@ mod tests {
         assert!(validate_favorite_owner(ProductRecordKind::QueryHistory, "alice", &values).is_ok());
         assert_eq!(
             validate_favorite_owner(ProductRecordKind::QueryHistory, "bob", &values),
-            Err(RegistryError::Forbidden)
+            Err(RegistryError::OwnershipForbidden)
         );
     }
 
@@ -2038,7 +2067,7 @@ mod tests {
         assert!(validate_favorite_owner(ProductRecordKind::Activity, "alice", &values).is_ok());
         assert_eq!(
             validate_favorite_owner(ProductRecordKind::Activity, "bob", &values),
-            Err(RegistryError::Forbidden)
+            Err(RegistryError::OwnershipForbidden)
         );
         assert!(product_document(ProductRecordKind::Activity,"a1",1,r#"{"id":"a1","action":"created","object_type":"source","object_id":"c1","object_name":"Lake","timestamp":"now","user_email":"alice","details":"raw"}"#).is_err());
     }
@@ -2154,7 +2183,7 @@ mod tests {
             registry
                 .read_product(&bob, ProductRecordKind::DlmDefinition, "orders")
                 .await,
-            Err(RegistryError::Forbidden)
+            Err(RegistryError::OwnershipForbidden)
         ));
     }
 
@@ -2196,7 +2225,7 @@ mod tests {
                     },
                 )
                 .await,
-            Err(RegistryError::Forbidden)
+            Err(RegistryError::OwnershipForbidden)
         ));
 
         for (id, document) in [
@@ -2260,7 +2289,7 @@ mod tests {
             registry
                 .read_product(&bob, ProductRecordKind::DlmRun, "run-1")
                 .await,
-            Err(RegistryError::Forbidden)
+            Err(RegistryError::OwnershipForbidden)
         ));
     }
 
@@ -2315,7 +2344,7 @@ mod tests {
                     .stage_product_command("bob", &begun.transaction_id, command)
                     .await
                     .unwrap_err(),
-                RegistryError::Forbidden
+                RegistryError::OwnershipForbidden
             );
             assert_eq!(
                 registry
@@ -2425,7 +2454,7 @@ mod tests {
                 .await
                 .err()
                 .unwrap(),
-            RegistryError::Forbidden
+            RegistryError::OwnershipForbidden
         );
         assert!(
             registry
@@ -2563,7 +2592,7 @@ mod tests {
                     },
                 )
                 .await,
-            Err(RegistryError::Forbidden)
+            Err(RegistryError::OwnershipForbidden)
         ));
 
         let update = registry.begin("alice").await.unwrap();
