@@ -11,8 +11,12 @@ names reject the configuration. The API reapplies visibility rules after its
 privileged Engine bridge read.
 
 Do not select a family until its reconciliation and role-based shadow reads
-pass at the final source watermark. Listing endpoints remain PostgreSQL-backed
-and therefore must be migrated before PostgreSQL can be retired completely.
+pass at the final source watermark. Point and list reads then use KaveonDB only.
+Lists traverse bounded, snapshot-pinned pages, apply the legacy visibility
+rules, and return records in descending modification order. A snapshot change
+during pagination fails the request instead of mixing catalog generations.
+Favorite state is joined from KaveonDB's owner-scoped favorite records, so
+cutover lists do not query PostgreSQL for presentation metadata.
 
 ## Context cache retirement
 

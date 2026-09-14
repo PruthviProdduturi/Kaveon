@@ -100,6 +100,20 @@ def _adapt(row: dict) -> dict:
     }
 
 
+def _adapt_product(document: dict) -> dict:
+    result = dict(document)
+    for field in ("layout", "charts", "filters"):
+        value = result.get(field, [])
+        if not isinstance(value, (list, dict)):
+            raise RuntimeError(f"KaveonDB dashboard {field} is invalid")
+        result[field] = json.dumps(value)
+    result.update({
+        "thumbnail": None, "thumbnail_dark": None,
+        "owner": result.get("created_by"), "favorite": bool(result.get("favorite", False)),
+    })
+    return result
+
+
 def _vis_clause(role_idx: int, email_idx: int, alias: str = "d") -> str:
     return (
         f"({alias}.visibility = 'published' "
@@ -110,6 +124,10 @@ def _vis_clause(role_idx: int, email_idx: int, alias: str = "d") -> str:
 
 
 def list_dashboards(user_email: str, role: str = "Viewer") -> List[dict]:
+    from services import product_read_authority
+    if product_read_authority.enabled("dashboards"):
+        return [_adapt_product(item) for item in
+                product_read_authority.list_documents("dashboards", user_email, role)]
     _ensure_thumbnail_dark_column()
     vis = _vis_clause(1, 0)
     result = db.query(f"""
@@ -139,7 +157,8 @@ def get_dashboard_by_id(
         )
         if document is not None:
             document.setdefault("favorite", False)
-        return document
+            return _adapt_product(document)
+        return None
     if user_email:
         vis = _vis_clause(2, 1)
         row = db.query_one(f"""

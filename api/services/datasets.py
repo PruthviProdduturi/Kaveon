@@ -115,6 +115,8 @@ def _vis_clause(role_idx: int, email_idx: int, alias: str = "d") -> str:
 
 
 def list_datasets(user_email: str, role: str = "Viewer") -> List[dict]:
+    if product_read_authority.enabled("datasets"):
+        return product_read_authority.list_documents("datasets", user_email, role)
     vis = _vis_clause(1, 0)
     result = db.query(f"""
         SELECT DISTINCT

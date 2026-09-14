@@ -136,3 +136,32 @@ def read(kind: ProductKind, record_id: str, actor: str, role: str) -> Optional[d
         actor,
         role=_role(role),
     )
+
+
+def list_records(kind: ProductKind, actor: str, role: str, *, max_records: int = 1000) -> list[dict]:
+    """Read a bounded, snapshot-pinned product family without source fallback."""
+    if kind not in _KINDS or max_records < 1 or max_records > 1000:
+        raise HTTPException(422, "Invalid product list request")
+    records, cursor, snapshot_id = [], None, None
+    while True:
+        query = "?limit=100" + (("&cursor=" + quote(cursor, safe="")) if cursor else "")
+        page = engine_bridge._request("GET", f"/v1/products/{kind}{query}",
+            "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_role(role))
+        if not isinstance(page, dict) or not isinstance(page.get("records"), list):
+            raise HTTPException(502, "KaveonDB returned an invalid product list")
+        current_snapshot = page.get("snapshot_id")
+        if not isinstance(current_snapshot, str) or not current_snapshot:
+            raise HTTPException(502, "KaveonDB product list omitted its snapshot identity")
+        if snapshot_id is not None and current_snapshot != snapshot_id:
+            raise HTTPException(409, "KaveonDB product list changed during pagination")
+        snapshot_id = current_snapshot
+        for record in page["records"]:
+            if not isinstance(record, dict) or not isinstance(record.get("document"), dict):
+                raise HTTPException(502, "KaveonDB returned an invalid product list record")
+            records.append(record)
+            if len(records) > max_records:
+                raise HTTPException(503, "KaveonDB product list exceeds its configured bound")
+        cursor = page.get("next_cursor")
+        if cursor is None: return records
+        if not isinstance(cursor, str) or not cursor:
+            raise HTTPException(502, "KaveonDB returned an invalid product list cursor")

@@ -1,5 +1,6 @@
 """Explicit, family-scoped KaveonDB read-authority cutover."""
 
+import hashlib
 import os
 from typing import Optional
 
@@ -61,4 +62,42 @@ def read_document(
     )
     if actor is not None and not permitted:
         return None
-    return dict(document)
+    result = dict(document)
+    if actor:
+        favorite_id = hashlib.sha256(
+            f"{actor}\0{_KIND[family]}\0{result.get('id')}".encode()
+        ).hexdigest()
+        result["favorite"] = product_store.read("favorite", favorite_id, actor, "Admin") is not None
+    else:
+        result["favorite"] = False
+    return result
+
+
+def list_documents(family: str, actor: str, role: str) -> list[dict]:
+    """List one cutover family from KaveonDB with legacy visibility and order."""
+    if not enabled(family):
+        raise ProductReadAuthorityError(f"{family} has not moved to KaveonDB read authority")
+    records = product_store.list_records(_KIND[family], actor, "Admin")
+    favorites = product_store.list_records("favorite", actor, "Admin")
+    favorite_ids = {
+        (str(document.get("object_type")), str(document.get("object_id")))
+        for record in favorites
+        if isinstance(record, dict) and isinstance((document := record.get("document")), dict)
+        and document.get("user_email") == actor
+    }
+    documents = []
+    for record in records:
+        document = record.get("document") if isinstance(record, dict) else None
+        if not isinstance(document, dict):
+            raise ProductReadAuthorityError(f"KaveonDB returned an invalid {family} document")
+        visibility = document.get("visibility") or "internal"
+        owner = document.get("created_by") or document.get("owner")
+        if not (role == "Admin" or visibility == "published"
+            or visibility == "internal" and role in {"Analyst", "Editor"}
+            or visibility == "private" and owner == actor): continue
+        item = dict(document)
+        item["favorite"] = (_KIND[family], str(item.get("id"))) in favorite_ids
+        documents.append(item)
+    def modified(item: dict) -> str:
+        return str(item.get("updated_at") or item.get("modified_at") or "")
+    return sorted(documents, key=lambda item: (modified(item), str(item.get("id") or "")), reverse=True)
