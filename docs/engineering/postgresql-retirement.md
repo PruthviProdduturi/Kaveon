@@ -389,6 +389,15 @@ Deleting the StatefulSet or PVC before these gates would remove the current
 product metadata authority and break Studio even though ADLS analytical queries
 remain available.
 
+In an evidence-qualified retirement or restart-rehearsal process, the setup
+status route reports KaveonDB as the configured product authority without
+probing an external metadata database. The administrative metadata connection
+test/update, setup initialization, start-fresh, and legacy data-source repair
+routes return `409 postgresql_retired` before opening a connection or changing
+configuration. This fence is part of PostgreSQL-free operation; operators must
+leave retirement mode and requalify the activation evidence before restoring an
+external metadata authority.
+
 Favorites now cover typed migrated targets with owner uniqueness, references,
 source/outbox atomicity, backfill/replay, shadow code, and direct KaveonDB
 mutations. Legacy data-source favorites normalize to the non-secret typed source

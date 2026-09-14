@@ -9,7 +9,7 @@ import { SETUP_DB_ICONS } from "../../../components/DataSourceIcons";
 import s from "../settings.module.css";
 
 interface MetadataConfig {
-  db_type: "fabric_sql" | "azure_sql" | "postgresql" | "mysql";
+  db_type: "fabric_sql" | "azure_sql" | "postgresql" | "mysql" | "kaveondb";
   label: string; endpoint: string; host: string; port: string; database: string; ui_configured: boolean;
 }
 interface EngineStatus { configured: boolean; connected: boolean; catalog_count: number | null }

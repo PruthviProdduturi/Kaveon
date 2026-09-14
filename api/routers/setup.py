@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from models.setup import SetupConnectionBody
 import database.pool as pool
 from middleware.permissions import require_min_role
+from services import postgresql_retirement_runtime
 
 router = APIRouter()
 
@@ -44,6 +45,17 @@ _DB_TYPE_LABELS = {
     "postgresql": "PostgreSQL",
     "mysql":      "MySQL",
 }
+
+_RETIRED_METADATA_DETAIL = {
+    "code": "postgresql_retired",
+    "message": "External metadata database administration is disabled because KaveonDB is the product authority.",
+}
+
+
+def _assert_external_metadata_enabled() -> None:
+    """Fence legacy metadata operations before they open a database or edit config."""
+    if postgresql_retirement_runtime.requested():
+        raise HTTPException(status_code=409, detail=_RETIRED_METADATA_DETAIL)
 
 
 def _read_env_vars() -> dict:
@@ -152,6 +164,8 @@ def _probe(data: SetupConnectionBody, statements=None):
 
 @router.get("/setup/status")
 def setup_status():
+    if postgresql_retirement_runtime.requested():
+        return {"status": "ok", "authority": "kaveondb"}
     cfg = _read_env_vars()
     endpoint = cfg["endpoint"]
     database = cfg["database"]
@@ -195,6 +209,7 @@ def setup_status():
 
 def _assert_setup_mode():
     """Raise 403 if the app is already fully configured."""
+    _assert_external_metadata_enabled()
     database = os.environ.get("METADATA_DATABASE")
     db_type = os.environ.get("METADATA_DB_TYPE") or "fabric_sql"
     endpoint = os.environ.get("METADATA_ENDPOINT")
@@ -311,6 +326,17 @@ def _is_reset_allowed() -> bool:
 @router.get("/admin/metadata")
 def admin_get_metadata(ctx=Depends(require_min_role("Admin"))):
     """Return current metadata server config (admin only). Never exposes credentials."""
+    if postgresql_retirement_runtime.requested():
+        return {
+            "db_type": "kaveondb",
+            "label": "KaveonDB",
+            "endpoint": "",
+            "host": "",
+            "port": "",
+            "database": "kaveon",
+            "ui_configured": True,
+            "authority": "kaveondb",
+        }
     cfg = _read_env_vars()
     return {
         "db_type":      cfg["db_type"],
@@ -326,6 +352,7 @@ def admin_get_metadata(ctx=Depends(require_min_role("Admin"))):
 @router.post("/admin/metadata/test")
 def admin_test_metadata(data: SetupConnectionBody, ctx=Depends(require_min_role("Admin"))):
     """Test a new metadata connection without applying it (admin only)."""
+    _assert_external_metadata_enabled()
     result = _probe(data)
     if result["success"]:
         return {"success": True, "db_type": data.db_type}
@@ -342,6 +369,7 @@ def admin_update_metadata(data: SetupConnectionBody, ctx=Depends(require_min_rol
     Reconfigure the metadata database and restart the API (admin only).
     Unlike /setup/initialize, this works even when the app is already configured.
     """
+    _assert_external_metadata_enabled()
     schema_path = _SCHEMA_FILES.get(data.db_type)
     if not schema_path or not schema_path.exists():
         raise HTTPException(status_code=500, detail=f"Schema file not found for {_DB_TYPE_LABELS.get(data.db_type, data.db_type)}")
@@ -402,6 +430,7 @@ def admin_start_fresh(ctx=Depends(require_min_role("Admin"))):
     Only available when the metadata DB was configured via the UI (not via
     deployment env vars), to prevent accidental resets on managed deployments.
     """
+    _assert_external_metadata_enabled()
     if not _is_reset_allowed():
         raise HTTPException(
             status_code=403,
@@ -454,6 +483,7 @@ def admin_start_fresh(ctx=Depends(require_min_role("Admin"))):
 @router.post("/admin/fix-datasource-refs")
 def fix_datasource_refs(ctx=Depends(require_min_role("Admin"))):
     """One-time fix: update dataset database_name from 'neondb' to 'kaveon' after migration."""
+    _assert_external_metadata_enabled()
     meta_db = pool._live_meta_db()
     p = pool.get_connection_pool(meta_db)
     conn = p.get_connection()
