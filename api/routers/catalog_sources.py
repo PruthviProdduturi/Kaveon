@@ -481,7 +481,11 @@ def get_audit_trail(cs_id: str, ctx: UserContext = Depends(require_min_role("Vie
 @router.post("/catalog-sources/{cs_id}/engine-sync")
 def sync_engine_catalog(cs_id: str, data: dict, ctx: UserContext = Depends(require_min_role("Admin"))):
     from services.engine_bridge import sync_catalog
-    row = db.query_one(f"SELECT {_FIELDS} FROM catalog_sources WHERE id = @param0", [cs_id])
+    if product_read_authority.enabled("sources"):
+        document=product_read_authority.read_document("sources",f"catalog-{cs_id}",ctx.email,"Admin")
+        row=_catalog_cutover_row(document) if document else None
+    else:
+        row = db.query_one(f"SELECT {_FIELDS} FROM catalog_sources WHERE id = @param0", [cs_id])
     if not row:
         raise HTTPException(404, "Catalog source not found")
     revision = data.get("expected_revision")

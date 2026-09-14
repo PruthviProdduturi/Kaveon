@@ -12,6 +12,7 @@ import database.pool as pool
 import database.metadata as meta_db
 import services.saved_queries as saved_q_svc
 import services.query_history as history_svc
+from services import postgresql_retirement_runtime, product_read_authority
 from services.query_generator import quote_identifier
 from services.sql_guard import PLATFORM_METADATA_TABLES, assert_no_platform_tables
 from config import settings
@@ -23,9 +24,24 @@ MAX_SQL_BYTES = 65_536
 NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
 
 
+def _require_legacy_data_plane():
+    """Reject legacy pool access before it can resolve metadata in PostgreSQL."""
+    if postgresql_retirement_runtime.requested():
+        raise HTTPException(
+            status_code=503,
+            detail="Legacy database passthrough is unavailable after PostgreSQL retirement; use an Engine catalog.",
+        )
+
+
 @router.get("/lab/databases")
 def list_databases(response: Response, user: str = Depends(require_auth)):
     response.headers.update(NO_CACHE)
+    if product_read_authority.enabled("sources"):
+        rows=[]
+        for source in product_read_authority.list_documents("sources",user,"Viewer"):
+            if source.get("source_kind")=="data" and source.get("is_active"):
+                rows.append({"database":source.get("database_name"),"display_name":source.get("name"),"table_count":0})
+        return {"success":True,"databases":sorted(rows,key=lambda row:str(row.get("display_name") or ""))}
     try:
         # Via the metadata adapter so is_active = 1 → TRUE on Postgres.
         result = meta_db.query(
@@ -96,6 +112,12 @@ def _hide_platform_tables(tables: list, resolved_db: str) -> list:
 
 def _engine_source(source_id: str) -> dict:
     """Resolve a browser-selected ID to one active native catalog only."""
+    if product_read_authority.enabled("sources"):
+        document=product_read_authority.read_document("sources",f"catalog-{source_id}","kaveon-system","Admin")
+        if (not document or document.get("source_kind")!="catalog" or document.get("lifecycle")!="active"
+                or document.get("adapter_type")!="native" or not document.get("catalog_identity")):
+            raise HTTPException(404,"Active Engine catalog source not found")
+        return {"id":source_id,"name":document.get("name"),"engine_catalog":document["catalog_identity"]}
     source = meta_db.query_one(
         "SELECT id, name, engine_catalog FROM catalog_sources "
         "WHERE id = @param0 AND lifecycle = 'active' AND adapter_type = 'native'",
@@ -204,10 +226,15 @@ def _engine_query(sql: str, catalog: str) -> str:
 @router.get("/lab/engine/sources")
 def list_engine_sources(response: Response, ctx=Depends(require_min_role("Viewer"))):
     response.headers.update(NO_CACHE)
-    rows = meta_db.query(
+    if product_read_authority.enabled("sources"):
+        rows=[{"id":str(item["source_id"])[8:],"name":item.get("name"),"engine_catalog":item.get("catalog_identity")}
+              for item in product_read_authority.list_documents("sources",ctx.email,ctx.role)
+              if item.get("source_kind")=="catalog" and item.get("lifecycle")=="active" and item.get("adapter_type")=="native"]
+    else:
+        rows = meta_db.query(
         "SELECT id, name, engine_catalog FROM catalog_sources "
         "WHERE lifecycle = 'active' AND adapter_type = 'native' ORDER BY name"
-    ).get("rows") or []
+        ).get("rows") or []
     return {"success": True, "sources": [
         {"id": row["id"], "name": row["name"], "catalog": row["engine_catalog"]} for row in rows
     ]}
@@ -252,6 +279,7 @@ def get_engine_table_columns(source_id: str, schema: str, table: str, response: 
 
 @router.get("/lab/tables")
 def list_tables(response: Response, database: str = Query(default=None), user: str = Depends(require_auth)):
+    _require_legacy_data_plane()
     response.headers.update(NO_CACHE)
     resolved = _resolve_db(database)
     tables = _hide_platform_tables(pool.get_tables(resolved), resolved)
@@ -260,12 +288,14 @@ def list_tables(response: Response, database: str = Query(default=None), user: s
 
 @router.get("/lab/tables/{table_id}/columns")
 def get_table_columns(table_id: str, database: str = Query(default=None), user: str = Depends(require_auth)):
+    _require_legacy_data_plane()
     columns = pool.get_table_columns(table_id, _resolve_db(database))
     return columns
 
 
 @router.get("/lab/schema/{schema}/{table_name}")
 def get_schema(schema: str, table_name: str, database: str = Query(default=None), user: str = Depends(require_auth)):
+    _require_legacy_data_plane()
     table_id = f"{schema}.{table_name}"
     columns = pool.get_table_columns(table_id, _resolve_db(database))
     return {"success": True, "schema": {"columns": columns}}
@@ -273,6 +303,7 @@ def get_schema(schema: str, table_name: str, database: str = Query(default=None)
 
 @router.post("/lab/execute")
 def execute_sql(data: LabExecuteBody, response: Response, ctx=Depends(require_min_role("Analyst"))):
+    _require_legacy_data_plane()
     user = ctx.email
     sql_execute_limiter.check(user)
     resolved = _resolve_db(data.database)
@@ -324,6 +355,7 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
             "rowCount": len(rows),
             "executionTime": duration_ms / 1000,
         }
+    _require_legacy_data_plane()
     assert_no_platform_tables(sql, database)
     dataset_id = data.datasetId
     run_context = data.runContext
@@ -405,6 +437,7 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
 
 @router.post("/lab/ctas", status_code=200)
 def create_table_as_select(data: CtasBody, ctx=Depends(require_min_role("Analyst"))):
+    _require_legacy_data_plane()
     user = ctx.email  # noqa: F841
     """Materialise a query as a new table using SELECT … INTO [schema].[table]."""
     sql_execute_limiter.check(user)
@@ -455,6 +488,7 @@ def get_distinct_values(
     limit: int = Query(default=100),
     user: str = Depends(require_auth),
 ):
+    _require_legacy_data_plane()
     user_id = user
     start_time = int(time.time() * 1000)
 

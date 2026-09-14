@@ -17,6 +17,7 @@ from services.sql_table_extractor import extract_tables_from_sql
 from services.sql_guard import assert_no_platform_tables, assert_read_only
 import database.pool as pool
 import database.metadata as meta_db
+from services import postgresql_retirement_runtime, product_read_authority
 
 router = APIRouter()
 
@@ -117,6 +118,14 @@ def _engine_source_for_catalog(catalog: str) -> dict | None:
     be used for chart execution.
     """
     if not catalog:
+        return None
+    if product_read_authority.enabled("sources"):
+        for source in product_read_authority.list_documents("sources", "kaveon-system", "Admin"):
+            if (source.get("source_kind") == "catalog"
+                    and source.get("catalog_identity") == catalog
+                    and source.get("lifecycle") == "active"
+                    and source.get("adapter_type") == "native"):
+                return {"id": source.get("source_id") or source.get("id"), "engine_catalog": catalog}
         return None
     return meta_db.query_one(
         "SELECT id, engine_catalog FROM catalog_sources "
@@ -386,6 +395,8 @@ def distinct_filter_values(
 
 @router.post("/sql/execute")
 def execute_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Depends(require_user_context)):
+    if postgresql_retirement_runtime.requested():
+        raise HTTPException(status_code=503, detail="Legacy SQL execution is unavailable after PostgreSQL retirement; use /sql/engine.")
     # Viewers may only execute from dashboard/filter context — not from builder or lab
     _dashboard_sources = {"dashboard-chart", "dashboard-filter", "dataset-filter", "dataset-preview"}
     from middleware.permissions import ROLE_LEVELS
@@ -502,6 +513,8 @@ def execute_sql_async(
     ctx=Depends(require_min_role("Analyst")),
 ):
     """Start an async query job. Returns job_id immediately for polling."""
+    if postgresql_retirement_runtime.requested():
+        raise HTTPException(status_code=503, detail="Legacy asynchronous SQL execution is unavailable after PostgreSQL retirement.")
     user = ctx.email
     assert_no_platform_tables(data.sql_text, data.database)
     sql_execute_limiter.check(user)
