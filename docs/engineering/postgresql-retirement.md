@@ -364,6 +364,15 @@ publisher reconciles ambiguous writes from exact remote bytes, but production
 use remains blocked on a deployed ADLS client and provenance for every sealed
 path/hash.
 
+Live DLM generation now has a retirement-mode commit path. It assigns the next
+run version from a bounded KaveonDB snapshot, publishes canonical compiled bytes
+create-only to ADLS and verifies them, then atomically creates or revision-CAS
+updates the dataset-bound definition and advances the run from `building` to
+`ready`. Only the dataset owner may publish. PostgreSQL mode retains the source
+transaction and outbox path. Immutable bytes deliberately precede the KaveonDB
+transaction, so a failed metadata commit can leave an unreferenced object but
+can never expose a ready run whose bytes are missing or divergent.
+
 A credential-free rehearsal bundle can now bind completed definition/run
 checkpoints, artifact receipts, source watermarks, exact revision bindings,
 KaveonDB snapshot/generations and reconciliation results. Its verifier rejects
