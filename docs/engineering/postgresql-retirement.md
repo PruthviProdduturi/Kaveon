@@ -29,6 +29,10 @@ timestamps. Credentials remain indirect: secret-backed sources expose only a
 validated Key Vault URI, while managed identities expose a bounded principal
 reference. Raw credentials and connection strings are rejected by migration
 and by the Engine document validator.
+When `user_themes` has read authority, theme create, update, and delete also use
+KaveonDB directly. Updates and deletes bind the exact current revision; missing
+deletes are idempotent, malformed revisions fail closed, and no operation falls
+back to PostgreSQL.
 Catalog audit reads can independently select `activity`; administrators see the
 workspace trail and other roles remain actor-scoped. `dlm_definitions` is
 reserved in the allowlist but the existing DLM status endpoint cannot select it

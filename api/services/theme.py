@@ -4,7 +4,7 @@ import re
 import time
 import logging
 import database.metadata as db
-from services import product_outbox, product_shadow_read
+from services import product_outbox, product_shadow_read, product_store
 
 DEFAULT_COLOR = "#8f9192"
 _CACHE_TTL = 300  # seconds
@@ -51,6 +51,19 @@ def save_user_theme(user_email: str, theme_color: str) -> None:
         raise ValueError("Invalid hex color format. Expected format: #RRGGBB")
 
     document = {"user_email": user_email, "theme_color": theme_color.lower()}
+    from services import product_read_authority
+    if product_read_authority.enabled("user_themes"):
+        current = product_store.read("user_theme", user_email, user_email, "Admin")
+        revision = current.get("revision") if isinstance(current, dict) else None
+        if current is not None and (type(revision) is not int or revision < 1):
+            raise RuntimeError("KaveonDB user-theme revision is invalid")
+        mutation = product_store.ProductMutation(
+            "update" if current else "create", "user_theme", user_email, document,
+            expected_revision=revision,
+        )
+        product_store.transact([mutation], user_email, "Admin")
+        _cache.pop(user_email, None)
+        return
     with db.transaction() as transaction:
         current = transaction.query_one(
             "SELECT theme_color FROM dbo.user_themes WHERE user_email = @param0 FOR UPDATE",
@@ -76,6 +89,22 @@ def save_user_theme(user_email: str, theme_color: str) -> None:
 
 
 def delete_user_theme(user_email: str) -> None:
+    from services import product_read_authority
+    if product_read_authority.enabled("user_themes"):
+        current = product_store.read("user_theme", user_email, user_email, "Admin")
+        if current is None:
+            _cache.pop(user_email, None)
+            return
+        revision = current.get("revision")
+        if type(revision) is not int or revision < 1:
+            raise RuntimeError("KaveonDB user-theme revision is invalid")
+        product_store.transact([
+            product_store.ProductMutation(
+                "delete", "user_theme", user_email, expected_revision=revision,
+            )
+        ], user_email, "Admin")
+        _cache.pop(user_email, None)
+        return
     with db.transaction() as transaction:
         current = transaction.query_one(
             "SELECT theme_color FROM dbo.user_themes WHERE user_email = @param0 FOR UPDATE",
