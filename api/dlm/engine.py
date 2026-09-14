@@ -64,6 +64,69 @@ _RETIREMENT_BUILD: ContextVar[Optional[_RetirementBuildState]] = ContextVar(
     "dlm_retirement_build", default=None,
 )
 
+
+@dataclass
+class _RetirementServingState:
+    actor: str
+    role: str
+    artifacts: Dict[str, tuple] = field(default_factory=dict)
+    all_loaded: bool = False
+
+
+_RETIREMENT_SERVING: ContextVar[Optional[_RetirementServingState]] = ContextVar(
+    "dlm_retirement_serving", default=None,
+)
+
+
+def _with_serving_identity(actor: Optional[str], role: str, invoke):
+    if not actor or _RETIREMENT_SERVING.get() is not None:
+        return invoke()
+    token = _RETIREMENT_SERVING.set(_RetirementServingState(actor, role))
+    try:
+        return invoke()
+    finally:
+        _RETIREMENT_SERVING.reset(token)
+
+
+def _serving_artifact(dataset_id: str) -> Optional[dict]:
+    state = _RETIREMENT_SERVING.get()
+    if state is None:
+        return None
+    dataset_id = str(dataset_id)
+    cached = state.artifacts.get(dataset_id)
+    if cached is not None:
+        return cached[1]
+    artifact = get_dlm(dataset_id, state.actor, state.role)
+    if artifact is None:
+        state.artifacts[dataset_id] = ((0, "missing"), None)
+        return None
+    identity = (artifact.get("version"), hashlib.sha256(
+        json.dumps(artifact, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).hexdigest())
+    state.artifacts[dataset_id] = (identity, artifact)
+    return artifact
+
+
+def _serving_artifacts() -> List[dict]:
+    state = _RETIREMENT_SERVING.get()
+    if state is None:
+        return []
+    if not state.all_loaded:
+        from services import product_store
+        for record in product_store.list_records("dataset", state.actor, state.role, max_records=1000):
+            record_id = str(record.get("id") or "")
+            if record_id:
+                _serving_artifact(record_id)
+        state.all_loaded = True
+    return [entry[1] for entry in state.artifacts.values() if entry[1] is not None]
+
+
+def _dataset_by_id(dataset_id: str):
+    state = _RETIREMENT_SERVING.get()
+    if state is not None:
+        return datasets_svc.get_dataset_by_id(str(dataset_id), state.actor, state.role)
+    return datasets_svc.get_dataset_by_id(str(dataset_id))
+
 # Low-cardinality dimensions get a value index; high-card columns (ids, free
 # text) are matched structurally, never by value.
 _MAX_CARDINALITY_FOR_VALUES = 1000
@@ -237,7 +300,7 @@ _tables_ready = False
 
 def ensure_tables() -> None:
     global _tables_ready
-    if _RETIREMENT_BUILD.get() is not None:
+    if _RETIREMENT_BUILD.get() is not None or _RETIREMENT_SERVING.get() is not None:
         return
     if _tables_ready:
         return
@@ -825,16 +888,33 @@ def get_dlm(dataset_id: str, actor: Optional[str] = None, role: str = "Viewer") 
 
 
 def resolve_value(dataset_id: str, term: str, limit: int = 5,
-                  exact_only: bool = False) -> List[Dict[str, Any]]:
+                  exact_only: bool = False, actor: Optional[str] = None,
+                  role: str = "Viewer") -> List[Dict[str, Any]]:
     """The no-LLM retrieval workhorse: map a term to the column + filter key it
     denotes. e.g. "anthropic" -> {column: provider, key_value: 'Anthropic'}.
     Exact-normalized match first; a prefix match is used as a fallback unless
     *exact_only* (the entity-filter path sets this, so "in" can't match "India")."""
+    if actor and _RETIREMENT_SERVING.get() is None:
+        return _with_serving_identity(actor, role, lambda: resolve_value(
+            dataset_id, term, limit, exact_only,
+        ))
     ensure_tables()
     norm = _normalize(term)
     if not norm:
         return []
     norm = _VALUE_ALIASES.get(norm, norm)   # USA -> united states, etc.
+    serving = _RETIREMENT_SERVING.get()
+    if serving is not None:
+        artifact = _serving_artifact(str(dataset_id)) or {}
+        values = ((artifact.get("compiled_context") or {}).get("values") or [])
+        rows = sorted((row for row in values if row.get("value_norm") == norm),
+                      key=lambda row: row.get("freq", 0), reverse=True)
+        if not rows and not exact_only and len(norm) >= 4:
+            rows = sorted((row for row in values if str(row.get("value_norm") or "").startswith(norm)),
+                          key=lambda row: row.get("freq", 0), reverse=True)
+        if not rows and len(norm) >= 4:
+            rows = _fuzzy_value(str(dataset_id), norm)
+        return [_value_hit(row) for row in rows[:limit]]
     exact = meta.query(
         "SELECT element_key, value_text, key_column, key_value, freq "
         "FROM dlm_value_index WHERE dataset_id = @param0 AND value_norm = @param1 "
@@ -860,10 +940,14 @@ def _fuzzy_value(dataset_id: str, norm: str) -> List[dict]:
     """Close-match a (possibly misspelled) term against the dataset's indexed
     values using edit-distance ratio. 'paskistan' -> 'Pakistan'."""
     import difflib
-    res = meta.query(
-        "SELECT element_key, value_text, value_norm, key_column, key_value, freq "
-        "FROM dlm_value_index WHERE dataset_id = @param0", [dataset_id])
-    cand = res.get("rows_objects", res.get("rows", []))
+    if _RETIREMENT_SERVING.get() is not None:
+        artifact = _serving_artifact(dataset_id) or {}
+        cand = ((artifact.get("compiled_context") or {}).get("values") or [])
+    else:
+        res = meta.query(
+            "SELECT element_key, value_text, value_norm, key_column, key_value, freq "
+            "FROM dlm_value_index WHERE dataset_id = @param0", [dataset_id])
+        cand = res.get("rows_objects", res.get("rows", []))
     if not cand:
         return []
     by_norm = {}
@@ -882,12 +966,15 @@ def _stem_set(tokens: set) -> set:
     return {_stem(t) for t in tokens}
 
 
-def route(question: str, limit: int = 3) -> List[Dict[str, Any]]:
+def route(question: str, limit: int = 3, actor: Optional[str] = None,
+          role: str = "Viewer") -> List[Dict[str, Any]]:
     """CLM-over-CLMs (weighted lexical): rank datasets by how strongly the
     question matches each dataset's metrics (x3), indexed values (x2), name (x4)
     and columns (min(hits,3)). A floor prevents a single generic word from routing
     (which sent 'USA consumption' to the AI leaderboard). Discrete-code routing
     at v2."""
+    if actor and _RETIREMENT_SERVING.get() is None:
+        return _with_serving_identity(actor, role, lambda: route(question, limit))
     ensure_tables()
     q_tokens = set(_tokenize(question))
     if not q_tokens:
@@ -895,7 +982,10 @@ def route(question: str, limit: int = 3) -> List[Dict[str, Any]]:
     q_stems = _stem_set(q_tokens)
 
     value_hits = _value_dataset_hits(q_tokens)  # dataset_id -> count of value matches
-    arts = meta.query("SELECT dataset_id, manifest FROM dlm_artifact", [])
+    serving_artifacts = _serving_artifacts() if _RETIREMENT_SERVING.get() is not None else None
+    arts = ({"rows_objects": [{"dataset_id": item.get("dataset_id"), "manifest": item.get("manifest")}
+                               for item in serving_artifacts]}
+            if serving_artifacts is not None else meta.query("SELECT dataset_id, manifest FROM dlm_artifact", []))
     ranked: List[Dict[str, Any]] = []
     for a in arts.get("rows_objects", arts.get("rows", [])):
         did = str(a.get("dataset_id"))
@@ -943,6 +1033,15 @@ def _value_dataset_hits(q_tokens: set) -> Dict[str, int]:
     toks = [t for t in q_tokens if len(t) >= 3]
     if not toks:
         return {}
+    if _RETIREMENT_SERVING.get() is not None:
+        wanted = set(toks)
+        out = {}
+        for artifact in _serving_artifacts():
+            values = ((artifact.get("compiled_context") or {}).get("values") or [])
+            count = sum(1 for row in values if row.get("value_norm") in wanted)
+            if count:
+                out[str(artifact.get("dataset_id"))] = count
+        return out
     placeholders = ",".join(f"@param{i}" for i in range(len(toks)))
     try:
         res = meta.query(
@@ -1255,7 +1354,10 @@ _FUZZY_CUTOFF = 0.85
 def _dataset_names() -> List[str]:
     """Names of the datasets the DLM can answer for — the compiled artifacts, which
     is exactly the set routing considers."""
-    arts = meta.query("SELECT manifest FROM dlm_artifact", [])
+    if _RETIREMENT_SERVING.get() is not None:
+        arts = {"rows_objects": [{"manifest": item.get("manifest")} for item in _serving_artifacts()]}
+    else:
+        arts = meta.query("SELECT manifest FROM dlm_artifact", [])
     names = []
     for a in arts.get("rows_objects", arts.get("rows", [])):
         name = (_loads(a.get("manifest")) or {}).get("name")
@@ -1274,7 +1376,10 @@ def _vocabulary_hit(question: str) -> bool:
     q_stems = _stem_set(q_tokens)
     if _value_dataset_hits(q_tokens):
         return True
-    arts = meta.query("SELECT manifest FROM dlm_artifact", [])
+    if _RETIREMENT_SERVING.get() is not None:
+        arts = {"rows_objects": [{"manifest": item.get("manifest")} for item in _serving_artifacts()]}
+    else:
+        arts = meta.query("SELECT manifest FROM dlm_artifact", [])
     for a in arts.get("rows_objects", arts.get("rows", [])):
         manifest = _loads(a.get("manifest")) or {}
         toks: set = set(_tokenize(manifest.get("name")))
@@ -1402,12 +1507,15 @@ def _clarify(kind: str, prompt: str, options: List[Dict[str, str]], question: st
 
 
 def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None,
-        frame: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        frame: Optional[Dict[str, Any]] = None, actor: Optional[str] = None,
+        role: str = "Viewer") -> Dict[str, Any]:
     """Deterministic NL -> SQL via the DLM — no LLM.
 
     `choices` pins an ambiguous slot the user resolved ({"metric": name} or
     {"dimension": column}); `frame` is the previous answer's frame, inherited by
     a follow-up for every slot the new question does not mention."""
+    if actor and _RETIREMENT_SERVING.get() is None:
+        return _with_serving_identity(actor, role, lambda: ask(question, limit, choices, frame))
     t0 = _time_mod.monotonic()
     ensure_tables()
     choices = dict(choices or {})
@@ -1426,7 +1534,7 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
         return {"ok": False, "reason": "no_dataset"}
     dataset_id = str(frame["dataset_id"]) if (follow_up and (not routed or bool(_FOLLOW_UP_RE.search(question)))) else str(routed[0]["dataset_id"])
     routed_entry = routed[0] if routed and str(routed[0]["dataset_id"]) == dataset_id else {"dataset_id": dataset_id, "score": 1.0}
-    ds = datasets_svc.get_dataset_by_id(dataset_id)
+    ds = _dataset_by_id(dataset_id)
     if not ds:
         return {"ok": False, "reason": "dataset_not_found"}
 
@@ -1771,6 +1879,10 @@ def _remember_answer(key: tuple, entry: Optional[Dict[str, Any]], size: int) -> 
 
 def _answer_keys(dataset_id: str) -> List[tuple]:
     """(metric_name, group_col) for every precomputed answer — no rows loaded."""
+    if _RETIREMENT_SERVING.get() is not None:
+        artifact = _serving_artifact(dataset_id) or {}
+        return [(row.get("metric_name"), row.get("group_col") or "")
+                for row in ((artifact.get("compiled_context") or {}).get("answers") or [])]
     ensure_tables()
     res = meta.query(
         "SELECT metric_name, group_col FROM dlm_answers WHERE dataset_id = @param0",
@@ -1781,6 +1893,12 @@ def _answer_keys(dataset_id: str) -> List[tuple]:
 
 def _context_answer(dataset_id: str, metric_name: str, group_col: str) -> Optional[Dict[str, Any]]:
     key = (str(dataset_id), metric_name, group_col or "")
+    if _RETIREMENT_SERVING.get() is not None:
+        artifact = _serving_artifact(key[0]) or {}
+        for row in ((artifact.get("compiled_context") or {}).get("answers") or []):
+            if row.get("metric_name") == key[1] and (row.get("group_col") or "") == key[2]:
+                return {"columns": row.get("columns") or [], "rows": row.get("rows") or []}
+        return None
     if key in _ANSWER_CACHE:
         _ANSWER_CACHE.move_to_end(key)
         return _ANSWER_CACHE[key]
@@ -1805,6 +1923,18 @@ _SKETCH_CACHE: Dict[str, Dict[str, dict]] = {}
 
 
 def _load_sketches(dataset_id: str) -> Dict[str, dict]:
+    if _RETIREMENT_SERVING.get() is not None:
+        artifact = _serving_artifact(dataset_id) or {}
+        rows = ((artifact.get("compiled_context") or {}).get("sketches") or [])
+        out: Dict[str, dict] = {}
+        for row in rows:
+            metric = row.get("metric_name")
+            entry = out.setdefault(metric, {"dims": [], "cells": {}})
+            if not row.get("cell_key"):
+                entry["dims"] = (_loads(row.get("registers")) or {}).get("dims") or []
+            else:
+                entry["cells"][tuple(_loads(row.get("cell_key")) or [])] = row.get("registers")
+        return out
     cached = _SKETCH_CACHE.get(dataset_id)
     if cached is not None:
         return cached
@@ -1843,6 +1973,16 @@ _RANGE_CACHE: Dict[str, tuple] = {}
 def _dataset_year_bounds(dataset_id: str) -> tuple:
     """(min_year, max_year) for the dataset's date column, read from the compiled
     stats_rollup.date_range — no live query. (None, None) when unknown."""
+    if _RETIREMENT_SERVING.get() is not None:
+        artifact = _serving_artifact(dataset_id) or {}
+        stats = artifact.get("stats_rollup") or {}
+        dr = stats.get("date_range") or {}
+        def _year(value):
+            try:
+                return int(value) if isinstance(value, int) else int(str(value)[:4])
+            except Exception:
+                return None
+        return _year(dr.get("min")), _year(dr.get("max"))
     if dataset_id in _RANGE_CACHE:
         return _RANGE_CACHE[dataset_id]
     ensure_tables()
@@ -1903,16 +2043,22 @@ def invalidate_caches(dataset_id: Optional[str] = None) -> int:
     return n
 
 
-def check_freshness(dataset_id: str) -> Dict[str, Any]:
+def check_freshness(dataset_id: str, actor: Optional[str] = None,
+                    role: str = "Viewer") -> Dict[str, Any]:
     """Compute how fresh a dataset's DLM context is, combining time decay since
     the artifact was built with the data-change signal from pg_stat_user_tables.
     Returns a recommendation: use_context / rebuild / no_context."""
+    if actor and _RETIREMENT_SERVING.get() is None:
+        return _with_serving_identity(actor, role, lambda: check_freshness(dataset_id))
     ensure_tables()
 
     # 1) load artifact metadata
-    art = meta.query_one(
-        "SELECT built_at, status, stats_rollup, manifest FROM dlm_artifact "
-        "WHERE dataset_id = @param0", [str(dataset_id)])
+    if _RETIREMENT_SERVING.get() is not None:
+        art = _serving_artifact(str(dataset_id))
+    else:
+        art = meta.query_one(
+            "SELECT built_at, status, stats_rollup, manifest FROM dlm_artifact "
+            "WHERE dataset_id = @param0", [str(dataset_id)])
     if not art:
         return {
             "fresh": False, "score": 0.0, "computed_at": None,
@@ -1935,7 +2081,7 @@ def check_freshness(dataset_id: str) -> Dict[str, Any]:
     # 3) change factor — row modifications since the artifact was built
     c_factor = 1.0
     data_modified = False
-    if fact_table:
+    if fact_table and _RETIREMENT_SERVING.get() is None:
         ds = datasets_svc.get_dataset_by_id(str(dataset_id))
         database = (ds.get("database_name") or _metadata_database()) if ds else _metadata_database()
         try:
@@ -1976,7 +2122,7 @@ def check_freshness(dataset_id: str) -> Dict[str, Any]:
     }
 
 
-def _trigger_background_rebuild(dataset_id: str) -> bool:
+def _trigger_background_rebuild(dataset_id: str, actor: Optional[str] = None) -> bool:
     """Kick off a background thread to rebuild the DLM for a dataset if one isn't
     already in progress (or recently completed). Returns True if a rebuild was
     started, False if skipped (cooldown / already running)."""
@@ -1992,7 +2138,10 @@ def _trigger_background_rebuild(dataset_id: str) -> bool:
     def _do_rebuild():
         try:
             logger.info("Auto-rebuild started for dataset %s", dataset_id)
-            generate_dlm(dataset_id, force=True)
+            if actor:
+                generate_dlm(dataset_id, force=True, actor=actor)
+            else:
+                generate_dlm(dataset_id, force=True)
             logger.info("Auto-rebuild completed for dataset %s", dataset_id)
         except Exception:
             logger.exception("Auto-rebuild failed for dataset %s", dataset_id)
@@ -2010,6 +2159,9 @@ def maybe_auto_rebuild(dataset_id: str) -> Optional[bool]:
     the ask/serve path so context stays current without manual intervention.
     Returns True if rebuild was triggered, False if skipped, None if context is
     fresh (no action needed)."""
+    from services import postgresql_retirement_runtime
+    if postgresql_retirement_runtime.requested() and _RETIREMENT_SERVING.get() is None:
+        return False
     freshness = check_freshness(dataset_id)
     if freshness["fresh"]:
         return None
@@ -2429,15 +2581,20 @@ def _serve_in_filter(dataset_id: str, ds: dict, metric_name: str, metric_obj: Op
 
 def serve_chart(dataset_id: str, metric_column: str, aggregation: str,
                 group_by: Optional[str] = None,
-                filters: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+                filters: Optional[List[Dict[str, Any]]] = None,
+                actor: Optional[str] = None, role: str = "Viewer") -> Dict[str, Any]:
     """Serve a dashboard chart query from precomputed context (dlm_answers / HLL
     sketches) without touching the live database.  Returns ``served=True`` with
     columns/rows on a hit, or ``served=False`` when context can't answer."""
+    if actor and _RETIREMENT_SERVING.get() is None:
+        return _with_serving_identity(actor, role, lambda: serve_chart(
+            dataset_id, metric_column, aggregation, group_by, filters,
+        ))
     dataset_id = str(dataset_id)
     metric_column = _strip_table_prefix(metric_column)
     if group_by:
         group_by = _strip_table_prefix(group_by)
-    ds = datasets_svc.get_dataset_by_id(dataset_id)
+    ds = _dataset_by_id(dataset_id)
     if not ds:
         return {"served": False, "reason": "dataset_not_found"}
 
@@ -2581,10 +2738,15 @@ def _stale_context_fallback(dataset_id: str) -> Optional[Dict[str, Any]]:
 def serve_chart_multi(dataset_id: str,
                       metric_specs: List[Dict[str, str]],
                       group_by: Optional[str] = None,
-                      filters: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+                      filters: Optional[List[Dict[str, Any]]] = None,
+                      actor: Optional[str] = None, role: str = "Viewer") -> Dict[str, Any]:
     """Serve a multi-metric dashboard chart (stacked bar, combo) by merging
     precomputed per-metric answers. Returns served=True only when ALL metrics
     are answered from context."""
+    if actor and _RETIREMENT_SERVING.get() is None:
+        return _with_serving_identity(actor, role, lambda: serve_chart_multi(
+            dataset_id, metric_specs, group_by, filters,
+        ))
     dataset_id = str(dataset_id)
     if group_by:
         group_by = _strip_table_prefix(group_by)
@@ -2592,7 +2754,7 @@ def serve_chart_multi(dataset_id: str,
         {**s, "column": _strip_table_prefix(s.get("column", ""))}
         for s in metric_specs
     ]
-    ds = datasets_svc.get_dataset_by_id(dataset_id)
+    ds = _dataset_by_id(dataset_id)
     if not ds:
         return {"served": False, "reason": "dataset_not_found"}
 
@@ -2688,12 +2850,15 @@ def serve_chart_multi(dataset_id: str,
     }
 
 
-def filter_values(dataset_id: str, column: str, limit: int = 200) -> Dict[str, Any]:
+def filter_values(dataset_id: str, column: str, limit: int = 200,
+                  actor: Optional[str] = None, role: str = "Viewer") -> Dict[str, Any]:
     """Return distinct values for a dimension column from precomputed DLM answers.
     No live SQL — instant on any hardware."""
+    if actor and _RETIREMENT_SERVING.get() is None:
+        return _with_serving_identity(actor, role, lambda: filter_values(dataset_id, column, limit))
     dataset_id = str(dataset_id)
     column = _strip_table_prefix(column)
-    ds = datasets_svc.get_dataset_by_id(dataset_id)
+    ds = _dataset_by_id(dataset_id)
     if not ds:
         return {"ok": False, "reason": "dataset_not_found", "values": []}
 
@@ -3367,21 +3532,27 @@ def _year_clause(date_column: str, year: int, columns: List[dict]) -> str:
             f"AND {_qid(date_column)} < '{int(year) + 1}-01-01'")
 
 
-def coverage() -> List[Dict[str, Any]]:
+def coverage(actor: Optional[str] = None, role: str = "Viewer") -> List[Dict[str, Any]]:
     """What context is available to test against — one row per compiled DLM, with
     the date range, row count, and value coverage. Drives the homepage banner."""
+    if actor and _RETIREMENT_SERVING.get() is None:
+        return _with_serving_identity(actor, role, lambda: coverage())
     ensure_tables()
-    res = meta.query(
-        "SELECT dataset_id, manifest, stats_rollup, status, built_at FROM dlm_artifact "
-        "ORDER BY built_at DESC", []
-    )
+    if _RETIREMENT_SERVING.get() is not None:
+        res = {"rows_objects": _serving_artifacts()}
+    else:
+        res = meta.query(
+            "SELECT dataset_id, manifest, stats_rollup, status, built_at FROM dlm_artifact "
+            "ORDER BY built_at DESC", []
+        )
     out: List[Dict[str, Any]] = []
     for r in res.get("rows_objects", res.get("rows", [])):
         did = str(r.get("dataset_id"))
         manifest = _loads(r.get("manifest")) or {}
         stats = _loads(r.get("stats_rollup")) or {}
         row_counts = stats.get("row_counts") or {}
-        if not row_counts or stats.get("row_count_source") != "kaveon_engine_exact":
+        if (_RETIREMENT_SERVING.get() is None and
+                (not row_counts or stats.get("row_count_source") != "kaveon_engine_exact")):
             backfilled_counts = _backfill_native_row_counts(did, stats)
             if backfilled_counts:
                 row_counts = backfilled_counts
@@ -3479,9 +3650,15 @@ def _backfill_native_row_counts(dataset_id: str, stats: Dict[str, Any]) -> Dict[
 
 def _sample_values(dataset_id: str, per_col: int = 6) -> Dict[str, List[str]]:
     """A few example indexed values per dimension column — for the banner hover."""
-    res = meta.query(
-        "SELECT element_key, value_text, freq FROM dlm_value_index "
-        "WHERE dataset_id = @param0 ORDER BY freq DESC", [dataset_id])
+    if _RETIREMENT_SERVING.get() is not None:
+        artifact = _serving_artifact(dataset_id) or {}
+        rows = sorted(((artifact.get("compiled_context") or {}).get("values") or []),
+                      key=lambda row: row.get("freq", 0), reverse=True)
+        res = {"rows_objects": rows}
+    else:
+        res = meta.query(
+            "SELECT element_key, value_text, freq FROM dlm_value_index "
+            "WHERE dataset_id = @param0 ORDER BY freq DESC", [dataset_id])
     out: Dict[str, List[str]] = {}
     for r in res.get("rows_objects", res.get("rows", [])):
         if not isinstance(r, dict):
@@ -3815,6 +3992,12 @@ def _merge_spec(suggested: dict, curation: dict) -> dict:
 def _effective_spec(dataset_id: str) -> dict:
     """Suggested ⊕ curation for a dataset, cached in-memory (invalidated on regen
     and on save). Empty spec when no artifact exists."""
+    serving = _RETIREMENT_SERVING.get()
+    if serving is not None:
+        artifact = _serving_artifact(dataset_id) or {}
+        context = artifact.get("compiled_context") or {}
+        return _merge_spec((artifact.get("manifest") or {}).get("context_spec") or {},
+                           context.get("curation") or {})
     if dataset_id in _SPEC_CACHE:
         return _SPEC_CACHE[dataset_id]
     state = _RETIREMENT_BUILD.get()
@@ -4018,6 +4201,9 @@ def _value_hit(r: dict) -> Dict[str, Any]:
 
 
 def _value_count(dataset_id: str) -> int:
+    if _RETIREMENT_SERVING.get() is not None:
+        artifact = _serving_artifact(dataset_id) or {}
+        return len((artifact.get("compiled_context") or {}).get("values") or [])
     row = meta.query_one(
         "SELECT COUNT(*) AS n FROM dlm_value_index WHERE dataset_id = @param0", [dataset_id]
     )

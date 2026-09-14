@@ -461,6 +461,13 @@ artifact before the KaveonDB run becomes ready. Context edits use the same
 create-only artifact and new-run path. The non-retirement compiler continues to
 use its existing metadata tables and outbox contract.
 
+Retirement-mode DLM serving reads routing manifests, indexed values, exact
+precomputed answers, chart context, coverage and curation only from the current
+KaveonDB-bound immutable artifact. Authenticated request-local caches are bound
+to the artifact version and canonical SHA-256 and discarded after the request;
+there is no PostgreSQL fallback or cross-revision answer cache. Non-retirement
+requests retain the legacy serving path.
+
 A credential-free rehearsal bundle can now bind completed definition/run
 checkpoints, artifact receipts, source watermarks, exact revision bindings,
 KaveonDB snapshot/generations and reconciliation results. Its verifier rejects
