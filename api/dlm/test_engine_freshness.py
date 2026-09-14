@@ -12,6 +12,53 @@ from dlm import engine
 
 
 class ChartFreshnessTests(unittest.TestCase):
+    def test_retirement_serving_uses_compiled_context_without_metadata_sql(self):
+        context_spec = {
+            "metrics": {"Sessions": {"display_name": "Sessions", "aliases": [],
+                                      "additive": True, "default": True}},
+            "dimensions": {"country": {"display_name": "country", "aliases": [],
+                                        "precompute": True, "top_n": 500}},
+            "value_aliases": {}, "default_metric": "Sessions",
+        }
+        artifact = {
+            "dataset_id": "7", "version": 3,
+            "manifest": {"name": "Events", "fact_table": "events", "schema": "public",
+                         "columns": [{"name": "country", "is_dimension": True}],
+                         "metrics": [{"name": "Sessions", "expression": "SUM(sessions)"}],
+                         "context_spec": context_spec},
+            "stats_rollup": {}, "usage_rollup": {}, "source_hash": "source",
+            "built_at": "2026-09-14T00:00:00Z", "status": "ready", "values_indexed": 1,
+            "compiled_context": {
+                "values": [{"element_key": "events.country", "value_text": "Canada",
+                            "value_norm": "canada", "key_column": "country",
+                            "key_value": "Canada", "freq": 5}],
+                "answers": [{"metric_name": "Sessions", "group_col": "country",
+                             "columns": ["country", "Sessions"],
+                             "rows": [["Canada", 42]], "computed_at": "now"}],
+                "sketches": [], "router": {"summary": "Events", "terms": ["sessions", "country"]},
+                "curation": {},
+            },
+        }
+        dataset = {"id": "7", "dataset_name": "Events", "database_name": "OpenSource",
+                   "schema_name": "public", "fact_table": "events",
+                   "columns": [{"column_name": "country", "is_dimension": True}],
+                   "metrics": [{"name": "Sessions", "expression": "SUM(sessions)"}]}
+        with patch.object(engine, "get_dlm", return_value=artifact), \
+             patch("services.product_store.list_records", return_value=[{"id": "7", "document": {}}]), \
+             patch.object(engine.datasets_svc, "get_dataset_by_id", return_value=dataset), \
+             patch.object(engine.meta, "query", side_effect=AssertionError("PostgreSQL read reached")), \
+             patch.object(engine.meta, "query_one", side_effect=AssertionError("PostgreSQL read reached")), \
+             patch.object(engine.meta, "execute", side_effect=AssertionError("PostgreSQL write reached")):
+            routed = engine.route("sessions by country", actor="viewer", role="Viewer")
+            resolved = engine.resolve_value("7", "Canada", actor="viewer", role="Viewer")
+            values = engine.filter_values("7", "country", actor="viewer", role="Viewer")
+            answer = engine.ask("sessions by country", actor="viewer", role="Viewer")
+        self.assertEqual(routed[0]["dataset_id"], "7")
+        self.assertEqual(resolved[0]["key_value"], "Canada")
+        self.assertEqual(values["values"], [{"key": "Canada", "value": "Canada"}])
+        self.assertTrue(answer["ok"], answer)
+        self.assertTrue(answer.get("from_context"), answer)
+
     def test_retirement_curation_creates_new_immutable_generation_without_metadata_write(self):
         artifact = {
             "dataset_id": "24", "version": 2,

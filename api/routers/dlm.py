@@ -127,7 +127,7 @@ def freshness(dataset_id: str, ctx: UserContext = Depends(require_user_context))
     """How fresh is this dataset's DLM context? Combines time decay since the
     artifact was built with live data-change signals from pg_stat_user_tables.
     Returns a score in [0,1] and a recommendation: use_context / rebuild / no_context."""
-    return dlm.check_freshness(dataset_id)
+    return dlm.check_freshness(dataset_id, ctx.email, ctx.role)
 
 
 @router.get("/datasets/{dataset_id}/dlm/resolve")
@@ -135,7 +135,8 @@ def resolve(dataset_id: str, term: str = Query(..., min_length=1),
             limit: int = Query(default=5, ge=1, le=50),
             ctx: UserContext = Depends(require_user_context)):
     """No-LLM retrieval probe: resolve a term to the column + filter it denotes."""
-    return {"term": term, "matches": dlm.resolve_value(dataset_id, term, limit=limit)}
+    return {"term": term, "matches": dlm.resolve_value(
+        dataset_id, term, limit=limit, actor=ctx.email, role=ctx.role)}
 
 
 @router.get("/dlm/route")
@@ -143,7 +144,8 @@ def route(question: str = Query(..., min_length=1),
           limit: int = Query(default=3, ge=1, le=20),
           ctx: UserContext = Depends(require_user_context)):
     """CLM-over-CLMs: rank which dataset(s) a natural-language question targets."""
-    return {"question": question, "datasets": dlm.route(question, limit=limit)}
+    return {"question": question, "datasets": dlm.route(
+        question, limit=limit, actor=ctx.email, role=ctx.role)}
 
 
 @router.post("/dlm/ask")
@@ -151,7 +153,8 @@ def ask(body: AskBody, ctx: UserContext = Depends(require_user_context)):
     """Deterministic NL -> SQL via the DLM (no LLM). Returns the routed dataset,
     assembled SQL, and chart hints — or ok=false if nothing matched.
     Triggers a background rebuild when the serving dataset's context is stale."""
-    result = dlm.ask(body.question, limit=body.limit, choices=body.choices, frame=body.frame)
+    result = dlm.ask(body.question, limit=body.limit, choices=body.choices,
+                     frame=body.frame, actor=ctx.email, role=ctx.role)
     dataset_id = result.get("dataset_id")
     if dataset_id and result.get("ok"):
         rebuilt = dlm.maybe_auto_rebuild(dataset_id)
@@ -184,6 +187,8 @@ def serve_chart(body: ServeChartBody, ctx: UserContext = Depends(require_user_co
             aggregation=mc["aggregation"],
             group_by=body.group_by,
             filters=raw_filters,
+            actor=ctx.email,
+            role=ctx.role,
         )
 
     return dlm.serve_chart_multi(
@@ -191,6 +196,8 @@ def serve_chart(body: ServeChartBody, ctx: UserContext = Depends(require_user_co
         metric_specs=metric_list,
         group_by=body.group_by,
         filters=raw_filters,
+        actor=ctx.email,
+        role=ctx.role,
     )
 
 
@@ -199,7 +206,8 @@ def filter_values(dataset_id: int = Query(...), column: str = Query(...),
                   limit: int = Query(default=200, ge=1, le=1000),
                   ctx: UserContext = Depends(require_user_context)):
     """Distinct values for a dimension column, served from DLM context — no SQL."""
-    return dlm.filter_values(str(dataset_id), column, limit=limit)
+    return dlm.filter_values(str(dataset_id), column, limit=limit,
+                             actor=ctx.email, role=ctx.role)
 
 
 @router.post("/dashboards/{dashboard_id}/dlm/curate")
@@ -246,7 +254,7 @@ def notify_data_change(dataset_id: str = Query(...),
     """Webhook for data pipelines: call after loading new data to trigger an
     immediate DLM rebuild instead of waiting for the next sweep or user ask."""
     dlm.invalidate_caches(dataset_id)
-    triggered = dlm._trigger_background_rebuild(dataset_id)
+    triggered = dlm._trigger_background_rebuild(dataset_id, ctx.email)
     return {"ok": True, "dataset_id": dataset_id, "rebuild_triggered": triggered}
 
 
@@ -254,5 +262,5 @@ def notify_data_change(dataset_id: str = Query(...),
 def coverage(ctx: UserContext = Depends(require_user_context)):
     """What context is compiled and testable — datasets, date ranges, row counts,
     value coverage. Powers the homepage 'available context' banner."""
-    items = dlm.coverage()
+    items = dlm.coverage(ctx.email, ctx.role)
     return {"count": len(items), "datasets": items}
