@@ -255,6 +255,32 @@ the command never turns those two checkpoints into evidence for generated
 answers, routers, sketches, or value indexes. It creates the output directory
 atomically only after all 16 families pass.
 
+The API image contains the two special-family report commands used by the
+optional `api.retirementReports` Helm Jobs. Mount a restricted evidence PVC and
+place the live observations on it before enabling the Jobs:
+
+```powershell
+python -m services.context_cache_retirement_cli `
+  --evidence /evidence/context-cache-live.json `
+  --output /evidence/reports/context_cache.json --max-age-hours 1
+
+python -m services.dlm_generation_retirement_cli `
+  --bundle /evidence/dlm-migration-bundle.json `
+  --retirement-evidence /evidence/dlm-generation-live.json `
+  --output /evidence/reports/dlm_generation.json --max-age-hours 1
+```
+
+`dlm-generation-live.json` must identify one PostgreSQL snapshot and watermark,
+give exact row counts and schema SHA-256 values for all five DLM authority
+tables, and provide a later deletion observation containing the active write
+fence, exact deleted counts, zero remaining counts, verification time, and the
+KaveonDB target snapshot ID. That target ID must equal the compiled-artifact
+bundle's independently observed snapshot. The context report retains its
+existing requirement for source schema identities, complete deterministic
+dataset rebuild coverage, and exact post-fence deletion. Both commands are
+disabled unless their dedicated enable variables equal `true`; neither command
+executes deletion or fills missing evidence fields.
+
 The local collector verifies each report's canonical SHA-256 and exact family
 identity before assembling the gate input:
 

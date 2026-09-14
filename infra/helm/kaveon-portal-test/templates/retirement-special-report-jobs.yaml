@@ -1,0 +1,50 @@
+{{- if .Values.api.retirementReports.enabled }}
+{{- $pvc := required "api.retirementReports.evidencePvc is required" .Values.api.retirementReports.evidencePvc }}
+apiVersion: batch/v1
+kind: Job
+metadata: {name: kaveon-context-retirement-report-{{ .Release.Revision }}, namespace: {{ .Values.namespace }}}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata: {labels: {app: kaveon-api, job: kaveon-context-retirement-report}}
+    spec:
+      restartPolicy: Never
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: report
+          image: {{ include "portal.image" (list .Values.images.api "api") }}
+          command: [python, -m, services.context_cache_retirement_cli]
+          args: [--evidence, /evidence/context-cache-live.json, --output, /evidence/reports/context_cache.json, --max-age-hours, {{ .Values.api.retirementReports.maxAgeHours | quote }}]
+          env:
+            - {name: KAVEON_CONTEXT_CACHE_RETIREMENT_ENABLED, value: "true"}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: evidence, mountPath: /evidence}]
+          resources:
+{{ toYaml .Values.api.retirementReports.resources | indent 12 }}
+      volumes: [{name: evidence, persistentVolumeClaim: {claimName: {{ $pvc }}}}]
+---
+apiVersion: batch/v1
+kind: Job
+metadata: {name: kaveon-dlm-retirement-report-{{ .Release.Revision }}, namespace: {{ .Values.namespace }}}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata: {labels: {app: kaveon-api, job: kaveon-dlm-retirement-report}}
+    spec:
+      restartPolicy: Never
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: report
+          image: {{ include "portal.image" (list .Values.images.api "api") }}
+          command: [python, -m, services.dlm_generation_retirement_cli]
+          args: [--bundle, /evidence/dlm-migration-bundle.json, --retirement-evidence, /evidence/dlm-generation-live.json, --output, /evidence/reports/dlm_generation.json, --max-age-hours, {{ .Values.api.retirementReports.maxAgeHours | quote }}]
+          env:
+            - {name: KAVEON_DLM_GENERATION_RETIREMENT_ENABLED, value: "true"}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: evidence, mountPath: /evidence}]
+          resources:
+{{ toYaml .Values.api.retirementReports.resources | indent 12 }}
+      volumes: [{name: evidence, persistentVolumeClaim: {claimName: {{ $pvc }}}}]
+{{- end }}
