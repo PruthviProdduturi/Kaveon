@@ -1,12 +1,14 @@
 """Data sources router — /api/v1/data-sources."""
 
+import logging
+
 from fastapi import APIRouter, Request, Response, HTTPException, Depends
 from middleware.auth import require_auth
 from middleware.permissions import require_min_role
 import database.metadata as db
 import database.pool as pool
 from services.credentials import encrypt, CredentialError
-from services import source_mutations
+from services import source_mutations, product_shadow_read
 
 router = APIRouter()
 NO_CACHE = {
@@ -43,10 +45,20 @@ def _add_table_counts(data_sources: list) -> list:
     return results
 
 
+def _observe_sources(rows: list[dict], user: str):
+    try:
+        report = product_shadow_read.observe_source_list(rows, "data", user, "Viewer")
+        if report.get("enabled"):
+            logging.getLogger(__name__).info("data_source_shadow_read %s", report)
+    except Exception as error:
+        logging.getLogger(__name__).warning("data_source_shadow_read_error type=%s", type(error).__name__)
+
+
 @router.get("/data-sources")
 def list_data_sources(request: Request, response: Response, user: str = Depends(require_auth)):
     response.headers.update(NO_CACHE)
     result = db.query(_LIST_SELECT, [user])
+    _observe_sources(result["rows"], user)
     return {"success": True, "dataSources": _add_table_counts(result["rows"])}
 
 
@@ -63,6 +75,7 @@ def list_active_data_sources(request: Request, response: Response, user: str = D
         WHERE ds.is_active = 1
         ORDER BY is_favorite DESC, ds.created_at DESC
     """, [user])
+    _observe_sources(result["rows"], user)
     return {"success": True, "dataSources": _add_table_counts(result["rows"])}
 
 
@@ -78,6 +91,7 @@ def list_data_sources_metadata_only(request: Request, response: Response, user: 
           AND fav.object_type = 'data_source' AND fav.user_email = @param0
         ORDER BY is_favorite DESC, ds.is_active DESC, ds.created_at DESC
     """, [user])
+    _observe_sources(result["rows"], user)
     return {"success": True, "dataSources": result["rows"]}
 
 
@@ -89,7 +103,15 @@ def get_favorite_data_source(user: str = Depends(require_auth)):
         INNER JOIN data_sources ds ON fav.object_id = CAST(ds.id AS NVARCHAR(255))
         WHERE fav.user_email = @param0 AND fav.object_type = 'data_source'
     """, [user])
-    return {"success": True, "dataSource": result["rows"][0] if result["rows"] else None}
+    row = result["rows"][0] if result["rows"] else None
+    if row is not None:
+        try:
+            report = product_shadow_read.observe_source(row, "data", user, "Viewer")
+            if report.get("enabled"):
+                logging.getLogger(__name__).info("data_source_shadow_read %s", report)
+        except Exception as error:
+            logging.getLogger(__name__).warning("data_source_shadow_read_error type=%s", type(error).__name__)
+    return {"success": True, "dataSource": row}
 
 
 @router.get("/data-sources/{ds_id}/table-count")
@@ -107,6 +129,12 @@ def get_data_source(ds_id: str, response: Response, user: str = Depends(require_
     )
     if not result["rows"]:
         raise HTTPException(status_code=404, detail="Data source not found")
+    try:
+        report = product_shadow_read.observe_source(result["rows"][0], "data", user, "Viewer")
+        if report.get("enabled"):
+            logging.getLogger(__name__).info("data_source_shadow_read %s", report)
+    except Exception as error:
+        logging.getLogger(__name__).warning("data_source_shadow_read_error type=%s", type(error).__name__)
     return {"success": True, "dataSource": result["rows"][0]}
 
 

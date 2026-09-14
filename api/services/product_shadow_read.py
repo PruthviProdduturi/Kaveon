@@ -19,6 +19,75 @@ DASHBOARD_SHADOW_FIELDS = (
 )
 
 
+def _source_document(source: dict, source_kind: str) -> tuple[str, dict]:
+    """Return the same credential-free document emitted by the source outbox."""
+    from services import source_mutations
+
+    raw_id = source.get("id")
+    if raw_id is None or str(raw_id) == "":
+        raise RuntimeError("source shadow comparison requires record identity")
+    if source_kind == "catalog":
+        document = source_mutations.catalog_document(source)
+    elif source_kind == "data":
+        document = source_mutations.data_document(source)
+    else:
+        raise RuntimeError("source shadow comparison requires a valid source kind")
+    return f"{source_kind}:{raw_id}", document
+
+
+def observe_source(source: dict, source_kind: str, actor: str, role: str) -> dict:
+    """Compare one public source document using the requester's exact authority."""
+    if os.getenv("KAVEON_SOURCE_SHADOW_READ_ENABLED") != "true":
+        return {"family": f"{source_kind}_sources", "enabled": False, "status": "disabled"}
+    if not actor:
+        raise RuntimeError("source shadow comparison requires actor identity")
+    record_id, expected = _source_document(source, source_kind)
+    source_sha, source_bytes = _identity(expected)
+    target = product_store.read("source", record_id, actor, role)
+    base = {
+        "family": f"{source_kind}_sources", "enabled": True,
+        "record_id_sha256": hashlib.sha256(record_id.encode()).hexdigest(),
+        "source_sha256": source_sha, "source_bytes": source_bytes,
+    }
+    if target is None:
+        return {**base, "status": "missing", "target_sha256": None}
+    document = target.get("document")
+    if not isinstance(document, dict):
+        raise RuntimeError("KaveonDB source shadow response is invalid")
+    target_sha, target_bytes = _identity(document)
+    return {
+        **base, "status": "match" if source_sha == target_sha else "mismatch",
+        "target_sha256": target_sha, "target_bytes": target_bytes,
+        "target_generation": int(target.get("generation") or 0),
+    }
+
+
+def observe_source_list(sources: list[dict], source_kind: str, actor: str, role: str) -> dict:
+    """Compare a bounded source listing without broadening the caller's access."""
+    if os.getenv("KAVEON_SOURCE_SHADOW_READ_ENABLED") != "true":
+        return {
+            "family": f"{source_kind}_sources", "operation": "list",
+            "enabled": False, "status": "disabled",
+        }
+    if not actor:
+        raise RuntimeError("source list shadow comparison requires actor identity")
+    if len(sources) > MAX_SHADOW_LIST_RECORDS:
+        return {
+            "family": f"{source_kind}_sources", "operation": "list", "enabled": True,
+            "status": "skipped_limit", "source_count": len(sources),
+            "limit": MAX_SHADOW_LIST_RECORDS,
+        }
+    counts = {"match": 0, "missing": 0, "mismatch": 0}
+    for source in sources:
+        result = observe_source(source, source_kind, actor, role)
+        counts[result["status"]] += 1
+    return {
+        "family": f"{source_kind}_sources", "operation": "list", "enabled": True,
+        "status": "match" if counts["match"] == len(sources) else "mismatch",
+        "source_count": len(sources), "compared": len(sources), **counts,
+    }
+
+
 def _identity(document: dict) -> tuple[str, int]:
     encoded = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     if len(encoded) > MAX_SHADOW_DOCUMENT_BYTES:
