@@ -647,23 +647,49 @@ def _precompute_answers(dataset_id: str, database: str, schema: str, fact: Optio
             continue
 
     # 3) common 2-dim combos — so a two-filter question ("... in Asia Enterprise")
-    #    serves from context instead of a live scan. Non-additive metrics stay exact:
-    #    COUNT(DISTINCT) is computed independently per (d1,d2) cell. Bounded to low-card
-    #    pairs (both dims fully enumerated, cell product under a cap) and a max pair
-    #    count, so generation time + storage stay sane.
+    #    or a two-way breakdown ("by country and industry") serves from context
+    #    instead of a live scan. Bounded to low-card pairs (both dims fully
+    #    enumerated, cell product under a cap) and a fixed scan budget, so
+    #    generation time + storage stay sane.
+    #
+    #    The budget is spent on cuboids first: one GROUP BY over a few low-card
+    #    dims at once yields every pair among them by exact roll-up (SUM/COUNT
+    #    add, MIN/MAX nest), so one scan covers up to six pairs instead of one.
+    #    Non-additive metrics (COUNT DISTINCT, AVG) cannot be rolled up and keep
+    #    the direct per-pair scans below, computed independently per cell.
     CELL_CAP, MAX_PAIRS, HIGH_CARD = 5000, 12, 500
     lowcard = [d for d in card if 0 < card[d] < HIGH_CARD]
+    covered: set = set()
+    budget = MAX_PAIRS
+    rollup = [(alias, name, expr) for alias, name, expr in mdefs
+              if _metric_agg_type(expr) in ("additive", "semi_additive")]
+    direct = [(alias, name, expr) for alias, name, expr in mdefs
+              if _metric_agg_type(expr) == "non_additive"]
+    if rollup:
+        # non-additive metrics need direct scans of their own: leave them half
+        cuboid_budget = MAX_PAIRS // 2 if direct else MAX_PAIRS
+        for cuboid in _pack_cuboids(lowcard, card, CELL_CAP, cuboid_budget):
+            budget -= 1
+            try:
+                stored += _cuboid_pairs(dataset_id, tbl, database, cuboid, rollup, now)
+                covered.update(frozenset(p) for p in _combinations(cuboid, 2))
+            except Exception as exc:
+                skipped.append({"dimension": "|".join(cuboid), "reason": _failure_reason(exc)})
+                logger.warning("DLM precompute: cuboid %s skipped for dataset %s: %s",
+                               "|".join(cuboid), dataset_id, _failure_reason(exc))
     pairs: List[tuple] = []
     for i in range(len(lowcard)):
         for k in range(i + 1, len(lowcard)):
             d1, d2 = sorted((lowcard[i], lowcard[k]))
             prod = card[d1] * card[d2]
-            if prod <= CELL_CAP:
+            if prod <= CELL_CAP and (frozenset((d1, d2)) not in covered or direct):
                 pairs.append((prod, d1, d2))
     pairs.sort()   # cheapest / smallest cell-count pairs first
-    for _prod, d1, d2 in pairs[:MAX_PAIRS]:
-        gsel = ", ".join(f"{expr} AS {alias}" for alias, _n, expr in mdefs)
-        order = mdefs[0][0]
+    for _prod, d1, d2 in pairs[:budget]:
+        # a pair the cuboids already rolled up only needs its non-additive metrics
+        pair_defs = direct if frozenset((d1, d2)) in covered else mdefs
+        gsel = ", ".join(f"{expr} AS {alias}" for alias, _n, expr in pair_defs)
+        order = pair_defs[0][0]
         try:
             res = _execute_dataset_query(
                 f"SELECT {_qid(d1)} AS g1, {_qid(d2)} AS g2, {gsel} FROM {tbl} "
@@ -674,7 +700,7 @@ def _precompute_answers(dataset_id: str, database: str, schema: str, fact: Optio
                 continue
             norm = [_row_vals(r) for r in rows]   # [g1, g2, m0, m1, ...]
             key = f"{d1}|{d2}"   # canonical (lexicographic) pair key
-            for j, (_a, name, _e) in enumerate(mdefs):
+            for j, (_a, name, _e) in enumerate(pair_defs):
                 out = [[_json_scalar(rv[0]), _json_scalar(rv[1]),
                         _json_scalar(rv[j + 2] if j + 2 < len(rv) else None)] for rv in norm]
                 _store_answer(dataset_id, name, key, [d1, d2, name], out, now)
@@ -694,6 +720,111 @@ def _precompute_answers(dataset_id: str, database: str, schema: str, fact: Optio
                                         columns, metrics, card, spec)
     except Exception:
         pass
+    return stored
+
+
+_CUBOID_MAX_KEYS = 4        # GROUP BY keys per cuboid scan; string keys cost per key per row
+_CUBOID_CELL_CAP = 100_000  # cells a cuboid may enumerate (result rows through the bridge)
+
+
+def _cell_number(v: Any) -> Any:
+    """A cell value as a number for addition, integers kept exact (a rolled-up
+    SUM of an Int64 column stays an int, as a direct scan would return it)."""
+    import decimal
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float):
+        return v
+    if isinstance(v, decimal.Decimal):
+        return int(v) if v == v.to_integral_value() else float(v)
+    try:
+        return int(str(v))
+    except ValueError:
+        try:
+            return float(str(v))
+        except ValueError:
+            return None
+
+
+def _combinations(items: List[str], r: int) -> List[tuple]:
+    import itertools
+    return list(itertools.combinations(items, r))
+
+
+def _pack_cuboids(dims: List[str], card: Dict[str, int], pair_cap: int,
+                  budget: int = 12) -> List[List[str]]:
+    """Choose the cuboid scans that cover the most dimension pairs within the
+    scan budget: a greedy set cover over candidate cuboids of two to
+    _CUBOID_MAX_KEYS dims whose enumerated cells stay under _CUBOID_CELL_CAP.
+    Only pairs a direct scan would store (cell product under *pair_cap*) count.
+    Every scan costs the same full pass over the table whatever it groups by,
+    so the measure is pairs newly covered per scan, ties to the smaller
+    cuboid. Deterministic for a given dataset."""
+    usable = sorted((d for d in dims if card.get(d)), key=lambda d: (card[d], d))
+    wanted = {frozenset((a, b)) for a, b in _combinations(usable, 2) if card[a] * card[b] <= pair_cap}
+    candidates = []
+    for size in range(2, min(_CUBOID_MAX_KEYS, len(usable)) + 1):
+        for combo in _combinations(usable, size):
+            cells = 1
+            for d in combo:
+                cells *= card[d]
+            if cells <= _CUBOID_CELL_CAP:
+                candidates.append((list(combo), cells))
+    chosen: List[List[str]] = []
+    covered: set = set()
+    while wanted - covered and len(chosen) < budget:
+        best, best_gain, best_cells = None, 0, 0
+        for combo, cells in candidates:
+            gain = sum(1 for p in _combinations(combo, 2) if frozenset(p) in wanted and frozenset(p) not in covered)
+            if gain > best_gain or (gain == best_gain and best is not None and cells < best_cells):
+                best, best_gain, best_cells = combo, gain, cells
+        if not best:
+            break
+        chosen.append(best)
+        covered.update(frozenset(p) for p in _combinations(best, 2))
+    return chosen
+
+
+def _cuboid_pairs(dataset_id: str, tbl: str, database: str, dims: List[str],
+                  mdefs: List[tuple], now: str) -> int:
+    """One GROUP BY over *dims*; every pair among them is rolled up exactly from
+    the cells (SUM/COUNT by addition, MIN/MAX by nesting) and stored under the
+    canonical 'a|b' key with the same shape a direct pair scan produces:
+    [g1, g2, metric] ordered by the first metric descending, capped."""
+    gsel = ", ".join(f"{expr} AS {alias}" for alias, _n, expr in mdefs)
+    keys = ", ".join(_qid(d) for d in dims)
+    where = " AND ".join(f"{_qid(d)} IS NOT NULL" for d in dims)
+    res = _execute_dataset_query(
+        f"SELECT {keys}, {gsel} FROM {tbl} WHERE {where} GROUP BY {keys} LIMIT {_CUBOID_CELL_CAP + 1}",
+        database)
+    rows = [_row_vals(r) for r in (res.get("rows") or res.get("rows_objects") or [])]
+    if len(rows) > _CUBOID_CELL_CAP:
+        raise RuntimeError(f"cuboid over {len(dims)} dimensions exceeds {_CUBOID_CELL_CAP} cells")
+    n = len(dims)
+    stored = 0
+    for j, (_alias, name, expr) in enumerate(mdefs):
+        kind = _metric_agg_type(expr)
+        fold = (lambda a, b: a + b) if kind == "additive" else \
+               (min if expr.strip().upper().startswith("MIN(") else max)
+        for a, b in _combinations(list(range(n)), 2):
+            cells: Dict[tuple, Any] = {}
+            for row in rows:
+                v = _cell_number(row[n + j]) if kind == "additive" else row[n + j]
+                if v is None:
+                    continue
+                key = (row[a], row[b])
+                cells[key] = v if key not in cells else fold(cells[key], v)
+            # first-metric-desc order, as a direct pair scan stores it; non-numeric
+            # (MIN/MAX of text) keeps cell order
+            ordered = sorted(cells.items(), key=lambda kv: -kv[1] if isinstance(kv[1], (int, float)) else 0)
+            out = [[_json_scalar(g1), _json_scalar(g2), _json_scalar(v)] for (g1, g2), v in ordered[:5000]]
+            d1, d2 = sorted((dims[a], dims[b]))
+            if d1 != dims[a]:
+                out = [[r[1], r[0], r[2]] for r in out]
+            _store_answer(dataset_id, name, f"{d1}|{d2}", [d1, d2, name], out, now)
+            stored += 1
     return stored
 
 

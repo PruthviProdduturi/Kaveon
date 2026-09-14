@@ -244,11 +244,9 @@
       "expect": {
         "ok": true,
         "dataset": "Kaveon Telemetry",
-        "route": "live",
+        "route": "context",
         "group": "country|industry",
-        "sql_contains": [
-          "GROUP BY country, industry"
-        ]
+        "rows": 312
       }
     },
     {
@@ -376,7 +374,8 @@
             "Europe"
           ]
         ],
-        "group": "country"
+        "group": "country",
+        "route": "context"
       }
     },
     {

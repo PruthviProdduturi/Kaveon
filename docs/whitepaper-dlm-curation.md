@@ -71,7 +71,7 @@ For a dataset with **M** metrics and **D** dimension columns:
 |---|---|---|---|
 | 1. Grand totals | All metrics, no grouping | M | 1 scan |
 | 2. Per-dimension breakdowns | Each metric × each dimension | M × D | D scans |
-| 3. Two-dim combos | Each metric × qualifying dim pairs | M × P (P ≤ 12) | P scans |
+| 3. Two-dim combos | Each metric × qualifying dim pairs | M × P | ≤ 12 scans: packed cuboids first, then direct pairs |
 | 4. HLL sketch cuboids | COUNT DISTINCT metrics × low-card dims | 1 base cuboid | 1 scan per metric |
 
 ### 2.2 What Does Not Get Precomputed
@@ -162,8 +162,24 @@ LIMIT 5000
 ```
 
 The pair is stored with `group_col = 'subscription_plan|user_role'`
-(pipe-delimited, lexicographically ordered). Maximum **12 pairs** per dataset
-(`MAX_PAIRS = 12`).
+(pipe-delimited, lexicographically ordered).
+
+**Packed cuboids spend the scan budget first.** A scan budget of twelve
+(`MAX_PAIRS = 12`) is fixed per dataset, but a scan need not produce one pair.
+Low-cardinality dimensions are sorted by cardinality and packed into cuboids of
+at most four `GROUP BY` keys and 100,000 enumerated cells; one scan per cuboid
+returns every cell, and every pair among its dimensions is rolled up exactly
+in memory — `SUM` and `COUNT` by addition, `MIN`/`MAX` by nesting — and stored
+in the same `[g1, g2, metric]` shape a direct scan would produce. A cuboid of
+four dimensions therefore covers six pairs for one scan. Whatever budget
+remains goes to direct pair scans, cheapest cell product first, for the pairs
+that straddle cuboids. Non-additive metrics (`COUNT(DISTINCT …)`, `AVG`)
+cannot be rolled up and are always computed by direct per-pair scans, each
+cell independently, within the same budget.
+
+On the 504 M-row telemetry table this is what turns "actions by country and
+industry" from an 80-second live statement into a context answer: `country`
+and `industry` land in the same cuboid, and the pair is served from memory.
 
 **What this enables at query time:**
 
