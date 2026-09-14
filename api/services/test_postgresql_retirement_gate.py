@@ -70,6 +70,12 @@ def evidence():
 
 
 class RetirementGateTests(unittest.TestCase):
+    def test_secret_backed_ai_configuration_is_a_required_authority_family(self):
+        self.assertEqual(
+            gate.AUTHORITY_FAMILIES["ai_configuration"],
+            ("ai_providers", "user_ai_keys"),
+        )
+
     def test_complete_fresh_evidence_produces_deterministic_audit(self):
         first = gate.evaluate(evidence(), now=NOW, max_age_hours=24)
         second = gate.evaluate(evidence(), now=NOW, max_age_hours=24)

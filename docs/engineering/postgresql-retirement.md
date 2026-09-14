@@ -69,7 +69,7 @@ python scripts/audit-postgresql-retirement.py `
   --max-age-hours 24
 ```
 
-It requires all 15 declared authority families and exact table membership. Every family
+It requires all 16 declared authority families and exact table membership. Every family
 must have fresh `passed` evidence for counts, stable IDs, ownership, references
 and content hashes, matching source and target counts, a watermark, and a
 lowercase SHA-256 report identity. The output binds the full input and audit to
@@ -113,9 +113,11 @@ python scripts/retirement-qualification-summary.py `
 The summary is fail-closed and reports every declared authority family and all
 seven global gates, plus separate backup/restore, rollback,
 PostgreSQL-unavailable restart, and durable-checkpoint rehearsal gates. It
-returns exit code 2 while any evidence is missing. The separate
-`ai_providers` and `user_ai_keys` secret authority remains outside this
-product-record manifest and requires its own key-management retirement plan.
+returns exit code 2 while any evidence is missing. The `ai_configuration`
+family covers legacy `ai_providers` and `user_ai_keys` tables. Their former
+application service is gone, but retirement still requires evidence that they
+are absent, securely migrated, or deliberately deleted. Secret values must
+never be placed in ordinary product records or retirement evidence.
 
 Reconciliation jobs produce one strict, content-free JSON report per family.
 The local collector verifies each report's canonical SHA-256 and exact family
@@ -175,7 +177,7 @@ reads, write fencing, restart, backup/restore and rollback qualification.
 
 The checked-in cutover dependency inventory (`python
 scripts/check-postgresql-dependencies.py`) must also pass before item 1 can be
-reviewed. It maps production PostgreSQL query/execute call sites to all 15
+reviewed. It maps production PostgreSQL query/execute call sites to all 16
 authority families and their read/write role, failing when an observed table
 family is unclassified. This is source-code coverage rather than proof that a
 deployment has no older or dynamically constructed authority path; preserve the
