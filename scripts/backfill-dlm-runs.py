@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "api"))
 from services import dlm_run_backfill_operation as operation  # noqa: E402
+from services import migration_checkpoint_store  # noqa: E402
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--checkpoint", required=True, type=Path)
@@ -22,5 +23,6 @@ if args.apply:
     client = getattr(importlib.import_module(module_name), factory_name)()
     from services.dlm_artifact_publisher import Publisher  # noqa: E402
     publisher = Publisher(client, args.artifact_root)
-print(json.dumps(operation.run(args.checkpoint, args.artifact_root,
-                               apply=args.apply, resume=args.resume, publisher=publisher), sort_keys=True))
+print(json.dumps(migration_checkpoint_store.run(operation, args.checkpoint, apply=args.apply,
+    invoke=lambda checkpoint: operation.run(checkpoint, args.artifact_root,
+        apply=args.apply, resume=args.resume, publisher=publisher)), sort_keys=True))
