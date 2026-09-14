@@ -15,7 +15,8 @@ def _canonical(v):
 def _safe(v):
  if isinstance(v,dict):
   for k,x in v.items():
-   if k!="secret_ref" and any(p in str(k).lower() for p in FORBIDDEN):raise RuntimeError("source document contains forbidden secret-shaped field")
+   if k not in {"secret_ref","credential_kind","credential_ref"} and any(p in str(k).lower() for p in FORBIDDEN):raise RuntimeError("source document contains forbidden secret-shaped field")
+   if k=="credential_ref" and x is not None and v.get("credential_kind") not in {"managed_identity","workload_identity"} and not (str(x).startswith("https://") and ".vault.azure.net/" in str(x)):raise RuntimeError("source credential reference is not a Key Vault URI")
    _safe(x)
  elif isinstance(v,list):
   for x in v:_safe(x)
@@ -59,7 +60,7 @@ def capture_snapshot():
  with db.transaction() as tx:
   tx.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
   wm=tx.query_one("SELECT COALESCE(MAX(source_sequence),0) AS watermark FROM product_migration_outbox") or {}
-  cats=tx.query("SELECT id,name,engine_catalog,storage_type,data_format,credential_kind,credential_ref,adapter_type,lifecycle,description,created_by FROM catalog_sources ORDER BY id LIMIT @param0",[MAX_SOURCES+1])["rows"]
+  cats=tx.query("SELECT id,name,engine_catalog,storage_type,storage_config,data_format,credential_kind,credential_ref,adapter_type,adapter_config,lifecycle,description,created_by,modified_by,created_at,modified_at FROM catalog_sources ORDER BY id LIMIT @param0",[MAX_SOURCES+1])["rows"]
   data=tx.query("SELECT id,name,type,database_name,region,description,created_by,is_active FROM data_sources ORDER BY id LIMIT @param0",[MAX_SOURCES+1])["rows"]
  if len(cats)+len(data)>MAX_SOURCES:raise RuntimeError("source snapshot exceeds its record bound")
  records=[]
@@ -67,8 +68,8 @@ def capture_snapshot():
   # Product object paths are normalized relative paths; avoid ':' from the
   # legacy PostgreSQL namespace while keeping the source kind explicit.
   rid=f"catalog-{row['id']}";owner=str(row.get("created_by") or "")
-  ref=_catalog_secret_ref(row)
-  doc={"source_kind":"catalog","source_id":rid,"name":row.get("name"),"catalog_identity":row.get("engine_catalog"),"source_type":row.get("storage_type"),"database_name":None,"region":None,"description":row.get("description"),"is_active":row.get("lifecycle")=="active","lifecycle":row.get("lifecycle"),"secret_ref":ref}
+  from services.source_mutations import catalog_document
+  doc=catalog_document(row)
   records.append(SourceRecord(rid,owner,doc,_canonical(doc)[1]))
  for row in data:
   rid=f"data-{row['id']}";owner=str(row.get("created_by") or "")

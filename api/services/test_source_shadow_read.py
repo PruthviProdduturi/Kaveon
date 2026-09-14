@@ -39,7 +39,7 @@ class SourceShadowReadTests(unittest.TestCase):
         self.assertEqual(report["status"], "match")
         self.assertNotIn("record_id", report)
         self.assertNotIn("connection_string", str(expected))
-        read.assert_called_once_with("source", "data:7", "viewer@example.test", "Viewer")
+        read.assert_called_once_with("source", "data-7", "viewer@example.test", "Viewer")
 
     def test_catalog_source_matches_canonical_outbox_document(self):
         source = catalog_source()
@@ -48,7 +48,7 @@ class SourceShadowReadTests(unittest.TestCase):
              patch.object(shadow.product_store, "read", return_value={"document": expected, "generation": 2}) as read:
             report = shadow.observe_source(source, "catalog", "admin@example.test", "Admin")
         self.assertEqual(report["status"], "match")
-        read.assert_called_once_with("source", "catalog:lake", "admin@example.test", "Admin")
+        read.assert_called_once_with("source", "catalog-lake", "admin@example.test", "Admin")
 
     def test_list_is_bounded_before_any_target_read(self):
         sources = [data_source(identifier=index) for index in range(shadow.MAX_SHADOW_LIST_RECORDS + 1)]

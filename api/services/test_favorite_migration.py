@@ -44,7 +44,7 @@ class FavoriteMigrationTests(unittest.TestCase):
   with patch.object(backfill.db,"transaction",return_value=transaction(Tx(rows=[row]))),patch.object(backfill.product_store,"read",return_value={"snapshot_id":"snap"}) as read:
    result=backfill.capture_snapshot()
   self.assertEqual(result.records[0].document["object_type"],"source")
-  read.assert_called_once_with("source","data:7","owner","Admin")
+  read.assert_called_once_with("source","data-7","owner","Admin")
  def test_apply_checkpoint_resume_and_shadow(self):
   s=snap();exact={"document":s.records[0].document}
   with patch.object(backfill.product_store,"read",side_effect=[None,exact]),patch.object(backfill.product_store,"transact") as tx:self.assertEqual(backfill.apply_and_reconcile(s)["created"],1)
