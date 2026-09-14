@@ -200,7 +200,10 @@ spec:
             failureThreshold: 30
             periodSeconds: 5
           readinessProbe:
-            httpGet: {path: {{ ternary "/health" "/ready" $isCoordinator }}, port: https, scheme: HTTPS}
+            # Workers intentionally do not expose catalog readiness; their
+            # process health is the readiness gate while the coordinator owns
+            # catalog initialization and query admission.
+            httpGet: {path: /health, port: https, scheme: HTTPS}
             periodSeconds: 5
           livenessProbe:
             httpGet: {path: /health, port: https, scheme: HTTPS}
