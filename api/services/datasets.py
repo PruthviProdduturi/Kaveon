@@ -3,15 +3,18 @@
 import json
 import logging
 import re
+import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import HTTPException
 import database.metadata as db
-from services import product_outbox, product_post_write_observer, product_shadow_read, product_read_authority
+from services import product_outbox, product_post_write_observer, product_shadow_read, product_read_authority, product_store
 
 logger = logging.getLogger(__name__)
 
 VALID_VISIBILITY = {"private", "internal", "published"}
+MAX_DATASET_COMPONENTS = 10_000
+MAX_DATASET_DOCUMENT_BYTES = 4 * 1024 * 1024
 
 
 def _observe_post_write(event) -> None:
@@ -245,7 +248,113 @@ def get_dataset_by_id(
     return dataset
 
 
+def _bounded_components(value, label: str) -> list[dict]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > MAX_DATASET_COMPONENTS:
+        raise ValueError(f"Dataset {label} must be a bounded list")
+    if any(not isinstance(item, dict) for item in value):
+        raise ValueError(f"Dataset {label} entries must be objects")
+    return value
+
+
+def _product_dimensions(value) -> list[dict]:
+    result = []
+    for dimension in _bounded_components(value, "dimensions"):
+        dimension_table = str(dimension.get("dimension_table") or "")
+        parts = dimension_table.split(".")
+        table_name = str(dimension.get("table_name") or (parts[1] if len(parts) > 1 else parts[0]))
+        join_condition = str(dimension.get("join_condition") or "")
+        match = re.search(r"\[([^\]]+)\]\.?\s*=\s*.*\[([^\]]+)\]\s*$", join_condition)
+        fact_key = str(dimension.get("fact_key") or (match.group(1) if match else ""))
+        join_key = str(dimension.get("join_key") or (match.group(2) if match else "Key"))
+        dim_name = str(dimension.get("dim_name") or table_name)
+        result.append({"dimension_table": dimension_table, "table_name": table_name,
+                       "join_condition": join_condition, "fact_key": fact_key,
+                       "join_key": join_key, "dim_name": dim_name,
+                       "display_name": dimension.get("display_name") or dim_name})
+    return result
+
+
+def _product_columns(value) -> list[dict]:
+    return [{"table_name": str(column.get("table_name") or ""),
+             "column_name": str(column.get("column_name") or ""),
+             "data_type": str(column.get("data_type") or ""),
+             "is_dimension": bool(column.get("is_dimension")),
+             "is_metric": bool(column.get("is_metric")),
+             "semantic_type": column.get("semantic_type")}
+            for column in _bounded_components(value, "columns")]
+
+
+def _product_metrics(value) -> list[dict]:
+    return [{"name": metric.get("name"), "expression": metric.get("expression"),
+             "metric_type": metric.get("metric_type") or "sum", "format": metric.get("format")}
+            for metric in _bounded_components(value, "metrics")]
+
+
+def _dataset_product_document(data: dict, dataset_id: str, actor: str,
+                              prior: dict | None = None) -> dict:
+    prior = prior or {}
+    name = data.get("name", prior.get("name", prior.get("dataset_name")))
+    if not isinstance(name, str) or not name.strip() or len(name) > 255:
+        raise ValueError("Dataset name is invalid")
+    visibility = data.get("visibility", prior.get("visibility", "internal")) or "internal"
+    if visibility not in VALID_VISIBILITY:
+        raise ValueError("Dataset visibility is invalid")
+    filters = _bounded_components(data.get("filters", prior.get("filters", [])), "filters")
+    sql_text = data.get("sql_text", prior.get("sql_text"))
+    metadata = {"filters": filters}
+    if sql_text:
+        metadata["sql_text"] = sql_text
+    tables_used = json.dumps(metadata, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    owner = str(prior.get("created_by") or actor)
+    document = {
+        "id": dataset_id, "name": name, "dataset_name": name,
+        "description": data.get("description", prior.get("description")),
+        "table_name": data.get("table_name", prior.get("table_name", "")) or "",
+        "schema_name": data.get("schema_name", prior.get("schema_name", "dbo")) or "dbo",
+        "database_name": data.get("database_name", prior.get("database_name", "")) or "",
+        "date_column": data.get("date_column", prior.get("date_column")),
+        "sql_text": sql_text, "tables_used": tables_used, "visibility": visibility,
+        "created_at": prior.get("created_at") or now, "updated_at": now,
+        "created_by": owner, "modified_by": actor, "modified_at": now,
+        "dimensions": _product_dimensions(data.get("dimensions", prior.get("dimensions", []))),
+        "columns": _product_columns(data.get("columns", prior.get("columns", []))),
+        "metrics": _product_metrics(data.get("metrics", prior.get("metrics", []))),
+        "filters": filters,
+    }
+    encoded = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    if len(encoded) > MAX_DATASET_DOCUMENT_BYTES:
+        raise ValueError("Dataset document exceeds its byte bound")
+    return document
+
+
+def _new_dataset_id() -> str:
+    # Keep the legacy signed-32-bit ID contract so a rollback can replay newly
+    # created records into PostgreSQL. KaveonDB create CAS resolves collisions.
+    return str(1 + uuid.uuid4().int % 2_147_483_646)
+
+
 def create_dataset(data: dict, user_id: str) -> dict:
+    if product_read_authority.enabled("datasets"):
+        for _attempt in range(5):
+            dataset_id = _new_dataset_id()
+            document = _dataset_product_document(data, dataset_id, user_id)
+            try:
+                product_store.transact([
+                    product_store.ProductMutation("create", "dataset", dataset_id, document)
+                ], user_id, "Analyst")
+                break
+            except HTTPException as error:
+                if error.status_code != 409:
+                    raise
+        else:
+            raise RuntimeError("KaveonDB could not allocate a unique dataset ID")
+        created = get_dataset_by_id(dataset_id, user_id, "Admin")
+        if not created:
+            raise RuntimeError("KaveonDB did not return the created dataset")
+        return created
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     tu_payload: dict = {"filters": data.get("filters") or []}
     if data.get("sql_text"):
@@ -377,6 +486,18 @@ def _dataset_product_document_from_source(transaction, dataset_id: int) -> dict:
 
 
 def update_dataset(dataset_id: str, data: dict, user_id: str) -> Optional[dict]:
+    if product_read_authority.enabled("datasets"):
+        current = product_store.read("dataset", dataset_id, user_id, "Admin")
+        if current is None:
+            return None
+        revision, document = current.get("revision"), current.get("document")
+        if type(revision) is not int or revision < 1 or not isinstance(document, dict):
+            raise RuntimeError("KaveonDB returned invalid dataset revision state")
+        updated = _dataset_product_document(data, dataset_id, user_id, document)
+        product_store.transact([
+            product_store.ProductMutation("update", "dataset", dataset_id, updated, revision)
+        ], user_id, "Analyst")
+        return get_dataset_by_id(dataset_id, user_id, "Admin")
     existing = get_dataset_by_id(dataset_id)
     if not existing:
         return None
@@ -450,6 +571,18 @@ def update_dataset(dataset_id: str, data: dict, user_id: str) -> Optional[dict]:
 
 
 def delete_dataset(dataset_id: str, user_id: str) -> bool:
+    if product_read_authority.enabled("datasets"):
+        current = product_store.read("dataset", dataset_id, user_id, "Admin")
+        if current is None:
+            return False
+        revision = current.get("revision")
+        if type(revision) is not int or revision < 1:
+            raise RuntimeError("KaveonDB returned invalid dataset revision state")
+        product_store.transact([
+            product_store.ProductMutation("delete", "dataset", dataset_id,
+                                          expected_revision=revision)
+        ], user_id, "Analyst")
+        return True
     did = int(dataset_id)
     with db.transaction() as transaction:
         existing = transaction.query_one(
@@ -480,5 +613,7 @@ def delete_dataset(dataset_id: str, user_id: str) -> bool:
 
 
 def count_datasets() -> int:
+    if product_read_authority.enabled("datasets"):
+        return len(product_read_authority.list_documents("datasets", "kaveon-system", "Admin"))
     result = db.query_one("SELECT COUNT(*) as count FROM datasets")
     return result.get("count") or 0
