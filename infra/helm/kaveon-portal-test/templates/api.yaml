@@ -3,6 +3,7 @@
 {{- if and $retirement $rehearsal }}{{ fail "api.cutover retirement and rehearsal modes are mutually exclusive" }}{{ end }}
 {{- if or $retirement $rehearsal }}
 {{- $_ := required "api.cutover.evidencePvc is required for PostgreSQL-free mode" .Values.api.cutover.evidencePvc }}
+{{- if and .Values.api.evidenceStorage.create (ne .Values.api.cutover.evidencePvc .Values.api.evidenceStorage.name) }}{{ fail "api.cutover.evidencePvc must name the chart-managed evidence PVC" }}{{ end }}
 {{- $_ := required "api.cutover.authorityFamilies is required for PostgreSQL-free mode" .Values.api.cutover.authorityFamilies }}
 {{- $_ := required "api.cutover.readAuthorityFamilies is required for PostgreSQL-free mode" .Values.api.cutover.readAuthorityFamilies }}
 {{- $_ := required "api.cutover.artifactAccount is required for PostgreSQL-free mode" .Values.api.cutover.artifactAccount }}

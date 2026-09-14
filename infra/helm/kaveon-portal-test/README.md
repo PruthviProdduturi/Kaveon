@@ -69,6 +69,13 @@ have been prepared separately.
 
 ## PostgreSQL retirement controls
 
+The chart can provision the shared evidence claim with `api.evidenceStorage.create=true`.
+On AKS, use an RWX Azure Files CSI storage class so report Jobs can write while
+the API mounts the same claim read-only. The claim carries Helm's `keep` policy
+by default because uninstalling a rehearsal must not delete its evidence. Set
+the same claim name in `cutover.evidencePvc`, `retirementReports.evidencePvc`,
+and `postgresqlFreeSmoke.evidencePvc`.
+
 All cutover switches under `api.cutover` default off. Shadow-read and outbox
 flags may be enabled family by family while PostgreSQL remains authoritative;
 `productReplay.enabled` controls the replay worker independently. The write

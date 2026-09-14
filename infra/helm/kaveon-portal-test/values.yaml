@@ -29,6 +29,15 @@ postgres:
     requests: {cpu: 250m, memory: 512Mi}
     limits: {cpu: "1", memory: 1Gi}
 api:
+  evidenceStorage:
+    # Create a restricted, durable PVC shared by report/smoke Jobs and the
+    # PostgreSQL-free API. Azure Files CSI supplies the required RWX topology.
+    create: false
+    name: kaveon-retirement-evidence
+    storageClass: azurefile-csi
+    size: 1Gi
+    accessModes: [ReadWriteMany]
+    retain: true
   cutover:
     # Final retirement and first PostgreSQL-free restart rehearsal are mutually
     # exclusive. Runtime validation rejects incomplete evidence or family sets.

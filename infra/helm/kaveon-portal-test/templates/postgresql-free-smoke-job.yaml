@@ -1,5 +1,6 @@
 {{- if .Values.api.postgresqlFreeSmoke.enabled }}
 {{- $_ := required "api.postgresqlFreeSmoke.evidencePvc is required" .Values.api.postgresqlFreeSmoke.evidencePvc }}
+{{- if and .Values.api.evidenceStorage.create (ne .Values.api.postgresqlFreeSmoke.evidencePvc .Values.api.evidenceStorage.name) }}{{ fail "api.postgresqlFreeSmoke.evidencePvc must name the chart-managed evidence PVC" }}{{ end }}
 {{- $_ := required "api.postgresqlFreeSmoke.baseUrl is required" .Values.api.postgresqlFreeSmoke.baseUrl }}
 {{- $_ := required "api.postgresqlFreeSmoke.identity is required" .Values.api.postgresqlFreeSmoke.identity }}
 {{- $_ := required "api.postgresqlFreeSmoke.datasetId is required" .Values.api.postgresqlFreeSmoke.datasetId }}
