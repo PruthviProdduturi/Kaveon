@@ -32,7 +32,7 @@ def capture_snapshot():
  for row in rows:
   kind=str(row.get("object_type") or "")
   owner=str(row.get("user_email") or "");oid=str(row.get("object_id") or "")
-  if kind=="data_source": kind,oid="source",f"data:{oid}"
+  if kind=="data_source": kind,oid="source",f"data-{oid}"
   if kind not in favorites.MIGRATABLE_TYPES: raise RuntimeError("favorite object type is unsupported")
   target=product_store.read(kind,oid,owner,"Admin")
   if target is None: raise RuntimeError(f"favorite target {kind}/{oid} is missing")

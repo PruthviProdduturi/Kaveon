@@ -39,6 +39,31 @@ _TRANSITIONS = {
 }
 
 
+def _catalog_cutover_row(document: dict) -> dict:
+    source_id = str(document.get("source_id") or "")
+    if document.get("source_kind") != "catalog" or not source_id.startswith("catalog-"):
+        raise RuntimeError("KaveonDB catalog-source identity is invalid")
+    storage_config, adapter_config = document.get("storage_config"), document.get("adapter_config")
+    if not isinstance(storage_config, dict) or not isinstance(adapter_config, dict):
+        raise RuntimeError("KaveonDB catalog-source configuration is invalid")
+    credential_ref = document.get("credential_ref")
+    if credential_ref and document.get("credential_kind") not in {"managed_identity", "workload_identity"}:
+        source_secret_store.validate_reference(str(credential_ref))
+    return {
+        "id": source_id[8:], "name": document.get("name"),
+        "engine_catalog": document.get("catalog_identity"),
+        "storage_type": document.get("source_type"),
+        "storage_config": json.dumps(storage_config, sort_keys=True, separators=(",", ":")),
+        "data_format": document.get("data_format"),
+        "credential_kind": document.get("credential_kind"), "credential_ref": credential_ref,
+        "adapter_type": document.get("adapter_type"),
+        "adapter_config": json.dumps(adapter_config, sort_keys=True, separators=(",", ":")),
+        "lifecycle": document.get("lifecycle"), "description": document.get("description"),
+        "created_by": document.get("created_by"), "modified_by": document.get("modified_by"),
+        "created_at": document.get("created_at"), "modified_at": document.get("modified_at"),
+    }
+
+
 def _audit(action: str, obj_id: str, obj_name: str, user: str, details: str = None, transaction=None):
     if os.getenv("KAVEON_ACTIVITY_OUTBOX_ENABLED") == "true" and transaction is None:
         with db.transaction() as tx:return _audit(action,obj_id,obj_name,user,details,tx)
@@ -84,6 +109,12 @@ def _validate_storage_config(storage_type: str, config: dict):
 
 @router.get("/catalog-sources")
 def list_catalog_sources(ctx: UserContext = Depends(require_min_role("Viewer"))):
+    if product_read_authority.enabled("sources"):
+        rows = [_catalog_cutover_row(document) for document in
+                product_read_authority.list_documents("sources", ctx.email, ctx.role)
+                if document.get("source_kind") == "catalog" and document.get("lifecycle") != "deleted"]
+        rows.sort(key=lambda row: (str(row.get("created_at") or ""), str(row["id"])), reverse=True)
+        return {"success": True, "catalogSources": rows}
     result = db.query(
         f"SELECT {_FIELDS} FROM catalog_sources WHERE lifecycle != 'deleted' ORDER BY created_at DESC"
     )
@@ -120,6 +151,11 @@ def engine_status(ctx: UserContext = Depends(require_min_role("Admin"))):
 
 @router.get("/catalog-sources/{cs_id}")
 def get_catalog_source(cs_id: str, ctx: UserContext = Depends(require_min_role("Viewer"))):
+    if product_read_authority.enabled("sources"):
+        document = product_read_authority.read_document("sources", f"catalog-{cs_id}", ctx.email, ctx.role)
+        if not document:
+            raise HTTPException(404, {"code": "NOT_FOUND", "message": "Catalog source not found"})
+        return {"success": True, "catalogSource": _catalog_cutover_row(document)}
     row = db.query_one(f"SELECT {_FIELDS} FROM catalog_sources WHERE id = @param0", [cs_id])
     if not row:
         raise HTTPException(404, {"code": "NOT_FOUND", "message": "Catalog source not found"})

@@ -32,7 +32,7 @@ def _source_document(source: dict, source_kind: str) -> tuple[str, dict]:
         document = source_mutations.data_document(source)
     else:
         raise RuntimeError("source shadow comparison requires a valid source kind")
-    return f"{source_kind}:{raw_id}", document
+    return f"{source_kind}-{raw_id}", document
 
 
 def observe_source(source: dict, source_kind: str, actor: str, role: str) -> dict:

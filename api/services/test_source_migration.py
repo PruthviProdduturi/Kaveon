@@ -10,7 +10,7 @@ class Tx:
  def execute(self,*a):pass
  def query_one(self,*a):return {"watermark":3}
  def query(self,sql,params):
-  if "catalog_sources" in sql:return {"rows":[{"id":"1","name":"Lake","engine_catalog":"lake","storage_type":"adls_gen2","data_format":"delta","credential_kind":"managed_identity","credential_ref":None,"adapter_type":"native","lifecycle":"active","description":None,"created_by":"owner"}]}
+  if "catalog_sources" in sql:return {"rows":[{"id":"1","name":"Lake","engine_catalog":"lake","storage_type":"adls_gen2","storage_config":"{\"account\":\"lake\",\"container\":\"data\",\"root_path\":\"\"}","data_format":"delta","credential_kind":"managed_identity","credential_ref":None,"adapter_type":"native","adapter_config":"{}","lifecycle":"active","description":None,"created_by":"owner","modified_by":"owner","created_at":None,"modified_at":None}]}
   return {"rows":[{"id":2,"name":"Warehouse","type":"PostgreSQL","database_name":"warehouse","region":"WW","description":None,"created_by":"owner","is_active":True}]}
 @contextlib.contextmanager
 def transaction():yield Tx()

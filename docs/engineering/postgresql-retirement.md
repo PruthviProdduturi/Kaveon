@@ -23,6 +23,12 @@ The same switch accepts `saved_queries`, `user_themes`, `user_recents`,
 are owner-filtered after the privileged bridge read. Chat sessions and messages
 remain separate typed records and are joined by session ID in the API. Source
 responses expose only the credential-free public projection stored in KaveonDB.
+Catalog-source list and point reads use the same family switch. Their KaveonDB
+documents include storage and adapter configuration, lifecycle, ownership, and
+timestamps. Credentials remain indirect: secret-backed sources expose only a
+validated Key Vault URI, while managed identities expose a bounded principal
+reference. Raw credentials and connection strings are rejected by migration
+and by the Engine document validator.
 Catalog audit reads can independently select `activity`; administrators see the
 workspace trail and other roles remain actor-scoped. `dlm_definitions` is
 reserved in the allowlist but the existing DLM status endpoint cannot select it

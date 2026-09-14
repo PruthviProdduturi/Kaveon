@@ -856,7 +856,7 @@ fn product_document(
         }])
     } else if kind == ProductRecordKind::Source {
         let object = value.as_object().expect("object checked above");
-        const ALLOWED: [&str; 12] = [
+        const ALLOWED: [&str; 21] = [
             "source_kind",
             "source_id",
             "name",
@@ -869,6 +869,15 @@ fn product_document(
             "lifecycle",
             "secret_ref",
             "adapter_type",
+            "storage_config",
+            "data_format",
+            "credential_kind",
+            "credential_ref",
+            "adapter_config",
+            "created_by",
+            "modified_by",
+            "created_at",
+            "modified_at",
         ];
         if object.keys().any(|key| !ALLOWED.contains(&key.as_str()))
             || object.get("source_id").and_then(serde_json::Value::as_str) != Some(id)
@@ -892,6 +901,47 @@ fn product_document(
             return Err(RegistryError::Invalid(
                 "source secret_ref is invalid".into(),
             ));
+        }
+        if object
+            .get("source_kind")
+            .and_then(serde_json::Value::as_str)
+            == Some("catalog")
+        {
+            let extended =
+                object.contains_key("storage_config") || object.contains_key("adapter_config");
+            if extended
+                && (!object
+                    .get("storage_config")
+                    .is_some_and(serde_json::Value::is_object)
+                    || !object
+                        .get("adapter_config")
+                        .is_some_and(serde_json::Value::is_object))
+            {
+                return Err(RegistryError::Invalid(
+                    "source configuration is invalid".into(),
+                ));
+            }
+            if let Some(reference) = object
+                .get("credential_ref")
+                .and_then(serde_json::Value::as_str)
+            {
+                let identity = matches!(
+                    object
+                        .get("credential_kind")
+                        .and_then(serde_json::Value::as_str),
+                    Some("managed_identity" | "workload_identity")
+                );
+                if reference.len() > 512
+                    || reference.chars().any(char::is_control)
+                    || (!identity
+                        && !(reference.starts_with("https://")
+                            && reference.contains(".vault.azure.net/")))
+                {
+                    return Err(RegistryError::Invalid(
+                        "source credential_ref is invalid".into(),
+                    ));
+                }
+            }
         }
         BTreeSet::new()
     } else if kind == ProductRecordKind::Favorite {
