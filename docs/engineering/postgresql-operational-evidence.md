@@ -135,6 +135,25 @@ python scripts/probe-kaveondb-cutover.py write-fence `
   --deployment-revision api@IMAGE_DIGEST
 ```
 
+Restart and rollback observations use reviewed command manifests whose entries
+contain only `argv` and `timeout_seconds`; shell interpreters and inline command
+strings are rejected. `probe-kaveondb-recovery.py restart-recovery` records
+content-free state inventories before and after, ready API/Studio pod lists with
+distinct UIDs, a PostgreSQL-unavailable probe, the restart command, and service
+probes. `rollback` additionally requires a separate bounded control containing
+the exact cutover revision, expected state digest, maximum operations, and
+maximum duration. It accepts success only after target fencing and source
+read/write restoration are observed:
+
+```powershell
+python scripts/probe-kaveondb-recovery.py restart-recovery `
+  --manifest tmp/restart-recovery-commands.json
+
+python scripts/probe-kaveondb-recovery.py rollback `
+  --manifest tmp/rollback-commands.json `
+  --control tmp/rollback-control.json
+```
+
 ```powershell
 python scripts/record-postgresql-operational-evidence.py `
   --manifest tmp/retirement-probe-manifest.json `
