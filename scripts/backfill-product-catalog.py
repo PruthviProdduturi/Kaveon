@@ -9,6 +9,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "api"))
 
 from services import product_backfill_operation  # noqa: E402
+from services import migration_checkpoint_store  # noqa: E402
 
 
 def main() -> int:
@@ -21,8 +22,11 @@ def main() -> int:
         help="write missing records to KaveonDB; also requires KAVEON_PRODUCT_MIGRATION_ENABLED=true",
     )
     args = parser.parse_args()
-    report = product_backfill_operation.run(
-        args.checkpoint, apply=args.apply, resume=args.resume
+    report = migration_checkpoint_store.run(
+        product_backfill_operation, args.checkpoint, apply=args.apply,
+        invoke=lambda checkpoint: product_backfill_operation.run(
+            checkpoint, apply=args.apply, resume=args.resume
+        ),
     )
     print(json.dumps(report, sort_keys=True, separators=(",", ":")))
     return 0
