@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 from typing import List, Optional
+import uuid
 import logging
 import os
 import database.metadata as db
@@ -93,6 +94,15 @@ def get_by_id(query_id: str, user_id: str) -> Optional[dict]:
 
 def create_saved_query(data: dict, user_id: str) -> dict:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    from services import product_read_authority, product_store
+    if product_read_authority.enabled("saved_queries"):
+        query_id = str(uuid.uuid4())
+        row = {"id": query_id, "name": data["name"], "description": data.get("description"),
+               "sql_text": data["sql"], "created_by": user_id, "modified_by": user_id,
+               "created_at": now, "modified_at": now}
+        product_store.transact([product_store.ProductMutation(
+            "create", "saved_query", query_id, _product_document(row))], user_id, "Editor")
+        return _adapt(row)
     with db.transaction() as transaction:
         inserted = transaction.query_one("""
             INSERT INTO saved_queries (name, description, sql_text, created_by, created_at,
@@ -114,6 +124,24 @@ def create_saved_query(data: dict, user_id: str) -> dict:
 
 def update_saved_query(query_id: str, data: dict, user_id: str) -> Optional[dict]:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    from services import product_read_authority, product_store
+    if product_read_authority.enabled("saved_queries"):
+        current = product_store.read("saved_query", str(query_id), user_id, "Editor")
+        if current is None:
+            return None
+        document, revision = current.get("document"), current.get("revision")
+        if not isinstance(document, dict) or document.get("created_by") != user_id or not isinstance(revision, int) or revision < 1:
+            raise RuntimeError("KaveonDB returned an invalid saved query record")
+        updated = dict(document)
+        for source, target in (("name", "name"), ("description", "description"), ("sql", "sql")):
+            if source in data:
+                updated[target] = data[source]
+        updated.update({"id": str(query_id), "modified_by": user_id, "updated_at": now.isoformat()})
+        product_store.transact([product_store.ProductMutation(
+            "update", "saved_query", str(query_id), updated, revision)], user_id, "Editor")
+        return {"id": str(query_id), "name": updated.get("name"), "description": updated.get("description"),
+                "sql": updated.get("sql"), "created_at": updated.get("created_at"),
+                "updated_at": updated.get("updated_at"), "created_by": user_id, "favorite": False}
     updates, params, i = [], [], 0
 
     if "name" in data:
@@ -152,6 +180,17 @@ def update_saved_query(query_id: str, data: dict, user_id: str) -> Optional[dict
 
 
 def delete_saved_query(query_id: str, user_id: str) -> bool:
+    from services import product_read_authority, product_store
+    if product_read_authority.enabled("saved_queries"):
+        current = product_store.read("saved_query", str(query_id), user_id, "Editor")
+        if current is None:
+            return False
+        document, revision = current.get("document"), current.get("revision")
+        if not isinstance(document, dict) or document.get("created_by") != user_id or not isinstance(revision, int) or revision < 1:
+            raise RuntimeError("KaveonDB returned an invalid saved query record")
+        product_store.transact([product_store.ProductMutation(
+            "delete", "saved_query", str(query_id), expected_revision=revision)], user_id, "Editor")
+        return True
     with db.transaction() as transaction:
         existing = transaction.query_one(
             "SELECT id, created_by FROM saved_queries WHERE id = @param0 AND created_by = @param1 FOR UPDATE",

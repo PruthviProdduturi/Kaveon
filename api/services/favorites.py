@@ -17,6 +17,11 @@ def _document(owner, row):
     return {"user_email": owner, "object_type": str(row["object_type"]),
             "object_id": str(row["object_id"]), "object_name": row.get("object_name")}
 
+def _normalized_reference(object_type, object_id):
+    if object_type == "data_source":
+        return "source", "data-" + str(object_id)
+    return str(object_type), str(object_id)
+
 
 def list_favorites(user_id: str) -> List[dict]:
     from services import product_read_authority
@@ -70,6 +75,7 @@ def list_favorites(user_id: str) -> List[dict]:
 def is_favorite(user_id: str, object_type: str, object_id: str) -> bool:
     from services import product_read_authority
     if product_read_authority.enabled("favorites"):
+        object_type, object_id = _normalized_reference(object_type, object_id)
         return product_read_authority.read_document(
             "favorites", _record_id(user_id, object_type, object_id), user_id, "Viewer") is not None
     result = db.query_one("""
@@ -82,6 +88,19 @@ def is_favorite(user_id: str, object_type: str, object_id: str) -> bool:
 def create_favorite(data: dict, user_id: str) -> dict:
     if data["object_type"] not in MIGRATABLE_TYPES and data["object_type"] != "data_source":
         raise ValueError("Unsupported favorite object type")
+    from services import product_read_authority, product_store
+    if product_read_authority.enabled("favorites"):
+        object_type, object_id = _normalized_reference(data["object_type"], data["object_id"])
+        favorite_id = _record_id(user_id, object_type, object_id)
+        document = _document(user_id, {**data, "object_type": object_type, "object_id": object_id})
+        current = product_store.read("favorite", favorite_id, user_id, "Editor")
+        if current is not None:
+            if current.get("document") != document:
+                raise RuntimeError("KaveonDB favorite identity conflicts with its document")
+        else:
+            product_store.transact([product_store.ProductMutation(
+                "create", "favorite", favorite_id, document)], user_id, "Editor")
+        return {"id": favorite_id, **document, "created_at": None, "user_id": user_id}
     with db.transaction() as transaction:
         existing = transaction.query_one("""
             SELECT id, user_email, object_id, object_type, object_name, created_at
@@ -121,6 +140,19 @@ def toggle_favorite(data: dict, user_id: str) -> dict:
 
 
 def delete_favorite(user_id: str, object_type: str, object_id: str) -> bool:
+    from services import product_read_authority, product_store
+    if product_read_authority.enabled("favorites"):
+        object_type, object_id = _normalized_reference(object_type, object_id)
+        favorite_id = _record_id(user_id, object_type, object_id)
+        current = product_store.read("favorite", favorite_id, user_id, "Editor")
+        if current is None:
+            return False
+        document, revision = current.get("document"), current.get("revision")
+        if not isinstance(document, dict) or document.get("user_email") != user_id or not isinstance(revision, int) or revision < 1:
+            raise RuntimeError("KaveonDB returned an invalid favorite record")
+        product_store.transact([product_store.ProductMutation(
+            "delete", "favorite", favorite_id, expected_revision=revision)], user_id, "Editor")
+        return True
     with db.transaction() as transaction:
         row=transaction.query_one("""SELECT id,object_type,object_id FROM favorites
             WHERE user_email=@param0 AND object_type=@param1 AND object_id=@param2 FOR UPDATE""",
@@ -134,6 +166,17 @@ def delete_favorite(user_id: str, object_type: str, object_id: str) -> bool:
 
 
 def delete_favorite_by_id(fav_id: str, user_id: str) -> bool:
+    from services import product_read_authority, product_store
+    if product_read_authority.enabled("favorites"):
+        current = product_store.read("favorite", str(fav_id), user_id, "Editor")
+        if current is None:
+            return False
+        document, revision = current.get("document"), current.get("revision")
+        if not isinstance(document, dict) or document.get("user_email") != user_id or not isinstance(revision, int) or revision < 1:
+            raise RuntimeError("KaveonDB returned an invalid favorite record")
+        product_store.transact([product_store.ProductMutation(
+            "delete", "favorite", str(fav_id), expected_revision=revision)], user_id, "Editor")
+        return True
     with db.transaction() as transaction:
         row=transaction.query_one("SELECT id,object_type,object_id FROM favorites WHERE id=@param0 AND user_email=@param1 FOR UPDATE",[fav_id,user_id])
         if not row: return False

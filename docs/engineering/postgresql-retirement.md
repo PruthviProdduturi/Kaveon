@@ -33,6 +33,13 @@ When `user_themes` has read authority, theme create, update, and delete also use
 KaveonDB directly. Updates and deletes bind the exact current revision; missing
 deletes are idempotent, malformed revisions fail closed, and no operation falls
 back to PostgreSQL.
+The same mutation cutover is implemented for `saved_queries`, `favorites`, and
+`user_recents`. Saved-query updates and deletes use revision CAS. Favorites use
+an owner/type/object deterministic identity, including normalization of legacy
+`data_source` references to non-secret `source` records. Recent upserts and the
+20-item retention delete commit together; cross-owner deletion is limited to
+100 records and commits separately under each record owner. Invalid documents,
+revisions, ownership, or fanout fail closed without querying PostgreSQL.
 Catalog audit reads can independently select `activity`; administrators see the
 workspace trail and other roles remain actor-scoped. `dlm_definitions` is
 reserved in the allowlist but the existing DLM status endpoint cannot select it
@@ -382,6 +389,9 @@ Deleting the StatefulSet or PVC before these gates would remove the current
 product metadata authority and break Studio even though ADLS analytical queries
 remain available.
 
-Favorites now cover typed migrated targets with owner uniqueness, references, source/outbox atomicity, backfill/replay and shadow code. Data-source favorites remain explicitly PostgreSQL-only until a non-secret source destination exists; therefore the family cannot pass retirement.
+Favorites now cover typed migrated targets with owner uniqueness, references,
+source/outbox atomicity, backfill/replay, shadow code, and direct KaveonDB
+mutations. Legacy data-source favorites normalize to the non-secret typed source
+destination. Live reconciliation, fencing, and rollback evidence remain gates.
 
 Source retirement now has a non-secret typed destination and deterministic coupled backfill, but encrypted connection material remains a separate secret authority. A workload-identity Key Vault resolver, writer/outbox atomicity, shared visibility semantics, shadow parity, rotation, backup/restore and rollback evidence are mandatory before retirement.
