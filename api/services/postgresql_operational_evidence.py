@@ -30,8 +30,8 @@ OBSERVATION_KEYS = {
         "duration_seconds",
     )),
     "backup_identity": frozenset((
-        "restore_job_id", "source_inventory_sha256", "restored_inventory_sha256",
-        "restored_table_count",
+        "backup_id", "backup_sha256", "restore_job_id", "source_inventory_sha256",
+        "restored_inventory_sha256", "restored_table_count",
     )),
     "durable_checkpoint": frozenset((
         "checkpoint_sha256_before", "checkpoint_sha256_after", "pod_uid_before",
@@ -130,7 +130,9 @@ def _validate_observation(gate, value, details, *, max_rollback_seconds):
             raise RuntimeError("backup restore job ID is missing")
         source = _digest(value["source_inventory_sha256"], "source inventory")
         restored = _digest(value["restored_inventory_sha256"], "restored inventory")
-        _digest(details["backup_sha256"], "backup")
+        backup = _digest(value["backup_sha256"], "backup")
+        if value["backup_id"] != details["backup_id"] or backup != details["backup_sha256"]:
+            raise RuntimeError("backup observation does not match gate details")
         _positive_int(value["restored_table_count"], "restored table count")
         if source != restored or details["restore_verified"] is not True or not details["backup_id"]:
             raise RuntimeError("backup restore inventory did not reconcile")
@@ -178,6 +180,38 @@ def load_receipt(path: Path, gate: str, *, now: datetime, max_age_hours: int,
     return receipt
 
 
+def receipt_from_observation(gate: str, observation: dict, *, checked_at: str,
+                             evidence_id: str, max_rollback_seconds: int = 900) -> dict:
+    """Derive and sign a receipt from one successful structured probe result."""
+    if gate == "source_watermark":
+        details = {"watermark": observation.get("watermark_observed")}
+    elif gate == "outbox_drain":
+        details = {"pending_events": observation.get("pending_after")}
+    elif gate == "write_fence":
+        details = {"enabled": True}
+    elif gate == "shadow_parity":
+        details = {"matched": observation.get("mismatch_count") == 0}
+    elif gate in {"restart_recovery", "rollback", "durable_checkpoint"}:
+        details = {"verified": True}
+    elif gate == "backup_identity":
+        details = {"backup_id": observation.get("backup_id"),
+                   "backup_sha256": observation.get("backup_sha256"),
+                   "restore_verified": True}
+    else:
+        raise RuntimeError(f"unknown operational gate: {gate}")
+    retirement._parse_utc(checked_at)
+    if not isinstance(evidence_id, str) or not 1 <= len(evidence_id) <= 256:
+        raise RuntimeError("operational evidence ID is invalid")
+    _reject_sensitive(observation)
+    _validate_observation(gate, observation, details,
+                          max_rollback_seconds=max_rollback_seconds)
+    value = {"schema_version": SCHEMA_VERSION, "gate": gate,
+             "checked_at": checked_at, "evidence_id": evidence_id,
+             "details": details, "observation": observation}
+    value["receipt_sha256"] = hashlib.sha256(_canonical(value)).hexdigest()
+    return value
+
+
 def collect(directory: Path, *, now: datetime, max_age_hours: int = 24,
             max_rollback_seconds: int = 900) -> tuple[dict, dict]:
     if max_rollback_seconds <= 0:
@@ -188,6 +222,9 @@ def collect(directory: Path, *, now: datetime, max_age_hours: int = 24,
                            max_rollback_seconds=max_rollback_seconds)
         for gate in GATES
     }
+    if (receipts["source_watermark"]["details"]["watermark"] !=
+            receipts["outbox_drain"]["observation"]["watermark"]):
+        raise RuntimeError("source watermark and outbox drain receipts are not bound to the same watermark")
     gates = {
         gate: {
             "status": "passed", "checked_at": receipt["checked_at"],
