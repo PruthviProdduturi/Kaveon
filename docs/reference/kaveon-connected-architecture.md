@@ -23,9 +23,9 @@ flowchart LR
   WN[Worker N\nArrow operators]
   Exchange{{Authenticated Arrow\nshuffle / broadcast / merge}}
   Lake[(Customer ADLS Gen2\nParquet · Delta · Iceberg target)]
-  Context[(DLM artifacts\nanswers · value index · freshness)]
-  Product[(Product records\nKaveonDB objects)]
-  Outbox[(Ordered migration outbox)]
+  Context[(Immutable DLM artifact\nanswers · value index · routing)]
+  Product[(Product records\nKaveonDB revisions)]
+  Outbox[(Pre-cutover migration outbox)]
   Telemetry[(Query history\nplans · stages · metrics · audit)]
   Recovery[(Snapshots · checkpoints\nrollback evidence)]
 
@@ -126,11 +126,14 @@ sequenceDiagram
   M-->>Client: Evidence report
 ```
 
-A transaction receipt is not evidence of PostgreSQL retirement. Retirement
-requires all authority families to reconcile, zero outbox lag, a write fence,
-shadow-read parity, restart recovery, backup/restore, rollback, and a verified
-PostgreSQL-unavailable rehearsal. Until those gates pass, PostgreSQL remains
-the source authority and the migration path remains fail-closed.
+A transaction receipt is not evidence of PostgreSQL retirement. The runtime has
+direct typed KaveonDB mutations for product-record families and does not fall
+back to PostgreSQL once a family is cut over. Context cache is deliberately
+rebuilt, and legacy AI configuration requires an explicit delete-or-secret-store
+disposition. Retirement still requires all 16 families to reconcile, zero
+outbox lag, a write fence, shadow-read parity, restart recovery, backup/restore,
+rollback, and a verified PostgreSQL-unavailable rehearsal. Until those live
+gates pass, PostgreSQL remains the deployment authority and rollback source.
 
 ## Storage and recovery boundaries
 
@@ -158,12 +161,12 @@ evidence artifact is a failed gate, never an implicit pass.
 
 | Capability | Current position | Target acceptance evidence |
 |---|---|---|
-| DLM context | Compiled answers and value indexes; 504M-row showcase answers are served from context | Freshness, ambiguity, and answer parity corpus on every release |
+| DLM context | Retirement mode compiles bounded state from Engine scans, publishes one immutable ADLS artifact, and serves its verified routing, values and answers without PostgreSQL fallback | Freshness, ambiguity, and answer parity corpus on every release and live AKS artifact qualification |
 | Distributed SQL | Coordinator/workers, Arrow exchange, joins, aggregates, retry and bounded pressure foundations | Publication-scale throughput, spill, adaptive planning and worker-loss recovery |
 | Transactions | Typed product-record protocol with revisions and checkpointed migration tooling | General row DML, isolation, durable WAL-equivalent recovery and crash testing |
 | Lake storage | Parquet and Delta paths with workload identity; Iceberg/S3 remain bounded targets | Multi-format snapshot qualification and object-store performance evidence |
-| PostgreSQL replacement | Migration tooling and partial live reconciliation; PostgreSQL remains authoritative | All retirement gates pass, then controlled cutover and rollback rehearsal |
-| Operations | Bicep/Helm deployment materials and immutable image references | Recreate-from-zero on a clean subscription and verified backup restore |
+| PostgreSQL replacement | Direct reads/mutations, 16-family replay and reconciliation, durable ADLS checkpoints, write fencing and strict evidence runners are implemented; live retirement is not yet qualified | One fresh immutable AKS run passes every gate, then PostgreSQL is scaled to zero while its PVC/snapshot remain through the rollback window |
+| Operations | Bicep/Helm deployment materials, immutable image references and bounded rehearsal tooling | Recreate-from-zero on a clean subscription and verified live backup/restore |
 
 The architecture is deliberately honest: Kaveon can be a unified product with
 one user experience while its analytical and transactional paths mature at

@@ -2,6 +2,12 @@
 
 > For development when the qualification cluster is down (it is deleted at weekends) or when Docker is unavailable on the machine. Same environment contract as `docker-compose.yml` and the Helm charts; what runs here is what runs on AKS **minus** TLS, workload identity, ADLS and network policies. Never publish a number measured here.
 
+This default profile intentionally keeps PostgreSQL so developers can exercise
+source capture, outbox replay, reconciliation and rollback. The checked-in
+retirement runtime can start Studio/API without PostgreSQL only when supplied a
+complete activation-evidence bundle and all 16 exact read-authority families.
+That fail-closed profile is a recovery test, not a shortcut around migration.
+
 ## What runs
 
 | Process | Port | Config | Notes |
@@ -82,6 +88,8 @@ reports Entra disabled.
   tokens, plain HTTP, no workload identity, no network policies.
 - Not ADLS: conditional writes, footer caching over the network, and the
   product-transaction store on ADLS are not exercised.
+- Not retirement evidence: a local filesystem checkpoint is accepted only when
+  `KAVEON_ENVIRONMENT=local`; it cannot be reused as an AKS cutover receipt.
 
 ## Findings recorded from the first local run (2026-09-13)
 
