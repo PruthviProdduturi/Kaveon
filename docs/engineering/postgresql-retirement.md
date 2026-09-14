@@ -29,6 +29,13 @@ timestamps. Credentials remain indirect: secret-backed sources expose only a
 validated Key Vault URI, while managed identities expose a bounded principal
 reference. Raw credentials and connection strings are rejected by migration
 and by the Engine document validator.
+Source mutations require `sources,activity` to move together. Catalog and data
+source metadata then writes directly to KaveonDB with an activity record in the
+same revision-CAS transaction. Data-source connection strings are written to
+Key Vault first and only the validated versioned URI enters KaveonDB; failed
+creates compensate by deleting that secret. Activity-only writes also bypass
+PostgreSQL when `activity` is selected. Malformed target records, missing audit
+authority, and concurrent revisions fail closed.
 When `user_themes` has read authority, theme create, update, and delete also use
 KaveonDB directly. Updates and deletes bind the exact current revision; missing
 deletes are idempotent, malformed revisions fail closed, and no operation falls

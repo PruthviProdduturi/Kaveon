@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from middleware.auth import UserContext
 from middleware.permissions import require_min_role
 import database.metadata as db
-from services import source_mutations, source_secret_store, product_outbox, product_shadow_read, product_read_authority
+from services import source_mutations, source_secret_store, source_cutover_mutations, product_outbox, product_shadow_read, product_read_authority
 from services.activity_backfill import document as activity_document
 
 router = APIRouter()
@@ -65,6 +65,10 @@ def _catalog_cutover_row(document: dict) -> dict:
 
 
 def _audit(action: str, obj_id: str, obj_name: str, user: str, details: str = None, transaction=None):
+    if product_read_authority.enabled("activity"):
+        parsed = json.loads(details) if isinstance(details, str) else details
+        source_cutover_mutations.audit_only(action, obj_id, obj_name, user, parsed)
+        return
     if os.getenv("KAVEON_ACTIVITY_OUTBOX_ENABLED") == "true" and transaction is None:
         with db.transaction() as tx:return _audit(action,obj_id,obj_name,user,details,tx)
     executor=transaction or db
@@ -204,6 +208,18 @@ def create_catalog_source(data: dict, ctx: UserContext = Depends(require_min_rol
 
     description = (data.get("description") or "").strip() or None
 
+    if source_cutover_mutations.enabled():
+        now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+        row = {"id": source_cutover_mutations.new_catalog_id(), "name": name, "engine_catalog": engine_catalog,
+               "storage_type": storage_type, "storage_config": config, "data_format": data_format,
+               "credential_kind": credential_kind, "credential_ref": credential_ref,
+               "adapter_type": adapter_type, "adapter_config": _validate_json(adapter_config_raw, "adapter_config"),
+               "lifecycle": "draft", "description": description, "created_by": ctx.email,
+               "modified_by": ctx.email, "created_at": now, "modified_at": now}
+        source_cutover_mutations.create("catalog_sources", row, ctx.email,
+            details={"storage_type": storage_type, "data_format": data_format, "adapter_type": adapter_type})
+        return {"success": True, "catalogSource": _catalog_cutover_row(source_mutations.catalog_document(row))}
+
     try:
         with db.transaction() as transaction:
             row = transaction.query_one(
@@ -237,6 +253,29 @@ def create_catalog_source(data: dict, ctx: UserContext = Depends(require_min_rol
 
 @router.patch("/catalog-sources/{cs_id}")
 def update_catalog_source(cs_id: str, data: dict, ctx: UserContext = Depends(require_min_role("Admin"))):
+    if source_cutover_mutations.enabled():
+        current = product_read_authority.read_document("sources", f"catalog-{cs_id}", ctx.email, "Admin")
+        if not current: raise HTTPException(404, {"code": "NOT_FOUND", "message": "Catalog source not found"})
+        for field, allowed in (("storage_type",_VALID_STORAGE),("data_format",_VALID_FORMAT),
+                               ("credential_kind",_VALID_CREDENTIAL),("adapter_type",_VALID_ADAPTER)):
+            if field in data and data[field] not in allowed:
+                raise HTTPException(400, f"{field} must be one of: {', '.join(sorted(allowed))}")
+        field_map = {"name":"name", "engine_catalog":"catalog_identity", "description":"description",
+                     "storage_type":"source_type", "data_format":"data_format", "credential_kind":"credential_kind",
+                     "credential_ref":"credential_ref", "adapter_type":"adapter_type"}
+        changes = {target: data[source] for source, target in field_map.items() if source in data}
+        for source, target in (("storage_config","storage_config"),("adapter_config","adapter_config")):
+            if source in data:
+                changes[target] = _validate_json(json.dumps(data[source]) if isinstance(data[source],dict) else data[source], source)
+        if not changes: raise HTTPException(400, "No fields to update")
+        if "credential_ref" in changes and changes["credential_ref"]:
+            try: source_secret_store.validate_reference(str(changes["credential_ref"]))
+            except source_secret_store.SourceSecretError as error: raise HTTPException(400,str(error)) from None
+        storage_type = changes.get("source_type", current.get("source_type"))
+        storage_config = changes.get("storage_config", current.get("storage_config"))
+        _validate_storage_config(storage_type, storage_config)
+        updated = source_cutover_mutations.update(f"catalog-{cs_id}", changes, ctx.email)
+        return {"success": True, "catalogSource": _catalog_cutover_row(updated)}
     existing = db.query_one("SELECT id, name, lifecycle FROM catalog_sources WHERE id = @param0", [cs_id])
     if not existing:
         raise HTTPException(404, {"code": "NOT_FOUND", "message": "Catalog source not found"})
@@ -345,6 +384,15 @@ def transition_lifecycle(cs_id: str, data: dict, ctx: UserContext = Depends(requ
     target = (data.get("lifecycle") or "").strip()
     if target not in _VALID_LIFECYCLE:
         raise HTTPException(400, f"lifecycle must be one of: {', '.join(sorted(_VALID_LIFECYCLE))}")
+    if source_cutover_mutations.enabled():
+        current = product_read_authority.read_document("sources", f"catalog-{cs_id}", ctx.email, "Admin")
+        if not current: raise HTTPException(404, {"code":"NOT_FOUND","message":"Catalog source not found"})
+        lifecycle = current.get("lifecycle")
+        if target not in _TRANSITIONS.get(lifecycle, set()):
+            raise HTTPException(400, f"Cannot transition from '{lifecycle}' to '{target}'. Allowed transitions: {', '.join(sorted(_TRANSITIONS.get(lifecycle,set()))) or 'none'}")
+        updated = source_cutover_mutations.update(f"catalog-{cs_id}", {"lifecycle":target,"is_active":target=="active"}, ctx.email,
+            action="lifecycle_transition", details={"from":lifecycle,"to":target})
+        return {"success":True,"catalogSource":_catalog_cutover_row(updated)}
 
     existing = db.query_one("SELECT id, name, lifecycle FROM catalog_sources WHERE id = @param0", [cs_id])
     if not existing:
@@ -371,6 +419,16 @@ def transition_lifecycle(cs_id: str, data: dict, ctx: UserContext = Depends(requ
 
 @router.delete("/catalog-sources/{cs_id}")
 def delete_catalog_source(cs_id: str, ctx: UserContext = Depends(require_min_role("Admin"))):
+    if source_cutover_mutations.enabled():
+        current = product_read_authority.read_document("sources", f"catalog-{cs_id}", ctx.email, "Admin")
+        if not current: raise HTTPException(404, {"code":"NOT_FOUND","message":"Catalog source not found"})
+        if current.get("lifecycle") not in ("draft","deleted"):
+            raise HTTPException(400,"Only draft or already-deleted catalog sources can be permanently removed. Transition to 'deleting' first for active/suspended sources.")
+        dependents = [item for item in product_read_authority.list_documents("sources",ctx.email,"Admin")
+                      if item.get("source_kind")=="data" and item.get("database_name")==current.get("catalog_identity")]
+        if dependents: raise HTTPException(409,"Catalog source is referenced by a data source")
+        source_cutover_mutations.delete(f"catalog-{cs_id}",ctx.email)
+        return {"success":True,"message":"Catalog source deleted"}
     existing = db.query_one("SELECT id, name, lifecycle FROM catalog_sources WHERE id = @param0", [cs_id])
     if not existing:
         raise HTTPException(404, {"code": "NOT_FOUND", "message": "Catalog source not found"})
