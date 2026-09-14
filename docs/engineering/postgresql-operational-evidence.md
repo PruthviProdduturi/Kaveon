@@ -55,6 +55,20 @@ SHA-256 in the immutable manifest. The command copies each listed object with
 `If-None-Match: *`, reads it back, recomputes the content-free state identity,
 and prints the strict `backup_identity` observation only after success:
 
+Create that immutable backup first from the active product-transaction prefix.
+The producer pins one Engine product snapshot across all typed families,
+enumerates the ADLS prefix before and after copying, caps the run at 10,000
+objects and 2 GiB, and publishes `manifest.json` last with create-only writes.
+The local manifest is content-free and is the input to the restore rehearsal:
+
+```powershell
+python scripts/create-kaveondb-adls-backup.py `
+  --account ACCOUNT --container CONTAINER `
+  --active-prefix PRODUCT_TRANSACTION_PREFIX `
+  --backup-id RUN_ID `
+  --manifest-output tmp/kaveondb-backup-manifest.json
+```
+
 ```powershell
 python scripts/rehearse-kaveondb-adls-restore.py restore `
   --manifest tmp/kaveondb-backup-manifest.json `

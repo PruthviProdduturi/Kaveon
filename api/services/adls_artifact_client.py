@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from urllib.parse import quote
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from azure.identity import DefaultAzureCredential
@@ -87,6 +88,35 @@ class AzureArtifactClient:
             raise RuntimeError("ADLS cleanup requires an ETag")
         response = self._request("DELETE", path, **{"If-Match": etag})
         response.close()
+
+    def list(self, prefix: str, max_objects: int = 10000) -> list[dict]:
+        import xml.etree.ElementTree as ET
+        if not prefix.strip("/") or not 1 <= max_objects <= 10000:
+            raise RuntimeError("ADLS list prefix or bound is invalid")
+        values, marker = [], None
+        while True:
+            query={"restype":"container","comp":"list","prefix":prefix.rstrip("/")+"/","maxresults":"5000"}
+            if marker: query["marker"]=marker
+            token=self.credential.get_token("https://storage.azure.com/.default").token
+            request=Request(f"https://{self.account}.blob.core.windows.net/{self.container}?{urlencode(query)}",
+                headers={"Authorization":f"Bearer {token}","x-ms-version":"2023-11-03",
+                         "x-ms-date":__import__("email.utils",fromlist=["formatdate"]).formatdate(usegmt=True)},method="GET")
+            response=self._opener(request)
+            try:
+                payload=response.read(4*1024*1024+1)
+                if len(payload)>4*1024*1024:raise RuntimeError("ADLS list response is oversized")
+                root=ET.fromstring(payload)
+            except Exception as error: raise RuntimeError("ADLS list returned invalid XML") from error
+            finally: response.close()
+            for blob in root.findall("./Blobs/Blob"):
+                name=blob.findtext("Name");etag=blob.findtext("./Properties/Etag");size=blob.findtext("./Properties/Content-Length")
+                try: size=int(size)
+                except (TypeError,ValueError): raise RuntimeError("ADLS list returned invalid object metadata") from None
+                if not name or not etag or size < 0: raise RuntimeError("ADLS list returned invalid object metadata")
+                values.append({"path":name,"etag":etag,"size":size})
+                if len(values)>max_objects: raise RuntimeError("ADLS list exceeds its object bound")
+            marker=root.findtext("NextMarker") or None
+            if not marker:return values
 
 
 def from_env() -> AzureArtifactClient:

@@ -39,3 +39,12 @@ def test_read_returns_bounded_content():
 
     client = AzureArtifactClient("acct", "artifacts", Credential(), opener)
     assert client.read("x", 16) == b"payload"
+
+
+def test_list_is_prefix_scoped_and_bounded():
+    xml=b"""<EnumerationResults><Blobs><Blob><Name>active/head.json</Name><Properties><Etag>etag-1</Etag><Content-Length>12</Content-Length></Properties></Blob></Blobs><NextMarker /></EnumerationResults>"""
+    def opener(request):
+        assert "comp=list" in request.full_url and "prefix=active%2F" in request.full_url
+        return Response(xml)
+    client=AzureArtifactClient("acct","state",Credential(),opener)
+    assert client.list("active")==[{"path":"active/head.json","etag":"etag-1","size":12}]
