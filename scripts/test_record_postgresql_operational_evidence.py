@@ -28,7 +28,8 @@ def _runner(observations, *, failing_gate=None):
         gate = argv[1]
         return SimpleNamespace(
             returncode=3 if gate == failing_gate else 0,
-            stdout=json.dumps(observations[gate][1]).encode(), stderr=b"probe failure")
+            stdout=json.dumps(observations[gate][1]).encode(),
+            stderr=b"probe failure" if gate == failing_gate else b"")
     return run
 
 
@@ -57,6 +58,16 @@ def test_successful_command_with_failed_observation_cannot_be_signed():
     with pytest.raises(RuntimeError, match="not drained"):
         module.record(_manifest(), checked_at="2026-09-14T18:00:00Z",
                       runner=_runner(observations))
+
+
+def test_successful_probe_rejects_stderr_and_duplicate_json_keys():
+    probe={"argv":["probe"],"timeout_seconds":30}
+    noisy=lambda *_args,**_kwargs: SimpleNamespace(returncode=0,stdout=b"{}",stderr=b"warning")
+    with pytest.raises(RuntimeError,match="unexpected stderr"):
+        module._run_probe("source_watermark",probe,runner=noisy)
+    duplicate=lambda *_args,**_kwargs: SimpleNamespace(returncode=0,stdout=b'{"x":1,"x":2}',stderr=b"")
+    with pytest.raises(RuntimeError,match="invalid JSON"):
+        module._run_probe("source_watermark",probe,runner=duplicate)
 
 
 def test_manifest_requires_bounded_argv_timeout_and_all_gates(tmp_path):

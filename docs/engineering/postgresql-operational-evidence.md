@@ -14,16 +14,16 @@ Place these integrity-bound receipts in one run directory:
 | `outbox_drain.json` | Bounded query ID, watermark, pending count before, and zero after |
 | `write_fence.json` | Deployment revision, successful read probe, and one rejected mutation probe for every authority family |
 | `shadow_parity.json` | Source/target snapshot identities, zero mismatches, and all 16 families exactly once |
-| `restart_recovery.json` | PostgreSQL unavailable, new API and Studio processes ready, nonzero probes, and identical state digests before/after |
-| `rollback.json` | Cutover revision, target fenced, source reads/writes restored within the recovery bound, and identical state digests |
-| `backup_identity.json` | Backup identity/digest, restore job, positive restored table count, and identical source/restored inventory digests |
+| `restart_recovery.json` | PostgreSQL unavailable, new API and Studio processes ready, nonzero probes, and identical content-free state digests/counts before/after |
+| `rollback.json` | Cutover revision, target fenced, source reads/writes restored within time and operation bounds, and identical state digests |
+| `backup_identity.json` | Immutable ADLS prefix and manifest digest, an executed restore job, positive restored table count, and identical source/restored inventory digests |
 | `durable_checkpoint.json` | Different pod UIDs, identical checkpoint digest, non-regressing position, and completed resume |
 
 Each JSON object has exactly these top-level fields:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "gate": "restart_recovery",
   "checked_at": "2026-09-14T18:00:00Z",
   "evidence_id": "aks-run-20260914-restart",
@@ -38,6 +38,16 @@ The exact gate-specific observation fields are defined in
 keys, oversized files, duplicate/missing family probes, mismatched state
 digests, reused pod UIDs, unbounded rollback time, and unverified restore claims
 all fail closed.
+
+State inventories must contain only `kind`, `id`, `revision`, and the committed
+document SHA-256. `kaveondb_recovery_evidence.state_identity` rejects payloads,
+duplicates, invalid revisions, and more than one million records before deriving
+the before/after identity. Its backup validator accepts only query-free ADLS
+paths containing `/backups/<backup-id>/`, exact object metadata, and immutable
+object digests. Validating this manifest proves backup identity only. The
+`backup_identity` receipt additionally requires `restore_executed: true`, a
+restore job ID, and a matching restored inventory; never set these from a plan
+or an unexecuted command.
 
 ### Live probe recorder
 
