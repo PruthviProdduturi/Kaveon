@@ -48,10 +48,10 @@ an owner/type/object deterministic identity, including normalization of legacy
 100 records and commits separately under each record owner. Invalid documents,
 revisions, ownership, or fanout fail closed without querying PostgreSQL.
 Catalog audit reads can independently select `activity`; administrators see the
-workspace trail and other roles remain actor-scoped. `dlm_definitions` is
-reserved in the allowlist but the existing DLM status endpoint cannot select it
-until the compiled artifact is retrievable without PostgreSQL; enabling that
-name alone therefore does not claim DLM read cutover.
+workspace trail and other roles remain actor-scoped. `dlm_definitions` and DLM
+runs are revision-bound KaveonDB records. In retirement mode, generation and
+serving use create-only ADLS artifacts and do not fall back to the five legacy
+PostgreSQL DLM tables.
 
 ## Context cache retirement
 
@@ -77,7 +77,9 @@ match, writes are fenced, deletion counts match the pre-deletion inventory, and
 zero rows remain. This report is one family input; it does not bypass the other
 authority-family or global retirement gates.
 
-Status on September 10, 2026: **do not delete or scale down PostgreSQL**.
+Current status on September 14, 2026: the PostgreSQL-free runtime and migration
+tooling are implemented locally, and the live AKS retirement gate has not passed.
+**Do not delete or scale down PostgreSQL yet.**
 
 The complete code-path and runtime-table audit is maintained in
 [PostgreSQL authority inventory](postgresql-authority-inventory.md).
@@ -89,52 +91,23 @@ container. The AKS storage account is HTTPS-only, hierarchical-namespace
 enabled, denies anonymous access and shared-key authorization, defaults its
 network firewall to deny, and grants the Engine workload identity scoped RBAC.
 
-That does not mean every product record has moved. The API still treats the AKS
-PostgreSQL database as the authority for Studio metadata. A read-only inventory
-on September 10 found these 21 live tables:
+The code now gives all 16 declared authority families an explicit typed-record,
+rebuild, or deletion disposition with deterministic migration and strict
+evidence collection. Product-record families have bounded replay and direct
+cutover reads/mutations; context cache is rebuilt, and legacy AI configuration
+must be proven absent, securely migrated, or deliberately deleted. Dataset
+semantics are committed atomically with their parent. DLM compiled context is
+immutable in ADLS and definition/run metadata is revisioned in KaveonDB. Setup
+and metadata-administration routes are fenced in retirement mode so Studio does
+not probe an external metadata database.
 
-| Table | Rows | Table | Rows |
-|---|---:|---|---:|
-| activity | 1 | catalog_sources | 2 |
-| charts | 70 | context_answer_cache | 0 |
-| context_snapshots | 0 | dashboards | 8 |
-| data_sources | 0 | dataset_columns | 119 |
-| dataset_dimensions | 0 | dataset_metrics | 35 |
-| datasets | 9 | dlm_answers | 3,659 |
-| dlm_artifact | 9 | dlm_router | 9 |
-| dlm_sketch | 0 | dlm_value_index | 0 |
-| favorites | 0 | query_history | 660 |
-| saved_queries | 0 | user_recents | 15 |
-| user_themes | 0 |  |  |
-
-The ADLS product-record layer currently has typed records for datasets, charts,
-dashboards, saved queries and user themes. The API now has a typed, bounded
-client for atomic create/update/delete groups and owner-scoped point reads. It
-is an application migration boundary, not an enabled repository adapter:
-backfill, PostgreSQL outbox/units of work, shadow-read wiring, write fencing and
-API cutover remain incomplete. It does not yet cover all 21 PostgreSQL tables.
-
-The PostgreSQL schema and API contain the source-side unit-of-work and
-idempotent migration-outbox primitives. The dataset parent and semantic-child
-writes now append exactly one event in that transaction. This is source capture,
-not migration completion: the schema is not deployed and no replay, backfill,
-reconciliation, shadow read or cutover is enabled.
-
-A bounded replay library now processes source sequence order and resolves an
-ambiguous target response only from exact committed KaveonDB content. It is not
-wired to a scheduler or deployment, and no backfill watermark exists. Therefore
-it provides no evidence that current PostgreSQL rows are present in KaveonDB.
-
-A deterministic dataset snapshot/backfill library now records a repeatable-read
-source watermark, canonical record and snapshot hashes, bounded counts, and
-exact post-create target reconciliation. It is disabled operationally and has
-not run against a real environment, so the required backfill and reconciliation
-evidence remains absent.
-
-The backfill has a disabled-by-default command with an exact snapshot checkpoint
-and resume support. Its existence is not a retirement gate result; only an
-archived successful command report followed by post-watermark replay and final
-reconciliation can supply that evidence.
+Those implementation facts are not live retirement evidence. The active AKS
+attempt must still produce fresh 16-family reconciliation, shadow parity across
+roles and visibility states, a fixed final watermark with zero outbox lag, live
+write-fence probes, PostgreSQL-unavailable restart, KaveonDB backup/restore, and
+bounded rollback receipts from one immutable run. Until the final audit accepts
+those artifacts, PostgreSQL remains the deployment authority and rollback
+source.
 
 ### Durable backfill checkpoints
 
@@ -397,121 +370,31 @@ family mapping, source-snapshot identity and a report digest; it contains no
 rows or credentials. Archive it with the cutover evidence. A locally generated
 fixture report does not qualify the live AKS schema.
 
-The dataset shadow comparator is disabled by default and covers authenticated
-point reads plus list projections of at most 25 records. Larger lists skip all
-target access. Enabling it emits bounded hashes and aggregate parity status while
-PostgreSQL still supplies the response. Retirement requires fresh
-aggregate evidence across representative roles, visibility states and changes;
-the existence of this comparator does not satisfy the shadow-read gate for
-datasets or any other family.
+## Implemented boundary and remaining live proof
 
-The default-off dataset post-write observer distinguishes unapplied outbox lag
-(`pending_replay`) from a changed/missing source event or applied target
-divergence. It verifies applied events with owner-scoped reads and never changes
-the PostgreSQL mutation result. This closes a telemetry boundary only; replay,
-zero-lag fencing, live mutation coverage and durable report aggregation remain
-required before dataset cutover.
+All 16 authority families have checked-in reconciliation producers and a strict
+collector. Runtime read authority is exact and fail-closed. Direct KaveonDB
+mutations cover datasets and semantic children, charts, dashboards, saved
+queries, themes, recents, favorites, query history, activity, sources, chat
+sessions/messages and DLM definition/run records. Source secrets remain in Key
+Vault and only validated versioned references enter product records.
 
-Authenticated chart point reads also have a default-off bounded shadow
-comparator. This establishes only hash telemetry for one read path. Chart list
-coverage, source capture, backfill, replay, write verification and live parity
-evidence remain mandatory, and the comparator cannot satisfy the chart family
-retirement gate by itself.
+DLM generation assigns a bounded next version, publishes canonical bytes
+create-only to ADLS, verifies them, and atomically commits the dataset-bound
+definition plus `building` to `ready` run transition. Serving reads routing,
+values, answers, charts, coverage and curation from that verified artifact.
+Request caches are actor-scoped and artifact-version/SHA-256-bound. Legacy mode
+keeps the existing PostgreSQL and outbox behavior.
 
-KaveonDB now has a durable owner-isolated `dlm_definition` record containing
-only dataset identity and positive pinned revision, with a typed dataset
-reference. No PostgreSQL writer/backfill uses it yet. Generated DLM artifacts,
-answers, indexes, router and sketches still lack a bounded atomic generation
-contract, so the DLM family remains PostgreSQL-authoritative/rebuilt state and
-cannot pass retirement.
+Retirement and restart-rehearsal modes make `/setup/status` report KaveonDB as
+configured. External metadata connection test/update, setup initialization,
+start-fresh and legacy repair routes return `409 postgresql_retired` before pool
+or configuration access.
 
-A deterministic, default-dry definition backfill command now exists with exact
-checkpoint/resume and owner-scoped reconciliation. It depends on datasets having
-already reached a stable KaveonDB snapshot and rejects mixed target generations.
-It has not run against a live environment, does not capture ongoing definition
-writes, and does not migrate generated runs; it supplies no DLM retirement
-evidence by itself.
-
-The durable `dlm_run` record now binds a generated run to one exact definition
-revision and immutable manifest identity, with a one-way building/ready/failed
-lifecycle. It stores no answer payloads or error text. PostgreSQL-generated
-artifacts still lack a manifest publisher, backfill, reconciliation and cleanup
-policy, so the new metadata contract does not advance the DLM retirement gate.
-
-The credential-free legacy-run command supplies deterministic snapshot,
-checkpoint/resume and exact reconciliation behavior. Its injected create-only
-publisher reconciles ambiguous writes from exact remote bytes, but production
-use remains blocked on a deployed ADLS client and provenance for every sealed
-path/hash.
-
-Live DLM generation now has a retirement-mode commit path. It assigns the next
-run version from a bounded KaveonDB snapshot, publishes canonical compiled bytes
-create-only to ADLS and verifies them, then atomically creates or revision-CAS
-updates the dataset-bound definition and advances the run from `building` to
-`ready`. Only the dataset owner may publish. PostgreSQL mode retains the source
-transaction and outbox path. Immutable bytes deliberately precede the KaveonDB
-transaction, so a failed metadata commit can leave an unreferenced object but
-can never expose a ready run whose bytes are missing or divergent.
-
-The retirement compiler holds value-index rows, router terms and precomputed
-answers in request-local bounded state rather than writing its five legacy DLM
-tables. Native source discovery and all build scans use the Engine bridge. The
-state, including preserved human curation, is sealed into the immutable compiled
-artifact before the KaveonDB run becomes ready. Context edits use the same
-create-only artifact and new-run path. The non-retirement compiler continues to
-use its existing metadata tables and outbox contract.
-
-Retirement-mode DLM serving reads routing manifests, indexed values, exact
-precomputed answers, chart context, coverage and curation only from the current
-KaveonDB-bound immutable artifact. Authenticated request-local caches are bound
-to the artifact version and canonical SHA-256 and discarded after the request;
-there is no PostgreSQL fallback or cross-revision answer cache. Non-retirement
-requests retain the legacy serving path.
-
-A credential-free rehearsal bundle can now bind completed definition/run
-checkpoints, artifact receipts, source watermarks, exact revision bindings,
-KaveonDB snapshot/generations and reconciliation results. Its verifier rejects
-stale or incomplete evidence. It is scoped DLM migration evidence and does not
-replace the complete authority-family retirement gate.
-
-The chart family now has deterministic snapshot, exact dataset-revision binding,
-checkpoint/resume and target reconciliation code. Retirement remains blocked on
-live backfill evidence, continuous mutation capture, read parity, fencing,
-rollback and backup/restore qualification.
-
-User themes now have atomic source/outbox writes, bounded checkpointed backfill,
-exact owner reconciliation and shadow parity code. The source outbox table is
-absent in the live AKS PostgreSQL deployment as verified by a read-only
-`to_regclass('public.product_migration_outbox')` probe on September 11, 2026.
-Deployment, replay, live evidence, fencing and rollback remain required.
-
-The saved-query family now has atomic source mutation/outbox capture plus a
-bounded deterministic backfill with exact owner-scoped reconciliation and
-tamper-evident checkpoint/resume. The command is disabled for apply by default.
-No live backfill, post-watermark replay, shadow-read, fence, restart or rollback
-evidence exists, so this family does not yet satisfy a retirement gate.
-
-Dashboards now have snapshot/backfill/reconciliation and point-read shadow code,
-including exact referenced chart revisions. Retirement remains blocked on typed
-filter dataset references, continuous writer capture, live parity evidence,
-fencing, rollback and backup/restore qualification.
-
-Deleting the StatefulSet or PVC before these gates would remove the current
-product metadata authority and break Studio even though ADLS analytical queries
-remain available.
-
-In an evidence-qualified retirement or restart-rehearsal process, the setup
-status route reports KaveonDB as the configured product authority without
-probing an external metadata database. The administrative metadata connection
-test/update, setup initialization, start-fresh, and legacy data-source repair
-routes return `409 postgresql_retired` before opening a connection or changing
-configuration. This fence is part of PostgreSQL-free operation; operators must
-leave retirement mode and requalify the activation evidence before restoring an
-external metadata authority.
-
-Favorites now cover typed migrated targets with owner uniqueness, references,
-source/outbox atomicity, backfill/replay, shadow code, and direct KaveonDB
-mutations. Legacy data-source favorites normalize to the non-secret typed source
-destination. Live reconciliation, fencing, and rollback evidence remain gates.
-
-Source retirement now has a non-secret typed destination and deterministic coupled backfill, but encrypted connection material remains a separate secret authority. A workload-identity Key Vault resolver, writer/outbox atomicity, shared visibility semantics, shadow parity, rotation, backup/restore and rollback evidence are mandatory before retirement.
+None of these code paths proves the active deployment is ready. The remaining
+work is operational: collect fresh reports from the deployed image, prove exact
+shadow parity, fence and drain one final watermark, restart with PostgreSQL
+unavailable, restore KaveonDB from its immutable backup, rehearse bounded
+rollback, and pass the final evidence runner with exactly 16 families. Scale
+PostgreSQL to zero only after review; retain its PVC and snapshot for the agreed
+rollback window. Delete them only after that window closes.

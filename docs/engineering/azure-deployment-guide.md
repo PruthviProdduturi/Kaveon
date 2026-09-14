@@ -2,7 +2,10 @@
 
 Use **Part A** if Kaveon is already deployed. Use **Part B** once to create a new
 test environment. Commands below are for PowerShell. The Engine UI uses port
-8080; Studio uses 3000. The AKS template deploys the Engine, not Studio/API.
+8080; Studio uses 3000. The `kaveon-test` AKS template used here deploys the
+Engine and test fixtures, not Studio/API. A full-product deployment uses the
+separate `kaveon-portal-test` chart. PostgreSQL retirement is an evidence-gated
+rehearsal for that chart; it is not an install-time switch.
 
 ## Part A — connect to an existing deployment
 
@@ -159,6 +162,13 @@ kaveon --server https://localhost:8080 --ca-cert ./kaveon-ca.crt --catalog medal
 ```
 
 ## Part B — deploy a new Azure test environment
+
+This part creates an Engine qualification environment. It does not establish
+that product metadata has moved out of PostgreSQL. To install Studio and the API,
+use the immutable images and `infra/helm/kaveon-portal-test` chart from the same
+release bundle, then follow the
+[AKS PostgreSQL retirement rehearsal](aks-postgresql-retirement-rehearsal.md).
+Keep every `api.cutover` retirement flag false on the initial install.
 
 ### 1. Gather these values and permissions
 
@@ -383,6 +393,21 @@ kubectl exec kaveon-coordinator-0 -n kaveon -- rm -rf /tmp/aks-bundle /tmp/aks-b
 Now follow **Part A**, using your tenant/subscription/resource-group/cluster values.
 Other users also need AKS access plus an explicit object-ID/role entry in the
 coordinator's Entra configuration. Being in the tenant alone does not grant access.
+
+### Product retirement and rollback boundary
+
+The full-product chart starts with PostgreSQL present and all retirement flags
+off. Backfill and replay first, then collect one fresh immutable evidence run for
+all 16 authority families. The same run must prove shadow parity, a fixed final
+watermark with zero outbox lag, the write fence, a PostgreSQL-unavailable API
+restart, KaveonDB backup/restore, and bounded rollback. The runtime rejects a
+missing, stale, incomplete, or mismatched report.
+
+Only after the final audit and qualification summary pass may an operator scale
+PostgreSQL to zero. Keep its PVC and snapshot for the approved rollback window;
+neither the chart nor the rehearsal runner deletes them. Local filesystem
+checkpoints and local-cluster tests are development aids and cannot satisfy the
+AKS evidence gate.
 
 ### 9. Stop compute when finished
 

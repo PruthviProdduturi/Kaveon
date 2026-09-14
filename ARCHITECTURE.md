@@ -45,7 +45,10 @@ The defining data model is the **Live Lake Path**: Kaveon reads data in the cust
 
 ## What runs today
 
-Two execution paths coexist on `dev`; they are not yet integrated.
+The analytical and product-transaction paths are integrated through Studio and
+FastAPI. PostgreSQL remains present in qualification deployments until the live
+retirement gate passes; checked-in retirement mode switches exact authority
+families to KaveonDB and fails closed rather than falling back.
 
 ### Shipping application path — implemented
 
@@ -54,11 +57,18 @@ flowchart LR
     Browser[Browser] -->|session cookie| Studio[Next.js Studio]
     Studio -->|same-origin proxy\ntrusted identity headers| API[FastAPI API]
     API --> DLM[DLM context and routing]
-    API --> Metadata[(Metadata PostgreSQL)]
-    API -->|legacy passthrough| SQL[(Registered SQL sources)]
+    API --> Engine[Kaveon Engine bridge]
+    API --> Tx[KaveonDB typed product records]
+    API -->|pre-cutover dual write / replay| Metadata[(PostgreSQL rollback source)]
+    API -->|registered-source passthrough| SQL[(External SQL sources)]
 ```
 
-The browser calls the Next.js proxy rather than constructing trusted API identity headers. FastAPI owns product services, metadata, DLM compilation and serving, and the legacy live-query path.
+The browser calls the Next.js proxy rather than constructing trusted API
+identity headers. FastAPI owns product services and routing. Retirement-mode DLM
+generation scans through the Engine, publishes a create-only compiled artifact
+to ADLS, and commits its definition/run records in KaveonDB; serving verifies the
+artifact revision and hash and has no PostgreSQL fallback. Registered external
+SQL sources remain an explicit passthrough path rather than Engine federation.
 
 ### Rust Engine path — distributed alpha
 
@@ -75,7 +85,7 @@ flowchart LR
     Workers -->|Root Arrow results| Coordinator
 ```
 
-Today the Engine queries local Parquet and multi-file Delta tables, plus individual Parquet objects in ADLS Gen2 through ranged object-store reads. The coordinator builds validated stage DAGs and versioned fragments for scan/filter/project, partial/final aggregates, Sort/TopN/limit, and repartitioned or broadcast joins. Workers execute deterministic partitions, exchange Arrow IPC payloads, and support bounded retry/cancellation lifecycle behavior. Delta snapshot resolution still requires complete local JSON commit history from version 0; cloud Delta checkpoints are unsupported. Studio and FastAPI do not yet route user queries to the Engine, and Python bindings remain a scaffold. S3 and Iceberg remain non-executable target paths.
+Today the Engine queries local Parquet and multi-file Delta tables, plus individual Parquet objects in ADLS Gen2 through ranged object-store reads. The coordinator builds validated stage DAGs and versioned fragments for scan/filter/project, partial/final aggregates, Sort/TopN/limit, and repartitioned or broadcast joins. Workers execute deterministic partitions, exchange Arrow IPC payloads, and support bounded retry/cancellation lifecycle behavior. Delta snapshot resolution still requires complete local JSON commit history from version 0; cloud Delta checkpoints are unsupported. Studio and FastAPI route native analytical work and retirement DLM scans through the Engine bridge; registered external SQL sources use a separate passthrough path. Python bindings remain a scaffold. S3 and Iceberg remain non-executable target paths.
 
 HTTP query records are inserted at submission and retain measured analysis, physical-planning, execution, and result-serialization durations. Completed storage scans report files opened, row groups considered/read/pruned, selected compressed Parquet bytes, emitted rows and batches, Delta snapshot time, footer time, read time, and throughput. Completed distributed stages report their worker tasks, partitions, elapsed time, output rows, Arrow batches, and transport bytes. The shared telemetry types distinguish a measured zero from an unavailable value. Physical operator CPU/memory, blocked time, spill, and live task updates are not yet emitted.
 
