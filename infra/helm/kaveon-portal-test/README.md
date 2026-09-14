@@ -89,3 +89,13 @@ PVC containing live observations; they validate and write the two special
 reports but never perform deletion or invent observations. Keep these controls
 in a reviewed values file rather than long `--set` commands so comma-delimited
 family lists remain exact and auditable.
+
+After the PostgreSQL-free API is ready, enable `api.postgresqlFreeSmoke` for one
+release revision. The Job requires a migrated fixture identity, a visible ready
+DLM dataset ID, a bounded question and the evidence PVC. It reads
+`KAVEON_PROXY_SECRET` from `secrets.portalAuth`, uses no service-account token,
+and writes the content-free receipt at `outputFile`. The in-cluster API URL uses
+plain HTTP by design; for an HTTPS route set `useCaCert=true` and supply either
+`caSecret` or `caConfigMap` plus `caKey`. Preserve the completed Job logs and
+receipt, then disable the Job in the next values revision. A failed or missing
+Job receipt is not restart-recovery evidence.

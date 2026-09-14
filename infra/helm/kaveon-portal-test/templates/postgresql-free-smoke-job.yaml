@@ -1,0 +1,64 @@
+{{- if .Values.api.postgresqlFreeSmoke.enabled }}
+{{- $_ := required "api.postgresqlFreeSmoke.evidencePvc is required" .Values.api.postgresqlFreeSmoke.evidencePvc }}
+{{- $_ := required "api.postgresqlFreeSmoke.baseUrl is required" .Values.api.postgresqlFreeSmoke.baseUrl }}
+{{- $_ := required "api.postgresqlFreeSmoke.identity is required" .Values.api.postgresqlFreeSmoke.identity }}
+{{- $_ := required "api.postgresqlFreeSmoke.datasetId is required" .Values.api.postgresqlFreeSmoke.datasetId }}
+{{- $_ := required "api.postgresqlFreeSmoke.question is required" .Values.api.postgresqlFreeSmoke.question }}
+{{- if or (hasPrefix "/" .Values.api.postgresqlFreeSmoke.outputFile) (contains ".." .Values.api.postgresqlFreeSmoke.outputFile) }}{{ fail "api.postgresqlFreeSmoke.outputFile must be a safe relative evidence path" }}{{ end }}
+{{- if not (regexMatch "^[A-Za-z0-9._-]+$" .Values.api.postgresqlFreeSmoke.caKey) }}{{ fail "api.postgresqlFreeSmoke.caKey must be a file name" }}{{ end }}
+{{- if and .Values.api.postgresqlFreeSmoke.useCaCert (and (not .Values.api.postgresqlFreeSmoke.caSecret) (not .Values.api.postgresqlFreeSmoke.caConfigMap)) }}{{ fail "a smoke CA Secret or ConfigMap is required when useCaCert=true" }}{{ end }}
+apiVersion: batch/v1
+kind: Job
+metadata: {name: kaveon-postgresql-free-smoke-{{ .Release.Revision }}, namespace: {{ .Values.namespace }}}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata: {labels: {app: kaveon-api, job: kaveon-postgresql-free-smoke}}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: smoke
+          image: {{ include "portal.image" (list .Values.images.api "api") }}
+          command: [python, -m, services.postgresql_free_smoke_cli]
+          args:
+            - --base-url
+            - {{ .Values.api.postgresqlFreeSmoke.baseUrl | quote }}
+            - --identity
+            - {{ .Values.api.postgresqlFreeSmoke.identity | quote }}
+            - --dataset-id
+            - {{ .Values.api.postgresqlFreeSmoke.datasetId | quote }}
+            - --question
+            - {{ .Values.api.postgresqlFreeSmoke.question | quote }}
+{{- if .Values.api.postgresqlFreeSmoke.useCaCert }}
+            - --ca-cert
+            - /var/run/kaveon/smoke-ca/{{ .Values.api.postgresqlFreeSmoke.caKey }}
+{{- end }}
+            - --output
+            - /evidence/{{ .Values.api.postgresqlFreeSmoke.outputFile }}
+          env:
+            - {name: KAVEON_POSTGRESQL_FREE_SMOKE_ENABLED, value: "true"}
+            - {name: KAVEON_PROXY_SECRET, valueFrom: {secretKeyRef: {name: {{ required "secrets.portalAuth is required" .Values.secrets.portalAuth }}, key: KAVEON_PROXY_SECRET}}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: evidence, mountPath: /evidence}
+{{- if .Values.api.postgresqlFreeSmoke.useCaCert }}
+            - {name: smoke-ca, mountPath: /var/run/kaveon/smoke-ca, readOnly: true}
+{{- end }}
+          resources:
+{{ toYaml .Values.api.postgresqlFreeSmoke.resources | indent 12 }}
+      volumes:
+        - {name: tmp, emptyDir: {}}
+        - {name: evidence, persistentVolumeClaim: {claimName: {{ .Values.api.postgresqlFreeSmoke.evidencePvc }}}}
+{{- if .Values.api.postgresqlFreeSmoke.useCaCert }}
+        - name: smoke-ca
+{{- if .Values.api.postgresqlFreeSmoke.caSecret }}
+          secret: {secretName: {{ .Values.api.postgresqlFreeSmoke.caSecret }}}
+{{- else }}
+          configMap: {name: {{ .Values.api.postgresqlFreeSmoke.caConfigMap }}}
+{{- end }}
+{{- end }}
+{{- end }}
