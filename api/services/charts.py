@@ -159,6 +159,14 @@ def get_chart_by_id(chart_id: str, user_email: Optional[str] = None, role: str =
     role defaults to 'Admin' for internal service calls so chart rendering
     is never blocked by visibility. Pass the actual role from user-facing endpoints.
     """
+    from services import product_read_authority
+    if product_read_authority.enabled("charts"):
+        document = product_read_authority.read_document(
+            "charts", chart_id, user_email, role,
+        )
+        if document is not None:
+            document.setdefault("favorite", False)
+        return document
     layout = _chart_schema()
     if layout == "legacy":
         return _legacy_get_chart(chart_id, user_email, role)

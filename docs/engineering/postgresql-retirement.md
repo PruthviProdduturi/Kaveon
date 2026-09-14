@@ -1,5 +1,19 @@
 # PostgreSQL retirement gate
 
+## Family-scoped read authority
+
+`KAVEONDB_READ_AUTHORITY_FAMILIES` is empty by default, so PostgreSQL remains
+the read authority. Point reads for `datasets`, `charts`, and `dashboards` can
+be moved independently with a comma-separated value such as
+`datasets,charts`. A selected family reads only KaveonDB: target errors and
+invalid documents fail closed and never fall back to PostgreSQL. Unknown family
+names reject the configuration. The API reapplies visibility rules after its
+privileged Engine bridge read.
+
+Do not select a family until its reconciliation and role-based shadow reads
+pass at the final source watermark. Listing endpoints remain PostgreSQL-backed
+and therefore must be migrated before PostgreSQL can be retired completely.
+
 ## Context cache retirement
 
 `context_snapshots` and `context_answer_cache` are revision-bound generated
@@ -82,6 +96,34 @@ The backfill has a disabled-by-default command with an exact snapshot checkpoint
 and resume support. Its existence is not a retirement gate result; only an
 archived successful command report followed by post-watermark replay and final
 reconciliation can supply that evidence.
+
+### Durable backfill checkpoints
+
+Every `scripts/backfill-*.py` command publishes each per-record checkpoint to
+ADLS before processing the next record. Deployed apply runs fail closed unless
+the durable backend is configured:
+
+```powershell
+$env:KAVEON_MIGRATION_CHECKPOINT_MODE = "adls"
+$env:KAVEON_MIGRATION_CHECKPOINT_ADLS_ACCOUNT = "<storage-account>"
+$env:KAVEON_MIGRATION_CHECKPOINT_ADLS_CONTAINER = "<private-container>"
+$env:KAVEON_MIGRATION_CHECKPOINT_ADLS_PREFIX = "retirement/<immutable-run-id>"
+python scripts/backfill-product-catalog.py `
+  --checkpoint tmp/datasets.json --apply --resume
+```
+
+The workload identity needs blob read, create, and update permissions on that
+container. The active blob uses ETag compare-and-swap, so two writers cannot
+advance one migration silently. Each state is also retained under a
+content-addressed version key, and every active write is read back byte-for-byte
+before the next source record runs. Existing checkpoint SHA-256 validation
+still applies after hydration. A local checkpoint without its corresponding
+ADLS object is rejected rather than promoted implicitly.
+
+Filesystem-only apply is available solely for an explicit local environment:
+set `KAVEON_MIGRATION_CHECKPOINT_MODE=local` and
+`KAVEON_ENVIRONMENT=local`. It is not valid retirement evidence. Dry runs may
+continue to use local checkpoints without cloud credentials.
 
 The local parity audit fails closed over the complete checked-in authority
 manifest:

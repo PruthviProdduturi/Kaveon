@@ -132,6 +132,14 @@ def get_dashboard_by_id(
     role: str = "Admin",
 ) -> Optional[dict]:
     """role defaults to 'Admin' for internal/rendering calls."""
+    from services import product_read_authority
+    if product_read_authority.enabled("dashboards"):
+        document = product_read_authority.read_document(
+            "dashboards", dashboard_id, user_email, role,
+        )
+        if document is not None:
+            document.setdefault("favorite", False)
+        return document
     if user_email:
         vis = _vis_clause(2, 1)
         row = db.query_one(f"""
