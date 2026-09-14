@@ -12,7 +12,7 @@ URLs, or account keys in the overlay. Start with retirement and restart modes
 false. Validate locally:
 
 ```powershell
-helm lint kaveon infra/helm/kaveon-portal-test -f $values
+helm lint infra/helm/kaveon-portal-test -f $values
 helm template kaveon infra/helm/kaveon-portal-test -f $values > tmp/retirement-rendered.yaml
 ```
 
