@@ -382,33 +382,43 @@ def generate_dlm(dataset_id: str, force: bool = False, actor: Optional[str] = No
     }
 
     if artifact_status == "ready":
-        from services import dlm_compiled_artifact, dlm_definition_mutations
         publication_actor = actor or str(ds.get("modified_by") or ds.get("created_by") or "")
-        artifact_row = meta.query_one(
-            "SELECT version, source_hash, built_at FROM dlm_artifact WHERE dataset_id = @param0",
-            [str(dataset_id)],
-        ) or {}
-        compiled = dlm_compiled_artifact.publish({
-            "dataset_id": str(dataset_id), "version": artifact_row.get("version"),
-            "manifest": manifest, "stats_rollup": stats_rollup,
-            "usage_rollup": usage_rollup, "source_hash": artifact_row.get("source_hash"),
-            "built_at": str(artifact_row.get("built_at") or ""), "status": "ready",
-            "values_indexed": len(value_rows),
-        })
-        with meta.transaction() as transaction:
-            changed = transaction.execute(
-                "UPDATE dlm_artifact SET status = 'ready', stats_rollup = @param0 "
-                "WHERE dataset_id = @param1",
-                [json.dumps(stats_rollup, default=str), str(dataset_id)],
-            )
-            if changed != 1:
-                raise RuntimeError("DLM artifact disappeared before ready publication")
-            definition = dlm_definition_mutations.publish_ready(
-                transaction, str(dataset_id), publication_actor,
-            )
-            if compiled is not None:
-                dlm_compiled_artifact.enqueue_run(transaction, str(dataset_id),
-                    definition.owner, publication_actor, definition.revision, compiled)
+        from services import postgresql_retirement_runtime
+        if postgresql_retirement_runtime.requested():
+            from services import dlm_generation_cutover
+            dlm_generation_cutover.publish({
+                "dataset_id": str(dataset_id), "manifest": manifest,
+                "stats_rollup": stats_rollup, "usage_rollup": usage_rollup,
+                "source_hash": source_hash, "built_at": _now_iso(),
+                "status": "ready", "values_indexed": len(value_rows),
+            }, publication_actor)
+        else:
+            from services import dlm_compiled_artifact, dlm_definition_mutations
+            artifact_row = meta.query_one(
+                "SELECT version, source_hash, built_at FROM dlm_artifact WHERE dataset_id = @param0",
+                [str(dataset_id)],
+            ) or {}
+            compiled = dlm_compiled_artifact.publish({
+                "dataset_id": str(dataset_id), "version": artifact_row.get("version"),
+                "manifest": manifest, "stats_rollup": stats_rollup,
+                "usage_rollup": usage_rollup, "source_hash": artifact_row.get("source_hash"),
+                "built_at": str(artifact_row.get("built_at") or ""), "status": "ready",
+                "values_indexed": len(value_rows),
+            })
+            with meta.transaction() as transaction:
+                changed = transaction.execute(
+                    "UPDATE dlm_artifact SET status = 'ready', stats_rollup = @param0 "
+                    "WHERE dataset_id = @param1",
+                    [json.dumps(stats_rollup, default=str), str(dataset_id)],
+                )
+                if changed != 1:
+                    raise RuntimeError("DLM artifact disappeared before ready publication")
+                definition = dlm_definition_mutations.publish_ready(
+                    transaction, str(dataset_id), publication_actor,
+                )
+                if compiled is not None:
+                    dlm_compiled_artifact.enqueue_run(transaction, str(dataset_id),
+                        definition.owner, publication_actor, definition.revision, compiled)
 
     return {
         "ok": True,

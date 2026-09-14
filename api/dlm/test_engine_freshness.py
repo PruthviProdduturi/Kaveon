@@ -76,6 +76,32 @@ class ChartFreshnessTests(unittest.TestCase):
         self.assertTrue(result.get("rebuilt"), result)
         precompute.assert_called_once()
 
+    def test_retirement_generation_uses_direct_kaveondb_publication(self):
+        dataset = {"id": "24", "dataset_name": "T", "database_name": "OpenSource",
+                   "schema_name": "s", "fact_table": "t", "columns": [], "metrics": [],
+                   "dimensions": [], "created_by": "owner"}
+        stubs = {"_analyze_tables": None, "_value_inventory": [], "_usage_rollup": {},
+                 "_stats_rollup": {}, "_native_row_counts": {}, "_manifest": {"name": "T"},
+                 "_persist_value_index": None, "_upsert_artifact": None, "_upsert_router": None,
+                 "_effective_spec": {}, "_curate_linked_dashboards": 0}
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(engine, "ensure_tables", lambda: None))
+            stack.enter_context(patch.object(engine.datasets_svc, "get_dataset_by_id", return_value=dataset))
+            stack.enter_context(patch.object(engine.profiler, "build_context", return_value={"supported": False}))
+            stack.enter_context(patch.object(engine.meta, "query_one", return_value={"status": "ready"}))
+            stack.enter_context(patch.object(engine.meta, "transaction",
+                                             side_effect=AssertionError("PostgreSQL transaction reached")))
+            stack.enter_context(patch.object(engine, "_precompute_answers", return_value=3))
+            stack.enter_context(patch("services.postgresql_retirement_runtime.requested", return_value=True))
+            direct = stack.enter_context(patch("services.dlm_generation_cutover.publish"))
+            for name, value in stubs.items():
+                stack.enter_context(patch.object(engine, name, lambda *a, _v=value, **k: _v))
+            result = engine.generate_dlm("24", force=True, actor="owner")
+        self.assertTrue(result["rebuilt"])
+        direct.assert_called_once()
+        self.assertEqual(direct.call_args.args[0]["dataset_id"], "24")
+        self.assertNotIn("version", direct.call_args.args[0])
+
     def test_external_source_without_statistics_gets_no_value_index(self):
         columns = [{"table_name": "t", "column_name": "region", "is_dimension": True}]
         with patch.object(engine, "_native_catalog", return_value=None), \
