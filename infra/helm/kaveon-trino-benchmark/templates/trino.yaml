@@ -54,6 +54,18 @@ data:
     delta.register-table-procedure.enabled=true
     azure.auth-type=DEFAULT
     azure.application-id=KaveonQualification
+{{- if .Values.trino.opensource.enabled }}
+  opensource.properties: |-
+    connector.name=hive
+    hive.metastore=file
+    hive.metastore.catalog.dir=file:///data/trino/metastore-opensource
+    hive.non-managed-table-writes-enabled=false
+    hive.storage-format=PARQUET
+    fs.native-local.enabled=true
+    fs.azure.enabled=true
+    azure.auth-type=DEFAULT
+    azure.application-id=KaveonQualification
+{{- end }}
 ---
 {{- range $role := list "coordinator" "worker" }}
 {{- $isCoordinator := eq $role "coordinator" }}
@@ -111,6 +123,10 @@ spec:
               mkdir -p /generated/catalog /data/trino/tmp /data/trino/metastore
               cp /source/{{ ternary "jvm-coordinator.config" "jvm-worker.config" $isCoordinator }} /generated/jvm.config
               cp /source/lake.properties /generated/catalog/lake.properties
+{{- if $.Values.trino.opensource.enabled }}
+              mkdir -p /data/trino/metastore-opensource
+              cp /source/opensource.properties /generated/catalog/opensource.properties
+{{- end }}
               cat > /generated/node.properties <<EOF
               node.environment=kaveon_qualification
               node.id=${POD_NAME}

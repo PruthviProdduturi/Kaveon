@@ -1,0 +1,70 @@
+# Time to answer: the DLM corpus on Kaveon versus the same SQL on Trino.
+#
+# Runs only inside a leased benchmark window while the kaveon-benchmark Trino
+# StatefulSets are up with trino.opensource.enabled=true. Before applying:
+#
+#   kubectl -n kaveon create configmap kaveon-time-to-answer-input \
+#     --from-file=benchmark-time-to-answer.py=scripts/benchmark-time-to-answer.py \
+#     --from-file=report.json=tmp/dlm-question-report-westus2.json \
+#     --from-file=manifest.json=infra/aks/opensource-catalog-manifest.json
+#
+# Replace the runner image digest and the storage account with the run's
+# values. Output lands on the benchmark results claim as /results/time-to-answer.json.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kaveon-time-to-answer
+  namespace: kaveon
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: kaveon-benchmark
+        app.kubernetes.io/component: time-to-answer
+        azure.workload.identity/use: "true"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: kaveon-engine
+      nodeSelector: {kubernetes.azure.com/agentpool: system}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: runner
+          image: kvtesticmwwliihpppo.azurecr.io/kaveon-benchmark-runner@sha256:93fa340eadd1f5654de67defcf76b8e60b2221a33c10257413808a3e1bfdd2a4
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          command: [python, /input/benchmark-time-to-answer.py]
+          env:
+            - {name: TRINO_URL, value: "https://kaveon-benchmark-trino.kaveon.svc.cluster.local:8443"}
+            - {name: TTA_REPORT, value: /input/report.json}
+            - {name: TTA_MANIFEST, value: /input/manifest.json}
+            - {name: TTA_ACCOUNT, value: kvtesticmwwliihpppo}
+            - {name: TTA_OUTPUT, value: /results/time-to-answer.json}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi, ephemeral-storage: 1Gi}
+          volumeMounts:
+            - {name: input, mountPath: /input, readOnly: true}
+            - {name: trino-tls, mountPath: /trino-tls, readOnly: true}
+            - {name: trino-auth, mountPath: /trino-auth, readOnly: true}
+            - {name: results, mountPath: /results}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: input
+          configMap: {name: kaveon-time-to-answer-input}
+        - name: trino-tls
+          secret: {secretName: kaveon-trino-benchmark-tls}
+        - name: trino-auth
+          secret: {secretName: kaveon-trino-benchmark-auth}
+        - name: results
+          persistentVolumeClaim: {claimName: kaveon-trino-benchmark-results}
+        - {name: tmp, emptyDir: {sizeLimit: 1Gi}}

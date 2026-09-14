@@ -190,3 +190,28 @@ Delete the private local bundle after preserving the non-secret manifest and
 reports in the intended evidence store. Scaling or deleting the cluster,
 changing policy, and deleting the existing Kaveon release or PVC are outside
 this procedure.
+
+## Time to answer on the product corpus
+
+The fixture run measures engine against engine. The product question is
+different: how long a person waits for an answer to one of the corpus
+questions. `scripts/benchmark-time-to-answer.py` takes the corpus report
+written by `scripts/qualify-dlm-questions.py` (route and seconds per question
+as served through the portal, live SQL seconds on Kaveon) and executes the same
+SQL on Trino through the read-only `opensource` Hive catalog
+(`--set trino.opensource.enabled=true`), declared from
+`infra/aks/opensource-catalog-manifest.json` as external Parquet tables on the
+same objects the Engine reads. Three timed executions after one warm-up per
+statement; no row data leaves the cluster.
+
+Run it inside the same leased window, after the runner Job has restored the
+Kaveon replica counts: scale Kaveon to zero and Trino up by hand so Trino is
+measured alone on the three worker nodes, apply
+`infra/aks/kaveon-time-to-answer-job.yaml` as its header describes, then
+restore Kaveon and park Trino again. Copy `/results/time-to-answer.json` off
+the results claim before disabling the runner, which removes the claim.
+
+The DLM side of every record is the portal-measured time for the question:
+a context answer (no scan) or a live statement on KaveonDB with the three
+workers alone. Publish the two sides together, never the ratio alone.
+
