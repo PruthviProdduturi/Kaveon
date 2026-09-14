@@ -3,13 +3,15 @@
 import hashlib
 import json
 import re
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi import HTTPException
 
 import database.metadata as db
-from services import product_store
+from services import dlm_compiled_artifact, product_store
 
 
 MAX_DLM_RUNS = 10_000
@@ -35,6 +37,64 @@ def _canonical(value) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
+def _object(value, label: str) -> dict:
+    if value in (None, ""):
+        return {}
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"PostgreSQL DLM artifact {label} is invalid") from error
+    if not isinstance(parsed, dict):
+        raise RuntimeError(f"PostgreSQL DLM artifact {label} is invalid")
+    return parsed
+
+
+def _payload(row: dict) -> dict:
+    dataset_id, version = str(row.get("id") or ""), row.get("version")
+    if not dataset_id.isdecimal() or type(version) is not int or version < 1 or row.get("status") != "ready":
+        raise RuntimeError(f"PostgreSQL DLM artifact {dataset_id} is unsupported")
+    return {"dataset_id": dataset_id, "version": version,
+            "manifest": _object(row.get("manifest"), "manifest"),
+            "stats_rollup": _object(row.get("stats_rollup"), "statistics"),
+            "usage_rollup": _object(row.get("usage_rollup"), "usage metadata"),
+            "source_hash": str(row.get("source_hash") or ""),
+            "built_at": str(row.get("built_at") or ""), "status": "ready",
+            "values_indexed": int(row.get("values_indexed") or 0)}
+
+
+def _stage(root: Path, relative_path: str, content: bytes) -> None:
+    destination = root.resolve() / Path(relative_path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        if destination.is_file() and destination.read_bytes() == content:
+            return
+        raise RuntimeError("Staged DLM artifact exists with divergent bytes")
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile("wb", dir=destination.parent,
+                                         prefix=destination.name + ".", delete=False) as handle:
+            temporary = Path(handle.name); os.chmod(temporary, 0o600)
+            handle.write(content); handle.flush(); os.fsync(handle.fileno())
+        os.replace(temporary, destination)
+        if os.name != "nt":
+            descriptor = os.open(destination.parent, os.O_RDONLY)
+            try: os.fsync(descriptor)
+            finally: os.close(descriptor)
+    finally:
+        if temporary and temporary.exists(): temporary.unlink()
+
+
+_SOURCE_SQL = """
+    SELECT d.id, d.created_by, a.version, a.manifest, a.stats_rollup,
+           a.usage_rollup, a.source_hash, a.built_at, a.status,
+           COALESCE(v.values_indexed, 0) AS values_indexed
+    FROM datasets d JOIN dlm_artifact a ON a.dataset_id = CAST(d.id AS TEXT)
+    LEFT JOIN (SELECT dataset_id, COUNT(*) AS values_indexed FROM dlm_value_index
+               GROUP BY dataset_id) v ON v.dataset_id = a.dataset_id
+    ORDER BY d.id, a.version LIMIT @param0
+"""
+
+
 def snapshot_digest(records: tuple[RunRecord, ...], definition_snapshot_id: str) -> str:
     digest = hashlib.sha256()
     for value in (definition_snapshot_id, *(item for record in records for item in
@@ -57,12 +117,16 @@ def validate_snapshot(snapshot: RunSnapshot) -> None:
         if set(document) != {"definition_id", "definition_revision", "status", "artifact"}:
             raise RuntimeError(f"DLM run {record.record_id} document is invalid")
         artifact = document.get("artifact")
-        if (document.get("status") != "ready" or type(document.get("definition_revision")) is not int
+        identity = re.fullmatch(r"([0-9]+)-v([1-9][0-9]*)", record.record_id)
+        expected_path = (f"dlm/{identity.group(1)}/v{identity.group(2)}/compiled.json"
+                         if identity else None)
+        if (document.get("status") != "ready" or not identity
+                or document.get("definition_id") != identity.group(1)
+                or type(document.get("definition_revision")) is not int
                 or document["definition_revision"] < 1 or not isinstance(artifact, dict)
                 or set(artifact) != {"path", "sha256"}
                 or re.fullmatch(r"[0-9a-f]{64}", artifact.get("sha256", "")) is None
-                or not isinstance(artifact.get("path"), str)
-                or not artifact["path"].startswith("dlm/") or ".." in artifact["path"].split("/")):
+                or artifact.get("path") != expected_path):
             raise RuntimeError(f"DLM run {record.record_id} document is invalid")
     if snapshot_digest(snapshot.records, snapshot.definition_snapshot_id) != snapshot.snapshot_sha256:
         raise RuntimeError("DLM run snapshot identity mismatch")
@@ -75,28 +139,16 @@ def capture_snapshot(artifact_root: Path) -> RunSnapshot:
         watermark = transaction.query_one(
             "SELECT COALESCE(MAX(source_sequence), 0) AS watermark FROM product_migration_outbox"
         ) or {}
-        rows = transaction.query("""
-            SELECT d.id, d.created_by, a.version, a.manifest, a.status
-            FROM datasets d JOIN dlm_artifact a ON a.dataset_id = CAST(d.id AS TEXT)
-            ORDER BY d.id, a.version LIMIT @param0
-        """, [MAX_DLM_RUNS + 1])["rows"]
+        rows = transaction.query(_SOURCE_SQL, [MAX_DLM_RUNS + 1])["rows"]
     if len(rows) > MAX_DLM_RUNS:
         raise RuntimeError("DLM run snapshot exceeds its record bound")
     records, snapshot_id = [], None
     for row in rows:
         dataset_id, owner = str(row["id"]), str(row["created_by"])
-        version = row.get("version")
-        if not dataset_id.isdecimal() or type(version) is not int or version < 1 or row.get("status") != "ready":
-            raise RuntimeError(f"PostgreSQL DLM artifact {dataset_id} is unsupported")
-        try:
-            manifest = json.loads(row["manifest"])
-        except (TypeError, json.JSONDecodeError) as error:
-            raise RuntimeError(f"PostgreSQL DLM artifact {dataset_id} manifest is invalid") from error
-        artifact_bytes = _canonical(manifest)
-        relative_path = f"dlm/{dataset_id}/v{version}/manifest.json"
-        staged = artifact_root.resolve() / Path(relative_path)
-        if not staged.is_file() or staged.read_bytes() != artifact_bytes:
-            raise RuntimeError(f"Staged DLM artifact {dataset_id} is missing or divergent")
+        compiled = _payload(row); version = compiled["version"]
+        artifact_bytes = dlm_compiled_artifact._canonical(compiled)
+        relative_path = f"dlm/{dataset_id}/v{version}/compiled.json"
+        _stage(artifact_root, relative_path, artifact_bytes)
         definition = product_store.read("dlm_definition", dataset_id, owner, "Admin")
         if definition is None:
             raise RuntimeError(f"KaveonDB DLM definition {dataset_id} is missing")
@@ -115,6 +167,29 @@ def capture_snapshot(artifact_root: Path) -> RunSnapshot:
     snapshot_id = snapshot_id or "empty"
     return RunSnapshot(int(watermark.get("watermark") or 0), snapshot_id, immutable,
                        snapshot_digest(immutable, snapshot_id))
+
+
+def restage_artifacts(snapshot: RunSnapshot, artifact_root: Path) -> None:
+    """Recreate ephemeral staging after pod replacement from unchanged source rows."""
+    validate_snapshot(snapshot)
+    with db.transaction() as transaction:
+        transaction.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        rows = transaction.query(_SOURCE_SQL, [MAX_DLM_RUNS + 1])["rows"]
+    expected = {record.record_id: record for record in snapshot.records}
+    if len(rows) != len(expected):
+        raise RuntimeError("PostgreSQL DLM artifact set changed after checkpoint")
+    seen = set()
+    for row in rows:
+        compiled = _payload(row); dataset_id = compiled["dataset_id"]
+        record_id = f"{dataset_id}-v{compiled['version']}"; record = expected.get(record_id)
+        content = dlm_compiled_artifact._canonical(compiled)
+        path = f"dlm/{dataset_id}/v{compiled['version']}/compiled.json"
+        if (record is None or record.document["artifact"]["path"] != path
+                or record.document["artifact"]["sha256"] != hashlib.sha256(content).hexdigest()):
+            raise RuntimeError("PostgreSQL DLM artifact changed after checkpoint")
+        _stage(artifact_root, path, content); seen.add(record_id)
+    if seen != set(expected):
+        raise RuntimeError("PostgreSQL DLM artifact checkpoint coverage changed")
 
 
 def apply_and_reconcile(snapshot: RunSnapshot) -> dict:

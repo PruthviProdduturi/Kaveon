@@ -8,7 +8,7 @@ from pathlib import Path
 
 from services import dlm_run_backfill as backfill
 
-VERSION = 1
+VERSION = 2
 MAX_CHECKPOINT_BYTES = 4 * 1024 * 1024
 
 
@@ -79,6 +79,7 @@ def run(checkpoint: Path, artifact_root: Path, *, apply: bool, resume: bool, pub
         if not checkpoint.exists():
             raise RuntimeError("Resume requires an existing checkpoint")
         snapshot, position, complete = load(checkpoint)
+        backfill.restage_artifacts(snapshot, artifact_root)
     else:
         if checkpoint.exists():
             raise RuntimeError("Checkpoint already exists; use --resume or a new path")

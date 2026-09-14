@@ -36,15 +36,18 @@ def transaction(source):
 
 def staged(root: Path, dataset_id="7", version=2, manifest=None):
     manifest = {"columns": ["a"], "schema": 1} if manifest is None else manifest
-    path = root / "dlm" / dataset_id / f"v{version}" / "manifest.json"
+    compiled = {"dataset_id": dataset_id, "version": version, "manifest": manifest,
+                "stats_rollup": {}, "usage_rollup": {}, "source_hash": "",
+                "built_at": "", "status": "ready", "values_indexed": 0}
+    path = root / "dlm" / dataset_id / f"v{version}" / "compiled.json"
     path.parent.mkdir(parents=True)
-    path.write_bytes(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode())
+    path.write_bytes(json.dumps(compiled, sort_keys=True, separators=(",", ":")).encode())
     return manifest
 
 
 def snapshot():
     document = {"definition_id": "7", "definition_revision": 4, "status": "ready",
-                "artifact": {"path": "dlm/7/v2/manifest.json", "sha256": "a" * 64}}
+                "artifact": {"path": "dlm/7/v2/compiled.json", "sha256": "a" * 64}}
     record = backfill.RunRecord("7-v2", "owner@example.test", document,
                                 hashlib.sha256(backfill._canonical(document)).hexdigest())
     return backfill.RunSnapshot(17, "snap-2", (record,),
@@ -64,7 +67,7 @@ class DlmRunBackfillTests(unittest.TestCase):
                 result = backfill.capture_snapshot(root)
         self.assertIn("REPEATABLE READ, READ ONLY", source.statements[0])
         self.assertEqual(result.records[0].document["definition_revision"], 4)
-        self.assertEqual(result.records[0].document["artifact"]["path"], "dlm/7/v2/manifest.json")
+        self.assertEqual(result.records[0].document["artifact"]["path"], "dlm/7/v2/compiled.json")
         self.assertEqual(read.call_args.args, ("dlm_definition", "7", "owner@example.test", "Admin"))
 
     def test_capture_fails_closed_on_unsupported_missing_or_divergent_data(self):
@@ -73,8 +76,6 @@ class DlmRunBackfillTests(unittest.TestCase):
              "unsupported", False),
             ({"id": 7, "created_by": "owner", "version": 2, "manifest": "not-json", "status": "ready"},
              "manifest is invalid", False),
-            ({"id": 7, "created_by": "owner", "version": 2, "manifest": "{}", "status": "ready"},
-             "missing or divergent", False),
             ({"id": 7, "created_by": "owner", "version": 2, "manifest": "{}", "status": "ready"},
              "definition 7 is missing", True),
         ]
@@ -140,6 +141,7 @@ class DlmRunBackfillTests(unittest.TestCase):
             original_save = operation.save
             with patch.dict(os.environ, {"KAVEON_DLM_RUN_MIGRATION_ENABLED": "true"}), \
                  patch.object(backfill, "apply_and_reconcile", return_value={"family": "dlm_runs"}) as apply, \
+                 patch.object(backfill, "restage_artifacts"), \
                  patch.object(operation, "save", side_effect=RuntimeError("checkpoint failure")):
                 with self.assertRaisesRegex(RuntimeError, "checkpoint failure"):
                     with patch.dict(os.environ, {"KAVEON_DLM_ARTIFACT_PUBLISH_ENABLED": "true"}):
@@ -153,6 +155,7 @@ class DlmRunBackfillTests(unittest.TestCase):
                                          "KAVEON_DLM_ARTIFACT_PUBLISH_ENABLED": "true"}), \
                  patch.object(backfill, "apply_and_reconcile",
                               side_effect=[{"family": "dlm_runs"}, full_report]) as retry, \
+                 patch.object(backfill, "restage_artifacts"), \
                  patch.object(operation, "save", wraps=original_save):
                 report = operation.run(path, root, apply=True, resume=True,
                                        publisher=SimpleNamespace(publish=lambda *_: None))
@@ -166,14 +169,45 @@ class DlmRunBackfillTests(unittest.TestCase):
             operation.save(path, value, 0)
             enabled = {"KAVEON_DLM_RUN_MIGRATION_ENABLED": "true",
                        "KAVEON_DLM_ARTIFACT_PUBLISH_ENABLED": "true"}
-            with patch.dict(os.environ, enabled), self.assertRaisesRegex(RuntimeError, "publication"):
+            with patch.dict(os.environ, enabled), patch.object(backfill, "restage_artifacts"), \
+                 self.assertRaisesRegex(RuntimeError, "publication"):
                 operation.run(path, root, apply=True, resume=True)
             failing = SimpleNamespace(publish=lambda *_: (_ for _ in ()).throw(RuntimeError("publish failed")))
             with patch.dict(os.environ, enabled), \
+                 patch.object(backfill, "restage_artifacts"), \
                  patch.object(backfill, "apply_and_reconcile") as apply, \
                  self.assertRaisesRegex(RuntimeError, "publish failed"):
                 operation.run(path, root, apply=True, resume=True, publisher=failing)
             apply.assert_not_called()
+
+    def test_capture_stages_full_compiled_payload_and_restages_exactly(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            row = {"id": 7, "created_by": "owner", "version": 2,
+                   "manifest": '{"name":"orders"}', "stats_rollup": '{"rows":12}',
+                   "usage_rollup": '{"queries":3}', "source_hash": "source-1",
+                   "built_at": "2026-09-14T20:00:00Z", "status": "ready", "values_indexed": 4}
+            source = Source([row]); definition = {"revision": 4, "snapshot_id": "snap-2"}
+            with patch.object(backfill.db, "transaction", return_value=transaction(source)), \
+                 patch.object(backfill.product_store, "read", return_value=definition):
+                value = backfill.capture_snapshot(root)
+            path = root / "dlm" / "7" / "v2" / "compiled.json"
+            compiled = json.loads(path.read_text())
+            self.assertEqual((compiled["stats_rollup"]["rows"], compiled["values_indexed"]), (12, 4))
+            path.unlink()
+            with patch.object(backfill.db, "transaction", return_value=transaction(Source([row]))):
+                backfill.restage_artifacts(value, root)
+            self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(),
+                             value.records[0].document["artifact"]["sha256"])
+
+    def test_restage_rejects_source_drift(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); value = snapshot()
+            changed = {"id": 7, "created_by": "owner", "version": 2,
+                       "manifest": '{"changed":true}', "status": "ready"}
+            with patch.object(backfill.db, "transaction", return_value=transaction(Source([changed]))), \
+                 self.assertRaisesRegex(RuntimeError, "changed"):
+                backfill.restage_artifacts(value, root)
 
 
 if __name__ == "__main__": unittest.main()
