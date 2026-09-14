@@ -66,7 +66,7 @@ def update_dashboard(
     if payload.get("visibility") == "published" and not can_publish(ctx):
         payload["visibility"] = "internal"
 
-    result = svc.update_dashboard(dashboard_id, payload)
+    result = svc.update_dashboard(dashboard_id, payload, ctx.email)
     if not result:
         raise HTTPException(status_code=404, detail="Dashboard not found")
     return result
@@ -79,7 +79,7 @@ def delete_dashboard(dashboard_id: str, ctx: UserContext = Depends(require_user_
         raise HTTPException(status_code=404, detail="Dashboard not found")
     if not can_write(existing["created_by"], ctx):
         raise HTTPException(status_code=403, detail="You don't have permission to delete this dashboard")
-    svc.delete_dashboard(dashboard_id)
+    svc.delete_dashboard(dashboard_id, ctx.email)
     # Also purge it from every user's recents so it doesn't linger there.
     # Recents store the id prefixed by type (e.g. "dashboard-<id>").
     try:

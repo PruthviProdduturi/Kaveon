@@ -2,13 +2,14 @@
 
 import json
 import logging
+import os
 import threading
 import time
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 import database.metadata as db
-from services import product_shadow_read
+from services import chart_backfill, product_outbox, product_shadow_read, product_store
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +17,34 @@ VALID_VISIBILITY = {"private", "internal", "published"}
 _SCHEMA_CACHE_TTL_SECONDS = 60.0
 _schema_cache: tuple[float, str] | None = None
 _schema_lock = threading.Lock()
+
+
+def _outbox_enabled() -> bool:
+    return os.getenv("KAVEON_CHART_OUTBOX_ENABLED") == "true"
+
+
+def _outbox_row(transaction, chart_id: str, layout: str) -> dict:
+    if layout == "modern":
+        row = transaction.query_one("""SELECT id,name,description,dataset_id,chart_type,config,visibility,
+            created_by,modified_by,created_at,modified_at FROM charts WHERE id=@param0""", [chart_id])
+    else:
+        row = transaction.query_one("""SELECT id,name,description,chart_type,query_config,viz_config,visibility,
+            created_by,updated_by,created_at,updated_at FROM charts WHERE id=@param0""", [int(chart_id)])
+    if not row:
+        raise RuntimeError("Chart disappeared before outbox capture")
+    preliminary = chart_backfill._document(row, layout, 1)
+    dataset = product_store.read("dataset", preliminary["dataset_id"], preliminary["created_by"], "Admin")
+    revision = dataset.get("revision") if dataset else None
+    if type(revision) is not int or revision < 1:
+        raise RuntimeError("KaveonDB dataset revision is unavailable for chart outbox capture")
+    return chart_backfill._document(row, layout, revision)
+
+
+def _enqueue(transaction, operation: str, chart_id: str, actor: str, layout: str) -> None:
+    document = {} if operation == "delete" else _outbox_row(transaction, chart_id, layout)
+    owner = str(document.get("created_by") or actor)
+    product_outbox.enqueue(transaction, family="charts", operation=operation, record_id=str(chart_id),
+                           payload=document, actor=actor, owner=owner)
 
 
 def _chart_schema() -> str:
@@ -173,23 +202,30 @@ def create_chart(data: dict, user_id: str) -> dict:
 
     chart_id = str(uuid.uuid4())
     envelope = {"query_config": query_config, "viz_config": data.get("viz_config") or {}}
-    db.execute("""
+    statement = """
         INSERT INTO charts (id, name, description, dataset_id, chart_type, config,
                            visibility, created_by, modified_by, created_at, modified_at)
         VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6, @param7, @param8, @param9, @param10)
-    """, [
+    """
+    params = [
         chart_id, data["name"], data.get("description"), data["dataset_id"], data["chart_type"],
         json.dumps(envelope), visibility, user_id, user_id, now, now,
-    ])
+    ]
+    if _outbox_enabled():
+        with db.transaction() as transaction:
+            transaction.execute(statement, params)
+            _enqueue(transaction, "create", chart_id, user_id, "modern")
+    else:
+        db.execute(statement, params)
     created = get_chart_by_id(chart_id)
     if not created:
         raise RuntimeError("Failed to retrieve created chart")
     return created
 
 
-def update_chart(chart_id: str, data: dict) -> Optional[dict]:
+def update_chart(chart_id: str, data: dict, actor: str | None = None) -> Optional[dict]:
     if _chart_schema() == "legacy":
-        return _legacy_update_chart(chart_id, data)
+        return _legacy_update_chart(chart_id, data, actor)
     if not get_chart_by_id(chart_id):
         return None
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -215,14 +251,44 @@ def update_chart(chart_id: str, data: dict) -> Optional[dict]:
     updates.append(f"modified_at = @param{i}"); params.append(now); i += 1
     params.append(chart_id)
 
-    db.execute(f"UPDATE charts SET {', '.join(updates)} WHERE id = @param{i}", params)
+    statement = f"UPDATE charts SET {', '.join(updates)} WHERE id = @param{i}"
+    if _outbox_enabled():
+        if not actor:
+            raise RuntimeError("Chart outbox capture requires actor identity")
+        with db.transaction() as transaction:
+            transaction.execute(statement, params)
+            _enqueue(transaction, "update", chart_id, actor, "modern")
+    else:
+        db.execute(statement, params)
     return get_chart_by_id(chart_id)
 
 
-def delete_chart(chart_id: str) -> bool:
+def delete_chart(chart_id: str, actor: str | None = None) -> bool:
     if _chart_schema() == "legacy":
-        return db.execute("DELETE FROM charts WHERE id = @param0", [int(chart_id)]) > 0
-    return db.execute("DELETE FROM charts WHERE id = @param0", [chart_id]) > 0
+        if not _outbox_enabled():
+            return db.execute("DELETE FROM charts WHERE id = @param0", [int(chart_id)]) > 0
+        if not actor:
+            raise RuntimeError("Chart outbox capture requires actor identity")
+        with db.transaction() as transaction:
+            row = transaction.query_one("SELECT created_by FROM charts WHERE id=@param0 FOR UPDATE", [int(chart_id)])
+            if not row:
+                return False
+            deleted = transaction.execute("DELETE FROM charts WHERE id = @param0", [int(chart_id)]) > 0
+            product_outbox.enqueue(transaction, family="charts", operation="delete", record_id=str(chart_id),
+                                   payload={}, actor=actor, owner=str(row["created_by"]))
+            return deleted
+    if not _outbox_enabled():
+        return db.execute("DELETE FROM charts WHERE id = @param0", [chart_id]) > 0
+    if not actor:
+        raise RuntimeError("Chart outbox capture requires actor identity")
+    with db.transaction() as transaction:
+        row = transaction.query_one("SELECT created_by FROM charts WHERE id=@param0 FOR UPDATE", [chart_id])
+        if not row:
+            return False
+        deleted = transaction.execute("DELETE FROM charts WHERE id = @param0", [chart_id]) > 0
+        product_outbox.enqueue(transaction, family="charts", operation="delete", record_id=chart_id,
+                               payload={}, actor=actor, owner=str(row["created_by"]))
+        return deleted
 
 
 def count_charts() -> int:
@@ -271,19 +337,30 @@ def _legacy_create_chart(data: dict, user_id: str) -> dict:
     if data.get("dataset_id") is not None:
         query_config = {**query_config, "dataset_id": data["dataset_id"]}
     visibility = data.get("visibility") if data.get("visibility") in VALID_VISIBILITY else "internal"
-    db.execute("""
+    statement = """
         INSERT INTO charts (name, description, chart_type, query_config, viz_config, visibility,
                             created_on, created_by, changed_on, updated_by, created_at, updated_at)
         VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6, @param7, @param8, @param9, @param10, @param11)
-    """, [data["name"], data.get("description"), data["chart_type"], json.dumps(query_config),
-            json.dumps(data.get("viz_config") or {}), visibility, now, user_id, now, user_id, now, now])
-    inserted = db.query_one("SELECT TOP 1 id FROM charts WHERE name = @param0 AND created_by = @param1 ORDER BY id DESC", [data["name"], user_id])
+    """
+    params = [data["name"], data.get("description"), data["chart_type"], json.dumps(query_config),
+              json.dumps(data.get("viz_config") or {}), visibility, now, user_id, now, user_id, now, now]
+    lookup = "SELECT TOP 1 id FROM charts WHERE name = @param0 AND created_by = @param1 ORDER BY id DESC"
+    if _outbox_enabled():
+        with db.transaction() as transaction:
+            transaction.execute(statement, params)
+            inserted = transaction.query_one(lookup, [data["name"], user_id])
+            if not inserted:
+                raise RuntimeError("Failed to retrieve created chart")
+            _enqueue(transaction, "create", str(inserted["id"]), user_id, "legacy")
+    else:
+        db.execute(statement, params)
+        inserted = db.query_one(lookup, [data["name"], user_id])
     if not inserted:
         raise RuntimeError("Failed to retrieve created chart")
     return _legacy_get_chart(str(inserted["id"]), None, "Admin")
 
 
-def _legacy_update_chart(chart_id: str, data: dict) -> Optional[dict]:
+def _legacy_update_chart(chart_id: str, data: dict, actor: str | None = None) -> Optional[dict]:
     if not _legacy_get_chart(chart_id, None, "Admin"):
         return None
     now, updates, params, index = datetime.now(timezone.utc).replace(tzinfo=None), [], [], 0
@@ -300,5 +377,13 @@ def _legacy_update_chart(chart_id: str, data: dict) -> Optional[dict]:
     updates.append(f"changed_on = @param{index}"); params.append(now); index += 1
     updates.append(f"updated_at = @param{index}"); params.append(now); index += 1
     params.append(int(chart_id))
-    db.execute(f"UPDATE charts SET {', '.join(updates)} WHERE id = @param{index}", params)
+    statement = f"UPDATE charts SET {', '.join(updates)} WHERE id = @param{index}"
+    if _outbox_enabled():
+        if not actor:
+            raise RuntimeError("Chart outbox capture requires actor identity")
+        with db.transaction() as transaction:
+            transaction.execute(statement, params)
+            _enqueue(transaction, "update", chart_id, actor, "legacy")
+    else:
+        db.execute(statement, params)
     return _legacy_get_chart(chart_id, None, "Admin")
