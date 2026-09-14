@@ -330,6 +330,12 @@ CREATE TABLE IF NOT EXISTS product_migration_outbox (
     last_error_code VARCHAR(100) NULL
 );
 ALTER TABLE product_migration_outbox ADD COLUMN IF NOT EXISTS owner_principal VARCHAR(255);
+-- Additive upgrade for databases created by the original five-family outbox.
+-- These columns are deliberately nullable/defaulted so existing events retain
+-- their source sequence, payload identity and applied state.
+ALTER TABLE product_migration_outbox ADD COLUMN IF NOT EXISTS target_generation BIGINT NULL;
+ALTER TABLE product_migration_outbox ADD COLUMN IF NOT EXISTS apply_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE product_migration_outbox ADD COLUMN IF NOT EXISTS last_error_code VARCHAR(100) NULL;
 UPDATE product_migration_outbox
 SET owner_principal = actor_principal
 WHERE owner_principal IS NULL;
@@ -345,6 +351,8 @@ ALTER TABLE product_migration_outbox ADD CONSTRAINT ck_product_outbox_family CHE
                 'dlm_runs','query_history'));
 CREATE INDEX IF NOT EXISTS idx_product_outbox_unapplied
     ON product_migration_outbox(source_sequence) WHERE applied_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_product_outbox_family_unapplied
+    ON product_migration_outbox(family, source_sequence) WHERE applied_at IS NULL;
 
 -- ── Adaptive Context Routing (staleness-scored NL query router) ────────────────
 -- Global context representation: one row per profiled table/column element.
@@ -405,6 +413,8 @@ CREATE TABLE IF NOT EXISTS dlm_artifact (
     built_at     TEXT             NOT NULL,
     status       TEXT             NOT NULL DEFAULT 'ready'
 );
+ALTER TABLE dlm_artifact ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE dlm_artifact ADD COLUMN IF NOT EXISTS curation TEXT;
 
 CREATE TABLE IF NOT EXISTS dlm_value_index (
     id          TEXT              PRIMARY KEY,
