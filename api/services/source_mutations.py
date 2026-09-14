@@ -4,8 +4,8 @@ from services import product_outbox
 
 
 def catalog_document(row: dict) -> dict:
-    kind = str(row.get("credential_kind") or "managed_identity")
     raw_ref = row.get("credential_ref")
+    kind = str(row.get("credential_kind") or ("secret_store" if raw_ref else "managed_identity"))
     if kind in {"managed_identity", "workload_identity"}:
         if raw_ref and (len(str(raw_ref)) > 255 or any(word in str(raw_ref).casefold() for word in ("password", "secret", "token"))):
             raise ValueError("catalog identity reference is invalid")
@@ -39,7 +39,9 @@ def data_document(row: dict) -> dict:
             "database_name":row.get("database_name"),"region":row.get("region"),
             "description":row.get("description"),"is_active":bool(row.get("is_active")),
             "lifecycle":"active" if row.get("is_active") else "suspended",
-            "secret_ref":f"key-managed:data_sources/{row['id']}"}
+            "secret_ref":row.get("secret_ref") or f"key-managed:data_sources/{row['id']}",
+            "created_by":row.get("created_by"),"modified_by":row.get("modified_by") or row.get("created_by"),
+            "created_at":row.get("created_at"),"modified_at":row.get("modified_at")}
 
 
 def enqueue(transaction, family: str, operation: str, row: dict, actor: str):

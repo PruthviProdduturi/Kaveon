@@ -8,7 +8,7 @@ from middleware.permissions import require_min_role
 import database.metadata as db
 import database.pool as pool
 from services.credentials import encrypt, CredentialError
-from services import source_mutations, product_shadow_read, product_read_authority
+from services import source_mutations, source_cutover_mutations, source_secret_store, product_shadow_read, product_read_authority
 
 router = APIRouter()
 NO_CACHE = {
@@ -183,6 +183,25 @@ def create_data_source(data: dict, ctx=Depends(require_min_role("Admin"))):
     if region not in ("WW", "EU"):
         raise HTTPException(status_code=400, detail='Region must be either "WW" or "EU"')
 
+    if source_cutover_mutations.enabled():
+        source_id = source_cutover_mutations.new_data_id()
+        store = source_secret_store.SourceSecretStore()
+        try:
+            secret_ref = store.set("data", source_id, connection_string)
+            row = {"id": source_id, "name": name, "type": ds_type, "database_name": data.get("database_name"),
+                   "region": region, "description": data.get("description"), "created_by": user,
+                   "modified_by": user, "is_active": True, "secret_ref": secret_ref}
+            source_cutover_mutations.create("data_sources", row, user)
+        except source_secret_store.SourceSecretError as error:
+            raise HTTPException(503, str(error)) from None
+        except Exception:
+            try: store.delete(secret_ref)
+            except Exception: pass
+            raise
+        return {"success":True,"dataSource":{
+            "id":source_id,"name":name,"type":ds_type,"database_name":data.get("database_name"),"region":region,
+            "description":data.get("description"),"created_by":user,"is_active":True},"message":"Data source created successfully"}
+
     try:
         connection_string = encrypt(connection_string)
     except CredentialError:
@@ -214,6 +233,23 @@ def update_data_source(ds_id: str, data: dict, ctx=Depends(require_min_role("Adm
     region = data.get("region")
     if region and region not in ("WW", "EU"):
         raise HTTPException(status_code=400, detail='Region must be either "WW" or "EU"')
+    if source_cutover_mutations.enabled():
+        current = product_read_authority.read_document("sources",f"data-{int(ds_id)}",user,"Admin")
+        if not current: raise HTTPException(404,"Data source not found")
+        changes={}
+        for source,target in (("name","name"),("type","source_type"),("database_name","database_name"),("region","region"),("description","description"),("is_active","is_active")):
+            if source in data: changes[target]=data[source]
+        if "is_active" in changes: changes["lifecycle"]="active" if changes["is_active"] else "suspended"
+        if "connection_string" in data:
+            if not isinstance(data["connection_string"],str) or not data["connection_string"]:
+                raise HTTPException(400,"connection_string must be nonempty")
+            try: changes["secret_ref"]=source_secret_store.SourceSecretStore().set("data",str(ds_id),data["connection_string"])
+            except source_secret_store.SourceSecretError as error: raise HTTPException(503,str(error)) from None
+        if not changes: raise HTTPException(400,"No fields to update")
+        updated=source_cutover_mutations.update(f"data-{int(ds_id)}",changes,user)
+        return {"success":True,"dataSource":{"id":str(ds_id),"name":updated.get("name"),"type":updated.get("source_type"),
+            "database_name":updated.get("database_name"),"region":updated.get("region"),"description":updated.get("description"),
+            "created_by":updated.get("created_by"),"is_active":updated.get("is_active")},"message":"Data source updated successfully"}
 
     if "connection_string" in data:
         if not isinstance(data["connection_string"], str) or not data["connection_string"]:
@@ -261,6 +297,17 @@ def update_data_source(ds_id: str, data: dict, ctx=Depends(require_min_role("Adm
 
 @router.delete("/data-sources/{ds_id}")
 def delete_data_source(ds_id: str, ctx=Depends(require_min_role("Admin"))):
+    if source_cutover_mutations.enabled():
+        record_id=f"data-{int(ds_id)}"
+        current=product_read_authority.read_document("sources",record_id,ctx.email,"Admin")
+        if not current: raise HTTPException(404,"Data source not found")
+        favorites=product_read_authority.list_documents("favorites",ctx.email,"Admin") if product_read_authority.enabled("favorites") else []
+        if any(item.get("object_type")=="source" and item.get("object_id")==record_id for item in favorites):
+            raise HTTPException(409,"Remove data-source favorites before deletion")
+        source_cutover_mutations.delete(record_id,ctx.email)
+        try: source_secret_store.SourceSecretStore().delete(str(current.get("secret_ref")))
+        except source_secret_store.SourceSecretError: pass
+        return {"success":True,"message":"Data source deleted successfully"}
     with db.transaction() as transaction:
         row=transaction.query_one("SELECT id,name,type,database_name,region,description,created_by,is_active FROM data_sources WHERE id=@param0 FOR UPDATE",[int(ds_id)])
         if not row: raise HTTPException(status_code=404, detail="Data source not found")
