@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from middleware.auth import UserContext
 from middleware.permissions import require_min_role
 import database.metadata as db
-from services import source_mutations, source_secret_store, product_outbox
+from services import source_mutations, source_secret_store, product_outbox, product_shadow_read
 from services.activity_backfill import document as activity_document
 
 router = APIRouter()
@@ -87,6 +87,12 @@ def list_catalog_sources(ctx: UserContext = Depends(require_min_role("Viewer")))
     result = db.query(
         f"SELECT {_FIELDS} FROM catalog_sources WHERE lifecycle != 'deleted' ORDER BY created_at DESC"
     )
+    try:
+        report = product_shadow_read.observe_source_list(result["rows"], "catalog", ctx.email, ctx.role)
+        if report.get("enabled"):
+            logging.getLogger(__name__).info("catalog_source_shadow_read %s", report)
+    except Exception as error:
+        logging.getLogger(__name__).warning("catalog_source_shadow_read_error type=%s", type(error).__name__)
     return {"success": True, "catalogSources": result["rows"]}
 
 
@@ -184,6 +190,12 @@ def create_catalog_source(data: dict, ctx: UserContext = Depends(require_min_rol
             raise HTTPException(409, "A catalog source with this name or engine_catalog already exists")
         raise HTTPException(500, "Failed to create catalog source")
 
+    try:
+        report = product_shadow_read.observe_source(row, "catalog", ctx.email, ctx.role)
+        if report.get("enabled"):
+            logging.getLogger(__name__).info("catalog_source_shadow_read %s", report)
+    except Exception as error:
+        logging.getLogger(__name__).warning("catalog_source_shadow_read_error type=%s", type(error).__name__)
     return {"success": True, "catalogSource": row}
 
 
