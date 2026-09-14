@@ -170,6 +170,21 @@ credentials or connection details. The collector reads files only: it does not
 connect to either system or turn an unexecuted reconciliation into evidence.
 Run the parity audit separately to enforce freshness and all parity assertions.
 
+During the final watermark drain, enable the source write fence on every API
+replica and migration worker:
+
+```powershell
+$env:KAVEON_POSTGRESQL_WRITE_FENCE_ENABLED = "true"
+```
+
+The fence is enforced inside the metadata query boundary, before PostgreSQL
+pool execution and before transaction cursors are opened. It rejects mutations
+of every table in the 16-family authority manifest while allowing read-only
+reconciliation and outbox-drain bookkeeping. The flag defaults off and only
+the exact value `true` enables it. A passing `write_fence` evidence record must
+come from a live probe that observes rejected create, update and delete paths;
+setting the variable or passing unit tests alone is not retirement evidence.
+
 PostgreSQL may be retired only after one repeatable migration command proves all
 of the following against a preserved backup:
 
