@@ -137,6 +137,39 @@ def _adapt_product(document: dict) -> dict:
     }
 
 
+def _product_document(data: dict, chart_id: str, actor: str, prior: dict | None = None) -> dict:
+    prior = prior or {}
+    query_config = data.get("query_config", data.get("config", prior.get("query_config", {}))) or {}
+    viz_config = data.get("viz_config", prior.get("viz_config", {})) or {}
+    if not isinstance(query_config, dict) or not isinstance(viz_config, dict):
+        raise ValueError("Chart configuration must be an object")
+    dataset_id = str(data.get("dataset_id", prior.get("dataset_id")) or "")
+    if not dataset_id:
+        raise ValueError("Chart dataset_id is required")
+    query_config = {**query_config, "dataset_id": data.get("dataset_id", dataset_id)}
+    dataset = product_store.read("dataset", dataset_id, actor, "Admin")
+    dataset_revision = dataset.get("revision") if dataset else None
+    if type(dataset_revision) is not int or dataset_revision < 1:
+        raise ValueError(f"Chart dataset {dataset_id} is unavailable")
+    visibility = data.get("visibility", prior.get("visibility", "internal")) or "internal"
+    if visibility not in VALID_VISIBILITY:
+        raise ValueError("Chart visibility is invalid")
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    owner = str(prior.get("created_by") or actor)
+    chart_type = data.get("chart_type", prior.get("chart_type", "table")) or "table"
+    if not isinstance(chart_type, str) or not chart_type:
+        raise ValueError("Chart type is invalid")
+    return {
+        "id": chart_id, "name": data.get("name", prior.get("name")),
+        "description": data.get("description", prior.get("description")),
+        "dataset_id": dataset_id, "dataset_revision": dataset_revision,
+        "chart_type": chart_type, "query_config": query_config,
+        "viz_config": viz_config, "visibility": visibility,
+        "created_at": prior.get("created_at") or now, "updated_at": now,
+        "created_by": owner, "modified_by": actor,
+    }
+
+
 def _vis_clause(role_idx: int, email_idx: int, alias: str = "c") -> str:
     return (
         f"({alias}.visibility = 'published' "
@@ -214,6 +247,17 @@ def get_chart_by_id(chart_id: str, user_email: Optional[str] = None, role: str =
 
 
 def create_chart(data: dict, user_id: str) -> dict:
+    from services import product_read_authority
+    if product_read_authority.enabled("charts"):
+        chart_id = str(uuid.uuid4())
+        document = _product_document(data, chart_id, user_id)
+        product_store.transact([
+            product_store.ProductMutation("create", "chart", chart_id, document)
+        ], user_id, "Analyst")
+        created = get_chart_by_id(chart_id, user_id, "Admin")
+        if not created:
+            raise RuntimeError("KaveonDB did not return the created chart")
+        return created
     if _chart_schema() == "legacy":
         return _legacy_create_chart(data, user_id)
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -249,6 +293,21 @@ def create_chart(data: dict, user_id: str) -> dict:
 
 
 def update_chart(chart_id: str, data: dict, actor: str | None = None) -> Optional[dict]:
+    from services import product_read_authority
+    if product_read_authority.enabled("charts"):
+        if not actor:
+            raise RuntimeError("KaveonDB chart update requires actor identity")
+        current = product_store.read("chart", chart_id, actor, "Admin")
+        if current is None:
+            return None
+        revision, document = current.get("revision"), current.get("document")
+        if type(revision) is not int or revision < 1 or not isinstance(document, dict):
+            raise RuntimeError("KaveonDB returned invalid chart revision state")
+        updated = _product_document(data, chart_id, actor, document)
+        product_store.transact([
+            product_store.ProductMutation("update", "chart", chart_id, updated, revision)
+        ], actor, "Analyst")
+        return get_chart_by_id(chart_id, actor, "Admin")
     if _chart_schema() == "legacy":
         return _legacy_update_chart(chart_id, data, actor)
     if not get_chart_by_id(chart_id):
@@ -289,6 +348,21 @@ def update_chart(chart_id: str, data: dict, actor: str | None = None) -> Optiona
 
 
 def delete_chart(chart_id: str, actor: str | None = None) -> bool:
+    from services import product_read_authority
+    if product_read_authority.enabled("charts"):
+        if not actor:
+            raise RuntimeError("KaveonDB chart delete requires actor identity")
+        current = product_store.read("chart", chart_id, actor, "Admin")
+        if current is None:
+            return False
+        revision = current.get("revision")
+        if type(revision) is not int or revision < 1:
+            raise RuntimeError("KaveonDB returned invalid chart revision state")
+        product_store.transact([
+            product_store.ProductMutation("delete", "chart", chart_id,
+                                          expected_revision=revision)
+        ], actor, "Analyst")
+        return True
     if _chart_schema() == "legacy":
         if not _outbox_enabled():
             return db.execute("DELETE FROM charts WHERE id = @param0", [int(chart_id)]) > 0
@@ -317,6 +391,9 @@ def delete_chart(chart_id: str, actor: str | None = None) -> bool:
 
 
 def count_charts() -> int:
+    from services import product_read_authority
+    if product_read_authority.enabled("charts"):
+        return len(product_read_authority.list_documents("charts", "kaveon-system", "Admin"))
     result = db.query_one("SELECT COUNT(*) as count FROM charts")
     return result.get("count") or 0
 
