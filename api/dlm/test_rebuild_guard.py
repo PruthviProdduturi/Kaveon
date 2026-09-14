@@ -94,6 +94,41 @@ class RebuildGuardTests(unittest.TestCase):
                 self.assertTrue(engine._trigger_background_rebuild("7"))
 
 
+class FreshnessSweepLifecycleTests(unittest.TestCase):
+    def test_write_fence_prevents_thread_start(self):
+        with patch.dict("os.environ", {"KAVEON_POSTGRESQL_WRITE_FENCE_ENABLED": "true"}), \
+             patch.object(engine.threading, "Thread") as thread:
+            engine._start_sweep_loop()
+        thread.assert_not_called()
+
+    def test_postgresql_free_mode_prevents_thread_start(self):
+        with patch.dict("os.environ", {"KAVEON_POSTGRESQL_RETIREMENT_MODE": "true"}), \
+             patch.object(engine.threading, "Thread") as thread:
+            engine._start_sweep_loop()
+        thread.assert_not_called()
+
+    def test_disabled_sweep_never_initializes_or_queries_postgresql(self):
+        with patch.dict("os.environ", {"KAVEON_POSTGRESQL_WRITE_FENCE_ENABLED": "true"}), \
+             patch.object(engine, "ensure_tables") as ensure, \
+             patch.object(engine.meta, "query") as query:
+            result = engine.freshness_sweep()
+        self.assertEqual(result, {"checked": 0, "stale": 0, "triggered": 0, "datasets": []})
+        ensure.assert_not_called()
+        query.assert_not_called()
+
+    def test_normal_mode_still_starts_the_sweep_thread(self):
+        with patch.dict("os.environ", {
+                "KAVEON_POSTGRESQL_WRITE_FENCE_ENABLED": "false",
+                "KAVEON_POSTGRESQL_RETIREMENT_MODE": "false",
+                "KAVEON_POSTGRESQL_RESTART_REHEARSAL_MODE": "false",
+        }), patch.object(engine.threading, "Thread") as thread:
+            engine._start_sweep_loop()
+        thread.assert_called_once()
+        self.assertEqual(thread.call_args.kwargs["name"], "dlm-sweep")
+        self.assertTrue(thread.call_args.kwargs["daemon"])
+        thread.return_value.start.assert_called_once_with()
+
+
 class BoundedScanTests(unittest.TestCase):
     def test_postgres_scan_carries_a_local_statement_timeout(self):
         seen = {}
