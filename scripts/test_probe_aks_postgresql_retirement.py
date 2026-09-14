@@ -29,7 +29,7 @@ def test_target_fence_scales_api_to_zero_and_observes_it(monkeypatch):
     monkeypatch.setattr(module,"kube",kube)
     assert module.target_fence("ctx","ns")=={"target_writes_fenced":True}
     assert calls[0]==("scale","deployment/kaveon-api","--replicas=0")
-    assert calls[1][:3]==("wait","--for=delete","pod")
+    assert calls[1][:5]==("wait","--for=delete","pod","-l","app=kaveon-api,!job")
 
 def test_source_write_probe_uses_rollback_scoped_temp_table(monkeypatch):
     captured=[]

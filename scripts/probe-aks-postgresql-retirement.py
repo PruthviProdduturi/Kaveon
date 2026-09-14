@@ -51,7 +51,7 @@ def smoke_report(context,namespace,selector,identity,dataset_id,question):
 
 def target_fence(context,namespace):
     kube(context,namespace,"scale","deployment/kaveon-api","--replicas=0")
-    kube(context,namespace,"wait","--for=delete","pod","-l","app=kaveon-api","--timeout=10m",timeout=660)
+    kube(context,namespace,"wait","--for=delete","pod","-l","app=kaveon-api,!job","--timeout=10m",timeout=660)
     deployment=kube(context,namespace,"get","deployment","kaveon-api","-o","json",json_output=True)
     if deployment.get("spec",{}).get("replicas")!=0 or deployment.get("status",{}).get("replicas",0)!=0:
         raise RuntimeError("KaveonDB target writes are not fenced")
@@ -78,7 +78,7 @@ def main():
     select("pods");select("state-inventory")
     smoke_command=commands.add_parser("smoke-report");smoke_command.add_argument("--selector",required=True);smoke_command.add_argument("--identity",required=True);smoke_command.add_argument("--dataset-id",required=True);smoke_command.add_argument("--question",required=True)
     commands.add_parser("postgresql-unavailable");commands.add_parser("restart");commands.add_parser("target-fence")
-    health=commands.add_parser("api-health");health.add_argument("--authority",required=True,choices=("kaveondb","postgresql"));health.add_argument("--selector",default="app=kaveon-api")
+    health=commands.add_parser("api-health");health.add_argument("--authority",required=True,choices=("kaveondb","postgresql"));health.add_argument("--selector",default="app=kaveon-api,!job")
     rb=commands.add_parser("rollback");rb.add_argument("--helm",required=True);rb.add_argument("--release",required=True);rb.add_argument("--revision",required=True,type=int)
     commands.add_parser("source-reads");commands.add_parser("source-writes")
     args=parser.parse_args()
