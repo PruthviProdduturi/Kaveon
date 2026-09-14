@@ -41,7 +41,9 @@ Use absolute local paths. Do not use a shell, `python -c`, or `python -m`.
    prefix. Archive its observation and ETag-bound cleanup manifest.
 9. `restart_recovery`: deploy `restartRehearsalMode: true` only after the
    preliminary audit is mounted, then run `probe-kaveondb-recovery.py
-   restart-recovery` with reviewed kubectl and probe commands.
+   restart-recovery` with reviewed kubectl commands. The `service_probes`
+   command must emit the complete fresh report from
+   `postgresql_free_smoke_cli.py`; a success flag or probe count is rejected.
 10. `rollback`: run `probe-kaveondb-recovery.py rollback` with the exact
     cutover revision, pre-cutover state digest, maximum 10,000 operations, and a
     recovery-time bound no longer than 900 seconds.
