@@ -114,7 +114,7 @@ def _serving_artifacts() -> List[dict]:
         return []
     if not state.all_loaded:
         from services import product_store
-        for record in product_store.list_records("dataset", state.actor, state.role, max_records=1000):
+        for record in product_store.list_records("dataset", state.actor, "Admin", max_records=1000):
             record_id = str(record.get("id") or "")
             if record_id:
                 _serving_artifact(record_id)
