@@ -47,8 +47,14 @@ cert = (x509.CertificateBuilder().subject_name(x509.Name([x509.NameAttribute(Nam
 tls = {'tls.crt': cert.public_bytes(serialization.Encoding.PEM),
        'tls.key': key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()),
        'ca.crt': ca.public_bytes(serialization.Encoding.PEM)}
-tokens = {k: secrets.token_urlsafe(48) for k in ['principal', 'exchange', 'catalog']}
-security = {'principals': [{'token': tokens['principal'], 'principal': 'prproddu-test', 'role': 'admin'}]}
+tokens = {k: secrets.token_urlsafe(48) for k in ['principal', 'bridge', 'exchange', 'catalog']}
+security = {
+    'principals': [{'token': tokens['principal'], 'principal': 'prproddu-test', 'role': 'admin'}],
+    # The API alone receives this credential. It allows the Engine to trust
+    # the separately authenticated x-kaveon-principal and x-kaveon-role
+    # headers used for owner-scoped product records.
+    'bridge_token': tokens['bridge'],
+}
 credentials = {'security.json': json.dumps(security),
                'exchange-token': tokens['exchange'],
                'catalog-token': tokens['catalog']}
