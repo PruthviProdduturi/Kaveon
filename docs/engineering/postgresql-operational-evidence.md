@@ -105,6 +105,22 @@ Studio/API probe surface and print only the exact observation object. Do not put
 tokens, passwords, connection strings, or inline shell programs in the
 manifest. Workload identity and the existing Kubernetes context supply access.
 
+The checked-in live cutover probe supplies the `shadow_parity` and
+`write_fence` observations. Shadow parity loads the 16 freshly reconciled,
+integrity-bound family reports, rechecks counts and every required comparison,
+and emits only aggregate identities. The fence probe requires the live
+PostgreSQL fence configuration, executes a read probe, then attempts a zero-row
+mutation against one authority table per family and passes only when the
+metadata boundary rejects every attempt with its fence exception:
+
+```powershell
+python scripts/probe-kaveondb-cutover.py shadow-parity `
+  --reports tmp/reconciliation-reports --max-age-hours 24
+
+python scripts/probe-kaveondb-cutover.py write-fence `
+  --deployment-revision api@IMAGE_DIGEST
+```
+
 ```powershell
 python scripts/record-postgresql-operational-evidence.py `
   --manifest tmp/retirement-probe-manifest.json `
