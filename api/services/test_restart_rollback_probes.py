@@ -1,12 +1,18 @@
 import json
+from datetime import datetime,timezone
 from types import SimpleNamespace
 import pytest
 from services import restart_rollback_probes as probes
 from services import kaveondb_recovery_evidence as recovery
+from services import postgresql_free_smoke as smoke
 
 RECORDS=[{"kind":"dataset","id":"1","revision":1,"document_sha256":"a"*64}]
 def spec(name):return {"argv":["kubectl",name],"timeout_seconds":30}
 def pod(uid):return {"items":[{"metadata":{"uid":uid},"status":{"containerStatuses":[{"ready":True}]}}]}
+def service_report():
+ checks=[{"name":name,"status":200,"count":1,"state_sha256":"b"*64} for name in smoke.CHECK_NAMES]
+ value={"schema_version":smoke.SCHEMA_VERSION,"status":"passed","checked_at":datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),"authority":"kaveondb","check_count":len(checks),"checks":checks}
+ value["state_sha256"]=smoke._digest(value);return value
 def runner(values):
  def call(argv,**kwargs):
   assert kwargs["shell"] is False
@@ -15,13 +21,17 @@ def runner(values):
 def restart_manifest():return {name:spec(name) for name in ("state_before","api_pods_before","studio_pods_before","postgresql_unavailable","restart","api_pods_after","studio_pods_after","state_after","service_probes")}
 
 def test_restart_requires_distinct_ready_pods_pg_down_and_stable_state():
- values={"state_before":RECORDS,"api_pods_before":pod("api-1"),"studio_pods_before":pod("studio-1"),"postgresql_unavailable":{"postgresql_unavailable":True},"restart":None,"api_pods_after":pod("api-2"),"studio_pods_after":pod("studio-2"),"state_after":RECORDS,"service_probes":{"passed":True,"probe_count":16}}
+ values={"state_before":RECORDS,"api_pods_before":pod("api-1"),"studio_pods_before":pod("studio-1"),"postgresql_unavailable":{"postgresql_unavailable":True},"restart":None,"api_pods_after":pod("api-2"),"studio_pods_after":pod("studio-2"),"state_after":RECORDS,"service_probes":service_report()}
  result=probes.restart(restart_manifest(),runner(values))
  assert result["api_restarted"] and result["postgresql_unavailable"] and result["state_record_count_after"]==1
 
 def test_restart_fails_when_pod_was_not_replaced():
- values={"state_before":RECORDS,"api_pods_before":pod("same"),"studio_pods_before":pod("studio-1"),"postgresql_unavailable":{"postgresql_unavailable":True},"restart":None,"api_pods_after":pod("same"),"studio_pods_after":pod("studio-2"),"state_after":RECORDS,"service_probes":{"passed":True,"probe_count":16}}
+ values={"state_before":RECORDS,"api_pods_before":pod("same"),"studio_pods_before":pod("studio-1"),"postgresql_unavailable":{"postgresql_unavailable":True},"restart":None,"api_pods_after":pod("same"),"studio_pods_after":pod("studio-2"),"state_after":RECORDS,"service_probes":service_report()}
  with pytest.raises(RuntimeError,match="not replaced"):probes.restart(restart_manifest(),runner(values))
+
+def test_restart_rejects_self_declared_service_success():
+ values={"state_before":RECORDS,"api_pods_before":pod("api-1"),"studio_pods_before":pod("studio-1"),"postgresql_unavailable":{"postgresql_unavailable":True},"restart":None,"api_pods_after":pod("api-2"),"studio_pods_after":pod("studio-2"),"state_after":RECORDS,"service_probes":{"passed":True,"probe_count":1}}
+ with pytest.raises(RuntimeError,match="service probes failed"):probes.restart(restart_manifest(),runner(values))
 
 def test_rollback_enforces_control_and_restored_probes():
  identity=recovery.state_identity(RECORDS);control={"cutover_revision":"api@abc","expected_state_sha256":identity["state_sha256"],"max_operations":20,"max_duration_seconds":60}

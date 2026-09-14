@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from services import postgresql_retirement_gate as retirement
+from services import postgresql_free_smoke as smoke
 
 
 SCHEMA_VERSION = 2
@@ -22,6 +23,7 @@ OBSERVATION_KEYS = {
     "shadow_parity": frozenset(("source_snapshot", "target_snapshot", "family_probes", "mismatch_count")),
     "restart_recovery": frozenset((
         "postgresql_unavailable", "api_restarted", "studio_restarted", "probe_count",
+        "service_state_sha256",
         "state_sha256_before", "state_sha256_after",
         "state_record_count_before", "state_record_count_after",
     )),
@@ -113,6 +115,9 @@ def _validate_observation(gate, value, details, *, max_rollback_seconds):
             if value[name] is not True:
                 raise RuntimeError("restart rehearsal did not prove PostgreSQL-independent recovery")
         _positive_int(value["probe_count"], "restart probe count")
+        if value["probe_count"] != len(smoke.CHECK_NAMES):
+            raise RuntimeError("restart rehearsal did not cover the complete PostgreSQL-free HTTP surface")
+        _digest(value["service_state_sha256"], "post-restart service state")
         before = _digest(value["state_sha256_before"], "pre-restart state")
         after = _digest(value["state_sha256_after"], "post-restart state")
         if before != after or details["verified"] is not True:

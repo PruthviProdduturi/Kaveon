@@ -6,9 +6,40 @@ from urllib.parse import urlparse
 import httpx
 
 SCHEMA_VERSION=1; MAX_RESPONSE_BYTES=8*1024*1024; REQUIRED_ROLE="Admin"
+CHECK_NAMES=("health","catalog_sources","data_sources","datasets","charts","dashboards","query_history","saved_queries","recents","favorites","chat_history","datasets_point","charts_point","dashboards_point","saved_query_point","chat_history_point","theme","dlm_get","dlm_context","dlm_ask","chat_serving")
+NONEMPTY_CHECKS=frozenset(("catalog_sources","data_sources","datasets","charts","dashboards","query_history","saved_queries","recents","favorites","chat_history"))
 
 def _canonical(value):return json.dumps(value,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()
 def _digest(value):return hashlib.sha256(_canonical(value)).hexdigest()
+def _sha256(value,label):
+ if not isinstance(value,str) or len(value)!=64 or any(c not in "0123456789abcdef" for c in value):raise RuntimeError(f"{label} is not a lowercase SHA-256 digest")
+ return value
+
+def verify(report,*,now=None,max_age_minutes=60):
+ """Validate that a restart probe is the complete, fresh HTTP smoke report."""
+ if not isinstance(report,dict) or set(report)!={"schema_version","status","checked_at","authority","check_count","checks","state_sha256"}:raise RuntimeError("PostgreSQL-free smoke report schema is invalid")
+ if report["schema_version"]!=SCHEMA_VERSION or report["status"]!="passed" or report["authority"]!="kaveondb":raise RuntimeError("PostgreSQL-free smoke report did not prove KaveonDB authority")
+ if type(max_age_minutes) is not int or max_age_minutes<1:raise RuntimeError("PostgreSQL-free smoke freshness bound is invalid")
+ try:checked=datetime.fromisoformat(report["checked_at"].replace("Z","+00:00"))
+ except (AttributeError,ValueError) as error:raise RuntimeError("PostgreSQL-free smoke timestamp is invalid") from error
+ current=now or datetime.now(timezone.utc)
+ if checked.tzinfo is None or current.tzinfo is None:raise RuntimeError("PostgreSQL-free smoke timestamp must be timezone-aware")
+ age=(current.astimezone(timezone.utc)-checked.astimezone(timezone.utc)).total_seconds()
+ if age<0 or age>max_age_minutes*60:raise RuntimeError("PostgreSQL-free smoke report is not fresh")
+ checks=report["checks"]
+ if not isinstance(checks,list) or report["check_count"]!=len(CHECK_NAMES) or len(checks)!=len(CHECK_NAMES):raise RuntimeError("PostgreSQL-free smoke report has incomplete check coverage")
+ names=[]
+ for item in checks:
+  if not isinstance(item,dict) or set(item)!={"name","status","count","state_sha256"}:raise RuntimeError("PostgreSQL-free smoke check schema is invalid")
+  names.append(item["name"])
+  if type(item["status"]) is not int or not 200<=item["status"]<300:raise RuntimeError("PostgreSQL-free smoke check did not succeed")
+  if type(item["count"]) is not int or item["count"]<0 or (item["name"] in NONEMPTY_CHECKS and item["count"]<1):raise RuntimeError("PostgreSQL-free smoke check count is invalid")
+  _sha256(item["state_sha256"],"PostgreSQL-free smoke check state")
+ if tuple(names)!=CHECK_NAMES or len(names)!=len(set(names)):raise RuntimeError("PostgreSQL-free smoke report check identities are invalid")
+ claimed=_sha256(report["state_sha256"],"PostgreSQL-free smoke report state")
+ unsigned={key:value for key,value in report.items() if key!="state_sha256"}
+ if claimed!=_digest(unsigned):raise RuntimeError("PostgreSQL-free smoke report digest mismatch")
+ return report
 def _list(value,*keys):
  if isinstance(value,list):return value
  if isinstance(value,dict):
@@ -79,4 +110,4 @@ def collect(base_url,email,proxy_secret,question,dataset_id,*,ca_cert=None,clien
  checks.append(item)
  at=(now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat().replace("+00:00","Z")
  report={"schema_version":SCHEMA_VERSION,"status":"passed","checked_at":at,"authority":"kaveondb","check_count":len(checks),"checks":checks}
- report["state_sha256"]=_digest(report);return report
+ report["state_sha256"]=_digest(report);return verify(report,now=now)

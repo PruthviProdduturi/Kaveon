@@ -2,6 +2,7 @@
 import json,subprocess,time,math
 from pathlib import Path
 from services import kaveondb_recovery_evidence as recovery
+from services import postgresql_free_smoke as smoke
 
 MAX_OUTPUT=16*1024*1024;MAX_ARGS=128;MAX_ARG_BYTES=8192
 FORBIDDEN_EXECUTABLES={"cmd","cmd.exe","powershell","powershell.exe","pwsh","pwsh.exe","bash","sh"}
@@ -60,9 +61,10 @@ def restart(manifest,runner=subprocess.run):
  api_after=pods(run(manifest["api_pods_after"],runner),"API");studio_after=pods(run(manifest["studio_pods_after"],runner),"Studio")
  if api_before&api_after or studio_before&studio_after:raise RuntimeError("API or Studio pods were not replaced")
  after=inventory(run(manifest["state_after"],runner));probe=run(manifest["service_probes"],runner)
- if not isinstance(probe,dict) or set(probe)!={"passed","probe_count"} or probe["passed"] is not True or type(probe["probe_count"]) is not int or probe["probe_count"]<1:raise RuntimeError("post-restart service probes failed")
+ try:smoke.verify(probe,max_age_minutes=60)
+ except RuntimeError as error:raise RuntimeError("post-restart service probes failed") from error
  if before!=after:raise RuntimeError("KaveonDB state changed across restart")
- return {"postgresql_unavailable":True,"api_restarted":True,"studio_restarted":True,"probe_count":probe["probe_count"],
+ return {"postgresql_unavailable":True,"api_restarted":True,"studio_restarted":True,"probe_count":probe["check_count"],"service_state_sha256":probe["state_sha256"],
   "state_sha256_before":before["state_sha256"],"state_sha256_after":after["state_sha256"],
   "state_record_count_before":before["record_count"],"state_record_count_after":after["record_count"]}
 

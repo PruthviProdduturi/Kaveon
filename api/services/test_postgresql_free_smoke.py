@@ -29,6 +29,15 @@ class Tests(unittest.TestCase):
   with patch.dict(os.environ,{"KAVEON_POSTGRESQL_FREE_SMOKE_ENABLED":"true","KAVEON_POSTGRESQL_FREE_SMOKE_ALLOWED_HOSTS":"example.test"}):return smoke.collect("https://example.test","probe@example.test","super-secret","show totals","7",client=client,now=NOW)
  def test_exercises_full_http_surface_and_emits_only_counts_and_digests(self):
   client=Client();report=self.collect(client);self.assertEqual(report["status"],"passed");self.assertEqual(report["check_count"],21);encoded=json.dumps(report);self.assertNotIn("private",encoded);self.assertNotIn("secret sql",encoded);self.assertNotIn("super-secret",encoded);self.assertEqual(len(report["state_sha256"]),64);self.assertTrue(all(call[2]["x-proxy-secret"]=="super-secret" for call in client.calls));self.assertEqual(client.calls[-2][0],"POST");self.assertEqual(client.calls[-1][0],"POST")
+  self.assertIs(smoke.verify(report,now=NOW),report)
+ def test_verifier_rejects_incomplete_stale_and_tampered_reports(self):
+  report=self.collect(Client())
+  incomplete=json.loads(json.dumps(report));incomplete["checks"].pop();incomplete["check_count"]-=1
+  with self.assertRaisesRegex(RuntimeError,"incomplete check coverage"):smoke.verify(incomplete,now=NOW)
+  stale=json.loads(json.dumps(report));stale["checked_at"]="2026-09-14T18:00:00Z";stale["state_sha256"]=smoke._digest({key:value for key,value in stale.items() if key!="state_sha256"})
+  with self.assertRaisesRegex(RuntimeError,"not fresh"):smoke.verify(stale,now=NOW,max_age_minutes=30)
+  tampered=json.loads(json.dumps(report));tampered["checks"][0]["count"]=99
+  with self.assertRaisesRegex(RuntimeError,"digest mismatch"):smoke.verify(tampered,now=NOW)
  def test_requires_kaveondb_health_and_nonempty_migrated_families(self):
   def unhealthy(path,value,status):
    if path=="/api/health":value={"status":"healthy","authority":"postgresql","checks":{"postgresql":{"required":True}}}

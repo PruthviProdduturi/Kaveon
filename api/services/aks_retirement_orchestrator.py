@@ -41,10 +41,24 @@ def load_plan(path,overlay):
  if "-f" not in helm:raise RuntimeError("Helm migration step does not consume the reviewed values overlay")
  index=helm.index("-f")
  if index+1>=len(helm) or Path(helm[index+1]).resolve()!=overlay.resolve():raise RuntimeError("Helm migration step does not consume the reviewed values overlay")
- required={"shadow_parity":"probe-kaveondb-cutover.py","backup":"create-kaveondb-adls-backup.py","restore":"rehearse-kaveondb-adls-restore.py","restart_recovery":"probe-kaveondb-recovery.py","rollback":"probe-kaveondb-recovery.py","final_audit":"run-postgresql-retirement-evidence.py"}
- for name,script in required.items():
+ required={
+  "snapshot_inventory":("inventory-postgresql-authority.py","probe-postgresql-source-state.py"),
+  "dlm_migration":("collect-dlm-migration-evidence.py",),
+  "reconcile_16":("collect-postgresql-retirement-evidence.py",),
+  "shadow_parity":("probe-kaveondb-cutover.py",),
+  "fence_drain":("probe-kaveondb-cutover.py","probe-postgresql-source-state.py"),
+  "backup":("create-kaveondb-adls-backup.py",),
+  "restore":("rehearse-kaveondb-adls-restore.py",),
+  "restart_recovery":("probe-kaveondb-recovery.py",),
+  "rollback":("probe-kaveondb-recovery.py",),
+  "collect_operational":("record-postgresql-operational-evidence.py","collect-postgresql-operational-evidence.py"),
+  "final_audit":("run-postgresql-retirement-evidence.py","retirement-qualification-summary.py"),
+ }
+ for name,scripts in required.items():
   commands=steps[STEPS.index(name)]["commands"]
-  if not any(any(Path(arg).name==script for arg in entry["argv"]) for entry in commands):raise RuntimeError(f"retirement {name} step does not use {script}")
+  entrypoints={Path(entry["argv"][1]).name for entry in commands if Path(entry["argv"][0]).name.lower().startswith("python") and len(entry["argv"])>1}
+  for script in scripts:
+   if script not in entrypoints:raise RuntimeError(f"retirement {name} step does not execute {script}")
  return value
 
 def run(plan,checkpoint,runner=subprocess.run):

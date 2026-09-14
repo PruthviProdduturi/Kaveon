@@ -11,5 +11,8 @@ def main():
   os.replace(temporary,a.output)
  finally:
   if temporary and temporary.exists():temporary.unlink()
- print(json.dumps({"status":"passed","checks":report["check_count"],"report":str(a.output)}));return 0
+ # The report contains only endpoint names, counts, status codes and digests. Emit
+ # it so the restart orchestrator can validate the live checks, not merely an
+ # exit code or self-declared summary.
+ print(json.dumps(report,sort_keys=True,separators=(",",":")));return 0
 if __name__=="__main__":raise SystemExit(main())

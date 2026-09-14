@@ -14,7 +14,7 @@ Place these integrity-bound receipts in one run directory:
 | `outbox_drain.json` | Bounded query ID, watermark, pending count before, and zero after |
 | `write_fence.json` | Deployment revision, successful read probe, and one rejected mutation probe for every authority family |
 | `shadow_parity.json` | Source/target snapshot identities, zero mismatches, and all 16 families exactly once |
-| `restart_recovery.json` | PostgreSQL unavailable, new API and Studio processes ready, nonzero probes, and identical content-free state digests/counts before/after |
+| `restart_recovery.json` | PostgreSQL unavailable, new API and Studio processes ready, the complete fresh 21-check PostgreSQL-free HTTP smoke report, and identical content-free state digests/counts before/after |
 | `rollback.json` | Cutover revision, target fenced, source reads/writes restored within time and operation bounds, and identical state digests |
 | `backup_identity.json` | Immutable ADLS prefix and manifest digest, an executed restore job, positive restored table count, and identical source/restored inventory digests |
 | `durable_checkpoint.json` | Different pod UIDs, identical checkpoint digest, non-regressing position, and completed resume |
