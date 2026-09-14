@@ -68,15 +68,26 @@ async def lifespan(app: FastAPI):
     _os.environ["METADATA_PORT"]     = _cfg["port"]
 
     # Startup: kick off pool warmup + heartbeat in the background
+    replay_worker = None
     if _db_configured:
         threading.Thread(target=start_warmup_and_heartbeat, daemon=True).start()
         print("[API] Connection pool warmup started.")
+        from services import product_replay_worker
+        replay_worker = product_replay_worker.start()
+        if replay_worker:
+            print("[API] Product migration outbox replay started.")
     else:
         print("[API] No metadata database configured — starting in setup mode.")
         print("[API] Setup wizard is available. Configure an identity provider to continue.")
 
-    yield
-    # Shutdown: pools close via GC; nothing explicit needed
+    try:
+        yield
+    finally:
+        if replay_worker:
+            stop, worker = replay_worker
+            stop.set()
+            worker.join(timeout=5)
+        # Pools close via GC; nothing explicit needed.
 
 
 # ── App ───────────────────────────────────────────────────────────────────────

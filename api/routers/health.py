@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 import database.metadata as db
+from services import product_replay_worker
 
 router = APIRouter()
 
@@ -22,6 +23,7 @@ def health():
                 "metadata_db": {"connected": True, "latency_ms": latency_ms, "last_check": now},
                 "data_warehouse": {"connected": True, "latency_ms": 0, "last_check": now},
                 "azure_ad": {"connected": True, "latency_ms": 0, "last_check": now},
+                "product_replay": product_replay_worker.status(),
             },
             "timestamp": now,
         }

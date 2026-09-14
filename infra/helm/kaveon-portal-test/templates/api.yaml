@@ -101,6 +101,9 @@ spec:
             - {name: METADATA_USER, value: kaveon}
             - {name: METADATA_SSLMODE, value: disable}
             - {name: KAVEON_KEY_VAULT_URL, value: {{ required "api.keyVaultUrl is required" .Values.api.keyVaultUrl | quote }}}
+            - {name: KAVEON_PRODUCT_REPLAY_ENABLED, value: {{ .Values.api.productReplay.enabled | quote }}}
+            - {name: KAVEON_PRODUCT_REPLAY_BATCH_SIZE, value: {{ .Values.api.productReplay.batchSize | quote }}}
+            - {name: KAVEON_PRODUCT_REPLAY_INTERVAL_SECONDS, value: {{ .Values.api.productReplay.intervalSeconds | quote }}}
             - {name: KAVEON_ENGINE_URL, value: "https://{{ .Values.engine.service }}:{{ .Values.engine.port }}"}
             - {name: KAVEON_ENGINE_CA_CERT, value: /var/run/kaveon/engine-ca/{{ .Values.engine.caKey }}}
             - {name: METADATA_PASSWORD, valueFrom: {secretKeyRef: {name: {{ required "secrets.portalAuth is required" .Values.secrets.portalAuth }}, key: METADATA_PASSWORD}}}

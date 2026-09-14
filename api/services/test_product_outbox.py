@@ -86,12 +86,25 @@ class ProductOutboxTests(unittest.TestCase):
                 event_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
             )
 
+    def test_query_history_is_accepted_for_live_writer_and_replay(self):
+        transaction = FakeTransaction()
+        event = product_outbox.enqueue(
+            transaction,
+            family="query_history",
+            operation="create",
+            record_id="42",
+            payload={"id": "42", "sql_text": "SELECT 1"},
+            actor="alice@example.com",
+        )
+        self.assertEqual(event.family, "query_history")
+        self.assertEqual(transaction.calls[0][1][1], "query_history")
+
     def test_unsupported_family_fails_before_database_write(self):
         transaction = FakeTransaction()
         with self.assertRaisesRegex(ValueError, "unsupported"):
             product_outbox.enqueue(
                 transaction,
-                family="query_history",
+                family="unknown_family",
                 operation="create",
                 record_id="42",
                 payload={},
