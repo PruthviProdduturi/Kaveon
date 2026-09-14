@@ -39,6 +39,48 @@ keys, oversized files, duplicate/missing family probes, mismatched state
 digests, reused pod UIDs, unbounded rollback time, and unverified restore claims
 all fail closed.
 
+### Live probe recorder
+
+Use `record-postgresql-operational-evidence.py` to execute the rehearsal probes.
+Its manifest contains exactly one argument array and timeout for every gate. It
+uses direct process execution (`shell=False`), bounds arguments, timeouts,
+stdout and stderr, requires exit code zero and an exact JSON observation, then
+derives the gate details from that observation. It publishes no receipts unless
+all eight probes succeed and validate.
+
+The source watermark and outbox entries can call the included read-only probe
+inside the API workload:
+
+```json
+{
+  "schema_version": 1,
+  "run_id": "aks-retirement-20260914-01",
+  "probes": {
+    "source_watermark": {
+      "argv": ["python", "scripts/probe-postgresql-source-state.py", "--gate", "source_watermark"],
+      "timeout_seconds": 60
+    },
+    "outbox_drain": {
+      "argv": ["python", "scripts/probe-postgresql-source-state.py", "--gate", "outbox_drain"],
+      "timeout_seconds": 60
+    }
+  }
+}
+```
+
+Add the other six gate commands to the same `probes` object. For AKS those
+commands should be reviewed scripts that use `kubectl` or the authenticated
+Studio/API probe surface and print only the exact observation object. Do not put
+tokens, passwords, connection strings, or inline shell programs in the
+manifest. Workload identity and the existing Kubernetes context supply access.
+
+```powershell
+python scripts/record-postgresql-operational-evidence.py `
+  --manifest tmp/retirement-probe-manifest.json `
+  --output tmp/retirement-observations/run-20260914 `
+  --max-rollback-seconds 900
+```
+
 After the operator has recorded and hashed all eight live observations, assemble
 the inputs for the existing 16-family retirement runner:
 

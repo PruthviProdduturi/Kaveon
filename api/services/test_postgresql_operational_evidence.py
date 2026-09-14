@@ -22,7 +22,7 @@ def _observations():
         "shadow_parity": ({"matched": True}, {"source_snapshot": DIGEST, "target_snapshot": "b" * 64, "family_probes": probes, "mismatch_count": 0}),
         "restart_recovery": ({"verified": True}, {"postgresql_unavailable": True, "api_restarted": True, "studio_restarted": True, "probe_count": 16, "state_sha256_before": DIGEST, "state_sha256_after": DIGEST}),
         "rollback": ({"verified": True}, {"cutover_revision": "api@abc123", "target_writes_fenced": True, "source_reads_restored": True, "source_writes_restored": True, "state_sha256_before": DIGEST, "state_sha256_after": DIGEST, "duration_seconds": 90}),
-        "backup_identity": ({"backup_id": "snapshot-1", "backup_sha256": "c" * 64, "restore_verified": True}, {"restore_job_id": "restore-1", "source_inventory_sha256": DIGEST, "restored_inventory_sha256": DIGEST, "restored_table_count": 24}),
+        "backup_identity": ({"backup_id": "snapshot-1", "backup_sha256": "c" * 64, "restore_verified": True}, {"backup_id": "snapshot-1", "backup_sha256": "c" * 64, "restore_job_id": "restore-1", "source_inventory_sha256": DIGEST, "restored_inventory_sha256": DIGEST, "restored_table_count": 24}),
         "durable_checkpoint": ({"verified": True}, {"checkpoint_sha256_before": DIGEST, "checkpoint_sha256_after": DIGEST, "pod_uid_before": "pod-1", "pod_uid_after": "pod-2", "next_index_before": 8, "next_index_after": 10, "resume_completed": True}),
     }
 
