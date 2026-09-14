@@ -1,5 +1,29 @@
 # PostgreSQL retirement gate
 
+## Context cache retirement
+
+`context_snapshots` and `context_answer_cache` are revision-bound generated
+state. They are rebuilt rather than copied: copying answer rows would retain
+possibly sensitive results and could make stale dependencies authoritative.
+The deployment-owned retirement job must fence profiler/router cache writes,
+capture only row counts and schema digests, rebuild against the exact cutover
+dataset revision, repeat a deterministic probe, delete the old PostgreSQL rows,
+and verify both tables are empty. Generate the family report with:
+
+```powershell
+$env:KAVEON_CONTEXT_CACHE_RETIREMENT_ENABLED = "true"
+python scripts/build-context-cache-retirement-report.py `
+  --evidence tmp/context-cache-retirement-observation.json `
+  --output tmp/postgresql-retirement-reports/context_cache.json
+```
+
+The observation is bounded to 256 KiB and rejects fields whose names indicate
+questions, answers, results, SQL, profile values, credentials, or secrets. The
+report is emitted only when rebuild coverage is complete, repeated probe hashes
+match, writes are fenced, deletion counts match the pre-deletion inventory, and
+zero rows remain. This report is one family input; it does not bypass the other
+authority-family or global retirement gates.
+
 Status on September 10, 2026: **do not delete or scale down PostgreSQL**.
 
 The complete code-path and runtime-table audit is maintained in
