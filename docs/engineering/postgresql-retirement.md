@@ -18,6 +18,17 @@ during pagination fails the request instead of mixing catalog generations.
 Favorite state is joined from KaveonDB's owner-scoped favorite records, so
 cutover lists do not query PostgreSQL for presentation metadata.
 
+The same switch accepts `saved_queries`, `user_themes`, `user_recents`,
+`favorites`, `query_history`, `chat_history`, and `sources`. Personal families
+are owner-filtered after the privileged bridge read. Chat sessions and messages
+remain separate typed records and are joined by session ID in the API. Source
+responses expose only the credential-free public projection stored in KaveonDB.
+Catalog audit reads can independently select `activity`; administrators see the
+workspace trail and other roles remain actor-scoped. `dlm_definitions` is
+reserved in the allowlist but the existing DLM status endpoint cannot select it
+until the compiled artifact is retrievable without PostgreSQL; enabling that
+name alone therefore does not claim DLM read cutover.
+
 ## Context cache retirement
 
 `context_snapshots` and `context_answer_cache` are revision-bound generated

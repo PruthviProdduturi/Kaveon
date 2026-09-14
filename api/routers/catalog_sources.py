@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from middleware.auth import UserContext
 from middleware.permissions import require_min_role
 import database.metadata as db
-from services import source_mutations, source_secret_store, product_outbox, product_shadow_read
+from services import source_mutations, source_secret_store, product_outbox, product_shadow_read, product_read_authority
 from services.activity_backfill import document as activity_document
 
 router = APIRouter()
@@ -359,10 +359,17 @@ def delete_catalog_source(cs_id: str, ctx: UserContext = Depends(require_min_rol
 
 @router.get("/catalog-sources/{cs_id}/audit")
 def get_audit_trail(cs_id: str, ctx: UserContext = Depends(require_min_role("Viewer"))):
-    existing = db.query_one("SELECT id FROM catalog_sources WHERE id = @param0", [cs_id])
+    if product_read_authority.enabled("sources"):
+        existing = product_read_authority.read_document("sources", f"catalog-{cs_id}", ctx.email, ctx.role)
+    else:
+        existing = db.query_one("SELECT id FROM catalog_sources WHERE id = @param0", [cs_id])
     if not existing:
         raise HTTPException(404, {"code": "NOT_FOUND", "message": "Catalog source not found"})
 
+    if product_read_authority.enabled("activity"):
+        events = [event for event in product_read_authority.list_documents("activity", ctx.email, ctx.role)
+                  if event.get("object_type") == "catalog_source" and str(event.get("object_id")) == cs_id][:50]
+        return {"success": True, "events": events}
     result = db.query(
         "SELECT id, action, object_type, object_id, object_name, timestamp, user_email, details "
         "FROM activity WHERE object_type = 'catalog_source' AND object_id = @param0 "

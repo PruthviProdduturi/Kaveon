@@ -21,6 +21,12 @@ MAX_LIMIT = 1000
 DEFAULT_LIMIT = 50
 MAX_DELETE_MESSAGES=1_000
 def _enabled():return os.getenv("KAVEON_CHAT_HISTORY_OUTBOX_ENABLED")=="true"
+def _legacy_ids(row: dict) -> dict:
+    result = dict(row)
+    for key in ("id", "session_id"):
+        if key in result: result[key] = int(result[key])
+    result.pop("user_email", None)
+    return result
 
 
 # ── Request/Response types ────────────────────────────────────────────────────
@@ -61,11 +67,15 @@ class MessageOut(BaseModel):
 
 def _assert_session_owner(session_id: int, email: str) -> dict:
     """Return the session row or raise 404."""
-    row = db.query_one(
+    from services import product_read_authority
+    if product_read_authority.enabled("chat_history"):
+        row = product_read_authority.read_typed("chat_session", "chat_history", str(session_id), email, "Viewer")
+    else:
+        row = db.query_one(
         "SELECT id, user_email, title, created_at, updated_at "
         "FROM dbo.chat_sessions WHERE id = @param0",
         [session_id],
-    )
+        )
     if not row or row["user_email"] != email:
         raise HTTPException(
             status_code=404,
@@ -86,6 +96,12 @@ def list_sessions(
     limit = min(max(limit, 1), MAX_LIMIT)
     offset = max(offset, 0)
 
+    from services import product_read_authority
+    if product_read_authority.enabled("chat_history"):
+        rows = product_read_authority.list_typed("chat_session", "chat_history", ctx.email, ctx.role)
+        rows.sort(key=lambda row: str(row.get("updated_at") or ""), reverse=True)
+        page = rows[offset:offset + limit]
+        return {"sessions": [_legacy_ids({key: row.get(key) for key in ("id", "title", "created_at", "updated_at")}) for row in page], "count": len(page)}
     rows = db.query(
         "SELECT id, title, created_at, updated_at "
         "FROM dbo.chat_sessions "
@@ -102,13 +118,20 @@ def get_session(session_id: int, ctx: UserContext = Depends(require_user_context
     """Return all messages in a session."""
     session = _assert_session_owner(session_id, ctx.email)
 
-    msgs = db.query(
+    from services import product_read_authority
+    if product_read_authority.enabled("chat_history"):
+        documents = product_read_authority.list_typed("chat_message", "chat_history", ctx.email, ctx.role)
+        message_rows = [row for row in documents if str(row.get("session_id")) == str(session_id)]
+        message_rows.sort(key=lambda row: str(row.get("created_at") or ""))
+        msgs = {"rows": message_rows}
+    else:
+        msgs = db.query(
         "SELECT id, session_id, role, content, sql_query, chart_type, data, route, created_at "
         "FROM dbo.chat_messages "
         "WHERE session_id = @param0 "
         "ORDER BY created_at",
         [session_id],
-    )
+        )
     try:
         from services import product_shadow_read
         product_shadow_read.observe_chat_session(session,msgs["rows"],ctx.email)
@@ -121,7 +144,7 @@ def get_session(session_id: int, ctx: UserContext = Depends(require_user_context
             "created_at": session["created_at"],
             "updated_at": session["updated_at"],
         },
-        "messages": msgs["rows"],
+        "messages": [_legacy_ids(row) for row in msgs["rows"]] if product_read_authority.enabled("chat_history") else msgs["rows"],
     }
 
 

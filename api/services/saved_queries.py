@@ -55,6 +55,9 @@ def _product_document(row: dict) -> dict:
 
 
 def list_saved_queries(user_id: str) -> List[dict]:
+    from services import product_read_authority
+    if product_read_authority.enabled("saved_queries"):
+        return product_read_authority.list_documents("saved_queries", user_id, "Viewer")
     result = db.query("""
         SELECT s.id, s.name, s.description, s.sql_text, s.created_by,
                s.created_at, s.modified_at,
@@ -73,6 +76,9 @@ def list_saved_queries(user_id: str) -> List[dict]:
 
 
 def get_by_id(query_id: str, user_id: str) -> Optional[dict]:
+    from services import product_read_authority
+    if product_read_authority.enabled("saved_queries"):
+        return product_read_authority.read_document("saved_queries", query_id, user_id, "Viewer")
     row = db.query_one(
         _SELECT + "WHERE id = @param0 AND created_by = @param1",
         [query_id, user_id],

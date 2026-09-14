@@ -8,7 +8,7 @@ from middleware.permissions import require_min_role
 import database.metadata as db
 import database.pool as pool
 from services.credentials import encrypt, CredentialError
-from services import source_mutations, product_shadow_read
+from services import source_mutations, product_shadow_read, product_read_authority
 
 router = APIRouter()
 NO_CACHE = {
@@ -54,9 +54,30 @@ def _observe_sources(rows: list[dict], user: str):
         logging.getLogger(__name__).warning("data_source_shadow_read_error type=%s", type(error).__name__)
 
 
+def _cutover_sources(user: str, *, active_only: bool = False) -> list[dict]:
+    documents = product_read_authority.list_documents("sources", user, "Viewer")
+    rows = []
+    for document in documents:
+        if document.get("source_kind") != "data" or active_only and not document.get("is_active"):
+            continue
+        source_id = str(document.get("source_id") or "")
+        if not source_id.startswith("data-"):
+            raise RuntimeError("KaveonDB data-source identity is invalid")
+        rows.append({
+            "id": source_id[5:], "name": document.get("name"),
+            "type": document.get("source_type"), "database_name": document.get("database_name"),
+            "region": document.get("region"), "description": document.get("description"),
+            "created_by": None, "created_at": None, "updated_at": None,
+            "is_active": bool(document.get("is_active")), "is_favorite": bool(document.get("favorite")),
+        })
+    return sorted(rows, key=lambda row: (bool(row["is_favorite"]), bool(row["is_active"]), str(row["id"])), reverse=True)
+
+
 @router.get("/data-sources")
 def list_data_sources(request: Request, response: Response, user: str = Depends(require_auth)):
     response.headers.update(NO_CACHE)
+    if product_read_authority.enabled("sources"):
+        return {"success": True, "dataSources": [{**row, "table_count": 0} for row in _cutover_sources(user)]}
     result = db.query(_LIST_SELECT, [user])
     _observe_sources(result["rows"], user)
     return {"success": True, "dataSources": _add_table_counts(result["rows"])}
@@ -65,6 +86,8 @@ def list_data_sources(request: Request, response: Response, user: str = Depends(
 @router.get("/data-sources/active")
 def list_active_data_sources(request: Request, response: Response, user: str = Depends(require_auth)):
     response.headers.update(NO_CACHE)
+    if product_read_authority.enabled("sources"):
+        return {"success": True, "dataSources": [{**row, "table_count": 0} for row in _cutover_sources(user, active_only=True)]}
     result = db.query(f"""
         SELECT {_PUBLIC_FIELDS},
                CASE WHEN fav.id IS NOT NULL THEN 1 ELSE 0 END AS is_favorite
@@ -82,6 +105,8 @@ def list_active_data_sources(request: Request, response: Response, user: str = D
 @router.get("/data-sources/list")
 def list_data_sources_metadata_only(request: Request, response: Response, user: str = Depends(require_auth)):
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    if product_read_authority.enabled("sources"):
+        return {"success": True, "dataSources": _cutover_sources(user)}
     result = db.query(f"""
         SELECT {_PUBLIC_FIELDS},
                CASE WHEN fav.id IS NOT NULL THEN 1 ELSE 0 END AS is_favorite
@@ -123,6 +148,12 @@ def get_table_count(ds_id: str, response: Response, user: str = Depends(require_
 @router.get("/data-sources/{ds_id}")
 def get_data_source(ds_id: str, response: Response, user: str = Depends(require_auth)):
     response.headers.update(NO_CACHE)
+    if product_read_authority.enabled("sources"):
+        document = product_read_authority.read_document("sources", f"data-{int(ds_id)}", user, "Viewer")
+        rows = _cutover_sources(user)
+        row = next((row for row in rows if str(row["id"]) == str(ds_id)), None) if document else None
+        if row is None: raise HTTPException(status_code=404, detail="Data source not found")
+        return {"success": True, "dataSource": row}
     result = db.query(
         f"SELECT {_PUBLIC_FIELDS} FROM data_sources ds WHERE ds.id = @param0",
         [int(ds_id)]
