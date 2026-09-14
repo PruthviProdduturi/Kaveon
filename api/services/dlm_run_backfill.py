@@ -46,7 +46,26 @@ def _object(value, label: str) -> dict:
         raise RuntimeError(f"PostgreSQL DLM artifact {label} is invalid") from error
     if not isinstance(parsed, dict):
         raise RuntimeError(f"PostgreSQL DLM artifact {label} is invalid")
-    return parsed
+    return _repair_utf8_mojibake(parsed)
+
+
+def _repair_utf8_mojibake(value):
+    """Repair UTF-8 bytes previously decoded as Windows-1252 at the PG boundary."""
+    if isinstance(value, dict):
+        return {key: _repair_utf8_mojibake(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [_repair_utf8_mojibake(child) for child in value]
+    if not isinstance(value, str) or not any(marker in value for marker in ("Ã", "Â", "â")):
+        return value
+    try:
+        repaired = value.encode("cp1252").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return value
+    markers = ("Ã", "Â", "â")
+    if sum(value.count(marker) for marker in markers) <= sum(
+            repaired.count(marker) for marker in markers):
+        return value
+    return repaired
 
 
 def _payload(row: dict) -> dict:

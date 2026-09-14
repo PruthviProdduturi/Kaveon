@@ -214,6 +214,22 @@ class DlmRunBackfillTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(),
                              value.records[0].document["artifact"]["sha256"])
 
+    def test_capture_repairs_cp1252_mojibake_before_utf8_publication(self):
+        row = {"id": 17, "created_by": "owner", "version": 4,
+               "manifest": '{"name":"Climate Ã— Energy"}', "status": "ready"}
+        definition = {"revision": 1, "snapshot_id": "snap-2"}
+        with tempfile.TemporaryDirectory() as temporary, \
+             patch.object(backfill.db, "transaction",
+                          return_value=transaction(Source([row]))), \
+             patch.object(backfill.product_store, "read", return_value=definition):
+            result = backfill.capture_snapshot(Path(temporary))
+            artifact = Path(temporary) / "dlm" / "17" / "v4" / "compiled.json"
+            artifact_text = artifact.read_bytes().decode("utf-8")
+            decoded = json.loads(artifact_text)
+        self.assertEqual(decoded["manifest"]["name"], "Climate × Energy")
+        self.assertNotIn("Ã", artifact_text)
+        self.assertEqual(result.records[0].record_id, "17-v4")
+
     def test_restage_rejects_source_drift(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary); value = snapshot()
