@@ -48,6 +48,19 @@ from routers import (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import os as _os
+    from services import postgresql_retirement_runtime
+
+    retirement = postgresql_retirement_runtime.validate()
+    app.state.postgresql_retirement = retirement
+    if retirement["enabled"]:
+        # Prevent frozen settings or an inherited environment from providing an
+        # accidental PostgreSQL fallback after retirement activation.
+        for key in ("METADATA_DB_TYPE", "METADATA_ENDPOINT", "METADATA_DATABASE",
+                    "METADATA_HOST", "METADATA_PORT", "METADATA_USER", "METADATA_PASSWORD"):
+            _os.environ[key] = ""
+        print("[API] PostgreSQL retirement mode verified; KaveonDB is authoritative.")
+        yield
+        return
 
     # Determine whether a metadata DB is configured by reading the .env file
     # directly — os.environ / settings may hold stale values from a previous
