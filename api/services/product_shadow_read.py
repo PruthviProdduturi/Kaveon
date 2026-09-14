@@ -330,3 +330,35 @@ def observe_chat_session(session:dict,messages:list[dict],owner:str)->dict:
         elif target.get("document")==document:counts["match"]+=1
         else:counts["mismatch"]+=1
     return {"family":"chat_history","enabled":True,"status":"match" if counts["match"]==len(expected) else "mismatch","record_count":len(expected),**counts}
+
+
+def observe_dlm_definition(dataset_id: str, source_owner: str, actor: str, role: str) -> dict:
+    """Compare a definition against its exact owner and committed dataset revision."""
+    if os.getenv("KAVEON_DLM_DEFINITION_SHADOW_READ_ENABLED") != "true":
+        return {"family": "dlm_definitions", "enabled": False, "status": "disabled"}
+    dataset_id = str(dataset_id or "")
+    if not dataset_id or not source_owner or not actor:
+        raise RuntimeError("DLM definition shadow comparison requires identity")
+    dataset = product_store.read("dataset", dataset_id, actor, role)
+    if dataset is None or not isinstance(dataset.get("document"), dict):
+        return {"family": "dlm_definitions", "enabled": True, "status": "missing_dataset"}
+    if str(dataset["document"].get("created_by") or "") != source_owner:
+        return {"family": "dlm_definitions", "enabled": True, "status": "owner_mismatch"}
+    revision = dataset.get("revision")
+    if type(revision) is not int or revision < 1:
+        raise RuntimeError("DLM definition shadow dataset revision is invalid")
+    expected = {"dataset_id": dataset_id, "dataset_revision": revision}
+    source_sha, source_bytes = _identity(expected)
+    target = product_store.read("dlm_definition", dataset_id, actor, role)
+    base = {"family": "dlm_definitions", "enabled": True,
+            "record_id": dataset_id, "source_sha256": source_sha,
+            "source_bytes": source_bytes, "dataset_revision": revision}
+    if target is None:
+        return {**base, "status": "missing", "target_sha256": None}
+    document = target.get("document")
+    if not isinstance(document, dict):
+        raise RuntimeError("KaveonDB DLM definition shadow response is invalid")
+    target_sha, target_bytes = _identity(document)
+    return {**base, "status": "match" if target_sha == source_sha else "mismatch",
+            "target_sha256": target_sha, "target_bytes": target_bytes,
+            "target_generation": int(target.get("generation") or 0)}

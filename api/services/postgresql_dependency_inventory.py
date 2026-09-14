@@ -30,6 +30,7 @@ DEPENDENCIES = {
     "services/dashboard_backfill.py": {"dashboards": "read", "charts": "read"},
     "services/datasets.py": {"datasets": "read-write", "dataset_semantics": "read-write", "charts": "read", "favorites": "read"},
     "services/dlm_definition_backfill.py": {"datasets": "read", "dlm_generation": "read"},
+    "services/dlm_definition_mutations.py": {"datasets": "read", "dlm_generation": "read"},
     "services/dlm_run_backfill.py": {"datasets": "read", "dlm_generation": "read"},
     "services/favorites.py": {"favorites": "read-write", "charts": "read", "dashboards": "read", "datasets": "read"},
     "services/favorite_backfill.py": {"favorites": "read"},
