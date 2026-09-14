@@ -47,6 +47,15 @@ api:
     resources:
       requests: {cpu: 100m, memory: 256Mi}
       limits: {cpu: "1", memory: 1Gi}
+  retirementReports:
+    # Requires a restricted PVC pre-populated by live observation/rebuild jobs.
+    # These jobs validate evidence and never manufacture source observations.
+    enabled: false
+    evidencePvc: ""
+    maxAgeHours: 1
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits: {cpu: 500m, memory: 512Mi}
   resources:
     requests: {cpu: 250m, memory: 512Mi}
     limits: {cpu: "1", memory: 1Gi}
