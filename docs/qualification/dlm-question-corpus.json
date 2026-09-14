@@ -1,6 +1,6 @@
 {
   "dataset": "Kaveon Telemetry",
-  "notes": "Every question shape the DLM claims to answer, against the 504M-row telemetry dataset (24) and its neighbours on kaveon-test-aks. `expect` is the contract; the runner reports every deviation. Exact figures come from the deterministic generator and were first observed on 2026-09-11 (HANDSHAKE query IDs).",
+  "notes": "Every question shape the DLM claims to answer, against the 504M-row telemetry dataset and its neighbours (datasets are named, so the corpus runs on any cluster where they are registered). `expect` is the contract; the runner reports every deviation. Exact figures come from the deterministic generator and were first observed on 2026-09-11 (HANDSHAKE query IDs).",
   "questions": [
     {
       "id": "T01",
@@ -8,7 +8,7 @@
       "q": "Kaveon Telemetry total actions",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "route": "context",
         "first_value": 6078000539
       }
@@ -19,7 +19,7 @@
       "q": "how many sessions in the telemetry",
       "expect": {
         "ok": true,
-        "dataset": "24"
+        "dataset": "Kaveon Telemetry"
       }
     },
     {
@@ -28,7 +28,7 @@
       "q": "telemetry sum of queries run",
       "expect": {
         "ok": true,
-        "dataset": "24"
+        "dataset": "Kaveon Telemetry"
       }
     },
     {
@@ -37,7 +37,7 @@
       "q": "telemetry average latency",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "metric": "Average latency (ms)"
       }
     },
@@ -47,7 +47,7 @@
       "q": "what is the total duration in seconds for telemetry",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "metric": "Duration (sec)"
       }
     },
@@ -57,7 +57,7 @@
       "q": "telemetry cache hits overall",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "metric": "Cache hits"
       }
     },
@@ -67,7 +67,7 @@
       "q": "telemetry errors in total",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "metric": "Errors"
       }
     },
@@ -77,7 +77,7 @@
       "q": "telemetry rows scanned",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "metric": "Rows scanned"
       }
     },
@@ -87,7 +87,7 @@
       "q": "telemetry charts created",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "metric": "Charts created"
       }
     },
@@ -97,7 +97,7 @@
       "q": "Kaveon Telemetry total actions by surface",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "route": "context",
         "rows": 6,
         "first_row": [
@@ -112,7 +112,7 @@
       "q": "telemetry sessions per country",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "route": "context",
         "rows": 26,
         "first_row": [
@@ -127,7 +127,7 @@
       "q": "telemetry errors across platforms",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "group": "platform"
       }
     },
@@ -137,7 +137,7 @@
       "q": "telemetry queries run for each license",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "group": "license",
         "rows": 4
       }
@@ -148,7 +148,7 @@
       "q": "telemetry duration by segment",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "group": "segment"
       }
     },
@@ -158,7 +158,7 @@
       "q": "telemetry charts created by industry",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "group": "industry"
       }
     },
@@ -168,7 +168,7 @@
       "q": "telemetry cache hits by region",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "group": "region",
         "rows": 6
       }
@@ -179,7 +179,7 @@
       "q": "telemetry rows scanned by deployment",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "group": "deployment",
         "rows": 3
       }
@@ -190,7 +190,7 @@
       "q": "telemetry latency by acquisition channel",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "group": "acquisition_channel"
       }
     },
@@ -200,7 +200,7 @@
       "q": "telemetry actions by team size",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "group": "team_size"
       }
     },
@@ -210,7 +210,7 @@
       "q": "telemetry errors by platform and deployment",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "route": "context",
         "group": "deployment|platform",
         "rows": 9
@@ -222,7 +222,7 @@
       "q": "telemetry sessions by license, segment",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "route": "context",
         "group": "license|segment"
       }
@@ -233,7 +233,7 @@
       "q": "telemetry actions by region & deployment",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "group": "deployment|region"
       }
     },
@@ -243,7 +243,7 @@
       "q": "telemetry actions by country and industry",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "route": "live",
         "group": "country|industry",
         "sql_contains": [
@@ -257,7 +257,7 @@
       "q": "telemetry top 3 countries by sessions",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "rows": 3,
         "first_row": [
           "United States",
@@ -271,7 +271,7 @@
       "q": "telemetry top 5 industries by actions",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "rows": 5
       }
     },
@@ -281,7 +281,7 @@
       "q": "telemetry bottom 3 platforms by errors",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "rows": 3,
         "sort": "asc"
       }
@@ -292,7 +292,7 @@
       "q": "which surface has the most actions in telemetry",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "rows": 1,
         "first_row": [
           "API",
@@ -306,7 +306,7 @@
       "q": "which region has the fewest sessions in telemetry",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "rows": 1,
         "sort": "asc"
       }
@@ -317,7 +317,7 @@
       "q": "telemetry top surfaces by cache hits",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "group": "surface"
       }
     },
@@ -327,7 +327,7 @@
       "q": "telemetry lowest latency platform",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "group": "platform",
         "sort": "asc",
         "rows": 1
@@ -339,7 +339,7 @@
       "q": "telemetry sessions in India",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "filters": [
           [
             "country",
@@ -354,7 +354,7 @@
       "q": "telemetry errors on Mobile",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "filters": [
           [
             "platform",
@@ -369,7 +369,7 @@
       "q": "telemetry queries run in Europe by country",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "filters": [
           [
             "region",
@@ -385,7 +385,7 @@
       "q": "telemetry actions in United States by surface",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "filters": [
           [
             "country",
@@ -402,7 +402,7 @@
       "q": "telemetry sessions for Cloud deployment in Asia",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "filters": [
           [
             "deployment",
@@ -421,7 +421,7 @@
       "q": "telemetry actions for Enterprise customers",
       "expect": {
         "reason": "clarify",
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "clarify_kind": "value"
       }
     },
@@ -431,7 +431,7 @@
       "q": "telemetry sessions in Atlantis",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "note_contains": "not found"
       }
     },
@@ -441,7 +441,7 @@
       "q": "telemetry actions on the Chat surface by license",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "filters": [
           [
             "surface",
@@ -457,7 +457,7 @@
       "q": "telemetry actions in July 2026",
       "expect": {
         "ok": true,
-        "dataset": "24"
+        "dataset": "Kaveon Telemetry"
       }
     },
     {
@@ -466,7 +466,7 @@
       "q": "telemetry sessions in 2026 by country",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "year": 2026,
         "group": "country"
       }
@@ -477,7 +477,7 @@
       "q": "telemetry actions in 2025",
       "expect": {
         "ok": true,
-        "dataset": "24"
+        "dataset": "Kaveon Telemetry"
       }
     },
     {
@@ -486,7 +486,7 @@
       "q": "telemetry errors last 7 days",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "metric": "Errors",
         "route": "live"
       }
@@ -497,7 +497,7 @@
       "q": "telemetry sessions by month",
       "expect": {
         "ok": true,
-        "dataset": "24"
+        "dataset": "Kaveon Telemetry"
       }
     },
     {
@@ -506,7 +506,7 @@
       "q": "trend of telemetry actions over time",
       "expect": {
         "ok": true,
-        "dataset": "24"
+        "dataset": "Kaveon Telemetry"
       }
     },
     {
@@ -515,7 +515,7 @@
       "q": "Telemetry Total Actions By Surface!",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "group": "surface",
         "rows": 6
       }
@@ -526,7 +526,7 @@
       "q": "telemetry sesions by contry",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "group": "country"
       }
     },
@@ -536,7 +536,7 @@
       "q": "telemetry erors by platfrom",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "group": "platform"
       }
     },
@@ -546,7 +546,7 @@
       "q": "TELEMETRY TOP 3 COUNTRIES BY SESSIONS",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "rows": 3
       }
     },
@@ -556,7 +556,7 @@
       "q": "telemetry  queries   run  by  license ?",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "group": "license"
       }
     },
@@ -566,7 +566,7 @@
       "q": "telemetry cache-hits by region",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "group": "region"
       }
     },
@@ -576,7 +576,7 @@
       "q": "telemetry usage by surface",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "group": "surface"
       }
     },
@@ -586,7 +586,7 @@
       "q": "telemetry avg latency per platform",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "metric": "Average latency (ms)",
         "group": "platform"
       }
@@ -597,7 +597,7 @@
       "q": "telemetry number of sessions by country",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "metric": "Sessions",
         "group": "country"
       }
@@ -608,7 +608,7 @@
       "q": "telemetry mean latency",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "metric": "Average latency (ms)"
       }
     },
@@ -617,7 +617,7 @@
       "group": "vocabulary",
       "q": "telemetry revenue by region",
       "expect": {
-        "dataset": "24"
+        "dataset": "Kaveon Telemetry"
       }
     },
     {
@@ -626,7 +626,7 @@
       "q": "Kaveon Telemetry total actions by surface",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "rows": 6
       }
     },
@@ -637,7 +637,7 @@
       "follow_up_of": "C01",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "group": "surface",
         "year": 2026
       }
@@ -649,7 +649,7 @@
       "follow_up_of": "C02",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "group": "platform"
       }
     },
@@ -660,7 +660,7 @@
       "follow_up_of": "C03",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "filters": [
           [
             "platform",
@@ -676,7 +676,7 @@
       "follow_up_of": "C01",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "rows": 3,
         "group": "surface"
       }
@@ -688,7 +688,7 @@
       "follow_up_of": "C01",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "group": "surface",
         "sort": "asc"
       }
@@ -713,7 +713,7 @@
       },
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "filters": [
           [
             "license",
@@ -768,7 +768,7 @@
       "q": "telemetry",
       "expect": {
         "ok": true,
-        "dataset": "24"
+        "dataset": "Kaveon Telemetry"
       }
     },
     {
@@ -785,7 +785,7 @@
       "q": "Kaveon Events actions by surface",
       "expect": {
         "ok": true,
-        "dataset": "23"
+        "dataset": "Kaveon Events"
       }
     },
     {
@@ -826,7 +826,7 @@
       "q": "telemetry actions by surface",
       "expect": {
         "ok": true,
-        "dataset": "24"
+        "dataset": "Kaveon Telemetry"
       }
     },
     {
@@ -835,7 +835,7 @@
       "q": "telemetry average latency in ms by platform",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "metric": "Average latency (ms)",
         "group": "platform"
       }
@@ -846,7 +846,7 @@
       "q": "telemetry actions per surface as a percentage",
       "expect": {
         "ok": true,
-        "dataset": "24",
+        "dataset": "Kaveon Telemetry",
         "group": "surface"
       }
     },
@@ -855,7 +855,7 @@
       "group": "measures",
       "q": "how many rows are in telemetry",
       "expect": {
-        "dataset": "24"
+        "dataset": "Kaveon Telemetry"
       }
     },
     {
@@ -863,7 +863,7 @@
       "group": "measures",
       "q": "telemetry compare sessions and actions by surface",
       "expect": {
-        "dataset": "24"
+        "dataset": "Kaveon Telemetry"
       }
     }
   ]

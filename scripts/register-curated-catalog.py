@@ -1,6 +1,7 @@
 """Register previously validated ADLS table manifests from an API pod.
 
-Requires the API's existing Engine credential and CA environment. Manifest
+Requires the API's existing Engine credential and CA environment, plus
+KAVEON_LAKE_ADLS_ACCOUNT (or KAVEON_LOCAL_LAKE_PATH for a local lake). Manifest
 arguments are local JSON files; no credentials or data rows are printed.
 """
 import json
@@ -25,10 +26,14 @@ if LOCAL_LAKE:
     CREDENTIAL = None
     SOURCE_STORAGE = ('local', json.dumps({'base_path': LOCAL_LAKE}), 'environment', 'local')
 else:
+    # The account is an environment fact, never a constant: the qualification
+    # cluster has already been rebuilt once into a different account.
+    ACCOUNT = os.environ['KAVEON_LAKE_ADLS_ACCOUNT']
     CATALOG_ID = 'aks-opensource'
-    STORAGE = {'AdlsGen2': {'account': 'kvtestegmf6oweugsno', 'container': 'opensource', 'root_path': ROOT}}
+    ADLS = {'account': ACCOUNT, 'container': 'opensource', 'root_path': ROOT}
+    STORAGE = {'AdlsGen2': ADLS}
     CREDENTIAL = {'kind': 'WorkloadIdentity', 'reference': 'kaveon-test-reader'}
-    SOURCE_STORAGE = ('adls_gen2', json.dumps({'account': 'kvtestegmf6oweugsno', 'container': 'opensource', 'root_path': ROOT}), 'workload_identity', 'kaveon-test-reader')
+    SOURCE_STORAGE = ('adls_gen2', json.dumps(ADLS), 'workload_identity', 'kaveon-test-reader')
 client = httpx.Client(base_url=os.environ['KAVEON_ENGINE_URL'],
                      verify=os.environ.get('KAVEON_ENGINE_CA_CERT') or True, timeout=120,
                      headers={'Authorization': 'Bearer ' + os.environ['KAVEON_ENGINE_CATALOG_TOKEN'],
