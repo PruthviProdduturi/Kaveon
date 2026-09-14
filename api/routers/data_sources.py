@@ -122,6 +122,9 @@ def list_data_sources_metadata_only(request: Request, response: Response, user: 
 
 @router.get("/data-sources/favorite/current")
 def get_favorite_data_source(user: str = Depends(require_auth)):
+    if product_read_authority.enabled("sources"):
+        rows=_cutover_sources(user)
+        return {"success":True,"dataSource":next((row for row in rows if row.get("is_favorite")),None)}
     result = db.query(f"""
         SELECT {_PUBLIC_FIELDS}
         FROM favorites fav
@@ -321,6 +324,10 @@ def delete_data_source(ds_id: str, ctx=Depends(require_min_role("Admin"))):
 
 @router.post("/data-sources/{ds_id}/test")
 def test_data_source(ds_id: str, user: str = Depends(require_auth)):
+    if product_read_authority.enabled("sources"):
+        document=product_read_authority.read_document("sources",f"data-{int(ds_id)}",user,"Viewer")
+        if not document:raise HTTPException(404,"Data source not found")
+        return {"success":True,"message":"Connection test not yet implemented","database":document.get("database_name"),"type":document.get("source_type")}
     row = db.query_one("SELECT database_name, type FROM data_sources WHERE id = @param0", [int(ds_id)])
     if not row:
         raise HTTPException(status_code=404, detail="Data source not found")
@@ -330,6 +337,12 @@ def test_data_source(ds_id: str, user: str = Depends(require_auth)):
 
 @router.post("/data-sources/{ds_id}/favorite")
 def set_ds_favorite(ds_id: str, user: str = Depends(require_auth)):
+    if product_read_authority.enabled("sources"):
+        from services import favorites
+        document=product_read_authority.read_document("sources",f"data-{int(ds_id)}",user,"Viewer")
+        if not document:raise HTTPException(404,"Data source not found")
+        favorites.create_favorite({"object_type":"source","object_id":f"data-{int(ds_id)}","object_name":document.get("name") or "Unknown"},user)
+        return {"success":True,"message":"Data source set as favorite"}
     ds = db.query_one("SELECT id, name FROM data_sources WHERE id = @param0", [int(ds_id)])
     if not ds:
         raise HTTPException(status_code=404, detail="Data source not found")
@@ -344,6 +357,10 @@ def set_ds_favorite(ds_id: str, user: str = Depends(require_auth)):
 
 @router.delete("/data-sources/{ds_id}/favorite")
 def remove_ds_favorite(ds_id: str, user: str = Depends(require_auth)):
+    if product_read_authority.enabled("sources"):
+        from services import favorites
+        favorites.delete_favorite(user,"source",f"data-{int(ds_id)}")
+        return {"success":True,"message":"Favorite removed"}
     db.execute(
         "DELETE FROM favorites WHERE user_email = @param0 AND object_id = @param1 AND object_type = 'data_source'",
         [user, str(ds_id)]

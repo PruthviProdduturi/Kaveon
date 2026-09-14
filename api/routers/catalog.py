@@ -18,6 +18,7 @@ from middleware.auth import UserContext
 from middleware.permissions import require_min_role
 from routers import lab
 from services import engine_bridge
+from services import product_read_authority
 from services.datasets import _vis_clause
 
 router = APIRouter(tags=["catalog"])
@@ -109,6 +110,47 @@ def get_table_usage(source_id: str, schema: str, table: str, response: Response,
     list is filtered by the caller's visibility, exactly as the Library is."""
     response.headers.update(lab.NO_CACHE)
     catalog = lab._engine_source(source_id)["engine_catalog"]
+    if product_read_authority.enabled("datasets"):
+        dataset_documents = product_read_authority.list_documents("datasets", ctx.email, ctx.role)
+
+        def uses_table(document):
+            used = document.get("tables_used") or []
+            if isinstance(used, str):
+                try:
+                    used = json.loads(used)
+                except (TypeError, ValueError):
+                    used = [used]
+            names = {
+                str(item.get("table") or item.get("name")) if isinstance(item, dict) else str(item)
+                for item in used if item is not None
+            }
+            return (
+                document.get("database_name") == catalog
+                and document.get("schema_name") == schema
+                and (document.get("fact_table") == table or table in names or f"{schema}.{table}" in names)
+            )
+
+        datasets = [document for document in dataset_documents if uses_table(document)]
+        dataset_ids = {str(document.get("id")) for document in datasets}
+        charts = [document for document in product_read_authority.list_documents("charts", ctx.email, ctx.role)
+                  if str(document.get("dataset_id")) in dataset_ids]
+        chart_ids = {str(document.get("id")) for document in charts}
+        dashboards = [document for document in product_read_authority.list_documents("dashboards", ctx.email, ctx.role)
+                      if _ids(document.get("charts")) & chart_ids]
+        definitions = product_read_authority.list_documents("dlm_definitions", ctx.email, ctx.role)
+        dlm = [document for document in definitions if str(document.get("dataset_id")) in dataset_ids]
+        return {
+            "success": True,
+            "datasets": [{"id": row.get("id"), "name": row.get("dataset_name") or row.get("name"),
+                          "visibility": row.get("visibility")} for row in datasets],
+            "charts": [{"id": row.get("id"), "name": row.get("name"),
+                        "datasetId": row.get("dataset_id")} for row in charts],
+            "dashboards": [{"id": row.get("id"), "name": row.get("name"), "slug": row.get("slug")}
+                           for row in dashboards],
+            "dlm": [{"datasetId": row.get("dataset_id"), "status": row.get("status") or "ready",
+                     "builtAt": row.get("built_at"), "rowCount": row.get("row_count"),
+                     "rowCountSource": row.get("row_count_source")} for row in dlm],
+        }
     # Match the dataset's fact table, or a table it declares in tables_used.
     datasets = db.query(
         f"SELECT d.id, d.dataset_name, d.visibility, d.created_by FROM dbo.datasets d "

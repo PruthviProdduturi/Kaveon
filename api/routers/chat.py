@@ -10,7 +10,7 @@ POST /api/v1/chat
 """
 
 from typing import Optional, List
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 import time
 import re
@@ -20,6 +20,7 @@ from middleware.auth import require_user_context, UserContext
 import database.metadata as db
 import database.pool as pool
 from services import product_outbox
+from services import postgresql_retirement_runtime
 from services.chat_history_backfill import message_document, session_document
 
 router = APIRouter()
@@ -389,6 +390,8 @@ def _save_message(session_id: int, owner_email: str, role: str, content: str,
 
 @router.post("/chat")
 def chat(req: ChatRequest, ctx: UserContext = Depends(require_user_context)):
+    if postgresql_retirement_runtime.requested():
+        raise HTTPException(status_code=503, detail="Legacy direct chat is unavailable after PostgreSQL retirement; use the DLM context API.")
     t0 = time.time()
     question = _fix_typos(req.question.strip())
 
