@@ -1,16 +1,59 @@
 """Dashboards service — port of dashboards.service.ts."""
 
 import json
+import os
 import uuid
 import re
 from datetime import datetime, timezone
 from typing import List, Optional
 import database.metadata as db
-from services import product_shadow_read
+from services import dashboard_backfill, product_outbox, product_shadow_read, product_store
 
 VALID_VISIBILITY = {"private", "internal", "published"}
 
 _thumb_dark_ready = False
+
+
+def _outbox_enabled() -> bool:
+    return os.getenv("KAVEON_DASHBOARD_OUTBOX_ENABLED") == "true"
+
+
+def _outbox_document(transaction, dashboard_id: str) -> dict:
+    row = transaction.query_one("""SELECT id,name,description,layout,charts,filters,theme,visibility,
+        is_published,is_archived,created_by,modified_by,created_at,modified_at
+        FROM dashboards WHERE id=@param0""", [dashboard_id])
+    if not row:
+        raise RuntimeError("Dashboard disappeared before outbox capture")
+    owner, record_id = str(row.get("created_by") or ""), str(row["id"])
+    if not owner:
+        raise RuntimeError("Dashboard owner is unavailable for outbox capture")
+    chart_ids = dashboard_backfill._json(row.get("charts"), "charts", [])
+    if len(chart_ids) > dashboard_backfill.MAX_CHART_REFS or len({str(value) for value in chart_ids}) != len(chart_ids):
+        raise RuntimeError("Dashboard chart references are invalid")
+    revisions = {}
+    for chart_id in sorted(str(value) for value in chart_ids):
+        chart = product_store.read("chart", chart_id, owner, "Admin")
+        revision = chart.get("revision") if chart else None
+        if type(revision) is not int or revision < 1:
+            raise RuntimeError(f"KaveonDB chart {chart_id} revision is unavailable for dashboard outbox capture")
+        revisions[chart_id] = revision
+    visibility = row.get("visibility") or "internal"
+    if visibility not in VALID_VISIBILITY:
+        raise RuntimeError("Dashboard visibility is invalid")
+    return {"id": record_id, "name": row.get("name"), "description": row.get("description"),
+        "layout": dashboard_backfill._json(row.get("layout"), "layout", []), "charts": chart_ids,
+        "chart_revisions": revisions, "filters": dashboard_backfill._json(row.get("filters"), "filters", []),
+        "theme": row.get("theme"), "visibility": visibility,
+        "is_published": bool(row.get("is_published")), "is_archived": bool(row.get("is_archived")),
+        "created_by": owner, "modified_by": str(row.get("modified_by") or owner),
+        "created_at": dashboard_backfill._text(row.get("created_at")),
+        "updated_at": dashboard_backfill._text(row.get("modified_at"))}
+
+
+def _enqueue(transaction, operation: str, dashboard_id: str, actor: str, owner: str | None = None) -> None:
+    document = {} if operation == "delete" else _outbox_document(transaction, dashboard_id)
+    product_outbox.enqueue(transaction, family="dashboards", operation=operation, record_id=dashboard_id,
+                           payload=document, actor=actor, owner=owner or document.get("created_by") or actor)
 
 
 def _ensure_thumbnail_dark_column() -> None:
@@ -132,13 +175,14 @@ def create_dashboard(data: dict, user_id: str) -> dict:
             return v
         return json.dumps(v) if v is not None else "[]"
 
-    db.execute("""
+    statement = """
         INSERT INTO dashboards (id, name, slug, description, layout, charts, filters,
                                theme, tags, visibility, is_published, is_archived,
                                created_by, modified_by, created_at, modified_at)
         VALUES (@param0, @param1, @param2, @param3, @param4, @param5, @param6,
                 @param7, @param8, @param9, @param10, @param11, @param12, @param13, @param14, @param15)
-    """, [
+    """
+    params = [
         d_id, data["name"], slug, data.get("description"),
         _to_str(data.get("layout", [])),
         _to_str(data.get("charts", [])),
@@ -147,14 +191,20 @@ def create_dashboard(data: dict, user_id: str) -> dict:
         bool(data.get("is_published")),
         bool(data.get("is_archived")),
         user_id, user_id, now, now,
-    ])
+    ]
+    if _outbox_enabled():
+        with db.transaction() as transaction:
+            transaction.execute(statement, params)
+            _enqueue(transaction, "create", d_id, user_id)
+    else:
+        db.execute(statement, params)
     created = get_dashboard_by_id(d_id)
     if not created:
         raise RuntimeError("Failed to retrieve created dashboard")
     return created
 
 
-def update_dashboard(dashboard_id: str, data: dict) -> Optional[dict]:
+def update_dashboard(dashboard_id: str, data: dict, actor: str | None = None) -> Optional[dict]:
     if not get_dashboard_by_id(dashboard_id):
         return None
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -191,12 +241,30 @@ def update_dashboard(dashboard_id: str, data: dict) -> Optional[dict]:
     updates.append(f"modified_at = @param{i}"); params.append(now); i += 1
     params.append(dashboard_id)
 
-    db.execute(f"UPDATE dashboards SET {', '.join(updates)} WHERE id = @param{i}", params)
+    statement = f"UPDATE dashboards SET {', '.join(updates)} WHERE id = @param{i}"
+    if _outbox_enabled():
+        if not actor:
+            raise RuntimeError("Dashboard outbox capture requires actor identity")
+        with db.transaction() as transaction:
+            transaction.execute(statement, params)
+            _enqueue(transaction, "update", dashboard_id, actor)
+    else:
+        db.execute(statement, params)
     return get_dashboard_by_id(dashboard_id)
 
 
-def delete_dashboard(dashboard_id: str) -> bool:
-    return db.execute("DELETE FROM dashboards WHERE id = @param0", [dashboard_id]) > 0
+def delete_dashboard(dashboard_id: str, actor: str | None = None) -> bool:
+    if not _outbox_enabled():
+        return db.execute("DELETE FROM dashboards WHERE id = @param0", [dashboard_id]) > 0
+    if not actor:
+        raise RuntimeError("Dashboard outbox capture requires actor identity")
+    with db.transaction() as transaction:
+        row = transaction.query_one("SELECT created_by FROM dashboards WHERE id=@param0 FOR UPDATE", [dashboard_id])
+        if not row:
+            return False
+        deleted = transaction.execute("DELETE FROM dashboards WHERE id = @param0", [dashboard_id]) > 0
+        _enqueue(transaction, "delete", dashboard_id, actor, str(row["created_by"]))
+        return deleted
 
 
 def count_dashboards() -> int:

@@ -400,9 +400,8 @@ identity, dataset reference, query/viz configuration, visibility, ownership and
 timestamps. PostgreSQL-only favorite, joined dataset name, thumbnail preview and
 compatibility aliases are excluded. Each side is bounded at 1 MiB. Telemetry
 contains only record ID, match/missing/mismatch status, hashes, sizes and target
-generation, while PostgreSQL continues to supply the response. Chart lists and
-all chart writes remain outside this slice because charts do not yet have the
-source outbox/backfill foundation that datasets have.
+generation, while PostgreSQL continues to supply the response. Chart lists
+remain outside this slice.
 
 ## Chart snapshot backfill
 
@@ -418,7 +417,11 @@ all datasets at one target snapshot. The chart document and typed Engine
 reference bind the exact dataset revision. `scripts/backfill-charts.py` is dry-run
 by default; apply also requires `KAVEON_CHART_MIGRATION_ENABLED=true`. The 8 MiB
 integrity-checked checkpoint advances by atomic replacement only after exact
-owner-scoped reconciliation. No writer/outbox, scheduler, live run or cutover
+owner-scoped reconciliation. With `KAVEON_CHART_OUTBOX_ENABLED=true`, modern and
+legacy chart create, update and delete operations append their canonical event
+inside the same PostgreSQL transaction. The event binds the current KaveonDB
+dataset revision; missing reference state or event failure rolls the source
+mutation back. The control defaults off. No scheduler, live run or cutover
 exists, so PostgreSQL remains authoritative.
 
 ## Dashboard snapshot and shadow parity
@@ -439,8 +442,12 @@ atomic replacement and exact retry after ambiguous commits.
 Set `KAVEON_DASHBOARD_SHADOW_READ_ENABLED=true` to compare authenticated point
 reads. PostgreSQL still supplies the response. Telemetry contains only record ID,
 status, hashes, sizes and target generation; request decorations and documents
-are excluded. Filter-level dataset references, list parity, mutation outbox,
-scheduling and cutover remain pending.
+are excluded. With `KAVEON_DASHBOARD_OUTBOX_ENABLED=true`, create, update and
+delete append one canonical event inside the source transaction. The document
+binds every chart reference to its current KaveonDB revision; missing reference
+state or event failure rolls the source mutation back. The control defaults
+off. Filter-level dataset references, list parity, scheduling and cutover remain
+pending.
 
 ## DLM definition record
 

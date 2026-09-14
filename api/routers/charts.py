@@ -65,7 +65,7 @@ def update_chart(
     if payload.get("visibility") == "published" and not can_publish(ctx):
         payload["visibility"] = "internal"
 
-    result = svc.update_chart(chart_id, payload)
+    result = svc.update_chart(chart_id, payload, ctx.email)
     if not result:
         raise HTTPException(status_code=404, detail="Chart not found")
     return result
@@ -87,7 +87,7 @@ def patch_chart(
     if payload.get("visibility") == "published" and not can_publish(ctx):
         payload["visibility"] = "internal"
 
-    result = svc.update_chart(chart_id, payload)
+    result = svc.update_chart(chart_id, payload, ctx.email)
     if not result:
         raise HTTPException(status_code=404, detail="Chart not found")
     return result
@@ -100,7 +100,7 @@ def delete_chart(chart_id: str, ctx: UserContext = Depends(require_user_context)
         raise HTTPException(status_code=404, detail="Chart not found")
     if not can_write(existing["created_by"], ctx):
         raise HTTPException(status_code=403, detail="You don't have permission to delete this chart")
-    svc.delete_chart(chart_id)
+    svc.delete_chart(chart_id, ctx.email)
     # Also purge it from every user's recents (id is prefixed by type).
     try:
         recents_svc.remove_recent_all_users(f"chart-{chart_id}", "chart")
