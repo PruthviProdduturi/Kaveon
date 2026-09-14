@@ -225,6 +225,36 @@ are absent, securely migrated, or deliberately deleted. Secret values must
 never be placed in ordinary product records or retirement evidence.
 
 Reconciliation jobs produce one strict, content-free JSON report per family.
+After every backfill job has uploaded its final checkpoint, run the API-image
+collector against locally hydrated copies of those durable checkpoints and the
+live Engine endpoint. The collector performs read-only, snapshot-pinned target
+enumeration and refuses missing or extra records as well as content drift:
+
+```powershell
+$env:KAVEON_RECONCILIATION_REPORT_COLLECTION_ENABLED = "true"
+python -m services.postgresql_reconciliation_report_cli `
+  --manifest /evidence/reconciliation-manifest.json `
+  --output-directory /evidence/family-reports
+```
+
+The manifest has exactly four fields: `schema_version` (`1`), `checkpoints`,
+`live_inventory`, and `special_reports`. `checkpoints` must name completed,
+tamper-evident files for `datasets`, `charts`, `dashboards`, `favorites`,
+`saved_queries`, `user_themes`, `user_recents`, `query_history`, `activity`,
+`sources`, `chat_history`, `dlm_definitions`, and `dlm_runs`. Paths are relative
+to the manifest unless absolute. `special_reports` must name independently
+verified `context_cache` and `dlm_generation` reports.
+
+The command derives `dataset_semantics` only from semantic children embedded in
+the exactly matched dataset documents. It emits an `ai_configuration` report
+only when the integrity-bound live inventory shows zero rows in both legacy AI
+tables. The context-cache report must already prove deterministic rebuild,
+write fencing, deletion, and zero remaining rows. DLM generation requires both
+definition and run checkpoints to match live KaveonDB plus its separate report;
+the command never turns those two checkpoints into evidence for generated
+answers, routers, sketches, or value indexes. It creates the output directory
+atomically only after all 16 families pass.
+
 The local collector verifies each report's canonical SHA-256 and exact family
 identity before assembling the gate input:
 
