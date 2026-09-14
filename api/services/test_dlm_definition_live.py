@@ -13,7 +13,9 @@ class DlmDefinitionMutationTests(unittest.TestCase):
         dataset = {"revision": 7, "document": {"created_by": "owner@example.test"}}
         with patch.object(mutations.product_store, "read", side_effect=[dataset, None]), \
              patch.object(mutations.product_outbox, "enqueue", return_value="event") as enqueue:
-            self.assertEqual(mutations.publish_ready(transaction, "42", "actor@example.test"), "event")
+            publication = mutations.publish_ready(transaction, "42", "actor@example.test")
+            self.assertEqual((publication.event, publication.owner, publication.revision),
+                             ("event", "owner@example.test", 1))
         self.assertEqual(enqueue.call_args.kwargs, {
             "family": "dlm_definitions", "operation": "create", "record_id": "42",
             "payload": {"dataset_id": "42", "dataset_revision": 7},

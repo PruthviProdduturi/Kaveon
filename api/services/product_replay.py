@@ -23,6 +23,7 @@ _KINDS = {
     "chat_sessions": "chat_session",
     "chat_messages": "chat_message",
     "dlm_definitions": "dlm_definition",
+    "dlm_runs": "dlm_run",
 }
 
 
@@ -75,8 +76,16 @@ def apply_event(event: dict) -> int | None:
             "update", kind, record_id, document, int(target["revision"])
         )
 
+    if kind == "dlm_run" and operation == "create":
+        building = {**document, "status": "building", "artifact": None}
+        mutations = [
+            product_store.ProductMutation("create", kind, record_id, building),
+            product_store.ProductMutation("update", kind, record_id, document, 1),
+        ]
+    else:
+        mutations = [mutation]
     try:
-        committed = product_store.transact([mutation], owner, "Admin")
+        committed = product_store.transact(mutations, owner, "Admin")
     except HTTPException as error:
         if error.status_code != 409:
             raise

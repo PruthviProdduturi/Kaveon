@@ -79,7 +79,7 @@ def generate(dataset_id: str, force: bool = Query(default=False),
 @router.get("/datasets/{dataset_id}/dlm")
 def status(dataset_id: str, ctx: UserContext = Depends(require_user_context)):
     """Return the compiled artifact, or 404 if it has not been generated yet."""
-    art = dlm.get_dlm(dataset_id)
+    art = dlm.get_dlm(dataset_id, ctx.email, ctx.role)
     if not art:
         raise HTTPException(status_code=404, detail="DLM not generated for this dataset")
     try:

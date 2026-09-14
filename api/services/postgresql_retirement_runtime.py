@@ -92,6 +92,11 @@ def validate(*, now: datetime | None = None) -> dict:
         if unknown:
             detail.append("unknown: " + ", ".join(unknown))
         raise RuntimeError("KaveonDB authority-family configuration is incomplete (" + "; ".join(detail) + ")")
+    from services import product_read_authority
+    runtime_reads = {item.strip().lower() for item in
+        os.getenv(product_read_authority.ENVIRONMENT_KEY, "").split(",") if item.strip()}
+    if runtime_reads != set(product_read_authority.SUPPORTED_FAMILIES):
+        raise RuntimeError("KaveonDB runtime read-authority configuration is incomplete")
     current = now or datetime.now(timezone.utc)
     try:
         max_age = int(os.getenv(MAX_AGE_KEY, "24"))
@@ -126,6 +131,11 @@ def validate(*, now: datetime | None = None) -> dict:
     engine_bridge._verify_context()
     if not os.getenv("KAVEON_ENGINE_BRIDGE_TOKEN"):
         raise RuntimeError("KaveonDB bridge credential is not configured")
+    from services import dlm_compiled_artifact
+    if os.getenv(dlm_compiled_artifact.LIVE_PUBLISH_KEY) != "true":
+        raise RuntimeError("Live compiled DLM artifact publication is not enabled")
+    if not os.getenv("KAVEON_ADLS_ACCOUNT") or not os.getenv("KAVEON_ADLS_CONTAINER"):
+        raise RuntimeError("Compiled DLM artifact storage is not configured")
     return {
         "enabled": True,
         "authority": "kaveondb",

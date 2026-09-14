@@ -341,7 +341,8 @@ ALTER TABLE product_migration_outbox DROP CONSTRAINT IF EXISTS ck_product_outbox
 ALTER TABLE product_migration_outbox ADD CONSTRAINT ck_product_outbox_family CHECK
     (family IN ('datasets','charts','dashboards','saved_queries','user_themes',
                 'user_recents','favorites','catalog_sources','data_sources',
-                'activity','chat_sessions','chat_messages','dlm_definitions'));
+                'activity','chat_sessions','chat_messages','dlm_definitions',
+                'dlm_runs','query_history'));
 CREATE INDEX IF NOT EXISTS idx_product_outbox_unapplied
     ON product_migration_outbox(source_sequence) WHERE applied_at IS NULL;
 
