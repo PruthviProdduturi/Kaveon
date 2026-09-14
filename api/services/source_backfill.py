@@ -6,6 +6,10 @@ import database.metadata as db
 from services import product_store
 MAX_SOURCES=10_000
 FORBIDDEN=("password","secret","token","credential","connection_string","cipher")
+LEGACY_CATALOG_KEYS=frozenset({"source_kind","source_id","name","catalog_identity",
+ "source_type","database_name","region","description","is_active","lifecycle","secret_ref"})
+CATALOG_RUNTIME_KEYS=frozenset({"storage_config","data_format","credential_kind",
+ "credential_ref","adapter_type","adapter_config","created_by","modified_by","created_at","modified_at"})
 @dataclass(frozen=True)
 class SourceRecord: record_id:str; owner_principal:str; document:dict; payload_sha256:str
 @dataclass(frozen=True)
@@ -76,12 +80,24 @@ def capture_snapshot():
   doc={"source_kind":"data","source_id":rid,"name":row.get("name"),"catalog_identity":row.get("database_name"),"source_type":row.get("type"),"database_name":row.get("database_name"),"region":row.get("region"),"description":row.get("description"),"is_active":bool(row.get("is_active")),"lifecycle":"active" if row.get("is_active") else "suspended","secret_ref":f"key-managed:data_sources/{row['id']}"}
   records.append(SourceRecord(rid,owner,doc,_canonical(doc)[1]))
  records=tuple(sorted(records,key=lambda r:r.record_id));s=SourceSnapshot(int(wm.get("watermark") or 0),records,digest(records));validate_snapshot(s);return s
+def _compatible_legacy_catalog(current,desired):
+ return (desired.get("source_kind")=="catalog" and set(current)==LEGACY_CATALOG_KEYS
+         and set(desired)==LEGACY_CATALOG_KEYS|CATALOG_RUNTIME_KEYS
+         and all(current[key]==desired[key] for key in LEGACY_CATALOG_KEYS))
 def apply_and_reconcile(s):
- validate_snapshot(s);created=present=0
+ validate_snapshot(s);created=present=repaired=0
  for r in s.records:
   target=product_store.read("source",r.record_id,r.owner_principal,"Admin")
   if target is not None and target.get("document")==r.document:present+=1;continue
-  if target is not None:raise RuntimeError(f"KaveonDB source {r.record_id} diverges")
+  if target is not None:
+   revision=target.get("revision")
+   if not _compatible_legacy_catalog(target.get("document"),r.document) or type(revision) is not int or revision<1:
+    raise RuntimeError(f"KaveonDB source {r.record_id} diverges")
+   try:product_store.transact([product_store.ProductMutation("update","source",r.record_id,r.document,revision)],r.owner_principal,"Admin")
+   except HTTPException as e:
+    resolved=product_store.read("source",r.record_id,r.owner_principal,"Admin")
+    if e.status_code not in (409,412) or resolved is None or resolved.get("document")!=r.document:raise
+   repaired+=1;continue
   try:product_store.transact([product_store.ProductMutation("create","source",r.record_id,r.document)],r.owner_principal,"Admin")
   except HTTPException as e:
    resolved=product_store.read("source",r.record_id,r.owner_principal,"Admin")
@@ -90,4 +106,4 @@ def apply_and_reconcile(s):
  for r in s.records:
   target=product_store.read("source",r.record_id,r.owner_principal,"Admin")
   if target is None or target.get("document")!=r.document:raise RuntimeError("source reconciliation failed")
- return {"family":"sources","source_watermark":s.source_watermark,"source_count":len(s.records),"created":created,"already_present":present,"reconciled":len(s.records),"snapshot_sha256":s.snapshot_sha256}
+ return {"family":"sources","source_watermark":s.source_watermark,"source_count":len(s.records),"created":created,"already_present":present,"repaired":repaired,"reconciled":len(s.records),"snapshot_sha256":s.snapshot_sha256}
