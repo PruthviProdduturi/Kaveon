@@ -638,3 +638,13 @@ the requester's role and binds the expected document to the exact visible
 KaveonDB dataset revision and PostgreSQL owner. Telemetry contains hashes and
 counts rather than definition contents. Generated answers and context caches
 remain rebuild-and-retire authorities with separate evidence gates.
+
+Existing ready DLMs migrate with `scripts/backfill-dlm-runs.py`. The command
+captures the manifest, statistics, usage rollup, source hash, build identity and
+indexed-value count in one repeatable-read PostgreSQL snapshot. It create-only
+stages canonical `compiled.json` bytes, publishes them immutably to ADLS, and
+reconciles the exact remote bytes before committing the revision-bound
+KaveonDB `dlm_run`. Apply uses the shared durable ADLS checkpoint store. After
+a pod replacement, ephemeral artifact staging is regenerated from PostgreSQL
+and must match every checkpointed path and SHA-256 before resume advances.
+The migration reads PostgreSQL only and never deletes source rows.
