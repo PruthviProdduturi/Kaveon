@@ -79,6 +79,29 @@ class ProductStoreTests(unittest.TestCase):
             product_store.read("dataset", "../unsafe", "alice@example.com", "Admin")
         self.assertEqual(id_error.exception.status_code, 422)
 
+    def test_list_records_paginates_one_immutable_snapshot(self):
+        pages = [
+            {"snapshot_id": "snapshot-1", "records": [{"document": {"id": "1"}}], "next_cursor": "next"},
+            {"snapshot_id": "snapshot-1", "records": [{"document": {"id": "2"}}], "next_cursor": None},
+        ]
+        with patch.object(product_store.engine_bridge, "_request", side_effect=pages) as request:
+            records = product_store.list_records("dataset", "alice@example.com", "Admin")
+        self.assertEqual([record["document"]["id"] for record in records], ["1", "2"])
+        self.assertIn("cursor=next", request.call_args_list[1].args[1])
+
+    def test_list_records_rejects_snapshot_drift_and_malformed_records(self):
+        drift = [
+            {"snapshot_id": "one", "records": [], "next_cursor": "next"},
+            {"snapshot_id": "two", "records": [], "next_cursor": None},
+        ]
+        with patch.object(product_store.engine_bridge, "_request", side_effect=drift), \
+             self.assertRaisesRegex(HTTPException, "changed during pagination"):
+            product_store.list_records("dataset", "alice@example.com", "Admin")
+        with patch.object(product_store.engine_bridge, "_request", return_value={
+            "snapshot_id": "one", "records": [{"document": "invalid"}], "next_cursor": None,
+        }), self.assertRaisesRegex(HTTPException, "invalid product list record"):
+            product_store.list_records("dataset", "alice@example.com", "Admin")
+
 
 if __name__ == "__main__":
     unittest.main()

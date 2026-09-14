@@ -51,6 +51,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/v1/transaction/{transaction_id}/recovery", get(recovery))
         .route("/v1/transaction/metrics", get(metrics))
         .route("/v1/transaction/sql", post(execute_sql))
+        .route("/v1/products/{kind}", get(list_products))
         .route("/v1/product/{kind}/{id}", get(read_product))
 }
 
@@ -290,6 +291,58 @@ impl TransactionRegistry {
             generation: snapshot.generation,
             snapshot_id: snapshot.snapshot_id,
             document,
+        })
+    }
+
+    async fn list_products(
+        &self,
+        identity: &Identity,
+        kind: ProductRecordKind,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<ProductListResponse, RegistryError> {
+        let catalog = self.catalog.as_ref().ok_or(RegistryError::Disabled)?;
+        let snapshot = catalog.read_current().await.map_err(|error| match error {
+            kaveon_storage::CommitErrorKind::Missing | kaveon_storage::CommitErrorKind::Invalid => {
+                RegistryError::Corrupt
+            }
+            _ => RegistryError::Unavailable,
+        })?;
+        let page = snapshot
+            .product_records_page(kind, limit, cursor)
+            .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+        let mut records = Vec::with_capacity(page.records.len());
+        for record in page.records {
+            let owner = record.unique_values.get("owner_principal");
+            if identity.role != crate::security::Role::Admin
+                && owner.map(String::as_str) != Some(identity.principal.as_str())
+            {
+                continue;
+            }
+            let bytes = catalog
+                .fetch_product_document_at(&snapshot, kind, &record.id)
+                .await
+                .map_err(|error| match error {
+                    kaveon_storage::CommitErrorKind::Missing
+                    | kaveon_storage::CommitErrorKind::Invalid => RegistryError::Corrupt,
+                    _ => RegistryError::Unavailable,
+                })?
+                .ok_or(RegistryError::Corrupt)?;
+            let document = serde_json::from_slice(&bytes).map_err(|_| RegistryError::Corrupt)?;
+            records.push(ProductReadResponse {
+                kind,
+                id: record.id,
+                revision: record.revision,
+                generation: snapshot.generation,
+                snapshot_id: snapshot.snapshot_id.clone(),
+                document,
+            });
+        }
+        Ok(ProductListResponse {
+            generation: snapshot.generation,
+            snapshot_id: snapshot.snapshot_id,
+            records,
+            next_cursor: page.next_cursor,
         })
     }
 }
@@ -1194,6 +1247,46 @@ struct ProductReadResponse {
     generation: u64,
     snapshot_id: String,
     document: serde_json::Value,
+}
+
+#[derive(Serialize)]
+struct ProductListResponse {
+    generation: u64,
+    snapshot_id: String,
+    records: Vec<ProductReadResponse>,
+    next_cursor: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ProductListQuery {
+    #[serde(default = "default_product_list_limit")]
+    limit: usize,
+    #[serde(default)]
+    cursor: Option<String>,
+}
+
+fn default_product_list_limit() -> usize {
+    100
+}
+
+async fn list_products(
+    State(state): State<Arc<AppState>>,
+    Extension(identity): Extension<Identity>,
+    Path(kind): Path<String>,
+    Query(query): Query<ProductListQuery>,
+) -> Response {
+    let kind = match record_kind(&kind) {
+        Ok(kind) => kind,
+        Err(error) => return error_response(error),
+    };
+    match state
+        .product_transactions
+        .list_products(&identity, kind, query.limit, query.cursor.as_deref())
+        .await
+    {
+        Ok(page) => Json(page).into_response(),
+        Err(error) => error_response(error),
+    }
 }
 
 async fn read_product(
@@ -2483,6 +2576,67 @@ mod tests {
         assert!(matches!(
             registry
                 .read_product(&admin, ProductRecordKind::Dataset, "../unsafe")
+                .await,
+            Err(RegistryError::Invalid(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn product_list_is_bounded_paginated_and_owner_isolated() {
+        let (registry, _) = registry().await;
+        for (owner, id) in [("alice", "alpha"), ("bob", "bravo")] {
+            let begun = registry.begin(owner).await.unwrap();
+            registry
+                .stage_product_command(
+                    owner,
+                    &begun.transaction_id,
+                    ProductDmlCommand::Create {
+                        kind: "dataset".into(),
+                        id: id.into(),
+                        document_json: format!(r#"{{"name":"{id}"}}"#),
+                    },
+                )
+                .await
+                .unwrap();
+            let mut transaction = registry.take(owner, &begun.transaction_id).await.unwrap();
+            transaction.bind_request_digest(owner.as_bytes()).unwrap();
+            transaction.commit().await.unwrap();
+        }
+        let alice = Identity {
+            principal: "alice".into(),
+            display_identity: None,
+            role: crate::security::Role::Analyst,
+        };
+        let admin = Identity {
+            principal: "admin".into(),
+            display_identity: None,
+            role: crate::security::Role::Admin,
+        };
+        let owned = registry
+            .list_products(&alice, ProductRecordKind::Dataset, 100, None)
+            .await
+            .unwrap();
+        assert_eq!(owned.records.len(), 1);
+        assert_eq!(owned.records[0].id, "alpha");
+        let first = registry
+            .list_products(&admin, ProductRecordKind::Dataset, 1, None)
+            .await
+            .unwrap();
+        assert_eq!(first.records[0].id, "alpha");
+        let second = registry
+            .list_products(
+                &admin,
+                ProductRecordKind::Dataset,
+                1,
+                first.next_cursor.as_deref(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(second.records[0].id, "bravo");
+        assert!(second.next_cursor.is_none());
+        assert!(matches!(
+            registry
+                .list_products(&admin, ProductRecordKind::Dataset, 0, None)
                 .await,
             Err(RegistryError::Invalid(_))
         ));

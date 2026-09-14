@@ -125,6 +125,18 @@ def _adapt(row: dict, layout: str) -> dict:
     }
 
 
+def _adapt_product(document: dict) -> dict:
+    query_config = document.get("query_config") or {}
+    viz_config = document.get("viz_config") or {}
+    if not isinstance(query_config, dict) or not isinstance(viz_config, dict):
+        raise RuntimeError("KaveonDB chart configuration is invalid")
+    return {
+        **document, "config": {**query_config, **viz_config}, "sql_text": None,
+        "dataset_name": None, "thumbnail": None,
+        "owner": document.get("created_by"), "favorite": bool(document.get("favorite", False)),
+    }
+
+
 def _vis_clause(role_idx: int, email_idx: int, alias: str = "c") -> str:
     return (
         f"({alias}.visibility = 'published' "
@@ -135,6 +147,10 @@ def _vis_clause(role_idx: int, email_idx: int, alias: str = "c") -> str:
 
 
 def list_charts(user_email: str, role: str = "Viewer") -> List[dict]:
+    from services import product_read_authority
+    if product_read_authority.enabled("charts"):
+        return [_adapt_product(item) for item in
+                product_read_authority.list_documents("charts", user_email, role)]
     layout = _chart_schema()
     if layout == "legacy":
         return _legacy_list_charts(user_email, role)
@@ -166,7 +182,8 @@ def get_chart_by_id(chart_id: str, user_email: Optional[str] = None, role: str =
         )
         if document is not None:
             document.setdefault("favorite", False)
-        return document
+            return _adapt_product(document)
+        return None
     layout = _chart_schema()
     if layout == "legacy":
         return _legacy_get_chart(chart_id, user_email, role)
