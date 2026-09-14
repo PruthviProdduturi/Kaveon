@@ -37,6 +37,26 @@ class SourceMigrationTests(unittest.TestCase):
   with patch.object(b.product_store,"read",side_effect=targets),patch.object(b.product_store,"transact") as tx:
    self.assertEqual(b.apply_and_reconcile(s)["created"],2)
   self.assertEqual(tx.call_count,2)
+ def test_compatible_legacy_catalog_is_repaired_with_cas(self):
+  with patch.object(b.db,"transaction",return_value=transaction()):s=b.capture_snapshot()
+  catalog=s.records[0];legacy={key:catalog.document[key] for key in b.LEGACY_CATALOG_KEYS}
+  data=s.records[1]
+  targets=[{"document":legacy,"revision":7},{"document":data.document,"revision":2},
+           {"document":catalog.document,"revision":8},{"document":data.document,"revision":2}]
+  with patch.object(b.product_store,"read",side_effect=targets),patch.object(b.product_store,"transact") as tx:
+   report=b.apply_and_reconcile(s)
+  self.assertEqual(report["repaired"],1);self.assertEqual(report["already_present"],1)
+  mutation=tx.call_args.args[0][0]
+  self.assertEqual((mutation.operation,mutation.record_id,mutation.expected_revision),("update","catalog-1",7))
+  self.assertEqual(mutation.document,catalog.document)
+ def test_legacy_repair_rejects_changed_fields_extra_keys_and_missing_revision(self):
+  with patch.object(b.db,"transaction",return_value=transaction()):catalog=b.capture_snapshot().records[0]
+  legacy={key:catalog.document[key] for key in b.LEGACY_CATALOG_KEYS}
+  cases=[({**legacy,"name":"Other"},7),({**legacy,"unexpected":1},7),(legacy,None)]
+  for document,revision in cases:
+   with self.subTest(document=document,revision=revision),patch.object(b.product_store,"read",return_value={"document":document,"revision":revision}),patch.object(b.product_store,"transact") as tx,self.assertRaisesRegex(RuntimeError,"diverges"):
+    b.apply_and_reconcile(b.SourceSnapshot(0,(catalog,),b.digest((catalog,))))
+   tx.assert_not_called()
  def test_checkpoint_resume_is_bounded_and_enabled_explicitly(self):
   with patch.object(b.db,"transaction",return_value=transaction()):snapshot=b.capture_snapshot()
   with tempfile.TemporaryDirectory() as directory:
