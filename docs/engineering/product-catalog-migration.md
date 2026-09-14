@@ -623,3 +623,18 @@ KaveonDB accepts immutable `activity` records owned by the authenticated actor. 
 ## Chat history migration
 
 KaveonDB accepts separate owner-isolated `chat_session` and `chat_message` records. Messages bind to their session and preserve source IDs and creation timestamps for deterministic ordering. A repeatable-read snapshot caps sessions at 25,000, messages at 250,000 and each document at 1 MiB; orphaned messages and malformed JSON data fail closed. The default-dry checkpoint is capped at 64 MiB and requires `KAVEON_CHAT_HISTORY_MIGRATION_ENABLED=true`; sessions publish before messages and progress advances after exact record reconciliation. `KAVEON_CHAT_HISTORY_OUTBOX_ENABLED=true` makes explicit history-router session/message writes atomic, including session timestamp updates, and caps cascade deletion at 1,000 messages. `KAVEON_CHAT_HISTORY_SHADOW_READ_ENABLED=true` compares one session and at most 100 messages as the owner. All controls default off. The best-effort response writer in `routers/chat.py`, encryption/retention policy, live parity and cutover remain pending; PostgreSQL stays authoritative.
+
+## DLM definition migration
+
+A ready DLM publishes the canonical `dlm_definition` record
+`{dataset_id, dataset_revision}` through the PostgreSQL migration outbox. The
+artifact's final ready transition, statistics rollup and outbox event share one
+transaction. Publication fails closed unless the KaveonDB dataset exists, its
+owner matches the PostgreSQL dataset owner, and its committed revision is
+valid. Regeneration emits an update when the definition already exists.
+
+`KAVEON_DLM_DEFINITION_SHADOW_READ_ENABLED=true` compares the definition using
+the requester's role and binds the expected document to the exact visible
+KaveonDB dataset revision and PostgreSQL owner. Telemetry contains hashes and
+counts rather than definition contents. Generated answers and context caches
+remain rebuild-and-retire authorities with separate evidence gates.

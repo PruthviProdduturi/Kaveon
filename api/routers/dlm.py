@@ -70,7 +70,7 @@ class ServeChartBody(BaseModel):
 def generate(dataset_id: str, force: bool = Query(default=False),
              ctx: UserContext = Depends(require_min_role("Analyst"))):
     """Encode the dataset into its DLM artifact. Idempotent unless force=true."""
-    result = dlm.generate_dlm(dataset_id, force=force)
+    result = dlm.generate_dlm(dataset_id, force=force, actor=ctx.email)
     if not result.get("ok"):
         raise HTTPException(status_code=404, detail=result.get("reason", "generate_failed"))
     return result
@@ -82,6 +82,21 @@ def status(dataset_id: str, ctx: UserContext = Depends(require_user_context)):
     art = dlm.get_dlm(dataset_id)
     if not art:
         raise HTTPException(status_code=404, detail="DLM not generated for this dataset")
+    try:
+        source = dlm.datasets_svc.get_dataset_by_id(dataset_id, ctx.email, ctx.role)
+        if source:
+            from services import product_shadow_read
+            report = product_shadow_read.observe_dlm_definition(
+                dataset_id, str(source.get("created_by") or ""), ctx.email, ctx.role,
+            )
+            if report.get("enabled"):
+                import logging
+                logging.getLogger(__name__).info("dlm_definition_shadow %s", report)
+    except Exception as error:
+        import logging
+        logging.getLogger(__name__).warning(
+            "dlm_definition_shadow_error type=%s", type(error).__name__
+        )
     return art
 
 

@@ -230,7 +230,7 @@ def ensure_tables() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
+def generate_dlm(dataset_id: str, force: bool = False, actor: Optional[str] = None) -> Dict[str, Any]:
     """Compile (or refresh) the DLM artifact for one dataset. Idempotent: a
     matching ``source_hash`` short-circuits unless *force*. Returns a summary."""
     import time as _time
@@ -318,7 +318,7 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
     # 7) persist artifact + value index + router summary atomically-ish
     _persist_value_index(str(dataset_id), value_rows)
     _upsert_artifact(str(dataset_id), manifest, stats_rollup, usage_rollup,
-                     source_hash, "ready" if stats_supported else "unsupported")
+                     source_hash, "building" if stats_supported else "unsupported")
     _upsert_router(str(dataset_id), ds, columns, metrics, value_rows)
 
     # refresh the cached effective spec so precompute (and serving) see the freshly
@@ -337,12 +337,6 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
     _SKETCH_CACHE.pop(str(dataset_id), None)
     _RANGE_CACHE.pop(str(dataset_id), None)
     artifact_status = "ready" if stats_supported or answers > 0 or value_rows else "unsupported"
-    if artifact_status == "ready" and not stats_supported:
-        meta.execute(
-            "UPDATE dlm_artifact SET status = 'ready' WHERE dataset_id = @param0",
-            [str(dataset_id)],
-        )
-
     # record generation timing (+ what drove it) into the stored stats rollup so
     # the dataset page can be transparent about how long it took and why.
     duration_ms = int((_time.time() - _gen_t0) * 1000)
@@ -387,11 +381,20 @@ def generate_dlm(dataset_id: str, force: bool = False) -> Dict[str, Any]:
         "method": "full_rebuild",
     }
 
-    try:
-        meta.execute("UPDATE dlm_artifact SET stats_rollup = @param0 WHERE dataset_id = @param1",
-                     [json.dumps(stats_rollup, default=str), str(dataset_id)])
-    except Exception:
-        pass
+    if artifact_status == "ready":
+        from services import dlm_definition_mutations
+        publication_actor = actor or str(ds.get("modified_by") or ds.get("created_by") or "")
+        with meta.transaction() as transaction:
+            changed = transaction.execute(
+                "UPDATE dlm_artifact SET status = 'ready', stats_rollup = @param0 "
+                "WHERE dataset_id = @param1",
+                [json.dumps(stats_rollup, default=str), str(dataset_id)],
+            )
+            if changed != 1:
+                raise RuntimeError("DLM artifact disappeared before ready publication")
+            dlm_definition_mutations.publish_ready(
+                transaction, str(dataset_id), publication_actor,
+            )
 
     return {
         "ok": True,

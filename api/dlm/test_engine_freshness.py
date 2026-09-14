@@ -1,7 +1,8 @@
+import contextlib
 import sys
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 if "pyodbc" not in sys.modules:
@@ -65,6 +66,9 @@ class ChartFreshnessTests(unittest.TestCase):
             stack.enter_context(patch.object(engine.profiler, "build_context", return_value={"supported": False}))
             stack.enter_context(patch.object(engine.meta, "query_one", return_value={"status": "ready"}))
             stack.enter_context(patch.object(engine.meta, "execute", lambda *a, **k: None))
+            transaction = SimpleNamespace(execute=Mock(return_value=1))
+            stack.enter_context(patch.object(engine.meta, "transaction", return_value=contextlib.nullcontext(transaction)))
+            stack.enter_context(patch("services.dlm_definition_mutations.publish_ready"))
             for name, value in stubs.items():
                 stack.enter_context(patch.object(engine, name, lambda *a, _v=value, **k: _v))
             precompute = stack.enter_context(patch.object(engine, "_precompute_answers", return_value=3))
