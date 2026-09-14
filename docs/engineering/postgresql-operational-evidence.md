@@ -49,6 +49,27 @@ object digests. Validating this manifest proves backup identity only. The
 restore job ID, and a matching restored inventory; never set these from a plan
 or an unexecuted command.
 
+Run the create-only rehearsal against a new `/restores/<job-id>/` prefix. The
+backup must include `state-inventory.json` and list its exact size, ETag, and
+SHA-256 in the immutable manifest. The command copies each listed object with
+`If-None-Match: *`, reads it back, recomputes the content-free state identity,
+and prints the strict `backup_identity` observation only after success:
+
+```powershell
+python scripts/rehearse-kaveondb-adls-restore.py restore `
+  --manifest tmp/kaveondb-backup-manifest.json `
+  --restore-prefix https://ACCOUNT.dfs.core.windows.net/CONTAINER/restores/RUN_ID/ `
+  --cleanup-manifest tmp/kaveondb-restore-cleanup.json
+```
+
+Cleanup is deliberately separate and binds every delete to the ETag returned
+by the rehearsal create. Review and archive the successful observation first:
+
+```powershell
+python scripts/rehearse-kaveondb-adls-restore.py cleanup `
+  --cleanup-manifest tmp/kaveondb-restore-cleanup.json
+```
+
 ### Live probe recorder
 
 Use `record-postgresql-operational-evidence.py` to execute the rehearsal probes.

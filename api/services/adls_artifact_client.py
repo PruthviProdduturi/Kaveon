@@ -57,6 +57,18 @@ class AzureArtifactClient:
                                     "If-None-Match": "*"})
         response.close()
 
+    def create_if_absent_with_etag(self, path: str, content: bytes) -> str:
+        response = self._request("PUT", path, content,
+                                 **{"Content-Type": "application/octet-stream",
+                                    "Content-Length": str(len(content)),
+                                    "x-ms-blob-type": "BlockBlob",
+                                    "If-None-Match": "*"})
+        etag = response.headers.get("ETag")
+        response.close()
+        if not etag:
+            raise RuntimeError("ADLS create-only write returned no ETag")
+        return etag
+
     def read(self, path: str, max_bytes: int) -> bytes | None:
         try:
             response = self._request("GET", path, Range=f"bytes=0-{max_bytes}")
@@ -69,6 +81,12 @@ class AzureArtifactClient:
         finally:
             response.close()
         return content
+
+    def delete_if_match(self, path: str, etag: str) -> None:
+        if not etag:
+            raise RuntimeError("ADLS cleanup requires an ETag")
+        response = self._request("DELETE", path, **{"If-Match": etag})
+        response.close()
 
 
 def from_env() -> AzureArtifactClient:
