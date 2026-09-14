@@ -20,15 +20,15 @@ def _observations():
         "outbox_drain": ({"pending_events": 0}, {"query_id": 7, "watermark": 42, "pending_before": 3, "pending_after": 0}),
         "write_fence": ({"enabled": True}, {"deployment_revision": "api@abc123", "readonly_probe_passed": True, "family_probes": probes}),
         "shadow_parity": ({"matched": True}, {"source_snapshot": DIGEST, "target_snapshot": "b" * 64, "family_probes": probes, "mismatch_count": 0}),
-        "restart_recovery": ({"verified": True}, {"postgresql_unavailable": True, "api_restarted": True, "studio_restarted": True, "probe_count": 16, "state_sha256_before": DIGEST, "state_sha256_after": DIGEST}),
-        "rollback": ({"verified": True}, {"cutover_revision": "api@abc123", "target_writes_fenced": True, "source_reads_restored": True, "source_writes_restored": True, "state_sha256_before": DIGEST, "state_sha256_after": DIGEST, "duration_seconds": 90}),
-        "backup_identity": ({"backup_id": "snapshot-1", "backup_sha256": "c" * 64, "restore_verified": True}, {"backup_id": "snapshot-1", "backup_sha256": "c" * 64, "restore_job_id": "restore-1", "source_inventory_sha256": DIGEST, "restored_inventory_sha256": DIGEST, "restored_table_count": 24}),
+        "restart_recovery": ({"verified": True}, {"postgresql_unavailable": True, "api_restarted": True, "studio_restarted": True, "probe_count": 16, "state_sha256_before": DIGEST, "state_sha256_after": DIGEST, "state_record_count_before":24,"state_record_count_after":24}),
+        "rollback": ({"verified": True}, {"cutover_revision": "api@abc123", "target_writes_fenced": True, "source_reads_restored": True, "source_writes_restored": True, "state_sha256_before": DIGEST, "state_sha256_after": DIGEST, "duration_seconds": 90,"rollback_operation_count":16,"rollback_operation_limit":100}),
+        "backup_identity": ({"backup_id": "snapshot-1", "backup_sha256": "c" * 64, "restore_verified": True}, {"backup_id": "snapshot-1", "backup_sha256": "c" * 64, "restore_job_id": "restore-1", "source_inventory_sha256": DIGEST, "restored_inventory_sha256": DIGEST, "restored_table_count": 24,"immutable_prefix":"https://account.dfs.core.windows.net/container/backups/snapshot-1/","manifest_sha256":"d"*64,"restore_executed":True}),
         "durable_checkpoint": ({"verified": True}, {"checkpoint_sha256_before": DIGEST, "checkpoint_sha256_after": DIGEST, "pod_uid_before": "pod-1", "pod_uid_after": "pod-2", "next_index_before": 8, "next_index_after": 10, "resume_completed": True}),
     }
 
 
 def _receipt(gate, details, observation):
-    value = {"schema_version": 1, "gate": gate, "checked_at": "2026-09-14T18:00:00Z",
+    value = {"schema_version": evidence.SCHEMA_VERSION, "gate": gate, "checked_at": "2026-09-14T18:00:00Z",
              "evidence_id": f"{gate}-run-1", "details": details, "observation": observation}
     value["receipt_sha256"] = hashlib.sha256(evidence._canonical(value)).hexdigest()
     return value

@@ -59,8 +59,17 @@ def _run_probe(gate, probe, *, runner=subprocess.run):
         raise RuntimeError(f"live operational probe output is oversized for {gate}")
     if result.returncode != 0:
         raise RuntimeError(f"live operational probe failed for {gate} with exit code {result.returncode}")
+    if stderr.strip():
+        raise RuntimeError(f"live operational probe returned unexpected stderr for {gate}")
+    def unique_object(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate JSON key")
+            value[key] = item
+        return value
     try:
-        observation = json.loads(stdout.decode("utf-8"))
+        observation = json.loads(stdout.decode("utf-8"), object_pairs_hook=unique_object)
     except (UnicodeDecodeError, ValueError) as error:
         raise RuntimeError(f"live operational probe returned invalid JSON for {gate}") from error
     if not isinstance(observation, dict):

@@ -8,7 +8,7 @@ from pathlib import Path
 from services import postgresql_retirement_gate as retirement
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MAX_RECEIPT_BYTES = 256 * 1024
 RECEIPT_KEYS = frozenset((
     "schema_version", "gate", "checked_at", "evidence_id", "details",
@@ -23,15 +23,18 @@ OBSERVATION_KEYS = {
     "restart_recovery": frozenset((
         "postgresql_unavailable", "api_restarted", "studio_restarted", "probe_count",
         "state_sha256_before", "state_sha256_after",
+        "state_record_count_before", "state_record_count_after",
     )),
     "rollback": frozenset((
         "cutover_revision", "target_writes_fenced", "source_reads_restored",
         "source_writes_restored", "state_sha256_before", "state_sha256_after",
         "duration_seconds",
+        "rollback_operation_count", "rollback_operation_limit",
     )),
     "backup_identity": frozenset((
         "backup_id", "backup_sha256", "restore_job_id", "source_inventory_sha256",
         "restored_inventory_sha256", "restored_table_count",
+        "immutable_prefix", "manifest_sha256", "restore_executed",
     )),
     "durable_checkpoint": frozenset((
         "checkpoint_sha256_before", "checkpoint_sha256_after", "pod_uid_before",
@@ -114,6 +117,8 @@ def _validate_observation(gate, value, details, *, max_rollback_seconds):
         after = _digest(value["state_sha256_after"], "post-restart state")
         if before != after or details["verified"] is not True:
             raise RuntimeError("restart rehearsal changed committed state")
+        if value["state_record_count_before"] != value["state_record_count_after"] or type(value["state_record_count_before"]) is not int or value["state_record_count_before"] < 1:
+            raise RuntimeError("restart rehearsal changed state inventory size")
     elif gate == "rollback":
         if not isinstance(value["cutover_revision"], str) or not value["cutover_revision"]:
             raise RuntimeError("rollback cutover revision is missing")
@@ -125,16 +130,25 @@ def _validate_observation(gate, value, details, *, max_rollback_seconds):
         duration = _positive_int(value["duration_seconds"], "rollback duration", allow_zero=True)
         if before != after or duration > max_rollback_seconds or details["verified"] is not True:
             raise RuntimeError("rollback rehearsal exceeded its recovery bound or changed state")
+        operations = _positive_int(value["rollback_operation_count"], "rollback operation count", allow_zero=True)
+        limit = _positive_int(value["rollback_operation_limit"], "rollback operation limit")
+        if limit > 10000 or operations > limit:
+            raise RuntimeError("rollback rehearsal exceeded its operation bound")
     elif gate == "backup_identity":
         if not isinstance(value["restore_job_id"], str) or not value["restore_job_id"]:
             raise RuntimeError("backup restore job ID is missing")
         source = _digest(value["source_inventory_sha256"], "source inventory")
         restored = _digest(value["restored_inventory_sha256"], "restored inventory")
         backup = _digest(value["backup_sha256"], "backup")
+        _digest(value["manifest_sha256"], "backup manifest")
+        prefix = value["immutable_prefix"]
+        if (not isinstance(prefix, str) or not prefix.startswith("https://") or
+                f"/backups/{value['backup_id']}/" not in prefix.rstrip("/") + "/" or "?" in prefix or "#" in prefix):
+            raise RuntimeError("backup immutable prefix is invalid")
         if value["backup_id"] != details["backup_id"] or backup != details["backup_sha256"]:
             raise RuntimeError("backup observation does not match gate details")
         _positive_int(value["restored_table_count"], "restored table count")
-        if source != restored or details["restore_verified"] is not True or not details["backup_id"]:
+        if source != restored or value["restore_executed"] is not True or details["restore_verified"] is not True or not details["backup_id"]:
             raise RuntimeError("backup restore inventory did not reconcile")
     else:
         before = _digest(value["checkpoint_sha256_before"], "pre-restart checkpoint")
