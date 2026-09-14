@@ -1,5 +1,6 @@
 {{- if .Values.api.retirementReports.enabled }}
 {{- $pvc := required "api.retirementReports.evidencePvc is required" .Values.api.retirementReports.evidencePvc }}
+{{- if and .Values.api.evidenceStorage.create (ne $pvc .Values.api.evidenceStorage.name) }}{{ fail "api.retirementReports.evidencePvc must name the chart-managed evidence PVC" }}{{ end }}
 apiVersion: batch/v1
 kind: Job
 metadata: {name: kaveon-context-retirement-report-{{ .Release.Revision }}, namespace: {{ .Values.namespace }}}

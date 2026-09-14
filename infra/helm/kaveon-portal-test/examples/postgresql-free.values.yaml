@@ -24,6 +24,13 @@ seed:
   credentialRef: kaveon-test-reader
 
 api:
+  evidenceStorage:
+    create: true
+    name: kaveon-retirement-evidence
+    storageClass: azurefile-csi
+    size: 1Gi
+    accessModes: [ReadWriteMany]
+    retain: true
   cutover:
     # First PostgreSQL-free boot: true/false. For final retirement, change only
     # these two values to false/true after the complete final audit is mounted.
@@ -31,7 +38,7 @@ api:
     retirementMode: false
     authorityFamilies: activity,ai_configuration,catalog_sources,charts,chat_history,context_cache,dashboards,data_sources,dataset_semantics,datasets,dlm_generation,favorites,query_history,saved_queries,user_recents,user_themes
     readAuthorityFamilies: activity,charts,chat_history,dashboards,datasets,dlm_definitions,favorites,query_history,saved_queries,sources,user_recents,user_themes
-    evidencePvc: <restricted-retirement-evidence-pvc>
+    evidencePvc: kaveon-retirement-evidence
     evidencePath: /retirement/postgresql-reconciliation-evidence.json
     auditPath: /retirement/postgresql-retirement-audit.json
     reportDirectory: /retirement/family-reports
@@ -76,7 +83,7 @@ api:
     checkpointPrefix: postgresql-retirement/<immutable-run-id>/dlm-runs
   retirementReports:
     enabled: false
-    evidencePvc: <restricted-retirement-evidence-pvc>
+    evidencePvc: kaveon-retirement-evidence
     maxAgeHours: 1
   postgresqlFreeSmoke:
     enabled: true
@@ -85,6 +92,6 @@ api:
     identity: <migrated-fixture-owner-email>
     datasetId: <visible-ready-dlm-dataset-id>
     question: <bounded-qualified-question>
-    evidencePvc: <restricted-retirement-evidence-pvc>
+    evidencePvc: kaveon-retirement-evidence
     outputFile: receipts/postgresql-free-smoke.json
     useCaCert: false

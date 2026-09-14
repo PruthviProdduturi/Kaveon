@@ -1,0 +1,25 @@
+{{- if .Values.api.evidenceStorage.create }}
+{{- $name := required "api.evidenceStorage.name is required when create=true" .Values.api.evidenceStorage.name }}
+{{- $_ := required "api.evidenceStorage.storageClass is required when create=true" .Values.api.evidenceStorage.storageClass }}
+{{- $_ := required "api.evidenceStorage.size is required when create=true" .Values.api.evidenceStorage.size }}
+{{- if not .Values.api.evidenceStorage.accessModes }}{{ fail "api.evidenceStorage.accessModes is required when create=true" }}{{ end }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Values.namespace }}
+{{- if .Values.api.evidenceStorage.retain }}
+  annotations:
+    helm.sh/resource-policy: keep
+{{- end }}
+  labels:
+    app.kubernetes.io/name: kaveon-retirement-evidence
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  accessModes:
+{{ toYaml .Values.api.evidenceStorage.accessModes | indent 4 }}
+  storageClassName: {{ .Values.api.evidenceStorage.storageClass | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.api.evidenceStorage.size | quote }}
+{{- end }}
