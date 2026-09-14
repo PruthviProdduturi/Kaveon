@@ -14,6 +14,7 @@ spec:
       ports:
         - {protocol: TCP, port: 8080}
 ---
+{{- if not (or .Values.api.cutover.retirementMode .Values.api.cutover.restartRehearsalMode) }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -29,3 +30,4 @@ spec:
         - podSelector: {matchLabels: {app: kaveon-portal-init}}
       ports:
         - {protocol: TCP, port: 5432}
+{{- end }}

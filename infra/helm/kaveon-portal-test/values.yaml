@@ -29,6 +29,43 @@ postgres:
     requests: {cpu: 250m, memory: 512Mi}
     limits: {cpu: "1", memory: 1Gi}
 api:
+  cutover:
+    # Final retirement and first PostgreSQL-free restart rehearsal are mutually
+    # exclusive. Runtime validation rejects incomplete evidence or family sets.
+    retirementMode: false
+    restartRehearsalMode: false
+    authorityFamilies: ""
+    readAuthorityFamilies: ""
+    evidencePvc: ""
+    evidencePath: /retirement/postgresql-reconciliation-evidence.json
+    auditPath: /retirement/postgresql-retirement-audit.json
+    reportDirectory: /retirement/family-reports
+    receiptDirectory: /retirement/receipts
+    maxAgeHours: 24
+    postgresqlWriteFence: false
+    liveDlmArtifactPublish: false
+    artifactAccount: ""
+    artifactContainer: ""
+    shadowReads:
+      sources: false
+      datasets: false
+      charts: false
+      dashboards: false
+      userThemes: false
+      favorites: false
+      userRecents: false
+      queryHistory: false
+      savedQueries: false
+      activity: false
+      chatHistory: false
+      dlmDefinitions: false
+    outbox:
+      charts: false
+      dashboards: false
+      savedQueries: false
+      queryHistory: false
+      activity: false
+      chatHistory: false
   productReplay:
     # Enable only after backfill and target credentials are qualified.
     enabled: false
