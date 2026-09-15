@@ -254,6 +254,42 @@ def require_dataset17_sentinel(payload):
     return True
 
 
+def baseline_sha256(payload):
+    """Identity of the complete validated, versioned canonical baseline payload."""
+    validate(payload)
+    return hashlib.sha256(_json(payload)).hexdigest()
+
+
+def baseline_observation(payload):
+    require_dataset17_sentinel(payload)
+    manifest = payload["manifest"]
+    if manifest["table_count"] != 7:
+        raise RuntimeError("PostgreSQL baseline must contain exactly seven tables")
+    digest = baseline_sha256(payload)
+    return {"baseline_evidence_id": digest, "baseline_sha256": digest,
+            "table_count": 7, "dataset17_utf8_verified": True}
+
+
+def restore_qualification_observation(payload, qualification, restore_job_id):
+    baseline = baseline_observation(payload)
+    if (not isinstance(restore_job_id, str) or not restore_job_id
+            or qualification != {
+                "source_inventory_sha256": payload["manifest"]["global_sha256"],
+                "restored_inventory_sha256": payload["manifest"]["global_sha256"],
+                "restored_table_count": 7, "restore_verified": True}):
+        raise RuntimeError("PostgreSQL baseline restore qualification is invalid")
+    return {"baseline_evidence_id": baseline["baseline_evidence_id"],
+            "baseline_sha256": baseline["baseline_sha256"],
+            "restored_sha256": baseline["baseline_sha256"], "table_count": 7,
+            "restore_job_id": restore_job_id, "exact_match": True}
+
+
+def post_rollback_observation(payload, qualification):
+    restored = restore_qualification_observation(payload, qualification, "post-rollback")
+    return {key: restored[key] for key in ("baseline_evidence_id", "baseline_sha256",
+                                            "restored_sha256", "table_count", "exact_match")}
+
+
 def qualify_restore(source, restored):
     before, after = validate(source), validate(restored)
     require_dataset17_sentinel(source); require_dataset17_sentinel(restored)

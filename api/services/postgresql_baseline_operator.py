@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import hashlib
 import os
 import tempfile
 from pathlib import Path
@@ -155,22 +154,10 @@ def restore_and_qualify(connection, payload):
         connection.autocommit = True
 
 
-def restore_receipt(payload, qualification, target_id: str):
-    if (not isinstance(target_id, str) or not target_id
-            or qualification.get("restore_verified") is not True):
-        raise RuntimeError("PostgreSQL baseline restore receipt is invalid")
-    manifest = identity.validate(payload)
-    if (qualification.get("source_inventory_sha256") != manifest["global_sha256"]
-            or qualification.get("restored_inventory_sha256") != manifest["global_sha256"]
-            or qualification.get("restored_table_count") != manifest["table_count"]):
-        raise RuntimeError("PostgreSQL baseline restore receipt does not reconcile")
-    receipt = {"schema_version": 1, "kind": "postgresql-baseline-restore",
-               "source_id": manifest["source_id"], "target_id": target_id,
-               "table_count": manifest["table_count"], "row_count": manifest["row_count"],
-               "baseline_sha256": hashlib.sha256(identity._json(payload)).hexdigest(),
-               **qualification}
-    receipt["receipt_sha256"] = hashlib.sha256(identity._json(receipt)).hexdigest()
-    return receipt
+def qualify_existing(connection, payload):
+    """Read an existing rollback target and compare its exact canonical identity."""
+    restored = capture(connection, payload["manifest"]["source_id"])
+    return identity.qualify_restore(payload, restored)
 
 
 def read_payload(path: Path):
