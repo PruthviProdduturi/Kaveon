@@ -7,6 +7,8 @@ import pytest
 
 from services import postgresql_operational_evidence as evidence
 from services import postgresql_retirement_gate as retirement
+from services import postgresql_baseline_identity as canonical
+from services import postgresql_special_family_migration as migration
 
 
 DIGEST = "a" * 64
@@ -60,6 +62,51 @@ def test_collect_requires_and_validates_all_live_receipts(tmp_path):
     assert operational["postgresql_unavailable_restart"]["status"] == "passed"
     assert operational["postgresql_baseline_identity"]["baseline_evidence_id"] == "fresh-baseline-1"
     assert len(operational["receipt_set_sha256"]) == 64
+
+
+def test_lossless_producer_flows_through_receipt_collector_and_summary(tmp_path):
+    columns = [{"name": "id", "type": "integer", "nullable": False, "ordinal": 1}]
+    tables = [canonical.table_identity(name, columns, ["id"], [{"id": 1}])
+              for name in migration.TABLES if name != "dlm_artifact"]
+    artifact_columns = [
+        {"name": "dataset_id", "type": "text", "nullable": False, "ordinal": 1},
+        {"name": "manifest", "type": "jsonb", "nullable": False, "ordinal": 2}]
+    tables.append(canonical.table_identity("dlm_artifact", artifact_columns, ["dataset_id"],
+        [{"dataset_id": "17", "manifest": {"name": "Climate × Energy"}}]))
+    baseline = canonical.build("qualified-source", tables)
+    class Publisher:
+        def publish_immutable(self, path, body, sha256):
+            table = json.loads(body)["table"]
+            return {"path": path, "sha256": sha256, "bytes": len(body), "status": "created",
+                    "row_count": table["row_count"], "key_set_sha256": table["key_sha256"],
+                    "content_sha256": table["content_sha256"]}
+        def publish_manifest(self, body, **_kwargs):
+            return {"sha256": hashlib.sha256(body).hexdigest(), "status": "committed",
+                    "cas_attempts": 1, "published_last": True}
+    produced = migration.publish(baseline, expected_head="absent", publisher=Publisher(),
+                                 source_pending_events=0)
+    values = _write_receipts(tmp_path)
+    baseline_id = produced["baseline_evidence_id"]
+    for gate, observation in {
+        "postgresql_baseline_identity": {"baseline_evidence_id": baseline_id,
+            "baseline_sha256": baseline_id, "table_count": 7, "dataset17_utf8_verified": True},
+        "baseline_restore_qualification": {"baseline_evidence_id": baseline_id,
+            "baseline_sha256": baseline_id, "restored_sha256": baseline_id, "table_count": 7,
+            "restore_job_id": "restore-1", "exact_match": True},
+        "lossless_full_migration": produced["operational_observation"],
+        "pre_delete_baseline_recheck": {"baseline_evidence_id": baseline_id,
+            "baseline_sha256": baseline_id, "observed_sha256": baseline_id, "table_count": 7,
+            "writes_fenced": True, "outbox_pending": 0},
+        "exact_post_rollback_identity": {"baseline_evidence_id": baseline_id,
+            "baseline_sha256": baseline_id, "restored_sha256": baseline_id,
+            "table_count": 7, "exact_match": True},
+    }.items():
+        receipt = evidence.receipt_from_observation(gate, observation,
+            checked_at="2026-09-14T18:00:00Z", evidence_id=f"live:{gate}")
+        (tmp_path / f"{gate}.json").write_text(json.dumps(receipt), encoding="utf-8")
+    _, summary = evidence.collect(tmp_path, now=NOW, max_rollback_seconds=120)
+    assert summary["lossless_full_migration"]["baseline_sha256"] == baseline_id
+    assert summary["pre_delete_baseline_recheck"]["baseline_evidence_id"] == baseline_id
 
 
 def test_missing_or_tampered_receipt_fails_closed(tmp_path):

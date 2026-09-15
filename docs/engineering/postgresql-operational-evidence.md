@@ -102,7 +102,7 @@ Its manifest contains exactly one argument array and timeout for every gate. It
 uses direct process execution (`shell=False`), bounds arguments, timeouts,
 stdout and stderr, requires exit code zero and an exact JSON observation, then
 derives the gate details from that observation. It publishes no receipts unless
-all eight probes succeed and validate.
+all thirteen probes succeed and validate.
 
 The source watermark and outbox entries can call the included read-only probe
 inside the API workload:
@@ -197,7 +197,10 @@ dataset 17 `Climate × Energy` sentinel match. A failure rolls back the target.
 Neither command prints a DSN or credentials.
 
 ```powershell
-$env:KAVEON_POSTGRESQL_BASELINE_TARGET_DATABASE = "<isolated target DSN>"
+$env:KAVEON_POSTGRESQL_BASELINE_TARGET_HOST = "<isolated target host>"
+$env:KAVEON_POSTGRESQL_BASELINE_TARGET_DATABASE = "<isolated database name>"
+$env:KAVEON_POSTGRESQL_BASELINE_TARGET_USER = "<target user>"
+$env:KAVEON_POSTGRESQL_BASELINE_TARGET_PASSWORD = "<secret>"
 python scripts/postgresql-baseline.py restore-qualify `
   --baseline tmp/postgresql-seven-table-baseline.json `
   --target-id ISOLATED_DATABASE_RESOURCE_ID `
@@ -208,7 +211,7 @@ Archive the baseline and receipt with the immutable backup evidence. Review the
 global SHA-256 printed by capture and require the receipt's matching source and
 restored inventory hashes before treating this as a proven rollback baseline.
 
-After the operator has recorded and hashed all eight live observations, assemble
+After the operator has recorded and hashed all thirteen live observations, assemble
 the inputs for the existing 16-family retirement runner:
 
 ```powershell
