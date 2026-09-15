@@ -378,6 +378,38 @@ tables and five DLM tables. The repository wrapper below reads
 `KAVEON_ADLS_ACCOUNT` and `KAVEON_ADLS_CONTAINER` and never accepts a storage
 key or token on the command line.
 
+When the live seven tables are already empty from an earlier rehearsal, install
+the newly qualified baseline before publication. First derive the exact empty
+identity from the qualified baseline's schemas, keys and canonical encoding:
+
+```powershell
+python scripts/postgresql-baseline.py derive-empty `
+  --baseline /retirement/baselines/postgresql-seven-table-baseline.json `
+  --source-id documented-post-delete-empty `
+  --output /retirement/baselines/postgresql-seven-table-empty.json
+```
+
+Then enable the global PostgreSQL write fence and run the guarded installer with
+the fresh signed fence and isolated-restore receipts:
+
+```powershell
+$env:KAVEON_LIVE_BASELINE_INSTALL_ENABLED = "true"
+$env:KAVEON_POSTGRESQL_WRITE_FENCE_ENABLED = "true"
+python scripts/postgresql-baseline.py install-live `
+  --baseline /retirement/baselines/postgresql-seven-table-baseline.json `
+  --expected-empty-baseline /retirement/baselines/postgresql-seven-table-empty.json `
+  --isolated-restore-receipt /retirement/receipts/baseline_restore_qualification.json `
+  --write-fence-receipt /retirement/receipts/write_fence.json `
+  --receipt /retirement/receipts/live_baseline_install.json
+```
+
+The installer locks all seven tables in one serializable transaction. It
+requires their current identity to equal the documented empty identity before
+the first insert, restores the exact isolated-restore-qualified payload, and
+recaptures the installed identity before commit. Any mismatch rolls back the
+whole transaction. Run lossless publication only after reviewing this receipt;
+then refresh and drain the outbox before the final deletion precheck.
+
 ```powershell
 $env:KAVEON_SPECIAL_FAMILY_MIGRATION_ENABLED = "true"
 python scripts/migrate-postgresql-special-families.py `

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 from services import postgresql_baseline_identity as identity
@@ -77,6 +79,15 @@ def capture(connection, source_id: str):
     finally:
         cursor.close()
         connection.autocommit = True
+
+
+def documented_empty(payload, source_id: str):
+    """Derive the reviewed post-delete identity without consulting live state."""
+    identity.validate(payload)
+    tables = [{**table, "row_count": 0, "rows": [],
+               "key_sha256": identity._sha([]), "content_sha256": identity._sha([])}
+              for table in payload["tables"]]
+    return identity.build(source_id, tables)
 
 
 def decode_value(cell, pg_type):
@@ -152,6 +163,73 @@ def restore_and_qualify(connection, payload):
     finally:
         cursor.close()
         connection.autocommit = True
+
+
+def install_live_baseline(connection, payload, expected_empty, restore_receipt,
+                          fence_observation):
+    """Atomically replace the documented empty post-delete state with a qualified baseline."""
+    from services import postgresql_operational_evidence as operational
+    from services import postgresql_special_family_retirement as special
+    from services.postgresql_write_fence import enabled as fence_enabled
+    if os.getenv("KAVEON_LIVE_BASELINE_INSTALL_ENABLED") != "true" or not fence_enabled():
+        raise RuntimeError("live baseline installation requires explicit enablement and write fence")
+    special._validate_fence_observation(fence_observation)
+    manifest, empty_manifest = identity.validate(payload), identity.validate(expected_empty)
+    identity.require_dataset17_sentinel(payload)
+    if (empty_manifest["table_count"] != len(TABLES) or empty_manifest["row_count"] != 0
+            or {table["name"] for table in expected_empty["tables"]} != set(TABLES)):
+        raise RuntimeError("documented post-delete baseline is not the exact empty seven-table state")
+    expected_sha = identity.baseline_sha256(payload)
+    if (not isinstance(restore_receipt, dict)
+            or restore_receipt.get("gate") != "baseline_restore_qualification"
+            or restore_receipt.get("observation", {}).get("baseline_sha256") != expected_sha
+            or restore_receipt.get("observation", {}).get("restored_sha256") != expected_sha
+            or restore_receipt.get("observation", {}).get("exact_match") is not True):
+        raise RuntimeError("live baseline installation requires exact isolated restore qualification")
+    # Validate the signed receipt structure and digest without weakening its
+    # existing operational schema contract.
+    unsigned = {key: value for key, value in restore_receipt.items()
+                if key != "receipt_sha256"}
+    if restore_receipt.get("receipt_sha256") != hashlib.sha256(
+            operational._canonical(unsigned)).hexdigest():
+        raise RuntimeError("isolated restore qualification receipt identity is invalid")
+    if connection.autocommit is not True:
+        raise RuntimeError("live baseline connection already has a transaction")
+    by_name = {table["name"]: table for table in payload["tables"]}
+    connection.autocommit = False; cursor = connection.cursor()
+    try:
+        cursor.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+        cursor.execute("LOCK TABLE " + ",".join(_identifier(name) for name in TABLES)
+                       + " IN ACCESS EXCLUSIVE MODE")
+        current = capture_cursor(cursor, empty_manifest["source_id"])
+        if current != expected_empty:
+            raise RuntimeError("live special-family tables differ from documented empty state")
+        for name in TABLES:
+            table = by_name[name]
+            columns = table["columns"]
+            statement = (f"INSERT INTO {_identifier(name)} (" +
+                ",".join(_identifier(item["name"]) for item in columns) + ") VALUES (" +
+                ",".join(["%s"] * len(columns)) + ")")
+            for row in table["rows"]:
+                cursor.execute(statement, tuple(decode_value(cell, column["type"])
+                    for cell, column in zip(row, columns)))
+        installed = capture_cursor(cursor, manifest["source_id"])
+        qualified = identity.qualify_restore(payload, installed)
+        connection.commit()
+        receipt = {"schema_version": 1, "kind": "postgresql-live-baseline-install",
+                   "installed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                   "empty_baseline_sha256": identity.baseline_sha256(expected_empty),
+                   "installed_baseline_sha256": expected_sha,
+                   "installed_global_sha256": manifest["global_sha256"],
+                   "table_count": manifest["table_count"], "row_count": manifest["row_count"],
+                   "writes_fenced": True, "isolated_restore_exact": True,
+                   "recapture_exact": qualified["restore_verified"] is True}
+        receipt["receipt_sha256"] = hashlib.sha256(identity._json(receipt)).hexdigest()
+        return receipt
+    except Exception:
+        connection.rollback(); raise
+    finally:
+        cursor.close(); connection.autocommit = True
 
 
 def qualify_existing(connection, payload):

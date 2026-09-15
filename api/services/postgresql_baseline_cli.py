@@ -53,6 +53,16 @@ def main(argv=None):
     post.add_argument("--receipt", required=True, type=Path)
     post.add_argument("--evidence-id", required=True)
     post.add_argument("--checked-at")
+    install = commands.add_parser("install-live")
+    install.add_argument("--baseline", required=True, type=Path)
+    install.add_argument("--expected-empty-baseline", required=True, type=Path)
+    install.add_argument("--isolated-restore-receipt", required=True, type=Path)
+    install.add_argument("--write-fence-receipt", required=True, type=Path)
+    install.add_argument("--receipt", required=True, type=Path)
+    empty = commands.add_parser("derive-empty")
+    empty.add_argument("--baseline", required=True, type=Path)
+    empty.add_argument("--source-id", required=True)
+    empty.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
         if args.command == "capture":
@@ -93,7 +103,7 @@ def main(argv=None):
                 checked_at=args.checked_at or datetime.now(timezone.utc).isoformat(),
                 evidence_id=args.evidence_id)
             operator.write_atomic(args.receipt, result)
-        else:
+        elif args.command == "qualify-post-rollback":
             payload = operator.read_payload(args.baseline)
             connection = _target_connection()
             try:
@@ -105,6 +115,36 @@ def main(argv=None):
                 "exact_post_rollback_identity", observation,
                 checked_at=args.checked_at or datetime.now(timezone.utc).isoformat(),
                 evidence_id=args.evidence_id)
+            operator.write_atomic(args.receipt, result)
+        elif args.command == "derive-empty":
+            if args.output.exists():
+                raise RuntimeError("refusing to overwrite documented empty baseline")
+            result = operator.documented_empty(operator.read_payload(args.baseline), args.source_id)
+            operator.write_atomic(args.output, result)
+            result = {"derived": True, "baseline_sha256": identity.baseline_sha256(result),
+                      "table_count": result["manifest"]["table_count"], "row_count": 0}
+        else:
+            if args.receipt.exists():
+                raise RuntimeError("refusing to overwrite live baseline installation receipt")
+            now = datetime.now(timezone.utc)
+            payload = operator.read_payload(args.baseline)
+            empty = operator.read_payload(args.expected_empty_baseline)
+            isolated = operational.load_receipt(args.isolated_restore_receipt,
+                "baseline_restore_qualification", now=now, max_age_hours=24,
+                max_rollback_seconds=900)
+            fence = operational.load_receipt(args.write_fence_receipt, "write_fence",
+                now=now, max_age_hours=24, max_rollback_seconds=900)
+            database = os.getenv("METADATA_DATABASE", "")
+            pool = get_connection_pool(database)
+            if not database or pool.db_type != "postgresql":
+                raise RuntimeError("live baseline target must be configured PostgreSQL")
+            wrapper = pool.get_connection()
+            try:
+                wrapper.connect()
+                result = operator.install_live_baseline(wrapper.connection, payload, empty,
+                    isolated, fence["observation"])
+            finally:
+                pool.return_connection(wrapper)
             operator.write_atomic(args.receipt, result)
         print(json.dumps(result, sort_keys=True, separators=(",", ":")))
         return 0

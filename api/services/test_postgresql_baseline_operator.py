@@ -7,6 +7,7 @@ from services import postgresql_baseline_operator as operator
 from services import postgresql_baseline_identity as identity
 from services import postgresql_baseline_cli as cli
 from services import postgresql_operational_evidence as operational
+from services import postgresql_retirement_gate as retirement
 
 
 class Cursor:
@@ -71,6 +72,20 @@ def source_rows():
                               "manifest": '{"name":"Climate × Energy"}'}]}
 
 
+def fence_observation():
+    return {"deployment_revision": "api@qualified", "readonly_probe_passed": True,
+            "family_probes": [{"family": family, "passed": True}
+                              for family in sorted(retirement.AUTHORITY_FAMILIES)]}
+
+
+def restore_receipt(payload):
+    digest = identity.baseline_sha256(payload)
+    return operational.receipt_from_observation("baseline_restore_qualification", {
+        "baseline_evidence_id": digest, "baseline_sha256": digest,
+        "restored_sha256": digest, "table_count": 7, "restore_job_id": "isolated-1",
+        "exact_match": True}, checked_at="2026-09-14T23:00:00Z", evidence_id="restore:1")
+
+
 def test_capture_restore_and_recapture_exact_seven_table_identity():
     source = Connection(source_rows())
     payload = operator.capture(source, "snapshot-17")
@@ -105,6 +120,37 @@ def test_restore_refuses_nonempty_target_and_rolls_back():
     with pytest.raises(RuntimeError, match="not empty"):
         operator.restore_and_qualify(target, payload)
     assert target.rollbacks == 1 and target.commits == 0
+
+
+def test_guarded_live_install_requires_exact_empty_then_recaptures(monkeypatch):
+    payload = operator.capture(Connection(source_rows()), "qualified-seed")
+    empty = operator.documented_empty(payload, "documented-empty")
+    target = Connection({})
+    monkeypatch.setenv("KAVEON_LIVE_BASELINE_INSTALL_ENABLED", "true")
+    monkeypatch.setenv("KAVEON_POSTGRESQL_WRITE_FENCE_ENABLED", "true")
+    result = operator.install_live_baseline(target, payload, empty,
+                                            restore_receipt(payload), fence_observation())
+    assert result["recapture_exact"] is True
+    assert result["installed_baseline_sha256"] == identity.baseline_sha256(payload)
+    assert target.rows["dlm_artifact"] == source_rows()["dlm_artifact"]
+    assert target.commits == 1 and target.rollbacks == 0
+
+
+def test_guarded_live_install_refuses_nonempty_or_unqualified_source(monkeypatch):
+    payload = operator.capture(Connection(source_rows()), "qualified-seed")
+    empty = operator.documented_empty(payload, "documented-empty")
+    monkeypatch.setenv("KAVEON_LIVE_BASELINE_INSTALL_ENABLED", "true")
+    monkeypatch.setenv("KAVEON_POSTGRESQL_WRITE_FENCE_ENABLED", "true")
+    occupied = Connection({"dlm_router": [{"id": "unexpected"}]})
+    with pytest.raises(RuntimeError, match="differ from documented empty"):
+        operator.install_live_baseline(occupied, payload, empty,
+                                       restore_receipt(payload), fence_observation())
+    assert occupied.rollbacks == 1 and occupied.rows["dlm_artifact"] == []
+    receipt = restore_receipt(payload); receipt["observation"]["exact_match"] = False
+    target = Connection({})
+    with pytest.raises(RuntimeError, match="exact isolated restore"):
+        operator.install_live_baseline(target, payload, empty, receipt, fence_observation())
+    assert target.commits == 0 and target.rows["dlm_artifact"] == []
 
 
 def test_capture_rolls_back_when_global_row_bound_is_exceeded(monkeypatch):
@@ -161,3 +207,38 @@ def test_capture_cli_writes_durable_gate_receipt(tmp_path, monkeypatch):
     assert loaded["observation"]["baseline_sha256"] == \
         identity.baseline_sha256(operator.read_payload(baseline))
     assert pool.returned is True
+
+
+def test_install_live_cli_validates_receipts_and_writes_install_receipt(tmp_path, monkeypatch):
+    payload = operator.capture(Connection(source_rows()), "qualified-seed")
+    empty = operator.documented_empty(payload, "documented-empty")
+    baseline_path, empty_path = tmp_path / "baseline.json", tmp_path / "empty.json"
+    operator.write_atomic(baseline_path, payload); operator.write_atomic(empty_path, empty)
+    checked = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    isolated = restore_receipt(payload); isolated["checked_at"] = checked
+    unsigned = {key: value for key, value in isolated.items() if key != "receipt_sha256"}
+    isolated["receipt_sha256"] = __import__("hashlib").sha256(
+        operational._canonical(unsigned)).hexdigest()
+    fence = operational.receipt_from_observation("write_fence", fence_observation(),
+        checked_at=checked, evidence_id="fence:1")
+    isolated_path, fence_path = tmp_path / "restore.json", tmp_path / "fence.json"
+    operator.write_atomic(isolated_path, isolated); operator.write_atomic(fence_path, fence)
+    target = Connection({})
+    class Wrapper:
+        def __init__(self): self.connection = target
+        def connect(self): pass
+    class Pool:
+        db_type = "postgresql"
+        def get_connection(self): return Wrapper()
+        def return_connection(self, wrapper): pass
+    monkeypatch.setattr(cli, "get_connection_pool", lambda _database: Pool())
+    monkeypatch.setenv("METADATA_DATABASE", "kaveonmeta")
+    monkeypatch.setenv("KAVEON_LIVE_BASELINE_INSTALL_ENABLED", "true")
+    monkeypatch.setenv("KAVEON_POSTGRESQL_WRITE_FENCE_ENABLED", "true")
+    receipt = tmp_path / "install.json"
+    result = cli.main(["install-live", "--baseline", str(baseline_path),
+        "--expected-empty-baseline", str(empty_path), "--isolated-restore-receipt",
+        str(isolated_path), "--write-fence-receipt", str(fence_path),
+        "--receipt", str(receipt)])
+    assert result == 0
+    assert json.loads(receipt.read_text())["recapture_exact"] is True
