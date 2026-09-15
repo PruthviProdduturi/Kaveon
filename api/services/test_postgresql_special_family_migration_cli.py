@@ -50,5 +50,16 @@ class Tests(unittest.TestCase):
                             clear=True), self.assertRaisesRegex(RuntimeError, "overwrite"):
                 cli.main(args, client_factory=Client)
 
+    def test_evidence_writer_uses_exclusive_azure_files_compatible_create(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "evidence.json"
+            with patch.object(os, "chmod", side_effect=OSError("unsupported")) as chmod, \
+                    patch.object(os, "replace", side_effect=OSError("unsupported")) as replace:
+                cli._write_new(output, {"passed": True})
+            chmod.assert_not_called(); replace.assert_not_called()
+            self.assertEqual(json.loads(output.read_text(encoding="utf-8")), {"passed": True})
+            with self.assertRaisesRegex(RuntimeError, "overwrite"):
+                cli._write_new(output, {"passed": False})
+
 
 if __name__ == "__main__": unittest.main()

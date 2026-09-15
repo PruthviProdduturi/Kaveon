@@ -3,7 +3,6 @@
 import argparse
 import json
 import os
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,19 +21,25 @@ def _load(path):
 
 def _write_new(path, value):
     path = path.resolve()
-    if path.exists(): raise RuntimeError("refusing to overwrite special-family migration evidence")
     path.parent.mkdir(parents=True, exist_ok=True)
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":"),
                          ensure_ascii=False).encode("utf-8") + b"\n"
-    temporary = None
+    created = False
     try:
-        with tempfile.NamedTemporaryFile("wb", dir=path.parent, prefix=path.name + ".",
-                                         delete=False) as handle:
-            temporary = Path(handle.name); os.chmod(temporary, 0o600)
+        # Azure Files does not implement POSIX chmod and may reject os.replace.
+        # Exclusive creation is the publication boundary: it prevents a replay
+        # or concurrent writer from replacing accepted evidence. Consumers must
+        # still parse and verify the signed hashes before accepting the file.
+        with path.open("xb") as handle:
+            created = True
             handle.write(encoded); handle.flush(); os.fsync(handle.fileno())
-        os.replace(temporary, path); temporary = None
-    finally:
-        if temporary and temporary.exists(): temporary.unlink()
+    except FileExistsError as error:
+        raise RuntimeError("refusing to overwrite special-family migration evidence") from error
+    except Exception:
+        if created:
+            try: path.unlink()
+            except OSError: pass
+        raise
 
 
 def main(argv=None, *, client_factory=adls.AzureArtifactClient.from_env):
