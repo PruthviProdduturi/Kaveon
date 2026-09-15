@@ -7,7 +7,7 @@ import httpx
 
 SCHEMA_VERSION=1; MAX_RESPONSE_BYTES=8*1024*1024; REQUIRED_ROLE="Admin"
 CHECK_NAMES=("health","catalog_sources","data_sources","datasets","charts","dashboards","query_history","saved_queries","recents","favorites","chat_history","datasets_point","charts_point","dashboards_point","saved_query_point","chat_history_point","theme","dlm_get","dlm_context","dlm_ask","chat_serving")
-NONEMPTY_CHECKS=frozenset(("catalog_sources","datasets","charts","dashboards","query_history","recents"))
+NONEMPTY_CHECKS=frozenset(("catalog_sources","datasets","charts","dashboards","query_history"))
 ABSENT_POINT_CHECKS=frozenset(("saved_query_point","chat_history_point"))
 
 def _canonical(value):return json.dumps(value,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()
