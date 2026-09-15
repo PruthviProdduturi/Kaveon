@@ -1,5 +1,6 @@
 """Opt-in Engine control/data plane client. No secrets enter catalog definitions."""
 import json
+import uuid
 import os
 import ssl
 from urllib.parse import urlsplit, quote
@@ -64,7 +65,10 @@ def _request(method, path, token_name, actor, *, payload=None, revision=None, ro
         raise HTTPException(409, "Engine revision conflict; reload before retrying")
     if not response.is_success:
         raise HTTPException(502, "Engine rejected the request")
-    return response.json()
+    try:
+        return response.json()
+    except ValueError:
+        return None   # 204 and other bodiless successes (a cancelled query)
 
 
 def _object(value):
@@ -117,17 +121,47 @@ def sync_catalog(source, actor, expected_revision=None):
     return {"catalog": result, "changed": True}
 
 
+def cancel_tagged(tag, actor, role):
+    """Cancel every statement carrying *tag* that the Engine still reports as
+    running. Best effort: a statement that finished between the client's
+    timeout and this call is simply not there any more."""
+    try:
+        queries = _request("GET", "/v1/query", "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=role) or []
+    except HTTPException:
+        return 0
+    cancelled = 0
+    for record in queries if isinstance(queries, list) else []:
+        tags = record.get("client_tags") or (record.get("context") or {}).get("client_tags") or []
+        if tag in tags and str(record.get("state", "")).upper() in {"QUEUED", "PLANNING", "RUNNING", "STARTING"}:
+            try:
+                _request("DELETE", "/v1/query/" + quote(str(record["id"]), safe=""),
+                         "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=role)
+                cancelled += 1
+            except HTTPException:
+                continue
+    return cancelled
+
+
 def execute(sql, catalog, actor, role, schema=None, timeout=60):
     """Run one statement. `timeout` is how long this caller waits for the
     response: 60 s suits an interactive request; a DLM build passes its own
-    bound because a full-table aggregate legitimately runs for minutes."""
+    bound because a full-table aggregate legitimately runs for minutes. When
+    the bound passes, the statement is cancelled on the Engine as well: a
+    client that has given up must not leave a full-table scan running for
+    everyone else."""
     roles = {"Analyst": "analyst", "Editor": "analyst", "Admin": "admin"}
     if role not in roles:
         raise HTTPException(403, "A recognized Kaveon role is required for Engine SQL")
-    result = _request("POST", "/v1/statement", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
-                      payload={"query": sql, "catalog": catalog, "schema": schema,
-                               "source": "studio", "client": "kaveon-api"}, role=roles[role],
-                      timeout=timeout)
+    tag = "kaveon-api:" + uuid.uuid4().hex
+    try:
+        result = _request("POST", "/v1/statement", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+                          payload={"query": sql, "catalog": catalog, "schema": schema,
+                                   "source": "studio", "client": "kaveon-api", "client_tags": [tag]},
+                          role=roles[role], timeout=timeout)
+    except HTTPException as error:
+        if error.status_code == 504:
+            cancel_tagged(tag, actor, roles[role])
+        raise
     if result is None:
         raise HTTPException(422, "Engine query failed")
     query_id = result.get("id")

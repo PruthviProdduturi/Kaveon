@@ -751,7 +751,9 @@ def _precompute_answers(dataset_id: str, database: str, schema: str, fact: Optio
 
 
 _DAY_CELL_CAP = 5000        # days of history one scan may enumerate (13+ years)
-_CUBOID_MAX_KEYS = 4        # GROUP BY keys per cuboid scan; string keys cost per key per row
+_CUBOID_MAX_KEYS = 3        # GROUP BY keys per cuboid scan. Measured on the 504M-row table through
+                            # ADLS: two string keys ~80 s, four exceed the 300 s build bound; the
+                            # Engine's per-key cost sets this, and it rises when that falls.
 _CUBOID_CELL_CAP = 100_000  # cells a cuboid may enumerate (result rows through the bridge)
 
 
