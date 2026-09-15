@@ -47,6 +47,33 @@ class BridgeTimeoutTests(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 504)
         self.assertIn("bound", str(ctx.exception.detail))
 
+    def test_a_timed_out_statement_is_cancelled_on_the_engine(self):
+        """The client gave up; the Engine must not keep scanning for it."""
+        calls = []
+
+        def fake_request(method, url, **kw):
+            calls.append((method, url.split("https://engine")[-1]))
+            if method == "POST":
+                tag = kw["json"]["client_tags"][0]
+                self.assertTrue(tag.startswith("kaveon-api:"))
+                fake_request.tag = tag
+                raise httpx.ReadTimeout("slow")
+            if method == "GET":
+                return SimpleNamespace(status_code=200, is_success=True, content=b"[]", json=lambda: [
+                    {"id": "q-running", "state": "RUNNING", "context": {"client_tags": [fake_request.tag]}},
+                    {"id": "q-other", "state": "RUNNING", "context": {"client_tags": ["kaveon-api:someone-else"]}},
+                    {"id": "q-done", "state": "FINISHED", "context": {"client_tags": [fake_request.tag]}},
+                ])
+            return SimpleNamespace(status_code=204, is_success=True, content=b"", json=lambda: None)
+
+        with patch.dict("os.environ", {"KAVEON_ENGINE_BRIDGE_TOKEN": "t", "KAVEON_ENGINE_URL": "https://engine"}), \
+             patch.object(engine_bridge, "_verify_context", lambda: False), \
+             patch.object(engine_bridge.httpx, "request", fake_request):
+            with self.assertRaises(HTTPException) as ctx:
+                engine_bridge.execute("SELECT 1", "OpenSource", "kaveon-system", "Admin", "s", timeout=5)
+        self.assertEqual(ctx.exception.status_code, 504)
+        self.assertEqual([c for c in calls if c[0] == "DELETE"], [("DELETE", "/v1/query/q-running")])
+
 
 class BuildBoundTests(unittest.TestCase):
     def test_native_build_queries_carry_the_build_bound(self):
