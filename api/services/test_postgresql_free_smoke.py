@@ -18,10 +18,12 @@ class Client:
    "/api/v1/lab/query-history":{"history":[{"id":"q1","sql_text":"secret sql"}]},"/api/v1/lab/saved-queries":[{"id":"sq1"}],
    "/api/v1/user/recents":[{"id":"r1"}],"/api/v1/favorites":[{"id":"f1"}],"/api/v1/chat/history":{"sessions":[{"id":"10"}]},
    "/api/v1/datasets/7":{"id":"7"},"/api/v1/charts/8":{"id":"8"},"/api/v1/dashboards/9":{"id":"9"},
-   "/api/v1/lab/saved-queries/sq1":{"id":"sq1"},"/api/v1/chat/history/10":{"id":"10","messages":[]},"/api/v1/theme":{"theme_color":"dark"},
+   "/api/v1/lab/saved-queries/sq1":{"id":"sq1"},"/api/v1/chat/history/10":{"id":"10","messages":[]},
+   "/api/v1/lab/saved-queries/__postgresql_free_absence_probe__":{"detail":"not found"},
+   "/api/v1/chat/history/__postgresql_free_absence_probe__":{"detail":"not found"},"/api/v1/theme":{"theme_color":"dark"},
    "/api/v1/datasets/7/dlm":{"dataset_id":"7","artifact":{"private":"value"}},"/api/v1/datasets/7/dlm/context":{"ok":True,"context":{"private":"value"}},
    "/api/v1/dlm/ask":{"ok":True,"answer":"private answer"},"/api/v1/chat":{"route":"dlm","answer":"private answer"}}
-  value=values[path];status=200
+  value=values[path];status=404 if path.endswith("__postgresql_free_absence_probe__") else 200
   if self.mutate:value,status=self.mutate(path,value,status)
   return Response(value,status)
 class Tests(unittest.TestCase):
@@ -45,6 +47,14 @@ class Tests(unittest.TestCase):
   with self.assertRaisesRegex(RuntimeError,"PostgreSQL-free"):self.collect(Client(unhealthy))
   def empty(path,value,status):return ([] if path=="/api/v1/charts" else value),status
   with self.assertRaisesRegex(RuntimeError,"charts.*empty"):self.collect(Client(empty))
+ def test_reconciled_empty_optional_families_prove_point_absence(self):
+  def empty(path,value,status):
+   if path in {"/api/v1/data-sources","/api/v1/lab/saved-queries","/api/v1/favorites","/api/v1/chat/history"}: return ([] if path!="/api/v1/chat/history" else {"sessions":[]}),status
+   return value,status
+  report=self.collect(Client(empty)); checks={item["name"]:item for item in report["checks"]}
+  self.assertEqual(checks["data_sources"]["count"],0)
+  self.assertEqual(checks["saved_query_point"]["status"],404)
+  self.assertEqual(checks["chat_history_point"]["status"],404)
  def test_http_failure_dlm_and_chat_failure_are_closed(self):
   def forbidden(path,value,status):return (value,403) if path=="/api/v1/favorites" else (value,status)
   with self.assertRaisesRegex(RuntimeError,"HTTP 403"):self.collect(Client(forbidden))

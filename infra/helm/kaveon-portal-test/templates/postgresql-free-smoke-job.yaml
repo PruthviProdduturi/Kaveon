@@ -15,7 +15,7 @@ spec:
   backoffLimit: 0
   ttlSecondsAfterFinished: 86400
   template:
-    metadata: {labels: {app: kaveon-api, job: kaveon-postgresql-free-smoke}}
+    metadata: {labels: {app: kaveon-portal-init, job: kaveon-postgresql-free-smoke}}
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
