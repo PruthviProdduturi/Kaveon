@@ -17,7 +17,8 @@
 param(
   [Parameter(Position = 0)][ValidateSet("start", "stop", "status")][string]$Action = "status",
   [string]$DataDir = (Join-Path $PSScriptRoot "..\tmp\kaveon-events"),
-  [string]$StateDir = (Join-Path $PSScriptRoot "..\tmp\local-cluster")
+  [string]$StateDir = (Join-Path $PSScriptRoot "..\tmp\local-cluster"),
+  [int]$Parallelism = 0   # KAVEON_LOCAL_PARALLELISM for every Engine node; 0 leaves the Engine's default
 )
 $ErrorActionPreference = "Stop"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
@@ -48,6 +49,7 @@ function Start-Node([string]$name, [string]$config, [int]$port, [bool]$coordinat
   $env:KAVEON_CATALOG_ADMIN_TOKEN = $catalogToken
   $env:KAVEON_QUERY_MEMORY_LIMIT_BYTES = "1073741824"
   $env:KAVEON_MEMORY_ADMISSION_LIMIT_BYTES = "4294967296"
+  if ($Parallelism -gt 0) { $env:KAVEON_LOCAL_PARALLELISM = "$Parallelism" } else { Remove-Item Env:KAVEON_LOCAL_PARALLELISM -ErrorAction SilentlyContinue }
   if ($coordinator) { Remove-Item Env:KAVEON_DISCOVERY_URI -ErrorAction SilentlyContinue } else { $env:KAVEON_DISCOVERY_URI = "http://127.0.0.1:8080" }
   New-Item -ItemType Directory -Force -Path $env:KAVEON_EXCHANGE_SPOOL_ROOT | Out-Null
   $log = Join-Path $StateDir "$name.log"
