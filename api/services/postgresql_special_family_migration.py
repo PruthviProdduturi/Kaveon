@@ -23,6 +23,7 @@ def _sha_bytes(value): return hashlib.sha256(value).hexdigest()
 
 def verify_baseline(payload):
     manifest = baseline_identity.validate(payload)
+    baseline_identity.require_dataset17_sentinel(payload)
     found = tuple(table["name"] for table in payload["tables"])
     if set(found) != set(TABLES) or len(found) != len(TABLES):
         raise RuntimeError("canonical baseline must contain all seven special-family tables")
@@ -51,8 +52,10 @@ def _table_object(identity, table):
             "baseline_evidence_id": identity["baseline_evidence_id"], "table": table}
 
 
-def publish(payload, *, expected_head, publisher):
+def publish(payload, *, expected_head, publisher, source_pending_events):
     identity = verify_baseline(payload)
+    if type(source_pending_events) is not int or source_pending_events != 0:
+        raise RuntimeError("special-family publication requires a measured drained outbox")
     if not isinstance(expected_head, str) or not expected_head:
         raise RuntimeError("special-family publication requires an expected head ETag or 'absent'")
     receipts = []
@@ -96,10 +99,11 @@ def publish(payload, *, expected_head, publisher):
                            for name in TABLES], "objects": receipts, "manifest": committed,
                 "operational_observation": {
                     "baseline_evidence_id": identity["baseline_evidence_id"],
-                    "baseline_sha256": identity["global_content_sha256"],
-                    "source_sha256": identity["global_content_sha256"],
-                    "target_sha256": identity["global_content_sha256"],
-                    "table_count": len(TABLES), "pending_events": 0, "failed_events": 0,
+                    "baseline_sha256": identity["baseline_evidence_id"],
+                    "source_sha256": identity["baseline_evidence_id"],
+                    "target_sha256": identity["baseline_evidence_id"],
+                    "table_count": len(TABLES), "pending_events": source_pending_events,
+                    "failed_events": 0,
                     "manifest_published_last": True}}
     verify_evidence(evidence, payload)
     return evidence
@@ -116,9 +120,9 @@ def verify_evidence(evidence, payload):
         raise RuntimeError("special-family migration is not bound to the canonical baseline")
     if evidence["operational_observation"] != {
             "baseline_evidence_id": identity["baseline_evidence_id"],
-            "baseline_sha256": identity["global_content_sha256"],
-            "source_sha256": identity["global_content_sha256"],
-            "target_sha256": identity["global_content_sha256"], "table_count": len(TABLES),
+            "baseline_sha256": identity["baseline_evidence_id"],
+            "source_sha256": identity["baseline_evidence_id"],
+            "target_sha256": identity["baseline_evidence_id"], "table_count": len(TABLES),
             "pending_events": 0, "failed_events": 0, "manifest_published_last": True}:
         raise RuntimeError("special-family operational migration observation is invalid")
     tables, objects = evidence["tables"], evidence["objects"]

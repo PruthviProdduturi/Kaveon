@@ -35,18 +35,24 @@ class Client:
 
 def payload():
     columns = [{"name": "id", "type": "integer", "nullable": False, "ordinal": 1}]
-    return canonical.build("pg:qualified", [canonical.table_identity(
-        name, columns, ["id"], [{"id": 1}]) for name in migration.TABLES])
+    tables = [canonical.table_identity(name, columns, ["id"], [{"id": 1}])
+              for name in migration.TABLES if name != "dlm_artifact"]
+    artifact_columns = [
+        {"name": "dataset_id", "type": "text", "nullable": False, "ordinal": 1},
+        {"name": "manifest", "type": "jsonb", "nullable": False, "ordinal": 2}]
+    tables.append(canonical.table_identity("dlm_artifact", artifact_columns, ["dataset_id"],
+        [{"dataset_id": "17", "manifest": {"name": "Climate × Energy"}}]))
+    return canonical.build("pg:qualified", tables)
 
 
 class Tests(unittest.TestCase):
     def test_create_readback_manifest_last_and_exact_replay(self):
         client = Client(); publisher = adapter.Publisher(client, "retirement/run-1")
-        first = migration.publish(payload(), expected_head="absent", publisher=publisher)
+        first = migration.publish(payload(), expected_head="absent", publisher=publisher, source_pending_events=0)
         self.assertEqual(first["manifest"]["status"], "committed")
         self.assertEqual(len(client.puts), 1)
         second = migration.publish(payload(), expected_head='"stale-is-irrelevant-for-replay"',
-                                   publisher=publisher)
+                                   publisher=publisher, source_pending_events=0)
         self.assertEqual(second["manifest"]["status"], "verified-replay")
         self.assertTrue(all(item["status"] == "verified-replay" for item in second["objects"]))
 
@@ -56,12 +62,12 @@ class Tests(unittest.TestCase):
         path = f"retirement/run-1/objects/{identity['baseline_evidence_id']}/{migration.TABLES[0]}.json"
         client.values[path] = b"wrong"; client.etags[path] = '"etag-old"'
         with self.assertRaisesRegex(RuntimeError, "readback mismatch"):
-            migration.publish(payload(), expected_head="absent", publisher=publisher)
+            migration.publish(payload(), expected_head="absent", publisher=publisher, source_pending_events=0)
         client = Client(); publisher = adapter.Publisher(client, "retirement/run-1")
         client.values["retirement/run-1/head.json"] = b"other"
         client.etags["retirement/run-1/head.json"] = '"etag-current"'
         with self.assertRaisesRegex(RuntimeError, "changed concurrently"):
-            migration.publish(payload(), expected_head='"etag-stale"', publisher=publisher)
+            migration.publish(payload(), expected_head='"etag-stale"', publisher=publisher, source_pending_events=0)
 
     def test_ambiguous_head_success_is_verified_by_readback(self):
         class Ambiguous(Client):
@@ -69,7 +75,7 @@ class Tests(unittest.TestCase):
                 super().put_if_match(path, body, expected)
                 raise OSError("response lost")
         evidence = migration.publish(payload(), expected_head="absent",
-            publisher=adapter.Publisher(Ambiguous(), "retirement/run-1"))
+            publisher=adapter.Publisher(Ambiguous(), "retirement/run-1"), source_pending_events=0)
         self.assertEqual(evidence["manifest"]["status"], "verified-replay")
 
 

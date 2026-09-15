@@ -374,18 +374,24 @@ fixture report does not qualify the live AKS schema.
 
 The reviewed canonical baseline produced by
 `postgresql_baseline_identity` is the only accepted input for the two context
-tables and five DLM tables. Run the publisher in the API workload-identity pod;
-it reads `KAVEON_ADLS_ACCOUNT` and `KAVEON_ADLS_CONTAINER` and never accepts a
-storage key or token on the command line.
+tables and five DLM tables. The repository wrapper below reads
+`KAVEON_ADLS_ACCOUNT` and `KAVEON_ADLS_CONTAINER` and never accepts a storage
+key or token on the command line.
 
 ```powershell
 $env:KAVEON_SPECIAL_FAMILY_MIGRATION_ENABLED = "true"
-python -m services.postgresql_special_family_migration_cli `
+python scripts/migrate-postgresql-special-families.py `
   --baseline /retirement/postgresql-special-family-baseline.json `
   --prefix retirement/special-families/<immutable-run-id> `
   --expected-head-etag absent `
+  --outbox-drain-receipt /retirement/receipts/outbox_drain.json `
   --output /retirement/special-family-migration.json
 ```
+
+The API container contains the same entry point as
+`python -m services.postgresql_special_family_migration_cli`; use that form in
+the workload-identity Kubernetes Job, where the repository `scripts` directory
+is not copied into the image.
 
 For a later commit, pass the exact quoted ETag returned for `head.json`. The
 command creates and reads back seven immutable table objects, writes and reads

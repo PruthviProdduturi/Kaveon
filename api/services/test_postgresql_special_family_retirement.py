@@ -10,6 +10,7 @@ from services import postgresql_retirement_gate as gate
 from services import postgresql_special_family_retirement as retirement
 from services import postgresql_special_family_migration as lossless
 from services import postgresql_baseline_identity as canonical
+from services import postgresql_operational_evidence as operational
 
 
 def fence():
@@ -29,6 +30,7 @@ def captured():
     before.update({"dlm_answers": 3866, "dlm_artifact": 10,
                    "dlm_router": 10, "dlm_value_index": 74})
     return {"snapshot_id": "pg-snapshot-1", "watermark": 3,
+            "outbox_pending": 0,
             "schemas": {table: "c" * 64 for table in before},
             "identities": baseline_identity()["table_identities"],
             "before": before, "deleted": dict(before),
@@ -43,9 +45,19 @@ def baseline():
     # Unit tests use precomputed identities because materializing thousands of
     # fixture rows obscures the retirement contract under test.
     for table in lossless.TABLES:
-        columns = [{"name": "id", "type": "integer", "nullable": False, "ordinal": 1}]
-        rows = [{"id": index} for index in range(counts[table])]
-        tables.append(canonical.table_identity(table, columns, ["id"], rows))
+        if table == "dlm_artifact":
+            columns = [
+                {"name": "dataset_id", "type": "text", "nullable": False, "ordinal": 1},
+                {"name": "manifest", "type": "jsonb", "nullable": False, "ordinal": 2}]
+            ids = ["17", *[str(index) for index in range(counts[table] - 1)]]
+            rows = [{"dataset_id": value, "manifest": {
+                "name": "Climate × Energy" if value == "17" else f"dataset-{value}"}}
+                    for value in ids]
+            tables.append(canonical.table_identity(table, columns, ["dataset_id"], rows))
+        else:
+            columns = [{"name": "id", "type": "integer", "nullable": False, "ordinal": 1}]
+            rows = [{"id": index} for index in range(counts[table])]
+            tables.append(canonical.table_identity(table, columns, ["id"], rows))
     return canonical.build("pg-snapshot-1", tables)
 
 
@@ -64,7 +76,8 @@ def migration_evidence():
         def publish_manifest(self, body, **_kwargs):
             return {"sha256": __import__("hashlib").sha256(body).hexdigest(),
                     "status": "committed", "cas_attempts": 1, "published_last": True}
-    return lossless.publish(baseline(), expected_head="head:1", publisher=Publisher())
+    return lossless.publish(baseline(), expected_head="head:1", publisher=Publisher(),
+                            source_pending_events=0)
 
 
 def lossless_args():
@@ -175,6 +188,11 @@ class Tests(unittest.TestCase):
             self.assertEqual(dlm["source"]["rows"]["dlm_answers"], 3866)
             self.assertEqual(dlm["deletion"]["remaining_rows"]["dlm_answers"], 0)
             self.assertEqual(dlm["deletion"]["target_snapshot_id"], "snapshot-1")
+            predelete = json.loads((output / "special-family-lossless.json").read_text())
+            receipt = operational.receipt_from_observation("pre_delete_baseline_recheck",
+                predelete, checked_at=now.isoformat().replace("+00:00", "Z"),
+                evidence_id="predelete:test")
+            self.assertEqual(receipt["observation"]["outbox_pending"], 0)
 
 
 if __name__ == "__main__": unittest.main()

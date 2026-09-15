@@ -12,7 +12,12 @@ def payload(text="café"):
                {"name": "payload", "type": "text", "nullable": False, "ordinal": 2}]
     tables = [canonical.table_identity(name, columns, ["id"],
               [{"id": 2, "payload": "cafÃ©"}, {"id": 1, "payload": text}])
-              for name in migration.TABLES]
+              for name in migration.TABLES if name != "dlm_artifact"]
+    artifact_columns = [
+        {"name": "dataset_id", "type": "text", "nullable": False, "ordinal": 1},
+        {"name": "manifest", "type": "jsonb", "nullable": False, "ordinal": 2}]
+    tables.append(canonical.table_identity("dlm_artifact", artifact_columns, ["dataset_id"],
+        [{"dataset_id": "17", "manifest": {"name": "Climate × Energy", "text": text}}]))
     return canonical.build("pg:1", tables)
 
 
@@ -35,9 +40,16 @@ class Publisher:
 
 
 class Tests(unittest.TestCase):
+    def test_requires_measured_zero_pending_before_publication(self):
+        publisher = Publisher()
+        with self.assertRaisesRegex(RuntimeError, "measured drained outbox"):
+            migration.publish(payload(), expected_head="absent", publisher=publisher,
+                              source_pending_events=1)
+        self.assertEqual(publisher.events, [])
+
     def test_all_seven_use_canonical_baseline_and_manifest_is_last(self):
         baseline = payload(); publisher = Publisher()
-        evidence = migration.publish(baseline, expected_head="absent", publisher=publisher)
+        evidence = migration.publish(baseline, expected_head="absent", publisher=publisher, source_pending_events=0)
         self.assertEqual([event[0] for event in publisher.events], ["object"] * 7 + ["manifest"])
         identity = migration.verify_evidence(evidence, baseline)
         self.assertEqual(identity["encoding"], canonical.ENCODING)
@@ -54,15 +66,15 @@ class Tests(unittest.TestCase):
     def test_replay_is_exact_and_divergent_object_stops_before_manifest(self):
         baseline = payload(); replay = Publisher(replay=True)
         migration.verify_evidence(migration.publish(baseline, expected_head='"etag-1"',
-                                                     publisher=replay), baseline)
+                                                     publisher=replay, source_pending_events=0), baseline)
         bad = Publisher(bad=True)
         with self.assertRaisesRegex(RuntimeError, "readback verification"):
-            migration.publish(baseline, expected_head="absent", publisher=bad)
+            migration.publish(baseline, expected_head="absent", publisher=bad, source_pending_events=0)
         self.assertNotIn("manifest", [event[0] for event in bad.events])
 
     def test_wrong_baseline_and_cas_bounds_are_rejected(self):
         baseline = payload(); evidence = migration.publish(
-            baseline, expected_head="absent", publisher=Publisher())
+            baseline, expected_head="absent", publisher=Publisher(), source_pending_events=0)
         tampered = copy.deepcopy(evidence); tampered["baseline_evidence_id"] = "c" * 64
         with self.assertRaisesRegex(RuntimeError, "not bound"):
             migration.verify_evidence(tampered, baseline)

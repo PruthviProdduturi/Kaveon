@@ -4,12 +4,14 @@ import argparse
 import json
 import os
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 from services import adls_artifact_client as adls
 from services import postgresql_baseline_identity as baseline_identity
 from services import postgresql_special_family_adls_publisher as adapter
 from services import postgresql_special_family_migration as migration
+from services import postgresql_operational_evidence as operational
 
 
 def _load(path):
@@ -42,12 +44,16 @@ def main(argv=None, *, client_factory=adls.AzureArtifactClient.from_env):
     parser.add_argument("--expected-head-etag", required=True,
                         help="Current quoted ADLS ETag, or 'absent' for the first commit")
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--outbox-drain-receipt", required=True, type=Path)
     args = parser.parse_args(argv)
     if os.getenv("KAVEON_SPECIAL_FAMILY_MIGRATION_ENABLED") != "true":
         raise RuntimeError("special-family migration requires explicit enablement")
     payload = _load(args.baseline)
+    drained = operational.load_receipt(args.outbox_drain_receipt, "outbox_drain",
+        now=datetime.now(timezone.utc), max_age_hours=24, max_rollback_seconds=900)
     evidence = migration.publish(payload, expected_head=args.expected_head_etag,
-        publisher=adapter.Publisher(client_factory(), args.prefix))
+        publisher=adapter.Publisher(client_factory(), args.prefix),
+        source_pending_events=drained["observation"]["pending_after"])
     _write_new(args.output, evidence)
     return {"passed": True, "baseline_evidence_id": evidence["baseline_evidence_id"],
             "manifest_sha256": evidence["manifest"]["sha256"],

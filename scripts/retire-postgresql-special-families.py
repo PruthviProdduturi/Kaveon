@@ -19,8 +19,8 @@ parser.add_argument("--output-directory", required=True, type=Path)
 parser.add_argument("--max-age-hours", type=int, default=1)
 args = parser.parse_args()
 
-def load(path):
-    if not path.is_file() or path.stat().st_size > 4 * 1024 * 1024:
+def load(path, max_bytes=4 * 1024 * 1024):
+    if not path.is_file() or path.stat().st_size > max_bytes:
         raise RuntimeError(f"missing or oversized input: {path.name}")
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -29,7 +29,7 @@ try:
         rebuild=load(args.context_rebuild),
         fence_observation=load(args.write_fence_observation),
         expected_counts=load(args.expected_source_counts),
-        baseline=load(args.lossless_baseline),
+        baseline=load(args.lossless_baseline, 512 * 1024 * 1024),
         migration_evidence=load(args.lossless_migration_evidence),
         output_directory=args.output_directory, max_age_hours=args.max_age_hours)
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))
