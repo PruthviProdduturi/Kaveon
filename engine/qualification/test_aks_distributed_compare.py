@@ -1,4 +1,5 @@
 import unittest
+import unittest.mock
 
 from aks_distributed_compare import merge_stage_execution, summarize_successful_latencies
 
@@ -87,6 +88,40 @@ class LatencySummaryTests(unittest.TestCase):
                 [{"name": "unexpected", "passed": True, "ms": 1.0}],
                 ["count"],
             )
+
+
+class TrinoAuthenticatorWaitTests(unittest.TestCase):
+    """Trino answers HTTP before its password authenticators load; the runner
+    waits through that gap and gives up on anything else."""
+
+    def _engines(self, responses):
+        from aks_distributed_compare import Engines
+        engines = Engines.__new__(Engines)
+        engines.calls = []
+
+        def trino_query(sql):
+            engines.calls.append(sql)
+            outcome = responses.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        engines.trino_query = trino_query
+        return engines
+
+    def test_waits_through_the_startup_gap(self):
+        gap = RuntimeError("POST https://trino/v1/statement returned HTTP 500: java.lang.IllegalStateException: authenticators were not loaded")
+        engines = self._engines([gap, gap, [[1]]])
+        import aks_distributed_compare
+        with unittest.mock.patch.object(aks_distributed_compare.time, "sleep", lambda s: None):
+            engines.wait_trino_authenticators(timeout=60)
+        self.assertEqual(engines.calls, ["SELECT 1"] * 3)
+
+    def test_any_other_failure_is_not_retried(self):
+        engines = self._engines([RuntimeError("POST https://trino/v1/statement returned HTTP 401: Unauthorized")])
+        with self.assertRaises(RuntimeError):
+            engines.wait_trino_authenticators(timeout=60)
+        self.assertEqual(len(engines.calls), 1)
 
 
 if __name__ == "__main__":
