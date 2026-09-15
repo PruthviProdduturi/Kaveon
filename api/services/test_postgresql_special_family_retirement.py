@@ -9,6 +9,7 @@ from unittest.mock import patch
 from services import postgresql_retirement_gate as gate
 from services import postgresql_special_family_retirement as retirement
 from services import postgresql_special_family_migration as lossless
+from services import postgresql_baseline_identity as canonical
 
 
 def fence():
@@ -35,17 +36,17 @@ def captured():
 
 
 def baseline():
-    tables = {}
+    tables = []
     counts = {table: 0 for table in lossless.TABLES}
     counts.update({"dlm_answers": 3866, "dlm_artifact": 10,
                    "dlm_router": 10, "dlm_value_index": 74})
     # Unit tests use precomputed identities because materializing thousands of
     # fixture rows obscures the retirement contract under test.
     for table in lossless.TABLES:
-        rows = [[index] for index in range(counts[table])]
-        tables[table] = {"columns": ["id"], "key_columns": ["id"], "rows": rows,
-                         "schema_sha256": "c" * 64}
-    return lossless.build_baseline("e" * 64, "pg-snapshot-1", tables)
+        columns = [{"name": "id", "type": "integer", "nullable": False, "ordinal": 1}]
+        rows = [{"id": index} for index in range(counts[table])]
+        tables.append(canonical.table_identity(table, columns, ["id"], rows))
+    return canonical.build("pg-snapshot-1", tables)
 
 
 def baseline_identity():
@@ -55,11 +56,10 @@ def baseline_identity():
 def migration_evidence():
     class Publisher:
         def publish_immutable(self, path, body, sha256):
-            value = json.loads(body)
-            found = lossless.table_identity(value["columns"], value["key_columns"], value["rows"])
+            found = json.loads(body)["table"]
             return {"path": path, "sha256": sha256, "status": "created", "bytes": len(body),
-                    **{key: found[key] for key in
-                       ("row_count", "key_set_sha256", "content_sha256")}}
+                    "row_count": found["row_count"], "key_set_sha256": found["key_sha256"],
+                    "content_sha256": found["content_sha256"]}
 
         def publish_manifest(self, body, **_kwargs):
             return {"sha256": __import__("hashlib").sha256(body).hexdigest(),

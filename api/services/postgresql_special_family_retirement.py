@@ -79,16 +79,13 @@ def _validate_rebuild(value: dict) -> None:
 
 def _content_identities(cursor, baseline: dict) -> dict:
     result = {}
+    tables = {table["name"]: table for table in baseline["tables"]}
     for table in (*CONTEXT_TABLES, *DLM_TABLES):
-        item = baseline["tables"][table]
-        columns = item["columns"]
+        item = tables[table]
+        columns = [column["name"] for column in item["columns"]]
         cursor.execute("SELECT " + ",".join(f'\"{column}\"' for column in columns)
                        + f' FROM "{table}"')
-        identity = lossless.table_identity(columns, item["key_columns"],
-                                            [list(row) for row in cursor.fetchall()])
-        result[table] = {key: identity[key] for key in
-                         ("row_count", "key_set_sha256", "content_sha256")}
-        result[table]["schema_sha256"] = _schema_digest(cursor, table)
+        result[table] = lossless.raw_table_identity(item, cursor.fetchall())
     return result
 
 

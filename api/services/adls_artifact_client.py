@@ -101,6 +101,32 @@ class AzureArtifactClient:
             response.close()
         return content
 
+    def read_with_etag(self, path: str, max_bytes: int) -> tuple[bytes, str] | None:
+        try:
+            response = self._request("GET", path, Range=f"bytes=0-{max_bytes}")
+        except Exception as error:
+            if getattr(error, "status", None) == 404:
+                return None
+            raise
+        try:
+            content, etag = response.read(max_bytes + 1), response.headers.get("ETag")
+        finally:
+            response.close()
+        if len(content) > max_bytes or not etag:
+            raise RuntimeError("ADLS read is oversized or missing an ETag")
+        return content, etag
+
+    def put_if_match(self, path: str, content: bytes, expected_etag: str | None) -> str:
+        condition = {"If-Match": expected_etag} if expected_etag else {"If-None-Match": "*"}
+        response = self._request("PUT", path, content, **{
+            "Content-Type": "application/json", "Content-Length": str(len(content)),
+            "x-ms-blob-type": "BlockBlob", **condition})
+        etag = response.headers.get("ETag")
+        response.close()
+        if not etag:
+            raise RuntimeError("ADLS conditional write returned no ETag")
+        return etag
+
     def delete_if_match(self, path: str, etag: str) -> None:
         if (not isinstance(etag, str) or not etag or len(etag) > 256
                 or any(ord(character) < 32 for character in etag)):

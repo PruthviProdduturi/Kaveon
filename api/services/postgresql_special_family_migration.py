@@ -1,239 +1,153 @@
-"""Lossless, CAS-safe publication of the seven PostgreSQL special families."""
+"""Lossless, manifest-last publication of canonical special-family baselines."""
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
-from datetime import date, datetime, timezone
-from decimal import Decimal
+
+from services import postgresql_baseline_identity as baseline_identity
 
 TABLES = ("context_answer_cache", "context_snapshots", "dlm_answers",
           "dlm_artifact", "dlm_router", "dlm_sketch", "dlm_value_index")
-SCHEMA_VERSION = 1
-MAX_ROWS = 10_000_000
-MAX_BYTES = 256 * 1024 * 1024
+SCHEMA_VERSION = 2
 MAX_CAS_ATTEMPTS = 8
-HEX = frozenset("0123456789abcdef")
 
 
-def _value(value):
-    if value is None or isinstance(value, (bool, int, str)):
-        return value
-    if isinstance(value, float):
-        if value != value or value in (float("inf"), float("-inf")):
-            raise RuntimeError("special-family values must be finite")
-        return {"$float": value.hex()}
-    if isinstance(value, Decimal):
-        return {"$decimal": str(value)}
-    if isinstance(value, bytes):
-        return {"$bytes": base64.b64encode(value).decode("ascii")}
-    if isinstance(value, datetime):
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise RuntimeError("special-family timestamps must include a timezone")
-        return {"$datetime": value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")}
-    if isinstance(value, date):
-        return {"$date": value.isoformat()}
-    if isinstance(value, (list, tuple)):
-        return [_value(item) for item in value]
-    if isinstance(value, dict):
-        if any(not isinstance(key, str) for key in value):
-            raise RuntimeError("special-family JSON object keys must be strings")
-        return {key: _value(child) for key, child in value.items()}
-    raise RuntimeError(f"unsupported special-family value type: {type(value).__name__}")
+def _canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=False, allow_nan=False).encode("utf-8")
 
 
-def _canonical(value) -> bytes:
-    return json.dumps(_value(value), sort_keys=True, separators=(",", ":"),
-                      ensure_ascii=False).encode("utf-8")
+def _sha_bytes(value): return hashlib.sha256(value).hexdigest()
 
 
-def _sha(value) -> str:
-    return hashlib.sha256(_canonical(value)).hexdigest()
+def verify_baseline(payload):
+    manifest = baseline_identity.validate(payload)
+    found = tuple(table["name"] for table in payload["tables"])
+    if set(found) != set(TABLES) or len(found) != len(TABLES):
+        raise RuntimeError("canonical baseline must contain all seven special-family tables")
+    identities = {table["name"]: {
+        "row_count": table["row_count"], "schema_sha256": table["schema_sha256"],
+        "key_set_sha256": table["key_sha256"], "content_sha256": table["content_sha256"]}
+        for table in payload["tables"]}
+    return {"baseline_evidence_id": _sha_bytes(baseline_identity._json(payload)),
+            "source_snapshot_id": manifest["source_id"],
+            "global_content_sha256": manifest["global_sha256"],
+            "table_identities": identities, "encoding": manifest["encoding"]}
 
 
-def _digest(value, label="digest"):
-    if not isinstance(value, str) or len(value) != 64 or set(value) - HEX:
-        raise RuntimeError(f"special-family {label} is invalid")
-    return value
+def raw_table_identity(table, rows):
+    """Hash fresh PostgreSQL rows with the exact baseline encoding contract."""
+    names = [column["name"] for column in table["columns"]]
+    dictionaries = [dict(zip(names, row)) for row in rows]
+    value = baseline_identity.table_identity(table["name"], table["columns"],
+                                             table["primary_key"], dictionaries)
+    return {"row_count": value["row_count"], "schema_sha256": value["schema_sha256"],
+            "key_set_sha256": value["key_sha256"], "content_sha256": value["content_sha256"]}
 
 
-def table_identity(columns, key_columns, rows):
-    if (not isinstance(columns, list) or not columns or len(columns) != len(set(columns))
-            or any(not isinstance(column, str) or not column.isidentifier() for column in columns)
-            or not isinstance(key_columns, list) or not key_columns
-            or len(key_columns) != len(set(key_columns)) or not set(key_columns) <= set(columns)):
-        raise RuntimeError("special-family table columns are invalid")
-    if not isinstance(rows, list) or len(rows) > MAX_ROWS:
-        raise RuntimeError("special-family row bound exceeded")
-    indexes = [columns.index(column) for column in key_columns]
-    normalized = []
-    for row in rows:
-        if not isinstance(row, (list, tuple)) or len(row) != len(columns):
-            raise RuntimeError("special-family row shape is invalid")
-        normalized.append([_value(value) for value in row])
-    normalized.sort(key=lambda row: _canonical([row[index] for index in indexes]))
-    keys = [[row[index] for index in indexes] for row in normalized]
-    if len({_canonical(key) for key in keys}) != len(keys):
-        raise RuntimeError("special-family source keys are not unique")
-    if len(_canonical(normalized)) > MAX_BYTES:
-        raise RuntimeError("special-family content byte bound exceeded")
-    return {"row_count": len(normalized), "key_set_sha256": _sha(keys),
-            "content_sha256": _sha(normalized), "rows": normalized}
+def _table_object(identity, table):
+    return {"schema_version": SCHEMA_VERSION, "encoding": identity["encoding"],
+            "baseline_evidence_id": identity["baseline_evidence_id"], "table": table}
 
 
-def build_baseline(baseline_evidence_id, source_snapshot_id, tables):
-    _digest(baseline_evidence_id, "baseline evidence id")
-    if not isinstance(source_snapshot_id, str) or not source_snapshot_id:
-        raise RuntimeError("special-family source snapshot is invalid")
-    if not isinstance(tables, dict) or set(tables) != set(TABLES):
-        raise RuntimeError("all seven special-family tables are required")
-    result = {}
-    total_rows = total_bytes = 0
-    for name in TABLES:
-        item = tables[name]
-        if not isinstance(item, dict) or set(item) != {"columns", "key_columns", "rows", "schema_sha256"}:
-            raise RuntimeError("special-family source table schema is invalid")
-        identity = table_identity(item["columns"], item["key_columns"], item["rows"])
-        total_rows += identity["row_count"]
-        total_bytes += len(_canonical(identity["rows"]))
-        result[name] = {"columns": item["columns"], "key_columns": item["key_columns"],
-                        "schema_sha256": _digest(item["schema_sha256"], "schema digest"), **identity}
-    if total_rows > MAX_ROWS or total_bytes > MAX_BYTES:
-        raise RuntimeError("special-family aggregate migration bound exceeded")
-    global_identity = _sha({name: {key: result[name][key] for key in
-        ("row_count", "schema_sha256", "key_set_sha256", "content_sha256")} for name in TABLES})
-    return {"schema_version": SCHEMA_VERSION, "baseline_evidence_id": baseline_evidence_id,
-            "source_snapshot_id": source_snapshot_id, "tables": result,
-            "global_content_sha256": global_identity}
-
-
-def publish(baseline, *, expected_head, publisher):
-    """Publish immutable table objects first and one manifest with a bounded head CAS."""
-    verified = verify_baseline(baseline)
+def publish(payload, *, expected_head, publisher):
+    identity = verify_baseline(payload)
     if not isinstance(expected_head, str) or not expected_head:
-        raise RuntimeError("special-family publication requires an expected head")
+        raise RuntimeError("special-family publication requires an expected head ETag or 'absent'")
     receipts = []
+    table_by_name = {table["name"]: table for table in payload["tables"]}
     for name in TABLES:
-        item = baseline["tables"][name]
-        body = _canonical({"schema_version": SCHEMA_VERSION,
-                           "baseline_evidence_id": baseline["baseline_evidence_id"],
-                           "table": name, "columns": item["columns"],
-                           "key_columns": item["key_columns"], "rows": item["rows"]})
-        path = f"postgresql-special-families/{baseline['baseline_evidence_id']}/{name}.json"
-        receipt = publisher.publish_immutable(path, body, hashlib.sha256(body).hexdigest())
+        table = table_by_name[name]
+        body = _canonical(_table_object(identity, table))
+        path = f"objects/{identity['baseline_evidence_id']}/{name}.json"
+        receipt = publisher.publish_immutable(path, body, _sha_bytes(body))
+        expected = identity["table_identities"][name]
         if (not isinstance(receipt, dict) or receipt.get("path") != path
-                or receipt.get("sha256") != hashlib.sha256(body).hexdigest()
+                or receipt.get("sha256") != _sha_bytes(body)
                 or receipt.get("status") not in {"created", "verified-replay"}
-                or receipt.get("row_count") != item["row_count"]
-                or receipt.get("key_set_sha256") != item["key_set_sha256"]
-                or receipt.get("content_sha256") != item["content_sha256"]):
-            raise RuntimeError("special-family immutable publication failed")
-        if type(receipt.get("bytes")) is not int or not 1 <= receipt["bytes"] <= MAX_BYTES:
-            raise RuntimeError("special-family immutable publication exceeded its byte bound")
+                or type(receipt.get("bytes")) is not int or not 1 <= receipt["bytes"]
+                    <= baseline_identity.MAX_PAYLOAD_BYTES
+                or any(receipt.get(key) != expected[key] for key in
+                       ("row_count", "key_set_sha256", "content_sha256"))):
+            raise RuntimeError("special-family immutable publication failed readback verification")
         receipts.append(receipt)
-    manifest = {"schema_version": SCHEMA_VERSION,
-                "baseline_evidence_id": baseline["baseline_evidence_id"],
-                "source_snapshot_id": baseline["source_snapshot_id"],
-                "global_content_sha256": verified["global_content_sha256"],
+    manifest_value = {"schema_version": SCHEMA_VERSION, "encoding": identity["encoding"],
+                "baseline_evidence_id": identity["baseline_evidence_id"],
+                "source_snapshot_id": identity["source_snapshot_id"],
+                "global_content_sha256": identity["global_content_sha256"],
                 "tables": [{"table": name, "path": receipts[index]["path"],
                             "sha256": receipts[index]["sha256"],
-                            "row_count": baseline["tables"][name]["row_count"],
-                            "key_set_sha256": baseline["tables"][name]["key_set_sha256"],
-                            "content_sha256": baseline["tables"][name]["content_sha256"]}
+                            **identity["table_identities"][name]}
                            for index, name in enumerate(TABLES)]}
-    body = _canonical(manifest)
+    body = _canonical(manifest_value)
     committed = publisher.publish_manifest(body, expected_head=expected_head,
                                             max_attempts=MAX_CAS_ATTEMPTS)
     if (not isinstance(committed, dict) or committed.get("status") not in
-            {"committed", "verified-replay"} or committed.get("sha256") !=
-            hashlib.sha256(body).hexdigest() or type(committed.get("cas_attempts")) is not int
+            {"committed", "verified-replay"} or committed.get("sha256") != _sha_bytes(body)
+            or type(committed.get("cas_attempts")) is not int
             or not 0 <= committed["cas_attempts"] <= MAX_CAS_ATTEMPTS
             or committed.get("published_last") is not True):
         raise RuntimeError("special-family manifest CAS publication failed")
-    return {"schema_version": SCHEMA_VERSION,
-            "baseline_evidence_id": baseline["baseline_evidence_id"],
-            "source_snapshot_id": baseline["source_snapshot_id"],
-            "global_content_sha256": verified["global_content_sha256"],
-            "tables": [{"table": name,
-                        "source": verified["table_identities"][name],
-                        "target": {key: receipts[index][key] for key in
-                                   ("row_count", "key_set_sha256", "content_sha256")}}
-                       for index, name in enumerate(TABLES)],
-            "objects": receipts, "manifest": committed}
+    evidence = {"schema_version": SCHEMA_VERSION, **identity,
+                "tables": [{"table": name,
+                            "source": dict(identity["table_identities"][name]),
+                            "target": dict(identity["table_identities"][name])}
+                           for name in TABLES], "objects": receipts, "manifest": committed,
+                "operational_observation": {
+                    "baseline_evidence_id": identity["baseline_evidence_id"],
+                    "baseline_sha256": identity["global_content_sha256"],
+                    "source_sha256": identity["global_content_sha256"],
+                    "target_sha256": identity["global_content_sha256"],
+                    "table_count": len(TABLES), "pending_events": 0, "failed_events": 0,
+                    "manifest_published_last": True}}
+    verify_evidence(evidence, payload)
+    return evidence
 
 
-def verify_baseline(value):
-    if (not isinstance(value, dict) or set(value) != {"schema_version", "baseline_evidence_id",
-            "source_snapshot_id", "tables", "global_content_sha256"}
-            or value["schema_version"] != SCHEMA_VERSION):
-        raise RuntimeError("special-family baseline schema is invalid")
-    rebuilt = build_baseline(value["baseline_evidence_id"], value["source_snapshot_id"], {
-        name: {key: value["tables"][name][key] for key in
-               ("columns", "key_columns", "rows", "schema_sha256")} for name in TABLES})
-    if rebuilt != value:
-        raise RuntimeError("special-family baseline identity mismatch")
-    return {"baseline_evidence_id": value["baseline_evidence_id"],
-            "source_snapshot_id": value["source_snapshot_id"],
-            "global_content_sha256": value["global_content_sha256"],
-            "table_identities": {name: {key: value["tables"][name][key] for key in
-                ("row_count", "schema_sha256", "key_set_sha256", "content_sha256")}
-                for name in TABLES}}
-
-
-def verify_evidence(evidence, baseline):
-    identity = verify_baseline(baseline)
+def verify_evidence(evidence, payload):
+    identity = verify_baseline(payload)
     if (not isinstance(evidence, dict) or set(evidence) != {"schema_version",
             "baseline_evidence_id", "source_snapshot_id", "global_content_sha256",
-            "tables", "objects", "manifest"} or evidence["schema_version"] != SCHEMA_VERSION
-            or evidence["baseline_evidence_id"] != identity["baseline_evidence_id"]
-            or evidence["source_snapshot_id"] != identity["source_snapshot_id"]
-            or evidence["global_content_sha256"] != identity["global_content_sha256"]):
-        raise RuntimeError("special-family migration is not bound to the baseline")
-    tables = evidence["tables"]
-    if (not isinstance(tables, list) or len(tables) != len(TABLES)
-            or [item.get("table") for item in tables] != list(TABLES)):
+            "table_identities", "encoding", "tables", "objects", "manifest",
+            "operational_observation"}
+            or evidence["schema_version"] != SCHEMA_VERSION
+            or any(evidence[key] != identity[key] for key in identity)):
+        raise RuntimeError("special-family migration is not bound to the canonical baseline")
+    if evidence["operational_observation"] != {
+            "baseline_evidence_id": identity["baseline_evidence_id"],
+            "baseline_sha256": identity["global_content_sha256"],
+            "source_sha256": identity["global_content_sha256"],
+            "target_sha256": identity["global_content_sha256"], "table_count": len(TABLES),
+            "pending_events": 0, "failed_events": 0, "manifest_published_last": True}:
+        raise RuntimeError("special-family operational migration observation is invalid")
+    tables, objects = evidence["tables"], evidence["objects"]
+    if (not isinstance(tables, list) or [item.get("table") for item in tables] != list(TABLES)
+            or not isinstance(objects, list) or len(objects) != len(TABLES)):
         raise RuntimeError("special-family target table coverage is incomplete")
-    for item in tables:
-        expected = identity["table_identities"][item["table"]]
-        target_expected = {key: expected[key] for key in
-                           ("row_count", "key_set_sha256", "content_sha256")}
-        if set(item) != {"table", "source", "target"} or item["source"] != expected \
-                or item["target"] != target_expected:
-            raise RuntimeError("special-family source and target identities differ")
-    objects = evidence["objects"]
-    if (not isinstance(objects, list) or len(objects) != len(TABLES)
-            or [item.get("path", "").rsplit("/", 1)[-1] for item in objects]
-               != [name + ".json" for name in TABLES]
-            or any(item.get("status") not in {"created", "verified-replay"}
-                   or _digest(item.get("sha256"), "object digest") != item["sha256"]
-                   for item in objects)):
-        raise RuntimeError("special-family immutable object evidence is incomplete")
+    table_by_name = {table["name"]: table for table in payload["tables"]}
     for index, name in enumerate(TABLES):
-        item = baseline["tables"][name]
-        body = _canonical({"schema_version": SCHEMA_VERSION,
-                           "baseline_evidence_id": baseline["baseline_evidence_id"],
-                           "table": name, "columns": item["columns"],
-                           "key_columns": item["key_columns"], "rows": item["rows"]})
-        if objects[index]["sha256"] != hashlib.sha256(body).hexdigest():
+        expected = identity["table_identities"][name]
+        if tables[index] != {"table": name, "source": expected, "target": expected}:
+            raise RuntimeError("special-family source and target identities differ")
+        body = _canonical(_table_object(identity, table_by_name[name]))
+        item = objects[index]
+        if (item.get("path") != f"objects/{identity['baseline_evidence_id']}/{name}.json"
+                or item.get("sha256") != _sha_bytes(body)
+                or item.get("status") not in {"created", "verified-replay"}):
             raise RuntimeError("special-family immutable object identity mismatch")
+    manifest_value = {"schema_version": SCHEMA_VERSION, "encoding": identity["encoding"],
+        "baseline_evidence_id": identity["baseline_evidence_id"],
+        "source_snapshot_id": identity["source_snapshot_id"],
+        "global_content_sha256": identity["global_content_sha256"],
+        "tables": [{"table": name, "path": objects[index]["path"],
+                    "sha256": objects[index]["sha256"], **identity["table_identities"][name]}
+                   for index, name in enumerate(TABLES)]}
     manifest = evidence["manifest"]
-    if (not isinstance(manifest, dict) or manifest.get("status") not in
-            {"committed", "verified-replay"} or _digest(manifest.get("sha256"),
-            "manifest digest") != manifest["sha256"] or type(manifest.get("cas_attempts")) is not int
+    if (not isinstance(manifest, dict) or manifest.get("sha256") !=
+            _sha_bytes(_canonical(manifest_value)) or manifest.get("status") not in
+            {"committed", "verified-replay"} or type(manifest.get("cas_attempts")) is not int
             or not 0 <= manifest["cas_attempts"] <= MAX_CAS_ATTEMPTS
             or manifest.get("published_last") is not True):
         raise RuntimeError("special-family manifest evidence is invalid")
-    manifest_body = _canonical({"schema_version": SCHEMA_VERSION,
-        "baseline_evidence_id": baseline["baseline_evidence_id"],
-        "source_snapshot_id": baseline["source_snapshot_id"],
-        "global_content_sha256": identity["global_content_sha256"],
-        "tables": [{"table": name, "path": objects[index]["path"],
-                    "sha256": objects[index]["sha256"],
-                    "row_count": baseline["tables"][name]["row_count"],
-                    "key_set_sha256": baseline["tables"][name]["key_set_sha256"],
-                    "content_sha256": baseline["tables"][name]["content_sha256"]}
-                   for index, name in enumerate(TABLES)]})
-    if manifest["sha256"] != hashlib.sha256(manifest_body).hexdigest():
-        raise RuntimeError("special-family manifest identity mismatch")
     return identity

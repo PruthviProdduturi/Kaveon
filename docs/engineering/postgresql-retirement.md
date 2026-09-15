@@ -370,6 +370,33 @@ family mapping, source-snapshot identity and a report digest; it contains no
 rows or credentials. Archive it with the cutover evidence. A locally generated
 fixture report does not qualify the live AKS schema.
 
+### Lossless seven-family publication
+
+The reviewed canonical baseline produced by
+`postgresql_baseline_identity` is the only accepted input for the two context
+tables and five DLM tables. Run the publisher in the API workload-identity pod;
+it reads `KAVEON_ADLS_ACCOUNT` and `KAVEON_ADLS_CONTAINER` and never accepts a
+storage key or token on the command line.
+
+```powershell
+$env:KAVEON_SPECIAL_FAMILY_MIGRATION_ENABLED = "true"
+python -m services.postgresql_special_family_migration_cli `
+  --baseline /retirement/postgresql-special-family-baseline.json `
+  --prefix retirement/special-families/<immutable-run-id> `
+  --expected-head-etag absent `
+  --output /retirement/special-family-migration.json
+```
+
+For a later commit, pass the exact quoted ETag returned for `head.json`. The
+command creates and reads back seven immutable table objects, writes and reads
+back the immutable manifest, then updates `head.json` with `If-None-Match: *` or
+`If-Match`. A retry is accepted only when the existing object bytes and final
+head pointer are identical. A different object or head fails closed. Preserve
+the baseline and emitted evidence, then provide both to
+`retire-postgresql-special-families.py` as `--lossless-baseline` and
+`--lossless-migration-evidence`; retirement recomputes their exact identities
+inside the locked deletion transaction.
+
 ## Implemented boundary and remaining live proof
 
 All 16 authority families have checked-in reconciliation producers and a strict
