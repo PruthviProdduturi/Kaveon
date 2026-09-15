@@ -953,10 +953,23 @@ impl AdlsParquetReader {
         } else {
             scan_parallelism().min(row_groups.len()).max(1)
         };
-        let (schema, output_projection) = crate::parquet_reader::ordered_projection(
-            Arc::clone(&schema),
-            self.columns.as_deref(),
-        )?;
+        // The decoder emits projected columns in file order; the caller's
+        // order is restored per batch, exactly as before the lanes.
+        let projected_schema = match &projection {
+            Some(indices) => {
+                let mut in_file_order = indices.clone();
+                in_file_order.sort_unstable();
+                in_file_order.dedup();
+                Arc::new(
+                    schema
+                        .project(&in_file_order)
+                        .map_err(|error| storage_error(error.to_string()))?,
+                )
+            }
+            None => Arc::clone(&schema),
+        };
+        let (schema, output_projection) =
+            crate::parquet_reader::ordered_projection(projected_schema, self.columns.as_deref())?;
         let acquired = match decoded_cache_key {
             Some(key) => Some(acquire_decoded_cache(key, &metrics).await),
             None => None,
@@ -1355,11 +1368,19 @@ mod tests {
         use parquet::arrow::ArrowWriter;
         use parquet::file::properties::WriterProperties;
         let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("label", arrow::datatypes::DataType::Utf8, false),
             arrow::datatypes::Field::new("value", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("other", arrow::datatypes::DataType::Int64, false),
         ]));
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
-            vec![Arc::new(Int64Array::from((0..600).collect::<Vec<i64>>()))],
+            vec![
+                Arc::new(arrow::array::StringArray::from(
+                    (0..600).map(|i| format!("row-{i}")).collect::<Vec<_>>(),
+                )),
+                Arc::new(Int64Array::from((0..600).collect::<Vec<i64>>())),
+                Arc::new(Int64Array::from(vec![7_i64; 600])),
+            ],
         )
         .unwrap();
         let mut bytes = Vec::new();
@@ -1382,11 +1403,19 @@ mod tests {
     }
 
     async fn sum_of_values(reader: AdlsParquetReader) -> (i64, usize, u64) {
-        let mut stream = reader.read().await.unwrap();
+        // Request the columns out of file order; `value` must come back first.
+        let mut stream = reader
+            .with_columns(vec!["other".into(), "value".into()])
+            .read()
+            .await
+            .unwrap();
+        assert_eq!(stream.schema().field(0).name(), "other");
         let (mut total, mut rows) = (0_i64, 0_usize);
         while let Some(batch) = stream.next_batch().await.unwrap() {
+            assert_eq!(batch.num_columns(), 2);
+            assert_eq!(batch.schema().field(1).name(), "value");
             let values = batch
-                .column(0)
+                .column(1)
                 .as_primitive::<arrow::datatypes::Int64Type>();
             total += values.iter().flatten().sum::<i64>();
             rows += batch.num_rows();
