@@ -1,0 +1,27 @@
+{
+  "table": "OpenSource.kaveon_product.kaveon_events_enriched",
+  "rows": 504000000,
+  "notes": "The thirteen live corpus statements plus the seven profile shapes, measured on KaveonDB alone on the three worker nodes: one warm-up then three timed executions, median reported. Targets are the done-when statements of docs/engineering/upper-hand-program.md; the Trino column is the 2026-09-15 time-to-answer pass on the same object.",
+  "statements": [
+    {"id": "P04", "sql": "SELECT country, industry, SUM(actions) AS \"Total actions\" FROM kaveon_product.kaveon_events_enriched GROUP BY country, industry ORDER BY \"Total actions\" DESC LIMIT 50", "trino_seconds": 33.84, "target_seconds": 20},
+    {"id": "F03", "sql": "SELECT country, SUM(queries_run) AS \"Queries run\" FROM kaveon_product.kaveon_events_enriched WHERE region = 'Europe' GROUP BY country ORDER BY \"Queries run\" DESC LIMIT 50", "trino_seconds": 20.5, "target_seconds": 12},
+    {"id": "F04", "sql": "SELECT surface, SUM(actions) AS \"Total actions\" FROM kaveon_product.kaveon_events_enriched WHERE country = 'United States' GROUP BY surface ORDER BY \"Total actions\" DESC LIMIT 50", "trino_seconds": 10.32, "target_seconds": 6},
+    {"id": "F08", "sql": "SELECT license, SUM(actions) AS \"Total actions\" FROM kaveon_product.kaveon_events_enriched WHERE surface = 'Chat' GROUP BY license ORDER BY \"Total actions\" DESC LIMIT 50", "trino_seconds": 3.84, "target_seconds": 3},
+    {"id": "Y01", "sql": "SELECT SUM(actions) AS \"Total actions\" FROM kaveon_product.kaveon_events_enriched WHERE event_date >= '2026-01-01' AND event_date < '2027-01-01'", "trino_seconds": 2.45, "target_seconds": 3},
+    {"id": "Y02", "sql": "SELECT country, SUM(sessions) AS Sessions FROM kaveon_product.kaveon_events_enriched WHERE event_date >= '2026-01-01' AND event_date < '2027-01-01' GROUP BY country ORDER BY Sessions DESC LIMIT 50", "trino_seconds": 20.28, "target_seconds": 12},
+    {"id": "Y03", "sql": "SELECT SUM(actions) AS \"Total actions\" FROM kaveon_product.kaveon_events_enriched WHERE event_date >= '2025-01-01' AND event_date < '2026-01-01'", "trino_seconds": 0.51, "target_seconds": 1},
+    {"id": "Y04", "sql": "SELECT SUM(errors) AS Errors FROM kaveon_product.kaveon_events_enriched WHERE event_date >= '2026-09-07'", "trino_seconds": 0.46, "target_seconds": 1},
+    {"id": "Y05", "sql": "SELECT event_date, SUM(sessions) AS Sessions FROM kaveon_product.kaveon_events_enriched GROUP BY event_date ORDER BY event_date LIMIT 1000", "trino_seconds": 2.72, "target_seconds": 3},
+    {"id": "Y06", "sql": "SELECT event_date, SUM(actions) AS \"Total actions\" FROM kaveon_product.kaveon_events_enriched GROUP BY event_date ORDER BY event_date LIMIT 1000", "trino_seconds": 2.27, "target_seconds": 3},
+    {"id": "C02", "sql": "SELECT surface, SUM(actions) AS \"Total actions\" FROM kaveon_product.kaveon_events_enriched WHERE event_date >= '2026-01-01' AND event_date < '2027-01-01' GROUP BY surface ORDER BY \"Total actions\" DESC LIMIT 50", "trino_seconds": 3.24, "target_seconds": 3},
+    {"id": "C03", "sql": "SELECT platform, SUM(actions) AS \"Total actions\" FROM kaveon_product.kaveon_events_enriched WHERE event_date >= '2026-01-01' AND event_date < '2027-01-01' GROUP BY platform ORDER BY \"Total actions\" DESC LIMIT 50", "trino_seconds": 18.42, "target_seconds": 10},
+    {"id": "C04", "sql": "SELECT platform, SUM(actions) AS \"Total actions\" FROM kaveon_product.kaveon_events_enriched WHERE platform = 'Mobile' AND event_date >= '2026-01-01' AND event_date < '2027-01-01' GROUP BY platform ORDER BY \"Total actions\" DESC LIMIT 50", "trino_seconds": 13.35, "target_seconds": 8},
+    {"id": "count_star", "sql": "SELECT COUNT(*) FROM kaveon_product.kaveon_events_enriched", "trino_seconds": null, "target_seconds": 1},
+    {"id": "sum_1col", "sql": "SELECT SUM(actions) FROM kaveon_product.kaveon_events_enriched", "trino_seconds": null, "target_seconds": 3},
+    {"id": "sum_by_surface", "sql": "SELECT surface, SUM(actions) AS a FROM kaveon_product.kaveon_events_enriched GROUP BY surface ORDER BY a DESC LIMIT 50", "trino_seconds": null, "target_seconds": 5},
+    {"id": "sum_by_country", "sql": "SELECT country, SUM(actions) AS a FROM kaveon_product.kaveon_events_enriched GROUP BY country ORDER BY a DESC LIMIT 50", "trino_seconds": null, "target_seconds": 8},
+    {"id": "sum_by_pair", "sql": "SELECT country, industry, SUM(actions) AS a FROM kaveon_product.kaveon_events_enriched GROUP BY country, industry ORDER BY a DESC LIMIT 50", "trino_seconds": null, "target_seconds": 12},
+    {"id": "surface_chat_sum", "sql": "SELECT SUM(actions) FROM kaveon_product.kaveon_events_enriched WHERE surface = 'Chat'", "trino_seconds": null, "target_seconds": 3},
+    {"id": "one_day", "sql": "SELECT SUM(actions) FROM kaveon_product.kaveon_events_enriched WHERE event_date = '2026-07-10'", "trino_seconds": null, "target_seconds": 1}
+  ]
+}
