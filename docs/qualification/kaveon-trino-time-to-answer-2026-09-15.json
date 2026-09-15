@@ -1,0 +1,281 @@
+{
+ "measured_at": "2026-09-15",
+ "table": "OpenSource.kaveon_product.kaveon_events_enriched",
+ "rows_in_table": 504000000,
+ "conditions": "each engine alone on the three worker nodes, one warm-up then three timed executions, median reported; Trino 483 via the read-only Hive catalog over the same Parquet object; Kaveon via the API bridge",
+ "records": [
+  {
+   "id": "P04",
+   "question": "telemetry actions by country and industry",
+   "sql": "SELECT country, industry, SUM(actions) AS \"Total actions\" FROM kaveon_product.kaveon_events_enriched GROUP BY country, industry ORDER BY \"Total actions\" DESC LIMIT 50",
+   "dlm_route_today": "live",
+   "dlm_seconds": 0.09,
+   "kaveon_median_seconds": 82.285,
+   "kaveon_seconds": [
+    84.982,
+    82.285,
+    82.25
+   ],
+   "trino_median_seconds": 33.842,
+   "trino_seconds": [
+    35.903,
+    33.842,
+    33.249
+   ],
+   "rows": 50,
+   "trino_rows": 50
+  },
+  {
+   "id": "F03",
+   "question": "telemetry queries run in Europe by country",
+   "sql": "SELECT country, SUM(queries_run) AS \"Queries run\" FROM kaveon_product.kaveon_events_enriched WHERE region = 'Europe' GROUP BY country ORDER BY \"Queries run\" DESC LIMIT 50",
+   "dlm_route_today": "live",
+   "dlm_seconds": 0.09,
+   "kaveon_median_seconds": 32.33,
+   "kaveon_seconds": [
+    32.953,
+    32.33,
+    31.782
+   ],
+   "trino_median_seconds": 20.497,
+   "trino_seconds": [
+    20.497,
+    20.953,
+    19.73
+   ],
+   "rows": 7,
+   "trino_rows": 7
+  },
+  {
+   "id": "F04",
+   "question": "telemetry actions in United States by surface",
+   "sql": "SELECT surface, SUM(actions) AS \"Total actions\" FROM kaveon_product.kaveon_events_enriched WHERE country = 'United States' GROUP BY surface ORDER BY \"Total actions\" DESC LIMIT 50",
+   "dlm_route_today": "live",
+   "dlm_seconds": 0.07,
+   "kaveon_median_seconds": 20.805,
+   "kaveon_seconds": [
+    20.805,
+    20.947,
+    19.776
+   ],
+   "trino_median_seconds": 10.321,
+   "trino_seconds": [
+    11.598,
+    10.321,
+    10.047
+   ],
+   "rows": 6,
+   "trino_rows": 6
+  },
+  {
+   "id": "F08",
+   "question": "telemetry actions on the Chat surface by license",
+   "sql": "SELECT license, SUM(actions) AS \"Total actions\" FROM kaveon_product.kaveon_events_enriched WHERE surface = 'Chat' GROUP BY license ORDER BY \"Total actions\" DESC LIMIT 50",
+   "dlm_route_today": "live",
+   "dlm_seconds": 0.11,
+   "kaveon_median_seconds": 22.979,
+   "kaveon_seconds": [
+    22.967,
+    22.979,
+    23.155
+   ],
+   "trino_median_seconds": 3.839,
+   "trino_seconds": [
+    3.839,
+    3.708,
+    3.953
+   ],
+   "rows": 4,
+   "trino_rows": 4
+  },
+  {
+   "id": "Y01",
+   "question": "telemetry actions in July 2026",
+   "sql": "SELECT SUM(actions) AS \"Total actions\" FROM kaveon_product.kaveon_events_enriched WHERE event_date >= '2026-01-01' AND event_date < '2027-01-01'",
+   "dlm_route_today": "live",
+   "dlm_seconds": 0.43,
+   "kaveon_median_seconds": 15.346,
+   "kaveon_seconds": [
+    15.129,
+    15.346,
+    15.495
+   ],
+   "trino_median_seconds": 2.448,
+   "trino_seconds": [
+    2.757,
+    2.448,
+    2.122
+   ],
+   "rows": 1,
+   "trino_rows": 1
+  },
+  {
+   "id": "Y02",
+   "question": "telemetry sessions in 2026 by country",
+   "sql": "SELECT country, SUM(sessions) AS Sessions FROM kaveon_product.kaveon_events_enriched WHERE event_date >= '2026-01-01' AND event_date < '2027-01-01' GROUP BY country ORDER BY Sessions DESC LIMIT 50",
+   "dlm_route_today": "live",
+   "dlm_seconds": 0.41,
+   "kaveon_median_seconds": 44.234,
+   "kaveon_seconds": [
+    44.663,
+    43.321,
+    44.234
+   ],
+   "trino_median_seconds": 20.28,
+   "trino_seconds": [
+    20.231,
+    20.28,
+    21.866
+   ],
+   "rows": 26,
+   "trino_rows": 26
+  },
+  {
+   "id": "Y03",
+   "question": "telemetry actions in 2025",
+   "sql": "SELECT SUM(actions) AS \"Total actions\" FROM kaveon_product.kaveon_events_enriched WHERE event_date >= '2025-01-01' AND event_date < '2026-01-01'",
+   "dlm_route_today": "live",
+   "dlm_seconds": 0.39,
+   "kaveon_median_seconds": 10.495,
+   "kaveon_seconds": [
+    10.061,
+    10.593,
+    10.495
+   ],
+   "trino_median_seconds": 0.505,
+   "trino_seconds": [
+    0.505,
+    0.545,
+    0.492
+   ],
+   "rows": 1,
+   "trino_rows": 1
+  },
+  {
+   "id": "Y04",
+   "question": "telemetry errors last 7 days",
+   "sql": "SELECT SUM(errors) AS Errors FROM kaveon_product.kaveon_events_enriched WHERE event_date >= '2026-09-07'",
+   "dlm_route_today": "live",
+   "dlm_seconds": 0.08,
+   "kaveon_median_seconds": 6.859,
+   "kaveon_seconds": [
+    6.859,
+    6.914,
+    6.016
+   ],
+   "trino_median_seconds": 0.46,
+   "trino_seconds": [
+    0.46,
+    0.446,
+    0.477
+   ],
+   "rows": 1,
+   "trino_rows": 1
+  },
+  {
+   "id": "Y05",
+   "question": "telemetry sessions by month",
+   "sql": "SELECT event_date, SUM(sessions) AS Sessions FROM kaveon_product.kaveon_events_enriched GROUP BY event_date ORDER BY event_date LIMIT 1000",
+   "dlm_route_today": "live",
+   "dlm_seconds": 0.07,
+   "kaveon_median_seconds": 29.813,
+   "kaveon_seconds": [
+    27.788,
+    30.296,
+    29.813
+   ],
+   "trino_median_seconds": 2.723,
+   "trino_seconds": [
+    3.051,
+    2.696,
+    2.723
+   ],
+   "rows": 28,
+   "trino_rows": 28
+  },
+  {
+   "id": "Y06",
+   "question": "trend of telemetry actions over time",
+   "sql": "SELECT event_date, SUM(actions) AS \"Total actions\" FROM kaveon_product.kaveon_events_enriched GROUP BY event_date ORDER BY event_date LIMIT 1000",
+   "dlm_route_today": "live",
+   "dlm_seconds": 0.08,
+   "kaveon_median_seconds": 29.543,
+   "kaveon_seconds": [
+    29.165,
+    43.151,
+    29.543
+   ],
+   "trino_median_seconds": 2.275,
+   "trino_seconds": [
+    3.204,
+    2.159,
+    2.275
+   ],
+   "rows": 28,
+   "trino_rows": 28
+  },
+  {
+   "id": "C02",
+   "question": "what about 2026?",
+   "sql": "SELECT surface, SUM(actions) AS \"Total actions\" FROM kaveon_product.kaveon_events_enriched WHERE event_date >= '2026-01-01' AND event_date < '2027-01-01' GROUP BY surface ORDER BY \"Total actions\" DESC LIMIT 50",
+   "dlm_route_today": "live",
+   "dlm_seconds": 1.3,
+   "kaveon_median_seconds": 35.383,
+   "kaveon_seconds": [
+    44.199,
+    35.322,
+    35.383
+   ],
+   "trino_median_seconds": 3.239,
+   "trino_seconds": [
+    3.239,
+    3.384,
+    2.894
+   ],
+   "rows": 6,
+   "trino_rows": 6
+  },
+  {
+   "id": "C03",
+   "question": "and by platform",
+   "sql": "SELECT platform, SUM(actions) AS \"Total actions\" FROM kaveon_product.kaveon_events_enriched WHERE event_date >= '2026-01-01' AND event_date < '2027-01-01' GROUP BY platform ORDER BY \"Total actions\" DESC LIMIT 50",
+   "dlm_route_today": "live",
+   "dlm_seconds": 1.02,
+   "kaveon_median_seconds": 40.389,
+   "kaveon_seconds": [
+    41.185,
+    40.389,
+    38.923
+   ],
+   "trino_median_seconds": 18.417,
+   "trino_seconds": [
+    18.806,
+    18.417,
+    18.102
+   ],
+   "rows": 3,
+   "trino_rows": 3
+  },
+  {
+   "id": "C04",
+   "question": "only for Mobile",
+   "sql": "SELECT platform, SUM(actions) AS \"Total actions\" FROM kaveon_product.kaveon_events_enriched WHERE platform = 'Mobile' AND event_date >= '2026-01-01' AND event_date < '2027-01-01' GROUP BY platform ORDER BY \"Total actions\" DESC LIMIT 50",
+   "dlm_route_today": "live",
+   "dlm_seconds": 0.76,
+   "kaveon_median_seconds": 28.011,
+   "kaveon_seconds": [
+    30.652,
+    28.011,
+    27.206
+   ],
+   "trino_median_seconds": 13.35,
+   "trino_seconds": [
+    13.35,
+    13.422,
+    13.125
+   ],
+   "rows": 1,
+   "trino_rows": 1
+  }
+ ]
+}

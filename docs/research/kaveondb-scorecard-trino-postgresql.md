@@ -25,7 +25,7 @@ Two facts shape everything below:
 
 **Why not higher.** 1.26× on one warm corpus is a promising engine, not a faster engine. Trino's optimizer, dynamic filtering and join reordering have not been exercised by this corpus. The score would move to 8 with a passed cold-cache run and to 9 with the 1.90× gate.
 
-### 1.2 Scale: the 504 M-row test — **5 / 10**
+### 1.2 Scale: the 504 M-row test — **4 / 10**
 
 **Evidence.** On September 11 the 504,000,000-row `kaveon_events_enriched` (one 6.43 GB Parquet file, 168 row groups) was registered on KaveonDB and queried through the Studio front door:
 
@@ -42,7 +42,9 @@ On the previous digest (`6f33810b…`) a worker retained memory across statement
 
 **Trino** on the same three 3-CPU workers would scan the file at a comparable rate — the arithmetic is bandwidth and decode — but with mature spill for aggregation and join, dynamic filtering, and no OOM on exact distinct of 3 M keys.
 
-**Why 5.** The Engine reads 504 M rows correctly and fast enough for a build, but ~20 s for a two-column aggregate is not interactive, and the wide-aggregate cost (3–10× the narrow one) says projection and decode are not yet tight. Trino would answer both in the same order of magnitude; the difference is that Trino would not have needed a fix to survive it.
+**2026-09-15 measurement, both engines alone on the same nodes** (`docs/qualification/kaveon-trino-time-to-answer-2026-09-15.md`): on the thirteen corpus questions that run live, Trino 483 is faster on every one — geometric mean **5.1×**, from 1.6× (`GROUP BY country` with a region filter, 32 s vs 20 s) to 21× (`actions in 2025`, 10.5 s vs 0.5 s). The causes are legible in the file's own metadata: Trino prunes row groups on `event_date`/`surface` min/max and the Engine does not; the Engine's decode floor is ~6.5 s per column pass against Trino's ~2 s; string keys cost the Engine ~2.4× what they cost Trino.
+
+**Why 4, down from 5.** The earlier assumption that Trino "would answer in the same order of magnitude" was wrong; measured, it is five times faster at this scale. The Engine still reads 504 M rows exactly and survives the build, and the product hides most of this behind context answers, but the live path at scale is where Trino is clearly ahead today. Row-group pruning alone would move the seven date-window shapes to sub-second and this score back to 5–6.
 
 ### 1.3 SQL surface — **6 / 10**
 
@@ -103,7 +105,7 @@ KaveonDB ships reproducible images, Helm and Bicep, health/readiness/metrics, a 
 | Dimension | KaveonDB vs Trino | Decides shipping? |
 |---|:---:|:---:|
 | Throughput, matched corpus | 7 | yes — 1.90× gate |
-| Scale at 504 M rows | 5 | yes — interactive latency |
+| Scale at 504 M rows | 4 | yes — interactive latency |
 | SQL surface | 6 | no |
 | Storage and formats | 5 | partly — S3 |
 | Federation | 1 | no (out of scope) |
