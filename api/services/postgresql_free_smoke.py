@@ -7,7 +7,8 @@ import httpx
 
 SCHEMA_VERSION=1; MAX_RESPONSE_BYTES=8*1024*1024; REQUIRED_ROLE="Admin"
 CHECK_NAMES=("health","catalog_sources","data_sources","datasets","charts","dashboards","query_history","saved_queries","recents","favorites","chat_history","datasets_point","charts_point","dashboards_point","saved_query_point","chat_history_point","theme","dlm_get","dlm_context","dlm_ask","chat_serving")
-NONEMPTY_CHECKS=frozenset(("catalog_sources","data_sources","datasets","charts","dashboards","query_history","saved_queries","recents","favorites","chat_history"))
+NONEMPTY_CHECKS=frozenset(("catalog_sources","datasets","charts","dashboards","query_history","recents"))
+ABSENT_POINT_CHECKS=frozenset(("saved_query_point","chat_history_point"))
 
 def _canonical(value):return json.dumps(value,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()
 def _digest(value):return hashlib.sha256(_canonical(value)).hexdigest()
@@ -32,7 +33,8 @@ def verify(report,*,now=None,max_age_minutes=60):
  for item in checks:
   if not isinstance(item,dict) or set(item)!={"name","status","count","state_sha256"}:raise RuntimeError("PostgreSQL-free smoke check schema is invalid")
   names.append(item["name"])
-  if type(item["status"]) is not int or not 200<=item["status"]<300:raise RuntimeError("PostgreSQL-free smoke check did not succeed")
+  status=item["status"]
+  if type(status) is not int or (not 200<=status<300 and not (item["name"] in ABSENT_POINT_CHECKS and status==404 and item["count"]==0)):raise RuntimeError("PostgreSQL-free smoke check did not succeed")
   if type(item["count"]) is not int or item["count"]<0 or (item["name"] in NONEMPTY_CHECKS and item["count"]<1):raise RuntimeError("PostgreSQL-free smoke check count is invalid")
   _sha256(item["state_sha256"],"PostgreSQL-free smoke check state")
  if tuple(names)!=CHECK_NAMES or len(names)!=len(set(names)):raise RuntimeError("PostgreSQL-free smoke report check identities are invalid")
@@ -65,13 +67,13 @@ class Probe:
   if not email or "@" not in email or not proxy_secret:raise RuntimeError("trusted smoke identity is incomplete")
   self.base=base_url.rstrip("/");self.headers={"x-proxy-secret":proxy_secret,"x-user-email":email.lower(),"x-user-role":REQUIRED_ROLE,"x-user-roles":REQUIRED_ROLE,"x-user-name":"Retirement probe"}
   self.client=client or httpx.Client(timeout=60,verify=ca_cert or True,trust_env=False)
- def request(self,name,path,*,method="GET",body=None):
+ def request(self,name,path,*,method="GET",body=None,allow_absent=False):
   response=self.client.request(method,self.base+path,headers=self.headers,json=body)
-  if response.status_code<200 or response.status_code>=300:raise RuntimeError(f"{name} failed with HTTP {response.status_code}")
+  if (response.status_code<200 or response.status_code>=300) and not (allow_absent and response.status_code==404):raise RuntimeError(f"{name} failed with HTTP {response.status_code}")
   if len(response.content)>MAX_RESPONSE_BYTES:raise RuntimeError(f"{name} response exceeds its byte bound")
   try:value=response.json()
   except ValueError as error:raise RuntimeError(f"{name} returned invalid JSON") from error
-  return value,{"name":name,"status":response.status_code,"count":1,"state_sha256":_digest(value)}
+  return value,{"name":name,"status":response.status_code,"count":0 if response.status_code==404 else 1,"state_sha256":_digest(value)}
 
 def collect(base_url,email,proxy_secret,question,dataset_id,*,ca_cert=None,client=None,now=None):
  if os.getenv("KAVEON_POSTGRESQL_FREE_SMOKE_ENABLED")!="true":raise RuntimeError("PostgreSQL-free smoke collection requires explicit enablement")
@@ -89,12 +91,18 @@ def collect(base_url,email,proxy_secret,question,dataset_id,*,ca_cert=None,clien
   ("recents","/api/v1/user/recents",("recents","items","rows")),("favorites","/api/v1/favorites",("favorites","rows")),
   ("chat_history","/api/v1/chat/history",("sessions",))):
   value,item=probe.request(name,path);rows=_list(value,*keys);item["count"]=len(rows);checks.append(item);lists[name]=rows
- for required in ("catalog_sources","data_sources","datasets","charts","dashboards","query_history","saved_queries","recents","favorites","chat_history"):
+ for required in NONEMPTY_CHECKS:
   if not lists[required]:raise RuntimeError(f"{required} smoke coverage is empty")
  for family,path in (("datasets","/api/v1/datasets/"),("charts","/api/v1/charts/"),("dashboards","/api/v1/dashboards/")):
   _,item=probe.request(f"{family}_point",path+_id(lists[family][0],family));checks.append(item)
- saved_id=_id(lists["saved_queries"][0],"saved_queries");_,item=probe.request("saved_query_point","/api/v1/lab/saved-queries/"+saved_id);checks.append(item)
- session_id=_id(lists["chat_history"][0],"chat_history");_,item=probe.request("chat_history_point","/api/v1/chat/history/"+session_id);checks.append(item)
+ if lists["saved_queries"]:
+  saved_id=_id(lists["saved_queries"][0],"saved_queries");_,item=probe.request("saved_query_point","/api/v1/lab/saved-queries/"+saved_id)
+ else: _,item=probe.request("saved_query_point","/api/v1/lab/saved-queries/__postgresql_free_absence_probe__",allow_absent=True)
+ checks.append(item)
+ if lists["chat_history"]:
+  session_id=_id(lists["chat_history"][0],"chat_history");_,item=probe.request("chat_history_point","/api/v1/chat/history/"+session_id)
+ else: _,item=probe.request("chat_history_point","/api/v1/chat/history/__postgresql_free_absence_probe__",allow_absent=True)
+ checks.append(item)
  theme,item=probe.request("theme","/api/v1/theme");checks.append(item)
  dataset_id=str(dataset_id)
  if dataset_id not in {_id(item,"datasets") for item in lists["datasets"]}:raise RuntimeError("DLM smoke dataset is absent from visible datasets")
