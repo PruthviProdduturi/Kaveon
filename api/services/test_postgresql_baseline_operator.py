@@ -1,8 +1,12 @@
 import json
+from datetime import datetime, timezone
 
 import pytest
 
 from services import postgresql_baseline_operator as operator
+from services import postgresql_baseline_identity as identity
+from services import postgresql_baseline_cli as cli
+from services import postgresql_operational_evidence as operational
 
 
 class Cursor:
@@ -80,9 +84,19 @@ def test_capture_restore_and_recapture_exact_seven_table_identity():
     assert result["source_inventory_sha256"] == payload["manifest"]["global_sha256"]
     assert target.rows["dlm_artifact"] == source_rows()["dlm_artifact"]
     assert target.commits == 1 and target.autocommit is True
-    receipt = operator.restore_receipt(payload, result, "isolated-db-1")
-    assert receipt["source_inventory_sha256"] == receipt["restored_inventory_sha256"]
-    assert len(receipt["baseline_sha256"]) == len(receipt["receipt_sha256"]) == 64
+    observations = {
+        "postgresql_baseline_identity": identity.baseline_observation(payload),
+        "baseline_restore_qualification": identity.restore_qualification_observation(
+            payload, result, "isolated-db-1"),
+        "exact_post_rollback_identity": identity.post_rollback_observation(payload, result),
+    }
+    for gate, observation in observations.items():
+        receipt = operational.receipt_from_observation(gate, observation,
+            checked_at="2026-09-14T23:00:00Z", evidence_id=f"{gate}-1")
+        assert operational._validate_observation(gate, receipt["observation"],
+            receipt["details"], max_rollback_seconds=900) is None
+    assert observations["postgresql_baseline_identity"]["baseline_sha256"] == \
+        identity.baseline_sha256(payload)
 
 
 def test_restore_refuses_nonempty_target_and_rolls_back():
@@ -122,3 +136,28 @@ def test_atomic_output_and_bounded_input(tmp_path):
             operator.read_payload(oversized)
     finally:
         operator.MAX_FILE_BYTES = original
+
+
+def test_capture_cli_writes_durable_gate_receipt(tmp_path, monkeypatch):
+    connection = Connection(source_rows())
+    class Wrapper:
+        def __init__(self): self.connection = connection
+        def connect(self): pass
+    class Pool:
+        db_type = "postgresql"
+        def __init__(self): self.wrapper = Wrapper(); self.returned = False
+        def get_connection(self): return self.wrapper
+        def return_connection(self, wrapper): self.returned = wrapper is self.wrapper
+    pool = Pool()
+    monkeypatch.setenv("METADATA_DATABASE", "kaveonmeta")
+    monkeypatch.setattr(cli, "get_connection_pool", lambda database: pool)
+    baseline, receipt = tmp_path / "baseline.json", tmp_path / "receipt.json"
+    assert cli.main(["capture", "--source-id", "snapshot-17", "--output", str(baseline),
+                     "--receipt", str(receipt), "--evidence-id", "baseline-live-1",
+                     "--checked-at", "2026-09-14T23:00:00Z"]) == 0
+    loaded = operational.load_receipt(receipt, "postgresql_baseline_identity",
+        now=datetime(2026, 9, 14, 23, 1, tzinfo=timezone.utc), max_age_hours=1,
+        max_rollback_seconds=900)
+    assert loaded["observation"]["baseline_sha256"] == \
+        identity.baseline_sha256(operator.read_payload(baseline))
+    assert pool.returned is True

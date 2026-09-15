@@ -1,0 +1,118 @@
+"""CLI for canonical PostgreSQL baseline capture and isolated qualification."""
+
+import argparse
+import json
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+
+from database.pool import get_connection_pool
+from services import postgresql_baseline_operator as operator
+from services import postgresql_baseline_identity as identity
+from services import postgresql_operational_evidence as operational
+
+
+def _target_connection():
+    import psycopg2
+    required = {key: os.getenv(key, "") for key in (
+        "KAVEON_POSTGRESQL_BASELINE_TARGET_HOST",
+        "KAVEON_POSTGRESQL_BASELINE_TARGET_DATABASE",
+        "KAVEON_POSTGRESQL_BASELINE_TARGET_USER",
+        "KAVEON_POSTGRESQL_BASELINE_TARGET_PASSWORD")}
+    if any(not value for value in required.values()):
+        raise RuntimeError("complete isolated PostgreSQL target configuration is required")
+    connection = psycopg2.connect(
+        host=required["KAVEON_POSTGRESQL_BASELINE_TARGET_HOST"],
+        port=int(os.getenv("KAVEON_POSTGRESQL_BASELINE_TARGET_PORT", "5432")),
+        dbname=required["KAVEON_POSTGRESQL_BASELINE_TARGET_DATABASE"],
+        user=required["KAVEON_POSTGRESQL_BASELINE_TARGET_USER"],
+        password=required["KAVEON_POSTGRESQL_BASELINE_TARGET_PASSWORD"],
+        sslmode=os.getenv("KAVEON_POSTGRESQL_BASELINE_TARGET_SSLMODE", "require"),
+        connect_timeout=30)
+    connection.autocommit = True
+    return connection
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    capture = commands.add_parser("capture")
+    capture.add_argument("--source-id", required=True)
+    capture.add_argument("--output", required=True, type=Path)
+    capture.add_argument("--receipt", required=True, type=Path)
+    capture.add_argument("--evidence-id", required=True)
+    capture.add_argument("--checked-at")
+    restore = commands.add_parser("restore-qualify")
+    restore.add_argument("--baseline", required=True, type=Path)
+    restore.add_argument("--receipt", required=True, type=Path)
+    restore.add_argument("--target-id", required=True)
+    restore.add_argument("--evidence-id", required=True)
+    restore.add_argument("--checked-at")
+    post = commands.add_parser("qualify-post-rollback")
+    post.add_argument("--baseline", required=True, type=Path)
+    post.add_argument("--receipt", required=True, type=Path)
+    post.add_argument("--evidence-id", required=True)
+    post.add_argument("--checked-at")
+    args = parser.parse_args(argv)
+    try:
+        if args.command == "capture":
+            database = os.getenv("METADATA_DATABASE", "")
+            if not database:
+                raise RuntimeError("METADATA_DATABASE is required")
+            pool = get_connection_pool(database)
+            if pool.db_type != "postgresql":
+                raise RuntimeError("PostgreSQL baseline source must be PostgreSQL")
+            wrapper = pool.get_connection()
+            try:
+                wrapper.connect()
+                payload = operator.capture(wrapper.connection, args.source_id)
+            finally:
+                pool.return_connection(wrapper)
+            operator.write_atomic(args.output, payload)
+            observation = identity.baseline_observation(payload)
+            receipt = operational.receipt_from_observation(
+                "postgresql_baseline_identity", observation,
+                checked_at=args.checked_at or datetime.now(timezone.utc).isoformat(),
+                evidence_id=args.evidence_id)
+            operator.write_atomic(args.receipt, receipt)
+            result = {"captured": True,
+                      "global_sha256": payload["manifest"]["global_sha256"],
+                      "row_count": payload["manifest"]["row_count"],
+                      "table_count": payload["manifest"]["table_count"]}
+        elif args.command == "restore-qualify":
+            payload = operator.read_payload(args.baseline)
+            connection = _target_connection()
+            try:
+                qualified = operator.restore_and_qualify(connection, payload)
+            finally:
+                connection.close()
+            observation = identity.restore_qualification_observation(
+                payload, qualified, args.target_id)
+            result = operational.receipt_from_observation(
+                "baseline_restore_qualification", observation,
+                checked_at=args.checked_at or datetime.now(timezone.utc).isoformat(),
+                evidence_id=args.evidence_id)
+            operator.write_atomic(args.receipt, result)
+        else:
+            payload = operator.read_payload(args.baseline)
+            connection = _target_connection()
+            try:
+                qualified = operator.qualify_existing(connection, payload)
+            finally:
+                connection.close()
+            observation = identity.post_rollback_observation(payload, qualified)
+            result = operational.receipt_from_observation(
+                "exact_post_rollback_identity", observation,
+                checked_at=args.checked_at or datetime.now(timezone.utc).isoformat(),
+                evidence_id=args.evidence_id)
+            operator.write_atomic(args.receipt, result)
+        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+        return 0
+    except Exception as error:
+        print(json.dumps({"passed": False, "error": str(error)}, sort_keys=True,
+                         separators=(",", ":")))
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
