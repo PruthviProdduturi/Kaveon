@@ -12,6 +12,10 @@ from services import postgresql_baseline_identity as identity
 from services import postgresql_operational_evidence as operational
 
 
+def _checked_at(value):
+    return value or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _target_connection():
     import psycopg2
     required = {key: os.getenv(key, "") for key in (
@@ -82,7 +86,7 @@ def main(argv=None):
             observation = identity.baseline_observation(payload)
             receipt = operational.receipt_from_observation(
                 "postgresql_baseline_identity", observation,
-                checked_at=args.checked_at or datetime.now(timezone.utc).isoformat(),
+                checked_at=_checked_at(args.checked_at),
                 evidence_id=args.evidence_id)
             operator.write_atomic(args.receipt, receipt)
             result = {"captured": True,
@@ -100,7 +104,7 @@ def main(argv=None):
                 payload, qualified, args.target_id)
             result = operational.receipt_from_observation(
                 "baseline_restore_qualification", observation,
-                checked_at=args.checked_at or datetime.now(timezone.utc).isoformat(),
+                checked_at=_checked_at(args.checked_at),
                 evidence_id=args.evidence_id)
             operator.write_atomic(args.receipt, result)
         elif args.command == "qualify-post-rollback":
@@ -113,7 +117,7 @@ def main(argv=None):
             observation = identity.post_rollback_observation(payload, qualified)
             result = operational.receipt_from_observation(
                 "exact_post_rollback_identity", observation,
-                checked_at=args.checked_at or datetime.now(timezone.utc).isoformat(),
+                checked_at=_checked_at(args.checked_at),
                 evidence_id=args.evidence_id)
             operator.write_atomic(args.receipt, result)
         elif args.command == "derive-empty":
