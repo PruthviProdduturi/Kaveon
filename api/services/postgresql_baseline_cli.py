@@ -62,6 +62,8 @@ def main(argv=None):
     install.add_argument("--expected-empty-baseline", required=True, type=Path)
     install.add_argument("--isolated-restore-receipt", required=True, type=Path)
     install.add_argument("--write-fence-receipt", required=True, type=Path)
+    install.add_argument("--source-watermark-receipt", required=True, type=Path)
+    install.add_argument("--outbox-drain-receipt", required=True, type=Path)
     install.add_argument("--receipt", required=True, type=Path)
     empty = commands.add_parser("derive-empty")
     empty.add_argument("--baseline", required=True, type=Path)
@@ -138,6 +140,10 @@ def main(argv=None):
                 max_rollback_seconds=900)
             fence = operational.load_receipt(args.write_fence_receipt, "write_fence",
                 now=now, max_age_hours=24, max_rollback_seconds=900)
+            source = operational.load_receipt(args.source_watermark_receipt, "source_watermark",
+                now=now, max_age_hours=24, max_rollback_seconds=900)
+            drain = operational.load_receipt(args.outbox_drain_receipt, "outbox_drain",
+                now=now, max_age_hours=24, max_rollback_seconds=900)
             database = os.getenv("METADATA_DATABASE", "")
             pool = get_connection_pool(database)
             if not database or pool.db_type != "postgresql":
@@ -146,7 +152,7 @@ def main(argv=None):
             try:
                 wrapper.connect()
                 result = operator.install_live_baseline(wrapper.connection, payload, empty,
-                    isolated, fence["observation"])
+                    isolated, fence, source, drain)
             finally:
                 pool.return_connection(wrapper)
             operator.write_atomic(args.receipt, result)
