@@ -12,6 +12,9 @@ class Credential:
 
 
 class Response(io.BytesIO):
+    def __init__(self, value=b"", headers=None):
+        super().__init__(value); self.headers = headers or {}
+
     def close(self):
         super().close()
 
@@ -51,6 +54,28 @@ def test_read_zero_byte_object_omits_invalid_range():
 
     client = AzureArtifactClient("acct", "artifacts", Credential(), opener)
     assert client.read("empty", 0) == b""
+
+
+def test_etag_read_and_conditional_head_put():
+    seen = []
+    def opener(request):
+        seen.append(request)
+        if request.method == "GET": return Response(b"head", {"ETag": '"etag-1"'})
+        return Response(headers={"ETag": '"etag-2"'})
+    client = AzureArtifactClient("acct", "artifacts", Credential(), opener)
+    assert client.read_with_etag("head.json", 4) == (b"head", '"etag-1"')
+    assert client.put_if_match("head.json", b"next", '"etag-1"') == '"etag-2"'
+    assert seen[1].headers["If-match"] == '"etag-1"'
+    assert seen[1].headers["X-ms-blob-type"] == "BlockBlob"
+
+
+def test_first_head_put_uses_expected_absence():
+    seen = {}
+    def opener(request):
+        seen.update(request.headers); return Response(headers={"ETag": '"etag-1"'})
+    client = AzureArtifactClient("acct", "artifacts", Credential(), opener)
+    client.put_if_match("head.json", b"head", None)
+    assert seen["If-none-match"] == "*"
 
 
 def test_http_error_preserves_read_only_status():
