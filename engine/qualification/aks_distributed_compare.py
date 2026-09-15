@@ -95,8 +95,14 @@ class Kubernetes:
     def __init__(self, namespace):
         self.namespace = namespace
         self.base = "https://kubernetes.default.svc"
-        self.token = Path("/var/run/secrets/kubernetes.io/serviceaccount/token").read_text().strip()
+        self.token_path = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
         self.context = ssl.create_default_context(cafile="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
+
+    @property
+    def token(self):
+        # A projected service-account token is rotated on disk about hourly; a
+        # six-round run outlives the first one, so read it for every request.
+        return self.token_path.read_text().strip()
 
     def request(self, method, path, body=None):
         headers = {"Authorization": "Bearer " + self.token, "Accept": "application/json"}
