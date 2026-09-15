@@ -15,7 +15,12 @@ RECEIPT_KEYS = frozenset((
     "schema_version", "gate", "checked_at", "evidence_id", "details",
     "observation", "receipt_sha256",
 ))
-GATES = retirement.GLOBAL_GATE_NAMES + ("durable_checkpoint",)
+BASELINE_GATES = (
+    "postgresql_baseline_identity", "baseline_restore_qualification",
+    "lossless_full_migration", "pre_delete_baseline_recheck",
+    "exact_post_rollback_identity",
+)
+GATES = retirement.GLOBAL_GATE_NAMES + ("durable_checkpoint",) + BASELINE_GATES
 OBSERVATION_KEYS = {
     "source_watermark": frozenset(("source_snapshot", "watermark_observed")),
     "outbox_drain": frozenset(("query_id", "watermark", "pending_before", "pending_after")),
@@ -41,6 +46,27 @@ OBSERVATION_KEYS = {
     "durable_checkpoint": frozenset((
         "checkpoint_sha256_before", "checkpoint_sha256_after", "pod_uid_before",
         "pod_uid_after", "next_index_before", "next_index_after", "resume_completed",
+    )),
+    "postgresql_baseline_identity": frozenset((
+        "baseline_evidence_id", "baseline_sha256", "table_count",
+        "dataset17_utf8_verified",
+    )),
+    "baseline_restore_qualification": frozenset((
+        "baseline_evidence_id", "baseline_sha256", "restored_sha256",
+        "table_count", "restore_job_id", "exact_match",
+    )),
+    "lossless_full_migration": frozenset((
+        "baseline_evidence_id", "baseline_sha256", "source_sha256",
+        "target_sha256", "table_count", "pending_events", "failed_events",
+        "manifest_published_last",
+    )),
+    "pre_delete_baseline_recheck": frozenset((
+        "baseline_evidence_id", "baseline_sha256", "observed_sha256",
+        "table_count", "writes_fenced", "outbox_pending",
+    )),
+    "exact_post_rollback_identity": frozenset((
+        "baseline_evidence_id", "baseline_sha256", "restored_sha256",
+        "table_count", "exact_match",
     )),
 }
 _FORBIDDEN = ("password", "secret", "token", "credential", "connection_string", "api_key")
@@ -155,7 +181,7 @@ def _validate_observation(gate, value, details, *, max_rollback_seconds):
         _positive_int(value["restored_table_count"], "restored table count")
         if source != restored or value["restore_executed"] is not True or details["restore_verified"] is not True or not details["backup_id"]:
             raise RuntimeError("backup restore inventory did not reconcile")
-    else:
+    elif gate == "durable_checkpoint":
         before = _digest(value["checkpoint_sha256_before"], "pre-restart checkpoint")
         after = _digest(value["checkpoint_sha256_after"], "post-restart checkpoint")
         if before != after or value["pod_uid_before"] == value["pod_uid_after"]:
@@ -164,6 +190,38 @@ def _validate_observation(gate, value, details, *, max_rollback_seconds):
         after_index = _positive_int(value["next_index_after"], "resumed checkpoint index", allow_zero=True)
         if after_index < before_index or value["resume_completed"] is not True:
             raise RuntimeError("durable checkpoint resume did not complete")
+    else:
+        baseline_id = value["baseline_evidence_id"]
+        baseline = _digest(value["baseline_sha256"], "PostgreSQL baseline")
+        if (not isinstance(baseline_id, str) or not 1 <= len(baseline_id) <= 256
+                or details.get("verified") is not True
+                or details.get("baseline_evidence_id") != baseline_id
+                or details.get("baseline_sha256") != baseline):
+            raise RuntimeError(f"{gate} is not bound to its PostgreSQL baseline")
+        table_count = _positive_int(value["table_count"], "baseline table count")
+        if table_count != 7:
+            raise RuntimeError(f"{gate} must cover all seven lossless tables")
+        if gate == "postgresql_baseline_identity":
+            if value["dataset17_utf8_verified"] is not True:
+                raise RuntimeError("PostgreSQL baseline dataset 17 UTF-8 identity is unverified")
+        elif gate == "baseline_restore_qualification":
+            if (not isinstance(value["restore_job_id"], str) or not value["restore_job_id"]
+                    or _digest(value["restored_sha256"], "restored baseline") != baseline
+                    or value["exact_match"] is not True):
+                raise RuntimeError("baseline restore qualification is not exact")
+        elif gate == "lossless_full_migration":
+            if (_digest(value["source_sha256"], "migration source") != baseline
+                    or _digest(value["target_sha256"], "migration target") != baseline
+                    or value["pending_events"] != 0 or value["failed_events"] != 0
+                    or value["manifest_published_last"] is not True):
+                raise RuntimeError("full lossless migration is incomplete or mismatched")
+        elif gate == "pre_delete_baseline_recheck":
+            if (_digest(value["observed_sha256"], "pre-delete baseline") != baseline
+                    or value["writes_fenced"] is not True or value["outbox_pending"] != 0):
+                raise RuntimeError("pre-delete baseline identity changed or is unfenced")
+        elif (_digest(value["restored_sha256"], "post-rollback baseline") != baseline
+              or value["exact_match"] is not True):
+            raise RuntimeError("post-rollback PostgreSQL identity is not exact")
 
 
 def load_receipt(path: Path, gate: str, *, now: datetime, max_age_hours: int,
@@ -191,7 +249,9 @@ def load_receipt(path: Path, gate: str, *, now: datetime, max_age_hours: int,
         raise RuntimeError(f"operational receipt is not fresh for {gate}")
     if not isinstance(receipt["evidence_id"], str) or not receipt["evidence_id"]:
         raise RuntimeError(f"operational evidence ID is missing for {gate}")
-    expected_details = retirement.GATE_DETAIL_KEYS.get(gate, frozenset(("verified",)))
+    expected_details = (frozenset(("verified", "baseline_evidence_id", "baseline_sha256"))
+                        if gate in BASELINE_GATES else
+                        retirement.GATE_DETAIL_KEYS.get(gate, frozenset(("verified",))))
     if not isinstance(receipt["details"], dict) or set(receipt["details"]) != expected_details:
         raise RuntimeError(f"operational gate details are invalid for {gate}")
     _validate_observation(gate, receipt["observation"], receipt["details"],
@@ -212,6 +272,10 @@ def receipt_from_observation(gate: str, observation: dict, *, checked_at: str,
         details = {"matched": observation.get("mismatch_count") == 0}
     elif gate in {"restart_recovery", "rollback", "durable_checkpoint"}:
         details = {"verified": True}
+    elif gate in BASELINE_GATES:
+        details = {"verified": True,
+                   "baseline_evidence_id": observation.get("baseline_evidence_id"),
+                   "baseline_sha256": observation.get("baseline_sha256")}
     elif gate == "backup_identity":
         details = {"backup_id": observation.get("backup_id"),
                    "backup_sha256": observation.get("backup_sha256"),
@@ -244,6 +308,13 @@ def collect(directory: Path, *, now: datetime, max_age_hours: int = 24,
     if (receipts["source_watermark"]["details"]["watermark"] !=
             receipts["outbox_drain"]["observation"]["watermark"]):
         raise RuntimeError("source watermark and outbox drain receipts are not bound to the same watermark")
+    baseline_bindings = {
+        (receipts[gate]["details"]["baseline_evidence_id"],
+         receipts[gate]["details"]["baseline_sha256"])
+        for gate in BASELINE_GATES
+    }
+    if len(baseline_bindings) != 1:
+        raise RuntimeError("fresh PostgreSQL baseline receipts are not bound to one identity")
     gates = {
         gate: {
             "status": "passed", "checked_at": receipt["checked_at"],
@@ -252,7 +323,7 @@ def collect(directory: Path, *, now: datetime, max_age_hours: int = 24,
         for gate, receipt in receipts.items() if gate in retirement.GLOBAL_GATE_NAMES
     }
     operational = {
-        "schema_version": 1,
+        "schema_version": 2,
         "backup_restore": {"status": "passed", "evidence_id": receipts["backup_identity"]["evidence_id"]},
         "rollback": {"status": "passed", "evidence_id": receipts["rollback"]["evidence_id"]},
         "postgresql_unavailable_restart": {
@@ -260,5 +331,11 @@ def collect(directory: Path, *, now: datetime, max_age_hours: int = 24,
         "durable_checkpoint": {
             "status": "passed", "evidence_id": receipts["durable_checkpoint"]["evidence_id"]},
     }
+    for gate in BASELINE_GATES:
+        operational[gate] = {
+            "status": "passed", "evidence_id": receipts[gate]["evidence_id"],
+            "baseline_evidence_id": receipts[gate]["details"]["baseline_evidence_id"],
+            "baseline_sha256": receipts[gate]["details"]["baseline_sha256"],
+        }
     operational["receipt_set_sha256"] = hashlib.sha256(_canonical(receipts)).hexdigest()
     return gates, operational

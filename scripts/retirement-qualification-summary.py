@@ -12,6 +12,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "api"))
 from services.postgresql_retirement_gate import AUTHORITY_FAMILIES, GLOBAL_GATE_NAMES  # noqa: E402
+from services.postgresql_operational_evidence import BASELINE_GATES  # noqa: E402
 
 EXPECTED_AUTHORITY_FAMILY_COUNT = len(AUTHORITY_FAMILIES)
 
@@ -19,6 +20,7 @@ EXPECTED_AUTHORITY_FAMILY_COUNT = len(AUTHORITY_FAMILIES)
 def summarize(audit=None, operational=None):
     audit = audit or {}
     operational = operational or {}
+    operational_validated = operational.get("schema_version") == 2
     family_by_name = {
         item.get("family"): item
         for item in audit.get("families", [])
@@ -54,17 +56,30 @@ def summarize(audit=None, operational=None):
         ),
         "durable_checkpoint": operational.get("durable_checkpoint", {"status": "pending"}),
     }
+    for name in BASELINE_GATES:
+        rehearsal[name] = operational.get(name, {"status": "pending"})
     observed_families = set(family_by_name)
     family_inventory_complete = (
         observed_families == set(AUTHORITY_FAMILIES)
         and audit.get("authority_family_count") == EXPECTED_AUTHORITY_FAMILY_COUNT
     )
     audit_validated = audit.get("passed") is True
-    passed = audit_validated and family_inventory_complete
+    passed = audit_validated and operational_validated and family_inventory_complete
     passed = passed and all(item["status"] == "passed" for item in families + gates)
     passed = passed and all(item.get("status") == "passed" for item in rehearsal.values())
+    baseline_bindings = {
+        (rehearsal[name].get("baseline_evidence_id"),
+         rehearsal[name].get("baseline_sha256"))
+        for name in BASELINE_GATES
+        if rehearsal[name].get("status") == "passed"
+    }
+    baseline_bound = (len(baseline_bindings) == 1
+                      and all(all(binding) for binding in baseline_bindings)
+                      and all(rehearsal[name].get("status") == "passed"
+                              for name in BASELINE_GATES))
+    passed = passed and baseline_bound
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "qualification": "postgresql-retirement",
         "passed": passed,
         "status": "passed" if passed else "pending",
@@ -75,10 +90,12 @@ def summarize(audit=None, operational=None):
         "global_gate_count": len(gates),
         "global_gates": gates,
         "rehearsal_gates": rehearsal,
+        "fresh_postgresql_baseline_bound": baseline_bound,
         "source": {
             "audit_loaded": bool(audit),
             "audit_validated": audit_validated,
             "operational_loaded": bool(operational),
+            "operational_validated": operational_validated,
         },
     }
 

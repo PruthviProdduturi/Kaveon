@@ -52,6 +52,34 @@ class RetirementSummaryTests(unittest.TestCase):
         complete["families"].pop()
         self.assertFalse(module.summarize(complete, operational)["passed"])
 
+    def test_fresh_baseline_gates_are_required_and_share_one_binding(self):
+        audit = {
+            "passed": True,
+            "authority_family_count": len(module.AUTHORITY_FAMILIES),
+            "families": [{"family": family, "status": "passed"}
+                         for family in module.AUTHORITY_FAMILIES],
+            "gates": {name: {"status": "passed", "evidence_id": name}
+                      for name in module.GLOBAL_GATE_NAMES},
+        }
+        operational = {name: {"status": "passed"} for name in
+                       ("backup_restore", "rollback", "postgresql_unavailable_restart",
+                        "durable_checkpoint")}
+        operational["schema_version"] = 2
+        for name in module.BASELINE_GATES:
+            operational[name] = {"status": "passed", "evidence_id": name,
+                                 "baseline_evidence_id": "baseline-1",
+                                 "baseline_sha256": "a" * 64}
+        result = module.summarize(audit, operational)
+        self.assertTrue(result["passed"])
+        self.assertTrue(result["fresh_postgresql_baseline_bound"])
+        operational["schema_version"] = 1
+        self.assertFalse(module.summarize(audit, operational)["passed"])
+        operational["schema_version"] = 2
+        operational["exact_post_rollback_identity"]["baseline_sha256"] = "b" * 64
+        result = module.summarize(audit, operational)
+        self.assertFalse(result["passed"])
+        self.assertFalse(result["fresh_postgresql_baseline_bound"])
+
 
 if __name__ == "__main__":
     unittest.main()
