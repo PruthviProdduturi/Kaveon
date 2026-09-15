@@ -15,7 +15,7 @@ NOW = datetime(2026, 9, 14, 19, 0, tzinfo=timezone.utc)
 
 def _observations():
     probes = [{"family": family, "passed": True} for family in sorted(retirement.AUTHORITY_FAMILIES)]
-    return {
+    values = {
         "source_watermark": ({"watermark": 42}, {"source_snapshot": DIGEST, "watermark_observed": 42}),
         "outbox_drain": ({"pending_events": 0}, {"query_id": 7, "watermark": 42, "pending_before": 3, "pending_after": 0}),
         "write_fence": ({"enabled": True}, {"deployment_revision": "api@abc123", "readonly_probe_passed": True, "family_probes": probes}),
@@ -25,6 +25,16 @@ def _observations():
         "backup_identity": ({"backup_id": "snapshot-1", "backup_sha256": "c" * 64, "restore_verified": True}, {"backup_id": "snapshot-1", "backup_sha256": "c" * 64, "restore_job_id": "restore-1", "source_inventory_sha256": DIGEST, "restored_inventory_sha256": DIGEST, "restored_table_count": 24,"immutable_prefix":"https://account.dfs.core.windows.net/container/backups/snapshot-1/","manifest_sha256":"d"*64,"restore_executed":True}),
         "durable_checkpoint": ({"verified": True}, {"checkpoint_sha256_before": DIGEST, "checkpoint_sha256_after": DIGEST, "pod_uid_before": "pod-1", "pod_uid_after": "pod-2", "next_index_before": 8, "next_index_after": 10, "resume_completed": True}),
     }
+    binding = {"verified": True, "baseline_evidence_id": "fresh-baseline-1",
+               "baseline_sha256": DIGEST}
+    values.update({
+        "postgresql_baseline_identity": (binding, {"baseline_evidence_id": "fresh-baseline-1", "baseline_sha256": DIGEST, "table_count": 7, "dataset17_utf8_verified": True}),
+        "baseline_restore_qualification": (binding, {"baseline_evidence_id": "fresh-baseline-1", "baseline_sha256": DIGEST, "restored_sha256": DIGEST, "table_count": 7, "restore_job_id": "restore-fresh-1", "exact_match": True}),
+        "lossless_full_migration": (binding, {"baseline_evidence_id": "fresh-baseline-1", "baseline_sha256": DIGEST, "source_sha256": DIGEST, "target_sha256": DIGEST, "table_count": 7, "pending_events": 0, "failed_events": 0, "manifest_published_last": True}),
+        "pre_delete_baseline_recheck": (binding, {"baseline_evidence_id": "fresh-baseline-1", "baseline_sha256": DIGEST, "observed_sha256": DIGEST, "table_count": 7, "writes_fenced": True, "outbox_pending": 0}),
+        "exact_post_rollback_identity": (binding, {"baseline_evidence_id": "fresh-baseline-1", "baseline_sha256": DIGEST, "restored_sha256": DIGEST, "table_count": 7, "exact_match": True}),
+    })
+    return values
 
 
 def _receipt(gate, details, observation):
@@ -48,6 +58,7 @@ def test_collect_requires_and_validates_all_live_receipts(tmp_path):
     assert set(gates) == set(retirement.GLOBAL_GATE_NAMES)
     assert all(item["status"] == "passed" for item in gates.values())
     assert operational["postgresql_unavailable_restart"]["status"] == "passed"
+    assert operational["postgresql_baseline_identity"]["baseline_evidence_id"] == "fresh-baseline-1"
     assert len(operational["receipt_set_sha256"]) == 64
 
 
@@ -104,3 +115,35 @@ def test_stale_operational_receipt_fails_closed(tmp_path):
     with pytest.raises(RuntimeError, match="not fresh"):
         evidence.load_receipt(path, "durable_checkpoint", now=NOW,
                               max_age_hours=24, max_rollback_seconds=900)
+
+
+def test_fresh_baseline_receipts_must_share_one_identity(tmp_path):
+    values = _write_receipts(tmp_path)
+    receipt = values["exact_post_rollback_identity"]
+    receipt["details"]["baseline_sha256"] = "b" * 64
+    receipt["observation"]["baseline_sha256"] = "b" * 64
+    receipt["observation"]["restored_sha256"] = "b" * 64
+    unsigned = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+    receipt["receipt_sha256"] = hashlib.sha256(evidence._canonical(unsigned)).hexdigest()
+    (tmp_path / "exact_post_rollback_identity.json").write_text(json.dumps(receipt))
+    with pytest.raises(RuntimeError, match="bound to one identity"):
+        evidence.collect(tmp_path, now=NOW)
+
+
+@pytest.mark.parametrize("gate,field,value,message", [
+    ("postgresql_baseline_identity", "dataset17_utf8_verified", False, "UTF-8"),
+    ("baseline_restore_qualification", "restored_sha256", "b" * 64, "not exact"),
+    ("lossless_full_migration", "manifest_published_last", False, "incomplete"),
+    ("pre_delete_baseline_recheck", "writes_fenced", False, "unfenced"),
+    ("exact_post_rollback_identity", "exact_match", False, "not exact"),
+])
+def test_fresh_baseline_gate_claims_fail_closed(tmp_path, gate, field, value, message):
+    receipts = _write_receipts(tmp_path)
+    receipt = receipts[gate]
+    receipt["observation"][field] = value
+    unsigned = {key: item for key, item in receipt.items() if key != "receipt_sha256"}
+    receipt["receipt_sha256"] = hashlib.sha256(evidence._canonical(unsigned)).hexdigest()
+    path = tmp_path / f"{gate}.json"; path.write_text(json.dumps(receipt))
+    with pytest.raises(RuntimeError, match=message):
+        evidence.load_receipt(path, gate, now=NOW, max_age_hours=24,
+                              max_rollback_seconds=900)
