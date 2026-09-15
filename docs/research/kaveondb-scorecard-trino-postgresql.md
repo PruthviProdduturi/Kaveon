@@ -21,6 +21,8 @@ Two facts shape everything below:
 
 **What the number does not say.** The corpus is 10 M-row tables; warm cache; four concurrent clients; one coordinator and three 3-CPU workers. Cold-cache, mixed-workload soak, and larger data are separate experiments that have not been run. The first single-node six-query diagnostic in early September was 1.057×; the gain since is real engineering (shared worker clients, amortised reservations, worker-local exact DISTINCT, dense integer grouping, parallel Delta metadata), each accepted or rejected on measured evidence.
 
+**2026-09-15 update, westus2 cluster.** The first full alternating run on the rebuilt cluster (`docs/qualification/kaveon-trino-aks-2026-09-15.md`) measured Kaveon at **2.300 QPS against Trino's 1.582 — 1.45×** over five completed rounds (the sixth was lost to a runner token rotation, fixed). Per query, Kaveon leads 9 of 12 shapes — filtered aggregation 50×, TopN 10×, grouped 9–13×, joins 2× — and loses three: `high_groups` (5.5 s vs 2.1 s, the same per-string-key cost seen on the 504 M-row table), and two sub-second shapes where Trino's per-statement floor is lower. The score stays 7: the ratio improved, the gate did not pass.
+
 **Why not higher.** 1.26× on one warm corpus is a promising engine, not a faster engine. Trino's optimizer, dynamic filtering and join reordering have not been exercised by this corpus. The score would move to 8 with a passed cold-cache run and to 9 with the 1.90× gate.
 
 ### 1.2 Scale: the 504 M-row test — **5 / 10**
