@@ -427,7 +427,15 @@ fn compare_can_match(
     let Some(stats) = group.column(column).statistics() else {
         return true;
     };
-    if !stats.min_is_exact() || !stats.max_is_exact() {
+    // Inexact bounds are still bounds. Parquet lets a writer truncate long
+    // byte-array statistics, and the format requires a truncated minimum to
+    // sit at or below the true minimum and a truncated maximum to be raised
+    // above the true maximum, so range reasoning on them stays sound. Most
+    // writers, pyarrow included, never set the exactness flags at all, and
+    // requiring them here disabled pruning on every string column such files
+    // carry. Only the deprecated min/max fields, whose byte ordering is
+    // undefined, force the conservative path.
+    if stats.is_min_max_deprecated() {
         return true;
     }
     match stats {
@@ -762,6 +770,61 @@ mod tests {
             ParquetReader::new(&corrupt.0).read(),
             Err(KaveonError::Storage(_))
         ));
+    }
+
+    #[test]
+    fn prunes_on_byte_array_bounds_without_exactness_flags() {
+        use parquet::basic::Type as PhysicalType;
+        use parquet::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
+        use parquet::file::statistics::ValueStatistics;
+        use parquet::schema::types::{SchemaDescriptor, Type as SchemaType};
+
+        // A row group whose event_date statistics were written the way
+        // pyarrow writes them: min/max present, exactness flags absent.
+        let column = SchemaType::primitive_type_builder("event_date", PhysicalType::BYTE_ARRAY)
+            .build()
+            .unwrap();
+        let root = SchemaType::group_type_builder("schema")
+            .with_fields(vec![Arc::new(column)])
+            .build()
+            .unwrap();
+        let descriptor = Arc::new(SchemaDescriptor::new(Arc::new(root)));
+        let statistics = Statistics::ByteArray(
+            ValueStatistics::new(
+                Some("2026-07-04".into()),
+                Some("2026-07-04".into()),
+                None,
+                Some(0),
+                false,
+            )
+            .with_min_is_exact(false)
+            .with_max_is_exact(false),
+        );
+        let chunk = ColumnChunkMetaData::builder(descriptor.column(0))
+            .set_statistics(statistics)
+            .set_num_values(3_000_000)
+            .build()
+            .unwrap();
+        let group = RowGroupMetaData::builder(descriptor)
+            .set_num_rows(3_000_000)
+            .set_column_metadata(vec![chunk])
+            .build()
+            .unwrap();
+
+        let in_2025 = ScalarValue::Utf8("2025-01-01".into());
+        let in_2027 = ScalarValue::Utf8("2027-01-01".into());
+        let the_day = ScalarValue::Utf8("2026-07-04".into());
+        // event_date < '2026-01-01' cannot match a group whose min is 2026-07-04
+        assert!(!compare_can_match(
+            &group,
+            0,
+            CompareOp::Lt,
+            &ScalarValue::Utf8("2026-01-01".into())
+        ));
+        assert!(!compare_can_match(&group, 0, CompareOp::Eq, &in_2025));
+        assert!(!compare_can_match(&group, 0, CompareOp::Ge, &in_2027));
+        assert!(compare_can_match(&group, 0, CompareOp::Eq, &the_day));
+        assert!(compare_can_match(&group, 0, CompareOp::Ge, &in_2025));
     }
 
     #[test]
