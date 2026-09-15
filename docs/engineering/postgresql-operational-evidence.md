@@ -1,6 +1,6 @@
 # PostgreSQL retirement operational evidence
 
-PostgreSQL retirement requires eight independently observed rehearsal receipts.
+PostgreSQL retirement requires thirteen independently observed rehearsal receipts.
 The collector does not run infrastructure commands and cannot turn missing
 observations into passing evidence. Keep raw command output in the restricted
 operations archive; checked-in or retirement-gate JSON contains only counts,
@@ -18,6 +18,11 @@ Place these integrity-bound receipts in one run directory:
 | `rollback.json` | Cutover revision, target fenced, source reads/writes restored within time and operation bounds, and identical state digests |
 | `backup_identity.json` | Immutable ADLS prefix and manifest digest, an executed restore job, positive restored table count, and identical source/restored inventory digests |
 | `durable_checkpoint.json` | Different pod UIDs, identical checkpoint digest, non-regressing position, and completed resume |
+| `postgresql_baseline_identity.json` | Canonical seven-table PostgreSQL identity, including the dataset 17 UTF-8 sentinel |
+| `baseline_restore_qualification.json` | Exact isolated restore of that same baseline identity |
+| `lossless_full_migration.json` | Lossless seven-table source/target equality, drained replay, and manifest-last publication |
+| `pre_delete_baseline_recheck.json` | Fenced, drained source still exactly equal to the qualified baseline immediately before deletion |
+| `exact_post_rollback_identity.json` | PostgreSQL restored after rollback with the exact qualified baseline identity |
 
 Each JSON object has exactly these top-level fields:
 
@@ -38,6 +43,12 @@ The exact gate-specific observation fields are defined in
 keys, oversized files, duplicate/missing family probes, mismatched state
 digests, reused pod UIDs, unbounded rollback time, and unverified restore claims
 all fail closed.
+
+The five fresh-baseline receipts carry the same `baseline_evidence_id` and
+lowercase SHA-256 `baseline_sha256`. The collector rejects the set if any stage
+refers to another baseline. Each receipt covers exactly seven special-family
+tables. The qualification summary remains pending unless all five pass and
+share this binding, so an older eight-receipt run fails closed.
 
 State inventories must contain only `kind`, `id`, `revision`, and the committed
 document SHA-256. `kaveondb_recovery_evidence.state_identity` rejects payloads,
@@ -160,6 +171,41 @@ python scripts/record-postgresql-operational-evidence.py `
   --output tmp/retirement-observations/run-20260914 `
   --max-rollback-seconds 900
 ```
+
+### Lossless seven-table rollback baseline
+
+Capture the two context tables and five DLM tables from one read-only,
+repeatable-read snapshot. The source uses the existing `METADATA_DATABASE`
+configuration. The output is written atomically and contains canonical typed
+rows, ordered primary keys, per-table schema/key/content hashes, and a global
+identity. The operator caps the snapshot at 10,000 rows and 512 MiB.
+
+```powershell
+$env:METADATA_DATABASE = "<source PostgreSQL DSN>"
+python scripts/postgresql-baseline.py capture `
+  --source-id PRE_DELETION_SNAPSHOT_ID `
+  --output tmp/postgresql-seven-table-baseline.json
+```
+
+Rehearse only against a separately provisioned PostgreSQL database whose seven
+tables already exist with identical schemas and are all empty. The target DSN
+has a separate, explicit setting. The operator takes an exclusive lock in a
+serializable transaction, checks every schema and primary key, inserts decoded
+typed values, recaptures the target, and commits only if every identity and the
+dataset 17 `Climate × Energy` sentinel match. A failure rolls back the target.
+Neither command prints a DSN or credentials.
+
+```powershell
+$env:KAVEON_POSTGRESQL_BASELINE_TARGET_DATABASE = "<isolated target DSN>"
+python scripts/postgresql-baseline.py restore-qualify `
+  --baseline tmp/postgresql-seven-table-baseline.json `
+  --target-id ISOLATED_DATABASE_RESOURCE_ID `
+  --receipt tmp/postgresql-seven-table-restore-receipt.json
+```
+
+Archive the baseline and receipt with the immutable backup evidence. Review the
+global SHA-256 printed by capture and require the receipt's matching source and
+restored inventory hashes before treating this as a proven rollback baseline.
 
 After the operator has recorded and hashed all eight live observations, assemble
 the inputs for the existing 16-family retirement runner:
