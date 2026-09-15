@@ -27,6 +27,8 @@ class Cursor:
         elif statement.startswith("SELECT COUNT(*)"):
             table = statement.split('"')[1]
             self.results = [(len(self.connection.rows[table]),)]
+        elif "FROM product_migration_outbox" in statement:
+            self.results = [(42, 0)]
         elif statement.startswith("SELECT "):
             table = statement.split(' FROM "')[1].split('"')[0]
             names = [part.strip('"') for part in
@@ -86,6 +88,19 @@ def restore_receipt(payload):
         "exact_match": True}, checked_at="2026-09-14T23:00:00Z", evidence_id="restore:1")
 
 
+def window_receipts():
+    checked = "2026-09-14T23:00:00Z"; prefix = "install-window-1"
+    return (
+        operational.receipt_from_observation("write_fence", fence_observation(),
+            checked_at=checked, evidence_id=f"{prefix}:write_fence"),
+        operational.receipt_from_observation("source_watermark", {
+            "source_snapshot": "a" * 64, "watermark_observed": 42},
+            checked_at=checked, evidence_id=f"{prefix}:source_watermark"),
+        operational.receipt_from_observation("outbox_drain", {
+            "query_id": 7, "watermark": 42, "pending_before": 0, "pending_after": 0},
+            checked_at=checked, evidence_id=f"{prefix}:outbox_drain"))
+
+
 def test_capture_restore_and_recapture_exact_seven_table_identity():
     source = Connection(source_rows())
     payload = operator.capture(source, "snapshot-17")
@@ -128,8 +143,9 @@ def test_guarded_live_install_requires_exact_empty_then_recaptures(monkeypatch):
     target = Connection({})
     monkeypatch.setenv("KAVEON_LIVE_BASELINE_INSTALL_ENABLED", "true")
     monkeypatch.setenv("KAVEON_POSTGRESQL_WRITE_FENCE_ENABLED", "true")
+    fence, source, drain = window_receipts()
     result = operator.install_live_baseline(target, payload, empty,
-                                            restore_receipt(payload), fence_observation())
+                                            restore_receipt(payload), fence, source, drain)
     assert result["recapture_exact"] is True
     assert result["installed_baseline_sha256"] == identity.baseline_sha256(payload)
     assert target.rows["dlm_artifact"] == source_rows()["dlm_artifact"]
@@ -144,12 +160,29 @@ def test_guarded_live_install_refuses_nonempty_or_unqualified_source(monkeypatch
     occupied = Connection({"dlm_router": [{"id": "unexpected"}]})
     with pytest.raises(RuntimeError, match="differ from documented empty"):
         operator.install_live_baseline(occupied, payload, empty,
-                                       restore_receipt(payload), fence_observation())
+                                       restore_receipt(payload), *window_receipts())
     assert occupied.rollbacks == 1 and occupied.rows["dlm_artifact"] == []
     receipt = restore_receipt(payload); receipt["observation"]["exact_match"] = False
     target = Connection({})
     with pytest.raises(RuntimeError, match="exact isolated restore"):
-        operator.install_live_baseline(target, payload, empty, receipt, fence_observation())
+        operator.install_live_baseline(target, payload, empty, receipt, *window_receipts())
+    assert target.commits == 0 and target.rows["dlm_artifact"] == []
+
+
+def test_guarded_live_install_requires_one_fenced_drained_watermark_window(monkeypatch):
+    payload = operator.capture(Connection(source_rows()), "qualified-seed")
+    empty = operator.documented_empty(payload, "documented-empty")
+    fence, source, drain = window_receipts()
+    drain["observation"]["watermark"] = 41
+    unsigned = {key: value for key, value in drain.items() if key != "receipt_sha256"}
+    drain["receipt_sha256"] = __import__("hashlib").sha256(
+        operational._canonical(unsigned)).hexdigest()
+    monkeypatch.setenv("KAVEON_LIVE_BASELINE_INSTALL_ENABLED", "true")
+    monkeypatch.setenv("KAVEON_POSTGRESQL_WRITE_FENCE_ENABLED", "true")
+    target = Connection({})
+    with pytest.raises(RuntimeError, match="one drained window"):
+        operator.install_live_baseline(target, payload, empty, restore_receipt(payload),
+                                       fence, source, drain)
     assert target.commits == 0 and target.rows["dlm_artifact"] == []
 
 
@@ -225,10 +258,17 @@ def test_install_live_cli_validates_receipts_and_writes_install_receipt(tmp_path
     unsigned = {key: value for key, value in isolated.items() if key != "receipt_sha256"}
     isolated["receipt_sha256"] = __import__("hashlib").sha256(
         operational._canonical(unsigned)).hexdigest()
-    fence = operational.receipt_from_observation("write_fence", fence_observation(),
-        checked_at=checked, evidence_id="fence:1")
+    fence, source, drain = window_receipts()
+    for item in (fence, source, drain):
+        item["checked_at"] = checked
+        unsigned = {key: value for key, value in item.items() if key != "receipt_sha256"}
+        item["receipt_sha256"] = __import__("hashlib").sha256(
+            operational._canonical(unsigned)).hexdigest()
     isolated_path, fence_path = tmp_path / "restore.json", tmp_path / "fence.json"
-    operator.write_atomic(isolated_path, isolated); operator.write_atomic(fence_path, fence)
+    source_path, drain_path = tmp_path / "source.json", tmp_path / "drain.json"
+    for path, value in ((isolated_path, isolated), (fence_path, fence),
+                        (source_path, source), (drain_path, drain)):
+        operator.write_atomic(path, value)
     target = Connection({})
     class Wrapper:
         def __init__(self): self.connection = target
@@ -245,6 +285,8 @@ def test_install_live_cli_validates_receipts_and_writes_install_receipt(tmp_path
     result = cli.main(["install-live", "--baseline", str(baseline_path),
         "--expected-empty-baseline", str(empty_path), "--isolated-restore-receipt",
         str(isolated_path), "--write-fence-receipt", str(fence_path),
+        "--source-watermark-receipt", str(source_path),
+        "--outbox-drain-receipt", str(drain_path),
         "--receipt", str(receipt)])
     assert result == 0
     assert json.loads(receipt.read_text())["recapture_exact"] is True

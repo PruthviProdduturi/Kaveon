@@ -166,14 +166,14 @@ def restore_and_qualify(connection, payload):
 
 
 def install_live_baseline(connection, payload, expected_empty, restore_receipt,
-                          fence_observation):
+                          fence_receipt, source_receipt, drain_receipt):
     """Atomically replace the documented empty post-delete state with a qualified baseline."""
     from services import postgresql_operational_evidence as operational
     from services import postgresql_special_family_retirement as special
     from services.postgresql_write_fence import enabled as fence_enabled
     if os.getenv("KAVEON_LIVE_BASELINE_INSTALL_ENABLED") != "true" or not fence_enabled():
         raise RuntimeError("live baseline installation requires explicit enablement and write fence")
-    special._validate_fence_observation(fence_observation)
+    special._validate_fence_observation(fence_receipt.get("observation"))
     manifest, empty_manifest = identity.validate(payload), identity.validate(expected_empty)
     identity.require_dataset17_sentinel(payload)
     if (empty_manifest["table_count"] != len(TABLES) or empty_manifest["row_count"] != 0
@@ -188,11 +188,23 @@ def install_live_baseline(connection, payload, expected_empty, restore_receipt,
         raise RuntimeError("live baseline installation requires exact isolated restore qualification")
     # Validate the signed receipt structure and digest without weakening its
     # existing operational schema contract.
-    unsigned = {key: value for key, value in restore_receipt.items()
-                if key != "receipt_sha256"}
-    if restore_receipt.get("receipt_sha256") != hashlib.sha256(
-            operational._canonical(unsigned)).hexdigest():
-        raise RuntimeError("isolated restore qualification receipt identity is invalid")
+    for receipt, gate in ((restore_receipt, "baseline_restore_qualification"),
+                          (fence_receipt, "write_fence"),
+                          (source_receipt, "source_watermark"),
+                          (drain_receipt, "outbox_drain")):
+        unsigned = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+        if (receipt.get("gate") != gate or receipt.get("receipt_sha256") != hashlib.sha256(
+                operational._canonical(unsigned)).hexdigest()):
+            raise RuntimeError(f"live baseline {gate} receipt identity is invalid")
+    source_observation, drain_observation = (source_receipt["observation"],
+                                             drain_receipt["observation"])
+    if (source_observation.get("watermark_observed") != drain_observation.get("watermark")
+            or drain_observation.get("pending_after") != 0):
+        raise RuntimeError("live baseline source and outbox receipts are not one drained window")
+    prefixes = {receipt["evidence_id"].rsplit(":", 1)[0]
+                for receipt in (fence_receipt, source_receipt, drain_receipt)}
+    if len(prefixes) != 1:
+        raise RuntimeError("live baseline fence and drain receipts are not one window")
     if connection.autocommit is not True:
         raise RuntimeError("live baseline connection already has a transaction")
     by_name = {table["name"]: table for table in payload["tables"]}
@@ -204,6 +216,12 @@ def install_live_baseline(connection, payload, expected_empty, restore_receipt,
         current = capture_cursor(cursor, empty_manifest["source_id"])
         if current != expected_empty:
             raise RuntimeError("live special-family tables differ from documented empty state")
+        cursor.execute("SELECT COALESCE(MAX(source_sequence),0),"
+                       "COUNT(*) FILTER (WHERE applied_at IS NULL) "
+                       "FROM product_migration_outbox")
+        watermark, pending = map(int, cursor.fetchone())
+        if watermark != drain_observation["watermark"] or pending != 0:
+            raise RuntimeError("live outbox changed after its drained installation receipt")
         for name in TABLES:
             table = by_name[name]
             columns = table["columns"]
@@ -223,6 +241,7 @@ def install_live_baseline(connection, payload, expected_empty, restore_receipt,
                    "installed_global_sha256": manifest["global_sha256"],
                    "table_count": manifest["table_count"], "row_count": manifest["row_count"],
                    "writes_fenced": True, "isolated_restore_exact": True,
+                   "source_watermark": watermark, "outbox_pending": pending,
                    "recapture_exact": qualified["restore_verified"] is True}
         receipt["receipt_sha256"] = hashlib.sha256(identity._json(receipt)).hexdigest()
         return receipt
