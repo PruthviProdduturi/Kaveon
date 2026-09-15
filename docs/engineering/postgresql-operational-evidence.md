@@ -175,13 +175,14 @@ python scripts/record-postgresql-operational-evidence.py `
 ### Lossless seven-table rollback baseline
 
 Capture the two context tables and five DLM tables from one read-only,
-repeatable-read snapshot. The source uses the existing `METADATA_DATABASE`
-configuration. The output is written atomically and contains canonical typed
+repeatable-read snapshot. The source uses the existing metadata database pool,
+including `METADATA_DATABASE`, host, port, TLS, and managed identity settings.
+The output is written atomically and contains canonical typed
 rows, ordered primary keys, per-table schema/key/content hashes, and a global
 identity. The operator caps the snapshot at 10,000 rows and 512 MiB.
 
 ```powershell
-$env:METADATA_DATABASE = "<source PostgreSQL DSN>"
+$env:METADATA_DATABASE = "<configured source database name>"
 python scripts/postgresql-baseline.py capture `
   --source-id PRE_DELETION_SNAPSHOT_ID `
   --output tmp/postgresql-seven-table-baseline.json

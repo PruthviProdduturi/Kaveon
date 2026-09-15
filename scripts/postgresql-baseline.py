@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "api"))
+from database.pool import get_connection_pool  # noqa: E402
 from services import postgresql_baseline_operator as operator  # noqa: E402
 
 
@@ -30,11 +31,17 @@ args = parser.parse_args()
 
 try:
     if args.command == "capture":
-        dsn = os.getenv("METADATA_DATABASE", "")
-        if not dsn: raise RuntimeError("METADATA_DATABASE is required")
-        connection = connect(dsn)
-        try: payload = operator.capture(connection, args.source_id)
-        finally: connection.close()
+        database = os.getenv("METADATA_DATABASE", "")
+        if not database: raise RuntimeError("METADATA_DATABASE is required")
+        pool = get_connection_pool(database)
+        if pool.db_type != "postgresql":
+            raise RuntimeError("PostgreSQL baseline source must be PostgreSQL")
+        wrapper = pool.get_connection()
+        try:
+            wrapper.connect()
+            payload = operator.capture(wrapper.connection, args.source_id)
+        finally:
+            pool.return_connection(wrapper)
         operator.write_atomic(args.output, payload)
         result = {"captured": True, "global_sha256": payload["manifest"]["global_sha256"],
                   "row_count": payload["manifest"]["row_count"],
@@ -42,8 +49,6 @@ try:
     else:
         dsn = os.getenv("KAVEON_POSTGRESQL_BASELINE_TARGET_DATABASE", "")
         if not dsn: raise RuntimeError("KAVEON_POSTGRESQL_BASELINE_TARGET_DATABASE is required")
-        if dsn == os.getenv("METADATA_DATABASE", ""):
-            raise RuntimeError("baseline target must differ from the configured source")
         payload = operator.read_payload(args.baseline)
         connection = connect(dsn)
         try: result = operator.restore_and_qualify(connection, payload)
