@@ -4,7 +4,7 @@ export const metadata = { title: "KaveonDB scorecard" };
 
 const analytics: [string, number, string][] = [
   ["Throughput, matched corpus", 7, "1.45× Trino on the rebuilt cluster (2.30 vs 1.58 QPS, five rounds, 2026-09-15); faster on 9 of 12 shapes, slower on high-cardinality grouping; the 1.90× gate is not met"],
-  ["Scale at 504M rows", 5, "Exact grouped aggregate in ~20 s on three 3-CPU workers; wide aggregates 3–10× slower; exact distinct fix pending qualification"],
+  ["Scale at 504M rows", 4, "Measured alone on the same nodes, Trino 483 answers the thirteen live corpus questions 5× faster (geomean; 1.6–21×): row-group pruning, decode throughput and string keys. Context answers hide most of it; the live path does not"],
   ["SQL surface", 6, "CTEs, HAVING, CASE, window functions, WHERE subqueries, set operations; correlated subqueries, GROUPING SETS and approximate aggregates absent"],
   ["Storage and formats", 5, "Parquet, Delta (no checkpoints), Iceberg readers on ADLS Gen2 and local disk; no S3, no table writes"],
   ["Federation", 1, "No connectors; the Engine reads lake files. Out of scope by design"],
