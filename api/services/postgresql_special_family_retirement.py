@@ -11,7 +11,8 @@ from pathlib import Path
 
 from database.pool import get_connection_pool
 from services import (context_cache_retirement, dlm_generation_retirement,
-                      dlm_migration_evidence, postgresql_retirement_gate)
+                      dlm_migration_evidence, postgresql_retirement_gate,
+                      postgresql_special_family_migration as lossless)
 from services.postgresql_write_fence import enabled as fence_enabled
 
 CONTEXT_TABLES = ("context_answer_cache", "context_snapshots")
@@ -76,7 +77,22 @@ def _validate_rebuild(value: dict) -> None:
         raise RuntimeError("complete deterministic context-cache rebuild observation is required")
 
 
-def _delete_transactionally(expected_counts: dict[str, int]) -> dict:
+def _content_identities(cursor, baseline: dict) -> dict:
+    result = {}
+    for table in (*CONTEXT_TABLES, *DLM_TABLES):
+        item = baseline["tables"][table]
+        columns = item["columns"]
+        cursor.execute("SELECT " + ",".join(f'\"{column}\"' for column in columns)
+                       + f' FROM "{table}"')
+        identity = lossless.table_identity(columns, item["key_columns"],
+                                            [list(row) for row in cursor.fetchall()])
+        result[table] = {key: identity[key] for key in
+                         ("row_count", "key_set_sha256", "content_sha256")}
+        result[table]["schema_sha256"] = _schema_digest(cursor, table)
+    return result
+
+
+def _delete_transactionally(expected_counts: dict[str, int], baseline: dict) -> dict:
     database = os.getenv("METADATA_DATABASE", "")
     pool = get_connection_pool(database)
     if pool.db_type != "postgresql":
@@ -103,6 +119,10 @@ def _delete_transactionally(expected_counts: dict[str, int]) -> dict:
             before = _counts(cursor, (*CONTEXT_TABLES, *DLM_TABLES))
             if before != expected_counts:
                 raise RuntimeError("special-family source counts changed before deletion")
+            identities = _content_identities(cursor, baseline)
+            expected_identities = lossless.verify_baseline(baseline)["table_identities"]
+            if identities != expected_identities:
+                raise RuntimeError("special-family source content changed before deletion")
             deleted = {}
             for table in DELETE_ORDER:
                 cursor.execute(f'DELETE FROM "{table}"')
@@ -127,7 +147,8 @@ def _delete_transactionally(expected_counts: dict[str, int]) -> dict:
         if any(committed_remaining.values()):
             raise RuntimeError("special-family rows remain after commit")
         return {"snapshot_id": snapshot_id, "watermark": watermark,
-                "schemas": schemas, "before": before, "deleted": deleted,
+                "schemas": schemas, "identities": identities,
+                "before": before, "deleted": deleted,
                 "remaining": committed_remaining}
     finally:
         pool.return_connection(connection)
@@ -151,7 +172,8 @@ def _write_new(path: Path, value: dict) -> None:
 
 
 def run(*, bundle: dict, rebuild: dict, fence_observation: dict, output_directory: Path,
-        expected_counts: dict[str, int], now: datetime | None = None,
+        expected_counts: dict[str, int], baseline: dict, migration_evidence: dict,
+        now: datetime | None = None,
         delete_runner=None, max_age_hours: int = 1) -> dict:
     if os.getenv("KAVEON_SPECIAL_FAMILY_RETIREMENT_ENABLED") != "true":
         raise RuntimeError("special-family retirement requires explicit enablement")
@@ -169,11 +191,14 @@ def run(*, bundle: dict, rebuild: dict, fence_observation: dict, output_director
     instant = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     verified_bundle = dlm_migration_evidence.verify(bundle, now=instant,
                                                      max_age_hours=max_age_hours)
+    baseline_identity = lossless.verify_evidence(migration_evidence, baseline)
     if rebuild["target_snapshot_id"] != verified_bundle["target_snapshot_id"]:
         raise RuntimeError("context-cache and DLM target snapshots do not match")
-    captured = (delete_runner or _delete_transactionally)(expected_counts)
+    captured = (delete_runner or _delete_transactionally)(expected_counts, baseline)
     if captured["before"] != expected_counts:
         raise RuntimeError("special-family source counts changed before deletion")
+    if captured.get("identities") != baseline_identity["table_identities"]:
+        raise RuntimeError("special-family deletion precheck does not match baseline")
     verified_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     observed_at = instant.isoformat().replace("+00:00", "Z")
     context_observation = {
@@ -218,7 +243,18 @@ def run(*, bundle: dict, rebuild: dict, fence_observation: dict, output_director
     for name, value in (("context-cache-live.json", context_observation),
                         ("dlm-generation-live.json", dlm_observation),
                         ("context_cache.json", context_report),
-                        ("dlm_generation.json", dlm_report)):
+                        ("dlm_generation.json", dlm_report),
+                        ("special-family-lossless.json", {
+                            "schema_version": 1,
+                            "baseline_evidence_id": baseline_identity["baseline_evidence_id"],
+                            "source_snapshot_id": baseline_identity["source_snapshot_id"],
+                            "global_content_sha256": baseline_identity["global_content_sha256"],
+                            "table_identities": baseline_identity["table_identities"],
+                            "migration_manifest_sha256": migration_evidence["manifest"]["sha256"],
+                            "deletion_precheck_passed": True,
+                            "writes_fenced": True,
+                            "verified_at": verified_at,
+                        })):
         _write_new(output_directory / name, value)
     return {"passed": True, "source_snapshot": captured["snapshot_id"],
             "watermark": captured["watermark"], "output_directory": str(output_directory),

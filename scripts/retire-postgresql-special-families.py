@@ -13,6 +13,8 @@ parser.add_argument("--dlm-bundle", required=True, type=Path)
 parser.add_argument("--context-rebuild", required=True, type=Path)
 parser.add_argument("--write-fence-observation", required=True, type=Path)
 parser.add_argument("--expected-source-counts", required=True, type=Path)
+parser.add_argument("--lossless-baseline", required=True, type=Path)
+parser.add_argument("--lossless-migration-evidence", required=True, type=Path)
 parser.add_argument("--output-directory", required=True, type=Path)
 parser.add_argument("--max-age-hours", type=int, default=1)
 args = parser.parse_args()
@@ -27,6 +29,8 @@ try:
         rebuild=load(args.context_rebuild),
         fence_observation=load(args.write_fence_observation),
         expected_counts=load(args.expected_source_counts),
+        baseline=load(args.lossless_baseline),
+        migration_evidence=load(args.lossless_migration_evidence),
         output_directory=args.output_directory, max_age_hours=args.max_age_hours)
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))
 except Exception as error:
