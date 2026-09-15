@@ -394,7 +394,6 @@ fn local_compare_and_swap(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
     use std::sync::Arc;
 
     use object_store::memory::InMemory;
@@ -431,7 +430,7 @@ mod tests {
             store.read("heads/catalog.json").await.unwrap().bytes,
             b"generation-2"
         );
-        std::fs::remove_dir_all(PathBuf::from(root)).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

@@ -619,6 +619,23 @@ fn cache_metadata(key: String, identity: String, metadata: ArrowReaderMetadata) 
     );
 }
 
+/// Decoder lanes per scan of a large object. Defaults to the cores the process
+/// may use, capped at four: decode is CPU-bound per lane and a worker's
+/// container limit is what "cores" means here. `KAVEON_SCAN_PARALLELISM`
+/// overrides it; 1 restores the single sequential decoder.
+pub fn scan_parallelism() -> usize {
+    let cores = std::thread::available_parallelism().map_or(1, usize::from);
+    let configured = std::env::var("KAVEON_SCAN_PARALLELISM")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0);
+    configured
+        .unwrap_or_else(|| cores.min(MAX_SCAN_LANES))
+        .max(1)
+}
+
+const MAX_SCAN_LANES: usize = 4;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AdlsAuthMode {
     #[default]
@@ -868,48 +885,54 @@ impl AdlsParquetReader {
         };
         let preload =
             should_preload_object(object_metadata.size, metadata.metadata().num_row_groups());
-        let object_reader = AdlsObjectReader::new(
-            store,
-            object_metadata,
-            preload.then(|| format!("{cache_key}:{identity}")),
-        );
+        let object_cache_key = preload.then(|| format!("{cache_key}:{identity}"));
         let batch_size = effective_batch_size(self.batch_size, preload);
-        let mut builder =
-            ParquetRecordBatchStreamBuilder::new_with_metadata(object_reader, metadata)
-                .with_batch_size(batch_size);
-        metrics.footer_time(footer_started.elapsed());
-        metrics.file_opened();
-
-        let schema = Arc::clone(builder.schema());
+        let schema = Arc::clone(metadata.schema());
         let projection = self
             .columns
             .as_ref()
             .map(|columns| projection_indices(&schema, columns))
             .transpose()?;
-        if let Some(projection) = &projection {
-            let mask = ProjectionMask::roots(builder.parquet_schema(), projection.clone());
-            builder = builder.with_projection(mask);
-        }
-
-        if let Some(predicate) = self
-            .predicate
-            .as_ref()
-            .and_then(|predicate| parquet_row_filter(builder.parquet_schema(), &schema, predicate))
-        {
-            builder = builder.with_row_filter(predicate);
-        }
+        // One decoder per lane, each over its own object reader; the footer,
+        // projection and predicate are shared, the row groups are not.
+        let build_stream =
+            |groups: Vec<usize>| -> Result<ParquetRecordBatchStream<AdlsObjectReader>> {
+                let reader = AdlsObjectReader::new(
+                    store.clone(),
+                    object_metadata.clone(),
+                    object_cache_key.clone(),
+                );
+                let mut builder =
+                    ParquetRecordBatchStreamBuilder::new_with_metadata(reader, metadata.clone())
+                        .with_batch_size(batch_size);
+                if let Some(projection) = &projection {
+                    let mask = ProjectionMask::roots(builder.parquet_schema(), projection.clone());
+                    builder = builder.with_projection(mask);
+                }
+                if let Some(filter) = self.predicate.as_ref().and_then(|predicate| {
+                    parquet_row_filter(builder.parquet_schema(), &schema, predicate)
+                }) {
+                    builder = builder.with_row_filter(filter);
+                }
+                builder
+                    .with_row_groups(groups)
+                    .build()
+                    .map_err(parquet_error)
+            };
+        metrics.footer_time(footer_started.elapsed());
+        metrics.file_opened();
 
         let mut row_groups = if let Some(predicate) = &self.predicate {
             validate_predicate(predicate, &schema)?;
-            matching_row_groups(builder.metadata().as_ref(), &schema, predicate)
+            matching_row_groups(metadata.metadata().as_ref(), &schema, predicate)
         } else {
-            (0..builder.metadata().num_row_groups()).collect()
+            (0..metadata.metadata().num_row_groups()).collect()
         };
         if let Some(partition) = self.partition {
             row_groups.retain(|ordinal| partition.contains(*ordinal));
         }
         record_selection_metrics(
-            builder.metadata().as_ref(),
+            metadata.metadata().as_ref(),
             &row_groups,
             projection.as_deref(),
             &metrics,
@@ -920,11 +943,18 @@ impl AdlsParquetReader {
                 batch_size, self.predicate
             )
         });
-        builder = builder.with_row_groups(row_groups);
-        let stream: ParquetRecordBatchStream<AdlsObjectReader> =
-            builder.build().map_err(parquet_error)?;
+        // A preloaded object is decoded once and shared through the decoded
+        // cache, in file order; a large object is decoded by several lanes at
+        // once so network fetch and decode overlap and every core the worker
+        // was given does work. Lanes interleave row groups round-robin so
+        // each sees the whole file's range of days.
+        let lanes = if preload {
+            1
+        } else {
+            scan_parallelism().min(row_groups.len()).max(1)
+        };
         let (schema, output_projection) = crate::parquet_reader::ordered_projection(
-            Arc::clone(stream.schema()),
+            Arc::clone(&schema),
             self.columns.as_deref(),
         )?;
         let acquired = match decoded_cache_key {
@@ -943,7 +973,31 @@ impl AdlsParquetReader {
                 Some(batches) => Box::pin(futures::stream::iter(
                     batches.iter().cloned().map(Ok).collect::<Vec<_>>(),
                 )),
-                None => Box::pin(stream),
+                None if lanes <= 1 => Box::pin(build_stream(row_groups)?),
+                None => {
+                    let mut assignments: Vec<Vec<usize>> = vec![Vec::new(); lanes];
+                    for (index, group) in row_groups.iter().enumerate() {
+                        assignments[index % lanes].push(*group);
+                    }
+                    let (sender, receiver) = tokio::sync::mpsc::channel(lanes * 2);
+                    for groups in assignments.into_iter().filter(|groups| !groups.is_empty()) {
+                        let mut stream = build_stream(groups)?;
+                        let sender = sender.clone();
+                        tokio::spawn(async move {
+                            while let Some(item) = stream.next().await {
+                                let failed = item.is_err();
+                                if sender.send(item).await.is_err() || failed {
+                                    return;
+                                }
+                            }
+                        });
+                    }
+                    drop(sender);
+                    Box::pin(futures::stream::unfold(
+                        receiver,
+                        |mut receiver| async move { receiver.recv().await.map(|item| (item, receiver)) },
+                    ))
+                }
             };
         Ok(AdlsBatchStream {
             schema,
@@ -964,7 +1018,8 @@ impl AdlsParquetReader {
         std::thread::Builder::new()
             .name("kaveon-adls-reader".into())
             .spawn(move || {
-                let runtime = match tokio::runtime::Builder::new_current_thread()
+                let runtime = match tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(scan_parallelism())
                     .enable_all()
                     .build()
                 {
@@ -1292,6 +1347,77 @@ mod tests {
             acquire_decoded_cache_from(cache, format!("{key}:different-etag"), &metrics).await,
             DecodedCacheAcquire::Fill(_)
         ));
+    }
+
+    /// Six row groups of the sequence 0..600, decoded by several lanes at once:
+    /// the same rows come out, whatever the lane count and interleaving.
+    async fn lanes_fixture(account: &str) -> AdlsParquetReader {
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("value", arrow::datatypes::DataType::Int64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from((0..600).collect::<Vec<i64>>()))],
+        )
+        .unwrap();
+        let mut bytes = Vec::new();
+        let properties = WriterProperties::builder()
+            .set_max_row_group_size(100)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut bytes, schema, Some(properties)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        store
+            .put(&Path::from("lanes.parquet"), PutPayload::from(bytes))
+            .await
+            .unwrap();
+        cache_object_store(
+            format!("{account}/lanes/{:?}", AdlsAuthMode::Environment),
+            store,
+        );
+        AdlsParquetReader::new(account, "lanes", "lanes.parquet")
+    }
+
+    async fn sum_of_values(reader: AdlsParquetReader) -> (i64, usize, u64) {
+        let mut stream = reader.read().await.unwrap();
+        let (mut total, mut rows) = (0_i64, 0_usize);
+        while let Some(batch) = stream.next_batch().await.unwrap() {
+            let values = batch
+                .column(0)
+                .as_primitive::<arrow::datatypes::Int64Type>();
+            total += values.iter().flatten().sum::<i64>();
+            rows += batch.num_rows();
+        }
+        (total, rows, stream.metrics().snapshot().row_groups_selected)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+    async fn parallel_lanes_decode_every_row_group_exactly_once() {
+        let account = format!("lanes-{}", std::process::id());
+        let reader = lanes_fixture(&account).await;
+        assert_eq!(
+            sum_of_values(reader.clone().with_batch_size(64)).await,
+            ((0..600).sum::<i64>(), 600, 6)
+        );
+        // A predicate prunes row groups before the lanes are formed.
+        let predicate = StoragePredicate::Compare {
+            column: "value".into(),
+            op: kaveon_core::CompareOp::Ge,
+            value: kaveon_core::ScalarValue::Int64(400),
+        };
+        assert_eq!(
+            sum_of_values(reader.with_batch_size(64).with_predicate(predicate)).await,
+            ((400..600).sum::<i64>(), 200, 2)
+        );
+    }
+
+    #[test]
+    fn scan_parallelism_is_bounded_and_overridable() {
+        assert!(scan_parallelism() >= 1);
+        assert!(scan_parallelism() <= MAX_SCAN_LANES.max(1));
     }
 
     #[test]
