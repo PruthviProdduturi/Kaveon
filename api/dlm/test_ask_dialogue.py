@@ -39,6 +39,7 @@ class Harness(ExitStack):
         self.enter_context(patch.object(engine, "_effective_spec", lambda i: {}))
         self.enter_context(patch.object(engine, "_resolve_entity_filters", lambda i, q, **kw: list(self.filters)))
         self.enter_context(patch.object(engine, "_serve_from_context", lambda *a, **k: None))
+        self.enter_context(patch.object(engine, "_context_answer", lambda *a, **k: None))   # no precomputed cells
         self.enter_context(patch.object(engine, "_dataset_year_bounds", lambda i: (2023, 2026)))
         self.enter_context(patch.object(engine, "_metric_year_bounds", lambda *a, **k: (2023, 2026)))
         self.enter_context(patch.object(engine, "_context_hints", lambda *a, **k: []))
