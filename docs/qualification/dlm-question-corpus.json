@@ -456,7 +456,8 @@
       "q": "telemetry actions in July 2026",
       "expect": {
         "ok": true,
-        "dataset": "Kaveon Telemetry"
+        "dataset": "Kaveon Telemetry",
+        "route": "context"
       }
     },
     {
@@ -467,7 +468,8 @@
         "ok": true,
         "dataset": "Kaveon Telemetry",
         "year": 2026,
-        "group": "country"
+        "group": "country",
+        "route": "context"
       }
     },
     {
@@ -476,7 +478,8 @@
       "q": "telemetry actions in 2025",
       "expect": {
         "ok": true,
-        "dataset": "Kaveon Telemetry"
+        "dataset": "Kaveon Telemetry",
+        "route": "context"
       }
     },
     {
@@ -487,7 +490,7 @@
         "ok": true,
         "dataset": "Kaveon Telemetry",
         "metric": "Errors",
-        "route": "live"
+        "route": "context"
       }
     },
     {
@@ -496,7 +499,8 @@
       "q": "telemetry sessions by month",
       "expect": {
         "ok": true,
-        "dataset": "Kaveon Telemetry"
+        "dataset": "Kaveon Telemetry",
+        "route": "context"
       }
     },
     {
@@ -505,7 +509,8 @@
       "q": "trend of telemetry actions over time",
       "expect": {
         "ok": true,
-        "dataset": "Kaveon Telemetry"
+        "dataset": "Kaveon Telemetry",
+        "route": "context"
       }
     },
     {
@@ -638,7 +643,8 @@
         "ok": true,
         "dataset": "Kaveon Telemetry",
         "group": "surface",
-        "year": 2026
+        "year": 2026,
+        "route": "context"
       }
     },
     {

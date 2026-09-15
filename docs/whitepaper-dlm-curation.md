@@ -74,9 +74,22 @@ For a dataset with **M** metrics and **D** dimension columns:
 | 3. Two-dim combos | Each metric × qualifying dim pairs | M × P | ≤ 12 scans: packed cuboids first, then direct pairs |
 | 4. HLL sketch cuboids | COUNT DISTINCT metrics × low-card dims | 1 base cuboid | 1 scan per metric |
 
-### 2.2 What Does Not Get Precomputed
+### 2.2 Day cells: the time axis
 
-- Time-window slices ("revenue in Q3 2025") — the time-slice matrix is unbounded.
+When the dataset names a date column, one further scan groups every additive
+metric by day (bounded at 5,000 days). Those day cells are the time axis of the
+context: a year, a named month ("July 2026") or a relative window ("last 7
+days") is the sum of the cells inside the window; "by month" and "over the
+years" roll the cells up; and because the day count makes the date column a
+dimension for the cuboid cover, "sessions in 2026 by country" is answered from
+the `country|event_date` pair cells. The year bounds the DLM used to scan for
+("no data for 2025 yet") also come from the cells. Non-additive metrics keep
+their live path for time windows.
+
+### 2.3 What Does Not Get Precomputed
+
+- Time windows combined with two or more filters, or a window with both a
+  filter and a breakdown — these run live.
 - Three-or-more-filter intersections (unless dashboard-curated, §7).
 - High-cardinality dimension breakdowns (more than 500 distinct values).
 - Scatter/bubble charts (no metric aggregation — direct x/y column mapping).

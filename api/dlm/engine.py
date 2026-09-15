@@ -445,7 +445,8 @@ def _generate_dlm_impl(dataset_id: str, force: bool = False,
     precompute_report: Dict[str, Any] = {}
     answers = _precompute_answers(str(dataset_id), database, schema,
                                   ds.get("table_name") or ds.get("fact_table"),
-                                  columns, dimensions, metrics, spec, report=precompute_report)
+                                  columns, dimensions, metrics, spec, report=precompute_report,
+                                  date_column=ds.get("date_column"))
     _evict_answers(str(dataset_id))  # invalidate in-memory caches after regen
     _SKETCH_CACHE.pop(str(dataset_id), None)
     _RANGE_CACHE.pop(str(dataset_id), None)
@@ -459,7 +460,7 @@ def _generate_dlm_impl(dataset_id: str, force: bool = False,
         "answers_precomputed": answers,
         "values_indexed": len(value_rows),
         "rows_scanned": max((stats_rollup.get("row_counts") or {}).values(), default=None),
-        "scans": 1 + len([c for c in columns if c.get("is_dimension")]),  # totals + per-dim
+        "scans": 1 + len([c for c in columns if c.get("is_dimension")]) + (1 if ds.get("date_column") else 0),  # totals + per-dim + days
         "skipped_breakdowns": precompute_report.get("skipped") or [],
     }
     # 9) dashboard-level curation — precompute N-dim combos for any dashboards
@@ -567,7 +568,8 @@ def _failure_reason(exc: BaseException) -> str:
 
 def _precompute_answers(dataset_id: str, database: str, schema: str, fact: Optional[str],
                         columns: List[dict], dimensions: List[dict], metrics: List[dict],
-                        spec: Optional[dict] = None, report: Optional[dict] = None) -> int:
+                        spec: Optional[dict] = None, report: Optional[dict] = None,
+                        date_column: Optional[str] = None) -> int:
     """Compute + store the common answers for this dataset: every metric's grand
     total (one scan for all metrics) and every metric grouped by each dimension the
     curated spec marks for precompute, to its configured depth. Stored in dlm_answers
@@ -646,6 +648,31 @@ def _precompute_answers(dataset_id: str, database: str, schema: str, fact: Optio
             logger.warning("DLM precompute: breakdown by %s skipped for dataset %s: %s", dim, dataset_id, _failure_reason(exc))
             continue
 
+    # 2b) the date column, one cell per day — the time axis of every additive
+    #     metric. Year and relative-time windows sum a range of cells, "by month"
+    #     rolls cells up, and the day count makes the column a dimension the
+    #     cuboid cover can pair with the low-card dims, so "in 2026 by country"
+    #     is a context answer too. Non-additive metrics keep their live path.
+    rollup_defs = [(alias, name, expr) for alias, name, expr in mdefs
+                   if _metric_agg_type(expr) in ("additive", "semi_additive")]
+    if date_column and rollup_defs and date_column not in card:
+        gsel = ", ".join(f"{expr} AS {alias}" for alias, _n, expr in rollup_defs)
+        try:
+            res = _execute_dataset_query(
+                f"SELECT {_qid(date_column)} AS grp, {gsel} FROM {tbl} "
+                f"WHERE {_qid(date_column)} IS NOT NULL GROUP BY {_qid(date_column)} "
+                f"ORDER BY grp LIMIT {_DAY_CELL_CAP + 1}", database)
+            rows = [_row_vals(r) for r in (res.get("rows") or res.get("rows_objects") or [])]
+            if 0 < len(rows) <= _DAY_CELL_CAP:
+                card[date_column] = len(rows)
+                for j, (_a, name, _e) in enumerate(rollup_defs):
+                    out = [[_json_scalar(rv[0]), _json_scalar(rv[j + 1] if j + 1 < len(rv) else None)] for rv in rows]
+                    _store_answer(dataset_id, name, date_column, [date_column, name], out, now)
+                    stored += 1
+        except Exception as exc:
+            skipped.append({"dimension": date_column, "reason": _failure_reason(exc)})
+            logger.warning("DLM precompute: day cells skipped for dataset %s: %s", dataset_id, _failure_reason(exc))
+
     # 3) common 2-dim combos — so a two-filter question ("... in Asia Enterprise")
     #    or a two-way breakdown ("by country and industry") serves from context
     #    instead of a live scan. Bounded to low-card pairs (both dims fully
@@ -723,6 +750,7 @@ def _precompute_answers(dataset_id: str, database: str, schema: str, fact: Optio
     return stored
 
 
+_DAY_CELL_CAP = 5000        # days of history one scan may enumerate (13+ years)
 _CUBOID_MAX_KEYS = 4        # GROUP BY keys per cuboid scan; string keys cost per key per row
 _CUBOID_CELL_CAP = 100_000  # cells a cuboid may enumerate (result rows through the bridge)
 
@@ -1798,8 +1826,9 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
         if dim_names:
             note = f"No matching breakdown found. Available dimensions: {', '.join(dim_names)}."
 
-    # 4) year filter
+    # 4) year filter, optionally narrowed to a named month ("July 2026")
     year = _extract_year(question)
+    month = _extract_month(question) if year else None
 
     # 4-rel) relative time filter ("last 7 days", "this month", "yesterday")
     relative_time = _extract_relative_time(question) if not year else None
@@ -1813,7 +1842,7 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
     #     is a no-op — e.g. a single-year dataset (2026-only) asked "... in 2026".
     #     Drop it (zero DB trip via the cached range) so the answer serves from
     #     precomputed context instead of a full live scan.
-    if year:
+    if year and not month:
         _dlo, _dhi = _dataset_year_bounds(dataset_id)
         if _dlo is not None and _dhi is not None and _dlo == _dhi == year:
             year = None
@@ -1823,7 +1852,9 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
     #     say so, instead of returning an empty result for a future/missing year.
     metric_name = (metric or {}).get("name") or "Count"
     if year and metric:
-        lo, hi = _metric_year_bounds(database, schema, fact, date_column, metric, columns, filters)
+        lo, hi = _cell_year_bounds(dataset_id, metric_name, date_column, filters)
+        if lo is None:
+            lo, hi = _metric_year_bounds(database, schema, fact, date_column, metric, columns, filters)
         if hi is not None and year > hi:
             note = f"No data for {year} yet — showing the latest available ({hi}) for {metric_name}."
             year = hi
@@ -1863,6 +1894,19 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
                 sketched["duration_ms"] = round((_time_mod.monotonic() - t0) * 1000, 1)
                 return sketched
 
+    # ── time windows and trends from the day cells — still no database trip ──
+    if (time_group or year or relative_time) and metric and date_column \
+            and _metric_agg_type((metric or {}).get("expression") or "") == "additive":
+        served = _serve_time_window(dataset_id, ds, metric_name, group_col, filters, date_column,
+                                    year, relative_time, time_group, question, top_n, sort_asc,
+                                    round(routed_entry.get("score", 0.0), 3), month=month)
+        if served is not None:
+            if note:
+                served["note"] = note
+            served["frame"] = _frame(dataset_id, metric_name, group_col, filters, year, relative_time, top_n, sort_asc)
+            served["duration_ms"] = round((_time_mod.monotonic() - t0) * 1000, 1)
+            return served
+
     # ── assemble (live query path) ───────────────────────────────────────────
     metric_expr = (metric or {}).get("expression") or "COUNT(*)"
 
@@ -1876,7 +1920,10 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
     where: List[str] = []
     for f in filters:
         where.append(f"{_qid(f['column'])} = '{str(f['value']).replace(chr(39), chr(39) * 2)}'")
-    if year and date_column:
+    if year and month and date_column:
+        lo, hi = _time_window(year, None, month)
+        where.append(f"{_qid(date_column)} >= '{lo}' AND {_qid(date_column)} < '{hi}'")
+    elif year and date_column:
         where.append(_year_clause(date_column, year, columns))
     elif relative_time and date_column:
         where.append(f"{_qid(date_column)} >= {relative_time}")
@@ -1900,7 +1947,7 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
         title += " over time"
     elif group_cols:
         title += " by " + " and ".join(group_cols)
-    ctx_bits = [f["value"] for f in filters] + ([str(year)] if year else [])
+    ctx_bits = [f["value"] for f in filters] + ([f"{_MONTH_NAMES[month - 1].title()} {year}" if month else str(year)] if year else [])
     if relative_time:
         rt_m = _RELATIVE_TIME_RE.search(question) or _RELATIVE_NAMED_RE.search(question)
         rt_label = rt_m.group(0).strip() if rt_m else ("today" if _TODAY_RE.search(question) else "yesterday")
@@ -2356,6 +2403,171 @@ def _start_sweep_loop():
 
 
 _start_sweep_loop()
+
+
+_MONTH_RE = re.compile(r"\b(by month|monthly|per month|month over month)\b", re.I)
+_YEAR_GRAIN_RE = re.compile(r"\b(by year|yearly|per year|over the years|year over year)\b", re.I)
+
+
+_MONTH_NAMES = ["january", "february", "march", "april", "may", "june", "july",
+                "august", "september", "october", "november", "december"]
+_MONTH_RE_NAMED = re.compile(r"\b(" + "|".join(_MONTH_NAMES) + r"|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b", re.I)
+
+
+def _extract_month(question: str) -> Optional[int]:
+    """1–12 when the question names a month as a time slot: next to the year
+    ("July 2026", "2026 July") or after a time preposition ("in July"). A bare
+    "may" is an English verb far more often than a month, so it needs the year."""
+    for m in _MONTH_RE_NAMED.finditer(question):
+        name = m.group(1).lower()
+        before = question[:m.start()].rstrip()
+        after = question[m.end():].lstrip()
+        beside_year = bool(re.match(r"(19|20)\d{2}\b", after)) or bool(re.search(r"(19|20)\d{2}$", before))
+        after_preposition = bool(re.search(r"\b(in|for|during|of|since)$", before, re.I))
+        if beside_year or (after_preposition and name != "may"):
+            prefix = name[:3]
+            return next(i + 1 for i, full in enumerate(_MONTH_NAMES) if full.startswith(prefix))
+    return None
+
+
+def _time_window(year: Optional[int], relative_time: Optional[str], month: Optional[int] = None) -> Optional[tuple]:
+    """[lo, hi) ISO day bounds for the question's time slot; hi None = open."""
+    from datetime import date, timedelta
+    if year and month:
+        nxt = (int(year) + 1, 1) if month == 12 else (int(year), month + 1)
+        return (f"{int(year)}-{month:02d}-01", f"{nxt[0]}-{nxt[1]:02d}-01")
+    if year:
+        return (f"{int(year)}-01-01", f"{int(year) + 1}-01-01")
+    if not relative_time:
+        return None
+    today = date.today()
+    if relative_time == "CURRENT_DATE":
+        return (today.isoformat(), (today + timedelta(days=1)).isoformat())
+    if relative_time.startswith("CURRENT_DATE - INTERVAL '1 day'"):
+        return ((today - timedelta(days=1)).isoformat(), today.isoformat())
+    literal = relative_time.strip("'")
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", literal):
+        return (literal, None)
+    return None
+
+
+def _day_key(value: Any) -> Optional[str]:
+    """A cell's day as an ISO string; None for anything that is not a date."""
+    if value is None:
+        return None
+    text = str(value)
+    return text[:10] if re.match(r"\d{4}-\d{2}-\d{2}", text) else None
+
+
+def _serve_time_window(dataset_id: str, ds: dict, metric_name: str, group_col: Optional[str],
+                       filters: List[Dict[str, Any]], date_column: str, year: Optional[int],
+                       relative_time: Optional[str], time_group: Optional[str], question: str,
+                       top_n: Optional[int], sort_asc: bool, conf: float,
+                       month: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """Answer a year / relative-time window or a trend from the precomputed day
+    cells of an additive metric: a window sums the days inside [lo, hi); a trend
+    rolls the days up to the asked grain; one equality filter or one breakdown
+    uses the date|dimension pair cells the cuboid cover stored. Anything else
+    returns None and runs live."""
+    window = _time_window(year, relative_time, month)
+    if time_group and time_group != date_column:
+        return None
+    if len(filters) > 1 or (filters and group_col):
+        return None
+    if not window and not time_group:
+        return None
+    dataset_name = ds.get("dataset_name") or ds.get("name")
+    other = filters[0]["column"] if filters else group_col
+    if other:
+        pair = sorted([date_column, other])
+        ctx = _context_answer(dataset_id, metric_name, f"{pair[0]}|{pair[1]}")
+        if ctx is None:
+            return None
+        di = 0 if pair[0] == date_column else 1
+        oi = 1 - di
+        cells = [(_day_key(r[di]), r[oi], r[2]) for r in ctx["rows"] if r and len(r) >= 3]
+    else:
+        ctx = _context_answer(dataset_id, metric_name, date_column)
+        if ctx is None:
+            return None
+        cells = [(_day_key(r[0]), None, r[1]) for r in ctx["rows"] if r and len(r) >= 2]
+    cells = [c for c in cells if c[0] is not None]
+    if not cells:
+        return None
+    if window:
+        lo, hi = window
+        cells = [c for c in cells if c[0] >= lo and (hi is None or c[0] < hi)]
+    if filters:
+        want = _normalize(filters[0].get("value"))
+        cells = [c for c in cells if _normalize(c[1]) == want]
+    grain = None
+    if time_group:
+        grain = 7 if _MONTH_RE.search(question) else (4 if _YEAR_GRAIN_RE.search(question) else 10)
+    label_bits = [str(filters[0].get("value"))] if filters else []
+    if year:
+        label_bits.append(f"{_MONTH_NAMES[month - 1].title()} {year}" if month else str(year))
+    elif relative_time:
+        rt_m = _RELATIVE_TIME_RE.search(question) or _RELATIVE_NAMED_RE.search(question)
+        label_bits.append(rt_m.group(0).strip() if rt_m else ("today" if _TODAY_RE.search(question) else "yesterday"))
+    subtitle = ", ".join(label_bits) or None
+
+    def _sum(values):
+        total = None
+        for v in values:
+            n = _cell_number(v)
+            if n is None:
+                continue
+            total = n if total is None else total + n
+        return total
+
+    if grain:
+        buckets: Dict[str, list] = {}
+        for day, _o, v in cells:
+            buckets.setdefault(day[:grain], []).append(v)
+        rows = [[k, _sum(vs)] for k, vs in sorted(buckets.items())]
+        response = _ctx_response(dataset_id, dataset_name, metric_name, None,
+                                 [date_column, metric_name], rows, conf, subtitle=subtitle)
+        response.update({"chartType": "line", "xAxis": date_column,
+                         "title": metric_name + " over time" + (f" — {subtitle}" if subtitle else "")})
+        return response
+    if group_col:
+        buckets = {}
+        for _d, g, v in cells:
+            buckets.setdefault(g, []).append(v)
+        rows = [[g, _sum(vs)] for g, vs in buckets.items()]
+        rows.sort(key=lambda r: (r[1] is None, r[1] if sort_asc else -(r[1] or 0)))
+        if top_n:
+            rows = rows[:int(top_n)]
+        return _ctx_response(dataset_id, dataset_name, metric_name, group_col,
+                             [group_col, metric_name], rows, conf, subtitle=subtitle)
+    total = _sum(v for _d, _o, v in cells)
+    return _ctx_response(dataset_id, dataset_name, metric_name, None, [metric_name],
+                         [[total if total is not None else 0]], conf, subtitle=subtitle)
+
+
+def _cell_year_bounds(dataset_id: str, metric_name: str, date_column: Optional[str],
+                      filters: List[Dict[str, Any]]) -> tuple:
+    """(earliest, latest) year with data for the metric, from the day cells —
+    the same answer _metric_year_bounds scans for, without the scan."""
+    if not date_column or len(filters) > 1:
+        return (None, None)
+    if filters:
+        pair = sorted([date_column, filters[0]["column"]])
+        ctx = _context_answer(dataset_id, metric_name, f"{pair[0]}|{pair[1]}")
+        if ctx is None:
+            return (None, None)
+        di = 0 if pair[0] == date_column else 1
+        want = _normalize(filters[0].get("value"))
+        days = [_day_key(r[di]) for r in ctx["rows"] if r and len(r) >= 3 and _normalize(r[1 - di]) == want and _cell_number(r[2])]
+    else:
+        ctx = _context_answer(dataset_id, metric_name, date_column)
+        if ctx is None:
+            return (None, None)
+        days = [_day_key(r[0]) for r in ctx["rows"] if r and len(r) >= 2 and _cell_number(r[1])]
+    days = [d for d in days if d]
+    if not days:
+        return (None, None)
+    return (int(min(days)[:4]), int(max(days)[:4]))
 
 
 def _serve_from_context(dataset_id: str, ds: dict, metric_name: str, group_col: Optional[str],

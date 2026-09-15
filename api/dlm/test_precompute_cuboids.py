@@ -122,5 +122,38 @@ class CuboidRollupTests(unittest.TestCase):
         self.assertNotIn(("Users", "deployment|platform|country"), stored)   # cuboids never store a distinct count
 
 
+class DayCellTests(unittest.TestCase):
+    """The date column is scanned once into day cells and then packs with the
+    low-card dims, so windows and windowed breakdowns serve from context."""
+
+    def test_day_cells_are_stored_and_the_date_joins_the_cover(self):
+        facts = [("Cloud", "2026-01-01", 10), ("Cloud", "2026-01-02", 5), ("OnPrem", "2026-01-01", 3), ("OnPrem", "2026-01-02", 8)]
+        dims = {"deployment": 0, "day": 1}
+
+        def run(sql, database, timeout_seconds=None):
+            grouped = re.search(r"GROUP BY (.*?)(?: ORDER BY| LIMIT|$)", sql)
+            keys = [k.strip().strip('"') for k in grouped.group(1).split(",")] if grouped else []
+            groups = {}
+            for row in facts:
+                key = tuple(row[dims[k]] for k in keys)
+                groups[key] = groups.get(key, 0) + row[2]
+            rows = [list(k) + [v] for k, v in groups.items()]
+            if "ORDER BY grp" in sql:
+                rows.sort()
+            return {"rows": rows}
+
+        stored = {}
+        with patch.object(engine.meta, "execute", lambda *a, **k: None), \
+             patch.object(engine, "_execute_dataset_query", run), \
+             patch.object(engine, "_store_answer", lambda d, m, g, c, r, n: stored.__setitem__((m, g), r)), \
+             patch.object(engine, "_build_sketch_cuboids", lambda *a, **k: 0):
+            engine._precompute_answers("1", "OpenSource", "s", "events", [{"column_name": "deployment", "is_dimension": True}],
+                                       [], [{"name": "Total actions", "expression": "SUM(actions)"}], {}, report={},
+                                       date_column="day")
+        self.assertEqual(stored[("Total actions", "day")], [["2026-01-01", 13], ["2026-01-02", 13]])
+        self.assertEqual(sorted(stored[("Total actions", "day|deployment")]),
+                         [["2026-01-01", "Cloud", 10], ["2026-01-01", "OnPrem", 3], ["2026-01-02", "Cloud", 5], ["2026-01-02", "OnPrem", 8]])
+
+
 if __name__ == "__main__":
     unittest.main()
