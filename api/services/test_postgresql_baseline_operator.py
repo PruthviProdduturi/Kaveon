@@ -209,6 +209,12 @@ def test_capture_cli_writes_durable_gate_receipt(tmp_path, monkeypatch):
     assert pool.returned is True
 
 
+def test_cli_default_timestamp_is_validator_compatible_utc():
+    checked_at = cli._checked_at(None)
+    assert checked_at.endswith("Z")
+    assert operational.retirement._parse_utc(checked_at).utcoffset().total_seconds() == 0
+
+
 def test_install_live_cli_validates_receipts_and_writes_install_receipt(tmp_path, monkeypatch):
     payload = operator.capture(Connection(source_rows()), "qualified-seed")
     empty = operator.documented_empty(payload, "documented-empty")
