@@ -337,8 +337,23 @@ class Engines:
             if existing != expected:
                 raise RuntimeError(f"existing Kaveon catalog object disagrees at {item}") from error
 
+    def wait_trino_authenticators(self, timeout=180):
+        """Trino's HTTP listener answers before its password authenticators are
+        loaded; a statement in that gap fails with HTTP 500 rather than 401.
+        Wait for the first authenticated statement to be judged at all."""
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                self.trino_query("SELECT 1")
+                return
+            except RuntimeError as error:
+                if "authenticators were not loaded" not in str(error) or time.monotonic() >= deadline:
+                    raise
+            time.sleep(3)
+
     def bootstrap_trino(self):
         dataset = self.manifest["dataset"]
+        self.wait_trino_authenticators()
         self.trino_query(f"CREATE SCHEMA IF NOT EXISTS lake.{self.catalog}")
         root = f"abfss://{dataset['container']}@{dataset['account']}.dfs.core.windows.net/{dataset['prefix']}"
         for table in ("events", "customers"):
