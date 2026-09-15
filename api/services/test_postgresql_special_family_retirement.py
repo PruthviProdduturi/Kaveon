@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from services import postgresql_retirement_gate as gate
 from services import postgresql_special_family_retirement as retirement
+from services import postgresql_special_family_migration as lossless
 
 
 def fence():
@@ -28,8 +29,46 @@ def captured():
                    "dlm_router": 10, "dlm_value_index": 74})
     return {"snapshot_id": "pg-snapshot-1", "watermark": 3,
             "schemas": {table: "c" * 64 for table in before},
+            "identities": baseline_identity()["table_identities"],
             "before": before, "deleted": dict(before),
             "remaining": {table: 0 for table in before}}
+
+
+def baseline():
+    tables = {}
+    counts = {table: 0 for table in lossless.TABLES}
+    counts.update({"dlm_answers": 3866, "dlm_artifact": 10,
+                   "dlm_router": 10, "dlm_value_index": 74})
+    # Unit tests use precomputed identities because materializing thousands of
+    # fixture rows obscures the retirement contract under test.
+    for table in lossless.TABLES:
+        rows = [[index] for index in range(counts[table])]
+        tables[table] = {"columns": ["id"], "key_columns": ["id"], "rows": rows,
+                         "schema_sha256": "c" * 64}
+    return lossless.build_baseline("e" * 64, "pg-snapshot-1", tables)
+
+
+def baseline_identity():
+    return lossless.verify_baseline(baseline())
+
+
+def migration_evidence():
+    class Publisher:
+        def publish_immutable(self, path, body, sha256):
+            value = json.loads(body)
+            found = lossless.table_identity(value["columns"], value["key_columns"], value["rows"])
+            return {"path": path, "sha256": sha256, "status": "created", "bytes": len(body),
+                    **{key: found[key] for key in
+                       ("row_count", "key_set_sha256", "content_sha256")}}
+
+        def publish_manifest(self, body, **_kwargs):
+            return {"sha256": __import__("hashlib").sha256(body).hexdigest(),
+                    "status": "committed", "cas_attempts": 1, "published_last": True}
+    return lossless.publish(baseline(), expected_head="head:1", publisher=Publisher())
+
+
+def lossless_args():
+    return {"baseline": baseline(), "migration_evidence": migration_evidence()}
 
 
 class Tests(unittest.TestCase):
@@ -56,7 +95,7 @@ class Tests(unittest.TestCase):
              self.assertRaisesRegex(RuntimeError, "fence is not enabled"):
             retirement.run(bundle={}, rebuild={}, fence_observation=fence(),
                            expected_counts=captured()["before"], output_directory=Path("unused"),
-                           delete_runner=lambda _expected: called.append(1))
+                           delete_runner=lambda *_: called.append(1), **lossless_args())
         self.assertEqual(called, [])
 
     def test_requires_complete_live_fence_receipt_before_delete(self):
@@ -67,7 +106,7 @@ class Tests(unittest.TestCase):
              self.assertRaisesRegex(RuntimeError, "complete live write-fence"):
             retirement.run(bundle={}, rebuild={}, fence_observation=value,
                            expected_counts=captured()["before"], output_directory=Path("unused"),
-                           delete_runner=lambda _expected: called.append(1))
+                           delete_runner=lambda *_: called.append(1), **lossless_args())
         self.assertEqual(called, [])
 
     def test_rejects_bad_rebuild_before_delete(self):
@@ -78,7 +117,7 @@ class Tests(unittest.TestCase):
              self.assertRaisesRegex(RuntimeError, "deterministic context-cache rebuild"):
             retirement.run(bundle={}, rebuild=value, fence_observation=fence(),
                            expected_counts=captured()["before"], output_directory=Path("unused"),
-                           delete_runner=lambda _expected: called.append(1))
+                           delete_runner=lambda *_: called.append(1), **lossless_args())
         self.assertEqual(called, [])
 
     def test_requires_one_target_snapshot_before_delete(self):
@@ -94,7 +133,24 @@ class Tests(unittest.TestCase):
             retirement.run(bundle={}, rebuild=rebuild(), fence_observation=fence(),
                            output_directory=Path(directory) / "special",
                            expected_counts=captured()["before"],
-                           delete_runner=lambda _expected: called.append(1))
+                           delete_runner=lambda *_: called.append(1), **lossless_args())
+        self.assertEqual(called, [])
+
+    def test_lossless_identity_mismatch_refuses_before_delete(self):
+        called = []
+        evidence = migration_evidence()
+        evidence["tables"][0]["target"]["content_sha256"] = "0" * 64
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.dict(os.environ, {"KAVEON_SPECIAL_FAMILY_RETIREMENT_ENABLED": "true",
+                                     "KAVEON_POSTGRESQL_WRITE_FENCE_ENABLED": "true"}, clear=True), \
+             patch.object(retirement.dlm_migration_evidence, "verify", return_value={
+                 "passed": True, "bundle_sha256": "d" * 64, "definition_count": 10,
+                 "run_count": 10, "target_snapshot_id": "snapshot-1"}), \
+             self.assertRaisesRegex(RuntimeError, "source and target identities differ"):
+            retirement.run(bundle={}, rebuild=rebuild(), fence_observation=fence(),
+                output_directory=Path(directory) / "special", expected_counts=captured()["before"],
+                baseline=baseline(), migration_evidence=evidence,
+                delete_runner=lambda *_: called.append(1))
         self.assertEqual(called, [])
 
     def test_emits_both_observations_and_reports_after_verified_delete(self):
@@ -109,12 +165,12 @@ class Tests(unittest.TestCase):
             result = retirement.run(bundle={"safe": True}, rebuild=rebuild(),
                 fence_observation=fence(), output_directory=Path(directory) / "special",
                 expected_counts=captured()["before"], now=now,
-                delete_runner=lambda _expected: captured())
+                delete_runner=lambda *_: captured(), **lossless_args())
             self.assertTrue(result["passed"])
             output = Path(result["output_directory"])
             self.assertEqual({p.name for p in output.iterdir()}, {
                 "context-cache-live.json", "dlm-generation-live.json",
-                "context_cache.json", "dlm_generation.json"})
+                "context_cache.json", "dlm_generation.json", "special-family-lossless.json"})
             dlm = json.loads((output / "dlm-generation-live.json").read_text())
             self.assertEqual(dlm["source"]["rows"]["dlm_answers"], 3866)
             self.assertEqual(dlm["deletion"]["remaining_rows"]["dlm_answers"], 0)
