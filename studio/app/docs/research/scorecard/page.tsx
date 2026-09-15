@@ -3,7 +3,7 @@ import { Callout, PageHeader, Pager } from "../../../../components/docs/prose";
 export const metadata = { title: "KaveonDB scorecard" };
 
 const analytics: [string, number, string][] = [
-  ["Throughput, matched corpus", 7, "2.83 QPS vs Trino 2.24 on the twelve-query corpus at matched resources; 66.5% of the 1.90× objective"],
+  ["Throughput, matched corpus", 7, "1.45× Trino on the rebuilt cluster (2.30 vs 1.58 QPS, five rounds, 2026-09-15); faster on 9 of 12 shapes, slower on high-cardinality grouping; the 1.90× gate is not met"],
   ["Scale at 504M rows", 5, "Exact grouped aggregate in ~20 s on three 3-CPU workers; wide aggregates 3–10× slower; exact distinct fix pending qualification"],
   ["SQL surface", 6, "CTEs, HAVING, CASE, window functions, WHERE subqueries, set operations; correlated subqueries, GROUPING SETS and approximate aggregates absent"],
   ["Storage and formats", 5, "Parquet, Delta (no checkpoints), Iceberg readers on ADLS Gen2 and local disk; no S3, no table writes"],
