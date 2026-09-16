@@ -1000,7 +1000,10 @@ pub fn grouped_aggregate_output_types(schema: &SchemaRef) -> Result<Vec<DataType
         .collect())
 }
 
-fn validate_group_key_types(groups: &[GroupedAggregateState], types: &[DataType]) -> Result<()> {
+pub(crate) fn validate_group_key_types(
+    groups: &[GroupedAggregateState],
+    types: &[DataType],
+) -> Result<()> {
     for group in groups {
         if group.group_keys.len() != types.len() {
             return Err(exec_err("aggregate key count does not match typed schema"));
@@ -1035,21 +1038,9 @@ fn validate_group_key_types(groups: &[GroupedAggregateState], types: &[DataType]
 }
 
 /// Decodes canonical partial-aggregate Arrow batches received through an exchange.
-pub(crate) fn grouped_aggregate_state_row(
-    keys: &BinaryArray,
-    states: &BinaryArray,
-    row: usize,
-    types: &[DataType],
-) -> Result<GroupedAggregateState> {
-    if keys.is_null(row) || states.is_null(row) {
-        return Err(exec_err("grouped aggregate state row cannot contain nulls"));
-    }
-    let group = GroupedAggregateState {
-        group_keys: decode_group_keys(keys.value(row))?,
-        states: compact_state::decode(states.value(row))?,
-    };
-    validate_group_key_types(std::slice::from_ref(&group), types)?;
-    Ok(group)
+/// One row's accumulators from their compact encoding.
+pub(crate) fn decode_group_states(bytes: &[u8]) -> Result<Vec<AggregateState>> {
+    compact_state::decode(bytes)
 }
 
 pub fn grouped_aggregate_states_from_batches(
@@ -1338,7 +1329,7 @@ fn encode_group_keys_into(keys: &[AggregateValue], output: &mut Vec<u8>) -> Resu
     Ok(())
 }
 
-fn decode_group_keys(bytes: &[u8]) -> Result<Vec<AggregateValue>> {
+pub(crate) fn decode_group_keys(bytes: &[u8]) -> Result<Vec<AggregateValue>> {
     let mut offset = 0;
     let key_count = usize::try_from(read_u64(bytes, &mut offset)?)
         .map_err(|_| exec_err("aggregate group key count is too large"))?;
@@ -2124,6 +2115,9 @@ impl HashAggregate {
         if self.integer_key_states_apply() {
             return self.collect_integer_key_states();
         }
+        if self.string_key_states_apply() {
+            return self.collect_string_key_states();
+        }
         // Group keys are query-local and do not need the standard library's
         // comparatively expensive SipHash. AHash retains per-map randomized
         // seeds while materially reducing the hot-path cost of large GROUP BYs.
@@ -2811,6 +2805,29 @@ impl HashAggregate {
         ) {
             return false;
         }
+        self.in_place_accumulators_apply()
+    }
+
+    /// One plain text key with the same in-place accumulators as the
+    /// integer path. Dictionary-encoded keys stay on the coded path, whose
+    /// per-code batch folds win for the low-cardinality columns they carry.
+    fn string_key_states_apply(&self) -> bool {
+        if self.group_by.len() != 1 {
+            return false;
+        }
+        let schema = self.source.schema();
+        match schema.field_with_name(&self.group_by[0]) {
+            Ok(field) if matches!(field.data_type(), DataType::Utf8 | DataType::LargeUtf8) => {}
+            _ => return false,
+        }
+        self.in_place_accumulators_apply()
+    }
+
+    /// Every aggregate updates a fixed-size accumulator in place from an
+    /// integer or float column (or counts rows): nothing distinct, exact,
+    /// decimal or textual.
+    fn in_place_accumulators_apply(&self) -> bool {
+        let schema = self.source.schema();
         self.aggregates.iter().all(|aggregate| {
             if aggregate.distinct {
                 return false;
@@ -2837,6 +2854,134 @@ impl HashAggregate {
                     | AggregateState::Max(_)
             )
         })
+    }
+
+    /// Groups keyed by one text value: a `str → slot` index that owns each
+    /// distinct value once, and contiguous accumulators by slot; each row
+    /// hashes its bytes once.
+    fn collect_string_key_states(&mut self) -> Result<(GroupStateMap, Vec<MemoryReservation>)> {
+        let stride = self.aggregates.len();
+        let template = self.new_states();
+        let mut index: AHashMap<Box<str>, u32> = AHashMap::new();
+        let mut states: Vec<Accumulator> = Vec::new();
+        let mut null_states: Option<Vec<Accumulator>> = None;
+        let mut reservations = ReservationSlab::default();
+        let metrics = self
+            .memory
+            .as_ref()
+            .map(|memory| aggregate_metrics(memory.query()))
+            .transpose()?;
+        let key_index = self
+            .source
+            .schema()
+            .index_of(&self.group_by[0])
+            .expect("validated group key");
+        let value_indices = self
+            .aggregates
+            .iter()
+            .map(|aggregate| {
+                (aggregate.column != "*")
+                    .then(|| self.source.schema().index_of(&aggregate.column))
+                    .transpose()
+                    .expect("validated aggregate input")
+            })
+            .collect::<Vec<_>>();
+
+        while let Some(batch) = self.source.next_batch()? {
+            if let Some(metrics) = &metrics {
+                metrics
+                    .input_rows
+                    .fetch_add(batch.num_rows() as u64, Ordering::Relaxed);
+            }
+            let _input_memory = if self.input_already_reserved {
+                None
+            } else {
+                self.memory
+                    .as_ref()
+                    .map(|account| account.reserve(batch.get_array_memory_size() as u64))
+                    .transpose()?
+            };
+            let keys = batch.column(key_index);
+            let values = value_indices
+                .iter()
+                .map(|index| index.map(|index| batch.column(index)))
+                .collect::<Vec<_>>();
+            // Slot per row; u32::MAX marks a null key.
+            let mut resolve = |text: &str| -> Result<u32> {
+                if let Some(slot) = index.get(text) {
+                    return Ok(*slot);
+                }
+                if let Some(memory) = &self.memory {
+                    reservations.reserve(
+                        memory,
+                        estimated_group_bytes(&[GroupKey::Utf8(Arc::from(text))], stride),
+                    )?;
+                }
+                if let Some(metrics) = &metrics {
+                    metrics.groups_created.fetch_add(1, Ordering::Relaxed);
+                }
+                let slot = u32::try_from(index.len())
+                    .map_err(|_| exec_err("too many groups for one task"))?;
+                if slot == u32::MAX {
+                    return Err(exec_err("too many groups for one task"));
+                }
+                states.extend(template.iter().cloned());
+                index.insert(Box::from(text), slot);
+                Ok(slot)
+            };
+            let texts = string_values(keys)?;
+            let mut row_slots = Vec::with_capacity(batch.num_rows());
+            for row in 0..batch.num_rows() {
+                if row % 1024 == 0
+                    && let Some(memory) = &self.memory
+                {
+                    memory.check_cancelled()?;
+                }
+                row_slots.push(match texts.value(row) {
+                    Some(text) => resolve(text)?,
+                    None => u32::MAX,
+                });
+            }
+            for (row, slot) in row_slots.into_iter().enumerate() {
+                let accumulators: &mut [Accumulator] = if slot == u32::MAX {
+                    if null_states.is_none() {
+                        if let Some(memory) = &self.memory {
+                            reservations.reserve(
+                                memory,
+                                estimated_group_bytes(&[GroupKey::Null], stride),
+                            )?;
+                        }
+                        if let Some(metrics) = &metrics {
+                            metrics.groups_created.fetch_add(1, Ordering::Relaxed);
+                        }
+                        null_states = Some(template.clone());
+                    }
+                    null_states.as_mut().expect("just inserted")
+                } else {
+                    let slot = slot as usize;
+                    &mut states[slot * stride..(slot + 1) * stride]
+                };
+                update_in_place(accumulators, &values, row)?;
+            }
+        }
+
+        let mut by_slot: Vec<Option<Box<str>>> = (0..index.len()).map(|_| None).collect();
+        for (key, slot) in index {
+            by_slot[slot as usize] = Some(key);
+        }
+        let mut groups = Vec::with_capacity(by_slot.len() + usize::from(null_states.is_some()));
+        let mut states = states.into_iter();
+        for key in by_slot {
+            let key = key.expect("every slot has its key");
+            groups.push((
+                vec![GroupKey::Utf8(Arc::from(key))],
+                states.by_ref().take(stride).collect(),
+            ));
+        }
+        if let Some(states) = null_states {
+            groups.push((vec![GroupKey::Null], states));
+        }
+        Ok((groups, reservations.into_guards()))
     }
 
     /// Groups keyed by one integer: a compact `i64 → slot` index and every
@@ -2936,32 +3081,7 @@ impl HashAggregate {
                         &mut states[slot * stride..(slot + 1) * stride]
                     }
                 };
-                for (position, value) in values.iter().enumerate() {
-                    let state = &mut accumulators[position];
-                    match value {
-                        None => state.update_count()?,
-                        Some(array) => {
-                            if array.is_null(row) {
-                                continue;
-                            }
-                            match state {
-                                AggregateState::Count(_) => state.update_count()?,
-                                AggregateState::IntegerSum { .. }
-                                | AggregateState::IntegerMin(_)
-                                | AggregateState::IntegerMax(_) => {
-                                    let value = match array.data_type() {
-                                        DataType::Int32 => {
-                                            array.as_primitive::<Int32Type>().value(row) as i64
-                                        }
-                                        _ => array.as_primitive::<Int64Type>().value(row),
-                                    };
-                                    state.update_integer(value)?
-                                }
-                                _ => state.update_numeric(extract_f64(array, row)?)?,
-                            }
-                        }
-                    }
-                }
+                update_in_place(accumulators, &values, row)?;
             }
         }
 
@@ -3447,6 +3567,63 @@ fn batch_text_extreme(array: &ArrayRef, min: bool) -> Option<String> {
             extreme(texts.into_iter(), min)
         }
         _ => None,
+    }
+}
+
+/// Apply row `row` of each aggregate's input column (None counts the row) to
+/// its in-place accumulator.
+fn update_in_place(
+    accumulators: &mut [Accumulator],
+    values: &[Option<&ArrayRef>],
+    row: usize,
+) -> Result<()> {
+    for (position, value) in values.iter().enumerate() {
+        let state = &mut accumulators[position];
+        match value {
+            None => state.update_count()?,
+            Some(array) => {
+                if array.is_null(row) {
+                    continue;
+                }
+                match state {
+                    AggregateState::Count(_) => state.update_count()?,
+                    AggregateState::IntegerSum { .. }
+                    | AggregateState::IntegerMin(_)
+                    | AggregateState::IntegerMax(_) => {
+                        let value = match array.data_type() {
+                            DataType::Int32 => array.as_primitive::<Int32Type>().value(row) as i64,
+                            _ => array.as_primitive::<Int64Type>().value(row),
+                        };
+                        state.update_integer(value)?
+                    }
+                    _ => state.update_numeric(extract_f64(array, row)?)?,
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A text column's values by row, for Utf8 and LargeUtf8 alike.
+enum StringValues<'a> {
+    Small(&'a arrow::array::StringArray),
+    Large(&'a arrow::array::LargeStringArray),
+}
+
+impl StringValues<'_> {
+    fn value(&self, row: usize) -> Option<&str> {
+        match self {
+            Self::Small(array) => (!array.is_null(row)).then(|| array.value(row)),
+            Self::Large(array) => (!array.is_null(row)).then(|| array.value(row)),
+        }
+    }
+}
+
+fn string_values(array: &ArrayRef) -> Result<StringValues<'_>> {
+    match array.data_type() {
+        DataType::Utf8 => Ok(StringValues::Small(array.as_string::<i32>())),
+        DataType::LargeUtf8 => Ok(StringValues::Large(array.as_string::<i64>())),
+        other => Err(exec_err(format!("group key is not text: {other}"))),
     }
 }
 
