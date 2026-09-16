@@ -472,6 +472,11 @@ async fn finish_worker_query(
     if expected.is_none() || supplied != expected {
         return StatusCode::UNAUTHORIZED.into_response();
     }
+    // Finishing a query the coordinator gave up on must stop its tasks
+    // here too; otherwise they keep the worker busy for nobody.
+    if let Err(error) = state.lifecycle.cancellations.cancel(&query_id) {
+        return lifecycle_error_response(error.to_string());
+    }
     match state.lifecycle.finish_query(&query_id) {
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => lifecycle_error_response(error.to_string()),
@@ -3734,7 +3739,10 @@ enum MergeOperation {
     Max,
 }
 
-const REMOTE_TASK_TIMEOUT: Duration = Duration::from_secs(120);
+/// How long one task may run before the coordinator gives it up. Clients
+/// bound their own waits (and cancel on the way out); this is the ceiling for
+/// a stage over the full table, not an interactive budget.
+const REMOTE_TASK_TIMEOUT: Duration = Duration::from_secs(600);
 
 struct RemoteTaskFailure {
     message: String,
@@ -3791,8 +3799,18 @@ async fn execute_remote_task_payload(
         .send()
         .await
         .map_err(|error| RemoteTaskFailure {
-            message: format!("worker '{}' is unavailable: {error}", worker.node_id),
-            retryable: true,
+            message: if error.is_timeout() {
+                format!(
+                    "worker '{}' did not finish the task within {}s",
+                    worker.node_id,
+                    REMOTE_TASK_TIMEOUT.as_secs()
+                )
+            } else {
+                format!("worker '{}' is unavailable: {error}", worker.node_id)
+            },
+            // A task that ran out of time would run out of time again, and
+            // the first attempt is still running until the query is finished.
+            retryable: !error.is_timeout(),
         })?;
     if !response.status().is_success() {
         let status = response.status();
@@ -5684,6 +5702,31 @@ mod tests {
                 .workers
                 .contains_key("worker-sync-test")
         );
+    }
+
+    #[tokio::test]
+    async fn finishing_a_query_cancels_the_tasks_it_still_runs() {
+        let state = Arc::new(catalog_test_state());
+        let token = state.lifecycle.cancellations.token("query-orphan").unwrap();
+        assert!(!token.is_cancelled());
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer exchange-token-at-least-32-bytes-long"
+                .parse()
+                .unwrap(),
+        );
+        let response = super::finish_worker_query(
+            axum::extract::State(state.clone()),
+            axum::extract::Path("query-orphan".to_owned()),
+            headers,
+        )
+        .await;
+        assert_eq!(response.status(), axum::http::StatusCode::NO_CONTENT);
+        // The running task's token observes the cancel; the registry entry is gone.
+        assert!(token.is_cancelled());
+        let fresh = state.lifecycle.cancellations.token("query-orphan").unwrap();
+        assert!(!fresh.is_cancelled());
     }
 
     #[tokio::test]
