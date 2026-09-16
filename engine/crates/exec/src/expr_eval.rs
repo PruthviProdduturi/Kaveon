@@ -80,6 +80,12 @@ pub fn evaluate(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
         Expr::Column(name) => resolve_column(name, batch),
         Expr::Literal(value) => literal_to_array(value, batch.num_rows()),
         Expr::BinaryOp { left, op, right } => {
+            // A column against a literal is the common filter shape; compare
+            // it as a scalar so the literal is never expanded to a batch-long
+            // array, and through the dictionary when the column has one.
+            if let Some(result) = compare_column_with_literal(left, *op, right, batch)? {
+                return Ok(result);
+            }
             let left_arr = evaluate(left, batch)?;
             let right_arr = evaluate(right, batch)?;
             eval_binary_op(&left_arr, *op, &right_arr)
@@ -188,6 +194,75 @@ fn resolve_column(name: &str, batch: &RecordBatch) -> Result<ArrayRef> {
         }
     };
     Ok(Arc::clone(batch.column(idx)))
+}
+
+/// `column <op> literal` (or the mirror) with a same-typed literal: one
+/// comparison of the column against a scalar, or of a dictionary's values
+/// against the scalar followed by a gather through its keys. Returns None
+/// for every other shape, which takes the general path.
+fn compare_column_with_literal(
+    left: &Expr,
+    op: BinaryOp,
+    right: &Expr,
+    batch: &RecordBatch,
+) -> Result<Option<ArrayRef>> {
+    use arrow::array::{AsArray, Datum, Scalar};
+    use arrow::compute::kernels::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
+    let (column, literal, op) = match (left, right) {
+        (Expr::Column(name), Expr::Literal(value)) => (name, value, op),
+        (Expr::Literal(value), Expr::Column(name)) => (
+            name,
+            value,
+            match op {
+                BinaryOp::Lt => BinaryOp::Gt,
+                BinaryOp::Le => BinaryOp::Ge,
+                BinaryOp::Gt => BinaryOp::Lt,
+                BinaryOp::Ge => BinaryOp::Le,
+                other => other,
+            },
+        ),
+        _ => return Ok(None),
+    };
+    if !matches!(
+        op,
+        BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
+    ) {
+        return Ok(None);
+    }
+    let array = resolve_column(column, batch)?;
+    let value_type = match array.data_type() {
+        DataType::Dictionary(key_type, values) if key_type.as_ref() == &DataType::Int32 => {
+            values.as_ref()
+        }
+        DataType::Dictionary(_, _) => return Ok(None),
+        other => other,
+    };
+    let scalar: ArrayRef = match (literal, value_type) {
+        (ScalarValue::Utf8(v), DataType::Utf8) => Arc::new(StringArray::from(vec![v.as_str()])),
+        (ScalarValue::Int64(v), DataType::Int64) => Arc::new(Int64Array::from(vec![*v])),
+        (ScalarValue::Float64(v), DataType::Float64) => Arc::new(Float64Array::from(vec![*v])),
+        (ScalarValue::Bool(v), DataType::Boolean) => Arc::new(BooleanArray::from(vec![*v])),
+        _ => return Ok(None),
+    };
+    let scalar = Scalar::new(scalar);
+    let compare = |values: &dyn Datum| -> Result<BooleanArray> {
+        Ok(match op {
+            BinaryOp::Eq => eq(values, &scalar)?,
+            BinaryOp::Ne => neq(values, &scalar)?,
+            BinaryOp::Lt => lt(values, &scalar)?,
+            BinaryOp::Le => lt_eq(values, &scalar)?,
+            BinaryOp::Gt => gt(values, &scalar)?,
+            BinaryOp::Ge => gt_eq(values, &scalar)?,
+            _ => unreachable!("filtered above"),
+        })
+    };
+    if let DataType::Dictionary(_, _) = array.data_type() {
+        let dictionary = array.as_dictionary::<Int32Type>();
+        let verdicts = compare(dictionary.values())?;
+        let gathered = compute::take(&verdicts, dictionary.keys(), None)?;
+        return Ok(Some(gathered));
+    }
+    Ok(Some(Arc::new(compare(&array)?)))
 }
 
 fn literal_to_array(value: &ScalarValue, len: usize) -> Result<ArrayRef> {
@@ -1568,6 +1643,50 @@ mod tests {
             vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn compares_dictionary_columns_with_literals_through_the_dictionary() {
+        use arrow::array::{DictionaryArray, Int32Array};
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "day",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        )]));
+        let days = DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![Some(0), Some(1), None, Some(2), Some(1)]),
+            Arc::new(StringArray::from(vec![
+                "2026-07-01",
+                "2026-08-01",
+                "2026-09-01",
+            ])),
+        );
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(days)]).unwrap();
+        let expr = Expr::BinaryOp {
+            left: Box::new(Expr::Column("day".into())),
+            op: BinaryOp::Ge,
+            right: Box::new(Expr::Literal(ScalarValue::Utf8("2026-08-01".into()))),
+        };
+        let mask = evaluate_predicate(&expr, &batch).unwrap();
+        assert_eq!(
+            (0..5)
+                .map(|i| (!mask.is_null(i)).then(|| mask.value(i)))
+                .collect::<Vec<_>>(),
+            vec![Some(false), Some(true), None, Some(true), Some(true)]
+        );
+        // Mirrored: literal on the left flips the operator.
+        let mirrored = Expr::BinaryOp {
+            left: Box::new(Expr::Literal(ScalarValue::Utf8("2026-08-01".into()))),
+            op: BinaryOp::Lt,
+            right: Box::new(Expr::Column("day".into())),
+        };
+        let mask = evaluate_predicate(&mirrored, &batch).unwrap();
+        assert_eq!(
+            (0..5)
+                .map(|i| (!mask.is_null(i)).then(|| mask.value(i)))
+                .collect::<Vec<_>>(),
+            vec![Some(false), Some(false), None, Some(true), Some(false)]
+        );
     }
 
     #[test]
