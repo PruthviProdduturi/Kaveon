@@ -1,0 +1,197 @@
+{
+ "engine": "kaveon-engine@sha256:4df4c3280e3ec0a5aee1d28ff3fee36d9afe025339279bc47b28126ee61a7b34",
+ "dev": "bf80ab7",
+ "statements": "clickbench-targets",
+ "records": [
+  {
+   "id": "q13",
+   "seconds": [
+    21.329,
+    22.515,
+    21.002
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "465b4e5db6851ff394cb4c93aa729b7cd85bc1469da2255d5cf4870124772fa0",
+   "median_seconds": 21.329,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q14",
+   "seconds": [
+    48.592,
+    51.953,
+    49.051
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "b9f4d5bf0135230c11cde9563986b7eab1a893c12cf77ffc4e890fe6f0b69ffa",
+   "median_seconds": 49.051,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q15",
+   "seconds": [
+    24.552,
+    25.358,
+    25.322
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "3ce038a6ec9648fdd244123b2ce7a37300136f95933de6f5c32e84dc54e1e909",
+   "median_seconds": 25.322,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q16",
+   "seconds": [
+    23.825,
+    26.845,
+    24.199
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "09b32f84f51b36635d25b0958d6bb647bf0eea793acf1279f4e1fc21787d0942",
+   "median_seconds": 24.199,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q17",
+   "seconds": [
+    74.466,
+    77.184,
+    73.315
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "4bf50a1c7589e81eb30eaab1c1315ee42f145c26ace980b2258ed7f775d1e0ed",
+   "median_seconds": 74.466,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q18",
+   "seconds": [
+    67.95,
+    68.179,
+    66.291
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "41ea89450731eb140c841281c9f89e40ecca4c647715969aef8bed99734e95fa",
+   "median_seconds": 67.95,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q19",
+   "seconds": [
+    173.283,
+    166.653,
+    165.313
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": true,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "a988fff03448c7860b409546b3e7bd42f2c0570268a385446a59368e3fae4ebd",
+   "median_seconds": 166.653,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q31",
+   "seconds": [
+    25.497,
+    21.035,
+    20.93
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "92ef847297af2a1672f52c539635548a4dcdcb2343c5fb3b292bfca907604d8c",
+   "median_seconds": 21.035,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q32",
+   "seconds": [
+    38.442,
+    36.167,
+    37.607
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "d2ffaf499117ccc3629f7cdb925b837223e10fd4181895876f5e970703f0f55a",
+   "median_seconds": 37.607,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q33",
+   "seconds": [],
+   "rows": null,
+   "rows_selected": null,
+   "error": "Engine rejected the request",
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null
+  },
+  {
+   "id": "q34",
+   "seconds": [
+    239.125,
+    407.265,
+    226.544
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "63683b61a9620b079dee7a38bdd0ed48f65ef766b2d64c8e879055cf7df0969d",
+   "median_seconds": 239.125,
+   "meets_target": null,
+   "beats_trino": null
+  }
+ ]
+}
