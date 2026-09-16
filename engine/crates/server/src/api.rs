@@ -52,10 +52,43 @@ struct QueryStore {
     queries: HashMap<String, QueryRecord>,
 }
 
+/// Where the query ran, and why, when it did not run on the workers.
+#[derive(Clone, Serialize, PartialEq, Eq, Debug)]
+struct ExecutionPlacement {
+    /// `pending`, `distributed` or `coordinator`.
+    mode: &'static str,
+    /// The distributed path taken (`fragments`, `aggregate`, `top_n`), or
+    /// the reason the coordinator ran it instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+}
+
+impl ExecutionPlacement {
+    fn pending() -> Self {
+        Self {
+            mode: "pending",
+            detail: None,
+        }
+    }
+    fn distributed(path: &str) -> Self {
+        Self {
+            mode: "distributed",
+            detail: Some(path.to_owned()),
+        }
+    }
+    fn coordinator(reason: Option<String>) -> Self {
+        Self {
+            mode: "coordinator",
+            detail: Some(reason.unwrap_or_else(|| "shape has no distributed plan".to_owned())),
+        }
+    }
+}
+
 #[derive(Clone, Serialize)]
 struct QueryRecord {
     rows_are_preview: bool,
     scan_metrics_complete: bool,
+    execution: ExecutionPlacement,
     id: String,
     sql: String,
     state: QueryState,
@@ -1437,6 +1470,7 @@ async fn submit_statement(
         QueryRecord {
             rows_are_preview: true,
             scan_metrics_complete: false,
+            execution: ExecutionPlacement::pending(),
             id: query_id.clone(),
             sql: sql.clone(),
             state: QueryState::Running,
@@ -1499,6 +1533,9 @@ async fn submit_statement(
         record.plan.physical = Some(physical_plan.clone());
     }
 
+    // Why the coordinator ran it, when it did: surfaced on the record so a
+    // downgrade is never silent.
+    let mut placement_reason: Option<String> = None;
     if let Some(distributed) = execute_distributed_fragments(
         &state,
         &query_id,
@@ -1506,6 +1543,7 @@ async fn submit_statement(
         &plan,
         &catalog_snapshot,
         &planning_source_pins.delta_versions,
+        &mut placement_reason,
     )
     .await
     {
@@ -1541,6 +1579,7 @@ async fn submit_statement(
                 let record = QueryRecord {
                     rows_are_preview: true,
                     scan_metrics_complete,
+                    execution: ExecutionPlacement::distributed("fragments"),
                     id: query_id.clone(),
                     sql,
                     state: QueryState::Finished,
@@ -1648,6 +1687,7 @@ async fn submit_statement(
                 let record = QueryRecord {
                     rows_are_preview: true,
                     scan_metrics_complete,
+                    execution: ExecutionPlacement::distributed("aggregate"),
                     id: query_id.clone(),
                     sql,
                     state: QueryState::Finished,
@@ -1748,6 +1788,7 @@ async fn submit_statement(
                 let record = QueryRecord {
                     rows_are_preview: true,
                     scan_metrics_complete,
+                    execution: ExecutionPlacement::distributed("top_n"),
                     id: query_id.clone(),
                     sql,
                     state: QueryState::Finished,
@@ -1922,6 +1963,7 @@ async fn submit_statement(
             let record = QueryRecord {
                 rows_are_preview: true,
                 scan_metrics_complete: true,
+                execution: ExecutionPlacement::coordinator(placement_reason.clone()),
                 id: query_id.clone(),
                 sql: sql.clone(),
                 state: QueryState::Failed,
@@ -2007,6 +2049,7 @@ async fn submit_statement(
     let record = QueryRecord {
         rows_are_preview: true,
         scan_metrics_complete: true,
+        execution: ExecutionPlacement::coordinator(placement_reason.clone()),
         id: query_id.clone(),
         sql,
         state: QueryState::Finished,
@@ -3918,8 +3961,14 @@ async fn execute_distributed_fragments(
     plan: &LogicalPlan,
     catalog_snapshot: &kaveon_core::CatalogManager,
     analyzed_delta_versions: &BTreeMap<String, u64>,
+    placement_reason: &mut Option<String>,
 ) -> Option<Result<(TaskResponse, Vec<StageTelemetry>, u64), String>> {
-    if exact_metadata_count_plan(plan) || !general_distributed_eligible(plan) {
+    if exact_metadata_count_plan(plan) {
+        *placement_reason = Some("exact count answered from table metadata".to_owned());
+        return None;
+    }
+    if !general_distributed_eligible(plan) {
+        *placement_reason = Some("shape has no distributed plan".to_owned());
         return None;
     }
     let worker_selection = {
@@ -3931,8 +3980,20 @@ async fn execute_distributed_fragments(
         Err(error) => return Some(Err(error)),
     };
     workers.sort_unstable_by(|left, right| left.node_id.cmp(&right.node_id));
-    let token = state.config.exchange_token.clone()?;
-    if workers.len() < 2 || token.is_empty() {
+    let Some(token) = state
+        .config
+        .exchange_token
+        .clone()
+        .filter(|token| !token.is_empty())
+    else {
+        *placement_reason = Some("no exchange token is configured".to_owned());
+        return None;
+    };
+    if workers.len() < 2 {
+        *placement_reason = Some(format!(
+            "{} compatible worker(s); distributed execution needs two",
+            workers.len()
+        ));
         return None;
     }
 
@@ -3943,6 +4004,7 @@ async fn execute_distributed_fragments(
         Ok(graph) => graph,
         Err(error) => {
             eprintln!("query {query_id} runs on the coordinator: stage graph: {error}");
+            *placement_reason = Some(format!("stage graph: {error}"));
             return None;
         }
     };
@@ -3956,6 +4018,7 @@ async fn execute_distributed_fragments(
         Ok(fragments) => fragments,
         Err(error) => {
             eprintln!("query {query_id} runs on the coordinator: fragments: {error}");
+            *placement_reason = Some(format!("fragments: {error}"));
             return None;
         }
     };
@@ -5883,6 +5946,60 @@ mod tests {
                 .table
                 .location
                 .contains("snapshot-v2/events.parquet")
+        );
+    }
+
+    #[tokio::test]
+    async fn coordinator_placement_names_its_reason() {
+        use super::{ExecutionPlacement, QueryContext, execute_distributed_fragments};
+        use std::collections::BTreeMap;
+        // A cluster with no workers cannot distribute: the fragments path
+        // declines and says why, and the record carries it.
+        let state = Arc::new(catalog_test_state());
+        let plan = kaveon_sql::logical_plan::sql_to_logical_plan("SELECT id FROM events").unwrap();
+        let context = QueryContext {
+            engine_version: "test".into(),
+            environment: "test".into(),
+            principal: None,
+            user: None,
+            source: None,
+            client: None,
+            catalog: "kaveon".into(),
+            schema: "default".into(),
+            time_zone: None,
+            client_address: None,
+            client_tags: Vec::new(),
+            result_delivery: None,
+            catalog_snapshot_id: String::new(),
+        };
+        let snapshot = kaveon_core::CatalogManager::new("kaveon", "default");
+        let mut reason = None;
+        let outcome = execute_distributed_fragments(
+            &state,
+            "query-placement",
+            &context,
+            &plan,
+            &snapshot,
+            &BTreeMap::new(),
+            &mut reason,
+        )
+        .await;
+        assert!(outcome.is_none());
+        let reason = reason.expect("the coordinator path is explained");
+        assert!(
+            reason.contains("no distributed plan") || reason.contains("worker"),
+            "{reason}"
+        );
+        let placement = ExecutionPlacement::coordinator(Some(reason.clone()));
+        assert_eq!(placement.mode, "coordinator");
+        assert_eq!(placement.detail.as_deref(), Some(reason.as_str()));
+        assert_eq!(
+            serde_json::to_value(ExecutionPlacement::distributed("fragments")).unwrap(),
+            serde_json::json!({"mode": "distributed", "detail": "fragments"})
+        );
+        assert_eq!(
+            serde_json::to_value(ExecutionPlacement::pending()).unwrap(),
+            serde_json::json!({"mode": "pending"})
         );
     }
 

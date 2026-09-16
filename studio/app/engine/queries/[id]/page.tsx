@@ -18,6 +18,15 @@ const TABS: { id: Tab; label: string }[] = [
 const Value = ({ v, fallback = "Not provided" }: { v?: unknown; fallback?: string }) =>
   v === undefined || v === null || v === "" ? <span className={s.na}>{fallback}</span> : <>{String(v)}</>;
 
+/** Where the query ran. A coordinator-run query is a downgrade worth seeing: the reason travels with it. */
+function placement(q: QueryRecord) {
+  const p = q.execution;
+  if (!p) return <span className={s.na}>Not recorded</span>;
+  if (p.mode === "distributed") return <>Workers{p.detail ? <span className={s.na}> · {p.detail}</span> : null}</>;
+  if (p.mode === "coordinator") return <><span className={`${s.pill} ${s.pillRunning}`}>Coordinator</span>{p.detail ? <span className={s.na}> {p.detail}</span> : null}</>;
+  return <span className={s.na}>Pending</span>;
+}
+
 function Definitions({ rows }: { rows: [string, React.ReactNode][] }) {
   return <dl className={s.dl}>{rows.map(([k, v]) => <div key={k} style={{ display: "contents" }}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>;
 }
@@ -159,6 +168,7 @@ export default function EngineQueryPage() {
                     ["State", q.state], ["Elapsed", ms(q.elapsed_ms)],
                     ["Rows in response", `${q.rows.length.toLocaleString()}${q.rows_are_preview ? " (preview)" : ""}`],
                     ["Columns", String(q.columns.length)],
+                    ["Ran on", placement(q)],
                     ["Distributed stages", q.stages.length ? String(q.stages.length) : <span key="ns" className={s.na}>Node-local</span>],
                     ["KaveonDB version", <Value key="ev" v={c.engine_version} />], ["Environment", <Value key="en" v={c.environment} />],
                   ]} />
