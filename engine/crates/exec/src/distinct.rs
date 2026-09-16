@@ -6,7 +6,7 @@ use arrow::datatypes::{
     DataType, Date32Type, Int8Type, Int16Type, Int32Type, Int64Type, SchemaRef, UInt8Type,
     UInt16Type, UInt32Type, UInt64Type,
 };
-use kaveon_core::{BatchOperator, KaveonError, MemoryReservation, OperatorMemoryAccount, Result};
+use kaveon_core::{BatchOperator, KaveonError, OperatorMemoryAccount, ReservationSlab, Result};
 
 use crate::aggregate::AggregateValue;
 
@@ -25,7 +25,7 @@ pub struct DistinctOperator {
     /// text compares equal across batches whose dictionaries differ.
     interned: AHashMap<Box<str>, u64>,
     memory: Option<OperatorMemoryAccount>,
-    reservations: Vec<MemoryReservation>,
+    reservations: ReservationSlab,
 }
 
 impl DistinctOperator {
@@ -36,7 +36,7 @@ impl DistinctOperator {
             compact: AHashSet::new(),
             interned: AHashMap::new(),
             memory: None,
-            reservations: Vec::new(),
+            reservations: ReservationSlab::default(),
         }
     }
 
@@ -45,8 +45,7 @@ impl DistinctOperator {
             return Ok(*word);
         }
         if let Some(memory) = &self.memory {
-            self.reservations
-                .push(memory.reserve(64 + text.len() as u64)?);
+            self.reservations.reserve(memory, 64 + text.len() as u64)?;
         }
         let word = self.interned.len() as u64;
         self.interned.insert(Box::from(text), word);
@@ -157,11 +156,11 @@ impl DistinctOperator {
             {
                 // The set doubles; the old table lives until the copy is done.
                 self.reservations
-                    .push(memory.reserve((self.compact.capacity() as u64).saturating_mul(24))?);
+                    .reserve(memory, (self.compact.capacity() as u64).saturating_mul(24))?;
             }
             if self.compact.insert(key) {
                 if let Some(memory) = &self.memory {
-                    self.reservations.push(memory.reserve(COMPACT_KEY_BYTES)?);
+                    self.reservations.reserve(memory, COMPACT_KEY_BYTES)?;
                 }
                 keep.push(row as u32);
             }
@@ -227,7 +226,7 @@ impl BatchOperator for DistinctOperator {
                                 _ => 0,
                             })
                         });
-                        self.reservations.push(memory.reserve(bytes)?);
+                        self.reservations.reserve(memory, bytes)?;
                     }
                     self.seen.insert(key);
                     keep.push(row as u32);
@@ -456,6 +455,48 @@ mod tests {
                 vec![text("Africa"), text("Web")],
             ]
         );
+    }
+
+    #[test]
+    fn a_large_distinct_reserves_in_slabs_not_per_key() {
+        // 400 000 distinct (text, integer) keys: the budget is charged in
+        // 64 KiB slabs, so the pool sees hundreds of reservations, not one
+        // per key, and everything is released at the end.
+        let rows = 400_000;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("phrase", DataType::Utf8, true),
+            Field::new("user", DataType::Int64, false),
+        ]));
+        let batches = (0..rows / 8192 + 1)
+            .map(|chunk| {
+                let start = chunk * 8192;
+                let end = rows.min(start + 8192);
+                RecordBatch::try_new(
+                    schema.clone(),
+                    vec![
+                        Arc::new(StringArray::from_iter(
+                            (start..end).map(|n| Some(format!("phrase {}", n % 50_000))),
+                        )),
+                        Arc::new(arrow::array::Int64Array::from_iter_values(
+                            (start..end).map(|n| n as i64),
+                        )),
+                    ],
+                )
+                .unwrap()
+            })
+            .collect::<VecDeque<_>>();
+        let pool = kaveon_core::QueryMemoryPool::new("distinct-slabs", 256 * 1024 * 1024).unwrap();
+        let account = pool.operator("distinct").unwrap();
+        let mut distinct =
+            DistinctOperator::new(Box::new(Input { schema, batches })).with_memory(account.clone());
+        let mut kept = 0;
+        while let Some(batch) = distinct.next_batch().unwrap() {
+            kept += batch.num_rows();
+        }
+        assert_eq!(kept, rows);
+        let calls = account.snapshot().reservation_calls;
+        assert!(calls < 2_000, "{calls} reservation calls for {rows} keys");
+        assert_eq!(pool.snapshot().current_bytes, 0);
     }
 
     #[test]

@@ -32,7 +32,7 @@ pub use fragment::{
 };
 pub use memory::{
     AdmittedQueryMemory, MemoryAdmissionController, MemoryReservation, MemorySnapshot,
-    OperatorMemoryAccount, QueryMemoryPool,
+    OperatorMemoryAccount, QueryMemoryPool, ReservationSlab,
 };
 pub use operator::{BatchOperator, BatchSource, collect_batches};
 pub use predicate::{CompareOp, ScalarValue, StoragePredicate};
