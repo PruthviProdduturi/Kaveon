@@ -2121,6 +2121,9 @@ impl HashAggregate {
         {
             return self.collect_coded_string_count_sum_states();
         }
+        if self.integer_key_states_apply() {
+            return self.collect_integer_key_states();
+        }
         // Group keys are query-local and do not need the standard library's
         // comparatively expensive SipHash. AHash retains per-map randomized
         // seeds while materially reducing the hot-path cost of large GROUP BYs.
@@ -2790,6 +2793,198 @@ impl HashAggregate {
 
     /// Updates dense integer groups by indexing directly into a contiguous
     /// state vector. Keys outside the density bound retain the hash fallback.
+    /// One integer key (Int64, Int32 or a day-number date) and only the
+    /// accumulators a row updates in place: COUNT, integer and floating
+    /// SUM/AVG/MIN/MAX over integer or float columns, nothing distinct.
+    fn integer_key_states_apply(&self) -> bool {
+        if self.group_by.len() != 1 {
+            return false;
+        }
+        let schema = self.source.schema();
+        let key_type = match schema.field_with_name(&self.group_by[0]) {
+            Ok(field) => field.data_type(),
+            Err(_) => return false,
+        };
+        if !matches!(
+            key_type,
+            DataType::Int64 | DataType::Int32 | DataType::Date32
+        ) {
+            return false;
+        }
+        self.aggregates.iter().all(|aggregate| {
+            if aggregate.distinct {
+                return false;
+            }
+            if aggregate.column == "*" {
+                return matches!(aggregate.func, AggFunc::Count);
+            }
+            matches!(
+                schema
+                    .field_with_name(&aggregate.column)
+                    .map(|field| field.data_type()),
+                Ok(DataType::Int64 | DataType::Int32 | DataType::Float64)
+            )
+        }) && self.new_states().iter().all(|state| {
+            matches!(
+                state,
+                AggregateState::Count(_)
+                    | AggregateState::IntegerSum { .. }
+                    | AggregateState::IntegerMin(_)
+                    | AggregateState::IntegerMax(_)
+                    | AggregateState::Sum { .. }
+                    | AggregateState::Avg { .. }
+                    | AggregateState::Min(_)
+                    | AggregateState::Max(_)
+            )
+        })
+    }
+
+    /// Groups keyed by one integer: a compact `i64 → slot` index and every
+    /// group's accumulators laid out contiguously by slot, so a row costs one
+    /// small-key hash probe and an in-place update instead of a key enum, a
+    /// vector per group and two pointer chases. High-cardinality keys (user
+    /// and session ids) live here.
+    fn collect_integer_key_states(&mut self) -> Result<(GroupStateMap, Vec<MemoryReservation>)> {
+        let stride = self.aggregates.len();
+        let template = self.new_states();
+        let mut index: AHashMap<i64, u32> = AHashMap::new();
+        let mut states: Vec<Accumulator> = Vec::new();
+        let mut null_states: Option<Vec<Accumulator>> = None;
+        let mut reservations = ReservationSlab::default();
+        let group_bytes = estimated_group_bytes(&[GroupKey::Int64(0)], stride);
+        let metrics = self
+            .memory
+            .as_ref()
+            .map(|memory| aggregate_metrics(memory.query()))
+            .transpose()?;
+        let key_index = self
+            .source
+            .schema()
+            .index_of(&self.group_by[0])
+            .expect("validated group key");
+        // Int32 and Date32 keys come back at their own width.
+        let narrow_key = matches!(
+            self.source.schema().field(key_index).data_type(),
+            DataType::Int32 | DataType::Date32
+        );
+        let value_indices = self
+            .aggregates
+            .iter()
+            .map(|aggregate| {
+                (aggregate.column != "*")
+                    .then(|| self.source.schema().index_of(&aggregate.column))
+                    .transpose()
+                    .expect("validated aggregate input")
+            })
+            .collect::<Vec<_>>();
+
+        while let Some(batch) = self.source.next_batch()? {
+            if let Some(metrics) = &metrics {
+                metrics
+                    .input_rows
+                    .fetch_add(batch.num_rows() as u64, Ordering::Relaxed);
+            }
+            let _input_memory = if self.input_already_reserved {
+                None
+            } else {
+                self.memory
+                    .as_ref()
+                    .map(|account| account.reserve(batch.get_array_memory_size() as u64))
+                    .transpose()?
+            };
+            let keys = integer_keys(batch.column(key_index));
+            let values = value_indices
+                .iter()
+                .map(|index| index.map(|index| batch.column(index)))
+                .collect::<Vec<_>>();
+            for row in 0..batch.num_rows() {
+                if row % 1024 == 0
+                    && let Some(memory) = &self.memory
+                {
+                    memory.check_cancelled()?;
+                }
+                let accumulators: &mut [Accumulator] = match keys[row] {
+                    None => {
+                        if null_states.is_none() {
+                            if let Some(memory) = &self.memory {
+                                reservations.reserve(memory, group_bytes)?;
+                            }
+                            if let Some(metrics) = &metrics {
+                                metrics.groups_created.fetch_add(1, Ordering::Relaxed);
+                            }
+                            null_states = Some(template.clone());
+                        }
+                        null_states.as_mut().expect("just inserted")
+                    }
+                    Some(key) => {
+                        let next_slot = index.len();
+                        let slot = match index.entry(key) {
+                            Entry::Occupied(entry) => *entry.get(),
+                            Entry::Vacant(entry) => {
+                                if let Some(memory) = &self.memory {
+                                    reservations.reserve(memory, group_bytes)?;
+                                }
+                                if let Some(metrics) = &metrics {
+                                    metrics.groups_created.fetch_add(1, Ordering::Relaxed);
+                                }
+                                let slot = u32::try_from(next_slot)
+                                    .map_err(|_| exec_err("too many groups for one task"))?;
+                                states.extend(template.iter().cloned());
+                                *entry.insert(slot)
+                            }
+                        } as usize;
+                        &mut states[slot * stride..(slot + 1) * stride]
+                    }
+                };
+                for (position, value) in values.iter().enumerate() {
+                    let state = &mut accumulators[position];
+                    match value {
+                        None => state.update_count()?,
+                        Some(array) => {
+                            if array.is_null(row) {
+                                continue;
+                            }
+                            match state {
+                                AggregateState::Count(_) => state.update_count()?,
+                                AggregateState::IntegerSum { .. }
+                                | AggregateState::IntegerMin(_)
+                                | AggregateState::IntegerMax(_) => {
+                                    let value = match array.data_type() {
+                                        DataType::Int32 => {
+                                            array.as_primitive::<Int32Type>().value(row) as i64
+                                        }
+                                        _ => array.as_primitive::<Int64Type>().value(row),
+                                    };
+                                    state.update_integer(value)?
+                                }
+                                _ => state.update_numeric(extract_f64(array, row)?)?,
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut groups = Vec::with_capacity(index.len() + usize::from(null_states.is_some()));
+        let mut by_slot: Vec<i64> = vec![0; index.len()];
+        for (key, slot) in index {
+            by_slot[slot as usize] = key;
+        }
+        let mut states = states.into_iter();
+        for key in by_slot {
+            let key = if narrow_key {
+                GroupKey::Int32(key as i32)
+            } else {
+                GroupKey::Int64(key)
+            };
+            groups.push((vec![key], states.by_ref().take(stride).collect()));
+        }
+        if let Some(states) = null_states {
+            groups.push((vec![GroupKey::Null], states));
+        }
+        Ok((groups, reservations.into_guards()))
+    }
+
     fn collect_dense_i64_count_sum_states(
         &mut self,
     ) -> Result<(GroupStateMap, Vec<MemoryReservation>)> {
@@ -3252,6 +3447,23 @@ fn batch_text_extreme(array: &ArrayRef, min: bool) -> Option<String> {
             extreme(texts.into_iter(), min)
         }
         _ => None,
+    }
+}
+
+/// Every row's key as an i64 (dates as their day number), None for null.
+fn integer_keys(array: &ArrayRef) -> Vec<Option<i64>> {
+    match array.data_type() {
+        DataType::Int32 => array
+            .as_primitive::<Int32Type>()
+            .iter()
+            .map(|value| value.map(i64::from))
+            .collect(),
+        DataType::Date32 => array
+            .as_primitive::<arrow::datatypes::Date32Type>()
+            .iter()
+            .map(|value| value.map(i64::from))
+            .collect(),
+        _ => array.as_primitive::<Int64Type>().iter().collect(),
     }
 }
 
@@ -4677,6 +4889,107 @@ mod tests {
         assert_eq!(actual["b"], (2, -7));
         drop(output);
         drop(aggregate);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn integer_key_path_matches_the_general_path_for_every_state_kind() {
+        // One Int64 key with nulls, integer and float measures with nulls,
+        // two batches — the same shape through the integer-key path and,
+        // with the key cast to a string, through the general path.
+        let make = |keys: Vec<Option<i64>>, ints: Vec<Option<i64>>, floats: Vec<Option<f64>>| {
+            RecordBatch::try_from_iter(vec![
+                ("k", Arc::new(Int64Array::from(keys)) as ArrayRef),
+                ("i", Arc::new(Int64Array::from(ints)) as ArrayRef),
+                ("f", Arc::new(Float64Array::from(floats)) as ArrayRef),
+            ])
+            .unwrap()
+        };
+        let batches = vec![
+            make(
+                vec![Some(7), Some(-2), None, Some(7), Some(900_000_000_000)],
+                vec![Some(4), Some(-2), Some(9), None, Some(1)],
+                vec![Some(1.5), None, Some(2.0), Some(0.5), Some(3.0)],
+            ),
+            make(
+                vec![Some(-2), Some(7), None, Some(-2)],
+                vec![Some(10), Some(6), Some(1), None],
+                vec![Some(-3.0), Some(2.5), None, Some(4.0)],
+            ),
+        ];
+        let aggregates = || {
+            vec![
+                AggExpr::new(AggFunc::Count, "*"),
+                AggExpr::new(AggFunc::Count, "i"),
+                AggExpr::new(AggFunc::Sum, "i"),
+                AggExpr::new(AggFunc::Min, "i"),
+                AggExpr::new(AggFunc::Max, "i"),
+                AggExpr::new(AggFunc::Avg, "i"),
+                AggExpr::new(AggFunc::Sum, "f"),
+                AggExpr::new(AggFunc::Min, "f"),
+                AggExpr::new(AggFunc::Max, "f"),
+                AggExpr::new(AggFunc::Avg, "f"),
+            ]
+        };
+        let mut input = Input::new(batches[0].clone());
+        input.batches.push_back(batches[1].clone());
+        let pool = QueryMemoryPool::new("integer-key", 1024 * 1024).unwrap();
+        let mut fast = HashAggregate::new_with_memory(
+            Box::new(input),
+            vec!["k".into()],
+            aggregates(),
+            pool.operator("aggregate").unwrap(),
+        )
+        .unwrap();
+        assert!(fast.integer_key_states_apply());
+        let fast_output = fast.next_batch().unwrap().unwrap();
+
+        // The general path: the same rows with the key as text.
+        let stringify = |batch: &RecordBatch| {
+            let keys = batch.column(0).as_primitive::<Int64Type>();
+            let text: StringArray = keys.iter().map(|k| k.map(|k| k.to_string())).collect();
+            RecordBatch::try_from_iter(vec![
+                ("k", Arc::new(text) as ArrayRef),
+                ("i", batch.column(1).clone()),
+                ("f", batch.column(2).clone()),
+            ])
+            .unwrap()
+        };
+        let mut input = Input::new(stringify(&batches[0]));
+        input.batches.push_back(stringify(&batches[1]));
+        let mut general =
+            HashAggregate::new(Box::new(input), vec!["k".into()], aggregates()).unwrap();
+        let general_output = general.next_batch().unwrap().unwrap();
+
+        let rows = |batch: &RecordBatch, key_as_text: bool| {
+            let mut rows = Vec::new();
+            for row in 0..batch.num_rows() {
+                let key = if key_as_text {
+                    let keys = batch.column(0).as_string::<i32>();
+                    (!keys.is_null(row)).then(|| keys.value(row).to_owned())
+                } else {
+                    let keys = batch.column(0).as_primitive::<Int64Type>();
+                    (!keys.is_null(row)).then(|| keys.value(row).to_string())
+                };
+                let values = (1..batch.num_columns())
+                    .map(|column| {
+                        let array = batch.column(column);
+                        if array.is_null(row) {
+                            "null".to_owned()
+                        } else {
+                            arrow::util::display::array_value_to_string(array, row).unwrap()
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                rows.push((key, values));
+            }
+            rows.sort();
+            rows
+        };
+        assert_eq!(rows(&fast_output, false), rows(&general_output, true));
+        assert_eq!(fast_output.num_rows(), 4);
+        drop(fast_output);
+        drop(fast);
         assert_eq!(pool.snapshot().current_bytes, 0);
     }
 
