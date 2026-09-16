@@ -107,6 +107,19 @@ Complete the current round in this order:
 7. Record repeatable release-build performance and memory evidence; do not publish single-run claims.
 8. Add ADLS Gen2 range reads, then repeat the suite on a minimum five-worker AKS cluster.
 
+### Distributed changes on `dev`, 2026-09-16 (Claude, while Codex is away)
+
+Every item is one commit with tests; the differential sweep (`scripts/differential-cases.py`, 28 shapes, dictionary versus plain objects) matched 28/28 on AKS after them.
+
+- `eb13ee6` — UNION / INTERSECT / EXCEPT fragments: set-operation nodes were pushed with no inputs and every such query fell back to the coordinator; `FragmentNode::validate_shape` now requires ≥ 2 inputs for Union and exactly 2 for Intersect/Except, and INTERSECT/EXCEPT deduplicate each side on its workers before the single final task.
+- `b1f190f` — semi and anti joins distribute: the subquery side broadcasts into the probe stage (`attach_broadcast_join`, `JoinSpec { join_type: Semi | Anti, broadcast: true }`; `fragment_exec` compiles them to `SemiJoinOperator`); `SELECT DISTINCT` deduplicates on the workers before the exchange; the coordinator logs the reason when the stage planner cannot express a shape (it fell back silently).
+- `bb82ea9` — `DISTINCT` over named columns hash-partitions across the workers (`PartitionedDistinct`, task count = worker count) instead of one final task; the SQL layer rewrites a lone `COUNT(DISTINCT x) [GROUP BY k]` to `COUNT(x)` over those distinct rows.
+- `e578db1` — a worker's `/v1/internal/query/{id}/finish` cancels the query's token before removing it (orphaned tasks kept running after the coordinator gave up), remote task timeouts are not retried, `REMOTE_TASK_TIMEOUT` is 600 s.
+- `2608c42`, `c851f6c` — exchange payload ceiling 1 GiB (256 chunks of 4 MiB), receive limit matches it, process spool 4 GiB.
+- `8a4ff16` — partial-state encoding and final-merge memory estimates sized to the structures (were 4 KiB and ~5 KiB per group).
+- `b99aa22`, `cd2dabc` — partial states encode straight into the binary columns without per-group vectors or a key sort; the final merge indexes groups by encoded key bytes and merges in place. Canonical (sorted) key order in the grouped-state batch is gone: consumers merge by hash, and `decode_grouped_aggregate_states` checks uniqueness rather than order.
+- Not changed: no aggregate or join spill; the ceilings above are what bound a 100 M-row high-cardinality GROUP BY. Worker budget on AKS is now 3 GiB per query (`KAVEON_QUERY_MEMORY_LIMIT_BYTES`), admission 4 GiB, set with `kubectl set env` on the StatefulSet.
+
 ## Machine-to-machine handoff
 
 On the next machine:
