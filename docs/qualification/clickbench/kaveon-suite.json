@@ -78,7 +78,10 @@
   },
   {
    "id": "q19",
-   "sql": "SELECT UserID, extract(minute FROM EventTime) AS m, SearchPhrase, COUNT(*) FROM hits GROUP BY UserID, extract(minute FROM EventTime), SearchPhrase ORDER BY COUNT(*) DESC LIMIT 10"
+   "sql": "SELECT UserID, extract(minute FROM EventTime) AS m, SearchPhrase, COUNT(*) FROM hits GROUP BY UserID, extract(minute FROM EventTime), SearchPhrase ORDER BY COUNT(*) DESC LIMIT 10",
+   "trino_sql": "SELECT UserID, extract(minute FROM from_unixtime(EventTime)) AS m, SearchPhrase, COUNT(*) FROM hits GROUP BY UserID, extract(minute FROM from_unixtime(EventTime)), SearchPhrase ORDER BY COUNT(*) DESC LIMIT 10",
+   "kaveon_sql": "SELECT UserID, (EventTime / 60) % 60 AS m, SearchPhrase, COUNT(*) FROM hits GROUP BY UserID, (EventTime / 60) % 60, SearchPhrase ORDER BY COUNT(*) DESC LIMIT 10",
+   "note": "EventTime is epoch seconds in hits.parquet; upstream Trino wraps it in a from_unixtime view. Kaveon computes the minute arithmetically; same values."
   },
   {
    "id": "q20",
@@ -174,7 +177,13 @@
   },
   {
    "id": "q43",
-   "sql": "SELECT DATE_TRUNC('minute', EventTime) AS M, COUNT(*) AS PageViews FROM hits WHERE CounterID = 62 AND EventDate >= DATE '2013-07-14' AND EventDate <= DATE '2013-07-15' AND IsRefresh = 0 AND DontCountHits = 0 GROUP BY DATE_TRUNC('minute', EventTime) ORDER BY DATE_TRUNC('minute', EventTime) OFFSET 1000 LIMIT 10"
+   "sql": "SELECT DATE_TRUNC('minute', EventTime) AS M, COUNT(*) AS PageViews FROM hits WHERE CounterID = 62 AND EventDate >= DATE '2013-07-14' AND EventDate <= DATE '2013-07-15' AND IsRefresh = 0 AND DontCountHits = 0 GROUP BY DATE_TRUNC('minute', EventTime) ORDER BY DATE_TRUNC('minute', EventTime) OFFSET 1000 LIMIT 10",
+   "trino_sql": "SELECT DATE_TRUNC('minute', from_unixtime(EventTime)) AS M, COUNT(*) AS PageViews FROM hits WHERE CounterID = 62 AND EventDate >= DATE '2013-07-14' AND EventDate <= DATE '2013-07-15' AND IsRefresh = 0 AND DontCountHits = 0 GROUP BY DATE_TRUNC('minute', from_unixtime(EventTime)) ORDER BY DATE_TRUNC('minute', from_unixtime(EventTime)) OFFSET 1000 LIMIT 10",
+   "kaveon_sql": "SELECT EventTime - EventTime % 60 AS M, COUNT(*) AS PageViews FROM hits WHERE CounterID = 62 AND EventDate >= DATE '2013-07-14' AND EventDate <= DATE '2013-07-15' AND IsRefresh = 0 AND DontCountHits = 0 GROUP BY EventTime - EventTime % 60 ORDER BY EventTime - EventTime % 60 OFFSET 1000 LIMIT 10",
+   "note": "Minute bucket as epoch seconds on Kaveon versus a timestamp on Trino: same grouping, different rendering, so the digests differ by design."
   }
+ ],
+ "notes": [
+  "Upstream text verbatim in `sql`; `trino_sql`/`kaveon_sql` carry the one dialect adaptation a query needs, shown side by side in the record."
  ]
 }
