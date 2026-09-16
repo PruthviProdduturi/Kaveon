@@ -27,6 +27,7 @@ parquet = { version = "54", features = ["arrow", "async", "object_store", "snap"
 object_store = { version = "0.11", features = ["azure", "aws"] }
 futures = "0.3"
 sqlparser = "0.53"
+regex = "1"
 thiserror = "2"
 anyhow = "1"
 tokio = { version = "1", features = ["full"] }
