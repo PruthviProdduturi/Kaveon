@@ -987,7 +987,9 @@ fn sort_specs(order_by: &[(Expr, bool)]) -> Vec<SortSpec> {
     order_by
         .iter()
         .map(|(expression, ascending)| SortSpec {
-            expression: expression.clone(),
+            // `ORDER BY COUNT(*) DESC` above an aggregate orders by the
+            // aggregate's output column.
+            expression: bind_aggregate_references(expression.clone()),
             ascending: *ascending,
             nulls_first: !ascending,
         })
@@ -2331,6 +2333,23 @@ mod tests {
             }
             drop(planned);
         }
+    }
+
+    #[test]
+    fn top_n_keys_bind_aggregate_calls_to_their_outputs() {
+        let fragments = executable_fragments(
+            "SELECT id, COUNT(*) FROM items GROUP BY id ORDER BY COUNT(*) DESC LIMIT 3",
+        );
+        let top_n = fragments
+            .values()
+            .flat_map(|fragment| fragment.nodes.iter())
+            .find_map(|node| match &node.operator {
+                FragmentOperator::TopN { keys, .. } => Some(keys.clone()),
+                _ => None,
+            })
+            .expect("ORDER BY ... LIMIT plans a TopN");
+        assert_eq!(top_n[0].expression, Expr::Column("count_star".into()));
+        assert!(!top_n[0].ascending);
     }
 
     #[test]

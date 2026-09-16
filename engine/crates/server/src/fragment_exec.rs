@@ -399,12 +399,16 @@ fn compile_node(
                         aggregate.into_grouped_states_with_reservations()?;
                     let encoding_memory = memory
                         .map(|memory| {
-                            let bytes = state_memory
+                            // Encoding holds two small byte vectors per
+                            // group beside the states, then the binary
+                            // arrays: a few hundred bytes per group, not
+                            // pages. A 4 KiB figure here turned a 3 M-group
+                            // partial into a 12 GiB request.
+                            let state_bytes = state_memory
                                 .iter()
                                 .map(|reservation| reservation.bytes())
-                                .sum::<u64>()
-                                .saturating_mul(4)
-                                .saturating_add((states.len() as u64).saturating_mul(4096));
+                                .sum::<u64>();
+                            let bytes = state_bytes.max((states.len() as u64).saturating_mul(256));
                             memory
                                 .operator("fragment-partial-state-encoding")?
                                 .reserve(bytes)

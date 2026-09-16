@@ -47,7 +47,8 @@ function Start-Node([string]$name, [string]$config, [int]$port, [bool]$coordinat
   $env:KAVEON_SECURITY_JSON = $securityJson
   $env:KAVEON_EXCHANGE_TOKEN = $exchangeToken
   $env:KAVEON_CATALOG_ADMIN_TOKEN = $catalogToken
-  $env:KAVEON_QUERY_MEMORY_LIMIT_BYTES = "1073741824"
+  # The same per-query and admission budgets as the AKS worker pods.
+  $env:KAVEON_QUERY_MEMORY_LIMIT_BYTES = "3221225472"
   $env:KAVEON_MEMORY_ADMISSION_LIMIT_BYTES = "4294967296"
   if ($Parallelism -gt 0) { $env:KAVEON_LOCAL_PARALLELISM = "$Parallelism" } else { Remove-Item Env:KAVEON_LOCAL_PARALLELISM -ErrorAction SilentlyContinue }
   if ($coordinator) { Remove-Item Env:KAVEON_DISCOVERY_URI -ErrorAction SilentlyContinue } else { $env:KAVEON_DISCOVERY_URI = "http://127.0.0.1:8080" }

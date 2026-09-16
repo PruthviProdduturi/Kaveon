@@ -103,10 +103,14 @@ impl IncrementalAggregateMerger {
             }
             let partial = grouped_aggregate_state_row(keys, states, row, &types)?;
             let existing = self.groups.get(&partial.group_keys);
+            // A new group is one map entry: the key vector and its values,
+            // the state vector and its accumulators. Sized to what the
+            // structures occupy; a page-sized guess per group made a 3 M-group
+            // merge ask for 15 GiB.
             let mut growth = if existing.is_none() {
-                4096u64
+                NEW_GROUP_BYTES
                     .saturating_add(partial.group_keys.iter().map(value_bytes).sum::<u64>())
-                    .saturating_add((partial.states.len() as u64).saturating_mul(512))
+                    .saturating_add((partial.states.len() as u64).saturating_mul(STATE_BYTES))
             } else {
                 0
             };
@@ -163,9 +167,14 @@ fn distinct_values(state: &AggregateState) -> Option<&HashSet<AggregateValue>> {
     }
 }
 
+/// Map entry plus the two vectors' headers and hash overhead.
+const NEW_GROUP_BYTES: u64 = 160;
+/// One accumulator in place, with room for its enum payload.
+const STATE_BYTES: u64 = 128;
+
 fn value_bytes(value: &AggregateValue) -> u64 {
-    256u64.saturating_add(match value {
-        AggregateValue::Utf8(value) => (value.len() as u64).saturating_mul(4),
+    48u64.saturating_add(match value {
+        AggregateValue::Utf8(value) => (value.len() as u64).saturating_mul(2),
         _ => 0,
     })
 }
@@ -228,7 +237,7 @@ mod tests {
         let pool = QueryMemoryPool::new("distinct-growth", 256 * 1024).unwrap();
         let mut merger = IncrementalAggregateMerger::new(Some(pool.operator("final").unwrap()));
         let mut rejected = false;
-        for value in 0..2000 {
+        for value in 0..20_000 {
             let batch = batch(AggregateState::CountDistinct(HashSet::from([
                 AggregateValue::Int64(value),
             ])));
