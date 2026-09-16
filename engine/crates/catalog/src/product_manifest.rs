@@ -513,10 +513,10 @@ impl CatalogSnapshot {
                             validate_row_against_schema(&schema, row)?;
                         }
                     }
-                    if let Some(previous) = typed_schemas.get(&table) {
-                        if previous != &schema {
-                            return Err(error("typed table schema cannot change in place"));
-                        }
+                    if let Some(previous) = typed_schemas.get(&table)
+                        && previous != &schema
+                    {
+                        return Err(error("typed table schema cannot change in place"));
                     }
                     typed_schemas.insert(table, schema);
                 }
@@ -1284,10 +1284,10 @@ fn validate_typed_row(row: &TypedRow) -> Result<(), ManifestError> {
     }
     for (name, value) in &row.columns {
         validate_identifier("typed row column", name)?;
-        if let TypedValue::String(value) = value {
-            if value.len() > 16 * 1024 * 1024 {
-                return Err(error("typed row string value exceeds limit"));
-            }
+        if let TypedValue::String(value) = value
+            && value.len() > 16 * 1024 * 1024
+        {
+            return Err(error("typed row string value exceeds limit"));
         }
     }
     if row.unique_keys.len() > MAX_UNIQUE_VALUES_PER_PRODUCT_RECORD {

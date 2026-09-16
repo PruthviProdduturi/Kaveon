@@ -435,8 +435,7 @@ mod tests {
         }
         let admitted = workers
             .into_iter()
-            .map(|worker| worker.join().unwrap())
-            .flatten()
+            .filter_map(|worker| worker.join().unwrap())
             .collect::<Vec<_>>();
         assert_eq!(admitted.len(), 2);
         assert_eq!(manager.snapshot().current_bytes, 64);
