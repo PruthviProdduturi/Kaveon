@@ -1,14 +1,29 @@
 use std::collections::HashSet;
 
-use arrow::array::{Array, AsArray, RecordBatch};
-use arrow::datatypes::{DataType, Int32Type, SchemaRef};
+use ahash::{AHashMap, AHashSet};
+use arrow::array::{Array, ArrayRef, AsArray, RecordBatch};
+use arrow::datatypes::{
+    DataType, Date32Type, Int8Type, Int16Type, Int32Type, Int64Type, SchemaRef, UInt8Type,
+    UInt16Type, UInt32Type, UInt64Type,
+};
 use kaveon_core::{BatchOperator, KaveonError, MemoryReservation, OperatorMemoryAccount, Result};
 
 use crate::aggregate::AggregateValue;
 
+/// A row of up to two columns as fixed-width words plus a null mask: integers
+/// and dates as their bits, text through the operator's interner. No
+/// allocation per row, one hash per row.
+type CompactKey = (u64, u64, u8);
+const COMPACT_KEY_BYTES: u64 = 40;
+
 pub struct DistinctOperator {
     source: Box<dyn BatchOperator>,
     seen: HashSet<Vec<AggregateValue>>,
+    compact: AHashSet<CompactKey>,
+    /// Text values seen so far, each with the word that stands for it in a
+    /// compact key; dictionary codes resolve through it per batch, so equal
+    /// text compares equal across batches whose dictionaries differ.
+    interned: AHashMap<Box<str>, u64>,
     memory: Option<OperatorMemoryAccount>,
     reservations: Vec<MemoryReservation>,
 }
@@ -18,9 +33,132 @@ impl DistinctOperator {
         Self {
             source,
             seen: HashSet::new(),
+            compact: AHashSet::new(),
+            interned: AHashMap::new(),
             memory: None,
             reservations: Vec::new(),
         }
+    }
+
+    fn intern(&mut self, text: &str) -> Result<u64> {
+        if let Some(word) = self.interned.get(text) {
+            return Ok(*word);
+        }
+        if let Some(memory) = &self.memory {
+            self.reservations
+                .push(memory.reserve(64 + text.len() as u64)?);
+        }
+        let word = self.interned.len() as u64;
+        self.interned.insert(Box::from(text), word);
+        Ok(word)
+    }
+
+    /// One word per row for a column the compact path can carry, or None
+    /// when the column's type needs the general path.
+    fn column_words(&mut self, array: &ArrayRef) -> Result<Option<Vec<Option<u64>>>> {
+        let rows = array.len();
+        macro_rules! primitive {
+            ($t:ty) => {{
+                let values = array.as_primitive::<$t>();
+                Some(
+                    (0..rows)
+                        .map(|row| (!values.is_null(row)).then(|| values.value(row) as i64 as u64))
+                        .collect(),
+                )
+            }};
+        }
+        Ok(match array.data_type() {
+            DataType::Int8 => primitive!(Int8Type),
+            DataType::Int16 => primitive!(Int16Type),
+            DataType::Int32 => primitive!(Int32Type),
+            DataType::Int64 => primitive!(Int64Type),
+            DataType::UInt8 => primitive!(UInt8Type),
+            DataType::UInt16 => primitive!(UInt16Type),
+            DataType::UInt32 => primitive!(UInt32Type),
+            DataType::UInt64 => primitive!(UInt64Type),
+            DataType::Date32 => primitive!(Date32Type),
+            DataType::Boolean => {
+                let values = array.as_boolean();
+                Some(
+                    (0..rows)
+                        .map(|row| (!values.is_null(row)).then(|| values.value(row) as u64))
+                        .collect(),
+                )
+            }
+            DataType::Utf8 => {
+                let values = array.as_string::<i32>();
+                let mut words = Vec::with_capacity(rows);
+                for row in 0..rows {
+                    words.push(if values.is_null(row) {
+                        None
+                    } else {
+                        Some(self.intern(values.value(row))?)
+                    });
+                }
+                Some(words)
+            }
+            DataType::Dictionary(key_type, values)
+                if key_type.as_ref() == &DataType::Int32 && values.as_ref() == &DataType::Utf8 =>
+            {
+                let dictionary = array.as_dictionary::<Int32Type>();
+                let values = dictionary.values().as_string::<i32>();
+                let mut by_code = Vec::with_capacity(values.len());
+                for index in 0..values.len() {
+                    by_code.push(if values.is_null(index) {
+                        None
+                    } else {
+                        Some(self.intern(values.value(index))?)
+                    });
+                }
+                let keys = dictionary.keys();
+                Some(
+                    (0..rows)
+                        .map(|row| {
+                            if keys.is_null(row) {
+                                None
+                            } else {
+                                by_code[keys.value(row) as usize]
+                            }
+                        })
+                        .collect(),
+                )
+            }
+            _ => None,
+        })
+    }
+
+    /// The rows of `batch` that are new to this operator, through compact
+    /// keys, or None when the batch has a shape the compact path does not
+    /// carry (more than two columns, or a type it cannot pack).
+    fn keep_by_compact_keys(&mut self, batch: &RecordBatch) -> Result<Option<Vec<u32>>> {
+        if batch.num_columns() == 0 || batch.num_columns() > 2 {
+            return Ok(None);
+        }
+        let Some(first) = self.column_words(batch.column(0))? else {
+            return Ok(None);
+        };
+        let second = match batch.num_columns() {
+            2 => match self.column_words(batch.column(1))? {
+                Some(words) => Some(words),
+                None => return Ok(None),
+            },
+            _ => None,
+        };
+        let mut keep = Vec::new();
+        for row in 0..batch.num_rows() {
+            let (a, a_null) = first[row].map_or((0, 1), |word| (word, 0));
+            let (b, b_null) = second
+                .as_ref()
+                .map_or((0, 0), |words| words[row].map_or((0, 2), |word| (word, 0)));
+            let key = (a, b, a_null | b_null);
+            if self.compact.insert(key) {
+                if let Some(memory) = &self.memory {
+                    self.reservations.push(memory.reserve(COMPACT_KEY_BYTES)?);
+                }
+                keep.push(row as u32);
+            }
+        }
+        Ok(Some(keep))
     }
 
     pub fn with_memory(mut self, memory: OperatorMemoryAccount) -> Self {
@@ -38,6 +176,8 @@ impl BatchOperator for DistinctOperator {
         loop {
             let Some(batch) = self.source.next_batch()? else {
                 self.seen = HashSet::new();
+                self.compact = AHashSet::new();
+                self.interned = AHashMap::new();
                 self.reservations.clear();
                 return Ok(None);
             };
@@ -55,12 +195,17 @@ impl BatchOperator for DistinctOperator {
             let num_cols = batch.num_columns();
             let num_rows = batch.num_rows();
 
-            // Dictionary columns first collapse to one row per distinct key
-            // combination, so the value extraction below touches a handful
-            // of rows instead of every row of the batch.
-            let candidates =
-                distinct_rows_by_code(&batch).unwrap_or_else(|| (0..num_rows as u32).collect());
-            let mut keep = Vec::new();
+            // A batch of at most two packable columns deduplicates through
+            // compact keys; otherwise dictionary columns first collapse to
+            // one row per distinct key combination, so the value extraction
+            // below touches a handful of rows instead of every row.
+            let (mut keep, candidates) = match self.keep_by_compact_keys(&batch)? {
+                Some(keep) => (keep, Vec::new()),
+                None => (
+                    Vec::new(),
+                    distinct_rows_by_code(&batch).unwrap_or_else(|| (0..num_rows as u32).collect()),
+                ),
+            };
             for row in candidates {
                 let row = row as usize;
                 let key: Vec<AggregateValue> = (0..num_cols)
@@ -301,6 +446,50 @@ mod tests {
                 vec![None, text("Mobile")],
                 vec![text("Asia"), text("Mobile")],
                 vec![text("Africa"), text("Web")],
+            ]
+        );
+    }
+
+    #[test]
+    fn compact_keys_distinguish_nulls_and_zero_across_batches() {
+        use arrow::array::Int64Array;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("user", DataType::Int64, true),
+            Field::new("day", DataType::Int32, true),
+        ]));
+        let batch = |users: Vec<Option<i64>>, days: Vec<Option<i32>>| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from(users)),
+                    Arc::new(Int32Array::from(days)),
+                ],
+            )
+            .unwrap()
+        };
+        let first = batch(
+            vec![Some(0), None, Some(0), Some(-1), None],
+            vec![Some(0), Some(0), None, Some(0), None],
+        );
+        let second = batch(vec![Some(0), None, Some(7)], vec![Some(0), Some(0), None]);
+        let mut distinct = DistinctOperator::new(Box::new(Input {
+            schema: Arc::clone(&schema),
+            batches: VecDeque::from(vec![first, second]),
+        }));
+        let mut output = Vec::new();
+        while let Some(batch) = distinct.next_batch().unwrap() {
+            output.push(batch);
+        }
+        let text = |value: &str| Some(value.to_owned());
+        assert_eq!(
+            rows(&output),
+            vec![
+                vec![text("0"), text("0")],
+                vec![None, text("0")],
+                vec![text("0"), None],
+                vec![text("-1"), text("0")],
+                vec![None, None],
+                vec![text("7"), None],
             ]
         );
     }
