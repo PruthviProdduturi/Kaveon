@@ -423,6 +423,86 @@ impl AggregateState {
         }
     }
 
+    /// Fold a whole batch's worth of integers at once: `sum` over `count`
+    /// non-null values, and their extremes. One enum dispatch per batch
+    /// instead of one per row.
+    pub fn update_integer_batch(
+        &mut self,
+        sum: i128,
+        count: u64,
+        min: Option<i64>,
+        max: Option<i64>,
+    ) -> Result<()> {
+        match self {
+            Self::IntegerSum {
+                sum: total,
+                count: total_count,
+            } => {
+                *total = total
+                    .checked_add(sum)
+                    .ok_or_else(|| exec_err("integer SUM overflow"))?;
+                *total_count = total_count
+                    .checked_add(count)
+                    .ok_or_else(|| exec_err("integer SUM count overflow"))?;
+            }
+            Self::IntegerMin(current) => {
+                if let Some(min) = min {
+                    *current = Some(current.map_or(min, |old| old.min(min)));
+                }
+            }
+            Self::IntegerMax(current) => {
+                if let Some(max) = max {
+                    *current = Some(current.map_or(max, |old| old.max(max)));
+                }
+            }
+            _ => {
+                return Err(exec_err(
+                    "integer batch update applied to an incompatible aggregate state",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// The floating-point counterpart of `update_integer_batch`.
+    pub fn update_numeric_batch(
+        &mut self,
+        sum: f64,
+        count: u64,
+        min: Option<f64>,
+        max: Option<f64>,
+    ) -> Result<()> {
+        match self {
+            Self::Sum {
+                sum: total,
+                count: total_count,
+            }
+            | Self::Avg {
+                sum: total,
+                count: total_count,
+            } => {
+                *total += sum;
+                *total_count += count;
+            }
+            Self::Min(current) => {
+                if let Some(min) = min {
+                    *current = Some(current.map_or(min, |old| old.min(min)));
+                }
+            }
+            Self::Max(current) => {
+                if let Some(max) = max {
+                    *current = Some(current.map_or(max, |old| old.max(max)));
+                }
+            }
+            _ => {
+                return Err(exec_err(
+                    "numeric batch update applied to an incompatible aggregate state",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn update_count(&mut self) -> Result<()> {
         match self {
             Self::Count(count) => {
@@ -2044,6 +2124,20 @@ impl HashAggregate {
         // seeds while materially reducing the hot-path cost of large GROUP BYs.
         let mut groups: AHashMap<InlineGroupKey, Vec<Accumulator>> = AHashMap::new();
         let mut reservations = ReservationSlab::default();
+        // Every state a batch can be folded into with one call per group.
+        let vectorisable_states = self.new_states().iter().all(|state| {
+            matches!(
+                state,
+                AggregateState::Count(_)
+                    | AggregateState::IntegerSum { .. }
+                    | AggregateState::IntegerMin(_)
+                    | AggregateState::IntegerMax(_)
+                    | AggregateState::Sum { .. }
+                    | AggregateState::Avg { .. }
+                    | AggregateState::Min(_)
+                    | AggregateState::Max(_)
+            )
+        });
         let metrics = self
             .memory
             .as_ref()
@@ -2114,6 +2208,9 @@ impl HashAggregate {
                     }
                     let array =
                         aggregate_arrays[index].expect("non-count aggregate requires input");
+                    if !aggregate.distinct && fold_batch_into(state, array)? {
+                        continue;
+                    }
                     for row in 0..batch.num_rows() {
                         if row % 1024 == 0
                             && let Some(memory) = &self.memory
@@ -2182,13 +2279,19 @@ impl HashAggregate {
             let mut null_slot: *mut Vec<Accumulator> = std::ptr::null_mut();
             let coded_codes: Option<&[u32]> = match prepared.as_slice() {
                 [PreparedKeys::Coded { codes, table }] => {
-                    for key in table.iter().chain(codes.contains(&NULL_CODE).then_some(&GroupKey::Null)) {
+                    for key in table
+                        .iter()
+                        .chain(codes.contains(&NULL_CODE).then_some(&GroupKey::Null))
+                    {
                         let inline = InlineGroupKey::Single(key.clone());
                         if let Entry::Vacant(entry) = groups.entry(inline) {
                             if let Some(memory) = &self.memory {
                                 reservations.reserve(
                                     memory,
-                                    estimated_group_bytes(entry.key().as_slice(), self.aggregates.len()),
+                                    estimated_group_bytes(
+                                        entry.key().as_slice(),
+                                        self.aggregates.len(),
+                                    ),
                                 )?;
                             }
                             if let Some(metrics) = &metrics {
@@ -2214,6 +2317,160 @@ impl HashAggregate {
                 }
                 _ => None,
             };
+            if let Some(codes) = coded_codes
+                && vectorisable_states
+                && self
+                    .aggregates
+                    .iter()
+                    .enumerate()
+                    .all(|(index, aggregate)| {
+                        !aggregate.distinct && aggregate_arrays[index].is_none_or(foldable)
+                    })
+            {
+                if let Some(memory) = &self.memory {
+                    memory.check_cancelled()?;
+                }
+                let cells = slots.len() + 1; // the last cell is the null key
+                let null_cell = slots.len();
+                let cell_of = |code: u32| {
+                    if code == NULL_CODE {
+                        null_cell
+                    } else {
+                        code as usize
+                    }
+                };
+                for (index, aggregate) in self.aggregates.iter().enumerate() {
+                    let mut counts = vec![0_u64; cells];
+                    match aggregate_arrays[index] {
+                        None => {
+                            for code in codes {
+                                counts[cell_of(*code)] += 1;
+                            }
+                            for (cell, count) in
+                                counts.into_iter().enumerate().filter(|(_, n)| *n > 0)
+                            {
+                                let slot = if cell == null_cell {
+                                    null_slot
+                                } else {
+                                    slots[cell]
+                                };
+                                // SAFETY: see the row loop below; the map is untouched here.
+                                let states = unsafe { &mut *slot };
+                                if let AggregateState::Count(total) = &mut states[index] {
+                                    *total = total
+                                        .checked_add(count)
+                                        .ok_or_else(|| exec_err("COUNT overflow"))?;
+                                }
+                            }
+                        }
+                        Some(array) if matches!(aggregate.func, AggFunc::Count) => {
+                            let nulls = array.nulls();
+                            for (row, code) in codes.iter().enumerate() {
+                                if nulls.is_none_or(|nulls| nulls.is_valid(row)) {
+                                    counts[cell_of(*code)] += 1;
+                                }
+                            }
+                            for (cell, count) in
+                                counts.into_iter().enumerate().filter(|(_, n)| *n > 0)
+                            {
+                                let slot = if cell == null_cell {
+                                    null_slot
+                                } else {
+                                    slots[cell]
+                                };
+                                let states = unsafe { &mut *slot };
+                                if let AggregateState::Count(total) = &mut states[index] {
+                                    *total = total
+                                        .checked_add(count)
+                                        .ok_or_else(|| exec_err("COUNT overflow"))?;
+                                }
+                            }
+                        }
+                        Some(array) if array.data_type() == &DataType::Float64 => {
+                            let values = array.as_primitive::<Float64Type>();
+                            let nulls = values.nulls();
+                            let mut sums = vec![0_f64; cells];
+                            let mut mins = vec![f64::INFINITY; cells];
+                            let mut maxs = vec![f64::NEG_INFINITY; cells];
+                            for (row, (code, value)) in
+                                codes.iter().zip(values.values().iter()).enumerate()
+                            {
+                                if nulls.is_none_or(|nulls| nulls.is_valid(row)) {
+                                    let cell = cell_of(*code);
+                                    counts[cell] += 1;
+                                    sums[cell] += *value;
+                                    mins[cell] = mins[cell].min(*value);
+                                    maxs[cell] = maxs[cell].max(*value);
+                                }
+                            }
+                            for cell in 0..cells {
+                                if counts[cell] == 0 {
+                                    continue;
+                                }
+                                let slot = if cell == null_cell {
+                                    null_slot
+                                } else {
+                                    slots[cell]
+                                };
+                                let states = unsafe { &mut *slot };
+                                states[index].update_numeric_batch(
+                                    sums[cell],
+                                    counts[cell],
+                                    Some(mins[cell]),
+                                    Some(maxs[cell]),
+                                )?;
+                            }
+                        }
+                        Some(array) => {
+                            let mut sums = vec![0_i128; cells];
+                            let mut mins = vec![i64::MAX; cells];
+                            let mut maxs = vec![i64::MIN; cells];
+                            let mut visit = |row: usize, value: i64| {
+                                let cell = cell_of(codes[row]);
+                                counts[cell] += 1;
+                                sums[cell] += value as i128;
+                                mins[cell] = mins[cell].min(value);
+                                maxs[cell] = maxs[cell].max(value);
+                            };
+                            if array.data_type() == &DataType::Int32 {
+                                let values = array.as_primitive::<Int32Type>();
+                                let nulls = values.nulls();
+                                for (row, value) in values.values().iter().enumerate() {
+                                    if nulls.is_none_or(|nulls| nulls.is_valid(row)) {
+                                        visit(row, *value as i64);
+                                    }
+                                }
+                            } else {
+                                let values = array.as_primitive::<Int64Type>();
+                                let nulls = values.nulls();
+                                for (row, value) in values.values().iter().enumerate() {
+                                    if nulls.is_none_or(|nulls| nulls.is_valid(row)) {
+                                        visit(row, *value);
+                                    }
+                                }
+                            }
+                            for cell in 0..cells {
+                                if counts[cell] == 0 {
+                                    continue;
+                                }
+                                let slot = if cell == null_cell {
+                                    null_slot
+                                } else {
+                                    slots[cell]
+                                };
+                                let states = unsafe { &mut *slot };
+                                states[index].update_integer_batch(
+                                    sums[cell],
+                                    counts[cell],
+                                    Some(mins[cell]),
+                                    Some(maxs[cell]),
+                                )?;
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
             for row in 0..batch.num_rows() {
                 if row % 1024 == 0
                     && let Some(memory) = &self.memory
@@ -2630,6 +2887,98 @@ impl HashAggregate {
             groups.push((vec![GroupKey::Null], states(state)));
         }
         Ok((groups, reservations.into_guards()))
+    }
+}
+
+/// Whether a whole batch of this column can be folded into an accumulator
+/// with one call: integers and floats for SUM/AVG/MIN/MAX/COUNT.
+fn foldable(array: &ArrayRef) -> bool {
+    matches!(
+        array.data_type(),
+        DataType::Int64 | DataType::Int32 | DataType::Float64
+    )
+}
+
+/// Fold an ungrouped batch into `state` when both sides allow it; returns
+/// false when the per-row path must handle this state (decimals, text,
+/// exact and distinct states).
+fn fold_batch_into(state: &mut AggregateState, array: &ArrayRef) -> Result<bool> {
+    match (state, array.data_type()) {
+        (
+            state @ (AggregateState::IntegerSum { .. }
+            | AggregateState::IntegerMin(_)
+            | AggregateState::IntegerMax(_)),
+            DataType::Int64 | DataType::Int32,
+        ) => {
+            let (mut sum, mut count, mut min, mut max) = (0_i128, 0_u64, i64::MAX, i64::MIN);
+            let mut visit = |value: i64| {
+                sum += value as i128;
+                count += 1;
+                min = min.min(value);
+                max = max.max(value);
+            };
+            if array.data_type() == &DataType::Int32 {
+                let values = array.as_primitive::<Int32Type>();
+                match values.nulls() {
+                    None => values
+                        .values()
+                        .iter()
+                        .for_each(|value| visit(*value as i64)),
+                    Some(nulls) => values
+                        .values()
+                        .iter()
+                        .enumerate()
+                        .filter(|(row, _)| nulls.is_valid(*row))
+                        .for_each(|(_, value)| visit(*value as i64)),
+                }
+            } else {
+                let values = array.as_primitive::<Int64Type>();
+                match values.nulls() {
+                    None => values.values().iter().for_each(|value| visit(*value)),
+                    Some(nulls) => values
+                        .values()
+                        .iter()
+                        .enumerate()
+                        .filter(|(row, _)| nulls.is_valid(*row))
+                        .for_each(|(_, value)| visit(*value)),
+                }
+            }
+            if count > 0 {
+                state.update_integer_batch(sum, count, Some(min), Some(max))?;
+            }
+            Ok(true)
+        }
+        (
+            state @ (AggregateState::Sum { .. }
+            | AggregateState::Avg { .. }
+            | AggregateState::Min(_)
+            | AggregateState::Max(_)),
+            DataType::Float64,
+        ) => {
+            let values = array.as_primitive::<Float64Type>();
+            let (mut sum, mut count, mut min, mut max) =
+                (0_f64, 0_u64, f64::INFINITY, f64::NEG_INFINITY);
+            let mut visit = |value: f64| {
+                sum += value;
+                count += 1;
+                min = min.min(value);
+                max = max.max(value);
+            };
+            match values.nulls() {
+                None => values.values().iter().for_each(|value| visit(*value)),
+                Some(nulls) => values
+                    .values()
+                    .iter()
+                    .enumerate()
+                    .filter(|(row, _)| nulls.is_valid(*row))
+                    .for_each(|(_, value)| visit(*value)),
+            }
+            if count > 0 {
+                state.update_numeric_batch(sum, count, Some(min), Some(max))?;
+            }
+            Ok(true)
+        }
+        _ => Ok(false),
     }
 }
 
@@ -4158,6 +4507,91 @@ mod tests {
         assert_eq!(by_key[&GroupKey::Utf8(Arc::from("y"))], 12);
         assert_eq!(by_key[&GroupKey::Utf8(Arc::from("x"))], 6);
         assert_eq!(by_key[&GroupKey::Null], 8);
+    }
+
+    #[test]
+    fn folded_string_groups_match_the_row_path_for_every_vectorised_function() {
+        // SUM, MIN, MAX and AVG over integers and floats, COUNT(*) and
+        // COUNT(column), a string key with a null, values with nulls, two
+        // batches — folded per code and compared with hand-computed results.
+        let make = |keys: Vec<Option<&str>>, ints: Vec<Option<i64>>, floats: Vec<Option<f64>>| {
+            RecordBatch::try_from_iter(vec![
+                ("k", Arc::new(StringArray::from(keys)) as ArrayRef),
+                ("i", Arc::new(Int64Array::from(ints)) as ArrayRef),
+                ("f", Arc::new(Float64Array::from(floats)) as ArrayRef),
+            ])
+            .unwrap()
+        };
+        let mut input = Input::new(make(
+            vec![Some("a"), Some("b"), None, Some("a")],
+            vec![Some(4), Some(-2), Some(9), None],
+            vec![Some(1.5), None, Some(2.0), Some(0.5)],
+        ));
+        input.batches.push_back(make(
+            vec![Some("b"), Some("a"), None],
+            vec![Some(10), Some(6), Some(1)],
+            vec![Some(-3.0), Some(2.5), None],
+        ));
+        let pool = QueryMemoryPool::new("folded-groups", 1024 * 1024).unwrap();
+        let mut aggregate = HashAggregate::new_with_memory(
+            Box::new(input),
+            vec!["k".into()],
+            vec![
+                AggExpr::new(AggFunc::Count, "*"),
+                AggExpr::new(AggFunc::Count, "i"),
+                AggExpr::new(AggFunc::Sum, "i"),
+                AggExpr::new(AggFunc::Min, "i"),
+                AggExpr::new(AggFunc::Max, "i"),
+                AggExpr::new(AggFunc::Sum, "f"),
+                AggExpr::new(AggFunc::Min, "f"),
+                AggExpr::new(AggFunc::Max, "f"),
+                AggExpr::new(AggFunc::Avg, "f"),
+            ],
+            pool.operator("aggregate").unwrap(),
+        )
+        .unwrap();
+        let output = aggregate.next_batch().unwrap().unwrap();
+        let keys = output.column(0).as_string::<i32>();
+        let row_of = |key: Option<&str>| {
+            (0..output.num_rows())
+                .find(|row| (!keys.is_null(*row)).then(|| keys.value(*row)) == key)
+                .unwrap()
+        };
+        let u64_at = |col: usize, row: usize| {
+            output
+                .column(col)
+                .as_primitive::<arrow::datatypes::UInt64Type>()
+                .value(row)
+        };
+        let i64_at =
+            |col: usize, row: usize| output.column(col).as_primitive::<Int64Type>().value(row);
+        let f64_at =
+            |col: usize, row: usize| output.column(col).as_primitive::<Float64Type>().value(row);
+
+        let a = row_of(Some("a"));
+        assert_eq!((u64_at(1, a), u64_at(2, a)), (3, 2));
+        assert_eq!((i64_at(3, a), i64_at(4, a), i64_at(5, a)), (10, 4, 6));
+        assert_eq!(
+            (f64_at(6, a), f64_at(7, a), f64_at(8, a), f64_at(9, a)),
+            (4.5, 0.5, 2.5, 1.5)
+        );
+        let b = row_of(Some("b"));
+        assert_eq!((u64_at(1, b), u64_at(2, b)), (2, 2));
+        assert_eq!((i64_at(3, b), i64_at(4, b), i64_at(5, b)), (8, -2, 10));
+        assert_eq!(
+            (f64_at(6, b), f64_at(7, b), f64_at(8, b), f64_at(9, b)),
+            (-3.0, -3.0, -3.0, -3.0)
+        );
+        let n = row_of(None);
+        assert_eq!((u64_at(1, n), u64_at(2, n)), (2, 2));
+        assert_eq!((i64_at(3, n), i64_at(4, n), i64_at(5, n)), (10, 1, 9));
+        assert_eq!(
+            (f64_at(6, n), f64_at(7, n), f64_at(8, n), f64_at(9, n)),
+            (2.0, 2.0, 2.0, 2.0)
+        );
+        drop(output);
+        drop(aggregate);
+        assert_eq!(pool.snapshot().current_bytes, 0);
     }
 
     #[test]
