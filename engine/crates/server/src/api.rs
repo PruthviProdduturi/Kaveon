@@ -4953,8 +4953,7 @@ fn batches_to_json(batches: &[arrow::record_batch::RecordBatch]) -> Vec<Vec<serd
             .collect();
         for row in 0..batch.num_rows() {
             let mut cells = Vec::with_capacity(num_cols);
-            for col in 0..num_cols {
-                let arr = &columns[col];
+            for arr in columns.iter().take(num_cols) {
                 if arr.is_null(row) {
                     cells.push(serde_json::Value::Null);
                     continue;

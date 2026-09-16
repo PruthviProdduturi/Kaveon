@@ -388,7 +388,7 @@ fn comparison_literal(
             | DataType::Date32,
         ) => {
             let literal = Int64Array::from(vec![*value]);
-            let cast = arrow::compute::cast_with_options(
+            arrow::compute::cast_with_options(
                 &literal,
                 data_type,
                 &arrow::compute::CastOptions {
@@ -396,8 +396,7 @@ fn comparison_literal(
                     ..Default::default()
                 },
             )
-            .ok()?;
-            cast
+            .ok()?
         }
         (ScalarValue::Float64(value), DataType::Float64) => {
             Arc::new(Float64Array::from(vec![*value]))

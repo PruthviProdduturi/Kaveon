@@ -1681,8 +1681,8 @@ fn plan_query_with_predicate(
             let parallelism = kaveon_exec::local_parallel::configured_parallelism()?;
             // Parallel partials account through the query pool; without one
             // (embedded and test plans) the aggregate runs serially.
-            let operator = if parallelism > 1 && memory.is_some() {
-                let pool = memory.expect("checked above").clone();
+            let operator = if let Some(pool) = memory.filter(|_| parallelism > 1) {
+                let pool = pool.clone();
                 let probe = kaveon_exec::aggregate::HashAggregate::new(
                     Box::new(kaveon_exec::local_parallel::EmptyInput(
                         planned.operator.schema().clone(),
