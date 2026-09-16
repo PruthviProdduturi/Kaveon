@@ -2017,6 +2017,28 @@ impl HashAggregate {
         {
             return self.collect_dense_i64_count_sum_states();
         }
+        if self.group_by.len() == 1
+            && self.aggregates.len() == 2
+            && matches!(self.aggregates[0].func, AggFunc::Count)
+            && self.aggregates[0].column == "*"
+            && !self.aggregates[0].distinct
+            && matches!(self.aggregates[1].func, AggFunc::Sum)
+            && !self.aggregates[1].distinct
+            && is_string_key_type(
+                self.source
+                    .schema()
+                    .field_with_name(&self.group_by[0])?
+                    .data_type(),
+            )
+            && self
+                .source
+                .schema()
+                .field_with_name(&self.aggregates[1].column)?
+                .data_type()
+                == &DataType::Int64
+        {
+            return self.collect_coded_string_count_sum_states();
+        }
         // Group keys are query-local and do not need the standard library's
         // comparatively expensive SipHash. AHash retains per-map randomized
         // seeds while materially reducing the hot-path cost of large GROUP BYs.
@@ -2151,36 +2173,90 @@ impl HashAggregate {
                 .iter()
                 .map(|array| prepare_keys(array))
                 .collect::<Vec<_>>();
+            // One coded string key: resolve every distinct value of the batch
+            // to its group state once, up front, then index rows by code.
+            // No hash, no key clone and no map access per row. The pointers
+            // stay valid because the map is not touched again until the batch
+            // is done — every insert this batch needs happens here.
+            let mut slots: Vec<*mut Vec<Accumulator>> = Vec::new();
+            let mut null_slot: *mut Vec<Accumulator> = std::ptr::null_mut();
+            let coded_codes: Option<&[u32]> = match prepared.as_slice() {
+                [PreparedKeys::Coded { codes, table }] => {
+                    for key in table.iter().chain(codes.contains(&NULL_CODE).then_some(&GroupKey::Null)) {
+                        let inline = InlineGroupKey::Single(key.clone());
+                        if let Entry::Vacant(entry) = groups.entry(inline) {
+                            if let Some(memory) = &self.memory {
+                                reservations.reserve(
+                                    memory,
+                                    estimated_group_bytes(entry.key().as_slice(), self.aggregates.len()),
+                                )?;
+                            }
+                            if let Some(metrics) = &metrics {
+                                metrics.groups_created.fetch_add(1, Ordering::Relaxed);
+                            }
+                            entry.insert(self.new_states());
+                        }
+                    }
+                    slots = table
+                        .iter()
+                        .map(|key| {
+                            groups
+                                .get_mut(&InlineGroupKey::Single(key.clone()))
+                                .map_or(std::ptr::null_mut(), |states| states as *mut _)
+                        })
+                        .collect();
+                    if codes.contains(&NULL_CODE) {
+                        null_slot = groups
+                            .get_mut(&InlineGroupKey::Single(GroupKey::Null))
+                            .map_or(std::ptr::null_mut(), |states| states as *mut _);
+                    }
+                    Some(codes.as_slice())
+                }
+                _ => None,
+            };
             for row in 0..batch.num_rows() {
                 if row % 1024 == 0
                     && let Some(memory) = &self.memory
                 {
                     memory.check_cancelled()?;
                 }
-                let key = if prepared.len() == 1 {
-                    InlineGroupKey::Single(prepared[0].key(row))
+                let accumulators: &mut Vec<Accumulator> = if let Some(codes) = coded_codes {
+                    let slot = match codes[row] {
+                        NULL_CODE => null_slot,
+                        code => slots[code as usize],
+                    };
+                    // SAFETY: `slot` points at a value of `groups`, which is
+                    // neither inserted into nor removed from during this row
+                    // loop, and no other reference to that value is live.
+                    unsafe { &mut *slot }
                 } else {
-                    InlineGroupKey::Multiple(prepared.iter().map(|keys| keys.key(row)).collect())
-                };
-                // Use the entry probe for both admission and lookup. The old
-                // contains_key + entry sequence hashed and probed every group
-                // key twice, including every row of high-cardinality scans.
-                let accumulators = match groups.entry(key) {
-                    Entry::Occupied(entry) => entry.into_mut(),
-                    Entry::Vacant(entry) => {
-                        if let Some(memory) = &self.memory {
-                            reservations.reserve(
-                                memory,
-                                estimated_group_bytes(
-                                    entry.key().as_slice(),
-                                    self.aggregates.len(),
-                                ),
-                            )?;
+                    let key = if prepared.len() == 1 {
+                        InlineGroupKey::Single(prepared[0].key(row))
+                    } else {
+                        InlineGroupKey::Multiple(
+                            prepared.iter().map(|keys| keys.key(row)).collect(),
+                        )
+                    };
+                    // Use the entry probe for both admission and lookup. The old
+                    // contains_key + entry sequence hashed and probed every group
+                    // key twice, including every row of high-cardinality scans.
+                    match groups.entry(key) {
+                        Entry::Occupied(entry) => entry.into_mut(),
+                        Entry::Vacant(entry) => {
+                            if let Some(memory) = &self.memory {
+                                reservations.reserve(
+                                    memory,
+                                    estimated_group_bytes(
+                                        entry.key().as_slice(),
+                                        self.aggregates.len(),
+                                    ),
+                                )?;
+                            }
+                            if let Some(metrics) = &metrics {
+                                metrics.groups_created.fetch_add(1, Ordering::Relaxed);
+                            }
+                            entry.insert(self.new_states())
                         }
-                        if let Some(metrics) = &metrics {
-                            metrics.groups_created.fetch_add(1, Ordering::Relaxed);
-                        }
-                        entry.insert(self.new_states())
                     }
                 };
                 if let Some(values) = count_sum_i64 {
@@ -2414,6 +2490,157 @@ impl HashAggregate {
             groups.push((vec![GroupKey::Null], states(state)));
         }
         Ok((groups, reservations.into_guards()))
+    }
+
+    /// COUNT(*) and SUM over one string key, the shape every "by country"
+    /// partial takes on a worker. A batch's key column is coded once (see
+    /// `prepare_keys`); rows then index a per-batch state vector by code —
+    /// no hashing, no key materialisation per row — and the batch's few
+    /// distinct values are merged into the global map once per batch.
+    fn collect_coded_string_count_sum_states(
+        &mut self,
+    ) -> Result<(GroupStateMap, Vec<MemoryReservation>)> {
+        let mut global: AHashMap<GroupKey, DenseCountSumState> = AHashMap::new();
+        let mut null = None::<DenseCountSumState>;
+        let mut reservations = ReservationSlab::default();
+        let metrics = self
+            .memory
+            .as_ref()
+            .map(|memory| aggregate_metrics(memory.query()))
+            .transpose()?;
+
+        while let Some(batch) = self.source.next_batch()? {
+            if let Some(metrics) = &metrics {
+                metrics
+                    .input_rows
+                    .fetch_add(batch.num_rows() as u64, Ordering::Relaxed);
+            }
+            let _input_memory = if self.input_already_reserved {
+                None
+            } else {
+                self.memory
+                    .as_ref()
+                    .map(|account| account.reserve(batch.get_array_memory_size() as u64))
+                    .transpose()?
+            };
+            let schema = batch.schema();
+            let keys = batch.column(
+                schema
+                    .index_of(&self.group_by[0])
+                    .expect("validated group key"),
+            );
+            let values = batch
+                .column(
+                    schema
+                        .index_of(&self.aggregates[1].column)
+                        .expect("validated aggregate input"),
+                )
+                .as_primitive::<Int64Type>();
+            let PreparedKeys::Coded { codes, table } = prepare_keys(keys) else {
+                return Err(exec_err("string group key was not coded"));
+            };
+            if let Some(memory) = &self.memory {
+                reservations.reserve(
+                    memory,
+                    (table.len() * size_of::<DenseCountSumState>()) as u64,
+                )?;
+            }
+            let mut dense = vec![DenseCountSumState::default(); table.len()];
+            for (row, code) in codes.iter().enumerate() {
+                if row % 1024 == 0
+                    && let Some(memory) = &self.memory
+                {
+                    memory.check_cancelled()?;
+                }
+                let state = if *code == NULL_CODE {
+                    null.get_or_insert_with(DenseCountSumState::default)
+                } else {
+                    &mut dense[*code as usize]
+                };
+                state.occupied = true;
+                state.count = state
+                    .count
+                    .checked_add(1)
+                    .ok_or_else(|| exec_err("COUNT overflow"))?;
+                if !values.is_null(row) {
+                    state.sum = state
+                        .sum
+                        .checked_add(values.value(row) as i128)
+                        .ok_or_else(|| exec_err("integer SUM overflow"))?;
+                    state.sum_count = state
+                        .sum_count
+                        .checked_add(1)
+                        .ok_or_else(|| exec_err("integer SUM count overflow"))?;
+                }
+            }
+            for (key, partial) in table.into_iter().zip(dense) {
+                if !partial.occupied {
+                    continue;
+                }
+                let state = match global.entry(key) {
+                    Entry::Occupied(entry) => entry.into_mut(),
+                    Entry::Vacant(entry) => {
+                        if let Some(memory) = &self.memory {
+                            reservations.reserve(
+                                memory,
+                                estimated_group_bytes(std::slice::from_ref(entry.key()), 2),
+                            )?;
+                        }
+                        if let Some(metrics) = &metrics {
+                            metrics.groups_created.fetch_add(1, Ordering::Relaxed);
+                        }
+                        entry.insert(DenseCountSumState::default())
+                    }
+                };
+                state.occupied = true;
+                state.count = state
+                    .count
+                    .checked_add(partial.count)
+                    .ok_or_else(|| exec_err("COUNT overflow"))?;
+                state.sum = state
+                    .sum
+                    .checked_add(partial.sum)
+                    .ok_or_else(|| exec_err("integer SUM overflow"))?;
+                state.sum_count = state
+                    .sum_count
+                    .checked_add(partial.sum_count)
+                    .ok_or_else(|| exec_err("integer SUM count overflow"))?;
+            }
+        }
+
+        let states = |state: DenseCountSumState| {
+            vec![
+                AggregateState::Count(state.count),
+                AggregateState::IntegerSum {
+                    sum: state.sum,
+                    count: state.sum_count,
+                },
+            ]
+        };
+        let mut groups = Vec::with_capacity(global.len() + usize::from(null.is_some()));
+        groups.extend(
+            global
+                .into_iter()
+                .map(|(key, state)| (vec![key], states(state))),
+        );
+        if let Some(state) = null {
+            if let Some(metrics) = &metrics {
+                metrics.groups_created.fetch_add(1, Ordering::Relaxed);
+            }
+            groups.push((vec![GroupKey::Null], states(state)));
+        }
+        Ok((groups, reservations.into_guards()))
+    }
+}
+
+fn is_string_key_type(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Utf8 | DataType::LargeUtf8 => true,
+        DataType::Dictionary(key_type, value_type) => {
+            key_type.as_ref() == &DataType::Int32
+                && matches!(value_type.as_ref(), DataType::Utf8 | DataType::LargeUtf8)
+        }
+        _ => false,
     }
 }
 
@@ -3821,6 +4048,116 @@ mod tests {
         drop(output);
         drop(aggregate);
         assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn coded_string_groups_merge_across_batches_with_nulls_and_dictionaries() {
+        // Two batches whose codes differ (the first batch never sees "c"),
+        // a null key, a null value, and a dictionary-encoded third batch:
+        // the global merge must be by value, never by per-batch code.
+        let first = RecordBatch::try_from_iter(vec![
+            (
+                "group_key",
+                Arc::new(StringArray::from(vec![
+                    Some("a"),
+                    Some("b"),
+                    None,
+                    Some("a"),
+                ])) as ArrayRef,
+            ),
+            (
+                "value",
+                Arc::new(Int64Array::from(vec![Some(1), Some(10), Some(100), None])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let second = RecordBatch::try_from_iter(vec![
+            (
+                "group_key",
+                Arc::new(StringArray::from(vec![Some("c"), Some("a"), Some("c")])) as ArrayRef,
+            ),
+            (
+                "value",
+                Arc::new(Int64Array::from(vec![Some(1000), Some(2), Some(3000)])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let mut input = Input::new(first);
+        input.batches.push_back(second);
+        let pool = QueryMemoryPool::new("coded-groups", 1024 * 1024).unwrap();
+        let mut aggregate = HashAggregate::new_with_memory(
+            Box::new(input),
+            vec!["group_key".into()],
+            vec![
+                AggExpr::new(AggFunc::Count, "*"),
+                AggExpr::new(AggFunc::Sum, "value"),
+            ],
+            pool.operator("aggregate").unwrap(),
+        )
+        .unwrap();
+        let output = aggregate.next_batch().unwrap().unwrap();
+        let keys = output.column(0).as_string::<i32>();
+        let counts = output
+            .column(1)
+            .as_primitive::<arrow::datatypes::UInt64Type>();
+        let sums = output.column(2).as_primitive::<Int64Type>();
+        let actual = (0..output.num_rows())
+            .map(|row| {
+                (
+                    (!keys.is_null(row)).then(|| keys.value(row).to_owned()),
+                    (
+                        counts.value(row),
+                        (!sums.is_null(row)).then(|| sums.value(row)),
+                    ),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(actual[&Some("a".to_owned())], (3, Some(3)));
+        assert_eq!(actual[&Some("b".to_owned())], (1, Some(10)));
+        assert_eq!(actual[&Some("c".to_owned())], (2, Some(4000)));
+        assert_eq!(actual[&None], (1, Some(100)));
+        drop(output);
+        drop(aggregate);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+
+        // Dictionary keys take the same path with the dictionary as the table.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "group_key",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                true,
+            ),
+            Field::new("value", DataType::Int64, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32DictionaryArray::new(
+                    Int32Array::from(vec![Some(1), Some(0), Some(1), None]),
+                    Arc::new(StringArray::from(vec!["x", "y"])),
+                )),
+                Arc::new(Int64Array::from(vec![Some(5), Some(6), Some(7), Some(8)])),
+            ],
+        )
+        .unwrap();
+        let mut aggregate = HashAggregate::new(
+            Box::new(Input::new(batch)),
+            vec!["group_key".into()],
+            vec![
+                AggExpr::new(AggFunc::Count, "*"),
+                AggExpr::new(AggFunc::Sum, "value"),
+            ],
+        )
+        .unwrap();
+        let output = aggregate.next_batch().unwrap().unwrap();
+        let sums = output.column(2).as_primitive::<Int64Type>();
+        let keys = output.column(0);
+        let by_key = (0..output.num_rows())
+            .map(|row| (extract_key(keys, row), sums.value(row)))
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(by_key[&GroupKey::Utf8(Arc::from("y"))], 12);
+        assert_eq!(by_key[&GroupKey::Utf8(Arc::from("x"))], 6);
+        assert_eq!(by_key[&GroupKey::Null], 8);
     }
 
     #[test]
