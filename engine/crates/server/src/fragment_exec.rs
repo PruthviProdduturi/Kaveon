@@ -981,7 +981,10 @@ fn finalized_aggregate_batch(
         columns.push(group_column(groups, index, data_type)?);
     }
     for (index, aggregate) in aggregates.iter().enumerate() {
-        if matches!(output_types[index], DataType::Int32 | DataType::Int64) {
+        if matches!(
+            output_types[index],
+            DataType::Int32 | DataType::Int64 | DataType::Date32
+        ) {
             let values = groups
                 .iter()
                 .map(|group| match group.values.get(index) {
@@ -989,31 +992,38 @@ fn finalized_aggregate_batch(
                     _ => Err(exec_err("integer final state type mismatch")),
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let column: ArrayRef = if output_types[index] == DataType::Int32 {
-                Arc::new(arrow::array::Int32Array::from(
-                    values
-                        .into_iter()
-                        .map(|v| {
-                            v.map(|n| {
-                                i32::try_from(n).map_err(|_| exec_err("integer aggregate overflow"))
+            let column: ArrayRef =
+                if matches!(output_types[index], DataType::Int32 | DataType::Date32) {
+                    let days = arrow::array::Int32Array::from(
+                        values
+                            .into_iter()
+                            .map(|v| {
+                                v.map(|n| {
+                                    i32::try_from(n)
+                                        .map_err(|_| exec_err("integer aggregate overflow"))
+                                })
+                                .transpose()
                             })
-                            .transpose()
-                        })
-                        .collect::<Result<Vec<_>>>()?,
-                ))
-            } else {
-                Arc::new(arrow::array::Int64Array::from(
-                    values
-                        .into_iter()
-                        .map(|v| {
-                            v.map(|n| {
-                                i64::try_from(n).map_err(|_| exec_err("integer SUM overflow"))
+                            .collect::<Result<Vec<_>>>()?,
+                    );
+                    if output_types[index] == DataType::Date32 {
+                        arrow::compute::cast(&days, &DataType::Date32)?
+                    } else {
+                        Arc::new(days)
+                    }
+                } else {
+                    Arc::new(arrow::array::Int64Array::from(
+                        values
+                            .into_iter()
+                            .map(|v| {
+                                v.map(|n| {
+                                    i64::try_from(n).map_err(|_| exec_err("integer SUM overflow"))
+                                })
+                                .transpose()
                             })
-                            .transpose()
-                        })
-                        .collect::<Result<Vec<_>>>()?,
-                ))
-            };
+                            .collect::<Result<Vec<_>>>()?,
+                    ))
+                };
             fields.push(Field::new(
                 aggregate_output_name(aggregate),
                 output_types[index].clone(),

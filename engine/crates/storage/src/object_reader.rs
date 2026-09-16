@@ -235,8 +235,9 @@ impl ObjectParquetReader {
                         }
                         let considered = builder.metadata().num_row_groups();
                         let mut groups = if let Some(predicate) = &self.predicate {
-                            validate_predicate(predicate, &schema)?;
-                            matching_row_groups(builder.metadata().as_ref(), &schema, predicate)
+                            let predicate = predicate.coerced_for(&schema);
+                            validate_predicate(&predicate, &schema)?;
+                            matching_row_groups(builder.metadata().as_ref(), &schema, &predicate)
                         } else {
                             (0..considered).collect()
                         };

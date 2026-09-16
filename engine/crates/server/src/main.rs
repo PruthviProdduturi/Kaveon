@@ -1,6 +1,8 @@
 mod api;
 pub mod cluster;
 mod config;
+#[cfg(test)]
+mod differential_tests;
 pub mod disk_exchange;
 pub mod entra;
 pub mod exchange;

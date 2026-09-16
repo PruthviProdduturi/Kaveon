@@ -1008,20 +1008,7 @@ fn ast_expr_to_usize(expr: &ast::Expr) -> Result<usize> {
 
 /// Days since 1970-01-01 for a `YYYY-MM-DD` string (proleptic Gregorian).
 fn parse_date_days(value: &str) -> Option<i64> {
-    let mut parts = value.trim().splitn(3, '-');
-    let year: i64 = parts.next()?.parse().ok()?;
-    let month: i64 = parts.next()?.parse().ok()?;
-    let day: i64 = parts.next()?.parse().ok()?;
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-        return None;
-    }
-    let y = if month <= 2 { year - 1 } else { year };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let m = if month > 2 { month - 3 } else { month + 9 };
-    let doy = (153 * m + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    Some(era * 146097 + doe - 719468)
+    kaveon_core::predicate::date_literal_days(value)
 }
 
 fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {

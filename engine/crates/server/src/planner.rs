@@ -1570,10 +1570,22 @@ fn plan_query_with_predicate(
         }
 
         LogicalPlan::Filter { input, predicate } => {
-            let pushed = to_storage_predicate(predicate);
+            // HAVING: the filter sits on the aggregate's output, where
+            // SUM(x) is a column, and nothing about it reaches the scan.
+            let over_aggregate = matches!(input.as_ref(), LogicalPlan::Aggregate { .. });
+            let predicate = if over_aggregate {
+                bind_aggregate_references(predicate.clone())
+            } else {
+                predicate.clone()
+            };
+            let pushed = if over_aggregate {
+                None
+            } else {
+                to_storage_predicate(&predicate)
+            };
             let planned =
                 plan_query_with_predicate(input, catalog, pushed.as_ref(), partition, memory)?;
-            let mut operator = FilterOperator::new(planned.operator, predicate.clone());
+            let mut operator = FilterOperator::new(planned.operator, predicate);
             if let Some(memory) = memory {
                 operator = operator.with_memory(memory.operator("filter")?);
             }

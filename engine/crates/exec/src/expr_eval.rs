@@ -269,9 +269,18 @@ fn compare_column_with_literal(
         DataType::Dictionary(_, _) => return Ok(None),
         other => other,
     };
-    let scalar: ArrayRef = match (literal, value_type) {
+    let literal = literal.coerced_for(value_type);
+    let scalar: ArrayRef = match (&literal, value_type) {
         (ScalarValue::Utf8(v), DataType::Utf8) => Arc::new(StringArray::from(vec![v.as_str()])),
         (ScalarValue::Int64(v), DataType::Int64) => Arc::new(Int64Array::from(vec![*v])),
+        // A day number (from a DATE or a coerced text literal) against a
+        // date column, in the column's own type.
+        (ScalarValue::Int64(v), DataType::Date32) => {
+            let Ok(days) = i32::try_from(*v) else {
+                return Ok(None);
+            };
+            Arc::new(arrow::array::Date32Array::from(vec![days]))
+        }
         (ScalarValue::Float64(v), DataType::Float64) => Arc::new(Float64Array::from(vec![*v])),
         (ScalarValue::Bool(v), DataType::Boolean) => Arc::new(BooleanArray::from(vec![*v])),
         _ => return Ok(None),
@@ -538,6 +547,18 @@ fn coerce_numeric_pair(left: &ArrayRef, right: &ArrayRef) -> Result<(ArrayRef, A
     }
     if left.data_type() == right.data_type() {
         return Ok((Arc::clone(left), Arc::clone(right)));
+    }
+    // Text against a day-number date is read as a date, the way SQL
+    // coerces `date_col BETWEEN '2026-07-10' AND '2026-07-12'`; text that
+    // is not a date compares as null.
+    match (left.data_type(), right.data_type()) {
+        (DataType::Date32, DataType::Utf8 | DataType::LargeUtf8) => {
+            return Ok((Arc::clone(left), compute::cast(right, &DataType::Date32)?));
+        }
+        (DataType::Utf8 | DataType::LargeUtf8, DataType::Date32) => {
+            return Ok((compute::cast(left, &DataType::Date32)?, Arc::clone(right)));
+        }
+        _ => {}
     }
     // Integers of different widths, and a day-number date against an
     // integer, meet as Int64; anything else numeric meets as Float64.
