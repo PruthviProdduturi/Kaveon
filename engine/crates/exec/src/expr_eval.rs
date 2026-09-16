@@ -137,9 +137,12 @@ pub fn evaluate(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
         } => eval_in_list(expr, list, *negated, batch),
         Expr::Cast { expr, data_type } => eval_cast(expr, *data_type, batch),
         Expr::Function { name, args } => {
+            if let Some(result) = eval_function_through_dictionary(name, args, batch)? {
+                return Ok(result);
+            }
             let evaluated_args: Vec<ArrayRef> = args
                 .iter()
-                .map(|a| evaluate(a, batch))
+                .map(|a| evaluate(a, batch).and_then(|array| decode_dictionary(&array)))
                 .collect::<Result<_>>()?;
             eval_scalar_function(name, &evaluated_args, batch.num_rows())
         }
@@ -263,6 +266,92 @@ fn compare_column_with_literal(
         return Ok(Some(gathered));
     }
     Ok(Some(Arc::new(compare(&array)?)))
+}
+
+/// Row-wise functions that map a null input to a null output, so evaluating
+/// them over a dictionary's values and gathering by key is exactly the
+/// per-row result.
+const NULL_PROPAGATING_FUNCTIONS: &[&str] = &[
+    "UPPER",
+    "LOWER",
+    "TRIM",
+    "LTRIM",
+    "RTRIM",
+    "LENGTH",
+    "LEN",
+    "CHAR_LENGTH",
+    "CHARACTER_LENGTH",
+    "SUBSTR",
+    "SUBSTRING",
+    "REPLACE",
+    "LEFT",
+    "RIGHT",
+    "LPAD",
+    "RPAD",
+    "STARTS_WITH",
+    "ENDS_WITH",
+    "CONTAINS",
+    "STRPOS",
+    "POSITION",
+    "REVERSE",
+    "REPEAT",
+];
+
+/// A function over one dictionary column and literals runs once per
+/// dictionary value, not once per row: `UPPER(surface)` over a batch is a
+/// handful of string operations followed by a key gather.
+fn eval_function_through_dictionary(
+    name: &str,
+    args: &[Expr],
+    batch: &RecordBatch,
+) -> Result<Option<ArrayRef>> {
+    if !NULL_PROPAGATING_FUNCTIONS.contains(&name.to_uppercase().as_str()) {
+        return Ok(None);
+    }
+    let mut column = None;
+    for (index, arg) in args.iter().enumerate() {
+        match arg {
+            Expr::Literal(_) => {}
+            Expr::Column(name) if column.is_none() => {
+                let array = resolve_column(name, batch)?;
+                if !matches!(array.data_type(), DataType::Dictionary(key, _) if key.as_ref() == &DataType::Int32)
+                {
+                    return Ok(None);
+                }
+                column = Some((index, array));
+            }
+            _ => return Ok(None),
+        }
+    }
+    let Some((position, array)) = column else {
+        return Ok(None);
+    };
+    let dictionary = array.as_dictionary::<Int32Type>();
+    let values = dictionary.values();
+    let evaluated: Vec<ArrayRef> = args
+        .iter()
+        .enumerate()
+        .map(|(index, arg)| {
+            if index == position {
+                Ok(Arc::clone(values))
+            } else {
+                match arg {
+                    Expr::Literal(value) => literal_to_array(value, values.len()),
+                    _ => unreachable!("only literals remain"),
+                }
+            }
+        })
+        .collect::<Result<_>>()?;
+    let over_values = eval_scalar_function(name, &evaluated, values.len())?;
+    Ok(Some(compute::take(&over_values, dictionary.keys(), None)?))
+}
+
+/// A dictionary column as its plain values; every other array unchanged.
+fn decode_dictionary(array: &ArrayRef) -> Result<ArrayRef> {
+    match array.data_type() {
+        DataType::Dictionary(_, values) => Ok(compute::cast(array, values)?),
+        _ => Ok(Arc::clone(array)),
+    }
 }
 
 fn literal_to_array(value: &ScalarValue, len: usize) -> Result<ArrayRef> {
@@ -494,6 +583,10 @@ fn eval_case(
         .first()
         .map(|a| a.data_type().clone())
         .unwrap_or_else(|| else_arr.data_type().clone());
+    let target_type = match target_type {
+        DataType::Dictionary(_, values) => *values,
+        other => other,
+    };
 
     let mut output = compute::cast(&else_arr, &target_type)?;
     for (cond, result) in conditions.iter().zip(results.iter()).rev() {
@@ -606,10 +699,38 @@ fn eval_like(
     batch: &RecordBatch,
 ) -> Result<ArrayRef> {
     let values = evaluate(expr, batch)?;
+    if let (DataType::Dictionary(key, _), Expr::Literal(literal)) = (values.data_type(), pattern)
+        && key.as_ref() == &DataType::Int32
+    {
+        // Match the dictionary's values once and gather by key.
+        let dictionary = values.as_dictionary::<Int32Type>();
+        let patterns = literal_to_array(literal, dictionary.values().len())?;
+        let verdicts = like_arrays(
+            as_string_array(dictionary.values())?,
+            as_string_array(&patterns)?,
+            negated,
+            case_insensitive,
+        );
+        return Ok(compute::take(&verdicts, dictionary.keys(), None)?);
+    }
+    let values = decode_dictionary(&values)?;
     let patterns = evaluate(pattern, batch)?;
     let values = as_string_array(&values)?;
     let patterns = as_string_array(&patterns)?;
+    Ok(Arc::new(like_arrays(
+        values,
+        patterns,
+        negated,
+        case_insensitive,
+    )))
+}
 
+fn like_arrays(
+    values: &StringArray,
+    patterns: &StringArray,
+    negated: bool,
+    case_insensitive: bool,
+) -> BooleanArray {
     let result: BooleanArray = (0..values.len())
         .map(|i| {
             if values.is_null(i) || patterns.is_null(i) {
@@ -626,7 +747,7 @@ fn eval_like(
             }
         })
         .collect();
-    Ok(Arc::new(result))
+    result
 }
 
 fn like_match(text: &str, pattern: &str) -> bool {
@@ -1686,6 +1807,136 @@ mod tests {
                 .map(|i| (!mask.is_null(i)).then(|| mask.value(i)))
                 .collect::<Vec<_>>(),
             vec![Some(false), Some(false), None, Some(true), Some(false)]
+        );
+    }
+
+    #[test]
+    fn string_functions_like_and_case_run_over_dictionary_columns() {
+        use arrow::array::{DictionaryArray, Int32Array};
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "surface",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                true,
+            ),
+            Field::new(
+                "region",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                true,
+            ),
+        ]));
+        let surfaces = DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![Some(0), Some(1), None, Some(2), Some(1)]),
+            Arc::new(StringArray::from(vec!["Chat", "Export", "api"])),
+        );
+        let regions = DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![Some(1), Some(0), Some(0), None, Some(1)]),
+            Arc::new(StringArray::from(vec!["Asia", "Europe"])),
+        );
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(surfaces), Arc::new(regions)]).unwrap();
+        let strings = |array: ArrayRef| -> Vec<Option<String>> {
+            let array = array.as_string::<i32>();
+            (0..array.len())
+                .map(|i| (!array.is_null(i)).then(|| array.value(i).to_owned()))
+                .collect()
+        };
+
+        // A unary function with a literal argument runs on the dictionary's values.
+        let upper = Expr::Function {
+            name: "UPPER".into(),
+            args: vec![Expr::Column("surface".into())],
+        };
+        assert_eq!(
+            strings(evaluate(&upper, &batch).unwrap()),
+            vec![
+                Some("CHAT".into()),
+                Some("EXPORT".into()),
+                None,
+                Some("API".into()),
+                Some("EXPORT".into())
+            ]
+        );
+        let left = Expr::Function {
+            name: "LEFT".into(),
+            args: vec![
+                Expr::Column("surface".into()),
+                Expr::Literal(ScalarValue::Int64(2)),
+            ],
+        };
+        assert_eq!(
+            strings(evaluate(&left, &batch).unwrap()),
+            vec![
+                Some("Ch".into()),
+                Some("Ex".into()),
+                None,
+                Some("ap".into()),
+                Some("Ex".into())
+            ]
+        );
+        // Two dictionary columns decode and concatenate row by row.
+        let concat = Expr::Function {
+            name: "CONCAT".into(),
+            args: vec![
+                Expr::Column("surface".into()),
+                Expr::Literal(ScalarValue::Utf8("/".into())),
+                Expr::Column("region".into()),
+            ],
+        };
+        let joined = strings(evaluate(&concat, &batch).unwrap());
+        assert_eq!(joined[0].as_deref(), Some("Chat/Europe"));
+        assert_eq!(joined[4].as_deref(), Some("Export/Europe"));
+
+        // LIKE against a literal pattern matches the values once.
+        let like = Expr::Like {
+            expr: Box::new(Expr::Column("surface".into())),
+            pattern: Box::new(Expr::Literal(ScalarValue::Utf8("Ex%".into()))),
+            negated: false,
+            case_insensitive: false,
+        };
+        let mask = evaluate_predicate(&like, &batch).unwrap();
+        assert_eq!(
+            (0..5)
+                .map(|i| (!mask.is_null(i)).then(|| mask.value(i)))
+                .collect::<Vec<_>>(),
+            vec![Some(false), Some(true), None, Some(false), Some(true)]
+        );
+        let ilike = Expr::Like {
+            expr: Box::new(Expr::Column("surface".into())),
+            pattern: Box::new(Expr::Literal(ScalarValue::Utf8("API".into()))),
+            negated: true,
+            case_insensitive: true,
+        };
+        let mask = evaluate_predicate(&ilike, &batch).unwrap();
+        assert_eq!(
+            (0..5)
+                .map(|i| (!mask.is_null(i)).then(|| mask.value(i)))
+                .collect::<Vec<_>>(),
+            vec![Some(true), Some(true), None, Some(false), Some(true)]
+        );
+
+        // CASE with a dictionary column in a branch produces plain text.
+        let case = Expr::Case {
+            operand: None,
+            when_then: vec![(
+                Expr::BinaryOp {
+                    left: Box::new(Expr::Column("region".into())),
+                    op: BinaryOp::Eq,
+                    right: Box::new(Expr::Literal(ScalarValue::Utf8("Europe".into()))),
+                },
+                Expr::Column("surface".into()),
+            )],
+            else_expr: Some(Box::new(Expr::Literal(ScalarValue::Utf8("other".into())))),
+        };
+        assert_eq!(
+            strings(evaluate(&case, &batch).unwrap()),
+            vec![
+                Some("Chat".into()),
+                Some("other".into()),
+                Some("other".into()),
+                Some("other".into()),
+                Some("Export".into())
+            ]
         );
     }
 
