@@ -4,7 +4,7 @@
  "memory": "KAVEON_QUERY_MEMORY_LIMIT_BYTES=3 GiB, admission 4 GiB",
  "repetitions": 3,
  "statements": 43,
- "measured": 38,
+ "measured": 42,
  "records": [
   {
    "id": "q01",
@@ -332,13 +332,22 @@
   },
   {
    "id": "q19",
-   "seconds": [],
-   "rows": null,
-   "rows_selected": null,
-   "error": "Engine rejected the request",
+   "seconds": [
+    237.947,
+    236.44,
+    234.937
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
    "adapted": true,
    "trino_seconds": null,
-   "target_seconds": null
+   "target_seconds": null,
+   "result_sha256": "a988fff03448c7860b409546b3e7bd42f2c0570268a385446a59368e3fae4ebd",
+   "median_seconds": 236.44,
+   "meets_target": null,
+   "beats_trino": null,
+   "rerun_on": "efeaeda (sha256:1d372b11\u2026)"
   },
   {
    "id": "q20",
@@ -604,23 +613,41 @@
   },
   {
    "id": "q35",
-   "seconds": [],
-   "rows": null,
-   "rows_selected": null,
-   "error": "Engine rejected the request",
+   "seconds": [
+    317.238,
+    309.26,
+    308.418
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
    "adapted": false,
    "trino_seconds": null,
-   "target_seconds": null
+   "target_seconds": null,
+   "result_sha256": "2f455e74c9cdafe27669b84252950bd7b2f79aad4b007aba64e6844b1a1772f3",
+   "median_seconds": 309.26,
+   "meets_target": null,
+   "beats_trino": null,
+   "rerun_on": "efeaeda (sha256:1d372b11\u2026)"
   },
   {
    "id": "q36",
-   "seconds": [],
-   "rows": null,
-   "rows_selected": null,
-   "error": "Engine rejected the request",
+   "seconds": [
+    56.768,
+    53.648,
+    58.652
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
    "adapted": false,
    "trino_seconds": null,
-   "target_seconds": null
+   "target_seconds": null,
+   "result_sha256": "6288909f254539c04aadf95c8f4b2d61a600a4cc369aec7cb1dbf56f600ce628",
+   "median_seconds": 56.768,
+   "meets_target": null,
+   "beats_trino": null,
+   "rerun_on": "efeaeda (sha256:1d372b11\u2026)"
   },
   {
    "id": "q37",
@@ -732,14 +759,23 @@
   },
   {
    "id": "q43",
-   "seconds": [],
-   "rows": null,
-   "rows_selected": null,
-   "error": "Engine rejected the request",
+   "seconds": [
+    2.463,
+    0.549,
+    0.602
+   ],
+   "rows": 10,
+   "rows_selected": 1406798,
+   "error": null,
    "adapted": true,
    "trino_seconds": null,
-   "target_seconds": null
+   "target_seconds": null,
+   "result_sha256": "aebb32c8137a34399806a8624d4cec44625e35161e9d65979b028ae0192ed568",
+   "median_seconds": 0.602,
+   "meets_target": null,
+   "beats_trino": null,
+   "rerun_on": "efeaeda (sha256:1d372b11\u2026)"
   }
  ],
- "note": "q01-q34 from the full pass; the coordinator was OOM-killed (exit 137) after q34 and q35-q43 are a rerun on the same image immediately after"
+ "note": "q01-q34 from the full pass; the coordinator was OOM-killed (exit 137) after q34 and q35-q43 are a rerun on the same image immediately after; q19, q35, q36, q43 are from a rerun on efeaeda (the spill-path encoding estimate and the lowered ORDER BY key fixed there), q33 still fails closed on memory (100 M groups)"
 }
