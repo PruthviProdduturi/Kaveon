@@ -11,6 +11,8 @@ use kaveon_core::{
     BatchOperator, KaveonError, MemoryReservation, OperatorMemoryAccount, QueryMemoryPool, Result,
 };
 use std::collections::{HashMap, HashSet, hash_map::Entry};
+
+use crate::columnar_aggregate::{self, ColumnarGroups};
 use std::io::Cursor;
 use std::sync::{
     Arc,
@@ -55,7 +57,7 @@ const AGGREGATE_STATE_VERSION: &str = "2";
 const GROUPED_STATE_VERSION_KEY: &str = "kaveon.grouped_aggregate_state.version";
 const GROUPED_STATE_VERSION: &str = "3";
 #[path = "compact_state.rs"]
-mod compact_state;
+pub(crate) mod compact_state;
 const GROUPED_KEY_TYPES: &str = "kaveon.grouped_aggregate_state.key_types";
 const GROUPED_OUTPUT_TYPES: &str = "kaveon.grouped_aggregate_state.output_types";
 const AGGREGATE_RESERVATION_SLAB_BYTES: u64 = 64 * 1024;
@@ -72,14 +74,14 @@ const STATE_INTEGER_MAX: u8 = 12;
 const STATE_INTEGER_SUM_DISTINCT: u8 = 13;
 const STATE_UTF8_MIN: u8 = 15;
 const STATE_UTF8_MAX: u8 = 16;
-const VALUE_BOOL: u8 = 1;
-const VALUE_INT32: u8 = 2;
-const VALUE_INT64: u8 = 3;
-const VALUE_UTF8: u8 = 4;
+pub(crate) const VALUE_BOOL: u8 = 1;
+pub(crate) const VALUE_INT32: u8 = 2;
+pub(crate) const VALUE_INT64: u8 = 3;
+pub(crate) const VALUE_UTF8: u8 = 4;
 const VALUE_FLOAT64_BITS: u8 = 5;
 const VALUE_UINT64: u8 = 6;
 const VALUE_DECIMAL128: u8 = 7;
-const VALUE_NULL: u8 = 0;
+pub(crate) const VALUE_NULL: u8 = 0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AggFunc {
@@ -707,17 +709,17 @@ impl AggregateState {
                 }
             }
             (Self::Utf8Min(value), Self::Utf8Min(other)) => {
-                if let Some(other) = other {
-                    if value.as_ref().is_none_or(|current| other < current) {
-                        *value = Some(other.clone());
-                    }
+                if let Some(other) = other
+                    && value.as_ref().is_none_or(|current| other < current)
+                {
+                    *value = Some(other.clone());
                 }
             }
             (Self::Utf8Max(value), Self::Utf8Max(other)) => {
-                if let Some(other) = other {
-                    if value.as_ref().is_none_or(|current| other > current) {
-                        *value = Some(other.clone());
-                    }
+                if let Some(other) = other
+                    && value.as_ref().is_none_or(|current| other > current)
+                {
+                    *value = Some(other.clone());
                 }
             }
             (Self::CountDistinct(values), Self::CountDistinct(other))
@@ -849,6 +851,16 @@ pub fn grouped_aggregate_states_to_typed_batch(
         compact_state::encode_into(&groups[index].states, &mut state_scratch)?;
         state_values.append_value(&state_scratch);
     }
+    grouped_state_batch(key_values, state_values, group_types)
+}
+
+/// The grouped-state batch from its two encoded columns, the group key
+/// types carried as schema metadata.
+fn grouped_state_batch(
+    mut key_values: BinaryBuilder,
+    mut state_values: BinaryBuilder,
+    group_types: &[DataType],
+) -> Result<RecordBatch> {
     let mut schema = grouped_state_schema().as_ref().clone();
     let type_schema = Schema::new(
         group_types
@@ -884,6 +896,27 @@ pub fn grouped_aggregate_states_to_typed_batch(
     )?)
 }
 
+/// The partial stage's batch straight from columnar groups: keys and
+/// states encoded from the columns, no row representation in between.
+pub fn columnar_partial_batch(
+    groups: &ColumnarGroups,
+    group_types: &[DataType],
+    output_types: &[DataType],
+) -> Result<RecordBatch> {
+    if groups.key_count() != group_types.len() {
+        return Err(exec_err("aggregate key count does not match typed schema"));
+    }
+    for (actual, expected) in groups.logical_key_types().iter().zip(group_types) {
+        if actual != logical_data_type(expected) {
+            return Err(exec_err("aggregate key type does not match typed schema"));
+        }
+    }
+    validate_state_output_types(groups.template(), output_types)?;
+    let (key_values, state_values) = groups.encode()?;
+    let batch = grouped_state_batch(key_values, state_values, group_types)?;
+    attach_output_types(batch, output_types)
+}
+
 pub fn grouped_aggregate_key_types(schema: &SchemaRef) -> Result<Vec<DataType>> {
     validate_grouped_state_schema(schema)?;
     let types = schema
@@ -916,10 +949,19 @@ pub fn grouped_aggregate_states_to_schema_batch(
     output_types: &[DataType],
 ) -> Result<RecordBatch> {
     for group in groups {
-        if group.states.len() != output_types.len() {
+        validate_state_output_types(&group.states, output_types)?;
+    }
+    let batch = grouped_aggregate_states_to_typed_batch(groups, group_types)?;
+    attach_output_types(batch, output_types)
+}
+
+/// Every state must finish into its declared output type.
+fn validate_state_output_types(states: &[AggregateState], output_types: &[DataType]) -> Result<()> {
+    {
+        if states.len() != output_types.len() {
             return Err(exec_err("aggregate output type count mismatch"));
         }
-        for (state, data_type) in group.states.iter().zip(output_types) {
+        for (state, data_type) in states.iter().zip(output_types) {
             let expected = match state {
                 AggregateState::Exact { scale: None, .. } => DataType::UInt64,
                 AggregateState::Exact {
@@ -949,7 +991,11 @@ pub fn grouped_aggregate_states_to_schema_batch(
             }
         }
     }
-    let batch = grouped_aggregate_states_to_typed_batch(groups, group_types)?;
+    Ok(())
+}
+
+/// Carries the aggregate output types on the state column's metadata.
+fn attach_output_types(batch: RecordBatch, output_types: &[DataType]) -> Result<RecordBatch> {
     let mut bytes = Vec::new();
     let schema = Schema::new(
         output_types
@@ -2070,6 +2116,171 @@ impl HashAggregate {
         ))
     }
 
+    /// The partial stage's output — the grouped-state batch — with the
+    /// memory it holds. Columnar for every shape the columnar aggregate
+    /// carries, so the groups go from the columns to the wire without a row
+    /// representation; the row paths otherwise.
+    pub fn into_partial_batch(
+        mut self,
+        group_types: &[DataType],
+        output_types: &[DataType],
+    ) -> Result<(RecordBatch, Vec<MemoryReservation>)> {
+        let memory = self.memory.clone();
+        if let Some(key_types) = self.columnar_key_types() {
+            let (groups, mut reservations) = self.collect_columnar(key_types)?;
+            if let Some(memory) = &memory {
+                reservations
+                    .push(memory.reserve(partial_encoding_bytes(&reservations, groups.len()))?);
+            }
+            let batch = columnar_partial_batch(&groups, group_types, output_types)?;
+            return Ok((batch, reservations));
+        }
+        let (states, mut reservations) = self.into_grouped_states_with_reservations()?;
+        if let Some(memory) = &memory {
+            reservations.push(memory.reserve(partial_encoding_bytes(&reservations, states.len()))?);
+        }
+        let batch = grouped_aggregate_states_to_schema_batch(&states, group_types, output_types)?;
+        Ok((batch, reservations))
+    }
+
+    /// The key types the columnar aggregate takes for this shape, or None
+    /// when it stays on the row paths: every key carried, at least one key
+    /// not dictionary-encoded (the coded fold wins for the low-cardinality
+    /// columns dictionaries carry) unless a text extreme needs the values,
+    /// and every aggregate one the columns update in place.
+    fn columnar_key_types(&self) -> Option<Vec<DataType>> {
+        if self.group_by.is_empty() || self.group_by.len() > columnar_aggregate::MAX_KEYS {
+            return None;
+        }
+        let schema = self.source.schema();
+        let mut key_types = Vec::with_capacity(self.group_by.len());
+        for name in &self.group_by {
+            let data_type = schema.field_with_name(name).ok()?.data_type();
+            if !columnar_aggregate::supports_key(data_type) {
+                return None;
+            }
+            key_types.push(data_type.clone());
+        }
+        let template = self.new_states();
+        let text_extremes = template.iter().any(|state| {
+            matches!(
+                state,
+                AggregateState::Utf8Min(_) | AggregateState::Utf8Max(_)
+            )
+        });
+        if !text_extremes
+            && key_types
+                .iter()
+                .all(|data_type| matches!(data_type, DataType::Dictionary(_, _)))
+        {
+            return None;
+        }
+        for (aggregate, state) in self.aggregates.iter().zip(&template) {
+            let input = if aggregate.column == "*" {
+                None
+            } else {
+                Some(schema.field_with_name(&aggregate.column).ok()?.data_type())
+            };
+            if !columnar_aggregate::supports_aggregate(aggregate, input, state) {
+                return None;
+            }
+        }
+        Some(key_types)
+    }
+
+    /// Drains the source through the columnar aggregate. Each batch's worst
+    /// case — every row a new group, plus its text bytes and any index
+    /// doubling — is ensured before the batch is applied, and what it
+    /// actually took is charged after.
+    fn collect_columnar(
+        &mut self,
+        key_types: Vec<DataType>,
+    ) -> Result<(ColumnarGroups, Vec<MemoryReservation>)> {
+        let template = self.new_states();
+        let mut groups = ColumnarGroups::new(&key_types, &template)
+            .ok_or_else(|| exec_err("columnar aggregate rejected a carried shape"))?;
+        let mut reservations = ReservationSlab::default();
+        let metrics = self
+            .memory
+            .as_ref()
+            .map(|memory| aggregate_metrics(memory.query()))
+            .transpose()?;
+        let schema = self.source.schema();
+        let key_indices = self
+            .group_by
+            .iter()
+            .map(|name| schema.index_of(name).expect("validated group key"))
+            .collect::<Vec<_>>();
+        let value_indices = self
+            .aggregates
+            .iter()
+            .map(|aggregate| {
+                (aggregate.column != "*")
+                    .then(|| schema.index_of(&aggregate.column))
+                    .transpose()
+                    .expect("validated aggregate input")
+            })
+            .collect::<Vec<_>>();
+        let slot_bytes = groups.slot_bytes();
+        let mut growth_reserved_at = 0usize;
+
+        while let Some(batch) = self.source.next_batch()? {
+            let rows = batch.num_rows();
+            if let Some(metrics) = &metrics {
+                metrics.input_rows.fetch_add(rows as u64, Ordering::Relaxed);
+            }
+            let _input_memory = if self.input_already_reserved {
+                None
+            } else {
+                self.memory
+                    .as_ref()
+                    .map(|account| account.reserve(batch.get_array_memory_size() as u64))
+                    .transpose()?
+            };
+            let keys = key_indices
+                .iter()
+                .map(|index| batch.column(*index).clone())
+                .collect::<Vec<_>>();
+            let values = value_indices
+                .iter()
+                .map(|index| index.map(|index| batch.column(index)))
+                .collect::<Vec<_>>();
+            if let Some(memory) = &self.memory {
+                memory.check_cancelled()?;
+                let growth = groups.growth_bytes(rows);
+                if growth != 0 && groups.capacity() != growth_reserved_at {
+                    reservations.reserve(memory, growth)?;
+                    growth_reserved_at = groups.capacity();
+                }
+                let key_bytes = keys
+                    .iter()
+                    .map(|array| array.get_array_memory_size() as u64)
+                    .sum::<u64>();
+                reservations.ensure(
+                    memory,
+                    (rows as u64)
+                        .saturating_mul(slot_bytes)
+                        .saturating_add(key_bytes),
+                )?;
+            }
+            let (created, new_bytes) = groups.push_batch(&keys, &values, rows)?;
+            if let Some(memory) = &self.memory {
+                reservations.reserve(
+                    memory,
+                    (created as u64)
+                        .saturating_mul(slot_bytes)
+                        .saturating_add(new_bytes),
+                )?;
+            }
+            if let Some(metrics) = &metrics {
+                metrics
+                    .groups_created
+                    .fetch_add(created as u64, Ordering::Relaxed);
+            }
+        }
+        Ok((groups, reservations.into_guards()))
+    }
+
     fn collect_states(&mut self) -> Result<(GroupStateMap, Vec<MemoryReservation>)> {
         if self.group_by.len() == 1
             && self.aggregates.len() == 2
@@ -2115,14 +2326,14 @@ impl HashAggregate {
         {
             return self.collect_coded_string_count_sum_states();
         }
-        if self.integer_key_states_apply() {
-            return self.collect_integer_key_states();
-        }
-        if self.string_key_states_apply() {
-            return self.collect_string_key_states();
-        }
-        if self.compact_keys_apply() {
-            return self.collect_compact_key_states();
+        if let Some(key_types) = self.columnar_key_types() {
+            let (groups, mut reservations) = self.collect_columnar(key_types)?;
+            if let Some(memory) = &self.memory {
+                // The row representation the local consumer takes: two small
+                // vectors per group.
+                reservations.push(memory.reserve((groups.len() as u64).saturating_mul(160))?);
+            }
+            return Ok((groups.into_groups(), reservations));
         }
         // Group keys are query-local and do not need the standard library's
         // comparatively expensive SipHash. AHash retains per-map randomized
@@ -2791,593 +3002,6 @@ impl HashAggregate {
         ))
     }
 
-    /// Updates dense integer groups by indexing directly into a contiguous
-    /// state vector. Keys outside the density bound retain the hash fallback.
-    /// One integer key (Int64, Int32 or a day-number date) and only the
-    /// accumulators a row updates in place: COUNT, integer and floating
-    /// SUM/AVG/MIN/MAX over integer or float columns, nothing distinct.
-    fn integer_key_states_apply(&self) -> bool {
-        if self.group_by.len() != 1 {
-            return false;
-        }
-        let schema = self.source.schema();
-        let key_type = match schema.field_with_name(&self.group_by[0]) {
-            Ok(field) => field.data_type(),
-            Err(_) => return false,
-        };
-        if !matches!(
-            key_type,
-            DataType::Int64 | DataType::Int32 | DataType::Date32
-        ) {
-            return false;
-        }
-        self.in_place_accumulators_apply()
-    }
-
-    /// One plain text key with the same in-place accumulators as the
-    /// integer path. Dictionary-encoded keys stay on the coded path, whose
-    /// per-code batch folds win for the low-cardinality columns they carry.
-    fn string_key_states_apply(&self) -> bool {
-        if self.group_by.len() != 1 {
-            return false;
-        }
-        let schema = self.source.schema();
-        let text_extremes = self.new_states().iter().any(|state| {
-            matches!(
-                state,
-                AggregateState::Utf8Min(_) | AggregateState::Utf8Max(_)
-            )
-        });
-        match schema.field_with_name(&self.group_by[0]) {
-            Ok(field) if matches!(field.data_type(), DataType::Utf8 | DataType::LargeUtf8) => {}
-            // A dictionary key only comes here for text MIN/MAX, which the
-            // coded path cannot fold per group anyway.
-            Ok(field) if text_extremes && is_string_key_type(field.data_type()) => {}
-            _ => return false,
-        }
-        self.in_place_accumulators_apply()
-    }
-
-    /// Every aggregate updates a fixed-size accumulator in place from an
-    /// integer or float column (or counts rows): nothing distinct, exact,
-    /// decimal or textual.
-    fn in_place_accumulators_apply(&self) -> bool {
-        let schema = self.source.schema();
-        self.aggregates.iter().all(|aggregate| {
-            if aggregate.distinct {
-                return false;
-            }
-            if aggregate.column == "*" {
-                return matches!(aggregate.func, AggFunc::Count);
-            }
-            match schema
-                .field_with_name(&aggregate.column)
-                .map(|field| field.data_type())
-            {
-                Ok(DataType::Int64 | DataType::Int32 | DataType::Float64) => true,
-                // Text takes only MIN and MAX; COUNT(column) over text is
-                // counted through the same in-place COUNT state.
-                Ok(DataType::Utf8 | DataType::LargeUtf8) => {
-                    matches!(aggregate.func, AggFunc::Min | AggFunc::Max | AggFunc::Count)
-                }
-                Ok(DataType::Dictionary(key, values))
-                    if key.as_ref() == &DataType::Int32
-                        && matches!(values.as_ref(), DataType::Utf8 | DataType::LargeUtf8) =>
-                {
-                    matches!(aggregate.func, AggFunc::Min | AggFunc::Max | AggFunc::Count)
-                }
-                _ => false,
-            }
-        }) && self.new_states().iter().all(|state| {
-            matches!(
-                state,
-                AggregateState::Count(_)
-                    | AggregateState::IntegerSum { .. }
-                    | AggregateState::IntegerMin(_)
-                    | AggregateState::IntegerMax(_)
-                    | AggregateState::Sum { .. }
-                    | AggregateState::Avg { .. }
-                    | AggregateState::Min(_)
-                    | AggregateState::Max(_)
-                    | AggregateState::Utf8Min(_)
-                    | AggregateState::Utf8Max(_)
-            )
-        })
-    }
-
-    /// Groups keyed by one text value: a `str → slot` index that owns each
-    /// distinct value once, and contiguous accumulators by slot; each row
-    /// hashes its bytes once.
-    fn collect_string_key_states(&mut self) -> Result<(GroupStateMap, Vec<MemoryReservation>)> {
-        let stride = self.aggregates.len();
-        let template = self.new_states();
-        let mut index: AHashMap<Box<str>, u32> = AHashMap::new();
-        let mut states: Vec<Accumulator> = Vec::new();
-        let mut null_states: Option<Vec<Accumulator>> = None;
-        let mut reservations = ReservationSlab::default();
-        let metrics = self
-            .memory
-            .as_ref()
-            .map(|memory| aggregate_metrics(memory.query()))
-            .transpose()?;
-        let key_index = self
-            .source
-            .schema()
-            .index_of(&self.group_by[0])
-            .expect("validated group key");
-        let value_indices = self
-            .aggregates
-            .iter()
-            .map(|aggregate| {
-                (aggregate.column != "*")
-                    .then(|| self.source.schema().index_of(&aggregate.column))
-                    .transpose()
-                    .expect("validated aggregate input")
-            })
-            .collect::<Vec<_>>();
-
-        while let Some(batch) = self.source.next_batch()? {
-            if let Some(metrics) = &metrics {
-                metrics
-                    .input_rows
-                    .fetch_add(batch.num_rows() as u64, Ordering::Relaxed);
-            }
-            let _input_memory = if self.input_already_reserved {
-                None
-            } else {
-                self.memory
-                    .as_ref()
-                    .map(|account| account.reserve(batch.get_array_memory_size() as u64))
-                    .transpose()?
-            };
-            let keys = batch.column(key_index);
-            let values = value_indices
-                .iter()
-                .map(|index| index.map(|index| batch.column(index)))
-                .collect::<Vec<_>>();
-            // Slot per row; u32::MAX marks a null key.
-            let mut resolve = |text: &str| -> Result<u32> {
-                if let Some(slot) = index.get(text) {
-                    return Ok(*slot);
-                }
-                if let Some(memory) = &self.memory {
-                    reserve_growth(memory, &mut reservations, &index, &states, stride)?;
-                    reservations
-                        .reserve(memory, slot_group_bytes(16 + text.len() as u64, stride))?;
-                }
-                if let Some(metrics) = &metrics {
-                    metrics.groups_created.fetch_add(1, Ordering::Relaxed);
-                }
-                let slot = u32::try_from(index.len())
-                    .map_err(|_| exec_err("too many groups for one task"))?;
-                if slot == u32::MAX {
-                    return Err(exec_err("too many groups for one task"));
-                }
-                states.extend(template.iter().cloned());
-                index.insert(Box::from(text), slot);
-                Ok(slot)
-            };
-            let row_slots: Vec<u32> = match keys.data_type() {
-                DataType::Dictionary(_, _) => {
-                    let dictionary = keys
-                        .as_any()
-                        .downcast_ref::<Int32DictionaryArray>()
-                        .expect("dictionary key type must match schema");
-                    let texts = string_values(dictionary.values())?;
-                    let mut by_code = vec![u32::MAX; dictionary.values().len()];
-                    for code in used_dictionary_indices(dictionary) {
-                        if let Some(text) = texts.value(code) {
-                            by_code[code] = resolve(text)?;
-                        }
-                    }
-                    dictionary
-                        .keys()
-                        .iter()
-                        .map(|code| code.map_or(u32::MAX, |code| by_code[code as usize]))
-                        .collect()
-                }
-                _ => {
-                    let texts = string_values(keys)?;
-                    let mut slots = Vec::with_capacity(batch.num_rows());
-                    for row in 0..batch.num_rows() {
-                        if row % 1024 == 0
-                            && let Some(memory) = &self.memory
-                        {
-                            memory.check_cancelled()?;
-                        }
-                        slots.push(match texts.value(row) {
-                            Some(text) => resolve(text)?,
-                            None => u32::MAX,
-                        });
-                    }
-                    slots
-                }
-            };
-            for (row, slot) in row_slots.into_iter().enumerate() {
-                let accumulators: &mut [Accumulator] = if slot == u32::MAX {
-                    if null_states.is_none() {
-                        if let Some(memory) = &self.memory {
-                            reservations.reserve(memory, slot_group_bytes(0, stride))?;
-                        }
-                        if let Some(metrics) = &metrics {
-                            metrics.groups_created.fetch_add(1, Ordering::Relaxed);
-                        }
-                        null_states = Some(template.clone());
-                    }
-                    null_states.as_mut().expect("just inserted")
-                } else {
-                    let slot = slot as usize;
-                    &mut states[slot * stride..(slot + 1) * stride]
-                };
-                update_in_place(accumulators, &values, row)?;
-            }
-        }
-
-        let mut by_slot: Vec<Option<Box<str>>> = (0..index.len()).map(|_| None).collect();
-        for (key, slot) in index {
-            by_slot[slot as usize] = Some(key);
-        }
-        let mut groups = Vec::with_capacity(by_slot.len() + usize::from(null_states.is_some()));
-        let mut states = states.into_iter();
-        for key in by_slot {
-            let key = key.expect("every slot has its key");
-            groups.push((
-                vec![GroupKey::Utf8(Arc::from(key))],
-                states.by_ref().take(stride).collect(),
-            ));
-        }
-        if let Some(states) = null_states {
-            groups.push((vec![GroupKey::Null], states));
-        }
-        Ok((groups, reservations.into_guards()))
-    }
-
-    /// Two to six keys, each an integer, date, boolean, plain text or
-    /// dictionary column, with in-place accumulators.
-    fn compact_keys_apply(&self) -> bool {
-        if !(2..=MAX_COMPACT_KEYS).contains(&self.group_by.len()) {
-            return false;
-        }
-        let schema = self.source.schema();
-        // Keys that are all dictionary-encoded stay on the combined-code
-        // path, whose per-code batch folds win for low-cardinality columns.
-        if self.group_by.iter().all(|column| {
-            matches!(
-                schema
-                    .field_with_name(column)
-                    .map(|field| field.data_type()),
-                Ok(DataType::Dictionary(_, _))
-            )
-        }) {
-            return false;
-        }
-        self.group_by.iter().all(|column| {
-            matches!(
-                schema.field_with_name(column).map(|field| field.data_type()),
-                Ok(DataType::Int64
-                    | DataType::Int32
-                    | DataType::Date32
-                    | DataType::Boolean
-                    | DataType::Utf8
-                    | DataType::LargeUtf8)
-            ) || matches!(
-                schema.field_with_name(column).map(|field| field.data_type()),
-                Ok(DataType::Dictionary(key, values))
-                    if key.as_ref() == &DataType::Int32 && matches!(values.as_ref(), DataType::Utf8 | DataType::LargeUtf8)
-            )
-        }) && self.in_place_accumulators_apply()
-    }
-
-    /// Groups keyed by several columns packed into fixed-width words: each
-    /// column becomes one u64 per row (integers and dates as their bits,
-    /// booleans as 0/1, text through the operator's interner so equal text
-    /// shares a word across batches and dictionaries), with a null mask.
-    /// The row's key is then a small array — no vector, no enum, one hash.
-    fn collect_compact_key_states(&mut self) -> Result<(GroupStateMap, Vec<MemoryReservation>)> {
-        let stride = self.aggregates.len();
-        let key_count = self.group_by.len();
-        let template = self.new_states();
-        let mut index: AHashMap<CompactGroupKey, u32> = AHashMap::new();
-        let mut states: Vec<Accumulator> = Vec::new();
-        let mut interner: AHashMap<Box<str>, u64> = AHashMap::new();
-        let mut texts: Vec<Arc<str>> = Vec::new();
-        let mut reservations = ReservationSlab::default();
-        let metrics = self
-            .memory
-            .as_ref()
-            .map(|memory| aggregate_metrics(memory.query()))
-            .transpose()?;
-        let schema = self.source.schema().clone();
-        let key_columns = self
-            .group_by
-            .iter()
-            .map(|column| schema.index_of(column).expect("validated group key"))
-            .collect::<Vec<_>>();
-        let key_types = key_columns
-            .iter()
-            .map(|index| schema.field(*index).data_type().clone())
-            .collect::<Vec<_>>();
-        let value_indices = self
-            .aggregates
-            .iter()
-            .map(|aggregate| {
-                (aggregate.column != "*")
-                    .then(|| schema.index_of(&aggregate.column))
-                    .transpose()
-                    .expect("validated aggregate input")
-            })
-            .collect::<Vec<_>>();
-        let group_bytes = slot_group_bytes(8 * MAX_COMPACT_KEYS as u64, stride);
-
-        while let Some(batch) = self.source.next_batch()? {
-            if let Some(metrics) = &metrics {
-                metrics
-                    .input_rows
-                    .fetch_add(batch.num_rows() as u64, Ordering::Relaxed);
-            }
-            let _input_memory = if self.input_already_reserved {
-                None
-            } else {
-                self.memory
-                    .as_ref()
-                    .map(|account| account.reserve(batch.get_array_memory_size() as u64))
-                    .transpose()?
-            };
-            let rows = batch.num_rows();
-            // One word column per key.
-            let mut words: Vec<Vec<Option<u64>>> = Vec::with_capacity(key_count);
-            for &column in &key_columns {
-                let array = batch.column(column);
-                let mut intern = |text: &str| -> Result<u64> {
-                    if let Some(word) = interner.get(text) {
-                        return Ok(*word);
-                    }
-                    if let Some(memory) = &self.memory {
-                        reservations.reserve(memory, 80 + 2 * text.len() as u64)?;
-                    }
-                    let word = texts.len() as u64;
-                    texts.push(Arc::from(text));
-                    interner.insert(Box::from(text), word);
-                    Ok(word)
-                };
-                words.push(match array.data_type() {
-                    DataType::Int64 | DataType::Int32 | DataType::Date32 => integer_keys(array)
-                        .into_iter()
-                        .map(|value| value.map(|value| value as u64))
-                        .collect(),
-                    DataType::Boolean => {
-                        let values = array.as_boolean();
-                        (0..rows)
-                            .map(|row| (!values.is_null(row)).then(|| values.value(row) as u64))
-                            .collect()
-                    }
-                    DataType::Dictionary(_, _) => {
-                        let dictionary = array
-                            .as_any()
-                            .downcast_ref::<Int32DictionaryArray>()
-                            .expect("dictionary key type must match schema");
-                        let values = string_values(dictionary.values())?;
-                        let mut by_code = vec![None; dictionary.values().len()];
-                        for code in used_dictionary_indices(dictionary) {
-                            if let Some(text) = values.value(code) {
-                                by_code[code] = Some(intern(text)?);
-                            }
-                        }
-                        dictionary
-                            .keys()
-                            .iter()
-                            .map(|code| code.and_then(|code| by_code[code as usize]))
-                            .collect()
-                    }
-                    _ => {
-                        let values = string_values(array)?;
-                        let mut column_words = Vec::with_capacity(rows);
-                        for row in 0..rows {
-                            column_words.push(match values.value(row) {
-                                Some(text) => Some(intern(text)?),
-                                None => None,
-                            });
-                        }
-                        column_words
-                    }
-                });
-            }
-            let values = value_indices
-                .iter()
-                .map(|index| index.map(|index| batch.column(index)))
-                .collect::<Vec<_>>();
-            for row in 0..rows {
-                if row % 1024 == 0
-                    && let Some(memory) = &self.memory
-                {
-                    memory.check_cancelled()?;
-                }
-                let mut key = CompactGroupKey::default();
-                for (position, column) in words.iter().enumerate() {
-                    match column[row] {
-                        Some(word) => key.words[position] = word,
-                        None => key.nulls |= 1 << position,
-                    }
-                }
-                let next_slot = index.len();
-                if let Some(memory) = &self.memory {
-                    reserve_growth(memory, &mut reservations, &index, &states, stride)?;
-                }
-                let slot = match index.entry(key) {
-                    Entry::Occupied(entry) => *entry.get(),
-                    Entry::Vacant(entry) => {
-                        if let Some(memory) = &self.memory {
-                            reservations.reserve(memory, group_bytes)?;
-                        }
-                        if let Some(metrics) = &metrics {
-                            metrics.groups_created.fetch_add(1, Ordering::Relaxed);
-                        }
-                        let slot = u32::try_from(next_slot)
-                            .map_err(|_| exec_err("too many groups for one task"))?;
-                        states.extend(template.iter().cloned());
-                        *entry.insert(slot)
-                    }
-                } as usize;
-                update_in_place(
-                    &mut states[slot * stride..(slot + 1) * stride],
-                    &values,
-                    row,
-                )?;
-            }
-        }
-
-        let mut by_slot: Vec<CompactGroupKey> = vec![CompactGroupKey::default(); index.len()];
-        for (key, slot) in index {
-            by_slot[slot as usize] = key;
-        }
-        let mut groups = Vec::with_capacity(by_slot.len());
-        let mut states = states.into_iter();
-        for key in by_slot {
-            let group_keys = key_types
-                .iter()
-                .enumerate()
-                .map(|(position, data_type)| {
-                    if key.nulls & (1 << position) != 0 {
-                        return GroupKey::Null;
-                    }
-                    let word = key.words[position];
-                    match data_type {
-                        DataType::Int64 => GroupKey::Int64(word as i64),
-                        DataType::Int32 | DataType::Date32 => GroupKey::Int32(word as i64 as i32),
-                        DataType::Boolean => GroupKey::Bool(word != 0),
-                        _ => GroupKey::Utf8(Arc::clone(&texts[word as usize])),
-                    }
-                })
-                .collect();
-            groups.push((group_keys, states.by_ref().take(stride).collect()));
-        }
-        Ok((groups, reservations.into_guards()))
-    }
-
-    /// Groups keyed by one integer: a compact `i64 → slot` index and every
-    /// group's accumulators laid out contiguously by slot, so a row costs one
-    /// small-key hash probe and an in-place update instead of a key enum, a
-    /// vector per group and two pointer chases. High-cardinality keys (user
-    /// and session ids) live here.
-    fn collect_integer_key_states(&mut self) -> Result<(GroupStateMap, Vec<MemoryReservation>)> {
-        let stride = self.aggregates.len();
-        let template = self.new_states();
-        let mut index: AHashMap<i64, u32> = AHashMap::new();
-        let mut states: Vec<Accumulator> = Vec::new();
-        let mut null_states: Option<Vec<Accumulator>> = None;
-        let mut reservations = ReservationSlab::default();
-        let group_bytes = slot_group_bytes(8, stride);
-        let metrics = self
-            .memory
-            .as_ref()
-            .map(|memory| aggregate_metrics(memory.query()))
-            .transpose()?;
-        let key_index = self
-            .source
-            .schema()
-            .index_of(&self.group_by[0])
-            .expect("validated group key");
-        // Int32 and Date32 keys come back at their own width.
-        let narrow_key = matches!(
-            self.source.schema().field(key_index).data_type(),
-            DataType::Int32 | DataType::Date32
-        );
-        let value_indices = self
-            .aggregates
-            .iter()
-            .map(|aggregate| {
-                (aggregate.column != "*")
-                    .then(|| self.source.schema().index_of(&aggregate.column))
-                    .transpose()
-                    .expect("validated aggregate input")
-            })
-            .collect::<Vec<_>>();
-
-        while let Some(batch) = self.source.next_batch()? {
-            if let Some(metrics) = &metrics {
-                metrics
-                    .input_rows
-                    .fetch_add(batch.num_rows() as u64, Ordering::Relaxed);
-            }
-            let _input_memory = if self.input_already_reserved {
-                None
-            } else {
-                self.memory
-                    .as_ref()
-                    .map(|account| account.reserve(batch.get_array_memory_size() as u64))
-                    .transpose()?
-            };
-            let keys = integer_keys(batch.column(key_index));
-            let values = value_indices
-                .iter()
-                .map(|index| index.map(|index| batch.column(index)))
-                .collect::<Vec<_>>();
-            for row in 0..batch.num_rows() {
-                if row % 1024 == 0
-                    && let Some(memory) = &self.memory
-                {
-                    memory.check_cancelled()?;
-                }
-                let accumulators: &mut [Accumulator] = match keys[row] {
-                    None => {
-                        if null_states.is_none() {
-                            if let Some(memory) = &self.memory {
-                                reservations.reserve(memory, group_bytes)?;
-                            }
-                            if let Some(metrics) = &metrics {
-                                metrics.groups_created.fetch_add(1, Ordering::Relaxed);
-                            }
-                            null_states = Some(template.clone());
-                        }
-                        null_states.as_mut().expect("just inserted")
-                    }
-                    Some(key) => {
-                        let next_slot = index.len();
-                        if let Some(memory) = &self.memory {
-                            reserve_growth(memory, &mut reservations, &index, &states, stride)?;
-                        }
-                        let slot = match index.entry(key) {
-                            Entry::Occupied(entry) => *entry.get(),
-                            Entry::Vacant(entry) => {
-                                if let Some(memory) = &self.memory {
-                                    reservations.reserve(memory, group_bytes)?;
-                                }
-                                if let Some(metrics) = &metrics {
-                                    metrics.groups_created.fetch_add(1, Ordering::Relaxed);
-                                }
-                                let slot = u32::try_from(next_slot)
-                                    .map_err(|_| exec_err("too many groups for one task"))?;
-                                states.extend(template.iter().cloned());
-                                *entry.insert(slot)
-                            }
-                        } as usize;
-                        &mut states[slot * stride..(slot + 1) * stride]
-                    }
-                };
-                update_in_place(accumulators, &values, row)?;
-            }
-        }
-
-        let mut groups = Vec::with_capacity(index.len() + usize::from(null_states.is_some()));
-        let mut by_slot: Vec<i64> = vec![0; index.len()];
-        for (key, slot) in index {
-            by_slot[slot as usize] = key;
-        }
-        let mut states = states.into_iter();
-        for key in by_slot {
-            let key = if narrow_key {
-                GroupKey::Int32(key as i32)
-            } else {
-                GroupKey::Int64(key)
-            };
-            groups.push((vec![key], states.by_ref().take(stride).collect()));
-        }
-        if let Some(states) = null_states {
-            groups.push((vec![GroupKey::Null], states));
-        }
-        Ok((groups, reservations.into_guards()))
-    }
-
     fn collect_dense_i64_count_sum_states(
         &mut self,
     ) -> Result<(GroupStateMap, Vec<MemoryReservation>)> {
@@ -3843,162 +3467,6 @@ fn batch_text_extreme(array: &ArrayRef, min: bool) -> Option<String> {
     }
 }
 
-/// The most key columns the compact multi-key path packs.
-const MAX_COMPACT_KEYS: usize = 6;
-
-/// A full index or accumulator vector is about to double: the old table
-/// stays alive while the new one fills, so the doubling is reserved before
-/// it happens. This is what keeps a task's real footprint under the budget
-/// instead of a page-count estimate — the pod, not the pool, is the limit.
-fn reserve_growth<K, V>(
-    memory: &OperatorMemoryAccount,
-    reservations: &mut ReservationSlab,
-    index: &AHashMap<K, V>,
-    states: &Vec<Accumulator>,
-    stride: usize,
-) -> Result<()> {
-    // Below this many entries a doubling is a few megabytes and stays inside
-    // the per-group estimates; above it the copy is what fills a pod.
-    const GROWTH_ACCOUNTING_FROM: usize = 1 << 16;
-    if index.capacity() >= GROWTH_ACCOUNTING_FROM && index.len() == index.capacity() {
-        let entry = (std::mem::size_of::<K>() + std::mem::size_of::<V>() + 1) as u64;
-        reservations.reserve(memory, (index.capacity() as u64).saturating_mul(entry))?;
-    }
-    if states.capacity() >= GROWTH_ACCOUNTING_FROM && states.len() + stride > states.capacity() {
-        // The vector doubles; the copy needs the old buffer too.
-        reservations.reserve(
-            memory,
-            (states.capacity() as u64).saturating_mul(std::mem::size_of::<Accumulator>() as u64),
-        )?;
-    }
-    Ok(())
-}
-
-/// Memory one group occupies on a slot-indexed path: the index entry with
-/// its hash overhead, the key bytes, and the accumulators in the flat
-/// vector — no vector per group.
-fn slot_group_bytes(key_bytes: u64, stride: usize) -> u64 {
-    96u64
-        .saturating_add(key_bytes)
-        .saturating_add((stride as u64).saturating_mul(std::mem::size_of::<Accumulator>() as u64))
-}
-
-/// Up to six key columns as words plus a null mask.
-#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
-struct CompactGroupKey {
-    words: [u64; MAX_COMPACT_KEYS],
-    nulls: u8,
-}
-
-/// Apply row `row` of each aggregate's input column (None counts the row) to
-/// its in-place accumulator.
-fn update_in_place(
-    accumulators: &mut [Accumulator],
-    values: &[Option<&ArrayRef>],
-    row: usize,
-) -> Result<()> {
-    for (position, value) in values.iter().enumerate() {
-        let state = &mut accumulators[position];
-        match value {
-            None => state.update_count()?,
-            Some(array) => {
-                if array.is_null(row) {
-                    continue;
-                }
-                match state {
-                    AggregateState::Count(_) => state.update_count()?,
-                    AggregateState::IntegerSum { .. }
-                    | AggregateState::IntegerMin(_)
-                    | AggregateState::IntegerMax(_) => {
-                        let value = match array.data_type() {
-                            DataType::Int32 => array.as_primitive::<Int32Type>().value(row) as i64,
-                            _ => array.as_primitive::<Int64Type>().value(row),
-                        };
-                        state.update_integer(value)?
-                    }
-                    AggregateState::Utf8Min(_) | AggregateState::Utf8Max(_) => {
-                        if let Some(text) = text_at(array, row)? {
-                            state.update_utf8(text)?
-                        }
-                    }
-                    _ => state.update_numeric(extract_f64(array, row)?)?,
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Row `row` of a text or dictionary-encoded text column.
-fn text_at(array: &ArrayRef, row: usize) -> Result<Option<&str>> {
-    fn value_of(array: &ArrayRef, row: usize) -> Result<Option<&str>> {
-        match array.data_type() {
-            DataType::Utf8 => {
-                let values = array.as_string::<i32>();
-                Ok((!values.is_null(row)).then(|| values.value(row)))
-            }
-            DataType::LargeUtf8 => {
-                let values = array.as_string::<i64>();
-                Ok((!values.is_null(row)).then(|| values.value(row)))
-            }
-            other => Err(exec_err(format!("aggregate input is not text: {other}"))),
-        }
-    }
-    match array.data_type() {
-        DataType::Dictionary(_, _) => {
-            let dictionary = array
-                .as_any()
-                .downcast_ref::<Int32DictionaryArray>()
-                .expect("dictionary key type must match schema");
-            if dictionary.keys().is_null(row) {
-                return Ok(None);
-            }
-            value_of(dictionary.values(), dictionary.keys().value(row) as usize)
-        }
-        _ => value_of(array, row),
-    }
-}
-
-/// A text column's values by row, for Utf8 and LargeUtf8 alike.
-enum StringValues<'a> {
-    Small(&'a arrow::array::StringArray),
-    Large(&'a arrow::array::LargeStringArray),
-}
-
-impl StringValues<'_> {
-    fn value(&self, row: usize) -> Option<&str> {
-        match self {
-            Self::Small(array) => (!array.is_null(row)).then(|| array.value(row)),
-            Self::Large(array) => (!array.is_null(row)).then(|| array.value(row)),
-        }
-    }
-}
-
-fn string_values(array: &ArrayRef) -> Result<StringValues<'_>> {
-    match array.data_type() {
-        DataType::Utf8 => Ok(StringValues::Small(array.as_string::<i32>())),
-        DataType::LargeUtf8 => Ok(StringValues::Large(array.as_string::<i64>())),
-        other => Err(exec_err(format!("group key is not text: {other}"))),
-    }
-}
-
-/// Every row's key as an i64 (dates as their day number), None for null.
-fn integer_keys(array: &ArrayRef) -> Vec<Option<i64>> {
-    match array.data_type() {
-        DataType::Int32 => array
-            .as_primitive::<Int32Type>()
-            .iter()
-            .map(|value| value.map(i64::from))
-            .collect(),
-        DataType::Date32 => array
-            .as_primitive::<arrow::datatypes::Date32Type>()
-            .iter()
-            .map(|value| value.map(i64::from))
-            .collect(),
-        _ => array.as_primitive::<Int64Type>().iter().collect(),
-    }
-}
-
 fn is_string_key_type(data_type: &DataType) -> bool {
     match data_type {
         DataType::Utf8 | DataType::LargeUtf8 => true,
@@ -4157,7 +3625,7 @@ impl BatchOperator for HashAggregate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum GroupKey {
+pub(crate) enum GroupKey {
     Null,
     Bool(bool),
     Int32(i32),
@@ -4252,6 +3720,17 @@ fn intern_strings<'a>(values: impl Iterator<Item = Option<&'a str>>) -> Prepared
 }
 
 type GroupStateMap = Vec<(Vec<GroupKey>, Vec<Accumulator>)>;
+
+/// Bytes the partial encoding takes beside the states: the state bytes
+/// again, or a few hundred bytes per group — two small byte vectors per
+/// group and then the binary arrays, not pages.
+pub fn partial_encoding_bytes(state_memory: &[MemoryReservation], groups: usize) -> u64 {
+    state_memory
+        .iter()
+        .map(MemoryReservation::bytes)
+        .sum::<u64>()
+        .max((groups as u64).saturating_mul(256))
+}
 
 #[derive(Default)]
 struct ReservationSlab {
@@ -4658,7 +4137,7 @@ pub fn aggregate_key_column(keys: &[AggregateValue], data_type: &DataType) -> Re
     Ok(result)
 }
 
-fn exec_err(msg: impl Into<String>) -> KaveonError {
+pub(crate) fn exec_err(msg: impl Into<String>) -> KaveonError {
     KaveonError::Execution(msg.into())
 }
 
@@ -5425,6 +4904,92 @@ mod tests {
     }
 
     #[test]
+    fn columnar_partial_batch_decodes_to_the_row_paths_groups() {
+        // The same rows through the columnar partial (keys and states
+        // encoded from the columns) and through the row encoder: identical
+        // groups once decoded, and the columnar batch carries the key and
+        // output type metadata the final stage reads.
+        let make = |keys: Vec<Option<i64>>, names: Vec<Option<&str>>, ints: Vec<Option<i64>>| {
+            RecordBatch::try_from_iter(vec![
+                ("k", Arc::new(Int64Array::from(keys)) as ArrayRef),
+                ("n", Arc::new(StringArray::from(names)) as ArrayRef),
+                ("i", Arc::new(Int64Array::from(ints)) as ArrayRef),
+            ])
+            .unwrap()
+        };
+        let batches = [
+            make(
+                vec![Some(1), None, Some(1), Some(2)],
+                vec![Some("a"), Some("b"), Some("a"), None],
+                vec![Some(4), None, Some(9), Some(1)],
+            ),
+            make(
+                vec![None, Some(2), Some(1)],
+                vec![Some("b"), None, Some("a")],
+                vec![Some(2), Some(3), Some(5)],
+            ),
+        ];
+        let aggregates = || {
+            vec![
+                AggExpr::new(AggFunc::Count, "*"),
+                AggExpr::new(AggFunc::Sum, "i"),
+                AggExpr::new(AggFunc::Min, "n"),
+                AggExpr::new(AggFunc::Avg, "i"),
+            ]
+        };
+        let input = || {
+            let mut input = Input::new(batches[0].clone());
+            input.batches.push_back(batches[1].clone());
+            Box::new(input)
+        };
+        let group_types = [DataType::Int64, DataType::Utf8];
+        let output_types = aggregate_output_types(&aggregates(), &batches[0].schema()).unwrap();
+        let pool = QueryMemoryPool::new("columnar-partial", 1024 * 1024).unwrap();
+        let columnar = HashAggregate::new_with_memory(
+            input(),
+            vec!["k".into(), "n".into()],
+            aggregates(),
+            pool.operator("aggregate").unwrap(),
+        )
+        .unwrap();
+        assert!(columnar.columnar_key_types().is_some());
+        let (columnar_batch, reservations) = columnar
+            .into_partial_batch(&group_types, &output_types)
+            .unwrap();
+        assert!(!reservations.is_empty());
+        assert_eq!(
+            grouped_aggregate_key_types(&columnar_batch.schema()).unwrap(),
+            group_types
+        );
+        assert_eq!(
+            grouped_aggregate_output_types(&columnar_batch.schema()).unwrap(),
+            output_types
+        );
+
+        let rows = HashAggregate::new(input(), vec!["k".into(), "n".into()], aggregates()).unwrap();
+        let (states, _) = rows.into_grouped_states_with_reservations().unwrap();
+        let row_batch =
+            grouped_aggregate_states_to_schema_batch(&states, &group_types, &output_types).unwrap();
+
+        let decoded = |batch: &RecordBatch| {
+            let mut groups = grouped_aggregate_states_from_batches(std::slice::from_ref(batch))
+                .unwrap()
+                .into_iter()
+                .map(|group| {
+                    (
+                        format!("{:?}", group.group_keys),
+                        format!("{:?}", group.states),
+                    )
+                })
+                .collect::<Vec<_>>();
+            groups.sort();
+            groups
+        };
+        assert_eq!(decoded(&columnar_batch), decoded(&row_batch));
+        assert_eq!(columnar_batch.num_rows(), 3);
+    }
+
+    #[test]
     fn integer_key_path_matches_the_general_path_for_every_state_kind() {
         // One Int64 key with nulls, integer and float measures with nulls,
         // two batches — the same shape through the integer-key path and,
@@ -5437,7 +5002,7 @@ mod tests {
             ])
             .unwrap()
         };
-        let batches = vec![
+        let batches = [
             make(
                 vec![Some(7), Some(-2), None, Some(7), Some(900_000_000_000)],
                 vec![Some(4), Some(-2), Some(9), None, Some(1)],
@@ -5473,7 +5038,7 @@ mod tests {
             pool.operator("aggregate").unwrap(),
         )
         .unwrap();
-        assert!(fast.integer_key_states_apply());
+        assert!(fast.columnar_key_types().is_some());
         let fast_output = fast.next_batch().unwrap().unwrap();
 
         // The general path: the same rows with the key as text.
@@ -5588,7 +5153,7 @@ mod tests {
             pool.operator("aggregate").unwrap(),
         )
         .unwrap();
-        assert!(compact.compact_keys_apply());
+        assert!(compact.columnar_key_types().is_some());
         let compact_output = compact.next_batch().unwrap().unwrap();
 
         // The general path: an extra Float64 key column keeps it off every

@@ -3,6 +3,7 @@ use std::collections::HashSet;
 
 use ahash::AHashMap;
 use arrow::array::{Array, BinaryArray};
+use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
 use kaveon_core::{KaveonError, MemoryReservation, OperatorMemoryAccount, Result};
 
@@ -11,16 +12,40 @@ use crate::aggregate::{
     decode_group_states_into, grouped_aggregate_key_types, validate_group_key_types,
     validate_group_layouts,
 };
+use crate::columnar_aggregate::ColumnarGroups;
 
 /// Groups are indexed by their encoded key bytes — the producer's canonical
 /// per-value encoding — so a row costs one hash of those bytes and an
 /// in-place merge into the group's accumulators; keys decode once, at the
 /// end, per group rather than per row.
+///
+/// Shapes the columnar aggregate carries (integer, date, boolean and text
+/// keys; in-place accumulators) merge into its columns instead: the encoded
+/// key is parsed straight into key words, the states fold into flat
+/// accumulator columns, and the final batch comes from those columns.
 pub struct IncrementalAggregateMerger {
     index: AHashMap<Box<[u8]>, u32>,
     states: Vec<Vec<AggregateState>>,
+    columnar: Columnar,
     memory: Option<OperatorMemoryAccount>,
     reservations: ReservationSlab,
+}
+
+/// Decided on the first row: the layout is the same for every row after.
+enum Columnar {
+    Undecided,
+    Rows,
+    Groups {
+        groups: Box<ColumnarGroups>,
+        slot_bytes: u64,
+        growth_reserved_at: usize,
+    },
+}
+
+/// What the merge produced.
+pub enum MergedGroups {
+    Rows(Vec<GroupedAggregateState>),
+    Columnar(Box<ColumnarGroups>),
 }
 
 const MERGE_RESERVATION_SLAB_BYTES: u64 = 64 * 1024;
@@ -64,9 +89,72 @@ impl IncrementalAggregateMerger {
         Self {
             index: AHashMap::new(),
             states: Vec::new(),
+            columnar: Columnar::Undecided,
             memory,
             reservations: ReservationSlab::default(),
         }
+    }
+
+    /// The columnar merge for this batch's layout, when the columnar
+    /// aggregate carries it. Decided from the first row; every later row
+    /// has the same key types (checked by the caller) and state layout
+    /// (checked on merge).
+    fn decide(&mut self, types: &[DataType], first_states: &[AggregateState]) {
+        if !matches!(self.columnar, Columnar::Undecided) {
+            return;
+        }
+        self.columnar = match ColumnarGroups::new(types, first_states) {
+            Some(groups) if !types.is_empty() => Columnar::Groups {
+                slot_bytes: groups.slot_bytes(),
+                groups: Box::new(groups),
+                growth_reserved_at: 0,
+            },
+            _ => Columnar::Rows,
+        };
+    }
+
+    fn merge_columnar(
+        &mut self,
+        keys: &BinaryArray,
+        states: &BinaryArray,
+        rows: usize,
+    ) -> Result<()> {
+        let Columnar::Groups {
+            groups,
+            slot_bytes,
+            growth_reserved_at,
+        } = &mut self.columnar
+        else {
+            return Err(error("columnar merge without columnar groups"));
+        };
+        let mut incoming = Vec::new();
+        for row in 0..rows {
+            if row % 1024 == 0
+                && let Some(memory) = &self.memory
+            {
+                memory.check_cancelled()?;
+            }
+            if keys.is_null(row) || states.is_null(row) {
+                return Err(error("grouped aggregate state row cannot contain nulls"));
+            }
+            decode_group_states_into(states.value(row), &mut incoming)?;
+            if let Some(memory) = &self.memory {
+                // A doubling is paid once per capacity, before it happens.
+                let growth = groups.growth_bytes(1);
+                if growth != 0 && groups.capacity() != *growth_reserved_at {
+                    self.reservations.reserve(memory, growth)?;
+                    *growth_reserved_at = groups.capacity();
+                }
+            }
+            let (created, new_bytes) = groups.merge_encoded(keys.value(row), &incoming)?;
+            if let Some(memory) = &self.memory {
+                let bytes = if created { *slot_bytes } else { 0 }.saturating_add(new_bytes);
+                if bytes != 0 {
+                    self.reservations.reserve(memory, bytes)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn push_batch(&mut self, batch: &RecordBatch) -> Result<()> {
@@ -104,6 +192,20 @@ impl IncrementalAggregateMerger {
             .filter(|_| scratch != 0)
             .map(|memory| memory.reserve(scratch))
             .transpose()?;
+        if batch.num_rows() == 0 {
+            return Ok(());
+        }
+        if matches!(self.columnar, Columnar::Undecided) {
+            if keys.is_null(0) || states.is_null(0) {
+                return Err(error("grouped aggregate state row cannot contain nulls"));
+            }
+            let mut first = Vec::new();
+            decode_group_states_into(states.value(0), &mut first)?;
+            self.decide(&types, &first);
+        }
+        if matches!(self.columnar, Columnar::Groups { .. }) {
+            return self.merge_columnar(keys, states, batch.num_rows());
+        }
         let mut incoming = Vec::new();
         for row in 0..batch.num_rows() {
             if row % 1024 == 0
@@ -196,6 +298,30 @@ impl IncrementalAggregateMerger {
     /// The merged groups in map order: the map made them unique, and the
     /// final output does not depend on their order.
     pub fn finish(self) -> Result<(Vec<GroupedAggregateState>, Vec<MemoryReservation>)> {
+        let (groups, guards) = self.finish_groups()?;
+        let groups = match groups {
+            MergedGroups::Rows(groups) => groups,
+            MergedGroups::Columnar(groups) => groups
+                .into_groups()
+                .into_iter()
+                .map(|(keys, states)| GroupedAggregateState {
+                    group_keys: keys.into_iter().map(AggregateValue::from).collect(),
+                    states,
+                })
+                .collect(),
+        };
+        Ok((groups, guards))
+    }
+
+    /// The merged groups as they are held: columns when the columnar
+    /// aggregate carried the layout, rows otherwise.
+    pub fn finish_groups(self) -> Result<(MergedGroups, Vec<MemoryReservation>)> {
+        if let Columnar::Groups { groups, .. } = self.columnar {
+            return Ok((
+                MergedGroups::Columnar(groups),
+                self.reservations.into_guards(),
+            ));
+        }
         let mut keys: Vec<Option<Box<[u8]>>> = (0..self.states.len()).map(|_| None).collect();
         for (key, slot) in self.index {
             keys[slot as usize] = Some(key);
@@ -211,7 +337,7 @@ impl IncrementalAggregateMerger {
             })
             .collect::<Result<Vec<_>>>()?;
         validate_group_layouts(&groups)?;
-        Ok((groups, self.reservations.into_guards()))
+        Ok((MergedGroups::Rows(groups), self.reservations.into_guards()))
     }
 }
 
@@ -289,6 +415,132 @@ mod tests {
             drop(guards);
             assert_eq!(pool.snapshot().current_bytes, 0);
         }
+    }
+
+    #[test]
+    fn columnar_merge_matches_the_row_merge_and_holds_its_groups_as_columns() {
+        // Integer, date and text keys with every in-place state: the columnar
+        // merge takes the layout, folds partials from both encoders, and
+        // finishes to the same groups the row merge produces.
+        let states = |count: u64, sum: i128, text: Option<&str>| {
+            vec![
+                AggregateState::Count(count),
+                AggregateState::IntegerSum { sum, count },
+                AggregateState::Utf8Min(text.map(str::to_owned)),
+                AggregateState::Min(Some(sum as f64)),
+            ]
+        };
+        let key = |k: i64, d: i32, t: Option<&str>| {
+            vec![
+                AggregateValue::Int64(k),
+                AggregateValue::Int32(d),
+                t.map_or(AggregateValue::Null, |t| AggregateValue::Utf8(t.into())),
+            ]
+        };
+        let types = [DataType::Int64, DataType::Date32, DataType::Utf8];
+        let first = grouped_aggregate_states_to_typed_batch(
+            &[
+                GroupedAggregateState {
+                    group_keys: key(1, 10, Some("a")),
+                    states: states(2, 5, Some("m")),
+                },
+                GroupedAggregateState {
+                    group_keys: key(2, 11, None),
+                    states: states(1, -3, None),
+                },
+            ],
+            &types,
+        )
+        .unwrap();
+        let second = grouped_aggregate_states_to_typed_batch(
+            &[
+                GroupedAggregateState {
+                    group_keys: key(1, 10, Some("a")),
+                    states: states(3, 7, Some("b")),
+                },
+                GroupedAggregateState {
+                    group_keys: key(1, 10, Some("z")),
+                    states: states(1, 1, Some("q")),
+                },
+            ],
+            &types,
+        )
+        .unwrap();
+        let pool = QueryMemoryPool::new("columnar-merge", 16 * 1024 * 1024).unwrap();
+        let mut merger = IncrementalAggregateMerger::new(Some(pool.operator("final").unwrap()));
+        merger.push_batch(&first).unwrap();
+        merger.push_batch(&second).unwrap();
+        assert!(matches!(merger.columnar, Columnar::Groups { .. }));
+        let (merged, guards) = merger.finish_groups().unwrap();
+        let MergedGroups::Columnar(groups) = merged else {
+            panic!("columnar layout merges into columns");
+        };
+        assert_eq!(groups.len(), 3);
+        let keys = groups.key_arrays();
+        assert_eq!(keys[1].data_type(), &DataType::Date32);
+        let outputs = groups
+            .output_arrays(&[
+                DataType::UInt64,
+                DataType::Int64,
+                DataType::Utf8,
+                DataType::Float64,
+            ])
+            .unwrap();
+        let mut rows = (0..3)
+            .map(|slot| {
+                let (k, s) = groups.group(slot);
+                let k = k.into_iter().map(AggregateValue::from).collect::<Vec<_>>();
+                (format!("{k:?}"), format!("{s:?}"))
+            })
+            .collect::<Vec<_>>();
+        rows.sort();
+        let expected = merge_grouped_aggregate_states(
+            [first.clone(), second.clone()]
+                .iter()
+                .flat_map(|b| {
+                    crate::aggregate::grouped_aggregate_states_from_batches(std::slice::from_ref(b))
+                        .unwrap()
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let mut expected = expected
+            .iter()
+            .map(|g| (format!("{:?}", g.group_keys), format!("{:?}", g.states)))
+            .collect::<Vec<_>>();
+        expected.sort();
+        assert_eq!(rows, expected);
+        assert_eq!(outputs[0].len(), 3);
+        drop(groups);
+        drop(guards);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn columnar_merge_rejects_a_key_of_another_type() {
+        // The first row fixes the layout; a later row whose key bytes carry
+        // another type fails closed instead of being read as bits.
+        let types = [DataType::Int64];
+        let first = grouped_aggregate_states_to_typed_batch(
+            &[GroupedAggregateState {
+                group_keys: vec![AggregateValue::Int64(1)],
+                states: vec![AggregateState::Count(1)],
+            }],
+            &types,
+        )
+        .unwrap();
+        let wrong = grouped_aggregate_states_to_typed_batch(
+            &[GroupedAggregateState {
+                group_keys: vec![AggregateValue::Int32(1)],
+                states: vec![AggregateState::Count(1)],
+            }],
+            &[DataType::Int32],
+        )
+        .unwrap();
+        let mut merger = IncrementalAggregateMerger::new(None);
+        merger.push_batch(&first).unwrap();
+        let wrong = RecordBatch::try_new(first.schema(), wrong.columns().to_vec()).unwrap();
+        assert!(merger.push_batch(&wrong).is_err());
     }
 
     #[test]

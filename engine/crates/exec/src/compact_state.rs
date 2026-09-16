@@ -4,7 +4,7 @@ use super::*;
 /// Append one group's states to `out`. The caller has validated the layout
 /// for the whole set of groups and checks cancellation per stride, so this
 /// is the per-group hot path with no allocation of its own.
-pub(super) fn encode_into(states: &[AggregateState], out: &mut Vec<u8>) -> Result<()> {
+pub(crate) fn encode_into(states: &[AggregateState], out: &mut Vec<u8>) -> Result<()> {
     out.extend_from_slice(b"KAS\x01");
     length(out, states.len())?;
     for state in states {
@@ -121,7 +121,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Vec<AggregateState>> {
 /// Decode one group's states into `states` (cleared first). The final
 /// merge calls this once per incoming row with a reused vector, so a row
 /// costs no allocation unless it opens a new group.
-pub(super) fn decode_into(bytes: &[u8], states: &mut Vec<AggregateState>) -> Result<()> {
+pub(crate) fn decode_into(bytes: &[u8], states: &mut Vec<AggregateState>) -> Result<()> {
     states.clear();
     let mut input = Input(bytes);
     if input.take(4)? != b"KAS\x01" {
@@ -252,7 +252,7 @@ pub(super) fn decode_into(bytes: &[u8], states: &mut Vec<AggregateState>) -> Res
     if !input.0.is_empty() {
         return Err(exec_err("trailing compact aggregate state bytes"));
     }
-    state_layout(&states)?;
+    state_layout(states)?;
     Ok(())
 }
 

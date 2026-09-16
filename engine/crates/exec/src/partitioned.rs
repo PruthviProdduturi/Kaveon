@@ -660,20 +660,11 @@ impl PartitionedHashAggregate {
             operator = operator.with_reserved_input();
         }
         let batch = if self.partial {
-            let (states, state_memory) = operator.into_grouped_states_with_reservations()?;
-            // Encoding: the state bytes again, or a few hundred bytes per
-            // group — the same sizing as the in-memory partial.
-            let bytes = state_memory
-                .iter()
-                .map(|reservation| reservation.bytes())
-                .sum::<u64>()
-                .max((states.len() as u64).saturating_mul(256));
-            let _encoding_memory = self.memory.reserve(bytes)?;
-            Some(grouped_aggregate_states_to_schema_batch(
-                &states,
+            let (batch, _state_memory) = operator.into_partial_batch(
                 &self.group_types()?,
                 &aggregate_output_types(&self.aggregates, &self.input_schema)?,
-            )?)
+            )?;
+            Some(batch)
         } else {
             operator.next_batch()?
         };
