@@ -22,9 +22,12 @@ const CHECKSUM_OFFSET: usize = 54;
 const FNV_OFFSET_BASIS: u64 = 14_695_981_039_346_656_037;
 const FNV_PRIME: u64 = 1_099_511_628_211;
 const BEARER_PREFIX: &str = "Bearer ";
-const DEFAULT_MAX_PAYLOAD_BYTES: usize = 256 * 1024 * 1024;
+// One exchange partition's payload: 1 GiB in 4 MiB chunks. A partial
+// aggregate over tens of millions of groups needs the room; the producer
+// encodes and uploads one partition at a time.
+const DEFAULT_MAX_PAYLOAD_BYTES: usize = 1024 * 1024 * 1024;
 const DEFAULT_MAX_CHUNK_BYTES: usize = 4 * 1024 * 1024;
-const DEFAULT_MAX_CHUNKS: usize = 64;
+const DEFAULT_MAX_CHUNKS: usize = 256;
 const MAX_WIRE_ENVELOPE_OVERHEAD_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
