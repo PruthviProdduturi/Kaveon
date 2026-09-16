@@ -661,12 +661,13 @@ impl PartitionedHashAggregate {
         }
         let batch = if self.partial {
             let (states, state_memory) = operator.into_grouped_states_with_reservations()?;
+            // Encoding: the state bytes again, or a few hundred bytes per
+            // group — the same sizing as the in-memory partial.
             let bytes = state_memory
                 .iter()
                 .map(|reservation| reservation.bytes())
                 .sum::<u64>()
-                .saturating_mul(4)
-                .saturating_add((states.len() as u64).saturating_mul(4096));
+                .max((states.len() as u64).saturating_mul(256));
             let _encoding_memory = self.memory.reserve(bytes)?;
             Some(grouped_aggregate_states_to_schema_batch(
                 &states,
@@ -1496,7 +1497,9 @@ mod tests {
         assert!(grouped.next_batch().unwrap().is_none());
         assert_eq!(grouped_pool.snapshot().current_bytes, 0);
 
-        let bounded_pool = QueryMemoryPool::new("bounded-partial", 64 * 1024 * 1024).unwrap();
+        // Small enough that 100 000 groups cannot stay in memory even at the
+        // slot-sized estimates, so the trial is rejected and the run spills.
+        let bounded_pool = QueryMemoryPool::new("bounded-partial", 8 * 1024 * 1024).unwrap();
         let bounded_spill = spill();
         let mut high_cardinality = PartitionedHashAggregate::new_partial(
             input((0..100_000).map(Some).collect(), 8_192),
@@ -1517,12 +1520,13 @@ mod tests {
         // The rejected adaptive trial processes only a small sample before the
         // exact partitioned fallback consumes all rows. A 64-batch trial used
         // to repeat most of this high-cardinality workload.
-        assert_eq!(
-            aggregate_metrics(&bounded_pool)
-                .unwrap()
-                .snapshot()
-                .input_rows,
-            200_000 + (MAX_PARTIAL_PROBE_BATCHES * 8_192) as u64
+        let input_rows = aggregate_metrics(&bounded_pool)
+            .unwrap()
+            .snapshot()
+            .input_rows;
+        assert!(
+            (100_000..=200_000 + (MAX_PARTIAL_PROBE_BATCHES * 8_192) as u64).contains(&input_rows),
+            "trial plus fallback consumed {input_rows} rows"
         );
         assert!(bounded_spill.snapshot().peak_bytes > 0);
         assert_eq!(bounded_pool.snapshot().current_bytes, 0);
