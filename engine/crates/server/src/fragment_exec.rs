@@ -478,7 +478,29 @@ fn compile_node(
                     }
                 }
                 AggregateMode::Final => {
-                    compile_final_aggregate(input, group_by, aggregates, memory)
+                    // The final's input is an exchange spool on this
+                    // worker's disk: it can be opened again, so the merge
+                    // runs in memory on every thread first and only replays
+                    // through the partitioned disk path if the budget says no.
+                    let mut reopen = || {
+                        compile_input(
+                            node,
+                            0,
+                            nodes,
+                            catalog,
+                            exchanges,
+                            scan_partition,
+                            memory,
+                            &mut Vec::new(),
+                        )
+                    };
+                    compile_final_aggregate_replayable(
+                        input,
+                        &mut reopen,
+                        group_by,
+                        aggregates,
+                        memory,
+                    )
                 }
             }
         }
@@ -795,6 +817,83 @@ pub(crate) fn compile_final_aggregate(
 
 fn should_partition_final_aggregate(group_by: &[String]) -> bool {
     !group_by.is_empty()
+}
+
+/// The final aggregate over an input that can be opened again: the merge
+/// runs in memory — on several threads when the node has them, each
+/// holding the groups whose encoded key hashes to it — and its whole
+/// result is held before anything is emitted, so that a budget refusal
+/// leaves nothing half-delivered and the partitioned disk path can start
+/// over from `reopen`. A global aggregate has one group and one thread.
+pub(crate) fn compile_final_aggregate_replayable(
+    input: Box<dyn BatchOperator>,
+    reopen: &mut dyn FnMut() -> Result<Box<dyn BatchOperator>>,
+    group_by: Vec<String>,
+    aggregates: Vec<AggExpr>,
+    memory: Option<&QueryMemoryPool>,
+) -> Result<Box<dyn BatchOperator>> {
+    let Some(pool) = memory else {
+        return compile_final_aggregate_in_memory(input, group_by, aggregates, None);
+    };
+    if group_by.is_empty() {
+        return compile_final_aggregate(input, group_by, aggregates, memory);
+    }
+    let parallelism = kaveon_exec::local_parallel::configured_parallelism()?;
+    let attempt = if parallelism > 1 {
+        let schema = final_schema(input.schema(), &group_by, &aggregates)?;
+        let thread_group_by = group_by.clone();
+        let thread_aggregates = aggregates.clone();
+        let operator: kaveon_exec::local_parallel::ThreadOperator =
+            Arc::new(move |source, pool, _| {
+                compile_final_aggregate_in_memory(
+                    source,
+                    thread_group_by.clone(),
+                    thread_aggregates.clone(),
+                    Some(pool),
+                )
+            });
+        kaveon_exec::local_parallel::ParallelPartials::partitioned(
+            input,
+            schema,
+            vec!["group_keys".into()],
+            operator,
+            pool.clone(),
+            parallelism,
+        )
+        .map(|operator| Box::new(operator) as Box<dyn BatchOperator>)
+    } else {
+        compile_final_aggregate_in_memory(input, group_by.clone(), aggregates.clone(), memory)
+    };
+    let materialised = attempt.and_then(|mut operator| {
+        let schema = Arc::clone(operator.schema());
+        let batches = collect(&mut *operator)?;
+        BatchInput::with_memory(schema, batches, memory)
+    });
+    match materialised {
+        Ok(result) => Ok(Box::new(result)),
+        Err(KaveonError::MemoryLimit(_))
+            if kaveon_exec::partitioned::spill_from_environment(pool)?.is_some() =>
+        {
+            let (spill, count) = kaveon_exec::partitioned::spill_from_environment(pool)?
+                .expect("checked just above");
+            partitioned_final_aggregate(reopen()?, group_by, aggregates, pool, &spill, count)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// The finalised schema of a grouped-state input.
+fn final_schema(
+    input: &SchemaRef,
+    group_by: &[String],
+    aggregates: &[AggExpr],
+) -> Result<SchemaRef> {
+    let group_types = grouped_aggregate_key_types(input)?;
+    if group_types.len() != group_by.len() {
+        return Err(exec_err("final aggregate group types do not match plan"));
+    }
+    let output_types = final_output_types(input, aggregates)?;
+    Ok(finalized_aggregate_batch(group_by, &group_types, aggregates, &output_types, &[])?.schema())
 }
 
 fn partitioned_final_aggregate(
