@@ -280,6 +280,19 @@ fn decoder_comparison(
         (ScalarValue::Utf8(value), DataType::LargeUtf8) => {
             Arc::new(LargeStringArray::from(vec![value.as_str()]))
         }
+        // A dictionary-encoded string column compares against the literal
+        // through its dictionary: one comparison per distinct value, then
+        // an index lookup per row.
+        (ScalarValue::Utf8(value), DataType::Dictionary(_, values))
+            if matches!(values.as_ref(), DataType::Utf8) =>
+        {
+            Arc::new(StringArray::from(vec![value.as_str()]))
+        }
+        (ScalarValue::Utf8(value), DataType::Dictionary(_, values))
+            if matches!(values.as_ref(), DataType::LargeUtf8) =>
+        {
+            Arc::new(LargeStringArray::from(vec![value.as_str()]))
+        }
         _ => return None,
     };
     let scalar = Scalar::new(literal);
@@ -565,6 +578,11 @@ fn within_bounds(min: &ScalarValue, max: &ScalarValue, value: &ScalarValue) -> b
 }
 
 fn scalar_matches_data_type(value: &ScalarValue, data_type: &DataType) -> bool {
+    // A dictionary column is its value type for every comparison.
+    let data_type = match data_type {
+        DataType::Dictionary(_, values) => values.as_ref(),
+        other => other,
+    };
     matches!(
         (value, data_type),
         (ScalarValue::Bool(_), DataType::Boolean)
@@ -1013,6 +1031,60 @@ mod tests {
             })
             .collect();
         assert_eq!(labels, vec!["c", "d", "e"]);
+
+        // A dictionary-typed column (the Arrow schema stored in the file)
+        // takes the same path: the kernel compares the dictionary once.
+        let dictionary_file = TestFile(std::env::temp_dir().join(format!(
+            "kaveon-storage-dict-filter-{}-{id}.parquet",
+            std::process::id()
+        )));
+        let dictionary_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let dictionary_schema = Arc::new(Schema::new(vec![
+            Field::new("day", dictionary_type.clone(), false),
+            Field::new("amount", DataType::Int64, false),
+        ]));
+        let days: arrow::array::DictionaryArray<arrow::datatypes::Int32Type> =
+            vec!["2026-07-01", "2026-08-01", "2026-09-01", "2026-08-01"]
+                .into_iter()
+                .collect();
+        let dictionary_batch = RecordBatch::try_new(
+            Arc::clone(&dictionary_schema),
+            vec![
+                Arc::new(days),
+                Arc::new(arrow::array::Int64Array::from(vec![1, 2, 3, 4])),
+            ],
+        )
+        .unwrap();
+        let output = File::create(&dictionary_file.0).unwrap();
+        let mut writer = ArrowWriter::try_new(output, dictionary_schema, None).unwrap();
+        writer.write(&dictionary_batch).unwrap();
+        writer.close().unwrap();
+        let mut reader = ParquetReader::new(&dictionary_file.0)
+            .with_columns(vec!["amount".to_owned()])
+            .with_predicate(compare(
+                "day",
+                CompareOp::Eq,
+                ScalarValue::Utf8("2026-08-01".into()),
+            ))
+            .read()
+            .unwrap();
+        let amounts: Vec<i64> = reader
+            .by_ref()
+            .collect::<Result<Vec<_>>>()
+            .unwrap()
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<arrow::array::Int64Array>()
+                    .unwrap()
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        assert_eq!(amounts, vec![2, 4]);
 
         // An OR is left to the executor: nothing pushed, nothing lost.
         let disjunction = StoragePredicate::Or(vec![
