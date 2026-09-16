@@ -65,6 +65,10 @@ The engine will not be asked a question the DLM can answer from context; that is
 | G2 | **Scale suite**: the thirteen live statements as a second gate, each engine alone, medians of five, with per-statement targets from §2. | `docs/qualification` record per Engine digest; regression fails the gate. |
 | G3 | Cold-cache experiment as a separate, matched run. | Report. |
 | G4 | Cost per query (node-hours ÷ successful queries) recorded beside throughput. | Field in both reports. |
+| G5 | **ClickBench** (Tier 2 of `docs/qualification/benchmark-program.md`): the public 100 M-row `hits` table and its 43 queries, both engines matched. First pass 2026-09-16 (`docs/qualification/clickbench-2026-09-16.md`): Kaveon ran 38 of 43, faster on 21, slower on 17, geometric mean 1.10× over the 38 — every loss is high-cardinality GROUP BY, exact COUNT(DISTINCT) or per-row REGEXP. | Kaveon runs 43 of 43 and is faster on every shape; five alternating rounds. |
+| G6 | **TPC-H SF100** (Tier 3): the 22 join queries over Parquet generated once with Trino's `tpch` connector. | Record per Engine digest; coverage listed. |
+
+The ClickBench losses name the next Engine item beyond E1–E10: **E11, a columnar aggregate** — typed key vectors, flat accumulator columns, vectorised hashing, and a final merge that spills the way the partial already can. It is what moves `q13`–`q18`, `q31`–`q36` and `q40` (0.15–0.4× Trino today); nothing else on this list does.
 
 ## 6. Sequencing and ownership
 
