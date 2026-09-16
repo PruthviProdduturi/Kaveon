@@ -2147,21 +2147,20 @@ impl HashAggregate {
                 }
                 continue;
             }
+            let prepared = group_arrays
+                .iter()
+                .map(|array| prepare_keys(array))
+                .collect::<Vec<_>>();
             for row in 0..batch.num_rows() {
                 if row % 1024 == 0
                     && let Some(memory) = &self.memory
                 {
                     memory.check_cancelled()?;
                 }
-                let key = if group_arrays.len() == 1 {
-                    InlineGroupKey::Single(extract_key(group_arrays[0], row))
+                let key = if prepared.len() == 1 {
+                    InlineGroupKey::Single(prepared[0].key(row))
                 } else {
-                    InlineGroupKey::Multiple(
-                        group_arrays
-                            .iter()
-                            .map(|array| extract_key(array, row))
-                            .collect(),
-                    )
+                    InlineGroupKey::Multiple(prepared.iter().map(|keys| keys.key(row)).collect())
                 };
                 // Use the entry probe for both admission and lookup. The old
                 // contains_key + entry sequence hashed and probed every group
@@ -2572,8 +2571,89 @@ enum GroupKey {
     Int64(i64),
     UInt64(u64),
     Decimal128(i128, i8),
-    Utf8(String),
+    /// Shared so a row's key is a reference count, not an allocation: a batch
+    /// of a string column is interned once per distinct value, and every row
+    /// of that value clones the same text.
+    Utf8(Arc<str>),
     Float64Bits(u64),
+}
+
+/// A grouping column prepared for one batch. String columns — plain or
+/// dictionary-encoded — are coded up front so the per-row work is an index
+/// and a reference count; everything else is read row by row as before.
+enum PreparedKeys<'a> {
+    Direct(&'a ArrayRef),
+    Coded {
+        codes: Vec<u32>,
+        table: Vec<GroupKey>,
+    },
+}
+
+const NULL_CODE: u32 = u32::MAX;
+
+impl PreparedKeys<'_> {
+    fn key(&self, row: usize) -> GroupKey {
+        match self {
+            Self::Direct(array) => extract_key(array, row),
+            Self::Coded { codes, table } => match codes[row] {
+                NULL_CODE => GroupKey::Null,
+                code => table[code as usize].clone(),
+            },
+        }
+    }
+}
+
+fn prepare_keys(array: &ArrayRef) -> PreparedKeys<'_> {
+    match array.data_type() {
+        DataType::Utf8 => intern_strings(array.as_string::<i32>().iter()),
+        DataType::LargeUtf8 => intern_strings(array.as_string::<i64>().iter()),
+        DataType::Dictionary(key_type, value_type)
+            if key_type.as_ref() == &DataType::Int32
+                && matches!(value_type.as_ref(), DataType::Utf8 | DataType::LargeUtf8) =>
+        {
+            let dictionary = array
+                .as_any()
+                .downcast_ref::<Int32DictionaryArray>()
+                .expect("dictionary key type must match schema");
+            let values = dictionary.values();
+            let table: Vec<GroupKey> = (0..values.len())
+                .map(|index| {
+                    if values.is_null(index) {
+                        GroupKey::Null
+                    } else {
+                        match values.data_type() {
+                            DataType::Utf8 => {
+                                GroupKey::Utf8(Arc::from(values.as_string::<i32>().value(index)))
+                            }
+                            _ => GroupKey::Utf8(Arc::from(values.as_string::<i64>().value(index))),
+                        }
+                    }
+                })
+                .collect();
+            let codes = dictionary
+                .keys()
+                .iter()
+                .map(|key| key.map_or(NULL_CODE, |key| key as u32))
+                .collect();
+            PreparedKeys::Coded { codes, table }
+        }
+        _ => PreparedKeys::Direct(array),
+    }
+}
+
+fn intern_strings<'a>(values: impl Iterator<Item = Option<&'a str>>) -> PreparedKeys<'static> {
+    let mut seen: AHashMap<&'a str, u32> = AHashMap::new();
+    let mut table: Vec<GroupKey> = Vec::new();
+    let codes = values
+        .map(|value| match value {
+            None => NULL_CODE,
+            Some(text) => *seen.entry(text).or_insert_with(|| {
+                table.push(GroupKey::Utf8(Arc::from(text)));
+                (table.len() - 1) as u32
+            }),
+        })
+        .collect();
+    PreparedKeys::Coded { codes, table }
 }
 
 type GroupStateMap = Vec<(Vec<GroupKey>, Vec<Accumulator>)>;
@@ -2738,7 +2818,7 @@ impl From<GroupKey> for AggregateValue {
             GroupKey::Int64(value) => Self::Int64(value),
             GroupKey::UInt64(value) => Self::UInt64(value),
             GroupKey::Decimal128(value, scale) => Self::Decimal128(value, scale),
-            GroupKey::Utf8(value) => Self::Utf8(value),
+            GroupKey::Utf8(value) => Self::Utf8(value.to_string()),
             GroupKey::Float64Bits(value) => Self::Float64Bits(value),
         }
     }
@@ -2798,8 +2878,8 @@ fn extract_key(arr: &ArrayRef, row: usize) -> GroupKey {
                 value.to_bits()
             })
         }
-        DataType::Utf8 => GroupKey::Utf8(arr.as_string::<i32>().value(row).to_owned()),
-        DataType::LargeUtf8 => GroupKey::Utf8(arr.as_string::<i64>().value(row).to_owned()),
+        DataType::Utf8 => GroupKey::Utf8(Arc::from(arr.as_string::<i32>().value(row))),
+        DataType::LargeUtf8 => GroupKey::Utf8(Arc::from(arr.as_string::<i64>().value(row))),
         DataType::Dictionary(key_type, _) if key_type.as_ref() == &DataType::Int32 => {
             let dictionary = arr
                 .as_any()
@@ -2808,7 +2888,7 @@ fn extract_key(arr: &ArrayRef, row: usize) -> GroupKey {
             let index = dictionary.keys().value(row) as usize;
             extract_key(&dictionary.values().clone(), index)
         }
-        _ => GroupKey::Utf8(format!("{:?}", arr.slice(row, 1))),
+        _ => GroupKey::Utf8(Arc::from(format!("{:?}", arr.slice(row, 1)))),
     }
 }
 
@@ -2850,11 +2930,10 @@ fn supported_group_key_type(data_type: &DataType) -> bool {
             | DataType::Float64
             | DataType::Utf8
             | DataType::LargeUtf8
-    )
-        && match data_type {
-            DataType::Dictionary(key, _) => matches!(key.as_ref(), DataType::Int32),
-            _ => true,
-        }
+    ) && match data_type {
+        DataType::Dictionary(key, _) => matches!(key.as_ref(), DataType::Int32),
+        _ => true,
+    }
 }
 
 fn extract_f64(arr: &ArrayRef, row: usize) -> Result<f64> {
@@ -4127,5 +4206,47 @@ mod tests {
 
         assert!(encode_grouped_aggregate_states(&groups).is_err());
         assert!(merge_grouped_aggregate_states(groups).is_err());
+    }
+
+    #[test]
+    fn string_group_keys_are_interned_per_batch() {
+        // Plain UTF-8: one table entry per distinct value, codes per row, a
+        // null row carries the null code, and every row of a value shares
+        // the same text allocation.
+        let plain: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("India"),
+            Some("Germany"),
+            None,
+            Some("India"),
+        ]));
+        let prepared = prepare_keys(&plain);
+        let PreparedKeys::Coded { codes, table } = &prepared else {
+            panic!("string columns are coded");
+        };
+        assert_eq!(codes, &vec![0, 1, NULL_CODE, 0]);
+        assert_eq!(table.len(), 2);
+        assert_eq!(prepared.key(0), GroupKey::Utf8(Arc::from("India")));
+        assert_eq!(prepared.key(2), GroupKey::Null);
+        let (GroupKey::Utf8(first), GroupKey::Utf8(again)) = (prepared.key(0), prepared.key(3))
+        else {
+            panic!("string keys");
+        };
+        assert!(Arc::ptr_eq(&first, &again));
+
+        // Dictionary-encoded UTF-8: the dictionary is the table, the keys are
+        // the codes, so nothing is hashed per row at all.
+        let dictionary: ArrayRef = Arc::new(Int32DictionaryArray::new(
+            Int32Array::from(vec![Some(1), Some(0), None, Some(1)]),
+            Arc::new(StringArray::from(vec!["Cloud", "On-Premise"])),
+        ));
+        let prepared = prepare_keys(&dictionary);
+        assert_eq!(prepared.key(0), GroupKey::Utf8(Arc::from("On-Premise")));
+        assert_eq!(prepared.key(1), GroupKey::Utf8(Arc::from("Cloud")));
+        assert_eq!(prepared.key(2), GroupKey::Null);
+
+        // Other types keep the direct path.
+        let numbers: ArrayRef = Arc::new(Int64Array::from(vec![7, 8]));
+        assert!(matches!(prepare_keys(&numbers), PreparedKeys::Direct(_)));
+        assert_eq!(prepare_keys(&numbers).key(1), GroupKey::Int64(8));
     }
 }
