@@ -68,6 +68,14 @@ Mechanics:
   query at most, both fixes shown side by side in the record.
 - Cold and warm: cold = first execution after engine activation (page cache
   dropped by the activation itself); warm = median of the next five.
+- Rounds: `scripts/benchmark-rounds.py --rounds 5 --cold` alternates the two
+  engines on the worker nodes five times, restarting the Engine pods before
+  each Kaveon round (an empty decoded-batch cache; the object store is remote
+  either way), and keeps every round's record under
+  `clickbench/runs/rounds-<date>/`; `scripts/benchmark-rounds-report.py`
+  reports the median over rounds of each round's median with the fastest and
+  slowest round beside it. A statement that failed in any round is not
+  "ran". One pass is a measurement; five rounds are a claim.
 - Coverage: Kaveon does not run every ClickBench query today (URL and regexp
   functions, some casts). Every unsupported query is listed and counted as a
   loss until it runs.
