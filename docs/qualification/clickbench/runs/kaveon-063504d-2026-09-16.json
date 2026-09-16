@@ -1,0 +1,656 @@
+{
+ "engine": "kaveon-engine@sha256:a5e0ba07bd0620c21f6592401f72576dda2b5c24a22cf567d32a00574026c56a",
+ "dev": "063504d",
+ "memory": "KAVEON_QUERY_MEMORY_LIMIT_BYTES=3 GiB, admission 4 GiB",
+ "repetitions": 3,
+ "statements": 43,
+ "measured": 27,
+ "records": [
+  {
+   "id": "q01",
+   "seconds": [
+    0.811,
+    1.076,
+    0.899
+   ],
+   "rows": 1,
+   "rows_selected": 0,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "351a749cfaf1ce79f7e3ef576d4391f7874eee8436c66867bf1f18a7fca9e89d",
+   "median_seconds": 0.899,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q02",
+   "seconds": [
+    0.878,
+    0.748,
+    0.911
+   ],
+   "rows": 1,
+   "rows_selected": 94449612,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "15bec0bae1f47a8fb92cba765fef9f2650865638a3dff6c0017109b567f4fdcd",
+   "median_seconds": 0.878,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q03",
+   "seconds": [
+    1.227,
+    12.962,
+    14.426
+   ],
+   "rows": 1,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "eed1e14ec9887433cc459385c52bd45c131a0c20d068483de8392d61f9fdaf09",
+   "median_seconds": 12.962,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q04",
+   "seconds": [
+    2.017,
+    1.98,
+    2.021
+   ],
+   "rows": 1,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "7ec89909f50dc5b0b1cae021c70097d0b9e4f2e7395c4dbca0174b42d3ba3231",
+   "median_seconds": 2.017,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q05",
+   "seconds": [
+    16.361,
+    12.907,
+    12.695
+   ],
+   "rows": 1,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "0ef4a8cf11d91b896e38523d5142914e8a91da68319173b1995bd049b4530ff5",
+   "median_seconds": 12.907,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q06",
+   "seconds": [
+    21.693,
+    22.541,
+    21.846
+   ],
+   "rows": 1,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "73bdd41b0a736ebc34188dbe250c36e2058d18d121113faacf36eaf004421687",
+   "median_seconds": 21.846,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q07",
+   "seconds": [
+    0.701,
+    0.762,
+    0.721
+   ],
+   "rows": 1,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "42aa9fb3d4686a3cee58de27553b7722198f26803b3b965f5fed83e9cbdd1e16",
+   "median_seconds": 0.721,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q08",
+   "seconds": [
+    0.849,
+    0.809,
+    0.947
+   ],
+   "rows": 18,
+   "rows_selected": 94449612,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "938c8fa5ed1df3aa16c887c983258fb3b69b9f1ac88619b2a6d5b7f86012ec97",
+   "median_seconds": 0.849,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q09",
+   "seconds": [
+    18.683,
+    18.717,
+    19.332
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "073df0dfd3418c37c382894dc89aa0493b794c0de234dec62673a81cba032077",
+   "median_seconds": 18.717,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q10",
+   "seconds": [
+    24.516,
+    26.082,
+    26.148
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "bd05a4f43f7064c87b33b9cb669c36882ce72c2b4766670c6183a44759a76922",
+   "median_seconds": 26.082,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q11",
+   "seconds": [
+    3.533,
+    3.33,
+    3.301
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "2486e14263d2e6c63b62fd7cbe4d59006055f49bff810f6fbe00df9c83bc3824",
+   "median_seconds": 3.33,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q12",
+   "seconds": [
+    7.635,
+    7.797,
+    7.825
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "77aa79ecacdd1513abc4da32ba451b38b6fad7d9c0ac27483abc3bf05ffeef04",
+   "median_seconds": 7.797,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q13",
+   "seconds": [
+    31.218,
+    30.515,
+    30.107
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "465b4e5db6851ff394cb4c93aa729b7cd85bc1469da2255d5cf4870124772fa0",
+   "median_seconds": 30.515,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q14",
+   "seconds": [
+    63.049,
+    62.178,
+    65.312
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "b9f4d5bf0135230c11cde9563986b7eab1a893c12cf77ffc4e890fe6f0b69ffa",
+   "median_seconds": 63.049,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q15",
+   "seconds": [
+    37.765,
+    40.496,
+    45.554
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "3ce038a6ec9648fdd244123b2ce7a37300136f95933de6f5c32e84dc54e1e909",
+   "median_seconds": 40.496,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q16",
+   "seconds": [
+    40.901,
+    40.181,
+    40.865
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "09b32f84f51b36635d25b0958d6bb647bf0eea793acf1279f4e1fc21787d0942",
+   "median_seconds": 40.865,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q17",
+   "seconds": [],
+   "rows": null,
+   "rows_selected": null,
+   "error": "Engine rejected the request",
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null
+  },
+  {
+   "id": "q18",
+   "seconds": [],
+   "rows": null,
+   "rows_selected": null,
+   "error": "Engine rejected the request",
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null
+  },
+  {
+   "id": "q19",
+   "seconds": [],
+   "rows": null,
+   "rows_selected": null,
+   "error": "Engine rejected the request",
+   "adapted": true,
+   "trino_seconds": null,
+   "target_seconds": null
+  },
+  {
+   "id": "q20",
+   "seconds": [
+    1.477,
+    1.571,
+    1.614
+   ],
+   "rows": 4,
+   "rows_selected": 87300720,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "1005e9c488d0ec2b287ce4eb9f85df973f74e52edb739a360118635cac1769e5",
+   "median_seconds": 1.571,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q21",
+   "seconds": [
+    9.496,
+    9.496,
+    8.799
+   ],
+   "rows": 1,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "3a59862b546e20deb6022ed90109ce3d24de79c2c94aa903f86d81d723bd8f84",
+   "median_seconds": 9.496,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q22",
+   "seconds": [
+    10.549,
+    10.274,
+    9.525
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "8c0eea063e298298cf4a533263b0796804d12e16f5aa5df88960a98380391b5d",
+   "median_seconds": 10.274,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q23",
+   "seconds": [
+    17.382,
+    17.412,
+    19.585
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "b5a4c633d50d8fac3683761c5d2bc67799e0ea3e0be3aa533d0506abfb51b2eb",
+   "median_seconds": 17.412,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q24",
+   "seconds": [
+    9.648,
+    12.279,
+    9.402
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "85227f37e5826e8ff11095081b44a27b44db79c1692de92a441de2e5bce9e7d1",
+   "median_seconds": 9.648,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q25",
+   "seconds": [],
+   "rows": null,
+   "rows_selected": null,
+   "error": "Engine rejected the request",
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null
+  },
+  {
+   "id": "q26",
+   "seconds": [
+    2.759,
+    2.82,
+    2.963
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "615d64e45f3a1ef141a7ce45c0b62272f565764459bc32e9212bf77067e72d1a",
+   "median_seconds": 2.82,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q27",
+   "seconds": [],
+   "rows": null,
+   "rows_selected": null,
+   "error": "Engine rejected the request",
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null
+  },
+  {
+   "id": "q28",
+   "seconds": [
+    10.152,
+    10.083,
+    9.434
+   ],
+   "rows": 25,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "81b5388e9bba3bb306fc14b5032bc563c8dc3eb8184aac66204cbeb246f75279",
+   "median_seconds": 10.083,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q29",
+   "seconds": [
+    198.551,
+    188.753,
+    192.87
+   ],
+   "rows": 25,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "1dd224838a7c44967f7ff560782e10288d8d1f02ff28b22ad947a0e21dc94417",
+   "median_seconds": 192.87,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q30",
+   "seconds": [
+    32.002,
+    31.982,
+    31.361
+   ],
+   "rows": 1,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "9909706d36deca29c6a79b681c20daf9d61dfa5810c89ea36b4eb4701236facd",
+   "median_seconds": 31.982,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q31",
+   "seconds": [
+    29.464,
+    29.407,
+    29.161
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "92ef847297af2a1672f52c539635548a4dcdcb2343c5fb3b292bfca907604d8c",
+   "median_seconds": 29.407,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q32",
+   "seconds": [
+    59.753,
+    59.378,
+    60.66
+   ],
+   "rows": 10,
+   "rows_selected": 99997497,
+   "error": null,
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null,
+   "result_sha256": "9d7b8f8be746d5443df37c02b6428826431b63a1311ca0d68c1307f30292745d",
+   "median_seconds": 59.753,
+   "meets_target": null,
+   "beats_trino": null
+  },
+  {
+   "id": "q33",
+   "seconds": [],
+   "rows": null,
+   "rows_selected": null,
+   "error": "Engine rejected the request",
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null
+  },
+  {
+   "id": "q34",
+   "seconds": [],
+   "rows": null,
+   "rows_selected": null,
+   "error": "Engine rejected the request",
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null
+  },
+  {
+   "id": "q35",
+   "seconds": [],
+   "rows": null,
+   "rows_selected": null,
+   "error": "Engine rejected the request",
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null
+  },
+  {
+   "id": "q36",
+   "seconds": [],
+   "rows": null,
+   "rows_selected": null,
+   "error": "Engine rejected the request",
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null
+  },
+  {
+   "id": "q37",
+   "seconds": [],
+   "rows": null,
+   "rows_selected": null,
+   "error": "Engine rejected the request",
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null
+  },
+  {
+   "id": "q38",
+   "seconds": [],
+   "rows": null,
+   "rows_selected": null,
+   "error": "Engine rejected the request",
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null
+  },
+  {
+   "id": "q39",
+   "seconds": [],
+   "rows": null,
+   "rows_selected": null,
+   "error": "Engine rejected the request",
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null
+  },
+  {
+   "id": "q40",
+   "seconds": [],
+   "rows": null,
+   "rows_selected": null,
+   "error": "Engine rejected the request",
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null
+  },
+  {
+   "id": "q41",
+   "seconds": [],
+   "rows": null,
+   "rows_selected": null,
+   "error": "Engine rejected the request",
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null
+  },
+  {
+   "id": "q42",
+   "seconds": [],
+   "rows": null,
+   "rows_selected": null,
+   "error": "Engine rejected the request",
+   "adapted": false,
+   "trino_seconds": null,
+   "target_seconds": null
+  },
+  {
+   "id": "q43",
+   "seconds": [],
+   "rows": null,
+   "rows_selected": null,
+   "error": "Engine rejected the request",
+   "adapted": true,
+   "trino_seconds": null,
+   "target_seconds": null
+  }
+ ]
+}
