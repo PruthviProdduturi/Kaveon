@@ -44,16 +44,18 @@ impl SemiJoinOperator {
             }
             Expr::Column(right.schema().field(0).name().clone())
         };
-        let left_type =
+        // Keys compare by value; a dictionary-encoded side is its value type.
+        let left_type = logical_type(
             crate::expr_eval::evaluate(&left_key, &RecordBatch::new_empty(left.schema().clone()))?
-                .data_type()
-                .clone();
-        let right_type = crate::expr_eval::evaluate(
-            &right_key,
-            &RecordBatch::new_empty(right.schema().clone()),
-        )?
-        .data_type()
-        .clone();
+                .data_type(),
+        );
+        let right_type = logical_type(
+            crate::expr_eval::evaluate(
+                &right_key,
+                &RecordBatch::new_empty(right.schema().clone()),
+            )?
+            .data_type(),
+        );
         if left_type.is_numeric()
             && right_type.is_numeric()
             && (left_type == arrow::datatypes::DataType::Float64
@@ -171,16 +173,48 @@ impl BatchOperator for SemiJoinOperator {
                     .transpose()?;
 
                 let col = crate::expr_eval::evaluate(&self.left_key, &batch)?;
+                // A dictionary column is probed once per distinct value, then
+                // every row reads its value's verdict.
+                let (col, verdicts, dictionary_keys) = match col.data_type() {
+                    arrow::datatypes::DataType::Dictionary(key_type, _)
+                        if key_type.as_ref() == &arrow::datatypes::DataType::Int32 =>
+                    {
+                        let dictionary = col.as_dictionary::<Int32Type>();
+                        let values = dictionary.values().clone();
+                        let verdicts = (0..values.len())
+                            .map(|index| {
+                                if values.is_null(index) {
+                                    Ok(false)
+                                } else {
+                                    Ok(keys.contains(&extract_value(values.as_ref(), index)?))
+                                }
+                            })
+                            .collect::<Result<Vec<bool>>>()?;
+                        (values, Some(verdicts), Some(dictionary.keys().clone()))
+                    }
+                    _ => (col, None, None),
+                };
                 let mut indices = Vec::new();
                 for row in 0..batch.num_rows() {
-                    if col.is_null(row) {
+                    let is_null = match &dictionary_keys {
+                        Some(dictionary_keys) => {
+                            dictionary_keys.is_null(row)
+                                || col.is_null(dictionary_keys.value(row) as usize)
+                        }
+                        None => col.is_null(row),
+                    };
+                    if is_null {
                         if self.anti && keys.is_empty() && !self.right_has_null {
                             indices.push(row);
                         }
                         continue;
                     }
-                    let val = extract_value(col.as_ref(), row)?;
-                    let found = keys.contains(&val);
+                    let found = match (&verdicts, &dictionary_keys) {
+                        (Some(verdicts), Some(dictionary_keys)) => {
+                            verdicts[dictionary_keys.value(row) as usize]
+                        }
+                        _ => keys.contains(&extract_value(col.as_ref(), row)?),
+                    };
                     if (found && !self.anti) || (!found && self.anti && !self.right_has_null) {
                         indices.push(row);
                     }
@@ -208,8 +242,24 @@ impl BatchOperator for SemiJoinOperator {
     }
 }
 
+fn logical_type(data_type: &arrow::datatypes::DataType) -> arrow::datatypes::DataType {
+    match data_type {
+        arrow::datatypes::DataType::Dictionary(_, values) => values.as_ref().clone(),
+        other => other.clone(),
+    }
+}
+
 fn extract_value(array: &dyn Array, row: usize) -> Result<Key> {
     match array.data_type() {
+        arrow::datatypes::DataType::Dictionary(key_type, _)
+            if key_type.as_ref() == &arrow::datatypes::DataType::Int32 =>
+        {
+            let dictionary = array.as_dictionary::<Int32Type>();
+            extract_value(
+                dictionary.values().as_ref(),
+                dictionary.keys().value(row) as usize,
+            )
+        }
         arrow::datatypes::DataType::Boolean => Ok(Key::Bool(array.as_boolean().value(row))),
         arrow::datatypes::DataType::Int32 => Ok(Key::Number(
             array.as_primitive::<Int32Type>().value(row) as i128,
@@ -319,6 +369,65 @@ mod tests {
         }
         values
     }
+    #[test]
+    fn dictionary_left_keys_probe_by_value() {
+        use arrow::array::{DictionaryArray, Int32Array, StringArray};
+        let dictionary_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let left_schema = Arc::new(Schema::new(vec![Field::new(
+            "country",
+            dictionary_type,
+            true,
+        )]));
+        let left = RecordBatch::try_new(
+            left_schema.clone(),
+            vec![Arc::new(DictionaryArray::<Int32Type>::new(
+                Int32Array::from(vec![Some(0), Some(1), None, Some(2), Some(1)]),
+                Arc::new(StringArray::from(vec![Some("Japan"), None, Some("Kenya")])),
+            ))],
+        )
+        .unwrap();
+        let right_schema = Arc::new(Schema::new(vec![Field::new(
+            "country",
+            DataType::Utf8,
+            true,
+        )]));
+        let right = RecordBatch::try_new(
+            right_schema.clone(),
+            vec![Arc::new(StringArray::from(vec!["Kenya", "Brazil"]))],
+        )
+        .unwrap();
+        let run = |anti: bool| {
+            let mut op = SemiJoinOperator::new(
+                Box::new(Source {
+                    schema: left_schema.clone(),
+                    batches: vec![left.clone()].into_iter(),
+                }),
+                Box::new(Source {
+                    schema: right_schema.clone(),
+                    batches: vec![right.clone()].into_iter(),
+                }),
+                Expr::Column("country".into()),
+                Expr::Column("country".into()),
+                anti,
+            )
+            .unwrap();
+            let mut rows = Vec::new();
+            while let Some(batch) = op.next_batch().unwrap() {
+                let column = arrow::compute::cast(batch.column(0), &DataType::Utf8).unwrap();
+                rows.extend(
+                    column
+                        .as_string::<i32>()
+                        .iter()
+                        .map(|value| value.map(str::to_owned)),
+                );
+            }
+            rows
+        };
+        assert_eq!(run(false), vec![Some("Kenya".to_owned())]);
+        assert_eq!(run(true), vec![Some("Japan".to_owned())]);
+    }
+
     #[test]
     fn not_in_null_truth_table_across_batches() {
         let left = [Some(1), Some(2), None, Some(2)];
