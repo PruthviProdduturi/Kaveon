@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use kaveon_core::{BinaryOp, CompareOp, Expr, ScalarValue, StoragePredicate};
-use kaveon_sql::logical_plan::LogicalPlan;
+use kaveon_sql::logical_plan::{JoinType, LogicalPlan};
 
 pub fn push_filter_down(plan: LogicalPlan) -> LogicalPlan {
     match plan {
@@ -379,7 +379,158 @@ fn plan_qualifier(plan: &LogicalPlan) -> Option<String> {
                 .clone()
                 .unwrap_or_else(|| table.rsplit('.').next().unwrap_or(table).to_owned()),
         ),
+        // A filter keeps its input's relation.
+        LogicalPlan::Filter { input, .. } => plan_qualifier(input),
         _ => None,
+    }
+}
+
+/// The qualifier every column of `expression` carries, when they all carry
+/// the same one; None for unqualified or mixed references.
+fn expression_qualifier(expression: &Expr) -> Option<String> {
+    let mut columns = HashSet::new();
+    collect_columns(expression, &mut columns);
+    let mut qualifiers = columns.iter().map(|column| {
+        column
+            .rsplit_once('.')
+            .map(|(qualifier, _)| qualifier.to_owned())
+    });
+    let first = qualifiers.next()??;
+    qualifiers
+        .all(|qualifier| qualifier.as_deref() == Some(first.as_str()))
+        .then_some(first)
+}
+
+fn conjuncts(expression: Expr, into: &mut Vec<Expr>) {
+    match expression {
+        Expr::And(left, right) => {
+            conjuncts(*left, into);
+            conjuncts(*right, into);
+        }
+        other => into.push(other),
+    }
+}
+
+fn conjoin(mut expressions: Vec<Expr>) -> Option<Expr> {
+    let mut result = expressions.pop()?;
+    while let Some(expression) = expressions.pop() {
+        result = Expr::And(Box::new(expression), Box::new(result));
+    }
+    Some(result)
+}
+
+/// Columns qualified with the scan's own relation become bare column names,
+/// which is what storage predicates and the row filter resolve.
+fn strip_qualifier(expression: Expr, qualifier: &str) -> Expr {
+    let strip = |expr: Box<Expr>| Box::new(strip_qualifier(*expr, qualifier));
+    match expression {
+        Expr::Column(name) => Expr::Column(match name.rsplit_once('.') {
+            Some((prefix, column)) if prefix == qualifier => column.to_owned(),
+            _ => name,
+        }),
+        Expr::Literal(_) | Expr::Star => expression,
+        Expr::BinaryOp { left, op, right } => Expr::BinaryOp {
+            left: strip(left),
+            op,
+            right: strip(right),
+        },
+        Expr::And(left, right) => Expr::And(strip(left), strip(right)),
+        Expr::Or(left, right) => Expr::Or(strip(left), strip(right)),
+        Expr::IsNull(expr) => Expr::IsNull(strip(expr)),
+        Expr::IsNotNull(expr) => Expr::IsNotNull(strip(expr)),
+        Expr::Not(expr) => Expr::Not(strip(expr)),
+        Expr::Alias { expr, name } => Expr::Alias {
+            expr: strip(expr),
+            name,
+        },
+        Expr::Cast { expr, data_type } => Expr::Cast {
+            expr: strip(expr),
+            data_type,
+        },
+        Expr::Extract { field, expr } => Expr::Extract {
+            field,
+            expr: strip(expr),
+        },
+        Expr::Function { name, args } => Expr::Function {
+            name,
+            args: args
+                .into_iter()
+                .map(|arg| strip_qualifier(arg, qualifier))
+                .collect(),
+        },
+        Expr::Case {
+            operand,
+            when_then,
+            else_expr,
+        } => Expr::Case {
+            operand: operand.map(strip),
+            when_then: when_then
+                .into_iter()
+                .map(|(when, then)| {
+                    (
+                        strip_qualifier(when, qualifier),
+                        strip_qualifier(then, qualifier),
+                    )
+                })
+                .collect(),
+            else_expr: else_expr.map(strip),
+        },
+        Expr::Like {
+            expr,
+            pattern,
+            negated,
+            case_insensitive,
+        } => Expr::Like {
+            expr: strip(expr),
+            pattern: strip(pattern),
+            negated,
+            case_insensitive,
+        },
+        Expr::Between {
+            expr,
+            low,
+            high,
+            negated,
+        } => Expr::Between {
+            expr: strip(expr),
+            low: strip(low),
+            high: strip(high),
+            negated,
+        },
+        Expr::InList {
+            expr,
+            list,
+            negated,
+        } => Expr::InList {
+            expr: strip(expr),
+            list: list
+                .into_iter()
+                .map(|item| strip_qualifier(item, qualifier))
+                .collect(),
+            negated,
+        },
+        Expr::WindowFunction {
+            name,
+            args,
+            partition_by,
+            order_by,
+            frame,
+        } => Expr::WindowFunction {
+            name,
+            args: args
+                .into_iter()
+                .map(|arg| strip_qualifier(arg, qualifier))
+                .collect(),
+            partition_by: partition_by
+                .into_iter()
+                .map(|expr| strip_qualifier(expr, qualifier))
+                .collect(),
+            order_by: order_by
+                .into_iter()
+                .map(|(expr, ascending)| (strip_qualifier(expr, qualifier), ascending))
+                .collect(),
+            frame,
+        },
     }
 }
 
@@ -491,6 +642,102 @@ fn push_filter_into(predicate: Expr, input: LogicalPlan) -> LogicalPlan {
             input,
             predicate: inner,
         } => push_filter_into(Expr::And(Box::new(inner), Box::new(predicate)), *input),
+        LogicalPlan::Join {
+            left,
+            right,
+            join_type,
+            condition,
+            distribution,
+        } => {
+            // A conjunct that references one side only moves below the join.
+            // An outer join keeps the preserved side's rows whatever the
+            // filter says about the other side's columns, so only the
+            // preserved side takes filters.
+            let (into_left, into_right) = match join_type {
+                JoinType::Inner | JoinType::Cross => (true, true),
+                JoinType::Left => (true, false),
+                JoinType::Right => (false, true),
+                JoinType::Full => (false, false),
+            };
+            let left_qualifier = plan_qualifier(&left);
+            let right_qualifier = plan_qualifier(&right);
+            let mut parts = Vec::new();
+            conjuncts(predicate, &mut parts);
+            let (mut left_parts, mut right_parts, mut remaining) = (vec![], vec![], vec![]);
+            for part in parts {
+                let qualifier = expression_qualifier(&part);
+                if into_left && qualifier.is_some() && qualifier == left_qualifier {
+                    left_parts.push(part);
+                } else if into_right && qualifier.is_some() && qualifier == right_qualifier {
+                    right_parts.push(part);
+                } else {
+                    remaining.push(part);
+                }
+            }
+            let left = match conjoin(left_parts) {
+                Some(predicate) => push_filter_into(predicate, *left),
+                None => *left,
+            };
+            let right = match conjoin(right_parts) {
+                Some(predicate) => push_filter_into(predicate, *right),
+                None => *right,
+            };
+            let join = LogicalPlan::Join {
+                left: Box::new(left),
+                right: Box::new(right),
+                join_type,
+                condition,
+                distribution,
+            };
+            match conjoin(remaining) {
+                Some(predicate) => LogicalPlan::Filter {
+                    input: Box::new(join),
+                    predicate,
+                },
+                None => join,
+            }
+        }
+        // A semi or anti join emits rows of its left input, so a filter on
+        // its output is a filter on that input.
+        LogicalPlan::SemiJoin {
+            left,
+            right,
+            left_key,
+            right_key,
+        } => LogicalPlan::SemiJoin {
+            left: Box::new(push_filter_into(predicate, *left)),
+            right,
+            left_key,
+            right_key,
+        },
+        LogicalPlan::AntiJoin {
+            left,
+            right,
+            left_key,
+            right_key,
+        } => LogicalPlan::AntiJoin {
+            left: Box::new(push_filter_into(predicate, *left)),
+            right,
+            left_key,
+            right_key,
+        },
+        LogicalPlan::Scan {
+            table,
+            alias,
+            columns,
+        } => {
+            let qualifier = alias
+                .clone()
+                .unwrap_or_else(|| table.rsplit('.').next().unwrap_or(&table).to_owned());
+            LogicalPlan::Filter {
+                input: Box::new(LogicalPlan::Scan {
+                    table,
+                    alias,
+                    columns,
+                }),
+                predicate: strip_qualifier(predicate, &qualifier),
+            }
+        }
         boundary => LogicalPlan::Filter {
             input: Box::new(boundary),
             predicate,
@@ -924,5 +1171,238 @@ mod tests {
             to_storage_predicate(&expr),
             Some(StoragePredicate::And(_))
         ));
+    }
+
+    fn aliased(table: &str, alias: &str) -> LogicalPlan {
+        LogicalPlan::Scan {
+            table: format!("cat.schema.{table}"),
+            alias: Some(alias.to_owned()),
+            columns: None,
+        }
+    }
+    fn join(left: LogicalPlan, right: LogicalPlan, join_type: JoinType) -> LogicalPlan {
+        LogicalPlan::Join {
+            left: Box::new(left),
+            right: Box::new(right),
+            join_type,
+            condition: Some(compare(
+                column("t.user_id"),
+                BinaryOp::Eq,
+                column("u.user_id"),
+            )),
+            distribution: kaveon_sql::logical_plan::JoinDistribution::Partitioned,
+        }
+    }
+    fn filtered_scan(plan: &LogicalPlan) -> Option<(&Expr, &LogicalPlan)> {
+        match plan {
+            LogicalPlan::Filter { input, predicate }
+                if matches!(**input, LogicalPlan::Scan { .. }) =>
+            {
+                Some((predicate, input))
+            }
+            _ => None,
+        }
+    }
+    fn scan_columns<'a>(plan: &'a LogicalPlan, scans: &mut Vec<&'a Option<Vec<String>>>) {
+        match plan {
+            LogicalPlan::Scan { columns, .. } => scans.push(columns),
+            LogicalPlan::Project { input, .. } | LogicalPlan::Filter { input, .. } => {
+                scan_columns(input, scans)
+            }
+            LogicalPlan::Join { left, right, .. } => {
+                scan_columns(left, scans);
+                scan_columns(right, scans);
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn strips_the_relation_qualifier_at_the_scan() {
+        let plan = LogicalPlan::Filter {
+            input: Box::new(aliased("events", "t")),
+            predicate: Expr::And(
+                Box::new(compare(column("t.day"), BinaryOp::Eq, int(7))),
+                Box::new(Expr::Function {
+                    name: "UPPER".to_owned(),
+                    args: vec![column("t.surface")],
+                }),
+            ),
+        };
+        let pushed = push_filter_down(plan);
+        let (predicate, _) = filtered_scan(&pushed).expect("filter over scan");
+        assert_eq!(
+            *predicate,
+            Expr::And(
+                Box::new(compare(column("day"), BinaryOp::Eq, int(7))),
+                Box::new(Expr::Function {
+                    name: "UPPER".to_owned(),
+                    args: vec![column("surface")],
+                }),
+            )
+        );
+        // The bare table name is a qualifier too; a foreign qualifier stays.
+        let plan = LogicalPlan::Filter {
+            input: Box::new(LogicalPlan::Scan {
+                table: "cat.schema.events".to_owned(),
+                alias: None,
+                columns: None,
+            }),
+            predicate: compare(column("events.day"), BinaryOp::Eq, column("x.day")),
+        };
+        let pushed = push_filter_down(plan);
+        let (predicate, _) = filtered_scan(&pushed).expect("filter over scan");
+        assert_eq!(
+            *predicate,
+            compare(column("day"), BinaryOp::Eq, column("x.day"))
+        );
+    }
+
+    #[test]
+    fn splits_inner_join_filters_by_side_and_keeps_cross_side_conjuncts() {
+        let plan = LogicalPlan::Filter {
+            input: Box::new(join(
+                aliased("events", "t"),
+                aliased("users", "u"),
+                JoinType::Inner,
+            )),
+            predicate: Expr::And(
+                Box::new(Expr::And(
+                    Box::new(compare(column("t.day"), BinaryOp::Eq, int(7))),
+                    Box::new(compare(column("u.locale"), BinaryOp::Eq, int(1))),
+                )),
+                Box::new(Expr::And(
+                    Box::new(compare(
+                        column("t.country"),
+                        BinaryOp::Ne,
+                        column("u.country"),
+                    )),
+                    Box::new(compare(column("t.surface"), BinaryOp::Eq, int(2))),
+                )),
+            ),
+        };
+        let LogicalPlan::Filter { input, predicate } = push_filter_down(plan) else {
+            panic!("cross-side conjunct stays above the join");
+        };
+        assert_eq!(
+            predicate,
+            compare(column("t.country"), BinaryOp::Ne, column("u.country"))
+        );
+        let LogicalPlan::Join { left, right, .. } = *input else {
+            panic!("join below the residual filter");
+        };
+        let (left_predicate, _) = filtered_scan(&left).expect("left side filtered");
+        assert_eq!(
+            *left_predicate,
+            Expr::And(
+                Box::new(compare(column("day"), BinaryOp::Eq, int(7))),
+                Box::new(compare(column("surface"), BinaryOp::Eq, int(2))),
+            )
+        );
+        let (right_predicate, _) = filtered_scan(&right).expect("right side filtered");
+        assert_eq!(
+            *right_predicate,
+            compare(column("locale"), BinaryOp::Eq, int(1))
+        );
+        // Projection pruning sees through the pushed filters to both scans.
+        let pruned = push_projection_down(LogicalPlan::Project {
+            input: Box::new(LogicalPlan::Filter {
+                input: Box::new(LogicalPlan::Join {
+                    left,
+                    right,
+                    join_type: JoinType::Inner,
+                    condition: Some(compare(
+                        column("t.user_id"),
+                        BinaryOp::Eq,
+                        column("u.user_id"),
+                    )),
+                    distribution: kaveon_sql::logical_plan::JoinDistribution::Partitioned,
+                }),
+                predicate,
+            }),
+            columns: vec![column("t.actions"), column("u.locale")],
+        });
+        let mut scans = Vec::new();
+        scan_columns(&pruned, &mut scans);
+        assert_eq!(
+            scans,
+            vec![
+                &Some(vec![
+                    "actions".to_owned(),
+                    "country".to_owned(),
+                    "day".to_owned(),
+                    "surface".to_owned(),
+                    "user_id".to_owned()
+                ]),
+                &Some(vec![
+                    "country".to_owned(),
+                    "locale".to_owned(),
+                    "user_id".to_owned()
+                ]),
+            ]
+        );
+    }
+
+    #[test]
+    fn outer_joins_only_take_filters_on_the_preserved_side() {
+        let predicate = Expr::And(
+            Box::new(compare(column("t.day"), BinaryOp::Eq, int(7))),
+            Box::new(compare(column("u.locale"), BinaryOp::Eq, int(1))),
+        );
+        let plan = LogicalPlan::Filter {
+            input: Box::new(join(
+                aliased("events", "t"),
+                aliased("users", "u"),
+                JoinType::Left,
+            )),
+            predicate: predicate.clone(),
+        };
+        let LogicalPlan::Filter {
+            input,
+            predicate: residual,
+        } = push_filter_down(plan)
+        else {
+            panic!("right-side conjunct stays above a left join");
+        };
+        assert_eq!(residual, compare(column("u.locale"), BinaryOp::Eq, int(1)));
+        let LogicalPlan::Join { left, right, .. } = *input else {
+            panic!("join below the residual filter");
+        };
+        assert!(filtered_scan(&left).is_some());
+        assert!(matches!(*right, LogicalPlan::Scan { .. }));
+        let plan = LogicalPlan::Filter {
+            input: Box::new(join(
+                aliased("events", "t"),
+                aliased("users", "u"),
+                JoinType::Full,
+            )),
+            predicate,
+        };
+        let LogicalPlan::Filter { input, .. } = push_filter_down(plan) else {
+            panic!("full join keeps every filter above");
+        };
+        let LogicalPlan::Join { left, right, .. } = *input else {
+            panic!("join below the filter");
+        };
+        assert!(matches!(*left, LogicalPlan::Scan { .. }));
+        assert!(matches!(*right, LogicalPlan::Scan { .. }));
+    }
+
+    #[test]
+    fn semi_join_filters_move_into_the_left_input() {
+        let plan = LogicalPlan::Filter {
+            input: Box::new(LogicalPlan::SemiJoin {
+                left: Box::new(aliased("events", "t")),
+                right: Box::new(aliased("users", "u")),
+                left_key: column("country"),
+                right_key: column("country"),
+            }),
+            predicate: compare(column("day"), BinaryOp::Eq, int(7)),
+        };
+        let LogicalPlan::SemiJoin { left, right, .. } = push_filter_down(plan) else {
+            panic!("semi join stays the root");
+        };
+        assert!(filtered_scan(&left).is_some());
+        assert!(matches!(*right, LogicalPlan::Scan { .. }));
     }
 }
