@@ -1,0 +1,57 @@
+# Streams the public ClickBench `hits` Parquet object (99,997,497 rows,
+# ~14.8 GB) into the lake at opensource/benchmarks/clickbench/hits.parquet,
+# where the storage firewall's VNet rule allows the write. No disk: blocks go
+# from the HTTPS stream straight into ADLS. Inputs created out of band and
+# deleted afterwards:
+#
+#   kubectl -n kaveon create configmap kaveon-clickbench-load-scripts \
+#     --from-file=scripts/load-clickbench-adls.py
+#   kubectl -n kaveon create secret generic kaveon-opensource-upload \
+#     --from-literal=token="$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)"
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kaveon-clickbench-load
+  namespace: kaveon
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: {app: kaveon-clickbench-load}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: load
+          image: kvtesticmwwliihpppo.azurecr.io/kaveon-api@sha256:a946aa322715db61d14568ab2e987ad23ef4ea982e0dba29645733ab4ea1ba14
+          command: [python, /scripts/load-clickbench-adls.py]
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            - {name: ADLS_ACCOUNT, value: kvtesticmwwliihpppo}
+            - {name: ADLS_CONTAINER, value: opensource}
+            - {name: ADLS_BLOB, value: benchmarks/clickbench/hits.parquet}
+            - name: ADLS_UPLOAD_TOKEN
+              valueFrom: {secretKeyRef: {name: kaveon-opensource-upload, key: token}}
+          resources:
+            requests: {cpu: "500m", memory: 1Gi, ephemeral-storage: 1Gi}
+            limits: {cpu: "2", memory: 2Gi, ephemeral-storage: 2Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: scripts, mountPath: /scripts, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 512Mi}
+        - name: scripts
+          configMap: {name: kaveon-clickbench-load-scripts}
