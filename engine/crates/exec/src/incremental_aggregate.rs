@@ -1,17 +1,23 @@
 //! Incremental final-state merging. Encoded input is scratch, not retained state.
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
+use ahash::AHashMap;
 use arrow::array::{Array, BinaryArray};
 use arrow::record_batch::RecordBatch;
 use kaveon_core::{KaveonError, MemoryReservation, OperatorMemoryAccount, Result};
 
 use crate::aggregate::{
-    AggregateState, AggregateValue, GroupedAggregateState, grouped_aggregate_key_types,
-    grouped_aggregate_state_row, validate_group_layouts,
+    AggregateState, AggregateValue, GroupedAggregateState, decode_group_keys, decode_group_states,
+    grouped_aggregate_key_types, validate_group_key_types, validate_group_layouts,
 };
 
+/// Groups are indexed by their encoded key bytes — the producer's canonical
+/// per-value encoding — so a row costs one hash of those bytes and an
+/// in-place merge into the group's accumulators; keys decode once, at the
+/// end, per group rather than per row.
 pub struct IncrementalAggregateMerger {
-    groups: HashMap<Vec<AggregateValue>, Vec<AggregateState>>,
+    index: AHashMap<Box<[u8]>, u32>,
+    states: Vec<Vec<AggregateState>>,
     memory: Option<OperatorMemoryAccount>,
     reservations: ReservationSlab,
 }
@@ -55,7 +61,8 @@ impl ReservationSlab {
 impl IncrementalAggregateMerger {
     pub fn new(memory: Option<OperatorMemoryAccount>) -> Self {
         Self {
-            groups: HashMap::new(),
+            index: AHashMap::new(),
+            states: Vec::new(),
             memory,
             reservations: ReservationSlab::default(),
         }
@@ -97,26 +104,28 @@ impl IncrementalAggregateMerger {
             .map(|memory| memory.reserve(scratch))
             .transpose()?;
         for row in 0..batch.num_rows() {
-            if let Some(memory) = &self.memory {
+            if row % 1024 == 0
+                && let Some(memory) = &self.memory
+            {
                 memory.check_cancelled()?;
             }
-            let partial = grouped_aggregate_state_row(keys, states, row, &types)?;
-            let existing = self.groups.get(&partial.group_keys);
-            // A new group is one map entry: the key vector and its values,
-            // the state vector and its accumulators. Sized to what the
-            // structures occupy; a page-sized guess per group made a 3 M-group
-            // merge ask for 15 GiB.
+            if keys.is_null(row) || states.is_null(row) {
+                return Err(error("grouped aggregate state row cannot contain nulls"));
+            }
+            let encoded_key = keys.value(row);
+            let incoming = decode_group_states(states.value(row))?;
+            let existing = self.index.get(encoded_key).copied();
             let mut growth = if existing.is_none() {
                 NEW_GROUP_BYTES
-                    .saturating_add(partial.group_keys.iter().map(value_bytes).sum::<u64>())
-                    .saturating_add((partial.states.len() as u64).saturating_mul(STATE_BYTES))
+                    .saturating_add(encoded_key.len() as u64)
+                    .saturating_add((incoming.len() as u64).saturating_mul(STATE_BYTES))
             } else {
                 0
             };
-            for (index, incoming) in partial.states.iter().enumerate() {
-                if let Some(values) = distinct_values(incoming) {
+            for (position, state) in incoming.iter().enumerate() {
+                if let Some(values) = distinct_values(state) {
                     let previous = existing
-                        .and_then(|s| s.get(index))
+                        .and_then(|slot| self.states[slot as usize].get(position))
                         .and_then(distinct_values);
                     for value in values {
                         if previous.is_none_or(|p| !p.contains(value)) {
@@ -130,15 +139,33 @@ impl IncrementalAggregateMerger {
             {
                 self.reservations.reserve(memory, growth)?;
             }
-            if let Some(existing) = self.groups.get_mut(&partial.group_keys) {
-                if existing.len() != partial.states.len() {
-                    return Err(error("aggregate state count mismatch"));
+            match existing {
+                Some(slot) => {
+                    let current = &mut self.states[slot as usize];
+                    if current.len() != incoming.len() {
+                        return Err(error("aggregate state count mismatch"));
+                    }
+                    for (state, other) in current.iter_mut().zip(&incoming) {
+                        state.merge(other)?;
+                    }
                 }
-                for (state, other) in existing.iter_mut().zip(&partial.states) {
-                    state.merge(other)?;
+                None => {
+                    // The key's types are checked once, when the group is
+                    // first seen: every later row with these bytes is the
+                    // same key.
+                    let group_keys = decode_group_keys(encoded_key)?;
+                    validate_group_key_types(
+                        std::slice::from_ref(&GroupedAggregateState {
+                            group_keys,
+                            states: Vec::new(),
+                        }),
+                        &types,
+                    )?;
+                    let slot = u32::try_from(self.states.len())
+                        .map_err(|_| error("too many groups for one task"))?;
+                    self.states.push(incoming);
+                    self.index.insert(Box::from(encoded_key), slot);
                 }
-            } else {
-                self.groups.insert(partial.group_keys, partial.states);
             }
         }
         Ok(())
@@ -147,11 +174,20 @@ impl IncrementalAggregateMerger {
     /// The merged groups in map order: the map made them unique, and the
     /// final output does not depend on their order.
     pub fn finish(self) -> Result<(Vec<GroupedAggregateState>, Vec<MemoryReservation>)> {
-        let groups = self
-            .groups
+        let mut keys: Vec<Option<Box<[u8]>>> = (0..self.states.len()).map(|_| None).collect();
+        for (key, slot) in self.index {
+            keys[slot as usize] = Some(key);
+        }
+        let groups = keys
             .into_iter()
-            .map(|(group_keys, states)| GroupedAggregateState { group_keys, states })
-            .collect::<Vec<_>>();
+            .zip(self.states)
+            .map(|(key, states)| {
+                Ok(GroupedAggregateState {
+                    group_keys: decode_group_keys(&key.expect("every slot has its key"))?,
+                    states,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         validate_group_layouts(&groups)?;
         Ok((groups, self.reservations.into_guards()))
     }
