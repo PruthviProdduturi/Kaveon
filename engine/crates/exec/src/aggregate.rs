@@ -455,6 +455,16 @@ impl AggregateState {
                     *current = Some(current.map_or(max, |old| old.max(max)));
                 }
             }
+            // AVG over an integer column keeps a floating-point state; the
+            // exact integer sum converts once per batch, not once per row.
+            Self::Sum { .. } | Self::Avg { .. } | Self::Min(_) | Self::Max(_) => {
+                return self.update_numeric_batch(
+                    sum as f64,
+                    count,
+                    min.map(|value| value as f64),
+                    max.map(|value| value as f64),
+                );
+            }
             _ => {
                 return Err(exec_err(
                     "integer batch update applied to an incompatible aggregate state",
@@ -3022,7 +3032,8 @@ fn fold_batch_into(state: &mut AggregateState, array: &ArrayRef) -> Result<bool>
         (
             state @ (AggregateState::IntegerSum { .. }
             | AggregateState::IntegerMin(_)
-            | AggregateState::IntegerMax(_)),
+            | AggregateState::IntegerMax(_)
+            | AggregateState::Avg { .. }),
             DataType::Int64 | DataType::Int32,
         ) => {
             let (mut sum, mut count, mut min, mut max) = (0_i128, 0_u64, i64::MAX, i64::MIN);
@@ -3064,6 +3075,19 @@ fn fold_batch_into(state: &mut AggregateState, array: &ArrayRef) -> Result<bool>
             Ok(true)
         }
         (
+            state @ (AggregateState::Utf8Min(_) | AggregateState::Utf8Max(_)),
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Dictionary(_, _),
+        ) => {
+            // The batch's extreme: over the dictionary's used values when the
+            // column has one (a handful of comparisons), else over the rows.
+            if let Some(extreme) =
+                batch_text_extreme(array, matches!(state, AggregateState::Utf8Min(_)))
+            {
+                state.update_utf8(&extreme)?;
+            }
+            Ok(true)
+        }
+        (
             state @ (AggregateState::Sum { .. }
             | AggregateState::Avg { .. }
             | AggregateState::Min(_)
@@ -3094,6 +3118,58 @@ fn fold_batch_into(state: &mut AggregateState, array: &ArrayRef) -> Result<bool>
             Ok(true)
         }
         _ => Ok(false),
+    }
+}
+
+/// MIN or MAX of a text column over one batch, or None when every value is
+/// null. A dictionary column only compares the values its keys reference.
+fn batch_text_extreme(array: &ArrayRef, min: bool) -> Option<String> {
+    fn extreme<'a>(values: impl Iterator<Item = Option<&'a str>>, min: bool) -> Option<String> {
+        let mut best: Option<&str> = None;
+        for value in values.flatten() {
+            best = Some(match best {
+                None => value,
+                Some(current) if (min && value < current) || (!min && value > current) => value,
+                Some(current) => current,
+            });
+        }
+        best.map(str::to_owned)
+    }
+    match array.data_type() {
+        DataType::Utf8 => extreme(array.as_string::<i32>().iter(), min),
+        DataType::LargeUtf8 => extreme(array.as_string::<i64>().iter(), min),
+        DataType::Dictionary(key_type, _) if key_type.as_ref() == &DataType::Int32 => {
+            let dictionary = array
+                .as_any()
+                .downcast_ref::<Int32DictionaryArray>()
+                .expect("dictionary key type must match schema");
+            let values = dictionary.values();
+            let mut used = vec![false; values.len()];
+            for key in dictionary.keys().iter().flatten() {
+                used[key as usize] = true;
+            }
+            let texts: Vec<Option<&str>> = match values.data_type() {
+                DataType::Utf8 => {
+                    let strings = values.as_string::<i32>();
+                    (0..values.len())
+                        .map(|index| {
+                            (used[index] && !strings.is_null(index)).then(|| strings.value(index))
+                        })
+                        .collect()
+                }
+                DataType::LargeUtf8 => {
+                    let strings = values.as_string::<i64>();
+                    (0..values.len())
+                        .map(|index| {
+                            (used[index] && !strings.is_null(index)).then(|| strings.value(index))
+                        })
+                        .collect()
+                }
+                _ => return None,
+            };
+            extreme(texts.into_iter(), min)
+        }
+        _ => None,
     }
 }
 
@@ -4669,6 +4745,7 @@ mod tests {
                 AggExpr::new(AggFunc::Min, "f"),
                 AggExpr::new(AggFunc::Max, "f"),
                 AggExpr::new(AggFunc::Avg, "f"),
+                AggExpr::new(AggFunc::Avg, "i"),
             ],
             pool.operator("aggregate").unwrap(),
         )
@@ -4698,6 +4775,7 @@ mod tests {
             (f64_at(6, a), f64_at(7, a), f64_at(8, a), f64_at(9, a)),
             (4.5, 0.5, 2.5, 1.5)
         );
+        assert_eq!(f64_at(10, a), 5.0);
         let b = row_of(Some("b"));
         assert_eq!((u64_at(1, b), u64_at(2, b)), (2, 2));
         assert_eq!((i64_at(3, b), i64_at(4, b), i64_at(5, b)), (8, -2, 10));
@@ -4705,6 +4783,7 @@ mod tests {
             (f64_at(6, b), f64_at(7, b), f64_at(8, b), f64_at(9, b)),
             (-3.0, -3.0, -3.0, -3.0)
         );
+        assert_eq!(f64_at(10, b), 4.0);
         let n = row_of(None);
         assert_eq!((u64_at(1, n), u64_at(2, n)), (2, 2));
         assert_eq!((i64_at(3, n), i64_at(4, n), i64_at(5, n)), (10, 1, 9));
@@ -4712,6 +4791,7 @@ mod tests {
             (f64_at(6, n), f64_at(7, n), f64_at(8, n), f64_at(9, n)),
             (2.0, 2.0, 2.0, 2.0)
         );
+        assert_eq!(f64_at(10, n), 5.0);
         drop(output);
         drop(aggregate);
         assert_eq!(pool.snapshot().current_bytes, 0);
