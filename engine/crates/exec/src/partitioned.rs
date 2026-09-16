@@ -632,12 +632,14 @@ impl PartitionedHashAggregate {
     }
 
     fn group_types(&self) -> Result<Vec<arrow::datatypes::DataType>> {
+        // Keys leave the operator as their logical values (a dictionary
+        // column as its value type), the same as the in-memory aggregate.
         self.group_by
             .iter()
             .map(|name| {
                 self.input_schema
                     .field_with_name(name)
-                    .map(|field| field.data_type().clone())
+                    .map(|field| crate::aggregate::exchanged_group_key_type(field.data_type()))
                     .map_err(KaveonError::from)
             })
             .collect()
@@ -1706,6 +1708,73 @@ mod tests {
         assert!(spill.snapshot().runs_written > 0);
         assert!(spill.snapshot().bytes_written > 0);
         assert_eq!(spill.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn partitioned_aggregate_groups_dictionary_keys_as_their_values() {
+        // A dictionary-encoded key column, as a Parquet file with its Arrow
+        // schema stored hands it over: the group column comes out as text.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "country",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                true,
+            ),
+            Field::new("actions", DataType::Int64, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::Int32DictionaryArray::new(
+                    arrow::array::Int32Array::from(vec![Some(0), Some(1), Some(0), None]),
+                    Arc::new(arrow::array::StringArray::from(vec![
+                        "India", "Germany", "Unused",
+                    ])),
+                )),
+                Arc::new(Int64Array::from(vec![Some(1), Some(2), Some(4), Some(8)])),
+            ],
+        )
+        .unwrap();
+        let pool = QueryMemoryPool::new("dictionary-groups", 1024 * 1024).unwrap();
+        let mut aggregate = PartitionedHashAggregate::new(
+            Box::new(Input {
+                schema,
+                batches: std::collections::VecDeque::from([batch]),
+            }),
+            vec!["country".into()],
+            vec![
+                crate::aggregate::AggExpr::new(AggFunc::Count, "*"),
+                crate::aggregate::AggExpr::new(AggFunc::Sum, "actions"),
+            ],
+            pool.operator("partitioned").unwrap(),
+            spill(),
+            16,
+        )
+        .unwrap();
+        assert_eq!(aggregate.schema().field(0).data_type(), &DataType::Utf8);
+        let mut rows = std::collections::BTreeMap::new();
+        while let Some(batch) = aggregate.next_batch().unwrap() {
+            let keys = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<arrow::array::StringArray>()
+                .unwrap();
+            let sums = batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap();
+            for row in 0..batch.num_rows() {
+                rows.insert(
+                    (!keys.is_null(row)).then(|| keys.value(row).to_owned()),
+                    sums.value(row),
+                );
+            }
+        }
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[&Some("India".to_owned())], 5);
+        assert_eq!(rows[&Some("Germany".to_owned())], 2);
+        assert_eq!(rows[&None], 8);
     }
 
     #[test]
