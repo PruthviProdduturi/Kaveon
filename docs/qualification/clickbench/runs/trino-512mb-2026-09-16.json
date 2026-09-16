@@ -1,0 +1,520 @@
+{
+ "engine": "trino@sha256:db58cc93e593a2706553745f276bb119c9810e69918be56ecde088ba7ccb0534",
+ "memory": "query.max-memory-per-node=512MB (the pre-upgrade budget)",
+ "repetitions": 3,
+ "statements": 43,
+ "measured": 35,
+ "records": [
+  {
+   "id": "q01",
+   "seconds": [
+    4.503,
+    4.977,
+    4.41
+   ],
+   "rows": 1,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "351a749cfaf1ce79f7e3ef576d4391f7874eee8436c66867bf1f18a7fca9e89d",
+   "median_seconds": 4.503
+  },
+  {
+   "id": "q02",
+   "seconds": [
+    4.32,
+    4.431,
+    4.553
+   ],
+   "rows": 1,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "15bec0bae1f47a8fb92cba765fef9f2650865638a3dff6c0017109b567f4fdcd",
+   "median_seconds": 4.431
+  },
+  {
+   "id": "q03",
+   "seconds": [
+    5.654,
+    5.957,
+    5.004
+   ],
+   "rows": 1,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "eed1e14ec9887433cc459385c52bd45c131a0c20d068483de8392d61f9fdaf09",
+   "median_seconds": 5.654
+  },
+  {
+   "id": "q04",
+   "seconds": [
+    4.613,
+    4.486,
+    4.12
+   ],
+   "rows": 1,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "b65c35cd4ee6c058377e454998e2da24bd1d78e3187985d2f5304b78c80135d4",
+   "median_seconds": 4.486
+  },
+  {
+   "id": "q05",
+   "seconds": [
+    7.508,
+    6.96,
+    7.405
+   ],
+   "rows": 1,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "0ef4a8cf11d91b896e38523d5142914e8a91da68319173b1995bd049b4530ff5",
+   "median_seconds": 7.405
+  },
+  {
+   "id": "q06",
+   "seconds": [
+    15.051,
+    10.83,
+    10.723
+   ],
+   "rows": 1,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "73bdd41b0a736ebc34188dbe250c36e2058d18d121113faacf36eaf004421687",
+   "median_seconds": 10.83
+  },
+  {
+   "id": "q07",
+   "seconds": [
+    3.499,
+    3.6,
+    3.503
+   ],
+   "rows": 1,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "36875e584c6637e05d5aaa43f622162fdfa9b3dbc738ff30bf5d6bfcd1b49390",
+   "median_seconds": 3.503
+  },
+  {
+   "id": "q08",
+   "seconds": [
+    3.745,
+    3.528,
+    3.474
+   ],
+   "rows": 18,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "938c8fa5ed1df3aa16c887c983258fb3b69b9f1ac88619b2a6d5b7f86012ec97",
+   "median_seconds": 3.528
+  },
+  {
+   "id": "q09",
+   "seconds": [
+    10.113,
+    10.265,
+    10.014
+   ],
+   "rows": 10,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "073df0dfd3418c37c382894dc89aa0493b794c0de234dec62673a81cba032077",
+   "median_seconds": 10.113
+  },
+  {
+   "id": "q10",
+   "seconds": [
+    20.774,
+    18.656,
+    19.381
+   ],
+   "rows": 10,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "bd05a4f43f7064c87b33b9cb669c36882ce72c2b4766670c6183a44759a76922",
+   "median_seconds": 19.381
+  },
+  {
+   "id": "q11",
+   "seconds": [
+    4.814,
+    5.817,
+    5.106
+   ],
+   "rows": 10,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "2486e14263d2e6c63b62fd7cbe4d59006055f49bff810f6fbe00df9c83bc3824",
+   "median_seconds": 5.106
+  },
+  {
+   "id": "q12",
+   "seconds": [
+    5.051,
+    5.509,
+    5.728
+   ],
+   "rows": 10,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "77aa79ecacdd1513abc4da32ba451b38b6fad7d9c0ac27483abc3bf05ffeef04",
+   "median_seconds": 5.509
+  },
+  {
+   "id": "q13",
+   "seconds": [
+    10.144,
+    9.972,
+    10.578
+   ],
+   "rows": 10,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "465b4e5db6851ff394cb4c93aa729b7cd85bc1469da2255d5cf4870124772fa0",
+   "median_seconds": 10.144
+  },
+  {
+   "id": "q14",
+   "seconds": [
+    17.23,
+    17.918,
+    16.728
+   ],
+   "rows": 10,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "b9f4d5bf0135230c11cde9563986b7eab1a893c12cf77ffc4e890fe6f0b69ffa",
+   "median_seconds": 17.23
+  },
+  {
+   "id": "q15",
+   "seconds": [
+    10.571,
+    10.464,
+    10.778
+   ],
+   "rows": 10,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "3ce038a6ec9648fdd244123b2ce7a37300136f95933de6f5c32e84dc54e1e909",
+   "median_seconds": 10.571
+  },
+  {
+   "id": "q16",
+   "seconds": [
+    7.209,
+    7.259,
+    6.861
+   ],
+   "rows": 10,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "09b32f84f51b36635d25b0958d6bb647bf0eea793acf1279f4e1fc21787d0942",
+   "median_seconds": 7.209
+  },
+  {
+   "id": "q17",
+   "seconds": [],
+   "rows": null,
+   "error": "Query exceeded per-node memory limit of 512MB [Allocated: 505.53MB, Delta: 39.84MB, Top Consumers: {HashAggregationOperator=505.53MB, ExchangeOperator=48B}]",
+   "adapted": false
+  },
+  {
+   "id": "q18",
+   "seconds": [],
+   "rows": null,
+   "error": "Query exceeded per-node memory limit of 512MB [Allocated: 511.98MB, Delta: 153.89kB, Top Consumers: {HashAggregationOperator=382.18MB, TableScanOperator-ConnectorPageSource=84MB, PagePartitioner=40.30MB}]",
+   "adapted": false
+  },
+  {
+   "id": "q19",
+   "seconds": [],
+   "rows": null,
+   "error": "Query exceeded per-node memory limit of 512MB [Allocated: 505.70MB, Delta: 8.54MB, Top Consumers: {HashAggregationOperator=305.01MB, ScanFilterAndProjectOperator-ConnectorPageSource=129MB, PagePartitioner=42.03MB}]",
+   "adapted": true
+  },
+  {
+   "id": "q20",
+   "seconds": [
+    3.817,
+    3.446,
+    4.143
+   ],
+   "rows": 4,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "1005e9c488d0ec2b287ce4eb9f85df973f74e52edb739a360118635cac1769e5",
+   "median_seconds": 3.817
+  },
+  {
+   "id": "q21",
+   "seconds": [
+    11.972,
+    12.277,
+    13.542
+   ],
+   "rows": 1,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "3a59862b546e20deb6022ed90109ce3d24de79c2c94aa903f86d81d723bd8f84",
+   "median_seconds": 12.277
+  },
+  {
+   "id": "q22",
+   "seconds": [
+    13.146,
+    14.029,
+    13.724
+   ],
+   "rows": 10,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "cfc6ded6b01fbb9524e34692747736bc9231aa0b9a83d1a0a4bb311a26d5bc84",
+   "median_seconds": 13.724
+  },
+  {
+   "id": "q23",
+   "seconds": [
+    23.564,
+    22.293,
+    21.516
+   ],
+   "rows": 10,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "b5a4c633d50d8fac3683761c5d2bc67799e0ea3e0be3aa533d0506abfb51b2eb",
+   "median_seconds": 22.293
+  },
+  {
+   "id": "q24",
+   "seconds": [],
+   "rows": null,
+   "error": "Query exceeded per-node memory limit of 512MB [Allocated: 510.11MB, Delta: 4MB, Top Consumers: {ScanFilterAndProjectOperator-ConnectorPageSource=510MB, ScanFilterAndProjectOperator=112.46kB}]",
+   "adapted": false
+  },
+  {
+   "id": "q25",
+   "seconds": [
+    5.573,
+    6.45,
+    5.766
+   ],
+   "rows": 10,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "14c5d6def58765197f1a002e9d67d8aa05bd01a8b98329f3ac1fd5e79d7fb6fb",
+   "median_seconds": 5.766
+  },
+  {
+   "id": "q26",
+   "seconds": [
+    4.906,
+    4.803,
+    5.636
+   ],
+   "rows": 10,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "615d64e45f3a1ef141a7ce45c0b62272f565764459bc32e9212bf77067e72d1a",
+   "median_seconds": 4.906
+  },
+  {
+   "id": "q27",
+   "seconds": [
+    5.818,
+    5.46,
+    5.913
+   ],
+   "rows": 10,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "5db0eb85a6a92f789256624395200076c977f9f79e80a7c5c62a2ba9ad700aac",
+   "median_seconds": 5.818
+  },
+  {
+   "id": "q28",
+   "seconds": [
+    14.615,
+    12.982,
+    13.45
+   ],
+   "rows": 25,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "dbf842266f5f6919b1b5439a865ee371b219791be4a3cf8931b4add2052c1c6f",
+   "median_seconds": 13.45
+  },
+  {
+   "id": "q29",
+   "seconds": [],
+   "rows": null,
+   "error": "Query exceeded per-node memory limit of 512MB [Allocated: 511.53MB, Delta: 1.55MB, Top Consumers: {HashAggregationOperator=368.18MB, ScanFilterAndProjectOperator-ConnectorPageSource=103MB, PagePartitioner=38.79MB}]",
+   "adapted": false
+  },
+  {
+   "id": "q30",
+   "seconds": [
+    21.627,
+    21.831,
+    20.989
+   ],
+   "rows": 1,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "9909706d36deca29c6a79b681c20daf9d61dfa5810c89ea36b4eb4701236facd",
+   "median_seconds": 21.627
+  },
+  {
+   "id": "q31",
+   "seconds": [
+    9.184,
+    9.588,
+    9.176
+   ],
+   "rows": 10,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "832c38a25c47b566d6f3cc9c63e0fc248fdba1849ddf308c89789ecb9272de85",
+   "median_seconds": 9.184
+  },
+  {
+   "id": "q32",
+   "seconds": [
+    12.875,
+    13.156,
+    12.971
+   ],
+   "rows": 10,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "57caa1c7d36457168b0d7cefe8d78050d92efb6000ea0366eec02d1a48f63b0d",
+   "median_seconds": 12.971
+  },
+  {
+   "id": "q33",
+   "seconds": [],
+   "rows": null,
+   "error": "Query exceeded per-node memory limit of 512MB [Allocated: 511.50MB, Delta: 3.21MB, Top Consumers: {HashAggregationOperator=425.23MB, LazyOutputBuffer=32.39MB, PagePartitioner=29.87MB}]",
+   "adapted": false
+  },
+  {
+   "id": "q34",
+   "seconds": [],
+   "rows": null,
+   "error": "Query exceeded per-node memory limit of 512MB [Allocated: 510.59MB, Delta: 2.68MB, Top Consumers: {HashAggregationOperator=382.22MB, TableScanOperator-ConnectorPageSource=86MB, PagePartitioner=35.20MB}]",
+   "adapted": false
+  },
+  {
+   "id": "q35",
+   "seconds": [],
+   "rows": null,
+   "error": "Query exceeded per-node memory limit of 512MB [Allocated: 509.58MB, Delta: 3.56MB, Top Consumers: {HashAggregationOperator=316.01MB, ScanFilterAndProjectOperator-ConnectorPageSource=117MB, PagePartitioner=41.89MB}]",
+   "adapted": false
+  },
+  {
+   "id": "q36",
+   "seconds": [
+    11.593,
+    11.298,
+    11.841
+   ],
+   "rows": 10,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "6288909f254539c04aadf95c8f4b2d61a600a4cc369aec7cb1dbf56f600ce628",
+   "median_seconds": 11.593
+  },
+  {
+   "id": "q37",
+   "seconds": [
+    3.939,
+    4.125,
+    3.66
+   ],
+   "rows": 10,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "322a62b85b1fe1ac0368ff14e218eacdfcd27f00a21e0824e3c8a8f00b8cc541",
+   "median_seconds": 3.939
+  },
+  {
+   "id": "q38",
+   "seconds": [
+    3.491,
+    3.794,
+    5.023
+   ],
+   "rows": 10,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "cce985cc676dae9cb194e8a1f7becf2ff34bfca7483a57a4efa8345b3db8ad41",
+   "median_seconds": 3.794
+  },
+  {
+   "id": "q39",
+   "seconds": [
+    3.322,
+    3.384,
+    3.611
+   ],
+   "rows": 10,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "f0eec6e325da3f460600c3d198e91921d4825888833d9415844cedac76543fe0",
+   "median_seconds": 3.384
+  },
+  {
+   "id": "q40",
+   "seconds": [
+    4.986,
+    4.664,
+    5.365
+   ],
+   "rows": 10,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "98f7877ca485ea02cea91d473ec707cb7e0b43a3b45e1d28a20913a53b5369b5",
+   "median_seconds": 4.986
+  },
+  {
+   "id": "q41",
+   "seconds": [
+    3.125,
+    3.419,
+    3.153
+   ],
+   "rows": 10,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "7ae2df0306bccb42f6eb68cb3073ce1d03d9c910ff5873dc2ebe6d3e9d9961c8",
+   "median_seconds": 3.153
+  },
+  {
+   "id": "q42",
+   "seconds": [
+    3.161,
+    3.558,
+    3.634
+   ],
+   "rows": 10,
+   "error": null,
+   "adapted": false,
+   "result_sha256": "08868e3dac6e1ee0bd624bfa1d41d136b4632022add04633e8c1acd19c5d7a6b",
+   "median_seconds": 3.558
+  },
+  {
+   "id": "q43",
+   "seconds": [
+    3.285,
+    3.444,
+    3.706
+   ],
+   "rows": 10,
+   "error": null,
+   "adapted": true,
+   "result_sha256": "c6b6e77aa1d2d762ec8b43142e8384eed19318b0d0a4050615d2d2d56d0e53e9",
+   "median_seconds": 3.444
+  }
+ ]
+}
