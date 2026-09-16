@@ -164,7 +164,7 @@ def build_users(output: Path) -> pa.Table:
 
 # ── build ───────────────────────────────────────────────────────────────────
 
-def build(output: Path) -> None:
+def build(output: Path, store_schema: bool = False) -> None:
     users = build_users(output)
     # Each dimension is already dictionary-typed; chunks reuse dictionary + indices.
     dims = {}
@@ -192,7 +192,7 @@ def build(output: Path) -> None:
     # the on-disk encoding stays dictionary-compressed (RLE_DICTIONARY pages,
     # verified per column after the build).
     writer = pq.ParquetWriter(dest, schema, compression="zstd", use_dictionary=True,
-                              write_statistics=True, store_schema=False)
+                              write_statistics=True, store_schema=store_schema)
     total = 0
     t0 = time.time()
     surface_names = {sc: name for sc, name, *_ in SURFACES}
@@ -240,9 +240,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("step", choices=["build"])
     parser.add_argument("--output", type=Path, default=Path("tmp/kaveon-events"))
+    parser.add_argument("--store-schema", action="store_true",
+                        help="keep the Arrow dictionary types in the file metadata so readers "
+                             "receive dictionary arrays (the Engine's index path for string keys)")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    build(args.output)
+    build(args.output, store_schema=args.store_schema)
     return 0
 
 
