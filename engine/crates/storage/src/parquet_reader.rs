@@ -264,12 +264,16 @@ fn collect_decoder_predicates(
 /// round per row group (the predicate column first, the rest afterwards),
 /// which is more than the decode it saves; a lane decodes the projected
 /// columns in one round and drops the rejected rows before they leave it.
+/// One typed comparison against a projected batch: the column's index, the
+/// operator, and the literal as a one-element array of the column's type.
+type BatchComparison = (
+    usize,
+    CompareOp,
+    arrow::array::Scalar<Arc<dyn arrow::array::Array>>,
+);
+
 pub(crate) struct BatchPredicate {
-    comparisons: Vec<(
-        usize,
-        CompareOp,
-        arrow::array::Scalar<Arc<dyn arrow::array::Array>>,
-    )>,
+    comparisons: Vec<BatchComparison>,
 }
 
 impl BatchPredicate {
