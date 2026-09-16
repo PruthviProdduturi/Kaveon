@@ -115,6 +115,13 @@ pub fn evaluate(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
             if let Some(result) = compare_column_with_literal(left, *op, right, batch)? {
                 return Ok(result);
             }
+            // Arithmetic against a literal takes the scalar kernel: the
+            // literal is never expanded to a batch-long array. Ninety
+            // `SUM(width + k)` projections in one statement are ninety
+            // fewer allocations per batch.
+            if let Some(result) = arithmetic_with_literal(left, *op, right, batch)? {
+                return Ok(result);
+            }
             let left_arr = evaluate(left, batch)?;
             let right_arr = evaluate(right, batch)?;
             eval_binary_op(&left_arr, *op, &right_arr)
@@ -494,6 +501,76 @@ fn comparison(left: &ArrayRef, right: &ArrayRef, kind: CompareKind) -> Result<Bo
         CompareKind::Ge => gt_eq(&left, &right)?,
     };
     Ok(result)
+}
+
+/// `expression op literal` (or the reverse) for the five arithmetic
+/// operators over integer and float inputs, with the literal as an Arrow
+/// scalar. None when the shape is anything else.
+fn arithmetic_with_literal(
+    left: &Expr,
+    op: BinaryOp,
+    right: &Expr,
+    batch: &RecordBatch,
+) -> Result<Option<ArrayRef>> {
+    use arrow::array::{Datum, Scalar};
+    if !matches!(
+        op,
+        BinaryOp::Plus | BinaryOp::Minus | BinaryOp::Multiply | BinaryOp::Divide | BinaryOp::Modulo
+    ) {
+        return Ok(None);
+    }
+    let (expression, literal, literal_on_left) = match (left, right) {
+        (expression, Expr::Literal(literal)) => (expression, literal, false),
+        (Expr::Literal(literal), expression) => (expression, literal, true),
+        _ => return Ok(None),
+    };
+    let literal_type = match literal {
+        ScalarValue::Int64(_) => DataType::Int64,
+        ScalarValue::Float64(_) => DataType::Float64,
+        _ => return Ok(None),
+    };
+    let array = decode_dictionary(&evaluate(expression, batch)?)?;
+    let integer_like =
+        |data_type: &DataType| is_integer(data_type) || matches!(data_type, DataType::Date32);
+    // The same meeting types as coerce_numeric_pair: integers with an
+    // integer literal meet as Int64, anything else numeric as Float64.
+    let meet = if integer_like(array.data_type()) && literal_type == DataType::Int64 {
+        DataType::Int64
+    } else if is_numeric(array.data_type()) || integer_like(array.data_type()) {
+        DataType::Float64
+    } else {
+        return Ok(None);
+    };
+    let array = if array.data_type() == &meet {
+        array
+    } else {
+        let array = match array.data_type() {
+            DataType::Date32 => compute::cast(&array, &DataType::Int32)?,
+            _ => array,
+        };
+        compute::cast(&array, &meet)?
+    };
+    let scalar: ArrayRef = match (literal, &meet) {
+        (ScalarValue::Int64(v), DataType::Int64) => Arc::new(Int64Array::from(vec![*v])),
+        (ScalarValue::Int64(v), _) => Arc::new(Float64Array::from(vec![*v as f64])),
+        (ScalarValue::Float64(v), _) => Arc::new(Float64Array::from(vec![*v])),
+        _ => return Ok(None),
+    };
+    let scalar = Scalar::new(scalar);
+    let (l, r): (&dyn Datum, &dyn Datum) = if literal_on_left {
+        (&scalar, &array)
+    } else {
+        (&array, &scalar)
+    };
+    let result = match op {
+        BinaryOp::Plus => compute::kernels::numeric::add(l, r)?,
+        BinaryOp::Minus => compute::kernels::numeric::sub(l, r)?,
+        BinaryOp::Multiply => compute::kernels::numeric::mul(l, r)?,
+        BinaryOp::Divide => compute::kernels::numeric::div(l, r)?,
+        BinaryOp::Modulo => compute::kernels::numeric::rem(l, r)?,
+        _ => unreachable!(),
+    };
+    Ok(Some(result))
 }
 
 fn arithmetic(left: &ArrayRef, op: BinaryOp, right: &ArrayRef) -> Result<ArrayRef> {
@@ -2110,6 +2187,71 @@ mod tests {
             );
         }
         assert!(compiled_regex("(").is_err());
+    }
+
+    #[test]
+    fn arithmetic_with_a_literal_takes_the_scalar_kernel_with_the_same_types() {
+        // An Int32 column with an integer literal meets as Int64 on either
+        // side; with a float literal as Float64; a date as its day number;
+        // division by zero is still an error, as on the array path.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("w", DataType::Int32, true),
+            Field::new("d", DataType::Date32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![Some(10), None, Some(-3)])),
+                Arc::new(arrow::array::Date32Array::from(vec![10, 11, 12])),
+            ],
+        )
+        .unwrap();
+        let op = |left: Expr, op: BinaryOp, right: Expr| Expr::BinaryOp {
+            left: Box::new(left),
+            op,
+            right: Box::new(right),
+        };
+        let column = || Expr::Column("w".into());
+        let int = |v: i64| Expr::Literal(ScalarValue::Int64(v));
+        let plus = evaluate(&op(column(), BinaryOp::Plus, int(5)), &batch).unwrap();
+        assert_eq!(
+            plus.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(15), None, Some(2)]
+        );
+        let reversed = evaluate(&op(int(100), BinaryOp::Minus, column()), &batch).unwrap();
+        assert_eq!(
+            reversed
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(90), None, Some(103)]
+        );
+        let float = evaluate(
+            &op(
+                column(),
+                BinaryOp::Multiply,
+                Expr::Literal(ScalarValue::Float64(0.5)),
+            ),
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            float
+                .as_primitive::<Float64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(5.0), None, Some(-1.5)]
+        );
+        let day = evaluate(
+            &op(Expr::Column("d".into()), BinaryOp::Plus, int(1)),
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            day.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(11), Some(12), Some(13)]
+        );
+        assert!(evaluate(&op(column(), BinaryOp::Divide, int(0)), &batch).is_err());
     }
 
     #[test]
