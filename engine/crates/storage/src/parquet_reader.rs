@@ -373,6 +373,32 @@ fn comparison_literal(
     use arrow::array::{BooleanArray, Float64Array, LargeStringArray, StringArray};
     Some(match (value, data_type) {
         (ScalarValue::Int64(value), DataType::Int64) => Arc::new(Int64Array::from(vec![*value])),
+        // Narrower and unsigned integer columns, and day-number dates,
+        // compare against the literal cast to the column's own type; a
+        // literal outside that type's range is no pushdown at all.
+        (
+            ScalarValue::Int64(value),
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Date32,
+        ) => {
+            let literal = Int64Array::from(vec![*value]);
+            let cast = arrow::compute::cast_with_options(
+                &literal,
+                data_type,
+                &arrow::compute::CastOptions {
+                    safe: false,
+                    ..Default::default()
+                },
+            )
+            .ok()?;
+            cast
+        }
         (ScalarValue::Float64(value), DataType::Float64) => {
             Arc::new(Float64Array::from(vec![*value]))
         }
@@ -700,7 +726,15 @@ fn scalar_matches_data_type(value: &ScalarValue, data_type: &DataType) -> bool {
         (ScalarValue::Bool(_), DataType::Boolean)
             | (
                 ScalarValue::Int64(_),
-                DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+                DataType::Int8
+                    | DataType::Int16
+                    | DataType::Int32
+                    | DataType::Int64
+                    | DataType::UInt8
+                    | DataType::UInt16
+                    | DataType::UInt32
+                    | DataType::UInt64
+                    | DataType::Date32
             )
             | (
                 ScalarValue::Float64(_),
@@ -1010,9 +1044,10 @@ mod tests {
             CompareOp::Eq,
             ScalarValue::Int64(4),
         ));
-        // The fixture stores id as Int32, which deliberately remains on the
-        // conservative row-group-only path.
-        assert_eq!(row_count(&matching), ROW_GROUP_SIZE);
+        // The fixture stores id as Int32: the literal is cast to the column's
+        // width, so the decoded rows are filtered exactly, not only pruned by
+        // row group.
+        assert_eq!(row_count(&matching), 1);
 
         let absent = ParquetReader::new(&file.0).with_predicate(compare(
             "id",
@@ -1330,8 +1365,9 @@ mod tests {
             .is_some()
         {}
         let completed = metrics.snapshot();
-        assert_eq!(completed.rows_emitted, ROW_GROUP_SIZE as u64);
-        assert_eq!(completed.batches_emitted, 2);
+        // One row group selected, its rows filtered exactly to the match.
+        assert_eq!(completed.rows_emitted, 1);
+        assert_eq!(completed.batches_emitted, 1);
         assert!(completed.rows_per_second().is_finite());
         assert!(completed.compressed_bytes_per_second().is_finite());
     }

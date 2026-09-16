@@ -9,7 +9,9 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-const QUERY_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
+/// Exchange bytes one query may hold on this worker's disk: a high-cardinality
+/// partial from every producing task, inside the 10 GiB exchange disk limit.
+const QUERY_LIMIT: u64 = 8 * 1024 * 1024 * 1024;
 const TTL: Duration = Duration::from_secs(900);
 #[derive(Default)]
 struct QuotaState {
