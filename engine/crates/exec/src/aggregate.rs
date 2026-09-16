@@ -3033,7 +3033,7 @@ impl HashAggregate {
         Ok((groups, reservations.into_guards()))
     }
 
-    /// Two to four keys, each an integer, date, boolean, plain text or
+    /// Two to six keys, each an integer, date, boolean, plain text or
     /// dictionary column, with in-place accumulators.
     fn compact_keys_apply(&self) -> bool {
         if !(2..=MAX_COMPACT_KEYS).contains(&self.group_by.len()) {
@@ -3846,9 +3846,9 @@ fn batch_text_extreme(array: &ArrayRef, min: bool) -> Option<String> {
 }
 
 /// The most key columns the compact multi-key path packs.
-const MAX_COMPACT_KEYS: usize = 4;
+const MAX_COMPACT_KEYS: usize = 6;
 
-/// Up to four key columns as words plus a null mask.
+/// Up to six key columns as words plus a null mask.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
 struct CompactGroupKey {
     words: [u64; MAX_COMPACT_KEYS],
