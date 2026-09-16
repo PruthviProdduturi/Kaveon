@@ -65,6 +65,8 @@ spec:
           secret: {secretName: kaveon-trino-benchmark-tls}
         - name: trino-auth
           secret: {secretName: kaveon-trino-benchmark-auth}
-        - name: results
-          persistentVolumeClaim: {claimName: kaveon-trino-benchmark-results}
+        # The record is read from the Job log; nothing here needs to outlive
+        # the pod, and the runner's results claim exists only while the
+        # runner is enabled.
+        - {name: results, emptyDir: {sizeLimit: 256Mi}}
         - {name: tmp, emptyDir: {sizeLimit: 1Gi}}
