@@ -1,11 +1,20 @@
-//! Opt-in local aggregate workers. Operators are constructed inside their owning threads.
+//! Parallel partial aggregation inside one task. Rows are hash-partitioned
+//! by group key across aggregator threads, so every group lives in exactly
+//! one thread's map and memory is the same as one aggregator's; ungrouped
+//! aggregates round-robin. Operators are constructed inside their owning
+//! threads.
 use crate::{
     aggregate::{
-        AggExpr, HashAggregate, aggregate_output_types, grouped_aggregate_states_to_schema_batch,
+        AggExpr, HashAggregate, aggregate_output_types, exchanged_group_key_type,
+        grouped_aggregate_states_to_schema_batch,
     },
+    exchange::HashPartitioner,
     partitioned::{PartitionedHashAggregate, spill_from_environment},
 };
-use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
+use arrow::{
+    datatypes::{DataType, SchemaRef},
+    record_batch::RecordBatch,
+};
 use kaveon_core::{BatchOperator, KaveonError, MemoryReservation, QueryMemoryPool, Result};
 use std::{
     sync::{
@@ -18,12 +27,17 @@ use std::{
 };
 
 const MAX_WORKERS: usize = 16;
+/// Aggregator threads per task when `KAVEON_LOCAL_PARALLELISM` is unset:
+/// the cores the process sees, at most this many.
+const DEFAULT_MAX_PARALLELISM: usize = 4;
 pub fn configured_parallelism() -> Result<usize> {
     let value = match std::env::var("KAVEON_LOCAL_PARALLELISM") {
         Ok(value) => value
             .parse::<usize>()
             .map_err(|_| error("KAVEON_LOCAL_PARALLELISM must be a positive integer"))?,
-        Err(std::env::VarError::NotPresent) => 1,
+        Err(std::env::VarError::NotPresent) => thread::available_parallelism()
+            .map_or(1, usize::from)
+            .min(DEFAULT_MAX_PARALLELISM),
         Err(_) => return Err(error("KAVEON_LOCAL_PARALLELISM must contain Unicode")),
     };
     if value == 0 {
@@ -98,7 +112,7 @@ impl ParallelPartials {
                 source
                     .schema()
                     .field_with_name(name)
-                    .map(|f| f.data_type().clone())
+                    .map(|f| exchanged_group_key_type(f.data_type()))
                     .map_err(KaveonError::from)
             })
             .collect::<Result<Vec<_>>>()?;
@@ -163,6 +177,25 @@ impl ParallelPartials {
         }
         drop(output_tx);
         let account = self.pool.operator("parallel-input-queue")?;
+        // Grouped: rows go to the thread their key hashes to, so the threads
+        // hold disjoint groups. Ungrouped, or keyed only by dictionary
+        // columns (a handful of groups, cheaper to fold N times than to
+        // hash-partition every row): slices round-robin.
+        let low_cardinality_keys = self.groups.iter().all(|name| {
+            source
+                .schema()
+                .field_with_name(name)
+                .is_ok_and(|field| matches!(field.data_type(), DataType::Dictionary(_, _)))
+        });
+        let partitioner = if self.groups.is_empty() || self.workers == 1 || low_cardinality_keys {
+            None
+        } else {
+            Some(HashPartitioner::try_new(
+                source.schema(),
+                &self.groups,
+                self.workers,
+            )?)
+        };
         let mut index = 0;
         while let Some(batch) = source.next_batch()? {
             if batch.schema() != *source.schema() {
@@ -171,19 +204,41 @@ impl ParallelPartials {
                 ));
             }
             account.check_cancelled()?;
-            let memory = Arc::new(account.reserve(batch.get_array_memory_size() as u64)?);
-            for offset in (0..batch.num_rows()).step_by(8192) {
-                let slice = batch.slice(offset, 8192.min(batch.num_rows() - offset));
-                send_bounded(
-                    &senders[index % self.workers],
-                    QueuedBatch {
-                        batch: slice,
-                        _memory: memory.clone(),
-                    },
-                    &self.stopped,
-                    &self.pool,
-                )?;
-                index += 1;
+            match &partitioner {
+                Some(partitioner) => {
+                    for (worker, part) in partitioner.partition(&batch)?.into_iter().enumerate() {
+                        if part.num_rows() == 0 {
+                            continue;
+                        }
+                        let memory =
+                            Arc::new(account.reserve(part.get_array_memory_size() as u64)?);
+                        send_bounded(
+                            &senders[worker],
+                            QueuedBatch {
+                                batch: part,
+                                _memory: memory,
+                            },
+                            &self.stopped,
+                            &self.pool,
+                        )?;
+                    }
+                }
+                None => {
+                    let memory = Arc::new(account.reserve(batch.get_array_memory_size() as u64)?);
+                    for offset in (0..batch.num_rows()).step_by(8192) {
+                        let slice = batch.slice(offset, 8192.min(batch.num_rows() - offset));
+                        send_bounded(
+                            &senders[index % self.workers],
+                            QueuedBatch {
+                                batch: slice,
+                                _memory: memory.clone(),
+                            },
+                            &self.stopped,
+                            &self.pool,
+                        )?;
+                        index += 1;
+                    }
+                }
             }
         }
         drop(senders);
@@ -316,19 +371,19 @@ fn run_worker(
                 source
                     .schema()
                     .field_with_name(name)
-                    .map(|f| f.data_type().clone())
+                    .map(|f| exchanged_group_key_type(f.data_type()))
                     .map_err(KaveonError::from)
             })
             .collect::<Result<Vec<_>>>()?;
         let operator = HashAggregate::new_with_memory(source, groups, aggregates, account.clone())?
             .with_reserved_input();
         let (states, guards) = operator.into_grouped_states_with_reservations()?;
+        // Encoding: the state bytes again, or a few hundred bytes per group.
         let bytes = guards
             .iter()
             .map(MemoryReservation::bytes)
             .sum::<u64>()
-            .saturating_mul(4)
-            .saturating_add((states.len() as u64).saturating_mul(4096))
+            .max((states.len() as u64).saturating_mul(256))
             .saturating_add(8192);
         let memory = Arc::new(account.reserve(bytes)?);
         let batch = grouped_aggregate_states_to_schema_batch(&states, &keys, &types)?;
