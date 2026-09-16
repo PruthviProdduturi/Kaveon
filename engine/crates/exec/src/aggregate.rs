@@ -2941,10 +2941,8 @@ impl HashAggregate {
                     return Ok(*slot);
                 }
                 if let Some(memory) = &self.memory {
-                    reservations.reserve(
-                        memory,
-                        estimated_group_bytes(&[GroupKey::Utf8(Arc::from(text))], stride),
-                    )?;
+                    reservations
+                        .reserve(memory, slot_group_bytes(16 + text.len() as u64, stride))?;
                 }
                 if let Some(metrics) = &metrics {
                     metrics.groups_created.fetch_add(1, Ordering::Relaxed);
@@ -2998,10 +2996,7 @@ impl HashAggregate {
                 let accumulators: &mut [Accumulator] = if slot == u32::MAX {
                     if null_states.is_none() {
                         if let Some(memory) = &self.memory {
-                            reservations.reserve(
-                                memory,
-                                estimated_group_bytes(&[GroupKey::Null], stride),
-                            )?;
+                            reservations.reserve(memory, slot_group_bytes(0, stride))?;
                         }
                         if let Some(metrics) = &metrics {
                             metrics.groups_created.fetch_add(1, Ordering::Relaxed);
@@ -3111,14 +3106,7 @@ impl HashAggregate {
                     .expect("validated aggregate input")
             })
             .collect::<Vec<_>>();
-        let group_bytes = estimated_group_bytes(
-            &self
-                .group_by
-                .iter()
-                .map(|_| GroupKey::Int64(0))
-                .collect::<Vec<_>>(),
-            stride,
-        );
+        let group_bytes = slot_group_bytes(8 * MAX_COMPACT_KEYS as u64, stride);
 
         while let Some(batch) = self.source.next_batch()? {
             if let Some(metrics) = &metrics {
@@ -3274,7 +3262,7 @@ impl HashAggregate {
         let mut states: Vec<Accumulator> = Vec::new();
         let mut null_states: Option<Vec<Accumulator>> = None;
         let mut reservations = ReservationSlab::default();
-        let group_bytes = estimated_group_bytes(&[GroupKey::Int64(0)], stride);
+        let group_bytes = slot_group_bytes(8, stride);
         let metrics = self
             .memory
             .as_ref()
@@ -3850,6 +3838,15 @@ fn batch_text_extreme(array: &ArrayRef, min: bool) -> Option<String> {
 
 /// The most key columns the compact multi-key path packs.
 const MAX_COMPACT_KEYS: usize = 6;
+
+/// Memory one group occupies on a slot-indexed path: the index entry with
+/// its hash overhead, the key bytes, and the accumulators in the flat
+/// vector — no vector per group.
+fn slot_group_bytes(key_bytes: u64, stride: usize) -> u64 {
+    96u64
+        .saturating_add(key_bytes)
+        .saturating_add((stride as u64).saturating_mul(std::mem::size_of::<Accumulator>() as u64))
+}
 
 /// Up to six key columns as words plus a null mask.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
