@@ -78,6 +78,20 @@ def result_hash(rows, ordered):
     return hashlib.sha256("\n".join(rendered).encode()).hexdigest()
 
 
+def wait_ready(trino, timeout=300):
+    """A freshly activated coordinator answers 500 until its authenticators
+    and workers are up; wait for the first trivial statement to succeed."""
+    started = time.time()
+    while True:
+        try:
+            trino.query("SELECT 1")
+            return
+        except Exception as exc:
+            if time.time() - started > timeout:
+                raise RuntimeError(f"Trino did not become ready: {exc}") from exc
+            time.sleep(5)
+
+
 def declare_tables(trino, tables, account):
     root = f"abfs://opensource@{account}.dfs.core.windows.net"
     for table in tables:
@@ -92,6 +106,7 @@ def main():
     suite = json.load(open(os.environ["SUITE"], encoding="utf-8"))
     tables = json.load(open(os.environ["TRINO_TABLES"], encoding="utf-8"))
     trino = Trino(suite["schema"])
+    wait_ready(trino)
     declare_tables(trino, tables, os.environ["TRINO_ACCOUNT"])
     records = []
     for statement in suite["statements"]:
