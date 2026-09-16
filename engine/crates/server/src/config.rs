@@ -22,6 +22,8 @@ pub struct ServerConfig {
     pub coordinator_exchange_spool: bool,
     pub exchange_spool_root: PathBuf,
     pub exchange_disk_limit_bytes: u64,
+    /// One query's share of the exchange spool.
+    pub exchange_query_disk_limit_bytes: u64,
     pub node_id: String,
     pub environment: String,
     pub coordinator: bool,
@@ -95,6 +97,7 @@ impl Default for ServerConfig {
             coordinator_exchange_spool: true,
             exchange_spool_root: std::env::temp_dir(),
             exchange_disk_limit_bytes: 10 * 1024 * 1024 * 1024,
+            exchange_query_disk_limit_bytes: 8 * 1024 * 1024 * 1024,
             node_id: uuid::Uuid::new_v4().to_string(),
             environment: "production".into(),
             coordinator: true,
@@ -427,9 +430,12 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     if let Ok(value) = std::env::var("KAVEON_EXCHANGE_DISK_LIMIT_BYTES") {
         config.exchange_disk_limit_bytes = value.parse()?;
     }
+    if let Ok(value) = std::env::var("KAVEON_EXCHANGE_QUERY_DISK_LIMIT_BYTES") {
+        config.exchange_query_disk_limit_bytes = value.parse()?;
+    }
     anyhow::ensure!(
-        config.exchange_disk_limit_bytes > 0,
-        "exchange disk limit must be positive"
+        config.exchange_disk_limit_bytes > 0 && config.exchange_query_disk_limit_bytes > 0,
+        "exchange disk limits must be positive"
     );
     config.security.validate()?;
     validate_product_transactions(&config)?;

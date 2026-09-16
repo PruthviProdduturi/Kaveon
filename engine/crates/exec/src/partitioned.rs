@@ -664,7 +664,6 @@ pub struct FlushingPartialAggregate {
     memory: OperatorMemoryAccount,
     budget_share: usize,
     input_reserved: bool,
-    output_memory: Option<MemoryReservation>,
 }
 
 impl FlushingPartialAggregate {
@@ -697,7 +696,6 @@ impl FlushingPartialAggregate {
             memory,
             budget_share: 1,
             input_reserved: false,
-            output_memory: None,
         })
     }
 
@@ -713,13 +711,16 @@ impl FlushingPartialAggregate {
         self
     }
 
-    /// Bytes held before a flush: an eighth of the query budget, divided
-    /// among the operators running side by side. The encoded batch takes
-    /// up to about four times the columnar state while it is built, so the
-    /// flush leaves that much of the share free.
+    /// Bytes held before a flush: a sixth of the query budget, divided
+    /// among the operators running side by side. A flush emits every group
+    /// held once more, so the fewer the rounds the less the exchange
+    /// carries; but a round's peak is about four times its state (the
+    /// table's last doubling stays reserved, and the encoded batch is
+    /// bigger than the columns it comes from), which is what the rest of
+    /// the share is for.
     fn flush_bytes(&self) -> u64 {
         let pool = self.memory.query().snapshot().limit_bytes;
-        (pool / 8 / self.budget_share as u64).max(1)
+        (pool / 6 / self.budget_share as u64).max(1)
     }
 }
 
@@ -729,7 +730,6 @@ impl BatchOperator for FlushingPartialAggregate {
     }
 
     fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
-        self.output_memory = None;
         loop {
             if self.exhausted.get() {
                 return Ok(None);
@@ -752,13 +752,14 @@ impl BatchOperator for FlushingPartialAggregate {
                 self.memory.clone(),
             )?
             .with_reserved_input();
-            let (batch, _state_memory) =
+            let (batch, state_memory) =
                 operator.into_partial_batch(&self.group_types, &self.output_types)?;
+            // The groups are gone once the batch exists; the consumer
+            // accounts for the batch it takes, as for any operator's output.
+            drop(state_memory);
             // An ungrouped partial over no rows is still one row of empty
             // states; a grouped one is nothing.
             if batch.num_rows() > 0 {
-                self.output_memory =
-                    Some(self.memory.reserve(batch.get_array_memory_size() as u64)?);
                 return Ok(Some(batch));
             }
         }
@@ -1681,15 +1682,15 @@ mod tests {
         assert!(grouped.next_batch().unwrap().is_none());
         assert_eq!(grouped_pool.snapshot().current_bytes, 0);
 
-        // 100 000 groups cannot stay in memory in an 8 MiB budget: the
+        // 300 000 groups cannot stay in memory in a 16 MiB budget: the
         // partial flushes its groups in rounds instead of spilling — every
         // row is read once, every group reaches the output (as several
         // partial rows that merge), the peak stays inside the budget, and
         // the disk is not touched.
-        let bounded_pool = QueryMemoryPool::new("bounded-partial", 8 * 1024 * 1024).unwrap();
+        let bounded_pool = QueryMemoryPool::new("bounded-partial", 16 * 1024 * 1024).unwrap();
         let bounded_spill = spill();
         let mut high_cardinality = PartitionedHashAggregate::new_partial(
-            input((0..100_000).map(Some).collect(), 8_192),
+            input((0..300_000).map(Some).collect(), 8_192),
             vec!["id".into()],
             vec![AggExpr::new(AggFunc::Count, "*")],
             bounded_pool.operator("high-cardinality").unwrap(),
@@ -1704,13 +1705,13 @@ mod tests {
         assert!(high_cardinality_batches.len() > 1, "several flush rounds");
         let states = grouped_aggregate_states_from_batches(&high_cardinality_batches).unwrap();
         let merged = merge_grouped_aggregate_states(states).unwrap();
-        assert_eq!(merged.len(), 100_000);
+        assert_eq!(merged.len(), 300_000);
         let input_rows = aggregate_metrics(&bounded_pool)
             .unwrap()
             .snapshot()
             .input_rows;
-        assert_eq!(input_rows, 100_000, "every row read once");
-        assert!(bounded_pool.snapshot().peak_bytes <= 8 * 1024 * 1024);
+        assert_eq!(input_rows, 300_000, "every row read once");
+        assert!(bounded_pool.snapshot().peak_bytes <= 16 * 1024 * 1024);
         assert_eq!(bounded_spill.snapshot().peak_bytes, 0);
         assert_eq!(bounded_pool.snapshot().current_bytes, 0);
     }

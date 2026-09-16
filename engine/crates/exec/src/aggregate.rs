@@ -2151,9 +2151,9 @@ impl HashAggregate {
         if let Some(key_types) = self.columnar_key_types() {
             let (groups, mut reservations) = self.collect_columnar(key_types)?;
             if let Some(memory) = &memory {
-                // The columns know their encoded size; the builders grow by
-                // doubling, so up to twice that is live while they fill.
-                reservations.push(memory.reserve(groups.encoded_bytes().saturating_mul(2))?);
+                // The columns know their encoded size; the builders are
+                // sized from it, with room for the estimate to be short.
+                reservations.push(memory.reserve(groups.encoded_bytes() * 3 / 2)?);
             }
             let batch = columnar_partial_batch(&groups, group_types, output_types)?;
             return Ok((batch, reservations));
@@ -2245,6 +2245,10 @@ impl HashAggregate {
             })
             .collect::<Vec<_>>();
         let slot_bytes = groups.slot_bytes();
+        // The table's next doubling, reserved before it happens and replaced
+        // at the next: the old table is freed once the copy is done, so
+        // only one doubling is ever outstanding.
+        let mut growth: Option<MemoryReservation> = None;
         let mut growth_reserved_at = 0usize;
 
         while let Some(batch) = self.source.next_batch()? {
@@ -2275,9 +2279,11 @@ impl HashAggregate {
             let values = values.iter().map(Option::as_ref).collect::<Vec<_>>();
             if let Some(memory) = &self.memory {
                 memory.check_cancelled()?;
-                let growth = groups.growth_bytes(rows);
-                if growth != 0 && groups.capacity() != growth_reserved_at {
-                    reservations.reserve(memory, growth)?;
+                let doubling = groups.growth_bytes(rows);
+                if doubling != 0 && groups.capacity() != growth_reserved_at {
+                    // Release the previous doubling before taking this one.
+                    drop(growth.take());
+                    growth = Some(memory.reserve(doubling)?);
                     growth_reserved_at = groups.capacity();
                 }
                 let key_bytes = keys
@@ -2306,7 +2312,9 @@ impl HashAggregate {
                     .fetch_add(created as u64, Ordering::Relaxed);
             }
         }
-        Ok((groups, reservations.into_guards()))
+        let mut guards = reservations.into_guards();
+        guards.extend(growth);
+        Ok((groups, guards))
     }
 
     fn collect_states(&mut self) -> Result<(GroupStateMap, Vec<MemoryReservation>)> {

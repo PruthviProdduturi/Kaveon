@@ -172,9 +172,10 @@ async fn main() {
     }
     let disk_exchange_store = if config.coordinator && config.coordinator_exchange_spool {
         Some(
-            disk_exchange::DiskExchangeStore::new(
+            disk_exchange::DiskExchangeStore::with_query_limit(
                 &config.exchange_spool_root,
                 config.exchange_disk_limit_bytes,
+                config.exchange_query_disk_limit_bytes,
             )
             .expect("exchange spool can be initialized"),
         )

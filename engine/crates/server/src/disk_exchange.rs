@@ -21,6 +21,7 @@ struct QuotaState {
 struct Quota {
     state: Mutex<QuotaState>,
     limit: u64,
+    query_limit: u64,
 }
 struct Directory(PathBuf);
 impl Drop for Directory {
@@ -66,7 +67,12 @@ pub struct DiskExchangeStore {
 }
 impl DiskExchangeStore {
     pub fn new(root: &Path, limit: u64) -> Result<Self, String> {
-        if limit == 0 {
+        Self::with_query_limit(root, limit, QUERY_LIMIT)
+    }
+
+    /// `query_limit` bounds one query's share of `limit`.
+    pub fn with_query_limit(root: &Path, limit: u64, query_limit: u64) -> Result<Self, String> {
+        if limit == 0 || query_limit == 0 {
             return Err("exchange disk limit must be positive".into());
         }
         fs::create_dir_all(root).map_err(|error| error.to_string())?;
@@ -88,6 +94,7 @@ impl DiskExchangeStore {
             quota: Arc::new(Quota {
                 state: Mutex::new(QuotaState::default()),
                 limit,
+                query_limit: query_limit.min(limit),
             }),
             state: Mutex::new(StoreState::default()),
         })
@@ -107,7 +114,7 @@ impl DiskExchangeStore {
             return Err("query exchange lifecycle is already finished".into());
         }
         if let Some(entry) = state.entries.get(&chunk.identity) {
-            if entry.count != chunk.chunk_count {
+            if entry.count != 0 && chunk.chunk_count != 0 && entry.count != chunk.chunk_count {
                 return Err("conflicting exchange chunk count".into());
             }
             if let Some(existing) = entry.chunks.get(&chunk.chunk_index) {
@@ -130,7 +137,7 @@ impl DiskExchangeStore {
                 .map_err(|_| "exchange quota unavailable")?;
             let query_bytes = quota.queries.get(&query).copied().unwrap_or_default();
             if quota.total.saturating_add(bytes) > self.quota.limit
-                || query_bytes.saturating_add(bytes) > QUERY_LIMIT
+                || query_bytes.saturating_add(bytes) > self.quota.query_limit
             {
                 return Err("exchange disk quota exceeded".into());
             }
@@ -157,6 +164,9 @@ impl DiskExchangeStore {
                 expires: Instant::now() + TTL,
             });
         entry.expires = Instant::now() + TTL;
+        if chunk.chunk_count != 0 {
+            entry.count = chunk.chunk_count;
+        }
         entry.chunks.insert(chunk.chunk_index, file);
         Ok(())
     }
@@ -169,7 +179,9 @@ impl DiskExchangeStore {
             let Some(entry) = state.entries.get_mut(identity) else {
                 return Ok(None);
             };
-            if entry.chunks.len() != entry.count || entry.chunks.keys().copied().ne(0..entry.count)
+            if entry.count == 0
+                || entry.chunks.len() != entry.count
+                || entry.chunks.keys().copied().ne(0..entry.count)
             {
                 return Err("incomplete exchange chunk set".into());
             }
