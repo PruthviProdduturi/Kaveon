@@ -233,6 +233,20 @@ impl ParallelPartials {
         })
     }
 
+    /// Any operator whose input can be split by the hash of `keys` and
+    /// whose outputs union without a merge — the final aggregate over
+    /// partial rows keyed by their encoded group key, for one.
+    pub fn partitioned(
+        source: Box<dyn BatchOperator>,
+        schema: SchemaRef,
+        keys: Vec<String>,
+        operator: ThreadOperator,
+        pool: QueryMemoryPool,
+        workers: usize,
+    ) -> Result<Self> {
+        Self::over(source, schema, keys, false, operator, pool, workers)
+    }
+
     fn over(
         source: Box<dyn BatchOperator>,
         schema: SchemaRef,
