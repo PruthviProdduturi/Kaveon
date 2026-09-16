@@ -295,8 +295,17 @@ impl ExecutableFragmentBuilder<'_> {
             }
             LogicalPlan::Filter { input, predicate } => {
                 let stage = self.build(input)?;
+                // HAVING: the filter sits on the aggregate's output, where
+                // SUM(x) is a column, and nothing about it reaches the scan.
+                let over_aggregate = matches!(input.as_ref(), LogicalPlan::Aggregate { .. });
+                let predicate = if over_aggregate {
+                    bind_aggregate_references(predicate.clone())
+                } else {
+                    predicate.clone()
+                };
                 let mut draft = self.draft_mut(stage)?;
-                if let Some(storage_predicate) = to_storage_predicate(predicate)
+                if !over_aggregate
+                    && let Some(storage_predicate) = to_storage_predicate(&predicate)
                     && let Some(FragmentNode {
                         operator: FragmentOperator::Scan(scan),
                         ..
@@ -304,12 +313,7 @@ impl ExecutableFragmentBuilder<'_> {
                 {
                     scan.predicate = Some(storage_predicate);
                 }
-                draft.push(
-                    FragmentOperator::Filter {
-                        predicate: predicate.clone(),
-                    },
-                    vec![draft.root],
-                );
+                draft.push(FragmentOperator::Filter { predicate }, vec![draft.root]);
                 Ok(stage)
             }
             LogicalPlan::Project { input, columns } => {
@@ -425,7 +429,14 @@ impl ExecutableFragmentBuilder<'_> {
                 self.build_single_exchange(input, FragmentOperator::Offset { offset: *count }, None)
             }
             LogicalPlan::Distinct { input } => {
-                self.build_single_exchange(input, FragmentOperator::Distinct, None)
+                // Each worker deduplicates its own partition before the
+                // exchange; DISTINCT over a low-cardinality column then ships
+                // a handful of rows instead of the whole column.
+                self.build_single_exchange(
+                    input,
+                    FragmentOperator::Distinct,
+                    Some(FragmentOperator::Distinct),
+                )
             }
             LogicalPlan::Union { inputs, .. } => {
                 let mut stages = Vec::new();
@@ -546,10 +557,75 @@ impl ExecutableFragmentBuilder<'_> {
                 condition,
                 distribution,
             } => self.build_join(left, right, *join_type, condition.as_ref(), *distribution),
-            LogicalPlan::SemiJoin { .. } | LogicalPlan::AntiJoin { .. } => Err(
-                KaveonError::Execution("distributed semi/anti joins are not implemented".into()),
-            ),
+            LogicalPlan::SemiJoin {
+                left,
+                right,
+                left_key,
+                right_key,
+            }
+            | LogicalPlan::AntiJoin {
+                left,
+                right,
+                left_key,
+                right_key,
+            } => {
+                // The subquery side is one column of distinct-ish keys; it
+                // broadcasts into every probe task like a small build side.
+                let left_stage = self.build(left)?;
+                let right_stage = self.build(right)?;
+                let join_type = if matches!(plan, LogicalPlan::SemiJoin { .. }) {
+                    FragmentJoinType::Semi
+                } else {
+                    FragmentJoinType::Anti
+                };
+                self.attach_broadcast_join(
+                    left_stage,
+                    right_stage,
+                    JoinSpec {
+                        join_type,
+                        left_qualifier: None,
+                        right_qualifier: None,
+                        left_keys: vec![left_key.clone()],
+                        right_keys: vec![right_key.clone()],
+                        residual: None,
+                        broadcast: true,
+                    },
+                )
+            }
         }
+    }
+
+    /// Route `right_stage` into `left_stage` as a broadcast exchange and
+    /// finish the left stage with `spec` joining its root to that input.
+    fn attach_broadcast_join(
+        &mut self,
+        left_stage: StageId,
+        right_stage: StageId,
+        spec: JoinSpec,
+    ) -> Result<StageId> {
+        let right_exchange = self.exchange(right_stage, left_stage)?.clone();
+        let right_root = self.draft_mut(right_stage)?.root;
+        self.draft_mut(right_stage)?.push(
+            FragmentOperator::ExchangeOutput(ExchangeOutput {
+                exchange_id: right_exchange.id.clone(),
+                partitioning: Partitioning::Broadcast,
+            }),
+            vec![right_root],
+        );
+        let mut draft = self.draft_mut(left_stage)?;
+        let right_input = FragmentNodeId(draft.nodes.len() as u32);
+        draft.nodes.push(FragmentNode {
+            id: right_input,
+            inputs: Vec::new(),
+            operator: FragmentOperator::ExchangeInput(ExchangeInput {
+                exchange_id: right_exchange.id,
+            }),
+        });
+        draft.push(
+            FragmentOperator::HashJoin(spec),
+            vec![draft.root, right_input],
+        );
+        Ok(left_stage)
     }
 
     fn build_single_exchange(
@@ -591,32 +667,12 @@ impl ExecutableFragmentBuilder<'_> {
         let left_stage = self.build(left)?;
         let right_stage = self.build(right)?;
         if distribution == JoinDistribution::BroadcastRight {
-            let right_exchange = self.exchange(right_stage, left_stage)?.clone();
-            let right_root = self.draft_mut(right_stage)?.root;
-            self.draft_mut(right_stage)?.push(
-                FragmentOperator::ExchangeOutput(ExchangeOutput {
-                    exchange_id: right_exchange.id.clone(),
-                    partitioning: Partitioning::Broadcast,
-                }),
-                vec![right_root],
-            );
-            let right_input;
-            {
-                let mut draft = self.draft_mut(left_stage)?;
-                right_input = FragmentNodeId(draft.nodes.len() as u32);
-                draft.nodes.push(FragmentNode {
-                    id: right_input,
-                    inputs: Vec::new(),
-                    operator: FragmentOperator::ExchangeInput(ExchangeInput {
-                        exchange_id: right_exchange.id,
-                    }),
-                });
-            }
             let keys = join_keys(condition)?;
             let (left_keys, right_keys): (Vec<_>, Vec<_>) = keys.into_iter().unzip();
-            let mut draft = self.draft_mut(left_stage)?;
-            draft.push(
-                FragmentOperator::HashJoin(JoinSpec {
+            return self.attach_broadcast_join(
+                left_stage,
+                right_stage,
+                JoinSpec {
                     join_type: fragment_join_type(join_type),
                     left_qualifier: relation_qualifier(left),
                     right_qualifier: relation_qualifier(right),
@@ -624,10 +680,8 @@ impl ExecutableFragmentBuilder<'_> {
                     right_keys: right_keys.into_iter().map(Expr::Column).collect(),
                     residual: None,
                     broadcast: true,
-                }),
-                vec![draft.root, right_input],
+                },
             );
-            return Ok(left_stage);
         }
         let target = StageId(self.next_stage);
         let left_exchange = self.exchange(left_stage, target)?.clone();
@@ -741,13 +795,28 @@ impl FragmentDraftGuard<'_> {
 }
 
 fn named_expressions(expressions: &[Expr]) -> Vec<NamedExpr> {
+    // Columns from two relations that share a name (`t.country`,
+    // `u.country`) keep their qualifiers so both outputs stay addressable.
+    let mut bare_names = BTreeMap::<String, usize>::new();
+    for expression in expressions {
+        if let Expr::Column(column) = expression {
+            *bare_names.entry(unqualify(column)).or_default() += 1;
+        }
+    }
     expressions
         .iter()
         .enumerate()
         .map(|(index, expression)| NamedExpr {
             name: match expression {
                 Expr::Alias { name, .. } => name.clone(),
-                Expr::Column(column) => unqualify(column),
+                Expr::Column(column) => {
+                    let bare = unqualify(column);
+                    if bare_names[&bare] > 1 {
+                        column.clone()
+                    } else {
+                        bare
+                    }
+                }
                 _ => format!("expr_{index}"),
             },
             expression: expression.clone(),
@@ -759,30 +828,97 @@ fn fragment_project_expressions(expressions: &[Expr]) -> Vec<NamedExpr> {
     named_expressions(expressions)
         .into_iter()
         .map(|mut named| {
-            named.expression = match named.expression {
-                Expr::Function { name, args } if AGGREGATE_FUNCTIONS.contains(&name.as_str()) => {
-                    Expr::Column(fragment_aggregate_output_name(&name, &args))
-                }
-                Expr::Alias { expr, name } => match *expr {
-                    Expr::Function {
-                        name: function,
-                        args,
-                    } if AGGREGATE_FUNCTIONS.contains(&function.as_str()) => Expr::Alias {
-                        expr: Box::new(Expr::Column(fragment_aggregate_output_name(
-                            &function, &args,
-                        ))),
-                        name,
-                    },
-                    expression => Expr::Alias {
-                        expr: Box::new(expression),
-                        name,
-                    },
-                },
-                expression => expression,
-            };
+            named.expression = bind_aggregate_references(named.expression);
             named
         })
         .collect()
+}
+
+/// Above an aggregate, every aggregate call — at the top of an expression,
+/// under an alias, or nested in arithmetic, a CASE or a HAVING comparison —
+/// is the aggregate's output column, not a function to evaluate.
+fn bind_aggregate_references(expression: Expr) -> Expr {
+    let bind = |expr: Box<Expr>| Box::new(bind_aggregate_references(*expr));
+    match expression {
+        Expr::Function { name, args } if AGGREGATE_FUNCTIONS.contains(&name.as_str()) => {
+            Expr::Column(fragment_aggregate_output_name(&name, &args))
+        }
+        Expr::Function { name, args } => Expr::Function {
+            name,
+            args: args.into_iter().map(bind_aggregate_references).collect(),
+        },
+        Expr::Alias { expr, name } => Expr::Alias {
+            expr: bind(expr),
+            name,
+        },
+        Expr::BinaryOp { left, op, right } => Expr::BinaryOp {
+            left: bind(left),
+            op,
+            right: bind(right),
+        },
+        Expr::IsNull(expr) => Expr::IsNull(bind(expr)),
+        Expr::IsNotNull(expr) => Expr::IsNotNull(bind(expr)),
+        Expr::Not(expr) => Expr::Not(bind(expr)),
+        Expr::And(left, right) => Expr::And(bind(left), bind(right)),
+        Expr::Or(left, right) => Expr::Or(bind(left), bind(right)),
+        Expr::Case {
+            operand,
+            when_then,
+            else_expr,
+        } => Expr::Case {
+            operand: operand.map(bind),
+            when_then: when_then
+                .into_iter()
+                .map(|(when, then)| {
+                    (
+                        bind_aggregate_references(when),
+                        bind_aggregate_references(then),
+                    )
+                })
+                .collect(),
+            else_expr: else_expr.map(bind),
+        },
+        Expr::Like {
+            expr,
+            pattern,
+            negated,
+            case_insensitive,
+        } => Expr::Like {
+            expr: bind(expr),
+            pattern: bind(pattern),
+            negated,
+            case_insensitive,
+        },
+        Expr::Between {
+            expr,
+            low,
+            high,
+            negated,
+        } => Expr::Between {
+            expr: bind(expr),
+            low: bind(low),
+            high: bind(high),
+            negated,
+        },
+        Expr::InList {
+            expr,
+            list,
+            negated,
+        } => Expr::InList {
+            expr: bind(expr),
+            list: list.into_iter().map(bind_aggregate_references).collect(),
+            negated,
+        },
+        Expr::Cast { expr, data_type } => Expr::Cast {
+            expr: bind(expr),
+            data_type,
+        },
+        Expr::Extract { field, expr } => Expr::Extract {
+            field,
+            expr: bind(expr),
+        },
+        other => other,
+    }
 }
 
 fn fragment_aggregate_output_name(function: &str, arguments: &[Expr]) -> String {
@@ -1029,9 +1165,15 @@ impl StageGraphBuilder {
                 Ok(stage)
             }
             LogicalPlan::Scan { .. } => Ok(self.add_stage(plan, self.worker_count)),
-            LogicalPlan::SemiJoin { .. } | LogicalPlan::AntiJoin { .. } => Err(
-                KaveonError::Execution("distributed semi/anti joins are not implemented".into()),
-            ),
+            LogicalPlan::SemiJoin { left, right, .. }
+            | LogicalPlan::AntiJoin { left, right, .. } => {
+                let left_stage = self.build(left)?;
+                let right_stage = self.build(right)?;
+                let physical = physical_plan_tree(plan);
+                self.wrap_stage(left_stage, "BroadcastSemiJoin", physical.attributes);
+                self.add_exchange(right_stage, left_stage, Partitioning::Broadcast);
+                Ok(left_stage)
+            }
         }
     }
 
@@ -1812,6 +1954,8 @@ fn relation_qualifier(plan: &LogicalPlan) -> Option<String> {
                 .clone()
                 .unwrap_or_else(|| table.rsplit('.').next().unwrap_or(table).to_owned()),
         ),
+        // A pushed-down filter keeps its input relation.
+        LogicalPlan::Filter { input, .. } => relation_qualifier(input),
         _ => None,
     }
 }
@@ -1837,9 +1981,10 @@ mod tests {
     use arrow::array::Int64Array;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
+    use kaveon_core::predicate::ScalarValue;
     use kaveon_core::{
-        AccessPattern, CatalogProvider, DataFormat, MemoryCatalog, StorageType, TableMeta,
-        collect_batches,
+        AccessPattern, BinaryOp, CatalogProvider, DataFormat, MemoryCatalog, StorageType,
+        TableMeta, collect_batches,
     };
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
@@ -2224,6 +2369,69 @@ mod tests {
     }
 
     #[test]
+    fn having_and_nested_aggregate_references_bind_to_aggregate_outputs() {
+        let fragments = executable_fragments(
+            "SELECT id, SUM(id) * 2 AS doubled, CASE WHEN COUNT(*) > 1 THEN 'many' ELSE 'one' END AS n              FROM items GROUP BY id HAVING SUM(id) > 100 AND COUNT(*) >= 1",
+        );
+        let final_fragment = &fragments[&StageId(1)];
+        let filter = final_fragment
+            .nodes
+            .iter()
+            .find_map(|node| match &node.operator {
+                FragmentOperator::Filter { predicate } => Some(predicate.clone()),
+                _ => None,
+            })
+            .expect("HAVING becomes a filter on the final stage");
+        assert_eq!(
+            filter,
+            Expr::And(
+                Box::new(Expr::BinaryOp {
+                    left: Box::new(Expr::Column("sum_id".into())),
+                    op: BinaryOp::Gt,
+                    right: Box::new(Expr::Literal(ScalarValue::Int64(100))),
+                }),
+                Box::new(Expr::BinaryOp {
+                    left: Box::new(Expr::Column("count_star".into())),
+                    op: BinaryOp::Ge,
+                    right: Box::new(Expr::Literal(ScalarValue::Int64(1))),
+                }),
+            )
+        );
+        // The scan never receives a predicate built from aggregate outputs.
+        let partial = &fragments[&StageId(0)];
+        assert!(partial.nodes.iter().all(|node| match &node.operator {
+            FragmentOperator::Scan(scan) => scan.predicate.is_none(),
+            _ => true,
+        }));
+        let FragmentOperator::Project { expressions } =
+            &final_fragment.nodes.last().unwrap().operator
+        else {
+            panic!("final stage ends in the projection");
+        };
+        assert_eq!(
+            expressions[1].expression,
+            Expr::Alias {
+                expr: Box::new(Expr::BinaryOp {
+                    left: Box::new(Expr::Column("sum_id".into())),
+                    op: BinaryOp::Multiply,
+                    right: Box::new(Expr::Literal(ScalarValue::Int64(2))),
+                }),
+                name: "doubled".into(),
+            }
+        );
+        let Expr::Alias { expr, .. } = &expressions[2].expression else {
+            panic!("CASE keeps its alias");
+        };
+        let Expr::Case { when_then, .. } = expr.as_ref() else {
+            panic!("CASE survives binding");
+        };
+        assert!(matches!(
+            &when_then[0].0,
+            Expr::BinaryOp { left, .. } if **left == Expr::Column("count_star".into())
+        ));
+    }
+
+    #[test]
     fn translates_top_n_with_matching_single_exchange() {
         let fragments = executable_fragments("SELECT id FROM items ORDER BY id DESC LIMIT 3");
         let partial = &fragments[&StageId(0)];
@@ -2267,6 +2475,53 @@ mod tests {
                     FragmentOperator::ExchangeOutput(_)
                 ));
             }
+        }
+    }
+
+    #[test]
+    fn semi_and_anti_joins_broadcast_the_subquery_into_the_probe_stage() {
+        for (sql, expected_type) in [
+            (
+                "SELECT COUNT(*) FROM items WHERE id IN (SELECT id FROM customers WHERE id > 1)",
+                FragmentJoinType::Semi,
+            ),
+            (
+                "SELECT id FROM items WHERE id NOT IN (SELECT id FROM customers GROUP BY id)",
+                FragmentJoinType::Anti,
+            ),
+        ] {
+            let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(sql).unwrap();
+            qualify_tables(&mut plan, "test", "default");
+            let plan = kaveon_optim::rules::push_filter_down(plan);
+            let plan = kaveon_optim::rules::push_projection_down(plan);
+            let fixture = fixture();
+            let graph = build_stage_graph("query-1", &plan, 4).unwrap();
+            assert!(graph.exchanges.iter().any(|exchange| {
+                exchange.target_stage == StageId(0)
+                    && matches!(exchange.partitioning, Partitioning::Broadcast)
+            }));
+            let fragments =
+                build_executable_fragments("query-1", &plan, &fixture.catalog, 4).unwrap();
+            let probe = &fragments[&StageId(0)];
+            let join = probe
+                .nodes
+                .iter()
+                .find(|node| matches!(node.operator, FragmentOperator::HashJoin(_)))
+                .expect("probe stage carries the semi join");
+            let FragmentOperator::HashJoin(spec) = &join.operator else {
+                unreachable!()
+            };
+            assert_eq!(spec.join_type, expected_type);
+            assert!(spec.broadcast);
+            assert_eq!(spec.left_keys, vec![Expr::Column("id".into())]);
+            assert!(matches!(
+                probe.nodes[join.inputs[1].0 as usize].operator,
+                FragmentOperator::ExchangeInput(_)
+            ));
+            assert!(matches!(
+                probe.nodes.first().unwrap().operator,
+                FragmentOperator::Scan(_)
+            ));
         }
     }
 

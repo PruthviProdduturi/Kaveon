@@ -3919,15 +3919,28 @@ async fn execute_distributed_fragments(
     }
 
     let planning_start = Instant::now();
-    let graph = crate::planner::build_stage_graph(query_id, plan, workers.len()).ok()?;
-    let fragments = crate::planner::build_executable_fragments_with_delta_versions(
+    // A shape the stage planner cannot express runs on the coordinator
+    // instead; that downgrade is worth a line in the log.
+    let graph = match crate::planner::build_stage_graph(query_id, plan, workers.len()) {
+        Ok(graph) => graph,
+        Err(error) => {
+            eprintln!("query {query_id} runs on the coordinator: stage graph: {error}");
+            return None;
+        }
+    };
+    let fragments = match crate::planner::build_executable_fragments_with_delta_versions(
         query_id,
         plan,
         catalog_snapshot,
         workers.len(),
         analyzed_delta_versions,
-    )
-    .ok()?;
+    ) {
+        Ok(fragments) => fragments,
+        Err(error) => {
+            eprintln!("query {query_id} runs on the coordinator: fragments: {error}");
+            return None;
+        }
+    };
     let planning_us = elapsed_us(planning_start);
     let mut orchestrator = match CoordinatorOrchestrator::new(graph, fragments, workers.clone()) {
         Ok(orchestrator) => orchestrator,
@@ -4193,7 +4206,9 @@ fn general_distributed_eligible(plan: &LogicalPlan) -> bool {
         | LogicalPlan::Except { left, right } => {
             general_distributed_eligible(left) && general_distributed_eligible(right)
         }
-        LogicalPlan::SemiJoin { .. } | LogicalPlan::AntiJoin { .. } => false,
+        LogicalPlan::SemiJoin { left, right, .. } | LogicalPlan::AntiJoin { left, right, .. } => {
+            general_distributed_eligible(left) && general_distributed_eligible(right)
+        }
         LogicalPlan::Union { inputs, .. } => inputs.iter().all(general_distributed_eligible),
         LogicalPlan::Scan { .. } => true,
     }
