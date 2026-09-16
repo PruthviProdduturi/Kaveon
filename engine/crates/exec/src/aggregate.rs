@@ -2941,6 +2941,7 @@ impl HashAggregate {
                     return Ok(*slot);
                 }
                 if let Some(memory) = &self.memory {
+                    reserve_growth(memory, &mut reservations, &index, &states, stride)?;
                     reservations
                         .reserve(memory, slot_group_bytes(16 + text.len() as u64, stride))?;
                 }
@@ -3199,6 +3200,9 @@ impl HashAggregate {
                     }
                 }
                 let next_slot = index.len();
+                if let Some(memory) = &self.memory {
+                    reserve_growth(memory, &mut reservations, &index, &states, stride)?;
+                }
                 let slot = match index.entry(key) {
                     Entry::Occupied(entry) => *entry.get(),
                     Entry::Vacant(entry) => {
@@ -3329,6 +3333,9 @@ impl HashAggregate {
                     }
                     Some(key) => {
                         let next_slot = index.len();
+                        if let Some(memory) = &self.memory {
+                            reserve_growth(memory, &mut reservations, &index, &states, stride)?;
+                        }
                         let slot = match index.entry(key) {
                             Entry::Occupied(entry) => *entry.get(),
                             Entry::Vacant(entry) => {
@@ -3838,6 +3845,34 @@ fn batch_text_extreme(array: &ArrayRef, min: bool) -> Option<String> {
 
 /// The most key columns the compact multi-key path packs.
 const MAX_COMPACT_KEYS: usize = 6;
+
+/// A full index or accumulator vector is about to double: the old table
+/// stays alive while the new one fills, so the doubling is reserved before
+/// it happens. This is what keeps a task's real footprint under the budget
+/// instead of a page-count estimate — the pod, not the pool, is the limit.
+fn reserve_growth<K, V>(
+    memory: &OperatorMemoryAccount,
+    reservations: &mut ReservationSlab,
+    index: &AHashMap<K, V>,
+    states: &Vec<Accumulator>,
+    stride: usize,
+) -> Result<()> {
+    // Below this many entries a doubling is a few megabytes and stays inside
+    // the per-group estimates; above it the copy is what fills a pod.
+    const GROWTH_ACCOUNTING_FROM: usize = 1 << 16;
+    if index.capacity() >= GROWTH_ACCOUNTING_FROM && index.len() == index.capacity() {
+        let entry = (std::mem::size_of::<K>() + std::mem::size_of::<V>() + 1) as u64;
+        reservations.reserve(memory, (index.capacity() as u64).saturating_mul(entry))?;
+    }
+    if states.capacity() >= GROWTH_ACCOUNTING_FROM && states.len() + stride > states.capacity() {
+        // The vector doubles; the copy needs the old buffer too.
+        reservations.reserve(
+            memory,
+            (states.capacity() as u64).saturating_mul(std::mem::size_of::<Accumulator>() as u64),
+        )?;
+    }
+    Ok(())
+}
 
 /// Memory one group occupies on a slot-indexed path: the index entry with
 /// its hash overhead, the key bytes, and the accumulators in the flat
