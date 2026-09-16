@@ -1,6 +1,6 @@
 use ahash::AHashMap;
 use arrow::array::{
-    Array, ArrayRef, AsArray, BinaryArray, BooleanArray, Float64Array, Int32Array,
+    Array, ArrayRef, AsArray, BinaryArray, BinaryBuilder, BooleanArray, Float64Array, Int32Array,
     Int32DictionaryArray, Int64Array, StringArray, UInt8Array, UInt64Array,
 };
 use arrow::datatypes::{DataType, Field, Float64Type, Int32Type, Int64Type, Schema, SchemaRef};
@@ -821,31 +821,34 @@ pub fn grouped_aggregate_states_to_typed_batch(
 ) -> Result<RecordBatch> {
     validate_group_layouts(groups)?;
     validate_group_key_types(groups, group_types)?;
-    let mut rows = groups
-        .iter()
-        .enumerate()
-        .map(|(index, group)| {
-            if index % 1024 == 0 {
-                crate::expr_eval::check_expression_cancelled()?;
-            }
-            Ok((
-                encode_group_keys(&group.group_keys)?,
-                compact_state::encode(&group.states)?,
-            ))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    rows.sort_unstable_by(|left, right| left.0.cmp(&right.0));
-    if rows.windows(2).any(|pair| pair[0].0 == pair[1].0) {
-        return Err(exec_err("grouped aggregate state contains duplicate keys"));
+    // Every key encodes into one buffer and the two binary columns are built
+    // straight from it. The groups come from a map and are distinct by
+    // construction; the consumers merge by hash, so no order is imposed —
+    // sorting three million encoded keys cost more than producing them.
+    let mut key_bytes = Vec::with_capacity(groups.len() * 24);
+    let mut key_offsets = Vec::with_capacity(groups.len() + 1);
+    key_offsets.push(0usize);
+    for (index, group) in groups.iter().enumerate() {
+        if index % 1024 == 0 {
+            crate::expr_eval::check_expression_cancelled()?;
+        }
+        encode_group_keys_into(&group.group_keys, &mut key_bytes)?;
+        key_offsets.push(key_bytes.len());
     }
-    let key_values = rows
-        .iter()
-        .map(|(keys, _)| Some(keys.as_slice()))
-        .collect::<Vec<_>>();
-    let state_values = rows
-        .iter()
-        .map(|(_, states)| Some(states.as_slice()))
-        .collect::<Vec<_>>();
+    let key_of = |index: usize| &key_bytes[key_offsets[index]..key_offsets[index + 1]];
+    let order = 0..groups.len();
+    let mut key_values = BinaryBuilder::with_capacity(groups.len(), key_bytes.len());
+    let mut state_values = BinaryBuilder::with_capacity(groups.len(), groups.len() * 24);
+    let mut state_scratch = Vec::new();
+    for (position, index) in order.into_iter().enumerate() {
+        if position % 1024 == 0 {
+            crate::expr_eval::check_expression_cancelled()?;
+        }
+        key_values.append_value(key_of(index));
+        state_scratch.clear();
+        compact_state::encode_into(&groups[index].states, &mut state_scratch)?;
+        state_values.append_value(&state_scratch);
+    }
     let mut schema = grouped_state_schema().as_ref().clone();
     let type_schema = Schema::new(
         group_types
@@ -875,8 +878,8 @@ pub fn grouped_aggregate_states_to_typed_batch(
     Ok(RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(BinaryArray::from(key_values)),
-            Arc::new(BinaryArray::from(state_values)),
+            Arc::new(key_values.finish()),
+            Arc::new(state_values.finish()),
         ],
     )?)
 }
@@ -1088,7 +1091,8 @@ pub fn decode_grouped_aggregate_states(bytes: &[u8]) -> Result<Vec<GroupedAggreg
     validate_grouped_state_schema(&reader.schema())?;
     let types = grouped_aggregate_key_types(&reader.schema())?;
     let mut groups = Vec::new();
-    let mut previous_key: Option<Vec<u8>> = None;
+    // Keys arrive in the producer's map order; each must still be unique.
+    let mut seen_keys = HashSet::<Vec<u8>>::new();
     for batch in reader {
         let batch = batch?;
         validate_grouped_state_schema(&batch.schema())?;
@@ -1102,20 +1106,14 @@ pub fn decode_grouped_aggregate_states(bytes: &[u8]) -> Result<Vec<GroupedAggreg
                 return Err(exec_err("grouped aggregate state row cannot contain nulls"));
             }
             let encoded_key = keys.value(row);
-            if previous_key
-                .as_deref()
-                .is_some_and(|previous| previous >= encoded_key)
-            {
-                return Err(exec_err(
-                    "grouped aggregate state keys are not in canonical order",
-                ));
+            if !seen_keys.insert(encoded_key.to_vec()) {
+                return Err(exec_err("grouped aggregate state contains duplicate keys"));
             }
             groups.push(GroupedAggregateState {
                 group_keys: decode_group_keys(encoded_key)?,
                 states: compact_state::decode(states.value(row))?,
             });
             validate_group_key_types(&groups[groups.len() - 1..], &types)?;
-            previous_key = Some(encoded_key.to_vec());
         }
     }
     Ok(groups)
@@ -1159,29 +1157,7 @@ pub fn merge_grouped_aggregate_states(
     Ok(groups.into_iter().map(|(_, group)| group).collect())
 }
 
-/// Canonicalizes groups that are already unique by key.
-///
-/// Incremental final aggregation owns a hash map keyed by `group_keys`, so
-/// rebuilding another hash map in `merge_grouped_aggregate_states` cannot
-/// combine anything. Keep the same layout validation and canonical ordering
-/// without paying a second hash/probe/allocation pass over every final group.
-pub(crate) fn canonicalize_unique_grouped_aggregate_states(
-    groups: impl IntoIterator<Item = GroupedAggregateState>,
-) -> Result<Vec<GroupedAggregateState>> {
-    let mut groups = groups.into_iter().collect::<Vec<_>>();
-    validate_group_layouts(&groups)?;
-    let mut keyed = groups
-        .drain(..)
-        .map(|group| Ok((encode_group_keys(&group.group_keys)?, group)))
-        .collect::<Result<Vec<_>>>()?;
-    keyed.sort_unstable_by(|left, right| left.0.cmp(&right.0));
-    if keyed.windows(2).any(|pair| pair[0].0 == pair[1].0) {
-        return Err(exec_err("grouped aggregate state contains duplicate keys"));
-    }
-    Ok(keyed.into_iter().map(|(_, group)| group).collect())
-}
-
-fn validate_group_layouts(groups: &[GroupedAggregateState]) -> Result<()> {
+pub(crate) fn validate_group_layouts(groups: &[GroupedAggregateState]) -> Result<()> {
     let mut expected = None;
     for group in groups {
         let layout = state_layout(&group.states)?;
@@ -1341,13 +1317,25 @@ fn validate_grouped_state_schema(schema: &SchemaRef) -> Result<()> {
 
 fn encode_group_keys(keys: &[AggregateValue]) -> Result<Vec<u8>> {
     let mut output = Vec::new();
-    write_u64(&mut output, keys.len())?;
-    for key in keys {
-        let encoded = encode_group_key(key)?;
-        write_u64(&mut output, encoded.len())?;
-        output.extend_from_slice(&encoded);
-    }
+    encode_group_keys_into(keys, &mut output)?;
     Ok(output)
+}
+
+fn encode_group_keys_into(keys: &[AggregateValue], output: &mut Vec<u8>) -> Result<()> {
+    write_u64(output, keys.len())?;
+    for key in keys {
+        // Length prefix first, filled in once the value is written.
+        let length_at = output.len();
+        write_u64(output, 0)?;
+        if matches!(key, AggregateValue::Null) {
+            output.push(VALUE_NULL);
+        } else {
+            encode_aggregate_value_into(key, output)?;
+        }
+        let length = (output.len() - length_at - 8) as u64;
+        output[length_at..length_at + 8].copy_from_slice(&length.to_le_bytes());
+    }
+    Ok(())
 }
 
 fn decode_group_keys(bytes: &[u8]) -> Result<Vec<AggregateValue>> {
@@ -1376,14 +1364,6 @@ fn decode_group_keys(bytes: &[u8]) -> Result<Vec<AggregateValue>> {
         return Err(exec_err("aggregate group keys contain trailing bytes"));
     }
     Ok(keys)
-}
-
-fn encode_group_key(value: &AggregateValue) -> Result<Vec<u8>> {
-    if matches!(value, AggregateValue::Null) {
-        Ok(vec![VALUE_NULL])
-    } else {
-        encode_aggregate_value(value)
-    }
 }
 
 /// Encodes mergeable aggregate accumulators as a versioned Arrow IPC stream.
@@ -1802,6 +1782,11 @@ fn encode_distinct_values(values: &HashSet<AggregateValue>) -> Result<Vec<u8>> {
 
 fn encode_aggregate_value(value: &AggregateValue) -> Result<Vec<u8>> {
     let mut output = Vec::new();
+    encode_aggregate_value_into(value, &mut output)?;
+    Ok(output)
+}
+
+fn encode_aggregate_value_into(value: &AggregateValue, output: &mut Vec<u8>) -> Result<()> {
     match value {
         AggregateValue::UInt64(value) => {
             output.push(VALUE_UINT64);
@@ -1834,7 +1819,7 @@ fn encode_aggregate_value(value: &AggregateValue) -> Result<Vec<u8>> {
             output.extend_from_slice(&value.to_le_bytes());
         }
     }
-    Ok(output)
+    Ok(())
 }
 
 fn decode_distinct_values(bytes: &[u8]) -> Result<HashSet<AggregateValue>> {
@@ -5371,15 +5356,22 @@ mod tests {
     }
 
     #[test]
-    fn grouped_state_arrow_encoding_is_canonical_and_round_trips_null_keys() {
+    fn grouped_state_arrow_encoding_round_trips_null_keys_in_any_order() {
         let first = grouped_state(AggregateValue::Utf8("west".into()), (30.0, 2), &["a", "b"]);
         let second = grouped_state(AggregateValue::Null, (5.0, 1), &["c"]);
 
         let forward = encode_grouped_aggregate_states(&[first.clone(), second.clone()]).unwrap();
         let reverse = encode_grouped_aggregate_states(&[second, first]).unwrap();
 
-        assert_eq!(forward, reverse);
-        let decoded = decode_grouped_aggregate_states(&forward).unwrap();
+        // Input order is preserved rather than canonicalised; both encodings
+        // decode to the same groups.
+        assert_ne!(forward, reverse);
+        let mut forward_groups = decode_grouped_aggregate_states(&forward).unwrap();
+        let mut reverse_groups = decode_grouped_aggregate_states(&reverse).unwrap();
+        forward_groups.sort_by_key(|group| format!("{:?}", group.group_keys));
+        reverse_groups.sort_by_key(|group| format!("{:?}", group.group_keys));
+        assert_eq!(forward_groups, reverse_groups);
+        let decoded = forward_groups;
         assert_eq!(decoded.len(), 2);
         assert!(
             decoded

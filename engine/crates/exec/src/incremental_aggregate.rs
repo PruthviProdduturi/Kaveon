@@ -6,9 +6,8 @@ use arrow::record_batch::RecordBatch;
 use kaveon_core::{KaveonError, MemoryReservation, OperatorMemoryAccount, Result};
 
 use crate::aggregate::{
-    AggregateState, AggregateValue, GroupedAggregateState,
-    canonicalize_unique_grouped_aggregate_states, grouped_aggregate_key_types,
-    grouped_aggregate_state_row,
+    AggregateState, AggregateValue, GroupedAggregateState, grouped_aggregate_key_types,
+    grouped_aggregate_state_row, validate_group_layouts,
 };
 
 pub struct IncrementalAggregateMerger {
@@ -145,13 +144,15 @@ impl IncrementalAggregateMerger {
         Ok(())
     }
 
-    /// Guards include headroom for canonical sorting and final output construction.
+    /// The merged groups in map order: the map made them unique, and the
+    /// final output does not depend on their order.
     pub fn finish(self) -> Result<(Vec<GroupedAggregateState>, Vec<MemoryReservation>)> {
-        let groups = canonicalize_unique_grouped_aggregate_states(
-            self.groups
-                .into_iter()
-                .map(|(group_keys, states)| GroupedAggregateState { group_keys, states }),
-        )?;
+        let groups = self
+            .groups
+            .into_iter()
+            .map(|(group_keys, states)| GroupedAggregateState { group_keys, states })
+            .collect::<Vec<_>>();
+        validate_group_layouts(&groups)?;
         Ok((groups, self.reservations.into_guards()))
     }
 }
@@ -314,8 +315,13 @@ mod tests {
 
         merger.push_batch(&first).unwrap();
         merger.push_batch(&second).unwrap();
-        let (actual, guards) = merger.finish().unwrap();
+        let (mut actual, guards) = merger.finish().unwrap();
 
+        // Neither side orders its groups; compare them as sets.
+        let mut expected = expected;
+        let by_key = |group: &GroupedAggregateState| format!("{:?}", group.group_keys);
+        actual.sort_by_key(by_key);
+        expected.sort_by_key(by_key);
         assert_eq!(actual, expected);
         assert!(guards.is_empty());
     }

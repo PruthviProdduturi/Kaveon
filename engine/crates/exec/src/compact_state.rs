@@ -1,12 +1,13 @@
 //! Versioned accumulator payload inside the typed grouped Arrow envelope.
 use super::*;
 
-pub(super) fn encode(states: &[AggregateState]) -> Result<Vec<u8>> {
-    state_layout(states)?;
-    let mut out = b"KAS\x01".to_vec();
-    length(&mut out, states.len())?;
+/// Append one group's states to `out`. The caller has validated the layout
+/// for the whole set of groups and checks cancellation per stride, so this
+/// is the per-group hot path with no allocation of its own.
+pub(super) fn encode_into(states: &[AggregateState], out: &mut Vec<u8>) -> Result<()> {
+    out.extend_from_slice(b"KAS\x01");
+    length(out, states.len())?;
     for state in states {
-        crate::expr_eval::check_expression_cancelled()?;
         match state {
             AggregateState::Sum { sum, count } | AggregateState::Avg { sum, count } => {
                 out.push(if matches!(state, AggregateState::Sum { .. }) {
@@ -41,7 +42,7 @@ pub(super) fn encode(states: &[AggregateState]) -> Result<Vec<u8>> {
                 out.push(u8::from(value.is_some()));
                 if let Some(value) = value {
                     payload(
-                        &mut out,
+                        out,
                         &encode_aggregate_value(&AggregateValue::Utf8(value.clone()))?,
                     )?;
                 }
@@ -56,7 +57,7 @@ pub(super) fn encode(states: &[AggregateState]) -> Result<Vec<u8>> {
                     AggregateState::AvgDistinct(_) => 8,
                     _ => 13,
                 });
-                payload(&mut out, &encode_distinct_values(values)?)?;
+                payload(out, &encode_distinct_values(values)?)?;
             }
             AggregateState::DecimalSum { sum, count, scale } => {
                 out.push(9);
@@ -103,12 +104,12 @@ pub(super) fn encode(states: &[AggregateState]) -> Result<Vec<u8>> {
                 }
                 out.push(u8::from(distinct.is_some()));
                 if let Some(values) = distinct {
-                    payload(&mut out, &encode_distinct_values(values)?)?;
+                    payload(out, &encode_distinct_values(values)?)?;
                 }
             }
         }
     }
-    Ok(out)
+    Ok(())
 }
 
 pub(super) fn decode(bytes: &[u8]) -> Result<Vec<AggregateState>> {
@@ -291,6 +292,14 @@ impl<'a> Input<'a> {
         let len = self.u32()? as usize;
         self.take(len)
     }
+}
+
+#[cfg(test)]
+fn encode(states: &[AggregateState]) -> Result<Vec<u8>> {
+    state_layout(states)?;
+    let mut out = Vec::new();
+    encode_into(states, &mut out)?;
+    Ok(out)
 }
 
 #[cfg(test)]
