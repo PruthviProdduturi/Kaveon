@@ -65,6 +65,12 @@ export interface PlanNode {
   attributes?: Record<string, unknown>; children?: PlanNode[];
 }
 
+/** Where KaveonDB ran the query: on the workers, or on the coordinator and why. */
+export interface ExecutionPlacement {
+  mode: "pending" | "distributed" | "coordinator";
+  detail?: string;
+}
+
 export interface QueryRecord {
   id: string;
   sql: string;
@@ -73,6 +79,7 @@ export interface QueryRecord {
   rows: unknown[][];
   rows_are_preview: boolean;
   scan_metrics_complete: boolean;
+  execution?: ExecutionPlacement;
   error?: string | null;
   elapsed_ms: number;
   submitted_at_ms: number;
