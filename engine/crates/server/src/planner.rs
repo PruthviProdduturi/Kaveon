@@ -461,6 +461,7 @@ impl ExecutableFragmentBuilder<'_> {
                     FragmentDraft::leaf(FragmentOperator::ExchangeInput(ExchangeInput {
                         exchange_id: exchange_inputs[0].clone(),
                     }));
+                let mut union_inputs = vec![target_draft.root];
                 for exchange_id in &exchange_inputs[1..] {
                     let id = FragmentNodeId(target_draft.nodes.len() as u32);
                     target_draft.nodes.push(FragmentNode {
@@ -470,8 +471,9 @@ impl ExecutableFragmentBuilder<'_> {
                             exchange_id: exchange_id.clone(),
                         }),
                     });
+                    union_inputs.push(id);
                 }
-                target_draft.push(FragmentOperator::Union, vec![]);
+                target_draft.push(FragmentOperator::Union, union_inputs);
                 Ok(self.add_fragment(target_draft))
             }
             LogicalPlan::Window {
@@ -494,7 +496,11 @@ impl ExecutableFragmentBuilder<'_> {
                     (left_stage, left_exchange.clone()),
                     (right_stage, right_exchange.clone()),
                 ] {
+                    // Set semantics: each side deduplicates on its workers
+                    // before the exchange, so the single final task receives
+                    // distinct rows rather than every row of the input.
                     let mut draft = self.draft_mut(stage)?;
+                    draft.push(FragmentOperator::Distinct, vec![draft.root]);
                     draft.push(
                         FragmentOperator::ExchangeOutput(ExchangeOutput {
                             exchange_id: exchange.id,
@@ -514,7 +520,10 @@ impl ExecutableFragmentBuilder<'_> {
                         exchange_id: right_exchange.id,
                     }),
                 });
-                target_draft.push(FragmentOperator::Intersect, vec![]);
+                target_draft.push(
+                    FragmentOperator::Intersect,
+                    vec![FragmentNodeId(0), FragmentNodeId(1)],
+                );
                 Ok(self.add_fragment(target_draft))
             }
             LogicalPlan::Except { left, right } => {
@@ -527,7 +536,11 @@ impl ExecutableFragmentBuilder<'_> {
                     (left_stage, left_exchange.clone()),
                     (right_stage, right_exchange.clone()),
                 ] {
+                    // Set semantics: each side deduplicates on its workers
+                    // before the exchange, so the single final task receives
+                    // distinct rows rather than every row of the input.
                     let mut draft = self.draft_mut(stage)?;
+                    draft.push(FragmentOperator::Distinct, vec![draft.root]);
                     draft.push(
                         FragmentOperator::ExchangeOutput(ExchangeOutput {
                             exchange_id: exchange.id,
@@ -547,7 +560,10 @@ impl ExecutableFragmentBuilder<'_> {
                         exchange_id: right_exchange.id,
                     }),
                 });
-                target_draft.push(FragmentOperator::Except, vec![]);
+                target_draft.push(
+                    FragmentOperator::Except,
+                    vec![FragmentNodeId(0), FragmentNodeId(1)],
+                );
                 Ok(self.add_fragment(target_draft))
             }
             LogicalPlan::Join {
@@ -2475,6 +2491,54 @@ mod tests {
                     FragmentOperator::ExchangeOutput(_)
                 ));
             }
+        }
+    }
+
+    #[test]
+    fn set_operations_consume_every_exchange_input() {
+        for (sql, expected) in [
+            (
+                "SELECT COUNT(*) FROM items WHERE id > 1 UNION ALL SELECT COUNT(*) FROM customers",
+                "Union",
+            ),
+            (
+                "SELECT id FROM items INTERSECT SELECT id FROM customers",
+                "Intersect",
+            ),
+            (
+                "SELECT id FROM items EXCEPT SELECT id FROM customers",
+                "Except",
+            ),
+        ] {
+            let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(sql).unwrap();
+            qualify_tables(&mut plan, "test", "default");
+            let fixture = fixture();
+            // Building validates every fragment: an operator that leaves its
+            // exchange inputs unreachable fails here.
+            let fragments =
+                build_executable_fragments("query-1", &plan, &fixture.catalog, 4).unwrap();
+            let (_, target) = fragments
+                .iter()
+                .find(|(_, fragment)| {
+                    fragment
+                        .nodes
+                        .iter()
+                        .any(|node| format!("{:?}", node.operator).starts_with(expected))
+                })
+                .expect("set operation stage");
+            let operator = target
+                .nodes
+                .iter()
+                .find(|node| format!("{:?}", node.operator).starts_with(expected))
+                .unwrap();
+            let exchange_inputs = target
+                .nodes
+                .iter()
+                .filter(|node| matches!(node.operator, FragmentOperator::ExchangeInput(_)))
+                .map(|node| node.id)
+                .collect::<Vec<_>>();
+            assert_eq!(operator.inputs, exchange_inputs, "{sql}");
+            assert_eq!(exchange_inputs.len(), 2, "{sql}");
         }
     }
 

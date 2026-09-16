@@ -1,0 +1,344 @@
+{
+ "engine": "kaveon-engine@sha256:37a319ac4661dfb1fecea9e83c9392a7c80500cfd82bfad088d132a4ef573c70",
+ "dev": "e578db1",
+ "cases": 28,
+ "match": 28,
+ "records": [
+  {
+   "case": "distinct_values",
+   "a": {
+    "seconds": 3.88,
+    "rows": 6
+   },
+   "b": {
+    "seconds": 34.42,
+    "rows": 6
+   },
+   "match": true
+  },
+  {
+   "case": "order_by_dict_desc",
+   "a": {
+    "seconds": 5.81,
+    "rows": 5
+   },
+   "b": {
+    "seconds": 1.14,
+    "rows": 5
+   },
+   "match": true
+  },
+  {
+   "case": "in_list",
+   "a": {
+    "seconds": 12.6,
+    "rows": 3
+   },
+   "b": {
+    "seconds": 14.13,
+    "rows": 3
+   },
+   "match": true
+  },
+  {
+   "case": "not_equal",
+   "a": {
+    "seconds": 2.92,
+    "rows": 1
+   },
+   "b": {
+    "seconds": 7.56,
+    "rows": 1
+   },
+   "match": true
+  },
+  {
+   "case": "like_prefix",
+   "a": {
+    "seconds": 3.44,
+    "rows": 1
+   },
+   "b": {
+    "seconds": 67.05,
+    "rows": 1
+   },
+   "match": true
+  },
+  {
+   "case": "or_predicate",
+   "a": {
+    "seconds": 4.11,
+    "rows": 1
+   },
+   "b": {
+    "seconds": 11.92,
+    "rows": 1
+   },
+   "match": true
+  },
+  {
+   "case": "null_safe",
+   "a": {
+    "seconds": 0.25,
+    "rows": 1
+   },
+   "b": {
+    "seconds": 0.25,
+    "rows": 1
+   },
+   "match": true
+  },
+  {
+   "case": "case_expr",
+   "a": {
+    "seconds": 16.99,
+    "rows": 2
+   },
+   "b": {
+    "seconds": 20.02,
+    "rows": 2
+   },
+   "match": true
+  },
+  {
+   "case": "upper_fn",
+   "a": {
+    "seconds": 0.69,
+    "rows": 6
+   },
+   "b": {
+    "seconds": 1.21,
+    "rows": 6
+   },
+   "match": true
+  },
+  {
+   "case": "avg_min_max",
+   "a": {
+    "seconds": 8.12,
+    "rows": 3
+   },
+   "b": {
+    "seconds": 16.73,
+    "rows": 3
+   },
+   "match": true
+  },
+  {
+   "case": "text_min_max_grouped",
+   "a": {
+    "seconds": 36.2,
+    "rows": 6
+   },
+   "b": {
+    "seconds": 37.38,
+    "rows": 6
+   },
+   "match": true
+  },
+  {
+   "case": "three_keys",
+   "a": {
+    "seconds": 9.21,
+    "rows": 12
+   },
+   "b": {
+    "seconds": 37.22,
+    "rows": 12
+   },
+   "match": true
+  },
+  {
+   "case": "mixed_key_types",
+   "a": {
+    "seconds": 1.06,
+    "rows": 10
+   },
+   "b": {
+    "seconds": 2.45,
+    "rows": 10
+   },
+   "match": true
+  },
+  {
+   "case": "having",
+   "a": {
+    "seconds": 4.83,
+    "rows": 5
+   },
+   "b": {
+    "seconds": 15.08,
+    "rows": 5
+   },
+   "match": true
+  },
+  {
+   "case": "count_distinct_lowcard",
+   "a": {
+    "seconds": 85.78,
+    "rows": 1
+   },
+   "b": {
+    "seconds": 78.1,
+    "rows": 1
+   },
+   "match": true
+  },
+  {
+   "case": "count_distinct_grouped_lowcard",
+   "a": {
+    "seconds": 49.24,
+    "rows": 6
+   },
+   "b": {
+    "seconds": 55.49,
+    "rows": 6
+   },
+   "match": true
+  },
+  {
+   "case": "date_range_and_dim",
+   "a": {
+    "seconds": 1.83,
+    "rows": 5
+   },
+   "b": {
+    "seconds": 2.59,
+    "rows": 5
+   },
+   "match": true
+  },
+  {
+   "case": "join_users",
+   "a": {
+    "seconds": 5.22,
+    "rows": 5
+   },
+   "b": {
+    "seconds": 6.14,
+    "rows": 5
+   },
+   "match": true
+  },
+  {
+   "case": "join_dict_keys",
+   "a": {
+    "seconds": 5.05,
+    "rows": 0
+   },
+   "b": {
+    "seconds": 6.51,
+    "rows": 0
+   },
+   "match": true
+  },
+  {
+   "case": "topn_by_key",
+   "a": {
+    "seconds": 0.66,
+    "rows": 8
+   },
+   "b": {
+    "seconds": 1.53,
+    "rows": 8
+   },
+   "match": true
+  },
+  {
+   "case": "offset",
+   "a": {
+    "seconds": 5.3,
+    "rows": 5
+   },
+   "b": {
+    "seconds": 15.09,
+    "rows": 5
+   },
+   "match": true
+  },
+  {
+   "case": "limit_no_order",
+   "a": {
+    "seconds": 0.35,
+    "rows": 1
+   },
+   "b": {
+    "seconds": 0.34,
+    "rows": 1
+   },
+   "match": true
+  },
+  {
+   "case": "union_all",
+   "a": {
+    "seconds": 54.04,
+    "rows": 2
+   },
+   "b": {
+    "seconds": 125.55,
+    "rows": 2
+   },
+   "match": true
+  },
+  {
+   "case": "subquery_in",
+   "a": {
+    "seconds": 4.28,
+    "rows": 1
+   },
+   "b": {
+    "seconds": 23.47,
+    "rows": 1
+   },
+   "match": true
+  },
+  {
+   "case": "arith_projection",
+   "a": {
+    "seconds": 0.68,
+    "rows": 3
+   },
+   "b": {
+    "seconds": 1.15,
+    "rows": 3
+   },
+   "match": true
+  },
+  {
+   "case": "string_concat",
+   "a": {
+    "seconds": 1.58,
+    "rows": 3
+   },
+   "b": {
+    "seconds": 1.83,
+    "rows": 3
+   },
+   "match": true
+  },
+  {
+   "case": "window_rank",
+   "a": {
+    "seconds": 0.52,
+    "rows": 3
+   },
+   "b": {
+    "seconds": 1.13,
+    "rows": 3
+   },
+   "match": true
+  },
+  {
+   "case": "count_star_filter_only",
+   "a": {
+    "seconds": 0.98,
+    "rows": 1
+   },
+   "b": {
+    "seconds": 2.28,
+    "rows": 1
+   },
+   "match": true
+  }
+ ]
+}

@@ -270,10 +270,21 @@ impl FragmentNode {
             }
             FragmentOperator::Offset { .. } => 1,
             FragmentOperator::Distinct => 1,
-            FragmentOperator::Union => 0,
+            FragmentOperator::Union => {
+                // A union consumes every input it names; the executor
+                // concatenates them in order.
+                if self.inputs.len() < 2 {
+                    return invalid(format!(
+                        "node {} union requires at least two inputs, found {}",
+                        self.id.0,
+                        self.inputs.len()
+                    ));
+                }
+                self.inputs.len()
+            }
             FragmentOperator::Window { .. } => 1,
-            FragmentOperator::Intersect => 0,
-            FragmentOperator::Except => 0,
+            FragmentOperator::Intersect => 2,
+            FragmentOperator::Except => 2,
         };
         if self.inputs.len() != expected {
             return invalid(format!(

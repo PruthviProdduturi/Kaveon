@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use arrow::array::{Array, AsArray, RecordBatch};
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::{DataType, Int32Type, SchemaRef};
 use kaveon_core::{BatchOperator, KaveonError, MemoryReservation, OperatorMemoryAccount, Result};
 
 use crate::aggregate::AggregateValue;
@@ -57,21 +57,18 @@ impl SetOpOperator {
     }
 
     fn build_right_set(&mut self) -> Result<()> {
-        if self
-            .left
-            .schema()
-            .fields()
-            .iter()
-            .map(|field| field.data_type())
-            .collect::<Vec<_>>()
-            != self
-                .right
-                .schema()
+        // Rows compare by value, so a dictionary-encoded side is its value type.
+        let logical = |schema: &SchemaRef| {
+            schema
                 .fields()
                 .iter()
-                .map(|field| field.data_type())
+                .map(|field| match field.data_type() {
+                    DataType::Dictionary(_, values) => values.as_ref().clone(),
+                    other => other.clone(),
+                })
                 .collect::<Vec<_>>()
-        {
+        };
+        if logical(self.left.schema()) != logical(self.right.schema()) {
             return Err(KaveonError::Execution(
                 "set operation input column types must match".into(),
             ));
@@ -176,6 +173,13 @@ fn extract_value(array: &dyn Array, row: usize) -> Result<AggregateValue> {
         return Ok(AggregateValue::Null);
     }
     match array.data_type() {
+        DataType::Dictionary(key_type, _) if key_type.as_ref() == &DataType::Int32 => {
+            let dictionary = array.as_dictionary::<Int32Type>();
+            extract_value(
+                dictionary.values().as_ref(),
+                dictionary.keys().value(row) as usize,
+            )
+        }
         DataType::Boolean => Ok(AggregateValue::Bool(array.as_boolean().value(row))),
         DataType::Int32 => Ok(AggregateValue::Int32(
             array
@@ -215,5 +219,84 @@ fn extract_value(array: &dyn Array, row: usize) -> Result<AggregateValue> {
         dt => Err(KaveonError::Execution(format!(
             "set operation not supported for type {dt}"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::sync::Arc;
+
+    use arrow::array::{ArrayRef, DictionaryArray, Int32Array, StringArray};
+    use arrow::datatypes::{Field, Schema};
+
+    use super::*;
+
+    struct Source {
+        schema: SchemaRef,
+        batches: VecDeque<RecordBatch>,
+    }
+
+    impl BatchOperator for Source {
+        fn schema(&self) -> &SchemaRef {
+            &self.schema
+        }
+        fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+            Ok(self.batches.pop_front())
+        }
+    }
+
+    fn side(column: ArrayRef) -> Box<dyn BatchOperator> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "country",
+            column.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![column]).unwrap();
+        Box::new(Source {
+            schema,
+            batches: VecDeque::from(vec![batch]),
+        })
+    }
+
+    fn strings(batches: Vec<RecordBatch>) -> Vec<Option<String>> {
+        let mut rows = Vec::new();
+        for batch in batches {
+            let column = arrow::compute::cast(batch.column(0), &DataType::Utf8).unwrap();
+            rows.extend(
+                column
+                    .as_string::<i32>()
+                    .iter()
+                    .map(|value| value.map(str::to_owned)),
+            );
+        }
+        rows.sort();
+        rows
+    }
+
+    #[test]
+    fn dictionary_and_plain_sides_intersect_and_except_by_value() {
+        let dictionary = || -> ArrayRef {
+            Arc::new(DictionaryArray::<Int32Type>::new(
+                Int32Array::from(vec![Some(0), Some(1), Some(0), None, Some(2)]),
+                Arc::new(StringArray::from(vec!["jp", "in", "kr"])),
+            ))
+        };
+        let plain =
+            || -> ArrayRef { Arc::new(StringArray::from(vec![Some("in"), Some("kr"), None])) };
+        for (mode, expected) in [
+            (
+                SetOpMode::Intersect,
+                vec![None, Some("in".to_owned()), Some("kr".to_owned())],
+            ),
+            (SetOpMode::Except, vec![Some("jp".to_owned())]),
+        ] {
+            let mut operator = SetOpOperator::new(side(dictionary()), side(plain()), mode);
+            let mut batches = Vec::new();
+            while let Some(batch) = operator.next_batch().unwrap() {
+                batches.push(batch);
+            }
+            assert_eq!(strings(batches), expected);
+        }
     }
 }
