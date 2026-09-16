@@ -10,6 +10,7 @@ ahash = { workspace = true }
 kaveon-core = { path = "../core" }
 kaveon-storage = { path = "../storage" }
 arrow = { workspace = true }
+regex = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

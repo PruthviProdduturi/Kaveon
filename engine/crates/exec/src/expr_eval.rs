@@ -272,6 +272,7 @@ fn compare_column_with_literal(
 /// them over a dictionary's values and gathering by key is exactly the
 /// per-row result.
 const NULL_PROPAGATING_FUNCTIONS: &[&str] = &[
+    "REGEXP_REPLACE",
     "UPPER",
     "LOWER",
     "TRIM",
@@ -965,6 +966,45 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 })
                 .collect();
             Ok(Arc::new(result))
+        }
+        "REGEXP_REPLACE" => {
+            check_arity(name, args, 3)?;
+            let arr = as_string_array(&args[0])?;
+            let patterns = as_string_array(&args[1])?;
+            let replacements = as_string_array(&args[2])?;
+            // Patterns are literals in practice: compile each distinct one once.
+            let mut compiled: std::collections::HashMap<&str, regex::Regex> =
+                std::collections::HashMap::new();
+            let mut values: Vec<Option<String>> = Vec::with_capacity(num_rows);
+            let mut bytes = 0_u64;
+            for i in 0..num_rows {
+                if arr.is_null(i) || patterns.is_null(i) || replacements.is_null(i) {
+                    values.push(None);
+                    continue;
+                }
+                let pattern = patterns.value(i);
+                let expression = match compiled.get(pattern) {
+                    Some(expression) => expression,
+                    None => {
+                        let expression = regex::Regex::new(pattern).map_err(|error| {
+                            KaveonError::Execution(format!(
+                                "REGEXP_REPLACE pattern is invalid: {error}"
+                            ))
+                        })?;
+                        compiled.entry(pattern).or_insert(expression)
+                    }
+                };
+                let replaced = expression
+                    .replace_all(arr.value(i), replacements.value(i))
+                    .into_owned();
+                bytes = bytes.saturating_add(replaced.len() as u64);
+                values.push(Some(replaced));
+                if i % 1024 == 1023 {
+                    check_expression_cancelled()?;
+                }
+            }
+            reserve_string_expansion(bytes, num_rows)?;
+            Ok(Arc::new(StringArray::from(values)))
         }
         "REPLACE" => {
             check_arity(name, args, 3)?;
@@ -1964,6 +2004,44 @@ mod tests {
                 Some("other".into()),
                 Some("other".into()),
                 Some("Export".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn regexp_replace_extracts_hosts_with_capture_groups() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "referer",
+            DataType::Utf8,
+            true,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringArray::from(vec![
+                Some("https://www.example.com/path?q=1"),
+                Some("http://news.site.org/"),
+                Some("not a url"),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let expr = Expr::Function {
+            name: "REGEXP_REPLACE".into(),
+            args: vec![
+                Expr::Column("referer".into()),
+                Expr::Literal(ScalarValue::Utf8(r"^https?://(?:www\.)?([^/]+)/.*$".into())),
+                Expr::Literal(ScalarValue::Utf8("$1".into())),
+            ],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let result = as_string_array(&result).unwrap();
+        assert_eq!(
+            result.iter().collect::<Vec<_>>(),
+            vec![
+                Some("example.com"),
+                Some("news.site.org"),
+                Some("not a url"),
+                None
             ]
         );
     }

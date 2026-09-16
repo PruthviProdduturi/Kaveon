@@ -1889,6 +1889,7 @@ dependencies = [
  "criterion",
  "kaveon-core",
  "kaveon-storage",
+ "regex",
  "thiserror",
 ]
 
