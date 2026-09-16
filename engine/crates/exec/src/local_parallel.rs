@@ -186,12 +186,16 @@ impl ParallelPartials {
 
     /// DISTINCT over `columns`: every thread deduplicates the rows whose
     /// values hash to it, so the union of the threads' outputs is distinct.
+    /// Columns that are all dictionary-encoded hold a handful of values:
+    /// hashing every row to a thread would cost more than the whole
+    /// DISTINCT, so the threads take slices round-robin and a serial
+    /// DISTINCT over their small union settles the duplicates.
     pub fn distinct(
         source: Box<dyn BatchOperator>,
         columns: Vec<String>,
         pool: QueryMemoryPool,
         workers: usize,
-    ) -> Result<Self> {
+    ) -> Result<Box<dyn BatchOperator>> {
         if columns.is_empty() {
             return Err(error("parallel DISTINCT needs at least one column"));
         }
@@ -202,12 +206,31 @@ impl ParallelPartials {
                 .map_err(|_| error(&format!("DISTINCT column '{column}' is not in the input")))?;
         }
         let schema = source.schema().clone();
+        let low_cardinality = columns.iter().all(|name| {
+            schema
+                .field_with_name(name)
+                .is_ok_and(|field| matches!(field.data_type(), DataType::Dictionary(_, _)))
+        });
         let operator: ThreadOperator = Arc::new(move |source, pool, _| {
             Ok(Box::new(
                 DistinctOperator::new(source).with_memory(pool.operator("parallel-distinct")?),
             ) as Box<dyn BatchOperator>)
         });
-        Self::over(source, schema, columns, false, operator, pool, workers)
+        let account = pool.operator("distinct-union")?;
+        let parallel = Self::over(
+            source,
+            schema,
+            columns,
+            low_cardinality,
+            operator,
+            pool,
+            workers,
+        )?;
+        Ok(if low_cardinality {
+            Box::new(DistinctOperator::new(Box::new(parallel)).with_memory(account))
+        } else {
+            Box::new(parallel)
+        })
     }
 
     fn over(
@@ -888,7 +911,7 @@ mod tests {
                 batches: batches.clone(),
             }))));
             let pool = QueryMemoryPool::new("parallel-distinct", 64 * 1024 * 1024).unwrap();
-            let parallel = collect(Box::new(
+            let parallel = collect(
                 ParallelPartials::distinct(
                     Box::new(Input { schema, batches }),
                     columns,
@@ -896,7 +919,7 @@ mod tests {
                     4,
                 )
                 .unwrap(),
-            ));
+            );
             assert_eq!(parallel, serial);
             assert!(serial.len() > 10);
             assert_eq!(pool.snapshot().current_bytes, 0);

@@ -860,6 +860,121 @@ fn digest_canonical_json(digest: &mut Sha256, value: &serde_json::Value) {
     }
 }
 
+/// Chunks a lane may hold between the producer and its uploader: with
+/// 4 MiB chunks, 32 MiB of back-pressure per destination.
+const OUTPUT_LANE_CHUNKS: usize = 8;
+
+/// One exchange output partition on its way to one destination.
+struct OutputLane {
+    identity: crate::exchange::ExchangeIdentity,
+    sender: Option<tokio::sync::mpsc::Sender<crate::exchange::ExchangeChunk>>,
+    upload: tokio::task::JoinHandle<crate::exchange::ExchangeResult<u64>>,
+}
+
+/// The executing thread's side of the lanes: a streaming IPC writer per
+/// lane, created when the output schema is first seen, closed at the end.
+struct StreamingOutputs {
+    senders: Vec<(
+        crate::exchange::ExchangeIdentity,
+        tokio::sync::mpsc::Sender<crate::exchange::ExchangeChunk>,
+    )>,
+    writers: Vec<Option<crate::exchange::StreamingOutput>>,
+    schema: Option<arrow::datatypes::SchemaRef>,
+    encode_us: u64,
+    lanes: usize,
+}
+
+struct FinishedOutputs {
+    encode_us: u64,
+    lanes: usize,
+}
+
+impl StreamingOutputs {
+    fn new(
+        senders: Vec<(
+            crate::exchange::ExchangeIdentity,
+            tokio::sync::mpsc::Sender<crate::exchange::ExchangeChunk>,
+        )>,
+    ) -> Self {
+        let lanes = senders.len();
+        Self {
+            writers: (0..lanes).map(|_| None).collect(),
+            senders,
+            schema: None,
+            encode_us: 0,
+            lanes,
+        }
+    }
+
+    fn open(&mut self, schema: &arrow::datatypes::SchemaRef) -> kaveon_core::Result<()> {
+        if self.schema.is_some() {
+            return Ok(());
+        }
+        for (lane, (identity, sender)) in self.senders.iter().enumerate() {
+            self.writers[lane] = Some(
+                crate::exchange::StreamingOutput::new(
+                    identity.clone(),
+                    schema,
+                    sender.clone(),
+                    crate::exchange::ExchangeLimits::default(),
+                )
+                .map_err(|error| kaveon_core::KaveonError::Execution(error.to_string()))?,
+            );
+        }
+        self.schema = Some(Arc::clone(schema));
+        Ok(())
+    }
+
+    fn write(
+        &mut self,
+        partition: usize,
+        batch: &arrow::record_batch::RecordBatch,
+    ) -> kaveon_core::Result<()> {
+        let started = Instant::now();
+        self.open(&batch.schema())?;
+        for (lane, (identity, _)) in self.senders.iter().enumerate() {
+            if identity.output_partition != partition {
+                continue;
+            }
+            if let Some(writer) = self.writers[lane].as_mut() {
+                writer.write(batch).map_err(|error| {
+                    kaveon_core::KaveonError::Execution(format!(
+                        "cannot stream exchange '{}': {error}",
+                        identity.exchange_id.0
+                    ))
+                })?;
+            }
+        }
+        self.encode_us = self.encode_us.saturating_add(elapsed_us(started));
+        Ok(())
+    }
+
+    /// Close every lane. A lane that saw no batch still sends the output's
+    /// schema and end marker, so the consumer finds a complete, empty
+    /// stream of the right shape.
+    fn finish(
+        mut self,
+        schema: &arrow::datatypes::SchemaRef,
+    ) -> kaveon_core::Result<FinishedOutputs> {
+        let started = Instant::now();
+        self.open(schema)?;
+        for (lane, writer) in self.writers.into_iter().enumerate() {
+            if let Some(writer) = writer {
+                writer.finish().map_err(|error| {
+                    kaveon_core::KaveonError::Execution(format!(
+                        "cannot finish exchange '{}': {error}",
+                        self.senders[lane].0.exchange_id.0
+                    ))
+                })?;
+            }
+        }
+        Ok(FinishedOutputs {
+            encode_us: self.encode_us.saturating_add(elapsed_us(started)),
+            lanes: self.lanes,
+        })
+    }
+}
+
 struct PrefetchedExchangeInputs {
     inputs: HashMap<ExchangeId, Vec<crate::transport::ArrowPayload>>,
     memory: kaveon_core::OperatorMemoryAccount,
@@ -1048,6 +1163,48 @@ async fn execute_fragment_task(
         .map_err(|error| error.to_string())?
         .map(|(spill, _)| spill);
     let spill_before = spill.as_ref().map(|spill| spill.snapshot());
+    // Exchange output streams to its destinations while the fragment runs:
+    // one lane (a bounded chunk channel and an uploader) per output
+    // partition and destination, so the task never holds its whole output.
+    let mut lanes: Vec<OutputLane> = Vec::new();
+    for location in &req.exchange_outputs {
+        if location.producer.query_id != req.query_id
+            || location.producer.stage_id != StageId(req.stage_id)
+            || location.producer.partition != requested_partition_index(req)
+            || location.producer.attempt != req.attempt
+        {
+            return Err(format!(
+                "exchange '{}' destination declares a producer that does not match this task",
+                location.exchange_id.0
+            ));
+        }
+        let (sender, receiver) = tokio::sync::mpsc::channel(OUTPUT_LANE_CHUNKS);
+        let upload = tokio::spawn(crate::exchange::upload_chunk_stream(
+            client.clone(),
+            location.worker_uri.clone(),
+            token.to_owned(),
+            receiver,
+            crate::exchange::ExchangeLimits::default(),
+        ));
+        lanes.push(OutputLane {
+            identity: crate::exchange::ExchangeIdentity {
+                exchange_id: location.exchange_id.clone(),
+                task_id: location.producer.clone(),
+                output_partition: location.output_partition,
+            },
+            sender: Some(sender),
+            upload,
+        });
+    }
+    let lane_senders = lanes
+        .iter_mut()
+        .map(|lane| {
+            (
+                lane.identity.clone(),
+                lane.sender.take().expect("lane sender"),
+            )
+        })
+        .collect::<Vec<_>>();
     let execution_state = Arc::clone(state);
     let execution_fragment = fragment.clone();
     let execution_memory = memory.clone();
@@ -1058,7 +1215,11 @@ async fn execute_fragment_task(
         let wall_started = Instant::now();
         let cpu_started = thread_cpu_us();
         let catalog = execution_state.catalog.blocking_read();
-        let result = crate::fragment_exec::execute_fragment_with_memory(
+        let mut outputs = StreamingOutputs::new(lane_senders);
+        let mut sink = |partition: usize, batch: &arrow::record_batch::RecordBatch| {
+            outputs.write(partition, batch)
+        };
+        let result = crate::fragment_exec::execute_fragment_streaming(
             &execution_fragment,
             &catalog,
             &PrefetchedExchangeInputs {
@@ -1068,16 +1229,45 @@ async fn execute_fragment_task(
             },
             partition,
             Some(&execution_memory),
+            &mut sink,
         )
         .map_err(|error| error.to_string());
+        let outputs = match &result {
+            Ok(execution) => outputs
+                .finish(&execution.result_schema)
+                .map_err(|error| error.to_string()),
+            Err(error) => Err(error.clone()),
+        };
         let cpu_us =
             cpu_started.and_then(|started| thread_cpu_us().map(|end| end.saturating_sub(started)));
-        (result, cpu_us, queue_us, elapsed_us(wall_started))
+        (result, outputs, cpu_us, queue_us, elapsed_us(wall_started))
     })
     .await
     .map_err(|error| format!("fragment execution task failed: {error}"))?;
-    let (execution, compute_cpu_us, compute_queue_us, compute_wall_us) = execution;
+    let (execution, outputs, compute_cpu_us, compute_queue_us, compute_wall_us) = execution;
+    // The uploaders finish once their channels close; a failed upload is a
+    // failed task whatever the fragment returned.
+    let upload_started = Instant::now();
+    let mut uploaded = 0u64;
+    for lane in lanes {
+        let bytes = lane
+            .upload
+            .await
+            .map_err(|error| format!("exchange uploader failed: {error}"))?
+            .map_err(|error| {
+                format!(
+                    "cannot upload exchange '{}': {error}",
+                    lane.identity.exchange_id.0
+                )
+            })?;
+        uploaded = uploaded.saturating_add(bytes);
+    }
     let execution = execution?;
+    let outputs = outputs?;
+    metrics.exchange_encode_us = outputs.encode_us;
+    metrics.exchange_output_copies = outputs.lanes as u64;
+    metrics.exchange_output_bytes = uploaded;
+    metrics.exchange_upload_us = elapsed_us(upload_started);
     metrics.compute_cpu_us = compute_cpu_us;
     metrics.compute_queue_us = compute_queue_us;
     metrics.compute_wall_us = compute_wall_us;
@@ -1088,62 +1278,12 @@ async fn execute_fragment_task(
     metrics.exchange_copy_us = execution.hash_partition_metrics.copy_us;
     metrics.exchange_copy_allocations = execution.hash_partition_metrics.copy_allocations;
     metrics.exchange_copied_bytes = execution.hash_partition_metrics.copied_bytes;
-    for (exchange_id, output) in execution.exchange_outputs {
-        for (output_partition, batches) in output.partitions.iter().enumerate() {
-            let destinations = req.exchange_outputs.iter().filter(|location| {
-                location.exchange_id == exchange_id && location.output_partition == output_partition
-            });
-            let mut destination_count = 0_usize;
-            for destination in destinations {
-                destination_count += 1;
-                if destination.producer.query_id != req.query_id
-                    || destination.producer.stage_id != StageId(req.stage_id)
-                    || destination.producer.partition != requested_partition_index(req)
-                    || destination.producer.attempt != req.attempt
-                {
-                    return Err(format!(
-                        "exchange '{}' destination declares a producer that does not match this task",
-                        exchange_id.0
-                    ));
-                }
-                let identity = crate::exchange::ExchangeIdentity {
-                    exchange_id: exchange_id.clone(),
-                    task_id: destination.producer.clone(),
-                    output_partition,
-                };
-                let encode_started = Instant::now();
-                let chunks = crate::exchange::encode_batches(
-                    identity,
-                    &output.schema,
-                    batches,
-                    crate::exchange::ExchangeLimits::default(),
-                )
-                .map_err(|error| format!("cannot encode exchange '{}': {error}", exchange_id.0))?;
-                metrics.exchange_encode_us = metrics
-                    .exchange_encode_us
-                    .saturating_add(elapsed_us(encode_started));
-                metrics.exchange_output_copies += 1;
-                metrics.exchange_output_bytes = metrics.exchange_output_bytes.saturating_add(
-                    chunks
-                        .iter()
-                        .map(|chunk| chunk.payload.len() as u64)
-                        .sum::<u64>(),
-                );
-                let upload_started = Instant::now();
-                crate::exchange::upload_chunks(
-                    &client,
-                    &destination.worker_uri,
-                    token,
-                    &chunks,
-                    crate::exchange::ExchangeLimits::default(),
-                )
-                .await
-                .map_err(|error| format!("cannot upload exchange '{}': {error}", exchange_id.0))?;
-                metrics.exchange_upload_us = metrics
-                    .exchange_upload_us
-                    .saturating_add(elapsed_us(upload_started));
-            }
-            if destination_count == 0 {
+    for (exchange_id, output) in &execution.exchange_outputs {
+        for output_partition in 0..output.partitions.len() {
+            if !req.exchange_outputs.iter().any(|location| {
+                &location.exchange_id == exchange_id
+                    && location.output_partition == output_partition
+            }) {
                 return Err(format!(
                     "exchange '{}' output partition {output_partition} has no destination",
                     exchange_id.0

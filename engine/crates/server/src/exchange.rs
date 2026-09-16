@@ -25,9 +25,11 @@ const BEARER_PREFIX: &str = "Bearer ";
 // One exchange partition's payload: 1 GiB in 4 MiB chunks. A partial
 // aggregate over tens of millions of groups needs the room; the producer
 // encodes and uploads one partition at a time.
-const DEFAULT_MAX_PAYLOAD_BYTES: usize = 1024 * 1024 * 1024;
+// A streamed output partition is bounded by the receiver's disk quotas,
+// not by memory: 2 048 chunks of 4 MiB is 8 GiB per partition.
+const DEFAULT_MAX_PAYLOAD_BYTES: usize = 8 * 1024 * 1024 * 1024;
 const DEFAULT_MAX_CHUNK_BYTES: usize = 4 * 1024 * 1024;
-const DEFAULT_MAX_CHUNKS: usize = 256;
+const DEFAULT_MAX_CHUNKS: usize = 2048;
 const MAX_WIRE_ENVELOPE_OVERHEAD_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -593,10 +595,17 @@ impl ExchangeChunk {
     fn validate(&self, limits: ExchangeLimits) -> ExchangeResult<()> {
         limits.validate()?;
         self.identity.validate()?;
-        if self.chunk_count == 0 || self.chunk_count > limits.max_chunks {
+        // A streamed output does not know its chunk count until it ends:
+        // its chunks carry 0 (open) and the last one the final count.
+        if self.chunk_count > limits.max_chunks {
             return Err(ExchangeError::InvalidChunkCount);
         }
-        if self.chunk_index >= self.chunk_count {
+        let bound = if self.chunk_count == 0 {
+            limits.max_chunks
+        } else {
+            self.chunk_count
+        };
+        if self.chunk_index >= bound {
             return Err(ExchangeError::InvalidChunkIndex);
         }
         if self.payload.len() > limits.max_chunk_bytes {
@@ -604,6 +613,159 @@ impl ExchangeChunk {
         }
         Ok(())
     }
+}
+
+/// One output partition's payload written as it is produced: batches go
+/// into an Arrow IPC stream, and every `max_chunk_bytes` of it leaves as a
+/// chunk through `chunks` while the producer keeps running. Nothing of the
+/// partition's output stays behind but the bytes of the chunk being
+/// filled; the last chunk carries the final count.
+pub struct StreamingOutput {
+    identity: ExchangeIdentity,
+    writer: Option<arrow::ipc::writer::StreamWriter<ChunkBuffer>>,
+    chunks: tokio::sync::mpsc::Sender<ExchangeChunk>,
+    limits: ExchangeLimits,
+    next_index: usize,
+    bytes: u64,
+}
+
+/// The IPC writer's sink: bytes accumulate here between chunk cuts.
+#[derive(Default)]
+struct ChunkBuffer(Vec<u8>);
+
+impl std::io::Write for ChunkBuffer {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl StreamingOutput {
+    pub fn new(
+        identity: ExchangeIdentity,
+        schema: &SchemaRef,
+        chunks: tokio::sync::mpsc::Sender<ExchangeChunk>,
+        limits: ExchangeLimits,
+    ) -> ExchangeResult<Self> {
+        limits.validate()?;
+        identity.validate()?;
+        let writer = arrow::ipc::writer::StreamWriter::try_new(ChunkBuffer::default(), schema)
+            .map_err(|error| ExchangeError::Arrow(error.to_string()))?;
+        Ok(Self {
+            identity,
+            writer: Some(writer),
+            chunks,
+            limits,
+            next_index: 0,
+            bytes: 0,
+        })
+    }
+
+    pub fn write(&mut self, batch: &RecordBatch) -> ExchangeResult<()> {
+        let writer = self.writer.as_mut().ok_or(ExchangeError::MissingChunks)?;
+        writer
+            .write(batch)
+            .map_err(|error| ExchangeError::Arrow(error.to_string()))?;
+        self.cut(false)
+    }
+
+    /// Emit every full chunk the buffer holds; with `all`, the remainder
+    /// too, as the final chunk carrying the count.
+    fn cut(&mut self, all: bool) -> ExchangeResult<()> {
+        let writer = self.writer.as_mut().ok_or(ExchangeError::MissingChunks)?;
+        let buffer = &mut writer.get_mut().0;
+        let size = self.limits.max_chunk_bytes;
+        while buffer.len() >= size || (all && !buffer.is_empty()) {
+            let take = buffer.len().min(size);
+            let payload: Vec<u8> = buffer.drain(..take).collect();
+            let last = all && buffer.is_empty();
+            let chunk = ExchangeChunk {
+                identity: self.identity.clone(),
+                chunk_index: self.next_index,
+                chunk_count: if last { self.next_index + 1 } else { 0 },
+                payload: Bytes::from(payload),
+            };
+            chunk.validate(self.limits)?;
+            self.bytes = self.bytes.saturating_add(chunk.payload.len() as u64);
+            self.next_index += 1;
+            // From the executing (blocking) thread: waits while the lane is
+            // full, which is the back-pressure.
+            self.chunks
+                .blocking_send(chunk)
+                .map_err(|_| ExchangeError::Transport("exchange uploader stopped".into()))?;
+        }
+        Ok(())
+    }
+
+    /// Close the stream; the remaining bytes leave as the last chunk. An
+    /// output with no batches still sends its schema and end marker.
+    pub fn finish(mut self) -> ExchangeResult<u64> {
+        let mut writer = self.writer.take().ok_or(ExchangeError::MissingChunks)?;
+        writer
+            .finish()
+            .map_err(|error| ExchangeError::Arrow(error.to_string()))?;
+        self.writer = Some(writer);
+        self.cut(true)?;
+        Ok(self.bytes)
+    }
+}
+
+/// Upload chunks as they arrive on `chunks`, a few in flight, until the
+/// sender closes. Returns the bytes uploaded.
+pub async fn upload_chunk_stream(
+    client: reqwest::Client,
+    worker_uri: String,
+    token: String,
+    mut chunks: tokio::sync::mpsc::Receiver<ExchangeChunk>,
+    limits: ExchangeLimits,
+) -> ExchangeResult<u64> {
+    use futures::StreamExt;
+    use futures::stream::FuturesUnordered;
+    const IN_FLIGHT: usize = 4;
+    let url = format!("{}/v1/internal/exchange", worker_uri.trim_end_matches('/'));
+    let upload = |chunk: ExchangeChunk| {
+        let client = client.clone();
+        let url = url.clone();
+        let token = token.clone();
+        async move {
+            let bytes = chunk.payload.len() as u64;
+            let body = chunk.encode(limits)?;
+            let response = client
+                .post(url)
+                .bearer_auth(token)
+                .header(header::CONTENT_TYPE.as_str(), EXCHANGE_MEDIA_TYPE)
+                .body(body)
+                .send()
+                .await
+                .map_err(|error| ExchangeError::Transport(error.to_string()))?;
+            if !response.status().is_success() {
+                return Err(ExchangeError::HttpStatus(response.status().as_u16()));
+            }
+            Ok::<u64, ExchangeError>(bytes)
+        }
+    };
+    let mut in_flight = FuturesUnordered::new();
+    let mut total = 0u64;
+    loop {
+        if in_flight.len() >= IN_FLIGHT {
+            let Some(result) = in_flight.next().await else {
+                break;
+            };
+            total = total.saturating_add(result?);
+            continue;
+        }
+        match chunks.recv().await {
+            Some(chunk) => in_flight.push(upload(chunk)),
+            None => break,
+        }
+    }
+    while let Some(result) = in_flight.next().await {
+        total = total.saturating_add(result?);
+    }
+    Ok(total)
 }
 
 pub fn encode_batches(
@@ -670,13 +832,22 @@ fn ordered_chunks(
     let first = chunks.first().ok_or(ExchangeError::MissingChunks)?;
     first.validate(limits)?;
     let identity = first.identity.clone();
-    let chunk_count = first.chunk_count;
-    if chunks.len() != chunk_count {
+    // The count comes from the chunk that carries it (the last of a
+    // streamed output, every chunk of an encoded one); open chunks agree
+    // with whatever it is.
+    let chunk_count = chunks
+        .iter()
+        .map(|chunk| chunk.chunk_count)
+        .max()
+        .unwrap_or_default();
+    if chunk_count == 0 || chunks.len() != chunk_count {
         return Err(ExchangeError::MissingChunks);
     }
     for chunk in &chunks {
         chunk.validate(limits)?;
-        if chunk.identity != identity || chunk.chunk_count != chunk_count {
+        if chunk.identity != identity
+            || (chunk.chunk_count != 0 && chunk.chunk_count != chunk_count)
+        {
             return Err(ExchangeError::MixedChunkSet);
         }
     }
@@ -883,6 +1054,100 @@ mod tests {
             max_chunk_bytes: 128,
             max_chunks: 128,
         }
+    }
+
+    #[tokio::test]
+    async fn streamed_output_cuts_open_chunks_and_reassembles_to_the_same_batches() {
+        // Batches written one at a time leave as 128-byte chunks with an
+        // open count; the last chunk carries the count; the set decodes
+        // to the batches that went in. An output with no batches is a
+        // complete empty stream with the right schema.
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+        let batches = (0..5i64)
+            .map(|k| {
+                RecordBatch::try_new(
+                    schema.clone(),
+                    vec![Arc::new(Int64Array::from_iter_values(k * 40..(k + 1) * 40))],
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(64);
+        let written = tokio::task::spawn_blocking({
+            let schema = schema.clone();
+            let batches = batches.clone();
+            move || {
+                let mut output =
+                    StreamingOutput::new(identity(), &schema, sender, limits()).unwrap();
+                for batch in &batches {
+                    output.write(batch).unwrap();
+                }
+                output.finish().unwrap()
+            }
+        })
+        .await
+        .unwrap();
+        let mut chunks = Vec::new();
+        while let Some(chunk) = receiver.recv().await {
+            chunks.push(chunk);
+        }
+        assert!(chunks.len() > 3, "several chunks for five batches");
+        assert_eq!(
+            chunks
+                .iter()
+                .map(|chunk| chunk.payload.len() as u64)
+                .sum::<u64>(),
+            written
+        );
+        assert!(
+            chunks[..chunks.len() - 1]
+                .iter()
+                .all(|chunk| chunk.chunk_count == 0)
+        );
+        assert_eq!(chunks.last().unwrap().chunk_count, chunks.len());
+        assert!(
+            chunks[..chunks.len() - 1]
+                .iter()
+                .all(|chunk| chunk.payload.len() == limits().max_chunk_bytes)
+        );
+        // Order of arrival does not matter to the receiver.
+        chunks.reverse();
+        let (decoded_identity, decoded_schema, decoded) =
+            decode_batches(chunks.clone(), limits()).unwrap();
+        assert_eq!(decoded_identity, identity());
+        assert_eq!(decoded_schema, schema);
+        assert_eq!(decoded, batches);
+        // Without the counting chunk the set is incomplete, not decodable.
+        let open_only = chunks
+            .iter()
+            .filter(|chunk| chunk.chunk_count == 0)
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            decode_batches(open_only, limits()).unwrap_err(),
+            ExchangeError::MissingChunks
+        );
+
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
+        tokio::task::spawn_blocking({
+            let schema = schema.clone();
+            move || {
+                StreamingOutput::new(identity(), &schema, sender, limits())
+                    .unwrap()
+                    .finish()
+                    .unwrap()
+            }
+        })
+        .await
+        .unwrap();
+        let mut chunks = Vec::new();
+        while let Some(chunk) = receiver.recv().await {
+            chunks.push(chunk);
+        }
+        assert_eq!(chunks.last().unwrap().chunk_count, chunks.len());
+        let (_, decoded_schema, decoded) = decode_batches(chunks, limits()).unwrap();
+        assert_eq!(decoded_schema, schema);
+        assert!(decoded.is_empty());
     }
 
     #[test]

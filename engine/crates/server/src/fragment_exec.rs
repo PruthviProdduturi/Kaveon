@@ -83,6 +83,51 @@ pub fn execute_fragment_with_memory(
     scan_partition: ScanPartition,
     memory: Option<&QueryMemoryPool>,
 ) -> Result<FragmentExecution> {
+    // Exchange output collected in memory: the local and test path. The
+    // worker task streams it instead (execute_fragment_streaming).
+    let mut partitions: Vec<Vec<RecordBatch>> = Vec::new();
+    let mut sink = |partition: usize, batch: &RecordBatch| {
+        if partitions.len() <= partition {
+            partitions.resize_with(partition + 1, Vec::new);
+        }
+        partitions[partition].push(batch.clone());
+        Ok(())
+    };
+    let mut execution = execute_fragment_streaming(
+        fragment,
+        catalog,
+        exchanges,
+        scan_partition,
+        memory,
+        &mut sink,
+    )?;
+    for output in execution.exchange_outputs.values_mut() {
+        let count = output.partitions.len();
+        let mut collected = std::mem::take(&mut partitions);
+        collected.resize_with(count, Vec::new);
+        output.partitions = collected;
+    }
+    Ok(execution)
+}
+
+/// Where a streamed exchange output goes: one call per (output partition,
+/// batch), in production order, from the executing thread.
+pub type ExchangeSink<'a> = dyn FnMut(usize, &RecordBatch) -> Result<()> + 'a;
+
+/// Execute a fragment whose root is an exchange output, handing each
+/// partitioned batch to `sink` as it is produced instead of holding the
+/// task's whole output — a partial aggregate's output can be as large as
+/// its input. The returned execution carries the output's schema and
+/// partition count with empty partitions; a fragment whose root is not an
+/// exchange output returns its result batches as before.
+pub fn execute_fragment_streaming(
+    fragment: &ExecutableFragment,
+    catalog: &CatalogManager,
+    exchanges: &dyn ExchangeInputProvider,
+    scan_partition: ScanPartition,
+    memory: Option<&QueryMemoryPool>,
+    sink: &mut ExchangeSink<'_>,
+) -> Result<FragmentExecution> {
     fragment.validate()?;
     let nodes = fragment
         .nodes
@@ -107,16 +152,18 @@ pub fn execute_fragment_with_memory(
             &mut scan_metrics,
         )?;
         let schema = Arc::clone(operator.schema());
-        let batches = collect(&mut *operator)?;
-        let (partitions, hash_partition_metrics) =
-            partition_batches(&batches, &schema, &output.partitioning)?;
+        let (partition_count, hash_partition_metrics) =
+            stream_partitions(&mut *operator, &schema, &output.partitioning, sink)?;
         let scan_metrics_complete = has_complete_scan_metrics(scan_count, scan_metrics.len());
         return Ok(FragmentExecution {
             result_schema: Arc::clone(&schema),
             result_batches: Vec::new(),
             exchange_outputs: BTreeMap::from([(
                 output.exchange_id.clone(),
-                ExchangeOutputBatches { schema, partitions },
+                ExchangeOutputBatches {
+                    schema,
+                    partitions: vec![Vec::new(); partition_count],
+                },
             )]),
             scan_metrics,
             scan_metrics_complete,
@@ -714,14 +761,12 @@ pub(crate) fn distinct_operator(
             .iter()
             .map(|field| field.name().clone())
             .collect::<Vec<_>>();
-        return Ok(Box::new(
-            kaveon_exec::local_parallel::ParallelPartials::distinct(
-                input,
-                columns,
-                memory.clone(),
-                parallelism,
-            )?,
-        ));
+        return kaveon_exec::local_parallel::ParallelPartials::distinct(
+            input,
+            columns,
+            memory.clone(),
+            parallelism,
+        );
     }
     let mut operator = DistinctOperator::new(input);
     if let Some(memory) = memory {
@@ -1221,31 +1266,38 @@ fn collect(operator: &mut dyn BatchOperator) -> Result<Vec<RecordBatch>> {
     Ok(batches)
 }
 
-fn partition_batches(
-    batches: &[RecordBatch],
+/// Drive `operator` to its end, routing every batch to its output
+/// partition through `sink`. Returns the partition count and the hash
+/// partitioning cost.
+fn stream_partitions(
+    operator: &mut dyn BatchOperator,
     schema: &SchemaRef,
     partitioning: &Partitioning,
-) -> Result<(Vec<Vec<RecordBatch>>, HashPartitionMetrics)> {
+    sink: &mut ExchangeSink<'_>,
+) -> Result<(usize, HashPartitionMetrics)> {
+    let mut metrics = HashPartitionMetrics::default();
     match partitioning {
         Partitioning::Single | Partitioning::Broadcast => {
-            Ok((vec![batches.to_vec()], HashPartitionMetrics::default()))
+            while let Some(batch) = operator.next_batch()? {
+                sink(0, &batch)?;
+            }
+            Ok((1, metrics))
         }
         Partitioning::RoundRobin { partition_count } => {
-            let mut partitions = vec![Vec::new(); *partition_count];
-            for (index, batch) in batches.iter().enumerate() {
-                partitions[index % partition_count].push(batch.clone());
+            let mut index = 0usize;
+            while let Some(batch) = operator.next_batch()? {
+                sink(index % partition_count, &batch)?;
+                index += 1;
             }
-            Ok((partitions, HashPartitionMetrics::default()))
+            Ok((*partition_count, metrics))
         }
         Partitioning::Hash {
             columns,
             partition_count,
         } => {
             let partitioner = HashPartitioner::try_new(schema, columns, *partition_count)?;
-            let mut partitions = vec![Vec::new(); *partition_count];
-            let mut metrics = HashPartitionMetrics::default();
-            for batch in batches {
-                let (partitioned, batch_metrics) = partitioner.partition_profiled(batch)?;
+            while let Some(batch) = operator.next_batch()? {
+                let (partitioned, batch_metrics) = partitioner.partition_profiled(&batch)?;
                 metrics.hash_us = metrics.hash_us.saturating_add(batch_metrics.hash_us);
                 metrics.copy_us = metrics.copy_us.saturating_add(batch_metrics.copy_us);
                 metrics.copy_allocations = metrics
@@ -1256,11 +1308,11 @@ fn partition_batches(
                     .saturating_add(batch_metrics.copied_bytes);
                 for (partition, batch) in partitioned.into_iter().enumerate() {
                     if batch.num_rows() > 0 {
-                        partitions[partition].push(batch);
+                        sink(partition, &batch)?;
                     }
                 }
             }
-            Ok((partitions, metrics))
+            Ok((*partition_count, metrics))
         }
     }
 }

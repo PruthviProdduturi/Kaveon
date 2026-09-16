@@ -39,6 +39,9 @@ enum Columnar {
         groups: Box<ColumnarGroups>,
         slot_bytes: u64,
         growth_reserved_at: usize,
+        /// The table's next doubling, replaced at each: only one is
+        /// outstanding, since the old table is freed after the copy.
+        growth: Option<MemoryReservation>,
     },
 }
 
@@ -108,6 +111,7 @@ impl IncrementalAggregateMerger {
                 slot_bytes: groups.slot_bytes(),
                 groups: Box::new(groups),
                 growth_reserved_at: 0,
+                growth: None,
             },
             _ => Columnar::Rows,
         };
@@ -123,6 +127,7 @@ impl IncrementalAggregateMerger {
             groups,
             slot_bytes,
             growth_reserved_at,
+            growth,
         } = &mut self.columnar
         else {
             return Err(error("columnar merge without columnar groups"));
@@ -139,10 +144,12 @@ impl IncrementalAggregateMerger {
             }
             decode_group_states_into(states.value(row), &mut incoming)?;
             if let Some(memory) = &self.memory {
-                // A doubling is paid once per capacity, before it happens.
-                let growth = groups.growth_bytes(1);
-                if growth != 0 && groups.capacity() != *growth_reserved_at {
-                    self.reservations.reserve(memory, growth)?;
+                // A doubling is paid once per capacity, before it happens,
+                // and released when the next one is paid.
+                let doubling = groups.growth_bytes(1);
+                if doubling != 0 && groups.capacity() != *growth_reserved_at {
+                    drop(growth.take());
+                    *growth = Some(memory.reserve(doubling)?);
                     *growth_reserved_at = groups.capacity();
                 }
             }
@@ -316,11 +323,10 @@ impl IncrementalAggregateMerger {
     /// The merged groups as they are held: columns when the columnar
     /// aggregate carried the layout, rows otherwise.
     pub fn finish_groups(self) -> Result<(MergedGroups, Vec<MemoryReservation>)> {
-        if let Columnar::Groups { groups, .. } = self.columnar {
-            return Ok((
-                MergedGroups::Columnar(groups),
-                self.reservations.into_guards(),
-            ));
+        if let Columnar::Groups { groups, growth, .. } = self.columnar {
+            let mut guards = self.reservations.into_guards();
+            guards.extend(growth);
+            return Ok((MergedGroups::Columnar(groups), guards));
         }
         let mut keys: Vec<Option<Box<[u8]>>> = (0..self.states.len()).map(|_| None).collect();
         for (key, slot) in self.index {

@@ -11,10 +11,14 @@ use std::{
 /// The most one exchange partition or task result may carry, matching the
 /// encoder's ceiling so a payload a worker can produce is one its peer can
 /// receive.
-pub const MAX_PAYLOAD_BYTES: u64 = 1024 * 1024 * 1024;
+/// One exchange payload the consumer spools to its disk: the producer's
+/// per-partition ceiling.
+pub const MAX_PAYLOAD_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 /// Received payloads spool to disk; this is the process-wide ceiling on what
 /// is spooled at once — a final task holds one payload per producing task.
-const PROCESS_SPOOL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+/// Every spooled payload a worker holds at once, across queries: the
+/// worker's ephemeral disk is what backs it.
+const PROCESS_SPOOL_BYTES: u64 = 12 * 1024 * 1024 * 1024;
 static RETAINED_BYTES: AtomicU64 = AtomicU64::new(0);
 static CACHED_BYTES: AtomicU64 = AtomicU64::new(0);
 pub struct CachedTaskResult {
