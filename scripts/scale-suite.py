@@ -21,15 +21,18 @@ import services.engine_bridge as eb  # noqa: E402
 
 def main():
     suite = json.load(open(os.environ.get("SUITE", "/input/scale-suite.json"), encoding="utf-8"))
+    # A suite names its catalog and schema; the telemetry suite predates that.
+    catalog = suite.get("catalog", "OpenSource")
+    schema = suite.get("schema", "kaveon_product")
     records = []
     for statement in suite["statements"]:
         record = {"id": statement["id"], "seconds": [], "rows": None, "rows_selected": None, "error": None,
                   "trino_seconds": statement.get("trino_seconds"), "target_seconds": statement.get("target_seconds")}
         try:
-            eb.execute(statement["sql"], "OpenSource", "scale-suite", "Admin", "kaveon_product", timeout=900)
+            eb.execute(statement["sql"], catalog, "scale-suite", "Admin", schema, timeout=900)
             for _ in range(3):
                 t0 = time.time()
-                result = eb.execute(statement["sql"], "OpenSource", "scale-suite", "Admin", "kaveon_product", timeout=900)
+                result = eb.execute(statement["sql"], catalog, "scale-suite", "Admin", schema, timeout=900)
                 record["seconds"].append(round(time.time() - t0, 3))
             record["rows"] = len(result.get("data") or result.get("rows") or [])
             stages = (result.get("query_details") or {}).get("stages") or []
