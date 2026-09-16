@@ -11,8 +11,10 @@ use std::{
 /// The most one exchange partition or task result may carry, matching the
 /// encoder's ceiling so a payload a worker can produce is one its peer can
 /// receive.
-pub const MAX_PAYLOAD_BYTES: u64 = 256 * 1024 * 1024;
-const PROCESS_SPOOL_BYTES: u64 = 512 * 1024 * 1024;
+pub const MAX_PAYLOAD_BYTES: u64 = 1024 * 1024 * 1024;
+/// Received payloads spool to disk; this is the process-wide ceiling on what
+/// is spooled at once — a final task holds one payload per producing task.
+const PROCESS_SPOOL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 static RETAINED_BYTES: AtomicU64 = AtomicU64::new(0);
 static CACHED_BYTES: AtomicU64 = AtomicU64::new(0);
 pub struct CachedTaskResult {
@@ -126,7 +128,7 @@ impl ArrowPayload {
         while let Some(batch) = self.next_batch()? {
             decoded_bytes = decoded_bytes.saturating_add(batch.get_array_memory_size());
             if decoded_bytes > MAX_PAYLOAD_BYTES as usize {
-                return Err("decoded Arrow payload exceeds 256 MiB limit".into());
+                return Err("decoded Arrow payload exceeds 1 GiB limit".into());
             }
             batches.push(batch);
         }
