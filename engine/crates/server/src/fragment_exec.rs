@@ -354,13 +354,19 @@ fn compile_node(
                         &aggregates,
                         input.schema(),
                     )?;
+                    // Keys cross the exchange as their logical values: a
+                    // dictionary-encoded string column is exchanged as Utf8.
                     let group_types = group_by
                         .iter()
                         .map(|name| {
                             input
                                 .schema()
                                 .field_with_name(name)
-                                .map(|field| field.data_type().clone())
+                                .map(|field| {
+                                    kaveon_exec::aggregate::exchanged_group_key_type(
+                                        field.data_type(),
+                                    )
+                                })
                                 .map_err(KaveonError::from)
                         })
                         .collect::<Result<Vec<_>>>()?;
@@ -897,6 +903,26 @@ fn finalized_aggregate_batch(
                 true,
             ));
             columns.push(Arc::new(array) as ArrayRef);
+        } else if matches!(output_types[index], DataType::Utf8 | DataType::LargeUtf8) {
+            // MIN/MAX over text: the finalized value is the text itself.
+            let values = groups
+                .iter()
+                .map(|group| match group.values.get(index) {
+                    Some(FinalAggregateValue::Utf8(value)) => Ok(value.clone()),
+                    _ => Err(exec_err("text final state type mismatch")),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let column: ArrayRef = if output_types[index] == DataType::LargeUtf8 {
+                Arc::new(arrow::array::LargeStringArray::from(values))
+            } else {
+                Arc::new(arrow::array::StringArray::from(values))
+            };
+            fields.push(Field::new(
+                aggregate_output_name(aggregate),
+                output_types[index].clone(),
+                true,
+            ));
+            columns.push(column);
         } else if output_types[index] == DataType::UInt64
             && !matches!(aggregate.func, AggFunc::Count)
         {

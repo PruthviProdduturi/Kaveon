@@ -1837,7 +1837,7 @@ async fn submit_statement(
                     .iter()
                     .map(|field| ColumnInfo {
                         name: field.name().clone(),
-                        data_type: field.data_type().to_string(),
+                        data_type: presented_type(field.data_type()),
                     })
                     .collect();
                 let execution_start = Instant::now();
@@ -1966,7 +1966,7 @@ async fn submit_statement(
             .iter()
             .map(|f| ColumnInfo {
                 name: f.name().clone(),
-                data_type: format!("{}", f.data_type()),
+                data_type: presented_type(f.data_type()),
             })
             .collect()
     } else {
@@ -3722,7 +3722,7 @@ fn columns_from_schema(schema: &arrow::datatypes::SchemaRef) -> Vec<ColumnInfo> 
         .iter()
         .map(|field| ColumnInfo {
             name: field.name().clone(),
-            data_type: field.data_type().to_string(),
+            data_type: presented_type(field.data_type()),
         })
         .collect()
 }
@@ -4891,6 +4891,14 @@ fn compare_json_scalars(
     Err("aggregate values have incompatible scalar types".into())
 }
 
+/// The type a client sees: a dictionary-encoded column is its value type.
+fn presented_type(data_type: &arrow::datatypes::DataType) -> String {
+    match data_type {
+        arrow::datatypes::DataType::Dictionary(_, values) => values.to_string(),
+        other => other.to_string(),
+    }
+}
+
 fn batches_to_json(batches: &[arrow::record_batch::RecordBatch]) -> Vec<Vec<serde_json::Value>> {
     use arrow::array::{Array, AsArray};
     use arrow::datatypes::*;
@@ -4898,10 +4906,22 @@ fn batches_to_json(batches: &[arrow::record_batch::RecordBatch]) -> Vec<Vec<serd
     let mut rows = Vec::new();
     for batch in batches {
         let num_cols = batch.num_columns();
+        // A dictionary-encoded column is presented as its values; the
+        // encoding is the file's business, not the client's.
+        let columns: Vec<arrow::array::ArrayRef> = batch
+            .columns()
+            .iter()
+            .map(|column| match column.data_type() {
+                DataType::Dictionary(_, values) => {
+                    arrow::compute::cast(column, values).unwrap_or_else(|_| column.clone())
+                }
+                _ => column.clone(),
+            })
+            .collect();
         for row in 0..batch.num_rows() {
             let mut cells = Vec::with_capacity(num_cols);
             for col in 0..num_cols {
-                let arr = batch.column(col);
+                let arr = &columns[col];
                 if arr.is_null(row) {
                     cells.push(serde_json::Value::Null);
                     continue;
