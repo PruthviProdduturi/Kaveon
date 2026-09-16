@@ -18,6 +18,11 @@ mod ui;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+
+/// Every allocation the node makes is counted, so the memory guard
+/// answers to live bytes, not to estimates.
+#[global_allocator]
+static ALLOCATOR: kaveon_core::CountingAllocator = kaveon_core::CountingAllocator;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -144,9 +149,25 @@ async fn main() {
     }
     println!();
 
-    let memory_admission =
+    let mut memory_admission =
         kaveon_core::MemoryAdmissionController::new(config.memory_admission_limit_bytes)
             .expect("validated memory admission configuration");
+    if let Some(process) = config.process_memory() {
+        println!(
+            "Memory:      process limit {} MiB, {} MiB kept free; admission {} MiB; per query {} MiB",
+            process.limit_bytes() >> 20,
+            process.headroom_bytes() >> 20,
+            config.memory_admission_limit_bytes >> 20,
+            config.query_memory_limit_bytes >> 20,
+        );
+        memory_admission = memory_admission.with_process_memory(process);
+    } else {
+        println!(
+            "Memory:      no process limit; admission {} MiB; per query {} MiB",
+            config.memory_admission_limit_bytes >> 20,
+            config.query_memory_limit_bytes >> 20,
+        );
+    }
     let disk_exchange_store = if config.coordinator && config.coordinator_exchange_spool {
         Some(
             disk_exchange::DiskExchangeStore::new(

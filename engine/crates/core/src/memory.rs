@@ -4,6 +4,7 @@ use std::sync::{
 };
 use std::{any::Any, collections::HashMap};
 
+use crate::process_memory::ProcessMemory;
 use crate::{KaveonError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +25,10 @@ struct QueryMemoryInner {
     reservation_calls: AtomicU64,
     reservation_bytes: AtomicU64,
     _admission: Option<AdmissionLease>,
+    /// The process guard, when the node runs under a memory limit: a
+    /// reservation the process could not honour fails here, before the
+    /// allocation, whatever the query budget still allows.
+    process: Option<ProcessMemory>,
     resources: QueryResources,
     cancellation: CancellationProbe,
 }
@@ -68,6 +73,7 @@ struct AdmissionInner {
 #[derive(Debug, Clone)]
 pub struct MemoryAdmissionController {
     inner: Arc<AdmissionInner>,
+    process: Option<ProcessMemory>,
 }
 
 impl MemoryAdmissionController {
@@ -83,7 +89,21 @@ impl MemoryAdmissionController {
                 admitted_bytes: AtomicU64::new(0),
                 peak_admitted_bytes: AtomicU64::new(0),
             }),
+            process: None,
         })
+    }
+
+    /// Every admitted query's reservations also answer to the process
+    /// guard: what the process really holds against the limit it really
+    /// has.
+    #[must_use]
+    pub fn with_process_memory(mut self, process: ProcessMemory) -> Self {
+        self.process = Some(process);
+        self
+    }
+
+    pub fn process_memory(&self) -> Option<&ProcessMemory> {
+        self.process.as_ref()
     }
 
     pub fn admit(
@@ -116,12 +136,13 @@ impl MemoryAdmissionController {
                     self.inner
                         .peak_admitted_bytes
                         .fetch_max(next, Ordering::AcqRel);
-                    Arc::get_mut(&mut pool.inner)
-                        .expect("new query pool is uniquely owned")
-                        ._admission = Some(AdmissionLease {
+                    let inner =
+                        Arc::get_mut(&mut pool.inner).expect("new query pool is uniquely owned");
+                    inner._admission = Some(AdmissionLease {
                         controller: self.clone(),
                         admitted_bytes: query_limit_bytes,
                     });
+                    inner.process = self.process.clone();
                     return Ok(AdmittedQueryMemory { pool });
                 }
                 Err(observed) => current = observed,
@@ -204,10 +225,20 @@ impl QueryMemoryPool {
                 reservation_calls: AtomicU64::new(0),
                 reservation_bytes: AtomicU64::new(0),
                 _admission: None,
+                process: None,
                 resources: QueryResources::default(),
                 cancellation: CancellationProbe::default(),
             }),
         })
+    }
+
+    /// A pool whose reservations also answer to `process`.
+    #[must_use]
+    pub fn with_process_memory(mut self, process: ProcessMemory) -> Self {
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.process = Some(process);
+        }
+        self
     }
 
     #[must_use]
@@ -284,6 +315,18 @@ impl QueryMemoryPool {
 
     fn try_reserve(&self, bytes: u64, operator_id: &str) -> Result<()> {
         self.check_cancelled()?;
+        if let Some(process) = &self.inner.process
+            && !process.can_reserve(bytes)
+        {
+            return Err(KaveonError::MemoryLimit(format!(
+                "query '{}' operator '{}' cannot reserve {bytes} bytes: the process holds {} of {} bytes with {} bytes kept free",
+                self.query_id(),
+                operator_id,
+                process.allocated_bytes(),
+                process.limit_bytes(),
+                process.headroom_bytes(),
+            )));
+        }
         let mut current = self.inner.current_bytes.load(Ordering::Acquire);
         loop {
             let Some(next) = current.checked_add(bytes) else {
@@ -568,6 +611,30 @@ mod tests {
         assert_eq!(admission.snapshot().peak_bytes, 768);
         drop(second);
         assert_eq!(admission.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn reservations_answer_to_the_process_guard_before_the_query_budget() {
+        // The query budget would allow it; the process cannot hold it.
+        let live = Arc::new(AtomicU64::new(0));
+        let probe = live.clone();
+        let process = ProcessMemory::with_probe(1_000, 100, move || probe.load(Ordering::Relaxed));
+        let admission = MemoryAdmissionController::new(4_096)
+            .unwrap()
+            .with_process_memory(process);
+        let admitted = admission.admit("guarded", 4_096).unwrap();
+        let account = admitted.pool().operator("scan").unwrap();
+        let held = account.reserve(900).unwrap();
+        live.store(950, Ordering::Relaxed);
+        let error = account.reserve(1).unwrap_err().to_string();
+        assert!(error.contains("the process holds 950 of 1000 bytes"));
+        assert!(error.contains("100 bytes kept free"));
+        live.store(0, Ordering::Relaxed);
+        let more = account.reserve(1).unwrap();
+        assert_eq!(admitted.pool().snapshot().current_bytes, 901);
+        drop(more);
+        drop(held);
+        assert_eq!(admitted.pool().snapshot().current_bytes, 0);
     }
 
     #[test]

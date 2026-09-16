@@ -27,6 +27,11 @@ pub struct NodeInfo {
     pub last_heartbeat: u64,
     #[serde(default)]
     pub memory_rss_bytes: u64,
+    /// Live heap bytes by the node's own count, and the limit it runs under.
+    #[serde(default)]
+    pub memory_allocated_bytes: u64,
+    #[serde(default)]
+    pub memory_limit_bytes: Option<u64>,
     #[serde(default)]
     pub catalog_snapshot_id: Option<String>,
 }
@@ -42,6 +47,8 @@ pub struct ClusterState {
     pub this_node: NodeInfo,
     pub workers: HashMap<String, NodeInfo>,
     pub required_catalog_snapshot_id: Option<String>,
+    /// The process limit reported with every heartbeat, when there is one.
+    pub process_memory_limit_bytes: Option<u64>,
     started_at: u64,
 }
 
@@ -72,9 +79,12 @@ impl ClusterState {
                 uptime_secs: 0,
                 last_heartbeat: now,
                 memory_rss_bytes: process_memory_rss_bytes(),
+                memory_allocated_bytes: kaveon_core::process_memory::allocated_bytes(),
+                memory_limit_bytes: config.process_memory_limit_bytes,
                 catalog_snapshot_id: None,
             },
             workers: HashMap::new(),
+            process_memory_limit_bytes: config.process_memory_limit_bytes,
             required_catalog_snapshot_id: if config.coordinator {
                 Some(String::new())
             } else {
@@ -89,6 +99,8 @@ impl ClusterState {
         self.this_node.uptime_secs = now.saturating_sub(self.started_at);
         self.this_node.last_heartbeat = now;
         self.this_node.memory_rss_bytes = process_memory_rss_bytes();
+        self.this_node.memory_allocated_bytes = kaveon_core::process_memory::allocated_bytes();
+        self.this_node.memory_limit_bytes = self.process_memory_limit_bytes;
     }
 
     pub fn register_worker(&mut self, info: NodeInfo) {

@@ -35,6 +35,10 @@ pub struct ServerConfig {
     pub exchange_token: Option<String>,
     pub query_memory_limit_bytes: u64,
     pub memory_admission_limit_bytes: u64,
+    /// The process's memory limit: the container's cgroup limit unless
+    /// `KAVEON_PROCESS_MEMORY_LIMIT_BYTES` says otherwise; None when the
+    /// process is not limited.
+    pub process_memory_limit_bytes: Option<u64>,
     pub product_transactions: ProductTransactionsConfig,
 }
 
@@ -104,9 +108,29 @@ impl Default for ServerConfig {
             exchange_token: None,
             query_memory_limit_bytes: DEFAULT_QUERY_MEMORY_LIMIT_BYTES,
             memory_admission_limit_bytes: DEFAULT_MEMORY_ADMISSION_LIMIT_BYTES,
+            process_memory_limit_bytes: None,
             product_transactions: ProductTransactionsConfig::default(),
         }
     }
+}
+
+impl ServerConfig {
+    /// The guard over the process's real memory, when it is limited.
+    pub fn process_memory(&self) -> Option<kaveon_core::ProcessMemory> {
+        self.process_memory_limit_bytes
+            .map(kaveon_core::ProcessMemory::new)
+    }
+}
+
+/// The admission limit a limited process defaults to: everything below the
+/// guard's headroom. Set explicitly, the limit is taken as given and only
+/// warned about when the process could never honour it.
+fn default_admission_for_process(limit_bytes: u64) -> u64 {
+    limit_bytes
+        .saturating_sub(kaveon_core::process_memory::default_headroom_bytes(
+            limit_bytes,
+        ))
+        .max(1)
 }
 
 #[derive(Deserialize)]
@@ -169,6 +193,7 @@ pub fn default_config_path() -> PathBuf {
 
 pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     let mut config = ServerConfig::default();
+    let mut config_sets_admission = false;
 
     if path.exists() {
         let content = std::fs::read_to_string(path)?;
@@ -216,6 +241,7 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
             }
             if let Some(limit) = memory.admission_limit_bytes {
                 config.memory_admission_limit_bytes = limit;
+                config_sets_admission = true;
             }
         }
         if let Some(catalog) = raw.catalog {
@@ -286,6 +312,19 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     if let Ok(value) = std::env::var("KAVEON_PRODUCT_LOCAL_PATH") {
         config.product_transactions.local_path = PathBuf::from(value);
     }
+    // The process limit: the cgroup's, or an explicit override (0 disables).
+    config.process_memory_limit_bytes = match std::env::var("KAVEON_PROCESS_MEMORY_LIMIT_BYTES") {
+        Ok(v) => {
+            let limit: u64 = v.parse().map_err(|_| {
+                anyhow::anyhow!("KAVEON_PROCESS_MEMORY_LIMIT_BYTES must be an unsigned integer")
+            })?;
+            (limit != 0).then_some(limit)
+        }
+        Err(_) => kaveon_core::process_memory::cgroup_memory_limit_bytes(),
+    };
+    // A limited process that is not told its admission limit takes what
+    // the guard leaves: the container's limit less the headroom.
+    let admission_from_env = std::env::var("KAVEON_MEMORY_ADMISSION_LIMIT_BYTES").is_ok();
     if let Ok(v) = std::env::var("KAVEON_QUERY_MEMORY_LIMIT_BYTES") {
         config.query_memory_limit_bytes = v.parse().map_err(|_| {
             anyhow::anyhow!("KAVEON_QUERY_MEMORY_LIMIT_BYTES must be an unsigned integer")
@@ -296,11 +335,29 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
             anyhow::anyhow!("KAVEON_MEMORY_ADMISSION_LIMIT_BYTES must be an unsigned integer")
         })?;
     }
+    if let Some(limit) = config.process_memory_limit_bytes
+        && !admission_from_env
+        && !config_sets_admission
+    {
+        config.memory_admission_limit_bytes = default_admission_for_process(limit);
+        config.query_memory_limit_bytes = config
+            .query_memory_limit_bytes
+            .min(config.memory_admission_limit_bytes);
+    }
     if config.query_memory_limit_bytes == 0 {
         anyhow::bail!("query memory limit must be greater than zero");
     }
     if config.memory_admission_limit_bytes < config.query_memory_limit_bytes {
         anyhow::bail!("memory admission limit must be at least the per-query limit");
+    }
+    if let Some(limit) = config.process_memory_limit_bytes
+        && config.memory_admission_limit_bytes > limit
+    {
+        anyhow::bail!(
+            "memory admission limit {} exceeds the process memory limit {}",
+            config.memory_admission_limit_bytes,
+            limit
+        );
     }
 
     if let Ok(value) = std::env::var("KAVEON_SECURITY_JSON") {
