@@ -13,7 +13,16 @@ const FNV_PRIME: u64 = 1_099_511_628_211;
 pub struct HashPartitioner {
     key_indices: Vec<usize>,
     partition_count: usize,
+    /// Nested partitioners on the same keys (an exchange, then threads,
+    /// then spill partitions) must not agree: a `hash % n` inside a
+    /// `hash % m` leaves most inner partitions empty. A non-zero salt mixes
+    /// the hash before the modulus; zero is the exchange's plain function.
+    salt: u64,
 }
+
+/// Partition levels nested inside one exchange partition.
+pub const THREAD_PARTITION_SALT: u64 = 0x9E37_79B9_7F4A_7C15;
+pub const SPILL_PARTITION_SALT: u64 = 0xD1B5_4A32_D192_ED03;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct HashPartitionMetrics {
@@ -28,6 +37,16 @@ impl HashPartitioner {
         schema: &arrow::datatypes::SchemaRef,
         columns: &[String],
         partition_count: usize,
+    ) -> Result<Self> {
+        Self::try_new_salted(schema, columns, partition_count, 0)
+    }
+
+    /// A partitioner independent of the plain one over the same keys.
+    pub fn try_new_salted(
+        schema: &arrow::datatypes::SchemaRef,
+        columns: &[String],
+        partition_count: usize,
+        salt: u64,
     ) -> Result<Self> {
         if columns.is_empty() {
             return Err(KaveonError::Execution(
@@ -52,6 +71,7 @@ impl HashPartitioner {
         Ok(Self {
             key_indices,
             partition_count,
+            salt,
         })
     }
 
@@ -123,7 +143,10 @@ impl HashPartitioner {
             .map(|_| UInt32Builder::new())
             .collect::<Vec<_>>();
         for row_index in 0..batch.num_rows() {
-            let hash = stable_hash(rows.row(row_index).as_ref());
+            let mut hash = stable_hash(rows.row(row_index).as_ref());
+            if self.salt != 0 {
+                hash = mix(hash ^ self.salt);
+            }
             let partition = (hash % self.partition_count as u64) as usize;
             indices[partition].append_value(u32::try_from(row_index).map_err(|_| {
                 KaveonError::Execution("record batch exceeds Arrow UInt32 row capacity".into())
@@ -164,6 +187,13 @@ impl HashPartitioner {
 
 fn elapsed_us(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
+}
+
+/// SplitMix64 finaliser: every input bit reaches every output bit.
+fn mix(mut value: u64) -> u64 {
+    value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    value ^ (value >> 31)
 }
 
 fn stable_hash(bytes: &[u8]) -> u64 {
@@ -228,7 +258,9 @@ impl BoundedExchangeBuffer {
 
 #[cfg(test)]
 mod tests {
-    use super::{BoundedExchangeBuffer, HashPartitioner};
+    use super::{
+        BoundedExchangeBuffer, HashPartitioner, SPILL_PARTITION_SALT, THREAD_PARTITION_SALT,
+    };
     use arrow::array::{Int64Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -259,6 +291,59 @@ mod tests {
         assert_eq!(
             partition(f64::NAN),
             partition(f64::from_bits(0x7ff8_0000_0000_1234))
+        );
+    }
+
+    #[test]
+    fn salted_partitioners_are_independent_of_the_plain_one() {
+        // One exchange partition (plain hash % 4) split again by the thread
+        // and the spill partitioners: with the plain function only every
+        // fourth inner partition would be non-empty; salted, all are.
+        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int64, false)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(arrow::array::Int64Array::from_iter_values(
+                0..20_000,
+            ))],
+        )
+        .unwrap();
+        let outer = HashPartitioner::try_new(&schema, &["key".into()], 4).unwrap();
+        let one = outer.partition(&batch).unwrap().remove(0);
+        assert!(one.num_rows() > 4_000);
+        let plain = HashPartitioner::try_new(&schema, &["key".into()], 16).unwrap();
+        let empty_plain = plain
+            .partition(&one)
+            .unwrap()
+            .iter()
+            .filter(|part| part.num_rows() == 0)
+            .count();
+        assert_eq!(empty_plain, 12);
+        for salt in [THREAD_PARTITION_SALT, SPILL_PARTITION_SALT] {
+            let salted =
+                HashPartitioner::try_new_salted(&schema, &["key".into()], 16, salt).unwrap();
+            let parts = salted.partition(&one).unwrap();
+            assert!(parts.iter().all(|part| part.num_rows() > 100));
+            assert_eq!(
+                parts.iter().map(|part| part.num_rows()).sum::<usize>(),
+                one.num_rows()
+            );
+        }
+        // Thread and spill salts disagree with each other too.
+        let thread =
+            HashPartitioner::try_new_salted(&schema, &["key".into()], 4, THREAD_PARTITION_SALT)
+                .unwrap()
+                .partition(&one)
+                .unwrap()
+                .remove(0);
+        let spill =
+            HashPartitioner::try_new_salted(&schema, &["key".into()], 16, SPILL_PARTITION_SALT)
+                .unwrap();
+        assert!(
+            spill
+                .partition(&thread)
+                .unwrap()
+                .iter()
+                .all(|part| part.num_rows() > 20)
         );
     }
 
