@@ -385,6 +385,23 @@ fn compile_node(
                             )?,
                         ));
                     }
+                    // Several aggregator threads per task: rows hash to the
+                    // thread that owns their group, so the task's memory is
+                    // one aggregator's and its CPU is all of them.
+                    let parallelism = kaveon_exec::local_parallel::configured_parallelism()?;
+                    if parallelism > 1
+                        && let Some(memory) = memory
+                    {
+                        return Ok(Box::new(
+                            kaveon_exec::local_parallel::ParallelPartials::new(
+                                input,
+                                group_by,
+                                aggregates,
+                                memory.clone(),
+                                parallelism,
+                            )?,
+                        ));
+                    }
                     let aggregate = if let Some(memory) = memory {
                         HashAggregate::new_with_memory(
                             input,
