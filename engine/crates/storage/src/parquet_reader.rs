@@ -5,7 +5,8 @@ use arrow::record_batch::{RecordBatch, RecordBatchReader as ArrowRecordBatchRead
 use kaveon_core::{BatchSource, CompareOp, KaveonError, Result, ScalarValue, StoragePredicate};
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::{
-    ArrowPredicateFn, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder, RowFilter,
+    ArrowPredicate, ArrowPredicateFn, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder,
+    RowFilter,
 };
 use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use parquet::file::statistics::Statistics;
@@ -220,25 +221,70 @@ impl ParquetReader {
 /// comparison. The logical filter remains in the execution plan as a
 /// correctness backstop; unsupported types and compound predicates continue
 /// to use conservative row-group pruning only.
+/// The part of a predicate the decoder can evaluate itself: every comparison
+/// of a column against a literal of its own type, conjoined. Each one reads
+/// only its column, and the rows it rejects are never decoded for the other
+/// projected columns — the filter runs inside the decoder lane, in parallel,
+/// on the narrowest possible input. Anything else (OR, NOT, IN, a type the
+/// kernels do not compare) is left to the executor, which evaluates the full
+/// predicate again on what survives.
 pub(crate) fn parquet_row_filter(
     parquet_schema: &parquet::schema::types::SchemaDescriptor,
     schema: &SchemaRef,
     predicate: &StoragePredicate,
 ) -> Option<RowFilter> {
-    let StoragePredicate::Compare { column, op, value } = predicate else {
-        return None;
-    };
-    let ScalarValue::Int64(value) = value else {
-        return None;
-    };
-    let index = schema.index_of(column).ok()?;
-    if schema.field(index).data_type() != &DataType::Int64 {
-        return None;
+    let mut predicates: Vec<Box<dyn ArrowPredicate>> = Vec::new();
+    collect_decoder_predicates(parquet_schema, schema, predicate, &mut predicates);
+    (!predicates.is_empty()).then(|| RowFilter::new(predicates))
+}
+
+fn collect_decoder_predicates(
+    parquet_schema: &parquet::schema::types::SchemaDescriptor,
+    schema: &SchemaRef,
+    predicate: &StoragePredicate,
+    out: &mut Vec<Box<dyn ArrowPredicate>>,
+) {
+    match predicate {
+        StoragePredicate::And(children) => {
+            for child in children {
+                collect_decoder_predicates(parquet_schema, schema, child, out);
+            }
+        }
+        StoragePredicate::Compare { column, op, value } => {
+            if let Some(filter) = decoder_comparison(parquet_schema, schema, column, *op, value) {
+                out.push(filter);
+            }
+        }
+        _ => {}
     }
-    let op = *op;
-    let scalar = Int64Array::new_scalar(*value);
+}
+
+fn decoder_comparison(
+    parquet_schema: &parquet::schema::types::SchemaDescriptor,
+    schema: &SchemaRef,
+    column: &str,
+    op: CompareOp,
+    value: &ScalarValue,
+) -> Option<Box<dyn ArrowPredicate>> {
+    use arrow::array::{Array, BooleanArray, Float64Array, LargeStringArray, Scalar, StringArray};
+    let index = schema.index_of(column).ok()?;
+    let literal: Arc<dyn Array> = match (value, schema.field(index).data_type()) {
+        (ScalarValue::Int64(value), DataType::Int64) => Arc::new(Int64Array::from(vec![*value])),
+        (ScalarValue::Float64(value), DataType::Float64) => {
+            Arc::new(Float64Array::from(vec![*value]))
+        }
+        (ScalarValue::Bool(value), DataType::Boolean) => Arc::new(BooleanArray::from(vec![*value])),
+        (ScalarValue::Utf8(value), DataType::Utf8) => {
+            Arc::new(StringArray::from(vec![value.as_str()]))
+        }
+        (ScalarValue::Utf8(value), DataType::LargeUtf8) => {
+            Arc::new(LargeStringArray::from(vec![value.as_str()]))
+        }
+        _ => return None,
+    };
+    let scalar = Scalar::new(literal);
     let projection = ProjectionMask::roots(parquet_schema, [index]);
-    let filter = ArrowPredicateFn::new(projection, move |batch| {
+    Some(Box::new(ArrowPredicateFn::new(projection, move |batch| {
         let column = batch.column(0);
         match op {
             CompareOp::Eq => cmp::eq(column, &scalar),
@@ -248,8 +294,7 @@ pub(crate) fn parquet_row_filter(
             CompareOp::Gt => cmp::gt(column, &scalar),
             CompareOp::Ge => cmp::gt_eq(column, &scalar),
         }
-    });
-    Some(RowFilter::new(vec![Box::new(filter)]))
+    })))
 }
 
 pub(crate) fn record_selection_metrics(
@@ -891,6 +936,90 @@ mod tests {
         let metrics = metrics.snapshot();
         assert_eq!(metrics.rows_selected, 6);
         assert_eq!(metrics.rows_emitted, 2);
+    }
+
+    #[test]
+    fn pushes_utf8_and_conjoined_comparisons_into_decoder() {
+        let id = NEXT_FILE_ID.fetch_add(1, AtomicOrdering::Relaxed);
+        let file = TestFile(std::env::temp_dir().join(format!(
+            "kaveon-storage-utf8-filter-{}-{id}.parquet",
+            std::process::id()
+        )));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("day", DataType::Utf8, false),
+            Field::new("amount", DataType::Int64, false),
+            Field::new("label", DataType::Utf8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![
+                    "2026-07-01",
+                    "2026-07-02",
+                    "2026-07-03",
+                    "2026-08-01",
+                    "2026-08-02",
+                    "2026-09-01",
+                ])),
+                Arc::new(arrow::array::Int64Array::from(vec![1, 2, 3, 4, 5, 6])),
+                Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e", "f"])),
+            ],
+        )
+        .unwrap();
+        let output = File::create(&file.0).unwrap();
+        let mut writer = ArrowWriter::try_new(output, schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        // day >= '2026-07-02' AND day < '2026-09-01' AND amount > 2: three
+        // decoder predicates; only the surviving rows' labels are decoded.
+        let predicate = StoragePredicate::And(vec![
+            compare("day", CompareOp::Ge, ScalarValue::Utf8("2026-07-02".into())),
+            compare("day", CompareOp::Lt, ScalarValue::Utf8("2026-09-01".into())),
+            compare("amount", CompareOp::Gt, ScalarValue::Int64(2)),
+        ]);
+        let parquet =
+            parquet::file::reader::SerializedFileReader::new(File::open(&file.0).unwrap()).unwrap();
+        let descriptor = parquet::file::reader::FileReader::metadata(&parquet)
+            .file_metadata()
+            .schema_descr_ptr();
+        let arrow_schema = Arc::new(Schema::new(vec![
+            Field::new("day", DataType::Utf8, false),
+            Field::new("amount", DataType::Int64, false),
+            Field::new("label", DataType::Utf8, false),
+        ]));
+        let mut pushed = Vec::new();
+        collect_decoder_predicates(&descriptor, &arrow_schema, &predicate, &mut pushed);
+        assert_eq!(pushed.len(), 3);
+        assert!(parquet_row_filter(&descriptor, &arrow_schema, &predicate).is_some());
+
+        let mut reader = ParquetReader::new(&file.0)
+            .with_columns(vec!["label".to_owned()])
+            .with_predicate(predicate)
+            .read()
+            .unwrap();
+        let batches = reader.by_ref().collect::<Result<Vec<_>>>().unwrap();
+        let labels: Vec<String> = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap()
+                    .iter()
+                    .map(|value| value.unwrap().to_owned())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(labels, vec!["c", "d", "e"]);
+
+        // An OR is left to the executor: nothing pushed, nothing lost.
+        let disjunction = StoragePredicate::Or(vec![
+            compare("amount", CompareOp::Eq, ScalarValue::Int64(1)),
+            compare("amount", CompareOp::Eq, ScalarValue::Int64(6)),
+        ]);
+        assert!(parquet_row_filter(&descriptor, &arrow_schema, &disjunction).is_none());
     }
 
     #[test]
