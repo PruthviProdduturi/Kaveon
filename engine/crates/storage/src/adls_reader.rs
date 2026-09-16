@@ -25,7 +25,7 @@ use parquet::{errors::ParquetError, file::metadata::ParquetMetaData};
 use crate::{
     ScanMetrics, ScanPartition,
     parquet_reader::{
-        matching_row_groups, parquet_row_filter, projection_indices, record_selection_metrics,
+        BatchPredicate, matching_row_groups, projection_indices, record_selection_metrics,
         validate_predicate,
     },
 };
@@ -909,11 +909,6 @@ impl AdlsParquetReader {
                     let mask = ProjectionMask::roots(builder.parquet_schema(), projection.clone());
                     builder = builder.with_projection(mask);
                 }
-                if let Some(filter) = self.predicate.as_ref().and_then(|predicate| {
-                    parquet_row_filter(builder.parquet_schema(), &schema, predicate)
-                }) {
-                    builder = builder.with_row_filter(filter);
-                }
                 builder
                     .with_row_groups(groups)
                     .build()
@@ -968,6 +963,13 @@ impl AdlsParquetReader {
             }
             None => Arc::clone(&schema),
         };
+        // Comparisons the lanes evaluate on each decoded batch (see
+        // BatchPredicate); the executor still applies the whole predicate.
+        let lane_predicate = self
+            .predicate
+            .as_ref()
+            .and_then(|predicate| BatchPredicate::new(&projected_schema, predicate))
+            .map(Arc::new);
         let (schema, output_projection) =
             crate::parquet_reader::ordered_projection(projected_schema, self.columns.as_deref())?;
         let acquired = match decoded_cache_key {
@@ -986,7 +988,15 @@ impl AdlsParquetReader {
                 Some(batches) => Box::pin(futures::stream::iter(
                     batches.iter().cloned().map(Ok).collect::<Vec<_>>(),
                 )),
-                None if lanes <= 1 => Box::pin(build_stream(row_groups)?),
+                None if lanes <= 1 => {
+                    let stream = build_stream(row_groups)?;
+                    match lane_predicate {
+                        Some(predicate) => Box::pin(
+                            stream.map(move |item| item.and_then(|batch| predicate.apply(batch))),
+                        ),
+                        None => Box::pin(stream),
+                    }
+                }
                 None => {
                     let mut assignments: Vec<Vec<usize>> = vec![Vec::new(); lanes];
                     for (index, group) in row_groups.iter().enumerate() {
@@ -996,8 +1006,15 @@ impl AdlsParquetReader {
                     for groups in assignments.into_iter().filter(|groups| !groups.is_empty()) {
                         let mut stream = build_stream(groups)?;
                         let sender = sender.clone();
+                        let predicate = lane_predicate.clone();
                         tokio::spawn(async move {
                             while let Some(item) = stream.next().await {
+                                let item = match &predicate {
+                                    Some(predicate) => {
+                                        item.and_then(|batch| predicate.apply(batch))
+                                    }
+                                    None => item,
+                                };
                                 let failed = item.is_err();
                                 if sender.send(item).await.is_err() || failed {
                                     return;

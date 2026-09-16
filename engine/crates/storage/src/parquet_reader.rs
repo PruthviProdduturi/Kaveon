@@ -259,16 +259,97 @@ fn collect_decoder_predicates(
     }
 }
 
-fn decoder_comparison(
-    parquet_schema: &parquet::schema::types::SchemaDescriptor,
+/// The same comparisons, evaluated on decoded batches instead of inside the
+/// decoder. Over object storage a decoder-side filter costs a second fetch
+/// round per row group (the predicate column first, the rest afterwards),
+/// which is more than the decode it saves; a lane decodes the projected
+/// columns in one round and drops the rejected rows before they leave it.
+pub(crate) struct BatchPredicate {
+    comparisons: Vec<(
+        usize,
+        CompareOp,
+        arrow::array::Scalar<Arc<dyn arrow::array::Array>>,
+    )>,
+}
+
+impl BatchPredicate {
+    /// Every conjoined typed comparison whose column is in `schema` — the
+    /// projected batch's schema, so the indices address the batch directly.
+    pub(crate) fn new(schema: &SchemaRef, predicate: &StoragePredicate) -> Option<Self> {
+        let mut comparisons = Vec::new();
+        collect_batch_comparisons(schema, predicate, &mut comparisons);
+        (!comparisons.is_empty()).then_some(Self { comparisons })
+    }
+
+    pub(crate) fn apply(&self, batch: RecordBatch) -> parquet::errors::Result<RecordBatch> {
+        let mut mask: Option<arrow::array::BooleanArray> = None;
+        for (index, op, scalar) in &self.comparisons {
+            let column = batch.column(*index);
+            let this = match op {
+                CompareOp::Eq => cmp::eq(column, scalar),
+                CompareOp::Ne => cmp::neq(column, scalar),
+                CompareOp::Lt => cmp::lt(column, scalar),
+                CompareOp::Le => cmp::lt_eq(column, scalar),
+                CompareOp::Gt => cmp::gt(column, scalar),
+                CompareOp::Ge => cmp::gt_eq(column, scalar),
+            }
+            .map_err(|error| parquet::errors::ParquetError::External(Box::new(error)))?;
+            // SQL: a null comparison never selects the row.
+            let this = if arrow::array::Array::null_count(&this) > 0 {
+                arrow::compute::prep_null_mask_filter(&this)
+            } else {
+                this
+            };
+            mask = Some(match mask {
+                None => this,
+                Some(previous) => arrow::compute::and(&previous, &this)
+                    .map_err(|error| parquet::errors::ParquetError::External(Box::new(error)))?,
+            });
+        }
+        match mask {
+            Some(mask) if mask.true_count() == batch.num_rows() => Ok(batch),
+            Some(mask) => arrow::compute::filter_record_batch(&batch, &mask)
+                .map_err(|error| parquet::errors::ParquetError::External(Box::new(error))),
+            None => Ok(batch),
+        }
+    }
+}
+
+fn collect_batch_comparisons(
     schema: &SchemaRef,
-    column: &str,
-    op: CompareOp,
+    predicate: &StoragePredicate,
+    out: &mut Vec<(
+        usize,
+        CompareOp,
+        arrow::array::Scalar<Arc<dyn arrow::array::Array>>,
+    )>,
+) {
+    match predicate {
+        StoragePredicate::And(children) => {
+            for child in children {
+                collect_batch_comparisons(schema, child, out);
+            }
+        }
+        StoragePredicate::Compare { column, op, value } => {
+            if let Ok(index) = schema.index_of(column)
+                && let Some(literal) = comparison_literal(value, schema.field(index).data_type())
+            {
+                out.push((index, *op, arrow::array::Scalar::new(literal)));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The literal as a one-element array of the column's own type, or None when
+/// the kernels cannot compare the two. A dictionary column compares through
+/// its dictionary: once per distinct value, then an index lookup per row.
+fn comparison_literal(
     value: &ScalarValue,
-) -> Option<Box<dyn ArrowPredicate>> {
-    use arrow::array::{Array, BooleanArray, Float64Array, LargeStringArray, Scalar, StringArray};
-    let index = schema.index_of(column).ok()?;
-    let literal: Arc<dyn Array> = match (value, schema.field(index).data_type()) {
+    data_type: &DataType,
+) -> Option<Arc<dyn arrow::array::Array>> {
+    use arrow::array::{BooleanArray, Float64Array, LargeStringArray, StringArray};
+    Some(match (value, data_type) {
         (ScalarValue::Int64(value), DataType::Int64) => Arc::new(Int64Array::from(vec![*value])),
         (ScalarValue::Float64(value), DataType::Float64) => {
             Arc::new(Float64Array::from(vec![*value]))
@@ -280,9 +361,6 @@ fn decoder_comparison(
         (ScalarValue::Utf8(value), DataType::LargeUtf8) => {
             Arc::new(LargeStringArray::from(vec![value.as_str()]))
         }
-        // A dictionary-encoded string column compares against the literal
-        // through its dictionary: one comparison per distinct value, then
-        // an index lookup per row.
         (ScalarValue::Utf8(value), DataType::Dictionary(_, values))
             if matches!(values.as_ref(), DataType::Utf8) =>
         {
@@ -294,7 +372,19 @@ fn decoder_comparison(
             Arc::new(LargeStringArray::from(vec![value.as_str()]))
         }
         _ => return None,
-    };
+    })
+}
+
+fn decoder_comparison(
+    parquet_schema: &parquet::schema::types::SchemaDescriptor,
+    schema: &SchemaRef,
+    column: &str,
+    op: CompareOp,
+    value: &ScalarValue,
+) -> Option<Box<dyn ArrowPredicate>> {
+    use arrow::array::Scalar;
+    let index = schema.index_of(column).ok()?;
+    let literal = comparison_literal(value, schema.field(index).data_type())?;
     let scalar = Scalar::new(literal);
     let projection = ProjectionMask::roots(parquet_schema, [index]);
     Some(Box::new(ArrowPredicateFn::new(projection, move |batch| {
