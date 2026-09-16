@@ -2819,8 +2819,17 @@ impl HashAggregate {
             return false;
         }
         let schema = self.source.schema();
+        let text_extremes = self.new_states().iter().any(|state| {
+            matches!(
+                state,
+                AggregateState::Utf8Min(_) | AggregateState::Utf8Max(_)
+            )
+        });
         match schema.field_with_name(&self.group_by[0]) {
             Ok(field) if matches!(field.data_type(), DataType::Utf8 | DataType::LargeUtf8) => {}
+            // A dictionary key only comes here for text MIN/MAX, which the
+            // coded path cannot fold per group anyway.
+            Ok(field) if text_extremes && is_string_key_type(field.data_type()) => {}
             _ => return false,
         }
         self.in_place_accumulators_apply()
@@ -2838,12 +2847,24 @@ impl HashAggregate {
             if aggregate.column == "*" {
                 return matches!(aggregate.func, AggFunc::Count);
             }
-            matches!(
-                schema
-                    .field_with_name(&aggregate.column)
-                    .map(|field| field.data_type()),
-                Ok(DataType::Int64 | DataType::Int32 | DataType::Float64)
-            )
+            match schema
+                .field_with_name(&aggregate.column)
+                .map(|field| field.data_type())
+            {
+                Ok(DataType::Int64 | DataType::Int32 | DataType::Float64) => true,
+                // Text takes only MIN and MAX; COUNT(column) over text is
+                // counted through the same in-place COUNT state.
+                Ok(DataType::Utf8 | DataType::LargeUtf8) => {
+                    matches!(aggregate.func, AggFunc::Min | AggFunc::Max | AggFunc::Count)
+                }
+                Ok(DataType::Dictionary(key, values))
+                    if key.as_ref() == &DataType::Int32
+                        && matches!(values.as_ref(), DataType::Utf8 | DataType::LargeUtf8) =>
+                {
+                    matches!(aggregate.func, AggFunc::Min | AggFunc::Max | AggFunc::Count)
+                }
+                _ => false,
+            }
         }) && self.new_states().iter().all(|state| {
             matches!(
                 state,
@@ -2855,6 +2876,8 @@ impl HashAggregate {
                     | AggregateState::Avg { .. }
                     | AggregateState::Min(_)
                     | AggregateState::Max(_)
+                    | AggregateState::Utf8Min(_)
+                    | AggregateState::Utf8Max(_)
             )
         })
     }
@@ -2932,19 +2955,42 @@ impl HashAggregate {
                 index.insert(Box::from(text), slot);
                 Ok(slot)
             };
-            let texts = string_values(keys)?;
-            let mut row_slots = Vec::with_capacity(batch.num_rows());
-            for row in 0..batch.num_rows() {
-                if row % 1024 == 0
-                    && let Some(memory) = &self.memory
-                {
-                    memory.check_cancelled()?;
+            let row_slots: Vec<u32> = match keys.data_type() {
+                DataType::Dictionary(_, _) => {
+                    let dictionary = keys
+                        .as_any()
+                        .downcast_ref::<Int32DictionaryArray>()
+                        .expect("dictionary key type must match schema");
+                    let texts = string_values(dictionary.values())?;
+                    let mut by_code = vec![u32::MAX; dictionary.values().len()];
+                    for code in used_dictionary_indices(dictionary) {
+                        if let Some(text) = texts.value(code) {
+                            by_code[code] = resolve(text)?;
+                        }
+                    }
+                    dictionary
+                        .keys()
+                        .iter()
+                        .map(|code| code.map_or(u32::MAX, |code| by_code[code as usize]))
+                        .collect()
                 }
-                row_slots.push(match texts.value(row) {
-                    Some(text) => resolve(text)?,
-                    None => u32::MAX,
-                });
-            }
+                _ => {
+                    let texts = string_values(keys)?;
+                    let mut slots = Vec::with_capacity(batch.num_rows());
+                    for row in 0..batch.num_rows() {
+                        if row % 1024 == 0
+                            && let Some(memory) = &self.memory
+                        {
+                            memory.check_cancelled()?;
+                        }
+                        slots.push(match texts.value(row) {
+                            Some(text) => resolve(text)?,
+                            None => u32::MAX,
+                        });
+                    }
+                    slots
+                }
+            };
             for (row, slot) in row_slots.into_iter().enumerate() {
                 let accumulators: &mut [Accumulator] = if slot == u32::MAX {
                     if null_states.is_none() {
@@ -3835,12 +3881,47 @@ fn update_in_place(
                         };
                         state.update_integer(value)?
                     }
+                    AggregateState::Utf8Min(_) | AggregateState::Utf8Max(_) => {
+                        if let Some(text) = text_at(array, row)? {
+                            state.update_utf8(text)?
+                        }
+                    }
                     _ => state.update_numeric(extract_f64(array, row)?)?,
                 }
             }
         }
     }
     Ok(())
+}
+
+/// Row `row` of a text or dictionary-encoded text column.
+fn text_at(array: &ArrayRef, row: usize) -> Result<Option<&str>> {
+    fn value_of(array: &ArrayRef, row: usize) -> Result<Option<&str>> {
+        match array.data_type() {
+            DataType::Utf8 => {
+                let values = array.as_string::<i32>();
+                Ok((!values.is_null(row)).then(|| values.value(row)))
+            }
+            DataType::LargeUtf8 => {
+                let values = array.as_string::<i64>();
+                Ok((!values.is_null(row)).then(|| values.value(row)))
+            }
+            other => Err(exec_err(format!("aggregate input is not text: {other}"))),
+        }
+    }
+    match array.data_type() {
+        DataType::Dictionary(_, _) => {
+            let dictionary = array
+                .as_any()
+                .downcast_ref::<Int32DictionaryArray>()
+                .expect("dictionary key type must match schema");
+            if dictionary.keys().is_null(row) {
+                return Ok(None);
+            }
+            value_of(dictionary.values(), dictionary.keys().value(row) as usize)
+        }
+        _ => value_of(array, row),
+    }
 }
 
 /// A text column's values by row, for Utf8 and LargeUtf8 alike.
