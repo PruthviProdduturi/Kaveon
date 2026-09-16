@@ -152,6 +152,26 @@ impl IncrementalAggregateMerger {
                     }
                 }
                 None => {
+                    // The index and the state vector double when full; the
+                    // old buffers live until the copy is done.
+                    if let Some(memory) = &self.memory {
+                        if self.index.capacity() >= 1 << 16
+                            && self.index.len() == self.index.capacity()
+                        {
+                            self.reservations.reserve(
+                                memory,
+                                (self.index.capacity() as u64).saturating_mul(48),
+                            )?;
+                        }
+                        if self.states.capacity() >= 1 << 16
+                            && self.states.len() == self.states.capacity()
+                        {
+                            self.reservations.reserve(
+                                memory,
+                                (self.states.capacity() as u64).saturating_mul(24),
+                            )?;
+                        }
+                    }
                     // The key's types are checked once, when the group is
                     // first seen: every later row with these bytes is the
                     // same key.

@@ -151,6 +151,14 @@ impl DistinctOperator {
                 .as_ref()
                 .map_or((0, 0), |words| words[row].map_or((0, 2), |word| (word, 0)));
             let key = (a, b, a_null | b_null);
+            if let Some(memory) = &self.memory
+                && self.compact.capacity() >= 1 << 16
+                && self.compact.len() == self.compact.capacity()
+            {
+                // The set doubles; the old table lives until the copy is done.
+                self.reservations
+                    .push(memory.reserve((self.compact.capacity() as u64).saturating_mul(24))?);
+            }
             if self.compact.insert(key) {
                 if let Some(memory) = &self.memory {
                     self.reservations.push(memory.reserve(COMPACT_KEY_BYTES)?);
