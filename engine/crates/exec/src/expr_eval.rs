@@ -509,6 +509,20 @@ fn coerce_numeric_pair(left: &ArrayRef, right: &ArrayRef) -> Result<(ArrayRef, A
     if left.data_type() == right.data_type() {
         return Ok((Arc::clone(left), Arc::clone(right)));
     }
+    // Integers of different widths, and a day-number date against an
+    // integer, meet as Int64; anything else numeric meets as Float64.
+    let integer_like =
+        |data_type: &DataType| is_integer(data_type) || matches!(data_type, DataType::Date32);
+    if integer_like(left.data_type()) && integer_like(right.data_type()) {
+        let as_int64 = |array: &ArrayRef| -> Result<ArrayRef> {
+            let array = match array.data_type() {
+                DataType::Date32 => compute::cast(array, &DataType::Int32)?,
+                _ => Arc::clone(array),
+            };
+            Ok(compute::cast(&array, &DataType::Int64)?)
+        };
+        return Ok((as_int64(left)?, as_int64(right)?));
+    }
     if is_numeric(left.data_type()) && is_numeric(right.data_type()) {
         return Ok((
             compute::cast(left, &DataType::Float64)?,
@@ -516,6 +530,20 @@ fn coerce_numeric_pair(left: &ArrayRef, right: &ArrayRef) -> Result<(ArrayRef, A
         ));
     }
     Ok((Arc::clone(left), Arc::clone(right)))
+}
+
+fn is_integer(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+    )
 }
 
 fn is_numeric(data_type: &DataType) -> bool {

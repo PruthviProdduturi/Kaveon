@@ -860,6 +860,24 @@ fn ast_expr_to_usize(expr: &ast::Expr) -> Result<usize> {
     }
 }
 
+/// Days since 1970-01-01 for a `YYYY-MM-DD` string (proleptic Gregorian).
+fn parse_date_days(value: &str) -> Option<i64> {
+    let mut parts = value.trim().splitn(3, '-');
+    let year: i64 = parts.next()?.parse().ok()?;
+    let month: i64 = parts.next()?.parse().ok()?;
+    let day: i64 = parts.next()?.parse().ok()?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let m = if month > 2 { month - 3 } else { month + 9 };
+    let doy = (153 * m + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146097 + doe - 719468)
+}
+
 fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
     match expr {
         ast::Expr::Identifier(ident) => Ok(Expr::Column(ident.value.clone())),
@@ -989,6 +1007,18 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
                 list: items,
                 negated: *negated,
             })
+        }
+
+        // A DATE literal is its day number: the Engine's date columns are
+        // days since the epoch, so `EventDate >= DATE '2013-07-01'` compares
+        // integers with integers.
+        ast::Expr::TypedString {
+            data_type: ast::DataType::Date,
+            value,
+        } => {
+            let days = parse_date_days(value)
+                .ok_or_else(|| sql_err(format!("invalid DATE literal: '{value}'")))?;
+            Ok(Expr::Literal(ScalarValue::Int64(days)))
         }
 
         // ── CAST ────────────────────────────────────────────────────────
@@ -1626,6 +1656,29 @@ mod tests {
         ));
         assert!(sql_to_logical_plan("SELECT x FROM a INTERSECT ALL SELECT x FROM b").is_err());
         assert!(sql_to_logical_plan("SELECT x FROM a EXCEPT ALL SELECT x FROM b").is_err());
+    }
+
+    #[test]
+    fn date_literals_are_day_numbers() {
+        assert_eq!(parse_date_days("1970-01-01"), Some(0));
+        assert_eq!(parse_date_days("2013-07-01"), Some(15887));
+        assert_eq!(parse_date_days("1969-12-31"), Some(-1));
+        assert_eq!(parse_date_days("2013-13-01"), None);
+        let plan = sql_to_logical_plan("SELECT x FROM t WHERE d >= DATE '2013-07-01'").unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("projection");
+        };
+        let LogicalPlan::Filter { predicate, .. } = *input else {
+            panic!("filter");
+        };
+        assert_eq!(
+            predicate,
+            Expr::BinaryOp {
+                left: Box::new(Expr::Column("d".into())),
+                op: BinaryOp::Ge,
+                right: Box::new(Expr::Literal(ScalarValue::Int64(15887))),
+            }
+        );
     }
 
     #[test]
