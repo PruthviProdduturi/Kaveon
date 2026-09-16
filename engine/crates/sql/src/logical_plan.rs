@@ -139,11 +139,20 @@ fn query_to_plan(
 
     let plan = set_expr_to_plan(query.body.as_ref(), &ctes)?;
 
-    let plan = match &query.order_by {
+    let (plan, visible) = match &query.order_by {
         Some(ob) => build_order_by(plan, &ob.exprs)?,
-        None => plan,
+        None => (plan, None),
     };
     let plan = build_limit_offset(plan, &query.limit, &query.offset)?;
+    // ORDER BY on a column the query does not select: the column rode
+    // along through the sort and limit and is dropped here.
+    let plan = match visible {
+        Some(columns) => LogicalPlan::Project {
+            input: Box::new(plan),
+            columns,
+        },
+        None => plan,
+    };
 
     Ok(plan)
 }
@@ -832,9 +841,14 @@ fn build_projection(
     })
 }
 
-fn build_order_by(plan: LogicalPlan, order_by: &[ast::OrderByExpr]) -> Result<LogicalPlan> {
+/// The sorted plan and, when a key had to be carried through the
+/// projection, the visible columns to re-project at the top.
+fn build_order_by(
+    plan: LogicalPlan,
+    order_by: &[ast::OrderByExpr],
+) -> Result<(LogicalPlan, Option<Vec<Expr>>)> {
     if order_by.is_empty() {
-        return Ok(plan);
+        return Ok((plan, None));
     }
     let mut items = Vec::new();
     for ob in order_by {
@@ -842,23 +856,54 @@ fn build_order_by(plan: LogicalPlan, order_by: &[ast::OrderByExpr]) -> Result<Lo
         let asc = ob.asc.unwrap_or(true);
         items.push((expr, asc));
     }
-    let plan = bind_order_keys_to_projection(plan, &mut items);
-    Ok(LogicalPlan::Sort {
-        input: Box::new(plan),
-        order_by: items,
-    })
+    let (plan, visible) = bind_order_keys_to_projection(plan, &mut items);
+    Ok((
+        LogicalPlan::Sort {
+            input: Box::new(plan),
+            order_by: items,
+        },
+        visible,
+    ))
 }
 
 /// An ORDER BY expression that repeats a select item — `ORDER BY COUNT(*)`
 /// beside `SELECT k, COUNT(*)` — orders by that item's output column. An
 /// item without a name receives one (`expr_<position>`) so the key can
 /// name it.
-fn bind_order_keys_to_projection(plan: LogicalPlan, keys: &mut [(Expr, bool)]) -> LogicalPlan {
+fn bind_order_keys_to_projection(
+    plan: LogicalPlan,
+    keys: &mut [(Expr, bool)],
+) -> (LogicalPlan, Option<Vec<Expr>>) {
     let LogicalPlan::Project { input, mut columns } = plan else {
-        return plan;
+        return (plan, None);
     };
+    if columns.iter().any(|column| matches!(column, Expr::Star)) {
+        return (LogicalPlan::Project { input, columns }, None);
+    }
+    let output_names = |columns: &[Expr]| {
+        columns
+            .iter()
+            .filter_map(|column| match column {
+                Expr::Alias { name, .. } => Some(name.clone()),
+                Expr::Column(name) => Some(name.rsplit('.').next().unwrap_or(name).to_owned()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let visible = columns.clone();
+    let mut hidden = Vec::new();
     for (key, _) in keys.iter_mut() {
-        if matches!(key, Expr::Column(_) | Expr::Literal(_)) {
+        if let Expr::Column(name) = key {
+            // A column the query does not select rides along through the
+            // sort; the caller re-projects the visible columns above.
+            let bare = name.rsplit('.').next().unwrap_or(name).to_owned();
+            if !output_names(&columns).contains(&bare) && !hidden.contains(name) {
+                hidden.push(name.clone());
+                columns.push(Expr::Column(name.clone()));
+            }
+            continue;
+        }
+        if matches!(key, Expr::Literal(_)) {
             continue;
         }
         let position = columns.iter().position(|column| match column {
@@ -881,7 +926,27 @@ fn bind_order_keys_to_projection(plan: LogicalPlan, keys: &mut [(Expr, bool)]) -
         };
         *key = Expr::Column(name);
     }
-    LogicalPlan::Project { input, columns }
+    let visible = (!hidden.is_empty()).then(|| {
+        visible
+            .iter()
+            .enumerate()
+            .map(|(position, column)| match column {
+                Expr::Alias { name, .. } => Expr::Column(name.clone()),
+                Expr::Column(name) => Expr::Column(name.clone()),
+                other => {
+                    // An unnamed expression is addressed by the name it
+                    // received in the extended projection.
+                    let name = format!("expr_{position}");
+                    columns[position] = Expr::Alias {
+                        expr: Box::new(other.clone()),
+                        name: name.clone(),
+                    };
+                    Expr::Column(name)
+                }
+            })
+            .collect::<Vec<_>>()
+    });
+    (LogicalPlan::Project { input, columns }, visible)
 }
 
 fn build_limit_offset(
@@ -1752,6 +1817,44 @@ mod tests {
                 (Expr::Column("k".into()), true)
             ]
         );
+    }
+
+    #[test]
+    fn order_by_an_unselected_column_rides_through_and_is_dropped() {
+        let plan = sql_to_logical_plan(
+            "SELECT phrase FROM t WHERE phrase <> '' ORDER BY event_time, phrase LIMIT 10",
+        )
+        .unwrap();
+        let LogicalPlan::Project { input, columns } = plan else {
+            panic!("visible projection on top");
+        };
+        assert_eq!(columns, vec![Expr::Column("phrase".into())]);
+        let LogicalPlan::Limit { input, count: 10 } = *input else {
+            panic!("limit under the visible projection");
+        };
+        let LogicalPlan::Sort { input, order_by } = *input else {
+            panic!("sort");
+        };
+        assert_eq!(
+            order_by,
+            vec![
+                (Expr::Column("event_time".into()), true),
+                (Expr::Column("phrase".into()), true)
+            ]
+        );
+        let LogicalPlan::Project { columns, .. } = *input else {
+            panic!("extended projection");
+        };
+        assert_eq!(
+            columns,
+            vec![
+                Expr::Column("phrase".into()),
+                Expr::Column("event_time".into())
+            ]
+        );
+        // A selected key changes nothing.
+        let plan = sql_to_logical_plan("SELECT a, b FROM t ORDER BY b").unwrap();
+        assert!(matches!(plan, LogicalPlan::Sort { .. }));
     }
 
     #[test]
