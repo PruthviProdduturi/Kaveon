@@ -377,17 +377,9 @@ fn run_worker(
             .collect::<Result<Vec<_>>>()?;
         let operator = HashAggregate::new_with_memory(source, groups, aggregates, account.clone())?
             .with_reserved_input();
-        let (states, guards) = operator.into_grouped_states_with_reservations()?;
-        // Encoding: the state bytes again, or a few hundred bytes per group.
-        let bytes = guards
-            .iter()
-            .map(MemoryReservation::bytes)
-            .sum::<u64>()
-            .max((states.len() as u64).saturating_mul(256))
-            .saturating_add(8192);
-        let memory = Arc::new(account.reserve(bytes)?);
-        let batch = grouped_aggregate_states_to_schema_batch(&states, &keys, &types)?;
-        drop(states);
+        let (batch, guards) = operator.into_partial_batch(&keys, &types)?;
+        // The batch is held by the queue; the states it came from are not.
+        let memory = Arc::new(account.reserve(batch.get_array_memory_size() as u64 + 8192)?);
         drop(guards);
         send_bounded(
             output,

@@ -21,6 +21,7 @@ use kaveon_exec::aggregate::{
 use kaveon_exec::distinct::DistinctOperator;
 use kaveon_exec::exchange::{HashPartitionMetrics, HashPartitioner};
 use kaveon_exec::filter::FilterOperator;
+use kaveon_exec::incremental_aggregate::{IncrementalAggregateMerger, MergedGroups};
 use kaveon_exec::join::JoinType;
 use kaveon_exec::limit::LimitOperator;
 use kaveon_exec::offset::OffsetOperator;
@@ -412,33 +413,9 @@ fn compile_node(
                     } else {
                         HashAggregate::new(input, group_by, aggregates)?
                     };
-                    let (states, state_memory) =
-                        aggregate.into_grouped_states_with_reservations()?;
-                    let encoding_memory = memory
-                        .map(|memory| {
-                            // Encoding holds two small byte vectors per
-                            // group beside the states, then the binary
-                            // arrays: a few hundred bytes per group, not
-                            // pages. A 4 KiB figure here turned a 3 M-group
-                            // partial into a 12 GiB request.
-                            let state_bytes = state_memory
-                                .iter()
-                                .map(|reservation| reservation.bytes())
-                                .sum::<u64>();
-                            let bytes = state_bytes.max((states.len() as u64).saturating_mul(256));
-                            memory
-                                .operator("fragment-partial-state-encoding")?
-                                .reserve(bytes)
-                        })
-                        .transpose()?;
-                    let batch = kaveon_exec::aggregate::grouped_aggregate_states_to_schema_batch(
-                        &states,
-                        &group_types,
-                        &output_types,
-                    )?;
-                    drop(states);
+                    let (batch, state_memory) =
+                        aggregate.into_partial_batch(&group_types, &output_types)?;
                     drop(state_memory);
-                    drop(encoding_memory);
                     Ok(Box::new(BatchInput::with_memory(
                         batch.schema(),
                         vec![batch],
@@ -829,8 +806,7 @@ fn compile_final_aggregate_in_memory(
         .map(|memory| memory.operator("fragment-final-aggregate"))
         .transpose()?;
     kaveon_exec::expr_eval::with_expression_memory(account.as_ref(), || {
-        let mut merger =
-            kaveon_exec::incremental_aggregate::IncrementalAggregateMerger::new(account.clone());
+        let mut merger = IncrementalAggregateMerger::new(account.clone());
         while let Some(batch) = input.next_batch()? {
             if grouped_aggregate_key_types(&batch.schema())? != group_types {
                 return Err(exec_err("final aggregate input key schema changed"));
@@ -840,7 +816,26 @@ fn compile_final_aggregate_in_memory(
             }
             merger.push_batch(&batch)?;
         }
-        let (mut merged, reservations) = merger.finish()?;
+        let (merged, reservations) = merger.finish_groups()?;
+        let mut merged = match merged {
+            MergedGroups::Rows(merged) => merged,
+            MergedGroups::Columnar(groups) => {
+                let batch = columnar_final_batch(
+                    &group_by,
+                    &group_types,
+                    &aggregates,
+                    &output_types,
+                    &groups,
+                )?;
+                drop(groups);
+                drop(reservations);
+                return Ok(Box::new(BatchInput::with_memory(
+                    batch.schema(),
+                    vec![batch],
+                    memory,
+                )?) as Box<dyn BatchOperator>);
+            }
+        };
         if merged.is_empty() && group_by.is_empty() {
             merged.push(GroupedAggregateState {
                 group_keys: Vec::new(),
@@ -888,6 +883,52 @@ fn final_output_types(schema: &SchemaRef, aggregates: &[AggExpr]) -> Result<Vec<
         return Err(exec_err("final aggregate output type count mismatch"));
     }
     Ok(types)
+}
+
+/// The final batch straight from columnar groups: key columns as the
+/// exchange typed them, aggregate columns finalised from the accumulator
+/// columns.
+fn columnar_final_batch(
+    group_by: &[String],
+    group_types: &[DataType],
+    aggregates: &[AggExpr],
+    output_types: &[DataType],
+    groups: &kaveon_exec::columnar_aggregate::ColumnarGroups,
+) -> Result<RecordBatch> {
+    let mut fields = Vec::with_capacity(group_by.len() + aggregates.len());
+    let mut columns = Vec::with_capacity(group_by.len() + aggregates.len());
+    let keys = groups.key_arrays();
+    if keys.len() != group_by.len() || group_types.len() != group_by.len() {
+        return Err(exec_err("missing final aggregate key type"));
+    }
+    for ((name, data_type), column) in group_by.iter().zip(group_types).zip(keys) {
+        if column.data_type() != data_type {
+            return Err(exec_err("final aggregate key type does not match plan"));
+        }
+        fields.push(Field::new(name, data_type.clone(), true));
+        columns.push(column);
+    }
+    if output_types.len() != aggregates.len() {
+        return Err(exec_err(
+            "final aggregate state layout does not match its plan",
+        ));
+    }
+    for ((aggregate, data_type), column) in aggregates
+        .iter()
+        .zip(output_types)
+        .zip(groups.output_arrays(output_types)?)
+    {
+        fields.push(Field::new(
+            aggregate_output_name(aggregate),
+            data_type.clone(),
+            true,
+        ));
+        columns.push(column);
+    }
+    Ok(RecordBatch::try_new(
+        Arc::new(Schema::new(fields)),
+        columns,
+    )?)
 }
 
 fn finalized_aggregate_batch(

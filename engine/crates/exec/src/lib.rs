@@ -1,4 +1,5 @@
 pub mod aggregate;
+pub mod columnar_aggregate;
 pub mod distinct;
 pub mod exchange;
 pub mod expr_eval;
