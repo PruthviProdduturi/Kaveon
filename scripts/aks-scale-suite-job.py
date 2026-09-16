@@ -17,6 +17,10 @@ def main():
     parser.add_argument("--image", required=True)
     parser.add_argument("--namespace", default="kaveon")
     parser.add_argument("--name", default="kaveon-scale-suite")
+    parser.add_argument("--input", default="kaveon-scale-suite-input",
+                        help="configmap holding scale-suite.py and the suite JSON")
+    parser.add_argument("--suite", default="/input/scale-suite.json",
+                        help="suite JSON path inside the input mount")
     args = parser.parse_args()
     live = json.loads(subprocess.check_output(["kubectl", "get", "deploy", "kaveon-api", "-n", args.namespace, "-o", "json"]))
     engine = json.loads(subprocess.check_output(["kubectl", "get", "sts", "kaveon-worker", "-n", args.namespace, "-o", "json"]))
@@ -37,7 +41,8 @@ def main():
                 "containers": [{
                     "name": "suite", "image": args.image, "workingDir": "/app",
                     "command": ["python", "-u", "/input/scale-suite.py"],
-                    "env": container.get("env", []) + [{"name": "ENGINE_DIGEST", "value": engine_digest}],
+                    "env": container.get("env", []) + [{"name": "ENGINE_DIGEST", "value": engine_digest},
+                                                       {"name": "SUITE", "value": args.suite}],
                     "envFrom": container.get("envFrom", []),
                     "resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"cpu": "500m", "memory": "1Gi"}},
                     "volumeMounts": [m for m in container.get("volumeMounts", []) if "retirement" not in m["name"]]
@@ -45,7 +50,7 @@ def main():
                     "securityContext": container.get("securityContext", {}),
                 }],
                 "volumes": [v for v in pod.get("volumes", []) if "retirement" not in v["name"]]
-                           + [{"name": "input", "configMap": {"name": "kaveon-scale-suite-input"}}],
+                           + [{"name": "input", "configMap": {"name": args.input}}],
             }}}}
     print(json.dumps(job, indent=1))
 
