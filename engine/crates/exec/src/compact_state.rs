@@ -113,6 +113,16 @@ pub(super) fn encode_into(states: &[AggregateState], out: &mut Vec<u8>) -> Resul
 }
 
 pub(super) fn decode(bytes: &[u8]) -> Result<Vec<AggregateState>> {
+    let mut states = Vec::new();
+    decode_into(bytes, &mut states)?;
+    Ok(states)
+}
+
+/// Decode one group's states into `states` (cleared first). The final
+/// merge calls this once per incoming row with a reused vector, so a row
+/// costs no allocation unless it opens a new group.
+pub(super) fn decode_into(bytes: &[u8], states: &mut Vec<AggregateState>) -> Result<()> {
+    states.clear();
     let mut input = Input(bytes);
     if input.take(4)? != b"KAS\x01" {
         return Err(exec_err("unsupported compact aggregate state version"));
@@ -121,9 +131,8 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Vec<AggregateState>> {
     if count > input.0.len() / 2 {
         return Err(exec_err("compact aggregate count exceeds payload"));
     }
-    let mut states = Vec::with_capacity(count);
+    states.reserve(count);
     for _ in 0..count {
-        crate::expr_eval::check_expression_cancelled()?;
         let tag = input.byte()?;
         let state = match tag {
             1 | 5 => {
@@ -244,7 +253,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Vec<AggregateState>> {
         return Err(exec_err("trailing compact aggregate state bytes"));
     }
     state_layout(&states)?;
-    Ok(states)
+    Ok(())
 }
 
 fn length(out: &mut Vec<u8>, size: usize) -> Result<()> {

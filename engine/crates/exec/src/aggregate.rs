@@ -1038,9 +1038,12 @@ pub(crate) fn validate_group_key_types(
 }
 
 /// Decodes canonical partial-aggregate Arrow batches received through an exchange.
-/// One row's accumulators from their compact encoding.
-pub(crate) fn decode_group_states(bytes: &[u8]) -> Result<Vec<AggregateState>> {
-    compact_state::decode(bytes)
+/// One row's accumulators from their compact encoding, into a reused vector.
+pub(crate) fn decode_group_states_into(
+    bytes: &[u8],
+    states: &mut Vec<AggregateState>,
+) -> Result<()> {
+    compact_state::decode_into(bytes, states)
 }
 
 pub fn grouped_aggregate_states_from_batches(
