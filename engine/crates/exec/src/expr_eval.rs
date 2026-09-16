@@ -1,6 +1,6 @@
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanArray, Decimal128Array, Float64Array, Int32Array, Int64Array,
-    StringArray,
+    StringArray, StringBuilder,
 };
 use arrow::compute;
 use arrow::datatypes::{DataType, Float64Type, Int32Type, Int64Type};
@@ -52,6 +52,35 @@ pub fn check_expression_cancelled() -> Result<()> {
             .map(|budget| budget.account.check_cancelled())
             .unwrap_or(Ok(()))
     })
+}
+
+/// Compiled regular expressions by pattern, shared by every batch and
+/// query in the process: a pattern is compiled once, not once per batch.
+/// Bounded; a burst of distinct patterns clears it rather than growing it.
+fn compiled_regex(pattern: &str) -> Result<regex::Regex> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    const MAX_CACHED_PATTERNS: usize = 256;
+    static CACHE: OnceLock<Mutex<HashMap<String, regex::Regex>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(regex) = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(pattern)
+    {
+        return Ok(regex.clone());
+    }
+    let regex = regex::Regex::new(pattern).map_err(|error| {
+        KaveonError::Execution(format!("REGEXP_REPLACE pattern is invalid: {error}"))
+    })?;
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if cache.len() >= MAX_CACHED_PATTERNS {
+        cache.clear();
+    }
+    cache.insert(pattern.to_owned(), regex.clone());
+    Ok(regex)
 }
 
 fn reserve_string_expansion(bytes: u64, rows: usize) -> Result<()> {
@@ -946,39 +975,46 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let arr = as_string_array(&args[0])?;
             let patterns = as_string_array(&args[1])?;
             let replacements = as_string_array(&args[2])?;
-            // Patterns are literals in practice: compile each distinct one once.
-            let mut compiled: std::collections::HashMap<&str, regex::Regex> =
-                std::collections::HashMap::new();
-            let mut values: Vec<Option<String>> = Vec::with_capacity(num_rows);
-            let mut bytes = 0_u64;
+            // Bounded by the input: a replacement can only grow a row by the
+            // replacement text per match, and the budget is charged for the
+            // input again plus that growth once the rows are written.
+            reserve_string_expansion(arr.values().len() as u64, num_rows)?;
+            let mut builder = StringBuilder::with_capacity(num_rows, arr.values().len());
+            let mut expression: Option<(&str, regex::Regex)> = None;
+            let mut grown = 0_u64;
             for i in 0..num_rows {
                 if arr.is_null(i) || patterns.is_null(i) || replacements.is_null(i) {
-                    values.push(None);
+                    builder.append_null();
                     continue;
                 }
+                // The pattern is a literal in practice: one compiled regex
+                // serves the batch, from the process-wide cache.
                 let pattern = patterns.value(i);
-                let expression = match compiled.get(pattern) {
-                    Some(expression) => expression,
-                    None => {
-                        let expression = regex::Regex::new(pattern).map_err(|error| {
-                            KaveonError::Execution(format!(
-                                "REGEXP_REPLACE pattern is invalid: {error}"
-                            ))
-                        })?;
-                        compiled.entry(pattern).or_insert(expression)
+                if expression
+                    .as_ref()
+                    .is_none_or(|(current, _)| *current != pattern)
+                {
+                    expression = Some((pattern, compiled_regex(pattern)?));
+                }
+                let (_, regex) = expression.as_ref().expect("set above");
+                let source = arr.value(i);
+                match regex.replace_all(source, replacements.value(i)) {
+                    std::borrow::Cow::Borrowed(unchanged) => builder.append_value(unchanged),
+                    std::borrow::Cow::Owned(replaced) => {
+                        grown = grown.saturating_add(
+                            (replaced.len() as u64).saturating_sub(source.len() as u64),
+                        );
+                        builder.append_value(&replaced);
                     }
-                };
-                let replaced = expression
-                    .replace_all(arr.value(i), replacements.value(i))
-                    .into_owned();
-                bytes = bytes.saturating_add(replaced.len() as u64);
-                values.push(Some(replaced));
+                }
                 if i % 1024 == 1023 {
                     check_expression_cancelled()?;
                 }
             }
-            reserve_string_expansion(bytes, num_rows)?;
-            Ok(Arc::new(StringArray::from(values)))
+            if grown != 0 {
+                reserve_string_expansion(grown, 0)?;
+            }
+            Ok(Arc::new(builder.finish()))
         }
         "REPLACE" => {
             check_arity(name, args, 3)?;
@@ -2018,6 +2054,41 @@ mod tests {
                 None
             ]
         );
+    }
+
+    #[test]
+    fn regexp_replace_keeps_unmatched_rows_and_grows_matched_ones() {
+        // Rows without a match come back unchanged; a replacement longer
+        // than its match grows the row; nulls stay null; and the same
+        // pattern across batches hits the process-wide compiled cache.
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, true)]));
+        let expr = Expr::Function {
+            name: "REGEXP_REPLACE".into(),
+            args: vec![
+                Expr::Column("s".into()),
+                Expr::Literal(ScalarValue::Utf8(r"a(\d)".into())),
+                Expr::Literal(ScalarValue::Utf8("<$1$1$1>".into())),
+            ],
+        };
+        for _ in 0..3 {
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(StringArray::from(vec![
+                    Some("xa1ya2"),
+                    Some("nothing here"),
+                    None,
+                    Some(""),
+                ]))],
+            )
+            .unwrap();
+            let result = evaluate(&expr, &batch).unwrap();
+            let result = as_string_array(&result).unwrap();
+            assert_eq!(
+                result.iter().collect::<Vec<_>>(),
+                vec![Some("x<111>y<222>"), Some("nothing here"), None, Some("")]
+            );
+        }
+        assert!(compiled_regex("(").is_err());
     }
 
     #[test]
