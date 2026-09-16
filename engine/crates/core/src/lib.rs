@@ -6,6 +6,7 @@ pub mod fragment;
 pub mod memory;
 pub mod operator;
 pub mod predicate;
+pub mod process_memory;
 pub mod telemetry;
 pub mod types;
 
@@ -35,6 +36,7 @@ pub use memory::{
 };
 pub use operator::{BatchOperator, BatchSource, collect_batches};
 pub use predicate::{CompareOp, ScalarValue, StoragePredicate};
+pub use process_memory::{CountingAllocator, ProcessMemory};
 pub use telemetry::{
     NodeMetrics, OperatorMetrics, PlanMetricsSnapshot, PlanNode, PlanNodeId, PlanPhase, ScanMetrics,
 };

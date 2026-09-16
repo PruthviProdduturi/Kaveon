@@ -413,6 +413,8 @@ mod tests {
             uptime_secs: 0,
             last_heartbeat: 0,
             memory_rss_bytes: 0,
+            memory_allocated_bytes: 0,
+            memory_limit_bytes: None,
             catalog_snapshot_id: None,
         }
     }
