@@ -2146,6 +2146,7 @@ impl HashAggregate {
             matches!(
                 state,
                 AggregateState::Count(_)
+                    | AggregateState::CountDistinct(_)
                     | AggregateState::IntegerSum { .. }
                     | AggregateState::IntegerMin(_)
                     | AggregateState::IntegerMax(_)
@@ -2226,6 +2227,32 @@ impl HashAggregate {
                     let array =
                         aggregate_arrays[index].expect("non-count aggregate requires input");
                     if !aggregate.distinct && fold_batch_into(state, array)? {
+                        continue;
+                    }
+                    if aggregate.distinct
+                        && let Some(dictionary) = int32_dictionary(array)
+                    {
+                        // The batch's distinct values are its used dictionary
+                        // entries: one pass over the keys, one admission per
+                        // value instead of one per row.
+                        let values = dictionary.values();
+                        for index in used_dictionary_indices(dictionary) {
+                            if values.is_null(index) {
+                                continue;
+                            }
+                            let value: AggregateValue = extract_key(values, index).into();
+                            let admitted = admit_distinct_value(
+                                state,
+                                value,
+                                self.memory.as_ref(),
+                                &mut reservations,
+                            )?;
+                            if admitted && let Some(metrics) = &metrics {
+                                metrics
+                                    .distinct_values_admitted
+                                    .fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
                         continue;
                     }
                     for row in 0..batch.num_rows() {
@@ -2449,7 +2476,20 @@ impl HashAggregate {
                     .iter()
                     .enumerate()
                     .all(|(index, aggregate)| {
-                        !aggregate.distinct && aggregate_arrays[index].is_none_or(foldable)
+                        if aggregate.distinct {
+                            // COUNT(DISTINCT dictionary column): distinct pairs
+                            // of (group, value) per batch through a bitset.
+                            matches!(aggregate.func, AggFunc::Count)
+                                && aggregate_arrays[index].is_some_and(|array| {
+                                    int32_dictionary(array).is_some_and(|dictionary| {
+                                        (dictionary.values().len() + 1)
+                                            .checked_mul(slots.len() + 1)
+                                            .is_some_and(|pairs| pairs <= MAX_COMBINED_CELLS)
+                                    })
+                                })
+                        } else {
+                            aggregate_arrays[index].is_none_or(foldable)
+                        }
                     })
             {
                 if let Some(memory) = &self.memory {
@@ -2485,6 +2525,43 @@ impl HashAggregate {
                                     *total = total
                                         .checked_add(count)
                                         .ok_or_else(|| exec_err("COUNT overflow"))?;
+                                }
+                            }
+                        }
+                        Some(array) if aggregate.distinct => {
+                            let dictionary =
+                                int32_dictionary(array).expect("checked before this path");
+                            let values = dictionary.values();
+                            let width = values.len();
+                            let mut seen = vec![false; cells * width];
+                            let keys = dictionary.keys();
+                            for (row, code) in codes.iter().enumerate() {
+                                if keys.is_valid(row) {
+                                    seen[cell_of(*code) * width + keys.value(row) as usize] = true;
+                                }
+                            }
+                            for (pair, _) in seen.iter().enumerate().filter(|(_, seen)| **seen) {
+                                let (cell, value_index) = (pair / width, pair % width);
+                                if values.is_null(value_index) {
+                                    continue;
+                                }
+                                let slot = if cell == null_cell {
+                                    null_slot
+                                } else {
+                                    slots[cell]
+                                };
+                                let states = unsafe { &mut *slot };
+                                let value: AggregateValue = extract_key(values, value_index).into();
+                                let admitted = admit_distinct_value(
+                                    &mut states[index],
+                                    value,
+                                    self.memory.as_ref(),
+                                    &mut reservations,
+                                )?;
+                                if admitted && let Some(metrics) = &metrics {
+                                    metrics
+                                        .distinct_values_admitted
+                                        .fetch_add(1, Ordering::Relaxed);
                                 }
                             }
                         }
@@ -3013,6 +3090,26 @@ impl HashAggregate {
         }
         Ok((groups, reservations.into_guards()))
     }
+}
+
+fn int32_dictionary(array: &ArrayRef) -> Option<&Int32DictionaryArray> {
+    match array.data_type() {
+        DataType::Dictionary(key_type, _) if key_type.as_ref() == &DataType::Int32 => {
+            array.as_any().downcast_ref::<Int32DictionaryArray>()
+        }
+        _ => None,
+    }
+}
+
+/// Indices of the dictionary values that at least one non-null key references.
+fn used_dictionary_indices(dictionary: &Int32DictionaryArray) -> impl Iterator<Item = usize> {
+    let mut used = vec![false; dictionary.values().len()];
+    for key in dictionary.keys().iter().flatten() {
+        used[key as usize] = true;
+    }
+    used.into_iter()
+        .enumerate()
+        .filter_map(|(index, used)| used.then_some(index))
 }
 
 /// Whether a whole batch of this column can be folded into an accumulator
@@ -4596,6 +4693,101 @@ mod tests {
         drop(output);
         drop(aggregate);
         assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn count_distinct_over_dictionary_columns_admits_used_values_per_batch() {
+        use arrow::array::{DictionaryArray, Int32Array};
+        let dictionary = |keys: Vec<Option<i32>>, values: Vec<Option<&str>>| {
+            Arc::new(DictionaryArray::<Int32Type>::new(
+                Int32Array::from(keys),
+                Arc::new(StringArray::from(values)),
+            )) as ArrayRef
+        };
+        // Two batches with different dictionaries, a null key on both sides,
+        // a null dictionary value, and an entry no row references ("ghost").
+        let first = RecordBatch::try_from_iter(vec![
+            (
+                "region",
+                dictionary(
+                    vec![Some(0), Some(0), Some(1), None, Some(1)],
+                    vec![Some("asia"), Some("europe"), Some("ghost")],
+                ),
+            ),
+            (
+                "country",
+                dictionary(
+                    vec![Some(0), Some(1), Some(2), Some(0), Some(3)],
+                    vec![Some("in"), Some("jp"), Some("de"), None, Some("ghost")],
+                ),
+            ),
+        ])
+        .unwrap();
+        let second = RecordBatch::try_from_iter(vec![
+            (
+                "region",
+                dictionary(
+                    vec![Some(1), Some(0), None],
+                    vec![Some("europe"), Some("asia")],
+                ),
+            ),
+            (
+                "country",
+                dictionary(
+                    vec![Some(1), Some(0), Some(0)],
+                    vec![Some("fr"), Some("jp")],
+                ),
+            ),
+        ])
+        .unwrap();
+        let expected = [
+            (Some("asia".to_owned()), 2_u64), // in, jp
+            (Some("europe".to_owned()), 2),   // de, fr
+            (None, 2),                        // in, jp
+        ];
+        for grouped in [true, false] {
+            let mut input = Input::new(first.clone());
+            input.batches.push_back(second.clone());
+            let pool = QueryMemoryPool::new("distinct-dictionary", 1024 * 1024).unwrap();
+            let mut aggregate = HashAggregate::new_with_memory(
+                Box::new(input),
+                if grouped {
+                    vec!["region".into()]
+                } else {
+                    vec![]
+                },
+                vec![AggExpr::new(AggFunc::Count, "country").distinct()],
+                pool.operator("aggregate").unwrap(),
+            )
+            .unwrap();
+            let output = aggregate.next_batch().unwrap().unwrap();
+            if grouped {
+                let keys = output.column(0).as_string::<i32>();
+                let counts = output
+                    .column(1)
+                    .as_primitive::<arrow::datatypes::UInt64Type>();
+                let mut actual = (0..output.num_rows())
+                    .map(|row| {
+                        (
+                            (!keys.is_null(row)).then(|| keys.value(row).to_owned()),
+                            counts.value(row),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                actual.sort();
+                let mut expected = expected.to_vec();
+                expected.sort();
+                assert_eq!(actual, expected);
+            } else {
+                let counts = output
+                    .column(0)
+                    .as_primitive::<arrow::datatypes::UInt64Type>();
+                assert_eq!(counts.value(0), 4); // in, jp, de, fr
+            }
+            drop(output);
+            drop(aggregate);
+            assert_eq!(pool.snapshot().current_bytes, 0);
+        }
     }
 
     #[test]
