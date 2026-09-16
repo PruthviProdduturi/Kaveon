@@ -581,10 +581,8 @@ pub struct PartitionedHashAggregate {
     streaming_partial: bool,
     /// Operators sharing the query budget side by side (parallel threads).
     budget_share: usize,
-    /// The partial stage's source once it is being flushed in rounds, and
-    /// whether it has been read to its end.
-    flushing: Option<SharedSource>,
-    flushing_exhausted: Rc<Cell<bool>>,
+    /// The grouped partial once it flushes in rounds.
+    flushing: Option<FlushingPartialAggregate>,
 }
 
 /// A source shared between the operator that owns it and the flush rounds
@@ -608,6 +606,10 @@ struct FlushingSource {
     reserve_input: bool,
     current: Option<MemoryReservation>,
     yielded: usize,
+    /// What the account held when the round began — the previous round's
+    /// output batch, still on its way downstream — so the threshold
+    /// measures this round's groups alone.
+    baseline: Option<u64>,
 }
 
 impl BatchOperator for FlushingSource {
@@ -617,7 +619,9 @@ impl BatchOperator for FlushingSource {
 
     fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
         self.current = None;
-        if self.yielded > 0 && self.memory.snapshot().current_bytes >= self.flush_at {
+        let held = self.memory.snapshot().current_bytes;
+        let baseline = *self.baseline.get_or_insert(held);
+        if self.yielded > 0 && held.saturating_sub(baseline) >= self.flush_at {
             return Ok(None);
         }
         let mut inner = self.inner.borrow_mut();
@@ -636,6 +640,126 @@ impl BatchOperator for FlushingSource {
                 *inner = None;
                 self.exhausted.set(true);
                 Ok(None)
+            }
+        }
+    }
+}
+
+/// A grouped partial aggregate that flushes on memory pressure. Partial
+/// groups merge across batches, so a grouped partial never needs the disk:
+/// it aggregates until it holds its share of the query budget, hands its
+/// groups to the exchange as one partial batch, and resumes on the rest of
+/// the input. Every round reads at least one batch, so progress does not
+/// depend on the budget; a batch the budget cannot hold at all fails
+/// closed as before.
+pub struct FlushingPartialAggregate {
+    source: SharedSource,
+    exhausted: Rc<Cell<bool>>,
+    input_schema: SchemaRef,
+    schema: SchemaRef,
+    group_by: Vec<String>,
+    aggregates: Vec<AggExpr>,
+    group_types: Vec<arrow::datatypes::DataType>,
+    output_types: Vec<arrow::datatypes::DataType>,
+    memory: OperatorMemoryAccount,
+    budget_share: usize,
+    input_reserved: bool,
+    output_memory: Option<MemoryReservation>,
+}
+
+impl FlushingPartialAggregate {
+    pub fn new(
+        source: Box<dyn BatchOperator>,
+        group_by: Vec<String>,
+        aggregates: Vec<AggExpr>,
+        memory: OperatorMemoryAccount,
+    ) -> Result<Self> {
+        let input_schema = Arc::clone(source.schema());
+        // Validate the bindings once, before any input is read.
+        let probe = HashAggregate::new(
+            Box::new(RunSource::new(Arc::clone(&input_schema), Vec::new())),
+            group_by.clone(),
+            aggregates.clone(),
+        )?;
+        let group_types = probe.exchanged_key_types()?;
+        let output_types = probe.output_types()?;
+        let schema =
+            grouped_aggregate_states_to_schema_batch(&[], &group_types, &output_types)?.schema();
+        Ok(Self {
+            source: Rc::new(RefCell::new(Some(source))),
+            exhausted: Rc::new(Cell::new(false)),
+            input_schema,
+            schema,
+            group_by,
+            aggregates,
+            group_types,
+            output_types,
+            memory,
+            budget_share: 1,
+            input_reserved: false,
+            output_memory: None,
+        })
+    }
+
+    /// The source holds a reservation for each batch it emits.
+    pub fn with_reserved_input(mut self) -> Self {
+        self.input_reserved = true;
+        self
+    }
+
+    /// One of `share` operators on the same query budget.
+    pub fn with_budget_share(mut self, share: usize) -> Self {
+        self.budget_share = share.max(1);
+        self
+    }
+
+    /// Bytes held before a flush: an eighth of the query budget, divided
+    /// among the operators running side by side. The encoded batch takes
+    /// up to about four times the columnar state while it is built, so the
+    /// flush leaves that much of the share free.
+    fn flush_bytes(&self) -> u64 {
+        let pool = self.memory.query().snapshot().limit_bytes;
+        (pool / 8 / self.budget_share as u64).max(1)
+    }
+}
+
+impl BatchOperator for FlushingPartialAggregate {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        self.output_memory = None;
+        loop {
+            if self.exhausted.get() {
+                return Ok(None);
+            }
+            let source = FlushingSource {
+                inner: self.source.clone(),
+                exhausted: self.exhausted.clone(),
+                schema: Arc::clone(&self.input_schema),
+                memory: self.memory.clone(),
+                flush_at: self.flush_bytes(),
+                reserve_input: !self.input_reserved,
+                current: None,
+                yielded: 0,
+                baseline: None,
+            };
+            let operator = HashAggregate::new_with_memory(
+                Box::new(source),
+                self.group_by.clone(),
+                self.aggregates.clone(),
+                self.memory.clone(),
+            )?
+            .with_reserved_input();
+            let (batch, _state_memory) =
+                operator.into_partial_batch(&self.group_types, &self.output_types)?;
+            // An ungrouped partial over no rows is still one row of empty
+            // states; a grouped one is nothing.
+            if batch.num_rows() > 0 {
+                self.output_memory =
+                    Some(self.memory.reserve(batch.get_array_memory_size() as u64)?);
+                return Ok(Some(batch));
             }
         }
     }
@@ -680,18 +804,7 @@ impl PartitionedHashAggregate {
             streaming_partial: true,
             budget_share: 1,
             flushing: None,
-            flushing_exhausted: Rc::new(Cell::new(false)),
         })
-    }
-
-    /// Bytes a grouped partial holds before it flushes its groups to the
-    /// exchange: an eighth of the query budget, divided among the operators
-    /// running side by side. The encoded batch takes up to about four
-    /// times the columnar state while it is built, so the flush leaves
-    /// that much of the share free.
-    fn partial_flush_bytes(&self) -> u64 {
-        let pool = self.memory.query().snapshot().limit_bytes;
-        (pool / 8 / self.budget_share.max(1) as u64).max(1)
     }
 
     /// The source must retain a reservation for each emitted input batch until
@@ -777,19 +890,20 @@ impl PartitionedHashAggregate {
     fn execute_next(&mut self) -> Result<Option<RecordBatch>> {
         self.output_memory = None;
         if self.partial && self.streaming_partial && self.partitions.is_empty() {
-            // The first round takes the source; later flush rounds find it
-            // shared in `flushing` and resume there.
-            let first_round = self.input.is_some();
-            let mut input = match self.input.take() {
-                Some(input) => input,
-                None if self.flushing.is_some() && !self.flushing_exhausted.get() => {
-                    Box::new(RunSource::new(Arc::clone(&self.input_schema), Vec::new()))
+            // A grouped partial that is flushing in rounds continues there.
+            if let Some(flushing) = self.flushing.as_mut() {
+                let batch = flushing.next_batch()?;
+                if batch.is_none() {
+                    self.flushing = None;
                 }
-                None => return Ok(None),
+                return Ok(batch);
+            }
+            let Some(mut input) = self.input.take() else {
+                return Ok(None);
             };
             let global_distinct = self.group_by.is_empty()
                 && self.aggregates.iter().any(|aggregate| aggregate.distinct);
-            if global_distinct && first_round {
+            if global_distinct {
                 let mut prefix = BufferedPrefix::collect_partial_distinct(
                     input,
                     &self.memory,
@@ -813,36 +927,21 @@ impl PartitionedHashAggregate {
             // Grouped partials merge across batches: aggregate until the
             // budget share is used, flush the groups as one partial batch,
             // resume on the rest of the input. No probe, no disk.
-            let flushing = self
-                .flushing
-                .get_or_insert_with(|| Rc::new(RefCell::new(Some(input))))
-                .clone();
-            let source = FlushingSource {
-                inner: flushing,
-                exhausted: self.flushing_exhausted.clone(),
-                schema: Arc::clone(&self.input_schema),
-                memory: self.memory.clone(),
-                flush_at: self.partial_flush_bytes(),
-                reserve_input: !self.input_reserved,
-                current: None,
-                yielded: 0,
-            };
-            let (batch, guard) = self.aggregate_batch(Box::new(source), true)?;
-            let exhausted = self.flushing_exhausted.get();
-            if exhausted {
-                self.flushing = None;
-            } else {
-                // Keep the operator on this branch for the next round.
-                self.input = None;
+            let mut flushing = FlushingPartialAggregate::new(
+                input,
+                self.group_by.clone(),
+                self.aggregates.clone(),
+                self.memory.clone(),
+            )?
+            .with_budget_share(self.budget_share);
+            if self.input_reserved {
+                flushing = flushing.with_reserved_input();
             }
-            match batch {
-                Some(batch) if batch.num_rows() > 0 => {
-                    self.output_memory = guard;
-                    return Ok(Some(batch));
-                }
-                _ if exhausted => return Ok(None),
-                _ => return self.execute_next(),
+            let batch = flushing.next_batch()?;
+            if batch.is_some() {
+                self.flushing = Some(flushing);
             }
+            return Ok(batch);
         }
         if let Some(input) = self.input.take() {
             let prefix = BufferedPrefix::collect(

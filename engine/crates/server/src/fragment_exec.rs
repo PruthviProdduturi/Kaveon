@@ -406,24 +406,29 @@ fn compile_node(
                             )?,
                         ));
                     }
-                    let aggregate = if let Some(memory) = memory {
-                        HashAggregate::new_with_memory(
-                            input,
-                            group_by,
-                            aggregates,
-                            memory.operator("fragment-partial-hash-aggregate")?,
-                        )?
-                    } else {
-                        HashAggregate::new(input, group_by, aggregates)?
-                    };
-                    let (batch, state_memory) =
-                        aggregate.into_partial_batch(&group_types, &output_types)?;
-                    drop(state_memory);
-                    Ok(Box::new(BatchInput::with_memory(
-                        batch.schema(),
-                        vec![batch],
-                        memory,
-                    )?))
+                    match memory {
+                        // One thread, no spill root: flush in rounds on the
+                        // query budget rather than hold every group at once.
+                        Some(memory) => Ok(Box::new(
+                            kaveon_exec::partitioned::FlushingPartialAggregate::new(
+                                input,
+                                group_by,
+                                aggregates,
+                                memory.operator("fragment-partial-hash-aggregate")?,
+                            )?,
+                        )),
+                        None => {
+                            let aggregate = HashAggregate::new(input, group_by, aggregates)?;
+                            let (batch, state_memory) =
+                                aggregate.into_partial_batch(&group_types, &output_types)?;
+                            drop(state_memory);
+                            Ok(Box::new(BatchInput::with_memory(
+                                batch.schema(),
+                                vec![batch],
+                                memory,
+                            )?))
+                        }
+                    }
                 }
                 AggregateMode::Final => {
                     compile_final_aggregate(input, group_by, aggregates, memory)

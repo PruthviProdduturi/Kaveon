@@ -10,7 +10,7 @@ use crate::{
     },
     distinct::DistinctOperator,
     exchange::HashPartitioner,
-    partitioned::{PartitionedHashAggregate, spill_from_environment},
+    partitioned::{FlushingPartialAggregate, PartitionedHashAggregate, spill_from_environment},
     spill::SpillManager,
 };
 use arrow::{
@@ -573,46 +573,11 @@ fn partial_aggregate_operator(
             .with_budget_share(context.workers)?,
         ));
     }
-    Ok(Box::new(PartialBatch::new(
-        HashAggregate::new_with_memory(source, groups, aggregates, account)?.with_reserved_input(),
-    )?))
-}
-
-/// A grouped aggregate as the one partial batch it encodes.
-struct PartialBatch {
-    aggregate: Option<HashAggregate>,
-    schema: SchemaRef,
-    keys: Vec<DataType>,
-    types: Vec<DataType>,
-    _memory: Vec<MemoryReservation>,
-}
-impl PartialBatch {
-    fn new(aggregate: HashAggregate) -> Result<Self> {
-        let types = aggregate.output_types()?;
-        let keys = aggregate.exchanged_key_types()?;
-        let schema = grouped_aggregate_states_to_schema_batch(&[], &keys, &types)?.schema();
-        Ok(Self {
-            aggregate: Some(aggregate),
-            schema,
-            keys,
-            types,
-            _memory: Vec::new(),
-        })
-    }
-}
-impl BatchOperator for PartialBatch {
-    fn schema(&self) -> &SchemaRef {
-        &self.schema
-    }
-    fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
-        let Some(aggregate) = self.aggregate.take() else {
-            self._memory.clear();
-            return Ok(None);
-        };
-        let (batch, memory) = aggregate.into_partial_batch(&self.keys, &self.types)?;
-        self._memory = memory;
-        Ok(Some(batch))
-    }
+    Ok(Box::new(
+        FlushingPartialAggregate::new(source, groups, aggregates, account)?
+            .with_reserved_input()
+            .with_budget_share(context.workers),
+    ))
 }
 
 pub type Finalizer = Box<dyn FnOnce(Box<dyn BatchOperator>) -> Result<Box<dyn BatchOperator>>>;
