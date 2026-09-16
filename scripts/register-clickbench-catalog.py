@@ -69,7 +69,7 @@ def main() -> int:
     columns = columns_from_create(Path(sys.argv[1]) if len(sys.argv) > 1
                                   else Path('/scripts/trino-create.sql'))
     register('/v1/catalog/definitions', '/v1/catalog/definitions/' + CATALOG_ID,
-             {'id': CATALOG_ID, 'name': CATALOG, 'storage': {'AdlsGen2': ADLS},
+             {'id': CATALOG_ID, 'name': CATALOG, 'adapter': 'Native', 'storage': {'AdlsGen2': ADLS},
               'credential': {'kind': 'WorkloadIdentity', 'reference': 'kaveon-test-reader'}})
     schema_id = CATALOG_ID + '-' + SCHEMA
     register(f'/v1/catalog/definitions/{CATALOG_ID}/schemas', '/v1/catalog/schemas/' + schema_id,
