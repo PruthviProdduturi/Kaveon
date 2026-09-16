@@ -3,6 +3,8 @@
 //! This bounds retained run metadata and open readers, not upstream allocations
 //! or Arrow IPC codec scratch space. Callers must account retained output batches.
 
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::{collections::VecDeque, sync::Arc};
 
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
@@ -22,11 +24,6 @@ use crate::{
 const MAX_PARTITIONS: usize = 256;
 const MAX_RUNS_PER_PARTITION: usize = 16;
 const MAX_ADAPTIVE_BATCHES: usize = 64;
-// A grouped partial whose cardinality is too high is replayed through the
-// partitioned spill path. Keep that speculative cardinality probe small: its
-// hash table is discarded on rejection, so processing a large prefix repeats
-// the most expensive work without changing the exact result.
-const MAX_PARTIAL_PROBE_BATCHES: usize = 8;
 
 /// A bounded prefix can be replayed from memory without reopening its source.
 struct BufferedPrefix {
@@ -132,10 +129,6 @@ impl BufferedPrefix {
 
     fn take_tail(&mut self) -> Option<Box<dyn BatchOperator>> {
         self.tail.take()
-    }
-
-    fn row_count(&self) -> usize {
-        self.batches.iter().map(RecordBatch::num_rows).sum()
     }
 }
 
@@ -586,7 +579,66 @@ pub struct PartitionedHashAggregate {
     output_memory: Option<MemoryReservation>,
     adaptive_bytes: Option<u64>,
     streaming_partial: bool,
-    partial_probe_complete: bool,
+    /// Operators sharing the query budget side by side (parallel threads).
+    budget_share: usize,
+    /// The partial stage's source once it is being flushed in rounds, and
+    /// whether it has been read to its end.
+    flushing: Option<SharedSource>,
+    flushing_exhausted: Rc<Cell<bool>>,
+}
+
+/// A source shared between the operator that owns it and the flush rounds
+/// that read it.
+type SharedSource = Rc<RefCell<Option<Box<dyn BatchOperator>>>>;
+
+/// Yields a source's batches until the operator holds `flush_at` bytes,
+/// then reports end of input, so the aggregate over it finishes its groups
+/// as one partial batch. Partial groups merge across batches, so a grouped
+/// partial never needs the disk: when memory is used up it flushes what it
+/// has to the exchange and starts over on the rest of the input. Every
+/// round yields at least one batch, so progress does not depend on the
+/// budget. The source itself is shared with the operator that owns it and
+/// resumes from where the round stopped.
+struct FlushingSource {
+    inner: SharedSource,
+    exhausted: Rc<Cell<bool>>,
+    schema: SchemaRef,
+    memory: OperatorMemoryAccount,
+    flush_at: u64,
+    reserve_input: bool,
+    current: Option<MemoryReservation>,
+    yielded: usize,
+}
+
+impl BatchOperator for FlushingSource {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        self.current = None;
+        if self.yielded > 0 && self.memory.snapshot().current_bytes >= self.flush_at {
+            return Ok(None);
+        }
+        let mut inner = self.inner.borrow_mut();
+        let Some(source) = inner.as_mut() else {
+            return Ok(None);
+        };
+        match source.next_batch()? {
+            Some(batch) => {
+                if self.reserve_input {
+                    self.current = Some(self.memory.reserve(batch.get_array_memory_size() as u64)?);
+                }
+                self.yielded += 1;
+                Ok(Some(batch))
+            }
+            None => {
+                *inner = None;
+                self.exhausted.set(true);
+                Ok(None)
+            }
+        }
+    }
 }
 
 impl PartitionedHashAggregate {
@@ -626,8 +678,20 @@ impl PartitionedHashAggregate {
             output_memory: None,
             adaptive_bytes: None,
             streaming_partial: true,
-            partial_probe_complete: false,
+            budget_share: 1,
+            flushing: None,
+            flushing_exhausted: Rc::new(Cell::new(false)),
         })
+    }
+
+    /// Bytes a grouped partial holds before it flushes its groups to the
+    /// exchange: an eighth of the query budget, divided among the operators
+    /// running side by side. The encoded batch takes up to about four
+    /// times the columnar state while it is built, so the flush leaves
+    /// that much of the share free.
+    fn partial_flush_bytes(&self) -> u64 {
+        let pool = self.memory.query().snapshot().limit_bytes;
+        (pool / 8 / self.budget_share.max(1) as u64).max(1)
     }
 
     /// The source must retain a reservation for each emitted input batch until
@@ -643,6 +707,7 @@ impl PartitionedHashAggregate {
     pub fn with_budget_share(mut self, share: usize) -> Result<Self> {
         let limit = adaptive_limit(&self.memory)?;
         self.adaptive_bytes = Some((limit / share.max(1) as u64).max(1));
+        self.budget_share = share.max(1);
         Ok(self)
     }
 
@@ -712,12 +777,19 @@ impl PartitionedHashAggregate {
     fn execute_next(&mut self) -> Result<Option<RecordBatch>> {
         self.output_memory = None;
         if self.partial && self.streaming_partial && self.partitions.is_empty() {
-            let Some(mut input) = self.input.take() else {
-                return Ok(None);
+            // The first round takes the source; later flush rounds find it
+            // shared in `flushing` and resume there.
+            let first_round = self.input.is_some();
+            let mut input = match self.input.take() {
+                Some(input) => input,
+                None if self.flushing.is_some() && !self.flushing_exhausted.get() => {
+                    Box::new(RunSource::new(Arc::clone(&self.input_schema), Vec::new()))
+                }
+                None => return Ok(None),
             };
             let global_distinct = self.group_by.is_empty()
                 && self.aggregates.iter().any(|aggregate| aggregate.distinct);
-            if global_distinct {
+            if global_distinct && first_round {
                 let mut prefix = BufferedPrefix::collect_partial_distinct(
                     input,
                     &self.memory,
@@ -738,51 +810,38 @@ impl PartitionedHashAggregate {
                     Err(error) => return Err(error),
                 }
             }
-            let mut prefix = BufferedPrefix::collect_with_batch_limit(
-                input,
-                &self.memory,
-                self.adaptive_bytes.unwrap_or(adaptive_limit(&self.memory)?),
-                if global_distinct {
-                    1
-                } else if self.partial_probe_complete {
-                    MAX_ADAPTIVE_BATCHES
-                } else {
-                    MAX_PARTIAL_PROBE_BATCHES
-                },
-            )?;
-            let input_rows = prefix.row_count();
-            if input_rows != 0 {
-                match self.aggregate_batch(prefix.trial(), true) {
-                    Ok((batch, guard))
-                        if batch.as_ref().is_some_and(|batch| {
-                            batch.num_rows().saturating_mul(8) <= input_rows
-                        }) =>
-                    {
-                        // Partial states are mergeable across batches. Stream them
-                        // only while aggregation reduces exchange rows by at least
-                        // 8x; otherwise retain the bounded partition/spill path.
-                        self.input = prefix.take_tail();
-                        self.output_memory = guard;
-                        self.partial_probe_complete = true;
-                        return Ok(batch);
-                    }
-                    Ok(_) | Err(KaveonError::MemoryLimit(_)) => {
-                        self.memory.check_cancelled()?;
-                        self.streaming_partial = false;
-                        self.input = Some(prefix.replay());
-                    }
-                    Err(error) => return Err(error),
-                }
+            // Grouped partials merge across batches: aggregate until the
+            // budget share is used, flush the groups as one partial batch,
+            // resume on the rest of the input. No probe, no disk.
+            let flushing = self
+                .flushing
+                .get_or_insert_with(|| Rc::new(RefCell::new(Some(input))))
+                .clone();
+            let source = FlushingSource {
+                inner: flushing,
+                exhausted: self.flushing_exhausted.clone(),
+                schema: Arc::clone(&self.input_schema),
+                memory: self.memory.clone(),
+                flush_at: self.partial_flush_bytes(),
+                reserve_input: !self.input_reserved,
+                current: None,
+                yielded: 0,
+            };
+            let (batch, guard) = self.aggregate_batch(Box::new(source), true)?;
+            let exhausted = self.flushing_exhausted.get();
+            if exhausted {
+                self.flushing = None;
             } else {
-                let (batch, guard) = self.aggregate_batch(
-                    Box::new(RunSource::new(Arc::clone(&self.input_schema), Vec::new())),
-                    false,
-                )?;
-                if batch.as_ref().is_some_and(|batch| batch.num_rows() > 0) {
+                // Keep the operator on this branch for the next round.
+                self.input = None;
+            }
+            match batch {
+                Some(batch) if batch.num_rows() > 0 => {
                     self.output_memory = guard;
-                    return Ok(batch);
+                    return Ok(Some(batch));
                 }
-                return Ok(None);
+                _ if exhausted => return Ok(None),
+                _ => return self.execute_next(),
             }
         }
         if let Some(input) = self.input.take() {
@@ -1523,8 +1582,11 @@ mod tests {
         assert!(grouped.next_batch().unwrap().is_none());
         assert_eq!(grouped_pool.snapshot().current_bytes, 0);
 
-        // Small enough that 100 000 groups cannot stay in memory even at the
-        // slot-sized estimates, so the trial is rejected and the run spills.
+        // 100 000 groups cannot stay in memory in an 8 MiB budget: the
+        // partial flushes its groups in rounds instead of spilling — every
+        // row is read once, every group reaches the output (as several
+        // partial rows that merge), the peak stays inside the budget, and
+        // the disk is not touched.
         let bounded_pool = QueryMemoryPool::new("bounded-partial", 8 * 1024 * 1024).unwrap();
         let bounded_spill = spill();
         let mut high_cardinality = PartitionedHashAggregate::new_partial(
@@ -1540,21 +1602,17 @@ mod tests {
         while let Some(batch) = high_cardinality.next_batch().unwrap() {
             high_cardinality_batches.push(batch);
         }
+        assert!(high_cardinality_batches.len() > 1, "several flush rounds");
         let states = grouped_aggregate_states_from_batches(&high_cardinality_batches).unwrap();
         let merged = merge_grouped_aggregate_states(states).unwrap();
         assert_eq!(merged.len(), 100_000);
-        // The rejected adaptive trial processes only a small sample before the
-        // exact partitioned fallback consumes all rows. A 64-batch trial used
-        // to repeat most of this high-cardinality workload.
         let input_rows = aggregate_metrics(&bounded_pool)
             .unwrap()
             .snapshot()
             .input_rows;
-        assert!(
-            (100_000..=200_000 + (MAX_PARTIAL_PROBE_BATCHES * 8_192) as u64).contains(&input_rows),
-            "trial plus fallback consumed {input_rows} rows"
-        );
-        assert!(bounded_spill.snapshot().peak_bytes > 0);
+        assert_eq!(input_rows, 100_000, "every row read once");
+        assert!(bounded_pool.snapshot().peak_bytes <= 8 * 1024 * 1024);
+        assert_eq!(bounded_spill.snapshot().peak_bytes, 0);
         assert_eq!(bounded_pool.snapshot().current_bytes, 0);
     }
 

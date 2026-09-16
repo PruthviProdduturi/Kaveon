@@ -939,12 +939,12 @@ mod tests {
     }
 
     #[test]
-    fn parallel_partials_spill_per_thread_under_a_tight_budget() {
-        // Unique keys defeat the streaming partial and each thread's share
-        // of the input exceeds its adaptive buffer, so every thread takes
-        // the partition-and-spill path inside its own budget; the union of
-        // the threads' partials is still one row per key, and the disk was
-        // really used.
+    fn parallel_partials_flush_per_thread_under_a_tight_budget() {
+        // Unique keys, more of them than a thread's share of the budget
+        // holds: every thread flushes its groups in rounds inside its own
+        // share, the union of the threads' partials is still one row per
+        // key, and the disk is never touched — partial groups merge, so a
+        // grouped partial has no reason to spill.
         let rows: usize = 1_200_000;
         let batch_rows = 8192;
         let batches = (0..rows.div_ceil(batch_rows))
@@ -997,10 +997,10 @@ mod tests {
         }
         assert_eq!(groups, rows);
         assert!(
-            partial_batches >= 4,
-            "every thread emits at least one partial"
+            partial_batches > 4,
+            "every thread emits several flush rounds"
         );
-        assert!(spill.snapshot().runs_written > 0);
+        assert_eq!(spill.snapshot().runs_written, 0);
         assert!(pool.snapshot().peak_bytes <= 64 * 1024 * 1024);
         drop(operator);
         assert_eq!(pool.snapshot().current_bytes, 0);
