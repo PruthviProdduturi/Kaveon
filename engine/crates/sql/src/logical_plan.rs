@@ -500,6 +500,20 @@ fn build_aggregate(plan: LogicalPlan, select: &ast::Select) -> Result<LogicalPla
         collect_aggregates_from_select_item(item, &mut aggregates)?;
     }
 
+    // GROUP BY over plain columns with nothing to aggregate is DISTINCT over
+    // those columns.
+    if aggregates.is_empty()
+        && !group_by.is_empty()
+        && group_by.iter().all(|expr| matches!(expr, Expr::Column(_)))
+    {
+        return Ok(LogicalPlan::Distinct {
+            input: Box::new(LogicalPlan::Project {
+                input: Box::new(plan),
+                columns: group_by,
+            }),
+        });
+    }
+
     Ok(LogicalPlan::Aggregate {
         input: Box::new(plan),
         group_by,
@@ -1612,6 +1626,28 @@ mod tests {
         ));
         assert!(sql_to_logical_plan("SELECT x FROM a INTERSECT ALL SELECT x FROM b").is_err());
         assert!(sql_to_logical_plan("SELECT x FROM a EXCEPT ALL SELECT x FROM b").is_err());
+    }
+
+    #[test]
+    fn group_by_without_aggregates_is_distinct_over_the_keys() {
+        let plan =
+            sql_to_logical_plan("SELECT country FROM u WHERE locale = 1 GROUP BY country").unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("outer projection");
+        };
+        let LogicalPlan::Distinct { input } = *input else {
+            panic!("distinct over the keys");
+        };
+        let LogicalPlan::Project { input, columns } = *input else {
+            panic!("key projection");
+        };
+        assert_eq!(columns, vec![Expr::Column("country".into())]);
+        assert!(matches!(*input, LogicalPlan::Filter { .. }));
+        // An expression key still aggregates.
+        assert!(matches!(
+            sql_to_logical_plan("SELECT UPPER(country) FROM u GROUP BY UPPER(country)").unwrap(),
+            LogicalPlan::Project { input, .. } if matches!(*input, LogicalPlan::Aggregate { .. })
+        ));
     }
 
     #[test]
