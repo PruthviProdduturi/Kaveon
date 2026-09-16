@@ -80,6 +80,17 @@ pub struct ScanMetrics {
     pub storage_read_ns: Option<u64>,
     pub decode_ns: Option<u64>,
     pub first_batch_ns: Option<u64>,
+    /// Decoder lanes and their spread, when the reader ran several.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lanes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane_rows_min: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane_rows_max: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane_read_ns_min: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane_read_ns_max: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
