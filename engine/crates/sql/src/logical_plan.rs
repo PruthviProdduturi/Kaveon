@@ -908,10 +908,31 @@ fn bind_order_keys_to_projection(
     let mut hidden = Vec::new();
     for (key, _) in keys.iter_mut() {
         if let Expr::Column(name) = key {
+            // `ORDER BY u.country` when the query selects `u.country AS
+            // user_country` orders by that output column.
+            let aliased = columns.iter().find_map(|column| match column {
+                Expr::Alias { expr, name: alias }
+                    if matches!(expr.as_ref(), Expr::Column(selected) if selected == name) =>
+                {
+                    Some(alias.clone())
+                }
+                _ => None,
+            });
+            if let Some(alias) = aliased {
+                *key = Expr::Column(alias);
+                continue;
+            }
             // A column the query does not select rides along through the
-            // sort; the caller re-projects the visible columns above.
+            // sort; the caller re-projects the visible columns above. A
+            // qualified key is selected only by the same qualified column
+            // (`t.country` does not stand in for `u.country`); a bare key
+            // by any column of that name.
+            let selected_exactly = columns
+                .iter()
+                .any(|column| matches!(column, Expr::Column(selected) if selected == name));
             let bare = name.rsplit('.').next().unwrap_or(name).to_owned();
-            if !output_names(&columns).contains(&bare) && !hidden.contains(name) {
+            let selected_bare = !name.contains('.') && output_names(&columns).contains(&bare);
+            if !selected_exactly && !selected_bare && !hidden.contains(name) {
                 hidden.push(name.clone());
                 columns.push(Expr::Column(name.clone()));
             }
@@ -1826,14 +1847,28 @@ mod tests {
             "SELECT t - t % 60 AS m, COUNT(*) AS n FROM h GROUP BY t - t % 60 ORDER BY t - t % 60 LIMIT 10",
         )
         .unwrap();
-        let LogicalPlan::Project { input, columns } = plan else {
-            panic!("visible projection");
+        // The lowered expression is selected as `m`: the sort orders by
+        // that output column and nothing rides along.
+        let LogicalPlan::Limit { input, .. } = plan else {
+            panic!("limit");
         };
-        assert_eq!(
-            columns,
-            vec![Expr::Column("m".into()), Expr::Column("n".into())]
-        );
-        let LogicalPlan::Limit { input, .. } = *input else {
+        let LogicalPlan::Sort { order_by, input } = *input else {
+            panic!("sort");
+        };
+        assert_eq!(order_by, vec![(Expr::Column("m".into()), true)]);
+        assert!(matches!(*input, LogicalPlan::Project { .. }));
+    }
+
+    #[test]
+    fn order_by_a_qualified_column_selected_under_an_alias_uses_the_alias() {
+        // `u.country AS user_country` is what `ORDER BY u.country` means;
+        // `t.country` does not stand in for it just because both are
+        // "country".
+        let plan = sql_to_logical_plan(
+            "SELECT t.country, u.country AS user_country, COUNT(*) AS n FROM t JOIN u ON u.id = t.id GROUP BY t.country, u.country ORDER BY n DESC, t.country, u.country LIMIT 3",
+        )
+        .unwrap();
+        let LogicalPlan::Limit { input, .. } = plan else {
             panic!("limit");
         };
         let LogicalPlan::Sort { order_by, .. } = *input else {
@@ -1841,8 +1876,32 @@ mod tests {
         };
         assert_eq!(
             order_by,
-            vec![(Expr::Column("__kaveon_group_0".into()), true)]
+            vec![
+                (Expr::Column("n".into()), false),
+                (Expr::Column("t.country".into()), true),
+                (Expr::Column("user_country".into()), true),
+            ]
         );
+        // An unselected qualified column still rides along, even when a
+        // column of the same bare name is selected.
+        let plan = sql_to_logical_plan(
+            "SELECT t.country, COUNT(*) AS n FROM t JOIN u ON u.id = t.id GROUP BY t.country, u.country ORDER BY u.country LIMIT 3",
+        )
+        .unwrap();
+        let LogicalPlan::Project { input, columns } = plan else {
+            panic!("visible projection above the ride-along");
+        };
+        assert_eq!(
+            columns,
+            vec![Expr::Column("t.country".into()), Expr::Column("n".into())]
+        );
+        let LogicalPlan::Limit { input, .. } = *input else {
+            panic!("limit");
+        };
+        let LogicalPlan::Sort { order_by, .. } = *input else {
+            panic!("sort");
+        };
+        assert_eq!(order_by, vec![(Expr::Column("u.country".into()), true)]);
     }
 
     #[test]
