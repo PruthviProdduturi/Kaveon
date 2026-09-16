@@ -6,7 +6,6 @@ use kaveon_core::{
     Result, ScanSpec, ScanTable, SortSpec, StageFragment, StageGraph, StageId, TableReference,
 };
 use kaveon_exec::aggregate::{AggExpr, AggFunc};
-use kaveon_exec::distinct::DistinctOperator;
 use kaveon_exec::filter::FilterOperator;
 use kaveon_exec::join::JoinType as PhysicalJoinType;
 use kaveon_exec::limit::LimitOperator;
@@ -1780,12 +1779,8 @@ fn plan_query_with_predicate(
 
         LogicalPlan::Distinct { input } => {
             let planned = plan_query_inner(input, catalog, partition, memory)?;
-            let mut operator = DistinctOperator::new(planned.operator);
-            if let Some(memory) = memory {
-                operator = operator.with_memory(memory.operator("distinct")?);
-            }
             Ok(PlannedQuery {
-                operator: Box::new(operator),
+                operator: crate::fragment_exec::distinct_operator(planned.operator, memory)?,
                 scan_metrics: planned.scan_metrics,
             })
         }

@@ -500,11 +500,7 @@ fn compile_node(
                 memory,
                 scan_metrics,
             )?;
-            let mut operator = DistinctOperator::new(input);
-            if let Some(memory) = memory {
-                operator = operator.with_memory(memory.operator("fragment-distinct")?);
-            }
-            Ok(Box::new(operator))
+            Ok(distinct_operator(input, memory)?)
         }
         FragmentOperator::Union => {
             let mut operators: Vec<Box<dyn BatchOperator>> = Vec::new();
@@ -693,6 +689,40 @@ fn compile_node(
 
 fn has_complete_scan_metrics(scan_count: usize, metric_handle_count: usize) -> bool {
     scan_count == metric_handle_count
+}
+
+/// DISTINCT over every input column: on several threads when the node
+/// runs more than one and a query budget accounts for them, each thread
+/// holding the rows whose values hash to it; serial otherwise.
+pub(crate) fn distinct_operator(
+    input: Box<dyn BatchOperator>,
+    memory: Option<&QueryMemoryPool>,
+) -> Result<Box<dyn BatchOperator>> {
+    let parallelism = kaveon_exec::local_parallel::configured_parallelism()?;
+    if parallelism > 1
+        && let Some(memory) = memory
+        && !input.schema().fields().is_empty()
+    {
+        let columns = input
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.name().clone())
+            .collect::<Vec<_>>();
+        return Ok(Box::new(
+            kaveon_exec::local_parallel::ParallelPartials::distinct(
+                input,
+                columns,
+                memory.clone(),
+                parallelism,
+            )?,
+        ));
+    }
+    let mut operator = DistinctOperator::new(input);
+    if let Some(memory) = memory {
+        operator = operator.with_memory(memory.operator("fragment-distinct")?);
+    }
+    Ok(Box::new(operator))
 }
 
 pub(crate) fn compile_final_aggregate(
