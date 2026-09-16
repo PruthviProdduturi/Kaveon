@@ -863,6 +863,22 @@ impl ColumnarGroups {
         (capacity as u64).saturating_mul(self.slot_bytes())
     }
 
+    /// Bytes the encoded partial batch takes: per group its length-prefixed
+    /// key values, its compact states (a tag and up to sixteen bytes each)
+    /// and the two offset entries. Text is sized from the arena's average.
+    pub fn encoded_bytes(&self) -> u64 {
+        let key = 8 + self
+            .keys
+            .iter()
+            .map(|key| match key {
+                KeyColumn::Integer { .. } => 17,
+                KeyColumn::Text { arena, .. } => 9 + arena.bytes() / (self.len as u64).max(1),
+            })
+            .sum::<u64>();
+        let states = 8 + 17 * self.accumulators.len() as u64;
+        (self.len as u64).saturating_mul(key + states + 8)
+    }
+
     /// Groups the index holds before it doubles.
     pub fn capacity(&self) -> usize {
         self.index.capacity()

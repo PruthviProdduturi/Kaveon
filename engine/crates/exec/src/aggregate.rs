@@ -2129,8 +2129,9 @@ impl HashAggregate {
         if let Some(key_types) = self.columnar_key_types() {
             let (groups, mut reservations) = self.collect_columnar(key_types)?;
             if let Some(memory) = &memory {
-                reservations
-                    .push(memory.reserve(partial_encoding_bytes(&reservations, groups.len()))?);
+                // The columns know their encoded size; the builders grow by
+                // doubling, so up to twice that is live while they fill.
+                reservations.push(memory.reserve(groups.encoded_bytes().saturating_mul(2))?);
             }
             let batch = columnar_partial_batch(&groups, group_types, output_types)?;
             return Ok((batch, reservations));

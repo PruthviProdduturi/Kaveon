@@ -10,6 +10,7 @@ use crate::{
     },
     exchange::HashPartitioner,
     partitioned::{PartitionedHashAggregate, spill_from_environment},
+    spill::SpillManager,
 };
 use arrow::{
     datatypes::{DataType, SchemaRef},
@@ -88,6 +89,10 @@ pub struct ParallelPartials {
     aggregates: Vec<AggExpr>,
     pool: QueryMemoryPool,
     workers: usize,
+    /// Each thread's aggregate spills through this when set: the query's
+    /// shared spill budget and its partition count, decided once here so
+    /// every thread takes the same path.
+    spill: Option<(SpillManager, usize)>,
     stopped: Arc<AtomicBool>,
     handles: Vec<JoinHandle<()>>,
     output: Option<Receiver<Result<QueuedBatch>>>,
@@ -123,6 +128,7 @@ impl ParallelPartials {
             groups.clone(),
             aggregates.clone(),
         )?;
+        let spill = spill_from_environment(&pool)?;
         Ok(Self {
             source: Some(source),
             schema,
@@ -130,6 +136,7 @@ impl ParallelPartials {
             aggregates,
             pool,
             workers,
+            spill,
             stopped: Arc::new(AtomicBool::new(false)),
             handles: vec![],
             output: None,
@@ -137,6 +144,13 @@ impl ParallelPartials {
             failed: false,
         })
     }
+    /// Every thread's partial spills through `spill` with `partitions`
+    /// hash partitions, whatever the environment says.
+    pub fn with_spill(mut self, spill: SpillManager, partitions: usize) -> Self {
+        self.spill = Some((spill, partitions));
+        self
+    }
+
     fn start(&mut self) -> Result<()> {
         let mut source = self
             .source
@@ -145,6 +159,7 @@ impl ParallelPartials {
         let (output_tx, output_rx) = mpsc::sync_channel(self.workers * 2);
         self.output = Some(output_rx);
         let mut senders = Vec::with_capacity(self.workers);
+        let workers = self.workers;
         for index in 0..self.workers {
             let (sender, receiver) = mpsc::sync_channel(2);
             senders.push(sender);
@@ -152,6 +167,7 @@ impl ParallelPartials {
             let groups = self.groups.clone();
             let aggregates = self.aggregates.clone();
             let pool = self.pool.clone();
+            let spill = self.spill.clone();
             let stopped = self.stopped.clone();
             let output = output_tx.clone();
             self.handles.push(
@@ -165,7 +181,10 @@ impl ParallelPartials {
                                 stopped: stopped.clone(),
                                 current: None,
                             });
-                            run_worker(source, groups, aggregates, &pool, &stopped, &output)
+                            run_worker(
+                                source, groups, aggregates, &pool, spill, workers, &stopped,
+                                &output,
+                            )
                         });
                         if let Err(err) = result {
                             let _ = output.send(Err(err));
@@ -190,10 +209,11 @@ impl ParallelPartials {
         let partitioner = if self.groups.is_empty() || self.workers == 1 || low_cardinality_keys {
             None
         } else {
-            Some(HashPartitioner::try_new(
+            Some(HashPartitioner::try_new_salted(
                 source.schema(),
                 &self.groups,
                 self.workers,
+                crate::exchange::THREAD_PARTITION_SALT,
             )?)
         };
         let mut index = 0;
@@ -332,16 +352,20 @@ fn catch_worker_failure(work: impl FnOnce() -> Result<()>) -> Result<()> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
         .unwrap_or_else(|_| Err(error("parallel aggregate worker panicked")))
 }
+#[allow(clippy::too_many_arguments)]
 fn run_worker(
     source: Box<dyn BatchOperator>,
     groups: Vec<String>,
     aggregates: Vec<AggExpr>,
     pool: &QueryMemoryPool,
+    spill: Option<(SpillManager, usize)>,
+    workers: usize,
     stopped: &AtomicBool,
     output: &SyncSender<Result<QueuedBatch>>,
 ) -> Result<()> {
     let account = pool.operator("parallel-partial-aggregate")?;
-    if let Some((spill, count)) = spill_from_environment(pool)? {
+    if let Some((spill, count)) = spill {
+        // The threads together buffer what one serial aggregate would.
         let mut operator = PartitionedHashAggregate::new_partial(
             source,
             groups,
@@ -350,7 +374,8 @@ fn run_worker(
             spill,
             count,
         )?
-        .with_reserved_input();
+        .with_reserved_input()
+        .with_budget_share(workers)?;
         while let Some(batch) = operator.next_batch()? {
             let memory = Arc::new(account.reserve(batch.get_array_memory_size() as u64)?);
             send_bounded(
@@ -471,7 +496,7 @@ fn error(message: &str) -> KaveonError {
 mod tests {
     use super::*;
     use crate::aggregate::{
-        AggFunc, FinalAggregateValue, finalize_grouped_aggregate_states,
+        AggFunc, AggregateState, FinalAggregateValue, finalize_grouped_aggregate_states,
         grouped_aggregate_states_from_batches, merge_grouped_aggregate_states,
     };
     use arrow::{
@@ -608,6 +633,74 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn parallel_partials_spill_per_thread_under_a_tight_budget() {
+        // Unique keys defeat the streaming partial and each thread's share
+        // of the input exceeds its adaptive buffer, so every thread takes
+        // the partition-and-spill path inside its own budget; the union of
+        // the threads' partials is still one row per key, and the disk was
+        // really used.
+        let rows: usize = 1_200_000;
+        let batch_rows = 8192;
+        let batches = (0..rows.div_ceil(batch_rows))
+            .map(|chunk| {
+                let start = chunk * batch_rows;
+                let end = rows.min(start + batch_rows);
+                RecordBatch::try_from_iter(vec![
+                    (
+                        "k",
+                        Arc::new(Int64Array::from_iter_values((start..end).map(|n| n as i64)))
+                            as ArrayRef,
+                    ),
+                    (
+                        "v",
+                        Arc::new(Int64Array::from_iter_values(
+                            (start..end).map(|n| (n % 1000) as i64),
+                        )) as ArrayRef,
+                    ),
+                ])
+                .unwrap()
+            })
+            .collect::<VecDeque<_>>();
+        let schema = batches[0].schema();
+        let spill = SpillManager::new(
+            std::env::temp_dir().join("kaveon-parallel-spill-tests"),
+            64 * 1024 * 1024,
+        )
+        .unwrap();
+        let pool = QueryMemoryPool::new("parallel-spill", 64 * 1024 * 1024).unwrap();
+        let mut operator = ParallelPartials::new(
+            Box::new(Input { schema, batches }),
+            vec!["k".into()],
+            vec![
+                AggExpr::new(AggFunc::Count, "*"),
+                AggExpr::new(AggFunc::Sum, "v"),
+            ],
+            pool.clone(),
+            4,
+        )
+        .unwrap()
+        .with_spill(spill.clone(), 16);
+        let mut groups = 0;
+        let mut partial_batches = 0;
+        while let Some(batch) = operator.next_batch().unwrap() {
+            partial_batches += 1;
+            for group in grouped_aggregate_states_from_batches(&[batch]).unwrap() {
+                assert_eq!(group.states[0], AggregateState::Count(1));
+                groups += 1;
+            }
+        }
+        assert_eq!(groups, rows);
+        assert!(
+            partial_batches >= 4,
+            "every thread emits at least one partial"
+        );
+        assert!(spill.snapshot().runs_written > 0);
+        assert!(pool.snapshot().peak_bytes <= 64 * 1024 * 1024);
+        drop(operator);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
     #[test]
     fn sliced_buffers_share_one_reservation_and_drop_joins_workers() {
         let batch = RecordBatch::try_from_iter(vec![(

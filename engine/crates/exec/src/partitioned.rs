@@ -372,11 +372,36 @@ fn partition_input(
     spill: &SpillManager,
     input_reserved: bool,
 ) -> Result<Vec<Vec<SpillRun>>> {
+    partition_input_with_flush(
+        input,
+        keys,
+        count,
+        memory,
+        spill,
+        input_reserved,
+        adaptive_limit(memory)?,
+    )
+}
+
+fn partition_input_with_flush(
+    input: &mut dyn BatchOperator,
+    keys: &[String],
+    count: usize,
+    memory: &OperatorMemoryAccount,
+    spill: &SpillManager,
+    input_reserved: bool,
+    flush_bytes: u64,
+) -> Result<Vec<Vec<SpillRun>>> {
     let schema = Arc::clone(input.schema());
     let partitioner = if keys.is_empty() {
         None
     } else {
-        Some(HashPartitioner::try_new(&schema, keys, count)?)
+        Some(HashPartitioner::try_new_salted(
+            &schema,
+            keys,
+            count,
+            crate::exchange::SPILL_PARTITION_SALT,
+        )?)
     };
     let mut partitions: Vec<Vec<SpillRun>> = (0..count).map(|_| Vec::new()).collect();
     let mut buffered: Vec<Vec<RecordBatch>> = (0..count).map(|_| Vec::new()).collect();
@@ -386,7 +411,7 @@ fn partition_input(
     // created one tiny run per non-empty partition and upstream batch, then
     // paid to compact those files repeatedly. Retaining the existing
     // conservative preflight reservations keeps this buffer query-bounded.
-    let flush_bytes = adaptive_limit(memory)?.max(1);
+    let flush_bytes = flush_bytes.max(1);
     while let Some(batch) = input.next_batch()? {
         if batch.num_rows() == 0 {
             continue;
@@ -612,6 +637,15 @@ impl PartitionedHashAggregate {
         self
     }
 
+    /// This operator is one of `share` running side by side on the same
+    /// query budget: its adaptive buffer is that fraction of the usual one,
+    /// so together they hold what one would.
+    pub fn with_budget_share(mut self, share: usize) -> Result<Self> {
+        let limit = adaptive_limit(&self.memory)?;
+        self.adaptive_bytes = Some((limit / share.max(1) as u64).max(1));
+        Ok(self)
+    }
+
     pub fn new_partial(
         source: Box<dyn BatchOperator>,
         group_by: Vec<String>,
@@ -770,13 +804,14 @@ impl PartitionedHashAggregate {
                 }
             }
             let mut input = prefix.replay();
-            self.partitions = partition_input(
+            self.partitions = partition_input_with_flush(
                 input.as_mut(),
                 &self.group_by,
                 self.count,
                 &self.memory,
                 &self.spill,
                 self.input_reserved,
+                self.adaptive_bytes.unwrap_or(adaptive_limit(&self.memory)?),
             )?
             .into();
         }
