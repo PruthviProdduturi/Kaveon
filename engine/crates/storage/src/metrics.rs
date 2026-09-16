@@ -21,6 +21,13 @@ pub struct ScanMetricsSnapshot {
     pub snapshot_elapsed: Duration,
     pub footer_elapsed: Duration,
     pub read_elapsed: Duration,
+    /// Decoder lanes that ran, and the spread between the lightest and the
+    /// heaviest: a wide spread is skew, not a slow store.
+    pub lanes: u64,
+    pub lane_rows_min: u64,
+    pub lane_rows_max: u64,
+    pub lane_elapsed_min: Duration,
+    pub lane_elapsed_max: Duration,
 }
 
 impl ScanMetricsSnapshot {
@@ -69,6 +76,11 @@ struct ScanMetricsInner {
     snapshot_nanos: AtomicU64,
     footer_nanos: AtomicU64,
     read_nanos: AtomicU64,
+    lanes: AtomicU64,
+    lane_rows_min: AtomicU64,
+    lane_rows_max: AtomicU64,
+    lane_nanos_min: AtomicU64,
+    lane_nanos_max: AtomicU64,
 }
 
 impl ScanMetrics {
@@ -92,7 +104,35 @@ impl ScanMetrics {
             snapshot_elapsed: Duration::from_nanos(self.load(&self.0.snapshot_nanos)),
             footer_elapsed: Duration::from_nanos(self.load(&self.0.footer_nanos)),
             read_elapsed: Duration::from_nanos(self.load(&self.0.read_nanos)),
+            lanes: self.load(&self.0.lanes),
+            lane_rows_min: if self.load(&self.0.lanes) == 0 {
+                0
+            } else {
+                self.load(&self.0.lane_rows_min)
+            },
+            lane_rows_max: self.load(&self.0.lane_rows_max),
+            lane_elapsed_min: Duration::from_nanos(if self.load(&self.0.lanes) == 0 {
+                0
+            } else {
+                self.load(&self.0.lane_nanos_min)
+            }),
+            lane_elapsed_max: Duration::from_nanos(self.load(&self.0.lane_nanos_max)),
         }
+    }
+
+    /// One decoder lane finished: it decoded `rows` in `elapsed`.
+    pub(crate) fn lane_finished(&self, rows: u64, elapsed: Duration) {
+        let nanos = elapsed.as_nanos().try_into().unwrap_or(u64::MAX);
+        if self.0.lanes.fetch_add(1, Ordering::Relaxed) == 0 {
+            // The first lane seeds the minima; later lanes only lower them.
+            self.0.lane_rows_min.store(rows, Ordering::Relaxed);
+            self.0.lane_nanos_min.store(nanos, Ordering::Relaxed);
+        } else {
+            self.0.lane_rows_min.fetch_min(rows, Ordering::Relaxed);
+            self.0.lane_nanos_min.fetch_min(nanos, Ordering::Relaxed);
+        }
+        self.0.lane_rows_max.fetch_max(rows, Ordering::Relaxed);
+        self.0.lane_nanos_max.fetch_max(nanos, Ordering::Relaxed);
     }
 
     fn load(&self, value: &AtomicU64) -> u64 {

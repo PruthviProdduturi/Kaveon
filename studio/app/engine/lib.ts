@@ -38,6 +38,9 @@ export interface ScanTelemetry {
   compressed_bytes_selected: number;
   compressed_bytes_per_second?: number; rows_per_second?: number;
   snapshot_ns?: number; footer_ns?: number; read_ns?: number;
+  /** Decoder lanes across the workers and the lightest and heaviest lane anywhere. */
+  lanes?: number; lane_rows_min?: number; lane_rows_max?: number;
+  lane_read_ns_min?: number; lane_read_ns_max?: number;
 }
 
 export interface TaskTelemetry {

@@ -208,6 +208,7 @@ export default function EngineQueryPage() {
                           ["Read throughput", rate(sc.compressed_bytes_per_second, "B/s")],
                           ["Row throughput", rate(sc.rows_per_second, "rows/s")],
                           ["Delta snapshot", ns(sc.snapshot_ns)], ["Parquet footers", ns(sc.footer_ns)], ["Read and decode", ns(sc.read_ns)],
+                          ["Decoder lanes", sc.lanes ? `${sc.lanes}, lightest ${ns(sc.lane_read_ns_min)} and heaviest ${ns(sc.lane_read_ns_max)}, ${(sc.lane_rows_min ?? 0).toLocaleString()} to ${(sc.lane_rows_max ?? 0).toLocaleString()} rows` : "Single lane"],
                         ].map(([k, v]) => <div key={k} className={s.metric}><div className={s.metricLabel}>{k}</div><div className={s.metricValue}>{v}</div></div>)}
                       </div>
                     ))}

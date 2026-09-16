@@ -1008,7 +1008,10 @@ impl AdlsParquetReader {
                         let mut stream = build_stream(groups)?;
                         let sender = sender.clone();
                         let predicate = lane_predicate.clone();
+                        let lane_metrics = metrics.clone();
                         tokio::spawn(async move {
+                            let started = std::time::Instant::now();
+                            let mut rows = 0u64;
                             while let Some(item) = stream.next().await {
                                 let item = match &predicate {
                                     Some(predicate) => {
@@ -1016,11 +1019,15 @@ impl AdlsParquetReader {
                                     }
                                     None => item,
                                 };
+                                if let Ok(batch) = &item {
+                                    rows += batch.num_rows() as u64;
+                                }
                                 let failed = item.is_err();
                                 if sender.send(item).await.is_err() || failed {
                                     return;
                                 }
                             }
+                            lane_metrics.lane_finished(rows, started.elapsed());
                         });
                     }
                     drop(sender);
@@ -1438,7 +1445,16 @@ mod tests {
             total += values.iter().flatten().sum::<i64>();
             rows += batch.num_rows();
         }
-        (total, rows, stream.metrics().snapshot().row_groups_selected)
+        let snapshot = stream.metrics().snapshot();
+        // Every lane that ran reported itself, and together they decoded
+        // every row: the spread is real per-lane work, not a guess.
+        if snapshot.lanes > 0 {
+            assert!(snapshot.lanes as usize <= scan_parallelism().max(1));
+            assert!(snapshot.lane_rows_min <= snapshot.lane_rows_max);
+            assert!(snapshot.lane_rows_max as usize <= rows);
+            assert!(snapshot.lane_elapsed_min <= snapshot.lane_elapsed_max);
+        }
+        (total, rows, snapshot.row_groups_selected)
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 3)]

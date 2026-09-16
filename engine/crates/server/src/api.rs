@@ -191,6 +191,11 @@ struct TaskScanMetrics {
     snapshot_ns: u64,
     footer_ns: u64,
     read_ns: u64,
+    lanes: u64,
+    lane_rows_min: u64,
+    lane_rows_max: u64,
+    lane_read_ns_min: u64,
+    lane_read_ns_max: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -230,6 +235,13 @@ struct ScanTelemetry {
     read_ns: u64,
     rows_per_second: f64,
     compressed_bytes_per_second: f64,
+    /// Decoder lanes across every task, and the lightest and heaviest
+    /// lane anywhere: the spread is the variance a scan carries.
+    lanes: u64,
+    lane_rows_min: u64,
+    lane_rows_max: u64,
+    lane_read_ns_min: u64,
+    lane_read_ns_max: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -5108,7 +5120,36 @@ fn scan_telemetry(metrics: &kaveon_storage::ScanMetrics) -> ScanTelemetry {
         read_ns: duration_ns(snapshot.read_elapsed),
         rows_per_second: snapshot.rows_per_second(),
         compressed_bytes_per_second: snapshot.compressed_bytes_per_second(),
+        lanes: snapshot.lanes,
+        lane_rows_min: snapshot.lane_rows_min,
+        lane_rows_max: snapshot.lane_rows_max,
+        lane_read_ns_min: duration_ns(snapshot.lane_elapsed_min),
+        lane_read_ns_max: duration_ns(snapshot.lane_elapsed_max),
     }
+}
+
+/// Lane spreads combine as the lightest and heaviest lane anywhere.
+fn merge_lanes(
+    total: &mut TaskScanMetrics,
+    lanes: u64,
+    rows_min: u64,
+    rows_max: u64,
+    ns_min: u64,
+    ns_max: u64,
+) {
+    if lanes == 0 {
+        return;
+    }
+    if total.lanes == 0 {
+        total.lane_rows_min = rows_min;
+        total.lane_read_ns_min = ns_min;
+    } else {
+        total.lane_rows_min = total.lane_rows_min.min(rows_min);
+        total.lane_read_ns_min = total.lane_read_ns_min.min(ns_min);
+    }
+    total.lanes += lanes;
+    total.lane_rows_max = total.lane_rows_max.max(rows_max);
+    total.lane_read_ns_max = total.lane_read_ns_max.max(ns_max);
 }
 
 fn merge_task_scan_metrics<'a>(
@@ -5132,6 +5173,14 @@ fn merge_task_scan_metrics<'a>(
         total.snapshot_ns += duration_ns(snapshot.snapshot_elapsed);
         total.footer_ns += duration_ns(snapshot.footer_elapsed);
         total.read_ns += duration_ns(snapshot.read_elapsed);
+        merge_lanes(
+            &mut total,
+            snapshot.lanes,
+            snapshot.lane_rows_min,
+            snapshot.lane_rows_max,
+            duration_ns(snapshot.lane_elapsed_min),
+            duration_ns(snapshot.lane_elapsed_max),
+        );
         total
     })
 }
@@ -5164,6 +5213,14 @@ fn distributed_scan_telemetry(stages: &[StageTelemetry]) -> (Vec<ScanTelemetry>,
             total.snapshot_ns += scan.snapshot_ns;
             total.footer_ns += scan.footer_ns;
             total.read_ns += scan.read_ns;
+            merge_lanes(
+                &mut total,
+                scan.lanes,
+                scan.lane_rows_min,
+                scan.lane_rows_max,
+                scan.lane_read_ns_min,
+                scan.lane_read_ns_max,
+            );
             total
         });
     let read_elapsed = std::time::Duration::from_nanos(total.read_ns);
@@ -5199,6 +5256,11 @@ fn distributed_scan_telemetry(stages: &[StageTelemetry]) -> (Vec<ScanTelemetry>,
             read_ns: total.read_ns,
             rows_per_second,
             compressed_bytes_per_second,
+            lanes: total.lanes,
+            lane_rows_min: total.lane_rows_min,
+            lane_rows_max: total.lane_rows_max,
+            lane_read_ns_min: total.lane_read_ns_min,
+            lane_read_ns_max: total.lane_read_ns_max,
         }],
         true,
     )
