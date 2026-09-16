@@ -514,6 +514,37 @@ fn build_aggregate(plan: LogicalPlan, select: &ast::Select) -> Result<LogicalPla
         });
     }
 
+    // COUNT(DISTINCT x) [GROUP BY k] is COUNT(x) over the distinct (k, x)
+    // rows: the distinct step partitions across the workers by value, so no
+    // single task has to hold every distinct value.
+    if let [
+        AggregateExpr::Count {
+            expr: Expr::Column(column),
+            distinct: true,
+        },
+    ] = aggregates.as_slice()
+        && group_by.iter().all(|expr| matches!(expr, Expr::Column(_)))
+    {
+        let counted = Expr::Column(column.clone());
+        let mut columns = group_by.clone();
+        if !columns.contains(&counted) {
+            columns.push(counted.clone());
+        }
+        return Ok(LogicalPlan::Aggregate {
+            input: Box::new(LogicalPlan::Distinct {
+                input: Box::new(LogicalPlan::Project {
+                    input: Box::new(plan),
+                    columns,
+                }),
+            }),
+            group_by,
+            aggregates: vec![AggregateExpr::Count {
+                expr: counted,
+                distinct: false,
+            }],
+        });
+    }
+
     Ok(LogicalPlan::Aggregate {
         input: Box::new(plan),
         group_by,
@@ -1837,7 +1868,30 @@ mod tests {
 
     #[test]
     fn preserves_count_distinct_semantics() {
+        // A lone COUNT(DISTINCT x) counts the distinct x rows instead.
         let plan = sql_to_logical_plan("SELECT COUNT(DISTINCT user_id) FROM events").unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected project")
+        };
+        let LogicalPlan::Aggregate {
+            aggregates, input, ..
+        } = *input
+        else {
+            panic!("expected aggregate")
+        };
+        assert!(matches!(
+            aggregates.as_slice(),
+            [AggregateExpr::Count { distinct: false, expr: Expr::Column(column) }] if column == "user_id"
+        ));
+        let LogicalPlan::Distinct { input } = *input else {
+            panic!("distinct rows feed the count");
+        };
+        assert!(matches!(*input, LogicalPlan::Project { ref columns, .. }
+            if columns == &[Expr::Column("user_id".into())]));
+        // Mixed with another aggregate, the exact distinct state remains.
+        let plan =
+            sql_to_logical_plan("SELECT k, COUNT(DISTINCT user_id), SUM(v) FROM events GROUP BY k")
+                .unwrap();
         let LogicalPlan::Project { input, .. } = plan else {
             panic!("expected project")
         };
@@ -1846,7 +1900,10 @@ mod tests {
         };
         assert!(matches!(
             aggregates.as_slice(),
-            [AggregateExpr::Count { distinct: true, .. }]
+            [
+                AggregateExpr::Count { distinct: true, .. },
+                AggregateExpr::Sum { .. }
+            ]
         ));
     }
 

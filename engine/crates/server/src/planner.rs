@@ -1136,9 +1136,35 @@ impl StageGraphBuilder {
             LogicalPlan::Distinct { input } => {
                 let source = self.build(input)?;
                 let physical = physical_plan_tree(plan);
-                let target = self.add_exchange_stage("FinalDistinct", physical.attributes, 1, 1);
-                self.add_exchange(source, target, Partitioning::Single);
-                Ok(target)
+                // Equal rows hash alike, so DISTINCT over named columns
+                // spreads across the workers; each partition then holds a
+                // disjoint share of the distinct rows and never waits on a
+                // single final task.
+                match distinct_partition_columns(input) {
+                    Some(columns) => {
+                        let target = self.add_exchange_stage(
+                            "PartitionedDistinct",
+                            physical.attributes,
+                            self.worker_count,
+                            1,
+                        );
+                        self.add_exchange(
+                            source,
+                            target,
+                            Partitioning::Hash {
+                                columns,
+                                partition_count: self.worker_count,
+                            },
+                        );
+                        Ok(target)
+                    }
+                    None => {
+                        let target =
+                            self.add_exchange_stage("FinalDistinct", physical.attributes, 1, 1);
+                        self.add_exchange(source, target, Partitioning::Single);
+                        Ok(target)
+                    }
+                }
             }
             LogicalPlan::Union { inputs, .. } => {
                 let mut stages = Vec::new();
@@ -1959,6 +1985,28 @@ fn join_keys(condition: Option<&Expr>) -> Result<Vec<(String, String)>> {
     }
 }
 
+/// The output names a DISTINCT can hash-partition on: every projected
+/// expression of its input, when that input is a projection of columns and
+/// aliases (what `SELECT DISTINCT a, b` and the COUNT(DISTINCT) rewrite
+/// produce). Anything else keeps the single final task.
+fn distinct_partition_columns(input: &LogicalPlan) -> Option<Vec<String>> {
+    let LogicalPlan::Project { columns, .. } = input else {
+        return None;
+    };
+    if columns.is_empty() || !columns.iter().all(|expression| {
+        matches!(expression, Expr::Column(_))
+            || matches!(expression, Expr::Alias { expr, .. } if matches!(**expr, Expr::Column(_)))
+    }) {
+        return None;
+    }
+    Some(
+        named_expressions(columns)
+            .into_iter()
+            .map(|named| named.name)
+            .collect(),
+    )
+}
+
 fn unqualify(column: &str) -> String {
     column.rsplit('.').next().unwrap_or(column).to_owned()
 }
@@ -2492,6 +2540,56 @@ mod tests {
                 ));
             }
         }
+    }
+
+    #[test]
+    fn count_distinct_partitions_the_distinct_rows_across_workers() {
+        let sql = "SELECT id, COUNT(DISTINCT id) FROM items GROUP BY id";
+        let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(sql).unwrap();
+        qualify_tables(&mut plan, "test", "default");
+        let plan = kaveon_optim::rules::push_projection_down(plan);
+        let graph = build_stage_graph("query-1", &plan, 4).unwrap();
+        fn mentions(node: &kaveon_core::PlanNode, operator: &str) -> bool {
+            node.operator == operator || node.children.iter().any(|child| mentions(child, operator))
+        }
+        let distinct = graph
+            .stages
+            .iter()
+            .find(|stage| mentions(&stage.plan, "PartitionedDistinct"))
+            .expect("distinct spreads across the workers");
+        assert_eq!(distinct.task_count, 4);
+        assert!(graph.exchanges.iter().any(|exchange| {
+            exchange.target_stage == distinct.id
+                && matches!(
+                    &exchange.partitioning,
+                    Partitioning::Hash { columns, partition_count: 4 } if columns == &["id".to_owned()]
+                )
+        }));
+        let fixture = fixture();
+        let fragments = build_executable_fragments("query-1", &plan, &fixture.catalog, 4).unwrap();
+        let scan_stage = &fragments[&StageId(0)];
+        assert!(
+            scan_stage
+                .nodes
+                .iter()
+                .any(|node| matches!(node.operator, FragmentOperator::Distinct))
+        );
+        assert!(matches!(
+            &scan_stage.nodes.last().unwrap().operator,
+            FragmentOperator::ExchangeOutput(output)
+                if matches!(output.partitioning, Partitioning::Hash { .. })
+        ));
+        // DISTINCT over an unprojected input keeps the single final task.
+        let mut plan =
+            kaveon_sql::logical_plan::sql_to_logical_plan("SELECT DISTINCT * FROM items").unwrap();
+        qualify_tables(&mut plan, "test", "default");
+        let graph = build_stage_graph("query-2", &plan, 4).unwrap();
+        assert!(
+            graph
+                .stages
+                .iter()
+                .any(|stage| mentions(&stage.plan, "FinalDistinct"))
+        );
     }
 
     #[test]
