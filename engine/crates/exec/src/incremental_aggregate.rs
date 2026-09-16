@@ -7,8 +7,9 @@ use arrow::record_batch::RecordBatch;
 use kaveon_core::{KaveonError, MemoryReservation, OperatorMemoryAccount, Result};
 
 use crate::aggregate::{
-    AggregateState, AggregateValue, GroupedAggregateState, decode_group_keys, decode_group_states,
-    grouped_aggregate_key_types, validate_group_key_types, validate_group_layouts,
+    AggregateState, AggregateValue, GroupedAggregateState, decode_group_keys,
+    decode_group_states_into, grouped_aggregate_key_types, validate_group_key_types,
+    validate_group_layouts,
 };
 
 /// Groups are indexed by their encoded key bytes — the producer's canonical
@@ -103,6 +104,7 @@ impl IncrementalAggregateMerger {
             .filter(|_| scratch != 0)
             .map(|memory| memory.reserve(scratch))
             .transpose()?;
+        let mut incoming = Vec::new();
         for row in 0..batch.num_rows() {
             if row % 1024 == 0
                 && let Some(memory) = &self.memory
@@ -113,7 +115,7 @@ impl IncrementalAggregateMerger {
                 return Err(error("grouped aggregate state row cannot contain nulls"));
             }
             let encoded_key = keys.value(row);
-            let incoming = decode_group_states(states.value(row))?;
+            decode_group_states_into(states.value(row), &mut incoming)?;
             let existing = self.index.get(encoded_key).copied();
             let mut growth = if existing.is_none() {
                 NEW_GROUP_BYTES
@@ -163,7 +165,7 @@ impl IncrementalAggregateMerger {
                     )?;
                     let slot = u32::try_from(self.states.len())
                         .map_err(|_| error("too many groups for one task"))?;
-                    self.states.push(incoming);
+                    self.states.push(incoming.clone());
                     self.index.insert(Box::from(encoded_key), slot);
                 }
             }

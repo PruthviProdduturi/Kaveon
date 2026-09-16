@@ -348,22 +348,37 @@ pub async fn upload_chunks(
     chunks: &[ExchangeChunk],
     limits: ExchangeLimits,
 ) -> ExchangeResult<()> {
+    use futures::StreamExt;
+    // The receiver stores chunks by index, so several may be in flight: one
+    // 4 MiB request at a time left a 340 MB partition at ~60 MB/s.
+    const IN_FLIGHT: usize = 4;
+    let url = format!("{}/v1/internal/exchange", worker_uri.trim_end_matches('/'));
+    let mut pending = Vec::with_capacity(chunks.len());
     for chunk in chunks {
-        let body = chunk.encode(limits)?;
-        let response = client
-            .post(format!(
-                "{}/v1/internal/exchange",
-                worker_uri.trim_end_matches('/')
-            ))
-            .bearer_auth(token)
-            .header(header::CONTENT_TYPE.as_str(), EXCHANGE_MEDIA_TYPE)
-            .body(body)
-            .send()
-            .await
-            .map_err(|error| ExchangeError::Transport(error.to_string()))?;
-        if !response.status().is_success() {
-            return Err(ExchangeError::HttpStatus(response.status().as_u16()));
-        }
+        let client = client.clone();
+        let url = url.clone();
+        let token = token.to_owned();
+        pending.push(async move {
+            // Each chunk encodes when its upload starts, so at most
+            // IN_FLIGHT copies exist at once.
+            let body = chunk.encode(limits)?;
+            let response = client
+                .post(url)
+                .bearer_auth(token)
+                .header(header::CONTENT_TYPE.as_str(), EXCHANGE_MEDIA_TYPE)
+                .body(body)
+                .send()
+                .await
+                .map_err(|error| ExchangeError::Transport(error.to_string()))?;
+            if !response.status().is_success() {
+                return Err(ExchangeError::HttpStatus(response.status().as_u16()));
+            }
+            Ok::<(), ExchangeError>(())
+        });
+    }
+    let mut uploads = futures::stream::iter(pending).buffer_unordered(IN_FLIGHT);
+    while let Some(result) = uploads.next().await {
+        result?;
     }
     Ok(())
 }
