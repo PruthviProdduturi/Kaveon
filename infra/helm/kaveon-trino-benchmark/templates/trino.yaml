@@ -42,7 +42,7 @@ data:
     -Djava.io.tmpdir=/data/trino/tmp
   jvm-worker.config: |-
     -server
-    -Xmx4G
+    -Xmx{{ .Values.trino.memory.workerHeap }}
     -XX:+ExitOnOutOfMemoryError
     -Djava.io.tmpdir=/data/trino/tmp
   lake.properties: |-
@@ -145,9 +145,9 @@ spec:
               internal-communication.https.keystore.path=/trino-tls/server.pem
               internal-communication.https.truststore.path=/trino-tls/ca.crt
               node.internal-address-source=FQDN
-              query.max-memory=2GB
-              query.max-total-memory=2GB
-              query.max-memory-per-node=512MB
+              query.max-memory={{ $.Values.trino.memory.queryTotal }}
+              query.max-total-memory={{ $.Values.trino.memory.queryTotal }}
+              query.max-memory-per-node={{ $.Values.trino.memory.queryPerNode }}
               memory.heap-headroom-per-node=1GB
               EOF
               {{- if $isCoordinator }}
