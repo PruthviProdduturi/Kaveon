@@ -147,7 +147,7 @@ spec:
               node.internal-address-source=FQDN
               query.max-memory={{ $.Values.trino.memory.queryTotal }}
               query.max-total-memory={{ $.Values.trino.memory.queryTotal }}
-              query.max-memory-per-node={{ $.Values.trino.memory.queryPerNode }}
+              query.max-memory-per-node={{ ternary $.Values.trino.memory.coordinatorQueryPerNode $.Values.trino.memory.queryPerNode $isCoordinator }}
               memory.heap-headroom-per-node=1GB
               EOF
               {{- if $isCoordinator }}

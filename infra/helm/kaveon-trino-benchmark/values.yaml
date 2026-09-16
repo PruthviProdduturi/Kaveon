@@ -32,6 +32,9 @@ trino:
   memory:
     workerHeap: 5G
     queryPerNode: 3GB
+    # The coordinator runs no tasks; its 3G heap only has to satisfy Trino's
+    # per-node + headroom check.
+    coordinatorQueryPerNode: 1GB
     queryTotal: 9GB
   internalSharedSecretName: kaveon-trino-benchmark-auth
   tlsSecretName: kaveon-trino-benchmark-tls
