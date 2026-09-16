@@ -32,6 +32,7 @@ from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.compute
 import pyarrow.parquet as pq
 
 N_USERS = 3_000_000
@@ -168,7 +169,12 @@ def build(output: Path) -> None:
     # Each dimension is already dictionary-typed; chunks reuse dictionary + indices.
     dims = {}
     for d in USER_DIMS:
-        arr = users.column(d).combine_chunks()
+        # The pools repeat values to weight them, so the in-memory dictionary
+        # holds duplicates; Parquet's dictionary pages require unique values
+        # and pyarrow silently falls back to PLAIN otherwise — which is how
+        # the first build shipped 37 MB of plain strings per row group for
+        # `country`. Re-encode to a unique dictionary before writing.
+        arr = pa.compute.dictionary_encode(users.column(d).combine_chunks().dictionary_decode())
         dims[d] = (arr.dictionary, arr.indices.to_numpy(zero_copy_only=False).astype(np.int32))
 
     # Low-cardinality text is dictionary-typed in memory; Parquet stores it as
@@ -183,7 +189,8 @@ def build(output: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     # store_schema=False keeps the Arrow dictionary typing out of the file's
     # metadata: readers see plain Utf8 from the Parquet logical type, while
-    # the on-disk encoding stays dictionary-compressed.
+    # the on-disk encoding stays dictionary-compressed (RLE_DICTIONARY pages,
+    # verified per column after the build).
     writer = pq.ParquetWriter(dest, schema, compression="zstd", use_dictionary=True,
                               write_statistics=True, store_schema=False)
     total = 0
