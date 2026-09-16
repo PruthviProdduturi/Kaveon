@@ -98,13 +98,13 @@ On `b0be459`, `q19`, `q33`, `q35`, `q36` were rejected on memory — the spill-c
 
 ## Where Kaveon loses, and why
 
-Trino is faster on 21 of the 42 statements both engines ran, and every one of them is the same shape:
+Trino is faster on 20 of the 42 statements both engines ran, and every one of them is the same shape:
 
 - **High-cardinality GROUP BY** (`q13`–`q19`, `q31`, `q32`, `q34`–`q36`, `q40`; `q33` fails outright): millions to a hundred million groups. Kaveon aggregates a row at a time through a general accumulator enum, with a hash probe per row on both the partial and the final stage; Trino's hash aggregation is columnar and three to five times leaner per group. On the same 3 CPUs per worker this is a 3–7× loss. The item is a columnar aggregate: typed key vectors, flat accumulator columns, vectorised hashing, and a final merge that spills the way the partial already can.
 - **Exact COUNT(DISTINCT)** (`q05`, `q06`, `q09`, `q10`, `q12`, `q14`): the distinct step is single-threaded on both stages and re-hashes every row on the final; 0.5–0.9× Trino.
 - **`REGEXP_REPLACE` per row** (`q29`, 0.29×) and the ninety-term `SUM(ResolutionWidth + k)` projection (`q30`, 0.72×): per-row expression evaluation with an allocation per string.
 
-Kaveon is faster on the other 21: every scan, filter, TopN and low-cardinality aggregate (`q01`–`q04`, `q07`, `q08`, `q11`, `q20`–`q28`, `q37`–`q39`, `q41`, `q42`) by 1.4–6×, and the LIKE-heavy `q21`–`q24` by 1.4–4.5×.
+Kaveon is faster on the other 22: every scan, filter, TopN and low-cardinality aggregate (`q01`–`q04`, `q07`, `q08`, `q11`, `q20`–`q28`, `q37`–`q39`, `q41`, `q42`) by 1.4–6×, and the LIKE-heavy `q21`–`q24` by 1.4–4.5×.
 
 ## Next
 
