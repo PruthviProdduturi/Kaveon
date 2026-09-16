@@ -1,0 +1,986 @@
+{
+ "cases": 28,
+ "match": 28,
+ "records": [
+  {
+   "case": "distinct_values",
+   "a": {
+    "seconds": 5.21,
+    "rows": 6,
+    "sample": [
+     [
+      "Africa"
+     ],
+     [
+      "Asia"
+     ],
+     [
+      "Europe"
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 21.91,
+    "rows": 6,
+    "sample": [
+     [
+      "Africa"
+     ],
+     [
+      "Asia"
+     ],
+     [
+      "Europe"
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "order_by_dict_desc",
+   "a": {
+    "seconds": 0.65,
+    "rows": 5,
+    "sample": [
+     [
+      "United States",
+      "North America"
+     ],
+     [
+      "United States",
+      "North America"
+     ],
+     [
+      "United States",
+      "North America"
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 0.74,
+    "rows": 5,
+    "sample": [
+     [
+      "United States",
+      "North America"
+     ],
+     [
+      "United States",
+      "North America"
+     ],
+     [
+      "United States",
+      "North America"
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "in_list",
+   "a": {
+    "seconds": 12.64,
+    "rows": 3,
+    "sample": [
+     [
+      "Brazil",
+      196512557
+     ],
+     [
+      "Japan",
+      195969946
+     ],
+     [
+      "Kenya",
+      196552549
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 16.41,
+    "rows": 3,
+    "sample": [
+     [
+      "Brazil",
+      196512557
+     ],
+     [
+      "Japan",
+      195969946
+     ],
+     [
+      "Kenya",
+      196552549
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "not_equal",
+   "a": {
+    "seconds": 3.2,
+    "rows": 1,
+    "sample": [
+     [
+      390164040
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 7.78,
+    "rows": 1,
+    "sample": [
+     [
+      390164040
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "like_prefix",
+   "a": {
+    "seconds": 3.28,
+    "rows": 1,
+    "sample": [
+     [
+      97682088
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 10.67,
+    "rows": 1,
+    "sample": [
+     [
+      97682088
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "or_predicate",
+   "a": {
+    "seconds": 4.3,
+    "rows": 1,
+    "sample": [
+     [
+      202186152
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 12.42,
+    "rows": 1,
+    "sample": [
+     [
+      202186152
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "null_safe",
+   "a": {
+    "seconds": 0.24,
+    "rows": 1,
+    "sample": [
+     [
+      0
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 0.27,
+    "rows": 1,
+    "sample": [
+     [
+      0
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "case_expr",
+   "a": {
+    "seconds": 24.62,
+    "rows": 2,
+    "sample": [
+     [
+      "EU",
+      232390642
+     ],
+     [
+      "Other",
+      667609358
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 27.65,
+    "rows": 2,
+    "sample": [
+     [
+      "EU",
+      232390642
+     ],
+     [
+      "Other",
+      667609358
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "upper_fn",
+   "a": {
+    "seconds": 1.01,
+    "rows": 6,
+    "sample": [
+     [
+      "API",
+      3000000
+     ],
+     [
+      "CHART BUILDER",
+      3000000
+     ],
+     [
+      "CHAT",
+      3000000
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 1.6,
+    "rows": 6,
+    "sample": [
+     [
+      "API",
+      3000000
+     ],
+     [
+      "CHART BUILDER",
+      3000000
+     ],
+     [
+      "CHAT",
+      3000000
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "avg_min_max",
+   "a": {
+    "seconds": 5.84,
+    "rows": 3,
+    "sample": [
+     [
+      "Desktop",
+      1084.982479098154,
+      50,
+      3000
+     ],
+     [
+      "Mobile",
+      1085.0458476805345,
+      50,
+      3000
+     ],
+     [
+      "Web",
+      1084.9761148063765,
+      50,
+      3000
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 20.7,
+    "rows": 3,
+    "sample": [
+     [
+      "Desktop",
+      1084.982479098154,
+      50,
+      3000
+     ],
+     [
+      "Mobile",
+      1085.0458476805345,
+      50,
+      3000
+     ],
+     [
+      "Web",
+      1084.9761148063765,
+      50,
+      3000
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "text_min_max_grouped",
+   "a": {
+    "seconds": 13.42,
+    "rows": 6,
+    "sample": [
+     [
+      "API",
+      "Argentina",
+      "2026-07-31"
+     ],
+     [
+      "Chart Builder",
+      "Argentina",
+      "2026-07-31"
+     ],
+     [
+      "Chat",
+      "Argentina",
+      "2026-07-31"
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 25.38,
+    "rows": 6,
+    "sample": [
+     [
+      "API",
+      "Argentina",
+      "2026-07-31"
+     ],
+     [
+      "Chart Builder",
+      "Argentina",
+      "2026-07-31"
+     ],
+     [
+      "Chat",
+      "Argentina",
+      "2026-07-31"
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "three_keys",
+   "a": {
+    "seconds": 6.2,
+    "rows": 12,
+    "sample": [
+     [
+      "Europe",
+      "Desktop",
+      "Free",
+      220172298
+     ],
+     [
+      "Asia",
+      "Desktop",
+      "Free",
+      192408578
+     ],
+     [
+      "Europe",
+      "Mobile",
+      "Free",
+      184312630
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 49.63,
+    "rows": 12,
+    "sample": [
+     [
+      "Europe",
+      "Desktop",
+      "Free",
+      220172298
+     ],
+     [
+      "Asia",
+      "Desktop",
+      "Free",
+      192408578
+     ],
+     [
+      "Europe",
+      "Mobile",
+      "Free",
+      184312630
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "mixed_key_types",
+   "a": {
+    "seconds": 0.87,
+    "rows": 10,
+    "sample": [
+     [
+      "United States",
+      5,
+      55649
+     ],
+     [
+      "United States",
+      4,
+      55562
+     ],
+     [
+      "United States",
+      0,
+      55454
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 1.13,
+    "rows": 10,
+    "sample": [
+     [
+      "United States",
+      5,
+      55649
+     ],
+     [
+      "United States",
+      4,
+      55562
+     ],
+     [
+      "United States",
+      0,
+      55454
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "having",
+   "a": {
+    "seconds": 4.14,
+    "rows": 5,
+    "sample": [
+     [
+      "Technology",
+      55244393
+     ],
+     [
+      "Government",
+      18483724
+     ],
+     [
+      "Logistics",
+      18476703
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 24.0,
+    "rows": 5,
+    "sample": [
+     [
+      "Technology",
+      55244393
+     ],
+     [
+      "Government",
+      18483724
+     ],
+     [
+      "Logistics",
+      18476703
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "count_distinct_lowcard",
+   "a": {
+    "seconds": 4.27,
+    "rows": 1,
+    "sample": [
+     [
+      26,
+      6
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 92.49,
+    "rows": 1,
+    "sample": [
+     [
+      26,
+      6
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "count_distinct_grouped_lowcard",
+   "a": {
+    "seconds": 5.3,
+    "rows": 6,
+    "sample": [
+     [
+      "Africa",
+      4
+     ],
+     [
+      "Asia",
+      6
+     ],
+     [
+      "Europe",
+      7
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 35.44,
+    "rows": 6,
+    "sample": [
+     [
+      "Africa",
+      4
+     ],
+     [
+      "Asia",
+      6
+     ],
+     [
+      "Europe",
+      7
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "date_range_and_dim",
+   "a": {
+    "seconds": 1.17,
+    "rows": 5,
+    "sample": [
+     [
+      "United States",
+      12610507
+     ],
+     [
+      "United Kingdom",
+      6350210
+     ],
+     [
+      "India",
+      6329001
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 2.63,
+    "rows": 5,
+    "sample": [
+     [
+      "United States",
+      12610507
+     ],
+     [
+      "United Kingdom",
+      6350210
+     ],
+     [
+      "India",
+      6329001
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "join_users",
+   "a": {
+    "seconds": 5.37,
+    "rows": 5,
+    "sample": [
+     [
+      "en-US",
+      11617311
+     ],
+     [
+      "en-GB",
+      5821911
+     ],
+     [
+      "hi-IN",
+      5819792
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 5.02,
+    "rows": 5,
+    "sample": [
+     [
+      "en-US",
+      11617311
+     ],
+     [
+      "en-GB",
+      5821911
+     ],
+     [
+      "hi-IN",
+      5819792
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "join_dict_keys",
+   "a": {
+    "seconds": 4.56,
+    "rows": 0,
+    "sample": []
+   },
+   "b": {
+    "seconds": 4.5,
+    "rows": 0,
+    "sample": []
+   },
+   "match": true
+  },
+  {
+   "case": "topn_by_key",
+   "a": {
+    "seconds": 0.66,
+    "rows": 8,
+    "sample": [
+     [
+      "Argentina",
+      "API",
+      2899419
+     ],
+     [
+      "Argentina",
+      "Chart Builder",
+      289737
+     ],
+     [
+      "Argentina",
+      "Chat",
+      870325
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 1.71,
+    "rows": 8,
+    "sample": [
+     [
+      "Argentina",
+      "API",
+      2899419
+     ],
+     [
+      "Argentina",
+      "Chart Builder",
+      289737
+     ],
+     [
+      "Argentina",
+      "Chat",
+      870325
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "offset",
+   "a": {
+    "seconds": 4.8,
+    "rows": 5,
+    "sample": [
+     [
+      "Kenya",
+      196552549
+     ],
+     [
+      "Brazil",
+      196512557
+     ],
+     [
+      "Germany",
+      196443870
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 22.96,
+    "rows": 5,
+    "sample": [
+     [
+      "Kenya",
+      196552549
+     ],
+     [
+      "Brazil",
+      196512557
+     ],
+     [
+      "Germany",
+      196443870
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "limit_no_order",
+   "a": {
+    "seconds": 0.3,
+    "rows": 1,
+    "sample": [
+     [
+      1000
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 0.33,
+    "rows": 1,
+    "sample": [
+     [
+      1000
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "union_all",
+   "a": {
+    "seconds": 6.2,
+    "rows": 2,
+    "sample": [
+     [
+      "a",
+      113835960
+     ],
+     [
+      "e",
+      130126920
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 13.05,
+    "rows": 2,
+    "sample": [
+     [
+      "a",
+      113835960
+     ],
+     [
+      "e",
+      130126920
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "subquery_in",
+   "a": {
+    "seconds": 4.6,
+    "rows": 1,
+    "sample": [
+     [
+      16250808
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 27.52,
+    "rows": 1,
+    "sample": [
+     [
+      16250808
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "arith_projection",
+   "a": {
+    "seconds": 0.62,
+    "rows": 3,
+    "sample": [
+     [
+      "United States",
+      61219781
+     ],
+     [
+      "India",
+      30653297
+     ],
+     [
+      "United Kingdom",
+      30649499
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 1.55,
+    "rows": 3,
+    "sample": [
+     [
+      "United States",
+      61219781
+     ],
+     [
+      "India",
+      30653297
+     ],
+     [
+      "United Kingdom",
+      30649499
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "string_concat",
+   "a": {
+    "seconds": 2.25,
+    "rows": 3,
+    "sample": [
+     [
+      "United States / North America",
+      387588
+     ],
+     [
+      "India / Asia",
+      194055
+     ],
+     [
+      "United Kingdom / Europe",
+      193853
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 2.35,
+    "rows": 3,
+    "sample": [
+     [
+      "United States / North America",
+      387588
+     ],
+     [
+      "India / Asia",
+      194055
+     ],
+     [
+      "United Kingdom / Europe",
+      193853
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "window_rank",
+   "a": {
+    "seconds": 0.57,
+    "rows": 3,
+    "sample": [
+     [
+      "United States",
+      28477719,
+      1
+     ],
+     [
+      "India",
+      14258919,
+      2
+     ],
+     [
+      "United Kingdom",
+      14257831,
+      3
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 1.3,
+    "rows": 3,
+    "sample": [
+     [
+      "United States",
+      28477719,
+      1
+     ],
+     [
+      "India",
+      14258919,
+      2
+     ],
+     [
+      "United Kingdom",
+      14257831,
+      3
+     ]
+    ]
+   },
+   "match": true
+  },
+  {
+   "case": "count_star_filter_only",
+   "a": {
+    "seconds": 1.2,
+    "rows": 1,
+    "sample": [
+     [
+      2328660
+     ]
+    ]
+   },
+   "b": {
+    "seconds": 3.41,
+    "rows": 1,
+    "sample": [
+     [
+      2328660
+     ]
+    ]
+   },
+   "match": true
+  }
+ ],
+ "engine": "kaveon-engine@sha256:9ab6325134f1b79af0b67ce41bec7f53bd6f28efe049f9b84c2619576aca896f",
+ "dev": "aaaffdd"
+}
