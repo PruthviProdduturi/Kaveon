@@ -344,11 +344,7 @@ fn compare_column(
 fn collect_batch_comparisons(
     schema: &SchemaRef,
     predicate: &StoragePredicate,
-    out: &mut Vec<(
-        usize,
-        CompareOp,
-        arrow::array::Scalar<Arc<dyn arrow::array::Array>>,
-    )>,
+    out: &mut Vec<BatchComparison>,
 ) {
     match predicate {
         StoragePredicate::And(children) => {
