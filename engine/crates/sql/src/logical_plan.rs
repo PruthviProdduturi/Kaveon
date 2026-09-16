@@ -842,10 +842,46 @@ fn build_order_by(plan: LogicalPlan, order_by: &[ast::OrderByExpr]) -> Result<Lo
         let asc = ob.asc.unwrap_or(true);
         items.push((expr, asc));
     }
+    let plan = bind_order_keys_to_projection(plan, &mut items);
     Ok(LogicalPlan::Sort {
         input: Box::new(plan),
         order_by: items,
     })
+}
+
+/// An ORDER BY expression that repeats a select item — `ORDER BY COUNT(*)`
+/// beside `SELECT k, COUNT(*)` — orders by that item's output column. An
+/// item without a name receives one (`expr_<position>`) so the key can
+/// name it.
+fn bind_order_keys_to_projection(plan: LogicalPlan, keys: &mut [(Expr, bool)]) -> LogicalPlan {
+    let LogicalPlan::Project { input, mut columns } = plan else {
+        return plan;
+    };
+    for (key, _) in keys.iter_mut() {
+        if matches!(key, Expr::Column(_) | Expr::Literal(_)) {
+            continue;
+        }
+        let position = columns.iter().position(|column| match column {
+            Expr::Alias { expr, .. } => expr.as_ref() == key,
+            other => other == key,
+        });
+        let Some(position) = position else {
+            continue;
+        };
+        let name = match &columns[position] {
+            Expr::Alias { name, .. } => name.clone(),
+            other => {
+                let name = format!("expr_{position}");
+                columns[position] = Expr::Alias {
+                    expr: Box::new(other.clone()),
+                    name: name.clone(),
+                };
+                name
+            }
+        };
+        *key = Expr::Column(name);
+    }
+    LogicalPlan::Project { input, columns }
 }
 
 fn build_limit_offset(
@@ -1687,6 +1723,35 @@ mod tests {
         ));
         assert!(sql_to_logical_plan("SELECT x FROM a INTERSECT ALL SELECT x FROM b").is_err());
         assert!(sql_to_logical_plan("SELECT x FROM a EXCEPT ALL SELECT x FROM b").is_err());
+    }
+
+    #[test]
+    fn order_by_a_repeated_select_item_orders_by_its_output() {
+        let plan =
+            sql_to_logical_plan("SELECT k, COUNT(*) FROM t GROUP BY k ORDER BY COUNT(*) DESC")
+                .unwrap();
+        let LogicalPlan::Sort { input, order_by } = plan else {
+            panic!("sort");
+        };
+        assert_eq!(order_by, vec![(Expr::Column("expr_1".into()), false)]);
+        let LogicalPlan::Project { columns, .. } = *input else {
+            panic!("projection");
+        };
+        assert!(matches!(&columns[1], Expr::Alias { name, .. } if name == "expr_1"));
+        // An aliased item keeps its alias; a column key is untouched.
+        let plan =
+            sql_to_logical_plan("SELECT k, SUM(v) AS total FROM t GROUP BY k ORDER BY SUM(v), k")
+                .unwrap();
+        let LogicalPlan::Sort { order_by, .. } = plan else {
+            panic!("sort");
+        };
+        assert_eq!(
+            order_by,
+            vec![
+                (Expr::Column("total".into()), true),
+                (Expr::Column("k".into()), true)
+            ]
+        );
     }
 
     #[test]

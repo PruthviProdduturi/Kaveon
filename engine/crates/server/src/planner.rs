@@ -2348,7 +2348,8 @@ mod tests {
                 _ => None,
             })
             .expect("ORDER BY ... LIMIT plans a TopN");
-        assert_eq!(top_n[0].expression, Expr::Column("count_star".into()));
+        // The SQL layer binds the repeated select item to its output name.
+        assert_eq!(top_n[0].expression, Expr::Column("expr_1".into()));
         assert!(!top_n[0].ascending);
     }
 
