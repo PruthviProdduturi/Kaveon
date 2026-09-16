@@ -593,6 +593,13 @@ pub fn supports_aggregate(
             state,
             AggregateState::Utf8Min(_) | AggregateState::Utf8Max(_)
         ),
+        // Dates fold as their day numbers; the caller hands them in as Int32.
+        Some(DataType::Date32) => matches!(
+            state,
+            AggregateState::IntegerMin(_)
+                | AggregateState::IntegerMax(_)
+                | AggregateState::Count(_)
+        ),
         Some(DataType::Utf8 | DataType::LargeUtf8) => {
             matches!(aggregate.func, AggFunc::Min | AggFunc::Max | AggFunc::Count)
         }
@@ -1504,6 +1511,19 @@ impl ColumnarGroups {
                             .zip(present)
                             .map(|(v, p)| p.then_some(*v as i32)),
                     )),
+                    (
+                        AccColumn::IntegerMin { values, present }
+                        | AccColumn::IntegerMax { values, present },
+                        DataType::Date32,
+                    ) => arrow::compute::cast(
+                        &Int32Array::from_iter(
+                            values
+                                .iter()
+                                .zip(present)
+                                .map(|(v, p)| p.then_some(*v as i32)),
+                        ),
+                        &DataType::Date32,
+                    )?,
                     (AccColumn::Float { sums, counts, avg }, DataType::Float64) => {
                         Arc::new(Float64Array::from_iter(sums.iter().zip(counts).map(
                             |(s, c)| (*c > 0).then(|| if *avg { s / *c as f64 } else { *s }),

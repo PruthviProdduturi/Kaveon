@@ -218,7 +218,10 @@ pub fn aggregate_output_types(aggregates: &[AggExpr], input: &SchemaRef) -> Resu
             if let Ok(field) = input.field_with_name(&agg.column) {
                 let data_type = logical_data_type(field.data_type());
                 if matches!(agg.func, AggFunc::Min | AggFunc::Max)
-                    && matches!(data_type, DataType::Utf8 | DataType::LargeUtf8)
+                    && matches!(
+                        data_type,
+                        DataType::Utf8 | DataType::LargeUtf8 | DataType::Date32
+                    )
                 {
                     return Ok(data_type.clone());
                 }
@@ -276,7 +279,10 @@ impl AggregateState {
                     .then(HashSet::new),
             };
         }
-        if matches!(output_type, DataType::Int32 | DataType::Int64) {
+        if matches!(
+            output_type,
+            DataType::Int32 | DataType::Int64 | DataType::Date32
+        ) {
             return match (expression.func, expression.distinct) {
                 (AggFunc::Sum, false) => Self::IntegerSum { sum: 0, count: 0 },
                 (AggFunc::Sum, true) => Self::IntegerSumDistinct(HashSet::new()),
@@ -975,7 +981,10 @@ fn validate_state_output_types(states: &[AggregateState], output_types: &[DataTy
                     DataType::Int64
                 }
                 AggregateState::IntegerMin(_) | AggregateState::IntegerMax(_)
-                    if matches!(data_type, DataType::Int32 | DataType::Int64) =>
+                    if matches!(
+                        data_type,
+                        DataType::Int32 | DataType::Int64 | DataType::Date32
+                    ) =>
                 {
                     data_type.clone()
                 }
@@ -2021,7 +2030,10 @@ impl HashAggregate {
                 let data_type = logical_data_type(source_schema.field(index).data_type());
                 if !is_numeric_type(data_type)
                     && !(matches!(agg.func, AggFunc::Min | AggFunc::Max)
-                        && matches!(data_type, DataType::Utf8 | DataType::LargeUtf8))
+                        && matches!(
+                            data_type,
+                            DataType::Utf8 | DataType::LargeUtf8 | DataType::Date32
+                        ))
                 {
                     return Err(exec_err(format!(
                         "{} requires a numeric column, got {}",
@@ -2254,8 +2266,13 @@ impl HashAggregate {
                 .collect::<Vec<_>>();
             let values = value_indices
                 .iter()
-                .map(|index| index.map(|index| batch.column(index)))
-                .collect::<Vec<_>>();
+                .map(|index| {
+                    index
+                        .map(|index| day_numbers(batch.column(index)))
+                        .transpose()
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let values = values.iter().map(Option::as_ref).collect::<Vec<_>>();
             if let Some(memory) = &self.memory {
                 memory.check_cancelled()?;
                 let growth = groups.growth_bytes(rows);
@@ -2396,8 +2413,15 @@ impl HashAggregate {
                 .iter()
                 .map(|aggregate| {
                     (!(matches!(aggregate.func, AggFunc::Count) && aggregate.column == "*"))
-                        .then(|| batch.column(schema.index_of(&aggregate.column).unwrap()))
+                        .then(|| {
+                            day_numbers(batch.column(schema.index_of(&aggregate.column).unwrap()))
+                        })
+                        .transpose()
                 })
+                .collect::<Result<Vec<_>>>()?;
+            let aggregate_arrays = aggregate_arrays
+                .iter()
+                .map(Option::as_ref)
                 .collect::<Vec<_>>();
             let count_sum_i64 = (self.aggregates.len() == 2
                 && matches!(self.aggregates[0].func, AggFunc::Count)
@@ -3535,7 +3559,7 @@ impl BatchOperator for HashAggregate {
                 .field(self.group_by.len() + ai)
                 .data_type()
             {
-                DataType::Int32 => {
+                data_type @ (DataType::Int32 | DataType::Date32) => {
                     let values = entries
                         .iter()
                         .map(|(_, states)| {
@@ -3548,7 +3572,12 @@ impl BatchOperator for HashAggregate {
                                 .transpose()
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    columns.push(Arc::new(Int32Array::from(values)));
+                    let days = Int32Array::from(values);
+                    columns.push(if data_type == &DataType::Date32 {
+                        arrow::compute::cast(&days, &DataType::Date32)?
+                    } else {
+                        Arc::new(days)
+                    });
                 }
                 DataType::Int64 => {
                     let values = entries
@@ -4054,6 +4083,17 @@ fn extract_f64(arr: &ArrayRef, row: usize) -> Result<f64> {
         }
     };
     Ok(value)
+}
+
+/// An aggregate input as the integers it folds as: a day-number date
+/// column is viewed as Int32 (a reinterpretation, no copy); anything else
+/// is itself. MIN and MAX over dates come back as dates from the output
+/// type, so only the fold sees the numbers.
+fn day_numbers(array: &ArrayRef) -> Result<ArrayRef> {
+    Ok(match array.data_type() {
+        DataType::Date32 => arrow::compute::cast(array, &DataType::Int32)?,
+        _ => Arc::clone(array),
+    })
 }
 
 fn is_numeric_type(data_type: &DataType) -> bool {

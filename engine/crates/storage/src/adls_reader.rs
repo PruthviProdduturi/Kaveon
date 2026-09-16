@@ -918,8 +918,9 @@ impl AdlsParquetReader {
         metrics.file_opened();
 
         let mut row_groups = if let Some(predicate) = &self.predicate {
-            validate_predicate(predicate, &schema)?;
-            matching_row_groups(metadata.metadata().as_ref(), &schema, predicate)
+            let predicate = predicate.coerced_for(&schema);
+            validate_predicate(&predicate, &schema)?;
+            matching_row_groups(metadata.metadata().as_ref(), &schema, &predicate)
         } else {
             (0..metadata.metadata().num_row_groups()).collect()
         };

@@ -187,15 +187,19 @@ impl ParquetReader {
             builder = builder.with_projection(mask);
         }
 
-        if let Some(predicate) = self
+        // Literals meet their columns' types here, once the schema is known.
+        let coerced = self
             .predicate
+            .as_ref()
+            .map(|predicate| predicate.coerced_for(&schema));
+        if let Some(predicate) = coerced
             .as_ref()
             .and_then(|predicate| parquet_row_filter(builder.parquet_schema(), &schema, predicate))
         {
             builder = builder.with_row_filter(predicate);
         }
 
-        let mut groups = if let Some(predicate) = &self.predicate {
+        let mut groups = if let Some(predicate) = &coerced {
             validate_predicate(predicate, &schema)?;
             matching_row_groups(builder.metadata().as_ref(), &schema, predicate)
         } else {
