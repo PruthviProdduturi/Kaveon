@@ -285,15 +285,8 @@ impl BatchPredicate {
         let mut mask: Option<arrow::array::BooleanArray> = None;
         for (index, op, scalar) in &self.comparisons {
             let column = batch.column(*index);
-            let this = match op {
-                CompareOp::Eq => cmp::eq(column, scalar),
-                CompareOp::Ne => cmp::neq(column, scalar),
-                CompareOp::Lt => cmp::lt(column, scalar),
-                CompareOp::Le => cmp::lt_eq(column, scalar),
-                CompareOp::Gt => cmp::gt(column, scalar),
-                CompareOp::Ge => cmp::gt_eq(column, scalar),
-            }
-            .map_err(|error| parquet::errors::ParquetError::External(Box::new(error)))?;
+            let this = compare_column(column, *op, scalar)
+                .map_err(|error| parquet::errors::ParquetError::External(Box::new(error)))?;
             // SQL: a null comparison never selects the row.
             let this = if arrow::array::Array::null_count(&this) > 0 {
                 arrow::compute::prep_null_mask_filter(&this)
@@ -313,6 +306,35 @@ impl BatchPredicate {
             None => Ok(batch),
         }
     }
+}
+
+/// Compare a column with a literal. A dictionary column is compared through
+/// its dictionary — once per distinct value — and the verdicts are taken
+/// through the keys, so a 3 M-row batch of 26 countries costs 26 comparisons
+/// and one gather rather than 3 M string comparisons.
+fn compare_column(
+    column: &Arc<dyn arrow::array::Array>,
+    op: CompareOp,
+    scalar: &arrow::array::Scalar<Arc<dyn arrow::array::Array>>,
+) -> std::result::Result<arrow::array::BooleanArray, arrow::error::ArrowError> {
+    use arrow::array::{Array, AsArray};
+    let compare = |values: &dyn arrow::array::Datum| match op {
+        CompareOp::Eq => cmp::eq(values, scalar),
+        CompareOp::Ne => cmp::neq(values, scalar),
+        CompareOp::Lt => cmp::lt(values, scalar),
+        CompareOp::Le => cmp::lt_eq(values, scalar),
+        CompareOp::Gt => cmp::gt(values, scalar),
+        CompareOp::Ge => cmp::gt_eq(values, scalar),
+    };
+    if let DataType::Dictionary(key_type, _) = column.data_type()
+        && key_type.as_ref() == &DataType::Int32
+    {
+        let dictionary = column.as_dictionary::<arrow::datatypes::Int32Type>();
+        let verdicts = compare(dictionary.values())?;
+        let gathered = arrow::compute::take(&verdicts, dictionary.keys(), None)?;
+        return Ok(gathered.as_boolean().clone());
+    }
+    compare(column)
 }
 
 fn collect_batch_comparisons(
@@ -1182,6 +1204,44 @@ mod tests {
             compare("amount", CompareOp::Eq, ScalarValue::Int64(6)),
         ]);
         assert!(parquet_row_filter(&descriptor, &arrow_schema, &disjunction).is_none());
+    }
+
+    #[test]
+    fn batch_predicate_compares_dictionaries_through_their_values() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "region",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                true,
+            ),
+            Field::new("amount", DataType::Int64, false),
+        ]));
+        let regions = arrow::array::DictionaryArray::<arrow::datatypes::Int32Type>::new(
+            arrow::array::Int32Array::from(vec![Some(1), Some(0), None, Some(1), Some(2)]),
+            Arc::new(StringArray::from(vec!["Asia", "Europe", "Africa"])),
+        );
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(regions),
+                Arc::new(arrow::array::Int64Array::from(vec![1, 2, 3, 4, 5])),
+            ],
+        )
+        .unwrap();
+        let predicate = StoragePredicate::And(vec![
+            compare("region", CompareOp::Eq, ScalarValue::Utf8("Europe".into())),
+            compare("amount", CompareOp::Lt, ScalarValue::Int64(5)),
+        ]);
+        let filter = BatchPredicate::new(&schema, &predicate).unwrap();
+        let kept = filter.apply(batch).unwrap();
+        let amounts = kept
+            .column(1)
+            .as_any()
+            .downcast_ref::<arrow::array::Int64Array>()
+            .unwrap()
+            .values()
+            .to_vec();
+        assert_eq!(amounts, vec![1, 4]); // the null key never matches
     }
 
     #[test]
