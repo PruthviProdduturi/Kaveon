@@ -426,6 +426,58 @@ impl OperatorMemoryAccount {
     }
 }
 
+/// Reservations in slabs: one pool round trip per 64 KiB of admitted
+/// entries, not one per entry. Operators that admit millions of small
+/// items (a distinct key, a build-side key) reserve through this; one
+/// `MemoryReservation` per item — an Arc clone and an atomic on the shared
+/// pool each — cost more than the item and held tens of millions of guards.
+#[derive(Debug, Default)]
+pub struct ReservationSlab {
+    guards: Vec<MemoryReservation>,
+    available: u64,
+}
+
+const RESERVATION_SLAB_BYTES: u64 = 64 * 1024;
+
+impl ReservationSlab {
+    /// Charge `bytes`, taking a new slab from `memory` when the current one
+    /// cannot cover it; a slab that the budget refuses falls back to the
+    /// exact amount before failing.
+    pub fn reserve(&mut self, memory: &OperatorMemoryAccount, bytes: u64) -> Result<()> {
+        if bytes > self.available {
+            let slab_bytes = RESERVATION_SLAB_BYTES.max(bytes);
+            let guard = match memory.reserve(slab_bytes) {
+                Ok(guard) => guard,
+                Err(KaveonError::MemoryLimit(_)) if slab_bytes != bytes => memory.reserve(bytes)?,
+                Err(error) => return Err(error),
+            };
+            self.available = self.available.saturating_add(guard.bytes());
+            self.guards.push(guard);
+        }
+        self.available -= bytes;
+        Ok(())
+    }
+
+    /// Bytes charged through this slab that are still held.
+    pub fn charged_bytes(&self) -> u64 {
+        self.guards
+            .iter()
+            .map(MemoryReservation::bytes)
+            .sum::<u64>()
+            .saturating_sub(self.available)
+    }
+
+    /// Release every slab.
+    pub fn clear(&mut self) {
+        self.guards.clear();
+        self.available = 0;
+    }
+
+    pub fn into_guards(self) -> Vec<MemoryReservation> {
+        self.guards
+    }
+}
+
 /// An owned reservation that returns its bytes when dropped.
 #[derive(Debug)]
 #[must_use = "dropping the reservation immediately releases the reserved memory"]

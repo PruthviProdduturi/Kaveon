@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use arrow::array::{Array, ArrayRef, AsArray, RecordBatch, StringArray};
 use arrow::datatypes::{Float64Type, Int32Type, Int64Type, SchemaRef, UInt64Type};
 use kaveon_core::{
-    BatchOperator, Expr, KaveonError, MemoryReservation, OperatorMemoryAccount, Result,
+    BatchOperator, Expr, KaveonError, OperatorMemoryAccount, ReservationSlab, Result,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -23,7 +23,7 @@ pub struct SemiJoinOperator {
     right_keys: Option<HashSet<Key>>,
     right_has_null: bool,
     memory: Option<OperatorMemoryAccount>,
-    reservations: Vec<MemoryReservation>,
+    reservations: ReservationSlab,
 }
 
 impl SemiJoinOperator {
@@ -87,7 +87,7 @@ impl SemiJoinOperator {
             right_keys: None,
             right_has_null: false,
             memory: None,
-            reservations: Vec::new(),
+            reservations: ReservationSlab::default(),
         })
     }
 
@@ -123,7 +123,7 @@ impl SemiJoinOperator {
                                 Key::Text(value) => value.len() as u64,
                                 _ => 0,
                             });
-                            self.reservations.push(memory.reserve(bytes)?);
+                            self.reservations.reserve(memory, bytes)?;
                         }
                         keys.insert(key);
                     }

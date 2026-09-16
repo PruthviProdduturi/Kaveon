@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use arrow::array::{Array, AsArray, RecordBatch};
 use arrow::datatypes::{DataType, Int32Type, SchemaRef};
-use kaveon_core::{BatchOperator, KaveonError, MemoryReservation, OperatorMemoryAccount, Result};
+use kaveon_core::{BatchOperator, KaveonError, OperatorMemoryAccount, ReservationSlab, Result};
 
 use crate::aggregate::AggregateValue;
 
@@ -18,7 +18,7 @@ pub struct SetOpOperator {
     right_set: Option<HashSet<Vec<AggregateValue>>>,
     emitted: HashSet<Vec<AggregateValue>>,
     memory: Option<OperatorMemoryAccount>,
-    reservations: Vec<MemoryReservation>,
+    reservations: ReservationSlab,
 }
 
 impl SetOpOperator {
@@ -34,7 +34,7 @@ impl SetOpOperator {
             right_set: None,
             emitted: HashSet::new(),
             memory: None,
-            reservations: Vec::new(),
+            reservations: ReservationSlab::default(),
         }
     }
 
@@ -51,7 +51,7 @@ impl SetOpOperator {
                     _ => 0,
                 })
             });
-            self.reservations.push(memory.reserve(bytes)?);
+            self.reservations.reserve(memory, bytes)?;
         }
         Ok(())
     }
