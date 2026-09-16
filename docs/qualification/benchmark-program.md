@@ -87,9 +87,15 @@ multi-way joins, correlated subqueries, EXISTS/NOT EXISTS, and aggregates over
 joins — the shapes Tier 1 and Tier 2 barely touch.
 
 - Data: generated once with Trino's `tpch` connector at scale factor 100
-  (~30 GB Parquet, zstd) and written to `benchmarks/tpch-sf100/<table>/` in
-  ADLS through the Hive connector; both engines read those objects.
-- Queries: the standard 22, Trino's reference text, parameter set 1.
+  by `infra/aks/tpch-generate-job.yaml` (`scripts/generate-tpch-trino.py`,
+  chart value `trino.tpch.enabled=true` for that window only) and written to
+  `benchmarks/tpch/sf100/<table>/` in ADLS as Parquet through a writable
+  Hive catalog; the Job's manifest (`tpch/tables.json`: columns and exact
+  row counts) is what both engines register from —
+  `scripts/register-tpch-catalog.py` for Kaveon (`Benchmarks.tpch_sf100`),
+  the read-only `opensource` catalog for Trino.
+- Queries: the standard 22 with the specification's validation parameters,
+  in Trino's dialect (`tpch/trino-queries.sql`; suite `tpch/kaveon-suite.json`).
 - Same rounds, same coverage rule. Kaveon's distributed joins cover
   equi-joins, broadcast builds and semi/anti joins; queries needing
   correlated subqueries or non-equi joins are listed as losses until

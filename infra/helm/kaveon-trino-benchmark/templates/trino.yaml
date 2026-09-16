@@ -66,6 +66,22 @@ data:
     azure.auth-type=DEFAULT
     azure.application-id=KaveonQualification
 {{- end }}
+{{- if .Values.trino.tpch.enabled }}
+  tpch.properties: |-
+    connector.name=tpch
+    tpch.splits-per-node=4
+  benchmarks.properties: |-
+    connector.name=hive
+    hive.metastore=file
+    hive.metastore.catalog.dir=file:///data/trino/metastore-benchmarks
+    hive.non-managed-table-writes-enabled=true
+    hive.storage-format=PARQUET
+    hive.compression-codec=SNAPPY
+    fs.native-local.enabled=true
+    fs.azure.enabled=true
+    azure.auth-type=DEFAULT
+    azure.application-id=KaveonQualification
+{{- end }}
 ---
 {{- range $role := list "coordinator" "worker" }}
 {{- $isCoordinator := eq $role "coordinator" }}
@@ -126,6 +142,11 @@ spec:
 {{- if $.Values.trino.opensource.enabled }}
               mkdir -p /data/trino/metastore-opensource
               cp /source/opensource.properties /generated/catalog/opensource.properties
+{{- end }}
+{{- if $.Values.trino.tpch.enabled }}
+              mkdir -p /data/trino/metastore-benchmarks
+              cp /source/tpch.properties /generated/catalog/tpch.properties
+              cp /source/benchmarks.properties /generated/catalog/benchmarks.properties
 {{- end }}
               cat > /generated/node.properties <<EOF
               node.environment=kaveon_qualification

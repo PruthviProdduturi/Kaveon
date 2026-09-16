@@ -25,6 +25,13 @@ trino:
   # infra/aks/opensource-catalog-manifest.json; nothing is written to the lake.
   opensource:
     enabled: false
+  # TPC-H generation: Trino's tpch connector (data computed on the fly at
+  # the chosen scale factor) beside a Hive catalog that may write external
+  # Parquet tables under benchmarks/tpch/ in the same container. Enabled
+  # only for the generation Job (infra/aks/tpch-generate-job.yaml); the
+  # comparison itself reads the objects through the read-only catalog.
+  tpch:
+    enabled: false
   # Per-query memory mirrors the Kaveon worker budget on the same nodes:
   # 3 GiB per worker per query (KAVEON_QUERY_MEMORY_LIMIT_BYTES), inside
   # the 6 GiB pod limit both engines' workers get. The worker heap leaves
