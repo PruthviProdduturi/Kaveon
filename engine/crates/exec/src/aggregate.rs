@@ -2277,6 +2277,7 @@ impl HashAggregate {
             // is done — every insert this batch needs happens here.
             let mut slots: Vec<*mut Vec<Accumulator>> = Vec::new();
             let mut null_slot: *mut Vec<Accumulator> = std::ptr::null_mut();
+            let combined_codes: Vec<u32>;
             let coded_codes: Option<&[u32]> = match prepared.as_slice() {
                 [PreparedKeys::Coded { codes, table }] => {
                     for key in table
@@ -2314,6 +2315,97 @@ impl HashAggregate {
                             .map_or(std::ptr::null_mut(), |states| states as *mut _);
                     }
                     Some(codes.as_slice())
+                }
+                // Several coded keys: one combined code per row (mixed radix
+                // over each key's table plus a null slot), bounded so the
+                // per-batch vectors stay small. "by country and industry" is
+                // 27 × 13 cells.
+                keys if keys.len() >= 2
+                    && keys
+                        .iter()
+                        .all(|key| matches!(key, PreparedKeys::Coded { .. }))
+                    && keys
+                        .iter()
+                        .map(|key| match key {
+                            PreparedKeys::Coded { table, .. } => table.len() + 1,
+                            PreparedKeys::Direct(_) => 1,
+                        })
+                        .try_fold(1_usize, |cells, size| cells.checked_mul(size))
+                        .is_some_and(|cells| cells <= MAX_COMBINED_CELLS) =>
+                {
+                    let parts: Vec<(&[u32], &[GroupKey])> = keys
+                        .iter()
+                        .map(|key| match key {
+                            PreparedKeys::Coded { codes, table } => {
+                                (codes.as_slice(), table.as_slice())
+                            }
+                            PreparedKeys::Direct(_) => unreachable!("checked above"),
+                        })
+                        .collect();
+                    let sizes: Vec<usize> =
+                        parts.iter().map(|(_, table)| table.len() + 1).collect();
+                    let cells: usize = sizes.iter().product();
+                    combined_codes = (0..batch.num_rows())
+                        .map(|row| {
+                            parts.iter().zip(&sizes).fold(
+                                0_usize,
+                                |combined, ((codes, table), size)| {
+                                    let index = match codes[row] {
+                                        NULL_CODE => table.len(),
+                                        code => code as usize,
+                                    };
+                                    combined * size + index
+                                },
+                            ) as u32
+                        })
+                        .collect();
+                    let mut seen = vec![false; cells];
+                    for code in &combined_codes {
+                        seen[*code as usize] = true;
+                    }
+                    let key_of = |mut cell: usize| -> InlineGroupKey {
+                        let mut parts_keys = vec![GroupKey::Null; parts.len()];
+                        for (position, ((_, table), size)) in
+                            parts.iter().zip(&sizes).enumerate().rev()
+                        {
+                            let index = cell % size;
+                            cell /= size;
+                            parts_keys[position] = if index == table.len() {
+                                GroupKey::Null
+                            } else {
+                                table[index].clone()
+                            };
+                        }
+                        InlineGroupKey::Multiple(parts_keys)
+                    };
+                    for cell in (0..cells).filter(|cell| seen[*cell]) {
+                        if let Entry::Vacant(entry) = groups.entry(key_of(cell)) {
+                            if let Some(memory) = &self.memory {
+                                reservations.reserve(
+                                    memory,
+                                    estimated_group_bytes(
+                                        entry.key().as_slice(),
+                                        self.aggregates.len(),
+                                    ),
+                                )?;
+                            }
+                            if let Some(metrics) = &metrics {
+                                metrics.groups_created.fetch_add(1, Ordering::Relaxed);
+                            }
+                            entry.insert(self.new_states());
+                        }
+                    }
+                    slots = (0..cells)
+                        .map(|cell| {
+                            if !seen[cell] {
+                                return std::ptr::null_mut();
+                            }
+                            groups
+                                .get_mut(&key_of(cell))
+                                .map_or(std::ptr::null_mut(), |states| states as *mut _)
+                        })
+                        .collect();
+                    Some(combined_codes.as_slice())
                 }
                 _ => None,
             };
@@ -3166,6 +3258,8 @@ enum PreparedKeys<'a> {
 }
 
 const NULL_CODE: u32 = u32::MAX;
+/// Bound on the cells a combined multi-key code may address per batch.
+const MAX_COMBINED_CELLS: usize = 1 << 16;
 
 impl PreparedKeys<'_> {
     fn key(&self, row: usize) -> GroupKey {
@@ -4592,6 +4686,61 @@ mod tests {
         drop(output);
         drop(aggregate);
         assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn two_string_keys_fold_through_combined_codes() {
+        let make = |a: Vec<Option<&str>>, b: Vec<Option<&str>>, v: Vec<Option<i64>>| {
+            RecordBatch::try_from_iter(vec![
+                ("country", Arc::new(StringArray::from(a)) as ArrayRef),
+                ("industry", Arc::new(StringArray::from(b)) as ArrayRef),
+                ("actions", Arc::new(Int64Array::from(v)) as ArrayRef),
+            ])
+            .unwrap()
+        };
+        let mut input = Input::new(make(
+            vec![Some("IN"), Some("IN"), Some("DE"), None],
+            vec![Some("tech"), Some("bank"), Some("tech"), None],
+            vec![Some(1), Some(2), Some(4), Some(8)],
+        ));
+        input.batches.push_back(make(
+            vec![Some("DE"), Some("IN"), None],
+            vec![Some("tech"), Some("tech"), Some("tech")],
+            vec![Some(16), Some(32), Some(64)],
+        ));
+        let mut aggregate = HashAggregate::new(
+            Box::new(input),
+            vec!["country".into(), "industry".into()],
+            vec![
+                AggExpr::new(AggFunc::Count, "*"),
+                AggExpr::new(AggFunc::Sum, "actions"),
+            ],
+        )
+        .unwrap();
+        let output = aggregate.next_batch().unwrap().unwrap();
+        let countries = output.column(0).as_string::<i32>();
+        let industries = output.column(1).as_string::<i32>();
+        let counts = output
+            .column(2)
+            .as_primitive::<arrow::datatypes::UInt64Type>();
+        let sums = output.column(3).as_primitive::<Int64Type>();
+        let actual = (0..output.num_rows())
+            .map(|row| {
+                (
+                    (
+                        (!countries.is_null(row)).then(|| countries.value(row).to_owned()),
+                        (!industries.is_null(row)).then(|| industries.value(row).to_owned()),
+                    ),
+                    (counts.value(row), sums.value(row)),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(actual.len(), 5);
+        assert_eq!(actual[&(Some("IN".into()), Some("tech".into()))], (2, 33));
+        assert_eq!(actual[&(Some("IN".into()), Some("bank".into()))], (1, 2));
+        assert_eq!(actual[&(Some("DE".into()), Some("tech".into()))], (2, 20));
+        assert_eq!(actual[&(None, None)], (1, 8));
+        assert_eq!(actual[&(None, Some("tech".into()))], (1, 64));
     }
 
     #[test]
