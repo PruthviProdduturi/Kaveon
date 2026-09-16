@@ -739,7 +739,7 @@ fn eval_like(
             as_string_array(&patterns)?,
             negated,
             case_insensitive,
-        );
+        )?;
         return Ok(compute::take(&verdicts, dictionary.keys(), None)?);
     }
     let values = decode_dictionary(&values)?;
@@ -751,7 +751,7 @@ fn eval_like(
         patterns,
         negated,
         case_insensitive,
-    )))
+    )?))
 }
 
 fn like_arrays(
@@ -759,52 +759,26 @@ fn like_arrays(
     patterns: &StringArray,
     negated: bool,
     case_insensitive: bool,
-) -> BooleanArray {
-    let result: BooleanArray = (0..values.len())
-        .map(|i| {
-            if values.is_null(i) || patterns.is_null(i) {
-                None
-            } else {
-                let text = values.value(i);
-                let pat = patterns.value(i);
-                let matched = if case_insensitive {
-                    like_match(&text.to_lowercase(), &pat.to_lowercase())
-                } else {
-                    like_match(text, pat)
-                };
-                Some(if negated { !matched } else { matched })
-            }
-        })
-        .collect();
-    result
-}
-
-fn like_match(text: &str, pattern: &str) -> bool {
-    let text = text.as_bytes();
-    let pattern = pattern.as_bytes();
-    let (t_len, p_len) = (text.len(), pattern.len());
-
-    let mut prev = vec![false; p_len + 1];
-    let mut curr = vec![false; p_len + 1];
-    prev[0] = true;
-    for j in 1..=p_len {
-        if pattern[j - 1] == b'%' {
-            prev[j] = prev[j - 1];
-        }
-    }
-
-    for i in 1..=t_len {
-        curr[0] = false;
-        for j in 1..=p_len {
-            curr[j] = match pattern[j - 1] {
-                b'%' => curr[j - 1] || prev[j],
-                b'_' => prev[j - 1],
-                c => prev[j - 1] && text[i - 1] == c,
-            };
-        }
-        std::mem::swap(&mut prev, &mut curr);
-    }
-    prev[p_len]
+) -> Result<BooleanArray> {
+    use arrow::compute::kernels::comparison::{ilike, like, nilike, nlike};
+    // Arrow's kernel recognises the common shapes — `%needle%`, `needle%`,
+    // `%needle`, no wildcard — and runs them as byte searches; a pattern
+    // given once (a literal) is a scalar so it is classified once.
+    let first = (!patterns.is_empty() && !patterns.is_null(0)).then(|| patterns.value(0));
+    let scalar_pattern = (patterns.len() == 1
+        || (first.is_some() && patterns.iter().all(|p| p == first)))
+    .then(|| arrow::array::Scalar::new(patterns.slice(0, 1)));
+    let matched = match (&scalar_pattern, negated, case_insensitive) {
+        (Some(pattern), false, false) => like(values, pattern)?,
+        (Some(pattern), true, false) => nlike(values, pattern)?,
+        (Some(pattern), false, true) => ilike(values, pattern)?,
+        (Some(pattern), true, true) => nilike(values, pattern)?,
+        (None, false, false) => like(values, patterns)?,
+        (None, true, false) => nlike(values, patterns)?,
+        (None, false, true) => ilike(values, patterns)?,
+        (None, true, true) => nilike(values, patterns)?,
+    };
+    Ok(matched)
 }
 
 // ── BETWEEN ─────────────────────────────────────────────────────────────────
