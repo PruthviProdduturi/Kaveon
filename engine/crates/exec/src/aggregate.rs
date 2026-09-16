@@ -924,6 +924,11 @@ pub fn grouped_aggregate_states_to_schema_batch(
                 {
                     data_type.clone()
                 }
+                AggregateState::Utf8Min(_) | AggregateState::Utf8Max(_)
+                    if matches!(data_type, DataType::Utf8 | DataType::LargeUtf8) =>
+                {
+                    data_type.clone()
+                }
                 _ => DataType::Float64,
             };
             if &expected != data_type {
@@ -988,6 +993,8 @@ fn validate_group_key_types(groups: &[GroupedAggregateState], types: &[DataType]
             return Err(exec_err("aggregate key count does not match typed schema"));
         }
         for (key, data_type) in group.group_keys.iter().zip(types) {
+            // A dictionary-encoded key carries its value type across the exchange.
+            let data_type = logical_data_type(data_type);
             let decimal_matches = matches!((key, data_type), (AggregateValue::Decimal128(_, scale), DataType::Decimal128(_, expected)) if scale == expected);
             if !decimal_matches
                 && !matches!(
@@ -2280,8 +2287,20 @@ impl HashAggregate {
             let combined_codes: Vec<u32>;
             let coded_codes: Option<&[u32]> = match prepared.as_slice() {
                 [PreparedKeys::Coded { codes, table }] => {
+                    // A dictionary's table lists every value the column can
+                    // hold; only the values this batch actually carries may
+                    // become groups (a filtered batch must not invent empty ones).
+                    let mut present = vec![false; table.len()];
+                    for code in codes {
+                        if *code != NULL_CODE {
+                            present[*code as usize] = true;
+                        }
+                    }
                     for key in table
                         .iter()
+                        .enumerate()
+                        .filter(|(index, _)| present[*index])
+                        .map(|(_, key)| key)
                         .chain(codes.contains(&NULL_CODE).then_some(&GroupKey::Null))
                     {
                         let inline = InlineGroupKey::Single(key.clone());
@@ -2303,7 +2322,11 @@ impl HashAggregate {
                     }
                     slots = table
                         .iter()
-                        .map(|key| {
+                        .enumerate()
+                        .map(|(index, key)| {
+                            if !present[index] {
+                                return std::ptr::null_mut();
+                            }
                             groups
                                 .get_mut(&InlineGroupKey::Single(key.clone()))
                                 .map_or(std::ptr::null_mut(), |states| states as *mut _)
@@ -3576,6 +3599,12 @@ fn extract_utf8_value(arr: &ArrayRef, row: usize) -> Result<String> {
         }
         _ => Err(exec_err("UTF-8 aggregate input type mismatch")),
     }
+}
+
+/// The type a group key has once it leaves an operator: a dictionary-encoded
+/// column's value type, everything else itself.
+pub fn exchanged_group_key_type(data_type: &DataType) -> DataType {
+    logical_data_type(data_type).clone()
 }
 
 fn logical_data_type(data_type: &DataType) -> &DataType {
@@ -5163,6 +5192,30 @@ mod tests {
         assert_eq!(prepared.key(0), GroupKey::Utf8(Arc::from("On-Premise")));
         assert_eq!(prepared.key(1), GroupKey::Utf8(Arc::from("Cloud")));
         assert_eq!(prepared.key(2), GroupKey::Null);
+
+        // A dictionary value no row uses is not a group (a filtered batch
+        // keeps the whole dictionary). Aggregate through the operator.
+        let unused: ArrayRef = Arc::new(Int32DictionaryArray::new(
+            Int32Array::from(vec![Some(2), Some(2)]),
+            Arc::new(StringArray::from(vec!["Cloud", "Hybrid", "On-Premise"])),
+        ));
+        let batch = RecordBatch::try_from_iter(vec![
+            ("deployment", unused),
+            (
+                "actions",
+                Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let mut aggregate = HashAggregate::new(
+            Box::new(Input::new(batch)),
+            vec!["deployment".into()],
+            vec![AggExpr::new(AggFunc::Sum, "actions")],
+        )
+        .unwrap();
+        let output = aggregate.next_batch().unwrap().unwrap();
+        assert_eq!(output.num_rows(), 1);
+        assert_eq!(output.column(0).as_string::<i32>().value(0), "On-Premise");
 
         // Other types keep the direct path.
         let numbers: ArrayRef = Arc::new(Int64Array::from(vec![7, 8]));
