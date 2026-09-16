@@ -27,7 +27,7 @@
   a dialect adaptation because `EventTime` is stored as epoch seconds
   (upstream Trino wraps the table in a `from_unixtime` view): `q19` and
   `q43`, both shown side by side in `clickbench/kaveon-suite.json`.
-- Kaveon Engine: ``sha256:2600408e…` (dev `b0be459`)`; Trino `sha256:db58cc93…`.
+- Kaveon Engine `sha256:2600408e…` (dev `b0be459`); Trino `sha256:db58cc93…`.
 - Result check: an engine-independent digest of each result set (values
   rendered canonically, rows sorted unless the statement orders them).
   Ties under `ORDER BY … LIMIT` and the epoch-versus-timestamp rendering of
@@ -84,7 +84,7 @@
 Both ran: 38 of 43; Kaveon faster on 21, Trino faster on 17; geometric mean of Trino ÷ Kaveon over statements both ran: 1.10×
 Kaveon ran 38 of 43; Trino ran 43 of 43.
 
-`q19`, `q33`, `q35`, `q36` were rejected by the Engine on memory (a partial aggregate over more groups than 3 GiB holds: `WatchID` is unique per row, `URL` and `(UserID, SearchPhrase)` are tens of millions of groups; no aggregate spill on this image); `q43` failed on an ORDER BY over a lowered group expression (fixed in `efeaeda`, after this pass). The coordinator was OOM-killed after `q34` in the full pass; `q35`–`q43` are a rerun on the same image straight after. Run records: `clickbench/runs/kaveon-b0be459-2026-09-16.json`, `clickbench/runs/trino-3gb-2026-09-16.json`.
+`q19`, `q33`, `q35`, `q36` were rejected by the Engine on memory: the spill-capable partial aggregate the AKS workers run (`KAVEON_HASH_SPILL_ROOT`) still reserved 4 KiB per group for its state encoding, so a partial over `WatchID` (unique per row), `URL` or `(UserID, SearchPhrase)` asked for several times the 3 GiB budget before spilling could help (estimate fixed in `efeaeda`, after this pass); `q43` failed on an ORDER BY over a lowered group expression (fixed in `efeaeda`, after this pass). The coordinator was OOM-killed after `q34` in the full pass; `q35`–`q43` are a rerun on the same image straight after. Run records: `clickbench/runs/kaveon-b0be459-2026-09-16.json`, `clickbench/runs/trino-3gb-2026-09-16.json`.
 
 ## What this run is and is not
 
@@ -100,7 +100,7 @@ Kaveon ran 38 of 43; Trino ran 43 of 43.
 
 Trino is faster on 17 of the 38 statements both engines ran, and every one of them is the same shape:
 
-- **High-cardinality GROUP BY** (`q13`–`q18`, `q31`, `q32`, `q34`, `q40`; `q33`, `q35`, `q36` fail outright): millions to a hundred million groups. Kaveon aggregates a row at a time through a general accumulator enum, with a hash probe per row on both the partial and the final stage; Trino's hash aggregation is columnar and three to five times leaner per group, and spills. On the same 3 CPUs per worker this is a 3–7× loss. The item is a columnar aggregate: typed key vectors, flat accumulator columns, vectorised hashing — and spill when the groups do not fit.
+- **High-cardinality GROUP BY** (`q13`–`q18`, `q31`, `q32`, `q34`, `q40`; `q33`, `q35`, `q36` fail outright): millions to a hundred million groups. Kaveon aggregates a row at a time through a general accumulator enum, with a hash probe per row on both the partial and the final stage; Trino's hash aggregation is columnar and three to five times leaner per group. On the same 3 CPUs per worker this is a 3–7× loss. The item is a columnar aggregate: typed key vectors, flat accumulator columns, vectorised hashing, and a final merge that spills the way the partial already can.
 - **Exact COUNT(DISTINCT)** (`q05`, `q06`, `q09`, `q10`, `q12`, `q14`): the distinct step is single-threaded on both stages and re-hashes every row on the final; 0.5–0.9× Trino.
 - **`REGEXP_REPLACE` per row** (`q29`, 0.29×) and the ninety-term `SUM(ResolutionWidth + k)` projection (`q30`, 0.72×): per-row expression evaluation with an allocation per string.
 
