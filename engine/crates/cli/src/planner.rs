@@ -439,6 +439,8 @@ fn relation_qualifier(plan: &LogicalPlan) -> Option<String> {
                 .clone()
                 .unwrap_or_else(|| table.rsplit('.').next().unwrap_or(table).to_owned()),
         ),
+        // A pushed-down filter keeps its input relation.
+        LogicalPlan::Filter { input, .. } => relation_qualifier(input),
         _ => None,
     }
 }
