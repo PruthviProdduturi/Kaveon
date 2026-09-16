@@ -25,6 +25,14 @@ trino:
   # infra/aks/opensource-catalog-manifest.json; nothing is written to the lake.
   opensource:
     enabled: false
+  # Per-query memory mirrors the Kaveon worker budget on the same nodes:
+  # 3 GiB per worker per query (KAVEON_QUERY_MEMORY_LIMIT_BYTES), inside
+  # the 6 GiB pod limit both engines' workers get. The worker heap leaves
+  # the JVM's 1 GB headroom and the pod's system share.
+  memory:
+    workerHeap: 5G
+    queryPerNode: 3GB
+    queryTotal: 9GB
   internalSharedSecretName: kaveon-trino-benchmark-auth
   tlsSecretName: kaveon-trino-benchmark-tls
 
