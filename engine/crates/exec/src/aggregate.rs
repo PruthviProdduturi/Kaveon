@@ -2118,6 +2118,9 @@ impl HashAggregate {
         if self.string_key_states_apply() {
             return self.collect_string_key_states();
         }
+        if self.compact_keys_apply() {
+            return self.collect_compact_key_states();
+        }
         // Group keys are query-local and do not need the standard library's
         // comparatively expensive SipHash. AHash retains per-map randomized
         // seeds while materially reducing the hot-path cost of large GROUP BYs.
@@ -2984,6 +2987,232 @@ impl HashAggregate {
         Ok((groups, reservations.into_guards()))
     }
 
+    /// Two to four keys, each an integer, date, boolean, plain text or
+    /// dictionary column, with in-place accumulators.
+    fn compact_keys_apply(&self) -> bool {
+        if !(2..=MAX_COMPACT_KEYS).contains(&self.group_by.len()) {
+            return false;
+        }
+        let schema = self.source.schema();
+        // Keys that are all dictionary-encoded stay on the combined-code
+        // path, whose per-code batch folds win for low-cardinality columns.
+        if self.group_by.iter().all(|column| {
+            matches!(
+                schema
+                    .field_with_name(column)
+                    .map(|field| field.data_type()),
+                Ok(DataType::Dictionary(_, _))
+            )
+        }) {
+            return false;
+        }
+        self.group_by.iter().all(|column| {
+            matches!(
+                schema.field_with_name(column).map(|field| field.data_type()),
+                Ok(DataType::Int64
+                    | DataType::Int32
+                    | DataType::Date32
+                    | DataType::Boolean
+                    | DataType::Utf8
+                    | DataType::LargeUtf8)
+            ) || matches!(
+                schema.field_with_name(column).map(|field| field.data_type()),
+                Ok(DataType::Dictionary(key, values))
+                    if key.as_ref() == &DataType::Int32 && matches!(values.as_ref(), DataType::Utf8 | DataType::LargeUtf8)
+            )
+        }) && self.in_place_accumulators_apply()
+    }
+
+    /// Groups keyed by several columns packed into fixed-width words: each
+    /// column becomes one u64 per row (integers and dates as their bits,
+    /// booleans as 0/1, text through the operator's interner so equal text
+    /// shares a word across batches and dictionaries), with a null mask.
+    /// The row's key is then a small array — no vector, no enum, one hash.
+    fn collect_compact_key_states(&mut self) -> Result<(GroupStateMap, Vec<MemoryReservation>)> {
+        let stride = self.aggregates.len();
+        let key_count = self.group_by.len();
+        let template = self.new_states();
+        let mut index: AHashMap<CompactGroupKey, u32> = AHashMap::new();
+        let mut states: Vec<Accumulator> = Vec::new();
+        let mut interner: AHashMap<Box<str>, u64> = AHashMap::new();
+        let mut texts: Vec<Arc<str>> = Vec::new();
+        let mut reservations = ReservationSlab::default();
+        let metrics = self
+            .memory
+            .as_ref()
+            .map(|memory| aggregate_metrics(memory.query()))
+            .transpose()?;
+        let schema = self.source.schema().clone();
+        let key_columns = self
+            .group_by
+            .iter()
+            .map(|column| schema.index_of(column).expect("validated group key"))
+            .collect::<Vec<_>>();
+        let key_types = key_columns
+            .iter()
+            .map(|index| schema.field(*index).data_type().clone())
+            .collect::<Vec<_>>();
+        let value_indices = self
+            .aggregates
+            .iter()
+            .map(|aggregate| {
+                (aggregate.column != "*")
+                    .then(|| schema.index_of(&aggregate.column))
+                    .transpose()
+                    .expect("validated aggregate input")
+            })
+            .collect::<Vec<_>>();
+        let group_bytes = estimated_group_bytes(
+            &self
+                .group_by
+                .iter()
+                .map(|_| GroupKey::Int64(0))
+                .collect::<Vec<_>>(),
+            stride,
+        );
+
+        while let Some(batch) = self.source.next_batch()? {
+            if let Some(metrics) = &metrics {
+                metrics
+                    .input_rows
+                    .fetch_add(batch.num_rows() as u64, Ordering::Relaxed);
+            }
+            let _input_memory = if self.input_already_reserved {
+                None
+            } else {
+                self.memory
+                    .as_ref()
+                    .map(|account| account.reserve(batch.get_array_memory_size() as u64))
+                    .transpose()?
+            };
+            let rows = batch.num_rows();
+            // One word column per key.
+            let mut words: Vec<Vec<Option<u64>>> = Vec::with_capacity(key_count);
+            for &column in &key_columns {
+                let array = batch.column(column);
+                let mut intern = |text: &str| -> Result<u64> {
+                    if let Some(word) = interner.get(text) {
+                        return Ok(*word);
+                    }
+                    if let Some(memory) = &self.memory {
+                        reservations.reserve(memory, 80 + 2 * text.len() as u64)?;
+                    }
+                    let word = texts.len() as u64;
+                    texts.push(Arc::from(text));
+                    interner.insert(Box::from(text), word);
+                    Ok(word)
+                };
+                words.push(match array.data_type() {
+                    DataType::Int64 | DataType::Int32 | DataType::Date32 => integer_keys(array)
+                        .into_iter()
+                        .map(|value| value.map(|value| value as u64))
+                        .collect(),
+                    DataType::Boolean => {
+                        let values = array.as_boolean();
+                        (0..rows)
+                            .map(|row| (!values.is_null(row)).then(|| values.value(row) as u64))
+                            .collect()
+                    }
+                    DataType::Dictionary(_, _) => {
+                        let dictionary = array
+                            .as_any()
+                            .downcast_ref::<Int32DictionaryArray>()
+                            .expect("dictionary key type must match schema");
+                        let values = string_values(dictionary.values())?;
+                        let mut by_code = vec![None; dictionary.values().len()];
+                        for code in used_dictionary_indices(dictionary) {
+                            if let Some(text) = values.value(code) {
+                                by_code[code] = Some(intern(text)?);
+                            }
+                        }
+                        dictionary
+                            .keys()
+                            .iter()
+                            .map(|code| code.and_then(|code| by_code[code as usize]))
+                            .collect()
+                    }
+                    _ => {
+                        let values = string_values(array)?;
+                        let mut column_words = Vec::with_capacity(rows);
+                        for row in 0..rows {
+                            column_words.push(match values.value(row) {
+                                Some(text) => Some(intern(text)?),
+                                None => None,
+                            });
+                        }
+                        column_words
+                    }
+                });
+            }
+            let values = value_indices
+                .iter()
+                .map(|index| index.map(|index| batch.column(index)))
+                .collect::<Vec<_>>();
+            for row in 0..rows {
+                if row % 1024 == 0
+                    && let Some(memory) = &self.memory
+                {
+                    memory.check_cancelled()?;
+                }
+                let mut key = CompactGroupKey::default();
+                for (position, column) in words.iter().enumerate() {
+                    match column[row] {
+                        Some(word) => key.words[position] = word,
+                        None => key.nulls |= 1 << position,
+                    }
+                }
+                let next_slot = index.len();
+                let slot = match index.entry(key) {
+                    Entry::Occupied(entry) => *entry.get(),
+                    Entry::Vacant(entry) => {
+                        if let Some(memory) = &self.memory {
+                            reservations.reserve(memory, group_bytes)?;
+                        }
+                        if let Some(metrics) = &metrics {
+                            metrics.groups_created.fetch_add(1, Ordering::Relaxed);
+                        }
+                        let slot = u32::try_from(next_slot)
+                            .map_err(|_| exec_err("too many groups for one task"))?;
+                        states.extend(template.iter().cloned());
+                        *entry.insert(slot)
+                    }
+                } as usize;
+                update_in_place(
+                    &mut states[slot * stride..(slot + 1) * stride],
+                    &values,
+                    row,
+                )?;
+            }
+        }
+
+        let mut by_slot: Vec<CompactGroupKey> = vec![CompactGroupKey::default(); index.len()];
+        for (key, slot) in index {
+            by_slot[slot as usize] = key;
+        }
+        let mut groups = Vec::with_capacity(by_slot.len());
+        let mut states = states.into_iter();
+        for key in by_slot {
+            let group_keys = key_types
+                .iter()
+                .enumerate()
+                .map(|(position, data_type)| {
+                    if key.nulls & (1 << position) != 0 {
+                        return GroupKey::Null;
+                    }
+                    let word = key.words[position];
+                    match data_type {
+                        DataType::Int64 => GroupKey::Int64(word as i64),
+                        DataType::Int32 | DataType::Date32 => GroupKey::Int32(word as i64 as i32),
+                        DataType::Boolean => GroupKey::Bool(word != 0),
+                        _ => GroupKey::Utf8(Arc::clone(&texts[word as usize])),
+                    }
+                })
+                .collect();
+            groups.push((group_keys, states.by_ref().take(stride).collect()));
+        }
+        Ok((groups, reservations.into_guards()))
+    }
+
     /// Groups keyed by one integer: a compact `i64 → slot` index and every
     /// group's accumulators laid out contiguously by slot, so a row costs one
     /// small-key hash probe and an in-place update instead of a key enum, a
@@ -3568,6 +3797,16 @@ fn batch_text_extreme(array: &ArrayRef, min: bool) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// The most key columns the compact multi-key path packs.
+const MAX_COMPACT_KEYS: usize = 4;
+
+/// Up to four key columns as words plus a null mask.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
+struct CompactGroupKey {
+    words: [u64; MAX_COMPACT_KEYS],
+    nulls: u8,
 }
 
 /// Apply row `row` of each aggregate's input column (None counts the row) to
@@ -5167,6 +5406,114 @@ mod tests {
         assert_eq!(fast_output.num_rows(), 4);
         drop(fast_output);
         drop(fast);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn compact_multi_key_path_matches_the_general_path() {
+        use arrow::array::{BooleanArray, DictionaryArray, Int32Array};
+        // Three keys — an Int64, plain text and a dictionary column — with
+        // nulls in each, over two batches whose dictionaries differ; the
+        // compact path and the general path (keys cast to text so it is
+        // taken) must agree on every group and value.
+        let dictionary = |keys: Vec<Option<i32>>, values: Vec<&str>| {
+            Arc::new(DictionaryArray::<Int32Type>::new(
+                Int32Array::from(keys),
+                Arc::new(StringArray::from(values)),
+            )) as ArrayRef
+        };
+        let batch = |ids: Vec<Option<i64>>,
+                     names: Vec<Option<&str>>,
+                     dictionary_column: ArrayRef,
+                     flags: Vec<Option<bool>>,
+                     values: Vec<Option<i64>>| {
+            RecordBatch::try_from_iter(vec![
+                ("id", Arc::new(Int64Array::from(ids)) as ArrayRef),
+                ("name", Arc::new(StringArray::from(names)) as ArrayRef),
+                ("region", dictionary_column),
+                ("flag", Arc::new(BooleanArray::from(flags)) as ArrayRef),
+                ("v", Arc::new(Int64Array::from(values)) as ArrayRef),
+            ])
+            .unwrap()
+        };
+        let first = batch(
+            vec![Some(1), Some(1), None, Some(2), Some(1)],
+            vec![Some("a"), Some("a"), Some("b"), None, Some("a")],
+            dictionary(
+                vec![Some(0), Some(1), Some(0), None, Some(0)],
+                vec!["x", "y"],
+            ),
+            vec![Some(true), Some(true), None, Some(false), Some(true)],
+            vec![Some(10), Some(5), Some(1), None, Some(2)],
+        );
+        let second = batch(
+            vec![Some(1), Some(2), None],
+            vec![Some("a"), None, Some("b")],
+            dictionary(vec![Some(1), None, Some(1)], vec!["y", "x"]),
+            vec![Some(true), Some(false), None],
+            vec![Some(7), Some(3), Some(4)],
+        );
+        let group_by: Vec<String> =
+            vec!["id".into(), "name".into(), "region".into(), "flag".into()];
+        let aggregates = || {
+            vec![
+                AggExpr::new(AggFunc::Count, "*"),
+                AggExpr::new(AggFunc::Sum, "v"),
+                AggExpr::new(AggFunc::Max, "v"),
+            ]
+        };
+        let mut input = Input::new(first.clone());
+        input.batches.push_back(second.clone());
+        let pool = QueryMemoryPool::new("compact-keys", 1024 * 1024).unwrap();
+        let mut compact = HashAggregate::new_with_memory(
+            Box::new(input),
+            group_by.clone(),
+            aggregates(),
+            pool.operator("aggregate").unwrap(),
+        )
+        .unwrap();
+        assert!(compact.compact_keys_apply());
+        let compact_output = compact.next_batch().unwrap().unwrap();
+
+        // The general path: an extra Float64 key column keeps it off every
+        // specialised path without changing the groups.
+        let widen = |batch: &RecordBatch| {
+            let mut columns = batch.columns().to_vec();
+            columns.push(Arc::new(Float64Array::from(vec![0.0; batch.num_rows()])) as ArrayRef);
+            let mut fields = batch.schema().fields().to_vec();
+            fields.push(Arc::new(Field::new("zero", DataType::Float64, true)));
+            RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap()
+        };
+        let mut input = Input::new(widen(&first));
+        input.batches.push_back(widen(&second));
+        let mut general_keys = group_by.clone();
+        general_keys.push("zero".into());
+        let mut general = HashAggregate::new(Box::new(input), general_keys, aggregates()).unwrap();
+        let general_output = general.next_batch().unwrap().unwrap();
+
+        let rows = |batch: &RecordBatch, keys: usize| {
+            let mut rows = Vec::new();
+            for row in 0..batch.num_rows() {
+                let mut cells = Vec::new();
+                for column in (0..keys)
+                    .chain(keys + usize::from(batch.num_columns() > 7)..batch.num_columns())
+                {
+                    let array = batch.column(column);
+                    cells.push(if array.is_null(row) {
+                        "null".to_owned()
+                    } else {
+                        arrow::util::display::array_value_to_string(array, row).unwrap()
+                    });
+                }
+                rows.push(cells);
+            }
+            rows.sort();
+            rows
+        };
+        assert_eq!(rows(&compact_output, 4), rows(&general_output, 4));
+        assert_eq!(compact_output.num_rows(), 4);
+        drop(compact_output);
+        drop(compact);
         assert_eq!(pool.snapshot().current_bytes, 0);
     }
 
